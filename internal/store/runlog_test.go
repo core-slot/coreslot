@@ -284,3 +284,72 @@ func TestWriteOnceIssuesOneWrite(t *testing.T) {
 		t.Fatal("writeOnce did not return: it wrote more than once")
 	}
 }
+
+// PROTOCOL.md section 20: a pass-through run's line carries "nested": true; every other line
+// has no such key (the key is encoded only when true).
+func TestRunLogNestedMarkerIsEncodedOnlyWhenTrue(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	r := RunRecord{
+		TimeNS: 1791720000000000000,
+		Label:  "nested:child",
+		Need:   map[string]spec.Range{"cpu": {Min: 2, Max: 2}},
+		Grant:  map[string]int{"cpu": 2},
+		Exit:   0,
+	}
+	if err := s.AppendRun(r); err != nil {
+		t.Fatal(err)
+	}
+	nested := r
+	nested.Nested = true
+	if err := s.AppendRun(nested); err != nil {
+		t.Fatal(err)
+	}
+	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
+	if len(lines) != 2 {
+		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
+	}
+	var plain, marked map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &marked); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plain["nested"]; ok {
+		t.Errorf("a regular run's line has a nested key: %s", lines[0])
+	}
+	if v, ok := marked["nested"].(bool); !ok || !v {
+		t.Errorf("a pass-through run's line = %s; want \"nested\":true as a JSON boolean", lines[1])
+	}
+	if !strings.HasSuffix(lines[1], `,"fail_open":"","nested":true}`) {
+		t.Errorf("nested is not the last key, after fail_open: %s", lines[1])
+	}
+	if len(marked) != len(plain)+1 {
+		t.Errorf("nested line has %d keys, regular line %d; want exactly one more", len(marked), len(plain))
+	}
+}
+
+// A pass-through appends outside the section and never rotates: AppendRun leaves a log at or
+// above 10 MiB where it is, and only Section.RotateLogIfNeeded renames it.
+func TestAppendRunNeverRotates(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	r := RunRecord{TimeNS: 1791720000000000000, Label: "nested:child", Nested: true}
+	if err := s.AppendRun(r); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, LogDir, RunLog)
+	if err := os.Truncate(logPath, RotateRunLogAt+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendRun(r); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(logPath); err != nil || fi.Size() <= RotateRunLogAt {
+		t.Errorf("AppendRun rotated or truncated the log: %v, %v", fi, err)
+	}
+	if exists(filepath.Join(dir, LogDir, RunLogOld)) {
+		t.Error("AppendRun created runs.1.jsonl")
+	}
+}
