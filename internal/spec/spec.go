@@ -126,6 +126,7 @@ func (r Request) Validate() error {
 	if len(r.Need) > MaxResources {
 		return usagef("a request names at most %d resources, got %d", MaxResources, len(r.Need))
 	}
+	minSum := 0
 	for name, rg := range r.Need {
 		if err := ValidateName(name); err != nil {
 			return err
@@ -133,6 +134,11 @@ func (r Request) Validate() error {
 		if err := rg.validate(name); err != nil {
 			return err
 		}
+		minSum += rg.Min
+	}
+	// A grant holds at most MaxPerGrant tokens, so minimums above it could never be admitted.
+	if minSum > MaxPerGrant {
+		return usagef("the minimums sum to %d, a grant holds at most %d tokens", minSum, MaxPerGrant)
 	}
 	if r.Priority < MinPriority || r.Priority > MaxPriority {
 		return usagef("priority %d is outside [%d, %d]", r.Priority, MinPriority, MaxPriority)

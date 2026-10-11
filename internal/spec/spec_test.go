@@ -77,6 +77,12 @@ func TestValidateBounds(t *testing.T) {
 		{"min 0", func(r *Request) { r.Need = map[string]Range{"cpu": {Min: 0, Max: 1}} }, false},
 		{"min above max", func(r *Request) { r.Need = map[string]Range{"cpu": {Min: 3, Max: 2}} }, false},
 		{"max 257", func(r *Request) { r.Need = map[string]Range{"cpu": {Min: 1, Max: 257}} }, false},
+		{"minimums summing to 512", func(r *Request) {
+			r.Need = map[string]Range{"cpu": {Min: 256, Max: 256}, "gpu": {Min: 256, Max: 256}}
+		}, true},
+		{"minimums summing to 600", func(r *Request) {
+			r.Need = map[string]Range{"a": {Min: 200, Max: 256}, "b": {Min: 200, Max: 256}, "c": {Min: 200, Max: 256}}
+		}, false},
 	}
 	for _, tc := range edge {
 		r := base()
