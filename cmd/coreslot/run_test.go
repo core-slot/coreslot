@@ -27,6 +27,7 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
 // The test binary doubles as the coreslot binary and as the helper commands the tests run:
@@ -46,6 +47,10 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(m.Run())
 }
+
+// helperDeadline ends a waiting helper whose test failed before releasing it, so that it can
+// never loop on after the test.
+const helperDeadline = 2 * time.Minute
 
 // runHelper runs one helper command of the tests.
 func runHelper(name string, args []string) int {
@@ -89,9 +94,13 @@ func runHelper(name string, args []string) int {
 		if err := os.WriteFile(args[0], nil, 0o600); err != nil {
 			return 1
 		}
+		deadline := time.Now().Add(helperDeadline)
 		for {
 			if _, err := os.Stat(args[1]); err == nil {
 				return 0
+			}
+			if time.Now().After(deadline) {
+				return 3
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -330,7 +339,8 @@ func TestClassify(t *testing.T) {
 		{"library state error", &coreslot.StateError{Reason: "symlink"}, 0, true},
 		{"cli state error", &stateError{Reason: "unusable"}, 0, true},
 		{"wrapped state error", fmt.Errorf("open: %w", &coreslot.StateError{Reason: "x"}), 0, true},
-		{"strict turns a state error into a refusal", &refusalError{Msg: "state error; --strict"}, 75, false},
+		{"strict turns a state error into a refusal", strictRefusal(&coreslot.StateError{Reason: "x"}, 75), 75, false},
+		{"strict with --refusal-code", strictRefusal(&stateError{Reason: "x"}, 99), 99, false},
 		{"interrupted", &interruptError{Sig: syscall.SIGINT}, 130, false},
 		{"not found", &exec.Error{Name: "nope", Err: exec.ErrNotFound}, 127, false},
 		{"missing path", &os.PathError{Op: "fork/exec", Path: "/nope", Err: syscall.ENOENT}, 127, false},
@@ -362,6 +372,7 @@ func TestRunUsageErrors(t *testing.T) {
 		{"run", "--need", "cpu=1", "--", "echo", "{n:gpu}"},
 		{"run", "--subst", "--", "make", "-j{n:gpu}"},
 		{"run", "--bogus", "--", "true"},
+		{"run", "--need", "gpu=1", "--", "echo", "{n}"},
 		{"run"},
 		{"run", "--on-timeout", "maybe", "--", "true"},
 	} {
@@ -441,6 +452,15 @@ func TestCtrlCWhileWaitingExits130(t *testing.T) {
 		}
 		f.Close()
 	}
+}
+
+func TestNoWaitAdmitsAtOnce(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	r := cli(t, baseEnv(dir), "run", "--no-wait", "--need", "cpu=2..3", "--", "echo", "{n}")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "3" {
+		t.Errorf("exit %d stdout %q stderr %q, want 0 and a grant of 3", r.code, r.stdout, r.stderr)
+	}
+	tokensFree(t, dir, 4)
 }
 
 func TestNoWaitRefusesWithin2s(t *testing.T) {
@@ -535,7 +555,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 		if !strings.HasPrefix(out, "granted=3 unbudgeted=") || out == "granted=3 unbudgeted=" {
 			t.Errorf("command saw %q, want granted=3 and a reason", out)
 		}
-		if !strings.Contains(r.stderr, "state error") || !strings.Contains(r.stderr, "not written") {
+		if !strings.Contains(r.stderr, "state error") || !strings.Contains(r.stderr, "nothing was written") {
 			t.Errorf("stderr %q: want the diagnostic and that nothing was recorded", r.stderr)
 		}
 		if names := entries(t, dir, ""); len(names) != 0 {
@@ -805,5 +825,93 @@ func TestEnqueueBoundedLeavesNothing(t *testing.T) {
 	}
 	if q := entries(t, dir, "queue"); len(q) != 0 {
 		t.Errorf("a ticket was published after enqueue returned: %q", q)
+	}
+}
+
+// A pass-through or a run whose rotation section finds a format this client does not implement
+// writes no run-log line (PROTOCOL.md sections 14 and 20).
+func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
+	dir := stateDir(t, "")
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "log", "runs.jsonl")
+	f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(store.RotateRunLogAt); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := appendRunLog(st, store.RunRecord{Label: "x"}, true); err == nil {
+		t.Error("appendRunLog under an unknown format: want an error")
+	}
+	if fi, _ := os.Stat(logPath); fi.Size() != store.RotateRunLogAt {
+		t.Errorf("the run log grew to %d bytes under an unknown format", fi.Size())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "log", "runs.1.jsonl")); err == nil {
+		t.Error("the run log was rotated under an unknown format")
+	}
+}
+
+func TestTimeoutLogGate(t *testing.T) {
+	cases := []struct {
+		name                      string
+		holdPublished             bool
+		holdErr                   error
+		ticketUnderstood, wantLog bool
+	}{
+		{"hold published", true, nil, true, true},
+		{"section busy, ticket published in format 1", false, context.DeadlineExceeded, true, true},
+		{"format no longer understood", false, fmt.Errorf("%w: format 2", engine.ErrRefused), true, false},
+		{"FORMAT now malformed", false, &store.StateError{Reason: "malformed FORMAT"}, true, false},
+		{"token-only ticket", false, context.DeadlineExceeded, false, false},
+	}
+	for _, c := range cases {
+		if got := timeoutLogs(c.holdPublished, c.holdErr, c.ticketUnderstood); got != c.wantLog {
+			t.Errorf("%s: timeoutLogs = %v, want %v", c.name, got, c.wantLog)
+		}
+	}
+}
+
+func TestFailOpenNotice(t *testing.T) {
+	cause := errors.New("boom")
+	cases := []struct {
+		name          string
+		opened, hold  bool
+		err           error
+		want, notWant string
+	}{
+		{"directory unusable", false, false, cause, "nothing was written", ""},
+		{"no hold", true, false, cause, "the unbudgeted hold, the degraded record and the run log were not written: boom", ""},
+		{"degraded failed", true, true, cause, "the degraded record was not written: boom", "hold"},
+		{"everything written", true, true, nil, "", ""},
+	}
+	for _, c := range cases {
+		got := failOpenNotice(c.opened, c.hold, c.err)
+		if (c.want == "" && got != "") || !strings.Contains(got, c.want) || (c.notWant != "" && strings.Contains(got, c.notWant)) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Under CORESLOT_STATE_DIR a Windows run reads <statedir>/config.toml (R-C1).
+func TestWindowsConfigUnderOverride(t *testing.T) {
+	dir := stateDir(t, "[platform]\nwindows_warning = false\n")
+	t.Setenv("CORESLOT_STATE_DIR", dir)
+	if got := windowsNotice(windowsConfig()); got != "" {
+		t.Errorf("the state directory's configuration silences the warning, got %q", got)
+	}
+	t.Setenv("CORESLOT_STATE_DIR", stateDir(t, ""))
+	if got := windowsNotice(windowsConfig()); got == "" {
+		t.Error("without a configuration the warning is printed")
 	}
 }

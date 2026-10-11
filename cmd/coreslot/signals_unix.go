@@ -28,8 +28,10 @@ func notIgnored(sigs ...os.Signal) []os.Signal {
 // stops emulates the default action of the stop signals SIGTSTP, SIGTTIN and SIGTTOU. The Go
 // runtime cannot give a stop signal back its default disposition once it has been caught, so
 // the run catches them for its whole life and stops itself with SIGSTOP, except while it holds
-// the admission section (inSection), where the stop is deferred until it has left, and except
-// that a SIGTSTP is forwarded to the command's group while a command runs in non-terminal mode.
+// the admission section (inSection), where the stop is deferred until it has left. While a
+// command runs in non-terminal mode, a SIGTSTP is first forwarded to the command's own group:
+// coreslot then stops as well, so that a shell sees its whole job stopped, and the SIGCONT that
+// continues coreslot is forwarded to the command's group.
 var stops struct {
 	once    sync.Once
 	mu      sync.Mutex
@@ -60,8 +62,12 @@ func onStop(sig syscall.Signal) {
 	stops.mu.Lock()
 	defer stops.mu.Unlock()
 	switch {
+	case stops.child != 0 && sig == syscall.SIGTSTP && stops.depth > 0:
+		forward(sig, stops.child, false)
+		stops.pending = true
 	case stops.child != 0 && sig == syscall.SIGTSTP:
 		forward(sig, stops.child, false)
+		stopSelf()
 	case stops.depth > 0:
 		stops.pending = true
 	default:
@@ -119,7 +125,8 @@ func childDone(terminal bool) {
 //     the command's pid; SIGTSTP stops coreslot as it stops the command, and SIGCONT continues
 //     both;
 //   - otherwise: SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTSTP and SIGCONT are forwarded to the
-//     command's own group, and coreslot itself does not stop.
+//     command's own group; after forwarding SIGTSTP coreslot stops too, so that a shell sees its
+//     job stopped, and the SIGCONT that continues it is forwarded in turn.
 //
 // It never signals coreslot's own process group.
 func superviseChild(cmd *exec.Cmd, terminal bool) int {
