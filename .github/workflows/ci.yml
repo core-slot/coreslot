@@ -12,7 +12,8 @@ permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A merge to main is never cancelled by a later push; superseded pull request runs are.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Pinned analysis tools. Bump deliberately, in a reviewed change.
@@ -38,6 +39,10 @@ jobs:
         # "1.26" is go.mod's minimum; "stable" is the latest release (1.27 as of
         # 2026-10). setup-go resolves "1.26" to the newest 1.26 patch release.
         go: ["1.26", stable]
+        exclude:
+          # macOS minutes bill at 10x: macOS runs the latest Go only.
+          - os: macos-latest
+            go: "1.26"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,13 +97,18 @@ jobs:
         run: python3 -m unittest
 
       - name: Fuzz targets (30 s each)
+        # Fuzzing runs once, on ubuntu-latest with the latest Go; the other cells only run the seed corpus via go test.
+        if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
         run: |
           # Every Fuzz function in every package, discovered rather than listed,
           # so a new target is run without editing this file. -fuzz accepts one
-          # target per invocation.
+          # target per invocation. A failing `go test -list` (build error) fails the step;
+          # only grep's "no match" (status 1, a package without fuzz targets) is tolerated.
           found=0
           for pkg in $(go list ./...); do
-            for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+            listing="$(go test -list '^Fuzz' "$pkg")"
+            targets="$(printf '%s\n' "$listing" | grep '^Fuzz' || [ $? -eq 1 ])"
+            for target in $targets; do
               found=$((found + 1))
               echo "::group::fuzz $pkg $target"
               go test -run '^$' -fuzz "^${target}\$" -fuzztime 30s "$pkg"
@@ -109,6 +119,14 @@ jobs:
             echo "::error::no fuzz targets discovered"
             exit 1
           fi
+
+      - name: Upload fuzz failure inputs
+        if: failure() && matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
 
       - name: Windows cross-build
         run: GOOS=windows go build ./...
