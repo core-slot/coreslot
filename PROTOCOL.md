@@ -303,7 +303,9 @@ temporary = ".tmp-" pid "-" seq
 ```
 
 All numbers in names are decimal and zero-padded to their width, so the byte order of the
-`order-key "-" pid "-" seq` prefix is the numeric order of (order-key, pid, seq). `display` contains
+`order-key "-" pid "-" seq` prefix is the numeric order of (order-key, pid, seq). An order-key or
+start-ns is at most 18 446 744 073 709 551 615 (2^64 − 1); a 20-digit value above it makes the
+name invalid, as does any name that does not match the grammar. `display` contains
 no `-`, so a name splits on `-` into three or four fields. A writer MAY include a display; how it
 derives one from the label is not part of the protocol (the examples below replace each byte
 outside the set with `_` and keep the first 32). Readers MUST NOT interpret it.
@@ -321,6 +323,10 @@ name exists takes its next `seq` and retries.
   whitespace. A writer MUST write every key of its table.
 - A body is **malformed** when it is not such an object, exceeds 8 KiB, lacks a key of its table,
   has a key of the wrong type or outside its rule, or has a duplicate key at any depth.
+- In particular, a body is malformed when a key inside `need`, `grant` or `clamped` does not match
+  the resource-name grammar (section 5.1), when `grant` maps a resource to an empty array, or when
+  a string anywhere in it contains an unpaired UTF-16 surrogate escape (a `\uD800`-`\uDBFF` escape
+  not followed by a `\uDC00`-`\uDFFF` escape, or a `\uDC00`-`\uDFFF` escape not preceded by one).
 - Unknown keys are ignored at any depth: bodies only gain optional keys within a format.
 - A malformed body makes its entry ignored and counted, never trusted. An ignored ticket takes no
   place in the queue.
@@ -335,7 +341,7 @@ Body:
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
 | `priority` | integer | `-1000..1000` |
 | `need` | object | resource name → `[min, max]`, an array of exactly two integers, `1 ≤ min ≤ max ≤ 256`; 1 to 8 entries; the minimums sum to at most 512; names need not be declared (section 14) |
-| `created_ns` | integer | the wall clock read for `arrival_ns` (section 9) |
+| `created_ns` | integer | `≥ 0`; the wall clock read for `arrival_ns` (section 9) |
 
 ### 7.4 Hold
 
@@ -345,11 +351,11 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | as in the ticket |
-| `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; at most 256 per resource and 512 in total; `{}` when no token is held |
+| `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held |
 | `start_ns` | integer | equal to the name's start-ns |
 | `unbudgeted` | boolean | `true` for a fail-open run (section 14) |
 | `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a fail-open run could not budget (section 14) |
-| `clamped` | object | resource name → the requested `min` (integer), for each resource clamped (section 12.2) |
+| `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2) |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
 
 ### 7.5 Cancel request
@@ -358,8 +364,8 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 
 | Key | Type | Rule |
 |---|---|---|
-| `requested_ns` | integer | wall clock at publication |
-| `requester_pid` | integer | the canceller's pid; informational |
+| `requested_ns` | integer | `≥ 0`; wall clock at publication |
+| `requester_pid` | integer | `≥ 0`; the canceller's pid; informational |
 
 ### 7.6 FORMAT
 
@@ -429,6 +435,8 @@ one priority point per minute, which gives the same order as a static key:
 ```
 order-key = arrival_ns − priority × 60 000 000 000      (ascending; ties by pid, then seq)
 ```
+
+An order key computed below zero is 0.
 
 `arrival_ns` is the wall clock read inside the enqueue section. A ticket is **ahead** of another
 when its (order-key, pid, seq) is smaller. A wall-clock step misorders the tickets enqueued across

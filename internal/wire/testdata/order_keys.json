@@ -33,5 +33,35 @@
   "arrival_ns": 60000000000000,
   "priority": 1000,
   "order_key": "00000000000000000000"
+ },
+ {
+  "arrival_ns": 0,
+  "priority": 1000,
+  "order_key": "00000000000000000000"
+ },
+ {
+  "arrival_ns": 59999999999999,
+  "priority": 1000,
+  "order_key": "00000000000000000000"
+ },
+ {
+  "arrival_ns": 0,
+  "priority": 1,
+  "order_key": "00000000000000000000"
+ },
+ {
+  "arrival_ns": 5,
+  "priority": 0,
+  "order_key": "00000000000000000005"
+ },
+ {
+  "arrival_ns": 0,
+  "priority": 0,
+  "order_key": "00000000000000000000"
+ },
+ {
+  "arrival_ns": 9223372036854775807,
+  "priority": -1000,
+  "order_key": "09223432036854775807"
  }
 ]
