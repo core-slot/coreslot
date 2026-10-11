@@ -828,22 +828,22 @@ func TestEnqueueBoundedLeavesNothing(t *testing.T) {
 	}
 }
 
-// A pass-through or a run whose rotation section finds a format this client does not implement
-// writes no run-log line (PROTOCOL.md sections 14 and 20).
-func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
+// bigRunLog is a state directory whose FORMAT holds format and whose run log is at the rotation
+// size, so that the next append rotates first.
+func bigRunLog(t *testing.T, format string) (*store.Store, string) {
+	t.Helper()
 	dir := stateDir(t, "")
 	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte(format), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(dir, "log"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(dir, "log", "runs.jsonl")
-	f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(filepath.Join(dir, "log", "runs.jsonl"), os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,14 +851,52 @@ func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if err := appendRunLog(st, store.RunRecord{Label: "x"}, true); err == nil {
-		t.Error("appendRunLog under an unknown format: want an error")
+	return st, dir
+}
+
+// Only a FORMAT the rotation section does not understand, or a malformed one, stops the append
+// (PROTOCOL.md section 14): the line is not written into a directory of an unknown format.
+func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
+	for _, format := range []string{"coreslot-protocol 2\n", "coreslot-protocol x\n"} {
+		st, dir := bigRunLog(t, format)
+		var notices []string
+		notice := func(f string, args ...any) { notices = append(notices, fmt.Sprintf(f, args...)) }
+		if err := appendRunLog(st, store.RunRecord{Label: "x"}, notice); err == nil {
+			t.Errorf("FORMAT %q: appendRunLog: want an error", format)
+		}
+		if fi, _ := os.Stat(filepath.Join(dir, "log", "runs.jsonl")); fi.Size() != store.RotateRunLogAt {
+			t.Errorf("FORMAT %q: the run log grew to %d bytes", format, fi.Size())
+		}
+		if _, err := os.Stat(filepath.Join(dir, "log", "runs.1.jsonl")); err == nil {
+			t.Errorf("FORMAT %q: the run log was rotated", format)
+		}
 	}
-	if fi, _ := os.Stat(logPath); fi.Size() != store.RotateRunLogAt {
-		t.Errorf("the run log grew to %d bytes under an unknown format", fi.Size())
+}
+
+// Any other rotation failure costs the rotation, never the line: one notice, then the append.
+func TestRunLogAppendedWhenRotationFails(t *testing.T) {
+	st, dir := bigRunLog(t, "coreslot-protocol 1\n")
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "log", "runs.1.jsonl")); err == nil {
-		t.Error("the run log was rotated under an unknown format")
+	if err := os.Symlink(target, filepath.Join(dir, "log", "runs.1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	var notices []string
+	notice := func(f string, args ...any) { notices = append(notices, fmt.Sprintf(f, args...)) }
+	if err := appendRunLog(st, store.RunRecord{Label: "kept"}, notice); err != nil {
+		t.Fatalf("appendRunLog: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "log", "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) <= store.RotateRunLogAt || !bytes.Contains(b[store.RotateRunLogAt:], []byte(`"label":"kept"`)) {
+		t.Errorf("the line was not appended after the failed rotation (%d bytes)", len(b))
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "rotat") {
+		t.Errorf("notices %q, want one about the rotation", notices)
 	}
 }
 

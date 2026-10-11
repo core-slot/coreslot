@@ -490,7 +490,9 @@ run-log append happen outside it.
 - A client SHOULD prevent its own job-control stop while inside the section (the CLI ignores
   `SIGTSTP`, `SIGTTIN` and `SIGTTOU` there; a library never installs signal handlers). `SIGSTOP`
   cannot be ignored: a process stopped inside the section blocks every admission on the machine
-  until it continues or dies. This is the one exception to I5.
+  until it continues or dies. This is the one exception to I5. The CLI's stop is deferred, not
+  lost: in non-terminal mode it forwards `SIGTSTP` to its command's process group and then stops
+  itself, once outside the section, and forwards `SIGCONT` to that group when it is continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
   says; when `FORMAT` is missing it writes `coreslot-protocol 1` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either

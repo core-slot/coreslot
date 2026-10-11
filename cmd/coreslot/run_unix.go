@@ -613,7 +613,7 @@ func (r *run) runChild(c child) int {
 		if c.nested {
 			err = appendNestedLog(rec) // reads FORMAT outside the section only now, after the command
 		} else {
-			err = appendRunLog(c.log, rec, true)
+			err = appendRunLog(c.log, rec, r.notice)
 		}
 		if err != nil {
 			r.notice("the run log was not written: %v", err)
@@ -636,13 +636,16 @@ func pendingSignal() syscall.Signal {
 // not understand: the line is not appended (PROTOCOL.md section 14).
 var errFormatChanged = errors.New("the state directory's FORMAT is no longer one this client implements")
 
-// appendRunLog appends rec to the run log (PROTOCOL.md section 20). When the log is at or above
-// 10 MiB and rotate is set, it first rotates it inside the section if it can enter within 2 s;
-// when that section finds a FORMAT this client does not understand, nothing is appended. A
-// busy section only skips the rotation. A pass-through never rotates (appendNestedLog).
-func appendRunLog(st *store.Store, rec store.RunRecord, rotate bool) error {
-	if rotate && st.RunLogNeedsRotation() {
-		err := inSection(func() error {
+// appendRunLog appends rec to the run log outside the section (PROTOCOL.md section 20). When the
+// log is at or above 10 MiB it first rotates it inside the section, if it can enter within 2 s.
+// Only a FORMAT that section does not understand, or a malformed one, stops the append, which
+// would otherwise write into a directory of an unknown format (section 14). Any other rotation
+// failure costs the rotation, not the line: notice reports it and the line is appended. A busy
+// section only skips the rotation. A pass-through never rotates (appendNestedLog).
+func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format string, args ...any)) error {
+	if st.RunLogNeedsRotation() {
+		var rotateErr error
+		skip := inSection(func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), logRotateWait)
 			defer cancel()
 			sec, err := st.Enter(ctx)
@@ -651,16 +654,23 @@ func appendRunLog(st *store.Store, rec store.RunRecord, rotate bool) error {
 			}
 			defer sec.Leave()
 			_, understood, err := sec.Format(testhooks.Formats())
-			if err != nil {
-				return err
-			}
 			if !understood {
+				if err != nil {
+					return err // malformed FORMAT
+				}
 				return errFormatChanged
 			}
-			return sec.RotateLogIfNeeded()
+			if err == nil {
+				err = sec.RotateLogIfNeeded()
+			}
+			rotateErr = err
+			return nil
 		})
-		if err != nil {
-			return err
+		if skip != nil {
+			return skip
+		}
+		if rotateErr != nil {
+			notice("the run log was not rotated: %v", rotateErr)
 		}
 	}
 	return st.AppendRun(rec)
