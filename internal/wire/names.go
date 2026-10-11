@@ -5,9 +5,9 @@ package wire
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"strconv"
-
-	"github.com/Nezhinskiy/coreslot/internal/spec"
 )
 
 // Widths of the fields of a name (PROTOCOL.md section 7.1).
@@ -122,14 +122,17 @@ func digits(s string) (uint64, bool) {
 }
 
 // OrderKey is `arrival_ns - priority * 60_000_000_000` (PROTOCOL.md section 9): ascending order
-// runs first, and a minute of waiting is worth one priority point. A priority outside the
-// protocol's range is clamped to it, and a result below zero, which only a wall clock within
-// minutes of the epoch can produce, is 0, because the key is an unsigned field.
+// runs first, and a minute of waiting is worth one priority point. The result saturates: below
+// zero it is 0 (the key is unsigned) and above the largest uint64 it is that maximum. The caller
+// validates priority; no input makes the arithmetic wrap.
 func OrderKey(arrivalNS int64, priority int) uint64 {
-	p := int64(min(max(priority, spec.MinPriority), spec.MaxPriority))
-	k := arrivalNS - p*60_000_000_000
-	if k < 0 {
+	k := new(big.Int).Mul(big.NewInt(int64(priority)), big.NewInt(60_000_000_000))
+	k.Sub(big.NewInt(arrivalNS), k)
+	switch {
+	case k.Sign() < 0:
 		return 0
+	case !k.IsUint64():
+		return math.MaxUint64
 	}
-	return uint64(k)
+	return k.Uint64()
 }

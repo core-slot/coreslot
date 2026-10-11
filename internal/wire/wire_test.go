@@ -84,6 +84,7 @@ func TestParseNameRejects(t *testing.T) {
 		"minus sign":           "-1791720000000000000-0000004711-000001",
 		"unicode digit":        "0179172000000000000\u0663-0000004711-000001",
 		"order key overflow":   "99999999999999999999-0000004711-000001",
+		"order key 2^64":       "18446744073709551616-0000004711-000001",
 		"trailing dash":        id + "-",
 		"empty display":        id + "--x",
 		"display too long":     id + "-" + strings.Repeat("a", 33),
@@ -179,12 +180,27 @@ func TestOrderKeyAging(t *testing.T) {
 	if got := fmt.Sprintf("%020d", OrderKey(1791719345000000000+600e9, 10)); got != "01791719345000000000" {
 		t.Errorf("21.1 pid 5120 order key = %s", got)
 	}
-	// A key cannot be negative: a clock before the epoch's first hour saturates at zero.
-	if got := OrderKey(0, 1000); got != 0 {
-		t.Errorf("OrderKey(0, 1000) = %d, want 0", got)
-	}
-	if got := OrderKey(-5, 0); got != 0 {
-		t.Errorf("OrderKey(-5, 0) = %d, want 0", got)
+	// Saturation: below zero the key is 0 (PROTOCOL.md section 9), above the largest uint64 it is
+	// that maximum, and the arithmetic never wraps, whatever the arguments.
+	for _, c := range []struct {
+		arrival  int64
+		priority int
+		want     uint64
+	}{
+		{0, 1000, 0},
+		{59_999_999_999_999, 1000, 0},
+		{60_000_000_000_000, 1000, 0},
+		{60_000_000_000_001, 1000, 1},
+		{-5, 0, 0},
+		{math.MinInt64, math.MaxInt, 0},
+		{math.MaxInt64, -1000, uint64(math.MaxInt64) + 60_000_000_000_000}, // int64 would wrap here
+		{math.MaxInt64, -1_000_000_000, math.MaxUint64},
+		{math.MaxInt64, math.MinInt, math.MaxUint64},
+		{t0, 2000, uint64(t0) - 2000*60_000_000_000}, // no clamp of the priority: callers validate
+	} {
+		if got := OrderKey(c.arrival, c.priority); got != c.want {
+			t.Errorf("OrderKey(%d, %d) = %d, want %d", c.arrival, c.priority, got, c.want)
+		}
 	}
 	if !(ID{OrderKey: 5, PID: 9, Seq: 1}.String() < ID{OrderKey: 5, PID: 10, Seq: 0}.String()) {
 		t.Errorf("name order must follow (order key, pid, seq)")
@@ -236,7 +252,7 @@ func TestDecodeStrict(t *testing.T) {
 		"duplicate label":                 `{"label":"x","label":"y","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
 		"duplicate priority":              `{"label":"x","priority":0,"priority":1,"need":{"cpu":[1,2]},"created_ns":5}`,
 		"duplicate cpu inside need":       `{"label":"x","priority":0,"need":{"cpu":[1,2],"cpu":[3,4]},"created_ns":5}`,
-		"duplicate by escaped spelling":   `{"label":"x","priority":0,"need":{"cpu":[1,2],"cpu":[3,4]},"created_ns":5}`,
+		"duplicate by escaped spelling":   `{"label":"x","priority":0,"need":{"cpu":[1,2],"c\u0070u":[3,4]},"created_ns":5}`,
 		"duplicate in an unknown subtree": `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"extra":{"a":{"b":1,"b":2}}}`,
 		"duplicate in an unknown array":   `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"extra":[{"b":1,"b":2}]}`,
 		"priority 1001":                   `{"label":"x","priority":1001,"need":{"cpu":[1,2]},"created_ns":5}`,
@@ -257,6 +273,16 @@ func TestDecodeStrict(t *testing.T) {
 		"empty need":                      `{"label":"x","priority":0,"need":{},"created_ns":5}`,
 		"need is an array":                `{"label":"x","priority":0,"need":[],"created_ns":5}`,
 		"bad resource name":               `{"label":"x","priority":0,"need":{"Cpu":[1,2]},"created_ns":5}`,
+		"created_ns negative":             `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":-1}`,
+		"minimums sum to 513":             `{"label":"x","priority":0,"need":{"a":[256,256],"b":[256,256],"c":[1,1]},"created_ns":5}`,
+		"lone high surrogate":             `{"label":"\ud800","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
+		"lone low surrogate":              `{"label":"\udc00","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
+		"low before high surrogate":       `{"label":"\ude00\ud83d","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
+		"high surrogate then other":       `{"label":"\ud83d\u0041","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
+		"high surrogate then text":        `{"label":"\ud83dx","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
+		"surrogate in an unknown key":     `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"\ud800":1}`,
+		"surrogate in an unknown value":   `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"e":[{"k":"\udfff"}]}`,
+		"surrogate after an escaped pair": `{"label":"\ud83d\ude00\ud83d","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
 		"missing label":                   `{"priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
 		"missing priority":                `{"label":"x","need":{"cpu":[1,2]},"created_ns":5}`,
 		"missing need":                    `{"label":"x","priority":0,"created_ns":5}`,
@@ -313,6 +339,15 @@ func TestDecodeStrict(t *testing.T) {
 		"duplicate top-level key":       strings.Replace(okHold, `"adopted":false`, `"adopted":false,"adopted":true`, 1),
 		"grant unsorted":                holdWith("grant", `{"cpu":[1,0]}`),
 		"grant repeated index":          holdWith("grant", `{"cpu":[1,1]}`),
+		"grant empty array":             holdWith("grant", `{"cpu":[]}`),
+		"grant empty beside a token":    holdWith("grant", `{"cpu":[0],"gpu":[]}`),
+		"clamped zero":                  holdWith("clamped", `{"cpu":0}`),
+		"clamped 257":                   holdWith("clamped", `{"cpu":257}`),
+		"clamped negative":              holdWith("clamped", `{"cpu":-1}`),
+		"clamped bad name":              holdWith("clamped", `{"Bad":4}`),
+		"label lone high surrogate":     holdWith("label", `"\ud800"`),
+		"label lone low surrogate":      holdWith("label", `"\udc00"`),
+		"surrogate in a grant key":      holdWith("grant", `{"\ud800":[0]}`),
 		"grant index 4096":              holdWith("grant", `{"cpu":[4096]}`),
 		"grant index -1":                holdWith("grant", `{"cpu":[-1]}`),
 		"grant index float":             holdWith("grant", `{"cpu":[1.0]}`),
@@ -357,6 +392,9 @@ func TestDecodeStrict(t *testing.T) {
 		"missing requested_ns":   `{"requester_pid":4711}`,
 		"pid string":             `{"requested_ns":5,"requester_pid":"4711"}`,
 		"requested_ns float":     `{"requested_ns":5.0,"requester_pid":4711}`,
+		"requested_ns negative":  `{"requested_ns":-1,"requester_pid":4711}`,
+		"requester_pid negative": `{"requested_ns":5,"requester_pid":-1}`,
+		"surrogate in a key":     `{"requested_ns":5,"requester_pid":4711,"\ud800":1}`,
 		"not an object":          `"x"`,
 	} {
 		if _, err := DecodeCancel([]byte(body)); !errors.Is(err, ErrMalformed) {
@@ -384,6 +422,17 @@ func TestDecodeStrict(t *testing.T) {
 		UnbudgetedResources: []string{}, Clamped: map[string]int{}}
 	if !reflect.DeepEqual(h, wantHold) {
 		t.Errorf("decoded hold = %+v, want %+v", h, wantHold)
+	}
+	// An escaped backslash before "ud800" is the text, not an escape; pairs in either case are fine.
+	for body, want := range map[string]string{
+		`{"label":"\\ud800","priority":0,"need":{"cpu":[1,2]},"created_ns":0}`:             `\ud800`,
+		`{"label":"\uD83D\uDE00","priority":0,"need":{"cpu":[1,2]},"created_ns":0}`:        "\U0001F600",
+		`{"label":"\ud83d\ude00\\ud800","priority":0,"need":{"cpu":[1,2]},"created_ns":0}`: "\U0001F600\\ud800",
+	} {
+		got, err := DecodeTicket([]byte(body))
+		if err != nil || got.Label != want {
+			t.Errorf("DecodeTicket(%s) = %q, %v; want label %q", body, got.Label, err, want)
+		}
 	}
 	// Ticket at the limits: the body is exactly 8192 bytes.
 	pad := `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"pad":"`
@@ -455,6 +504,15 @@ func TestEncodeShapeAndRefusals(t *testing.T) {
 		"hold too many":       Hold{Grant: map[string][]int{"cpu": make257()}},
 		"hold start":          Hold{StartNS: math.MaxInt64 + 1},
 		"hold name":           Hold{Clamped: map[string]int{"BAD": 3}},
+		"hold clamped zero":   Hold{Clamped: map[string]int{"cpu": 0}},
+		"hold clamped 257":    Hold{Clamped: map[string]int{"cpu": 257}},
+		"hold nil tokens":     Hold{Grant: map[string][]int{"cpu": nil}},
+		"hold empty tokens":   Hold{Grant: map[string][]int{"cpu": {}}},
+		"ticket created":      Ticket{Need: cpu, CreatedNS: -1},
+		"ticket minimums":     Ticket{Need: map[string]spec.Range{"a": {Min: 256, Max: 256}, "b": {Min: 256, Max: 256}, "c": {Min: 1, Max: 1}}},
+		"cancel requested":    Cancel{RequestedNS: -1},
+		"cancel pid":          Cancel{RequesterPID: -1},
+		"cancel pointer":      &Cancel{RequesterPID: -1},
 	}
 	for why, v := range refused {
 		if b, err := Encode(v); err == nil {
@@ -521,7 +579,7 @@ func TestLargestGrantFitsBody(t *testing.T) {
 	}
 	need := make(map[string]spec.Range, 8)
 	for _, r := range res {
-		need[r] = spec.Range{Min: 255, Max: 256}
+		need[r] = spec.Range{Min: 64, Max: 256} // the minimums sum to the 512 cap
 	}
 	tk := Ticket{Label: lbl, Priority: -1000, Need: need, CreatedNS: math.MaxInt64}
 	b, err = Encode(tk)
@@ -609,8 +667,16 @@ func TestFixtureNames(t *testing.T) {
 		}
 	}
 	for _, c := range f.CancelValid {
-		if _, ok := ParseID(c.Name); !ok {
-			t.Errorf("ParseID rejected %q", c.Name)
+		id, ok := ParseID(c.Name)
+		key, err := strconv.ParseUint(c.OrderKey, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || id != (ID{OrderKey: key, PID: c.PID, Seq: c.Seq}) || id.String() != c.Name {
+			t.Errorf("ParseID(%q) = %+v, %v", c.Name, id, ok)
+		}
+		if c.Display != nil {
+			t.Errorf("cancel case %q carries a display", c.Name)
 		}
 	}
 	for _, c := range f.CancelInvalid {
