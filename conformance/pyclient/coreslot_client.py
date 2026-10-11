@@ -80,7 +80,7 @@ TICKET_RE = re.compile(r"([0-9]{20})-([0-9]{10})-([0-9]{6})(?:-([A-Za-z0-9._]{1,
 ID_RE = re.compile(r"([0-9]{20})-([0-9]{10})-([0-9]{6})")
 TMP_RE = re.compile(r"\.tmp-[0-9]{10}-[0-9]{6}")
 INDEX_RE = re.compile(r"0|[1-9][0-9]{0,3}")
-FORMAT_RE = re.compile(rb"coreslot-protocol (0|[1-9][0-9]*)\n?")
+FORMAT_RE = re.compile(rb"coreslot-protocol ([0-9]{1,9})\n?")
 ID_LEN = 38  # 20 + 1 + 10 + 1 + 6
 
 O_FILE = os.O_NOFOLLOW | os.O_CLOEXEC
@@ -302,7 +302,7 @@ def validate_cancel(obj: dict) -> dict:
 
 def validate_gen(obj: dict) -> dict:
     _require(obj, ("gen", "reconciled_ns"))
-    if not _is_int(obj["gen"]) or not _is_int(obj["reconciled_ns"]):
+    if not _is_int(obj["gen"], 0) or not _is_int(obj["reconciled_ns"]):
         raise Malformed("gen")
     return obj
 
@@ -383,10 +383,16 @@ def _check_stat(st: os.stat_result, want_dir: bool, path: str) -> None:
         raise StateError("state-type", f"{path} is not a directory")
     if not want_dir and not stat.S_ISREG(st.st_mode):
         raise StateError("state-type", f"{path} is not a regular file")
-    if st.st_uid != os.geteuid():
-        raise StateError("state-owner", f"{path} is not owned by uid {os.geteuid()}")
+    if st.st_uid != os.getuid():
+        raise StateError("state-owner", f"{path} is not owned by uid {os.getuid()}")
     if st.st_mode & 0o022:
         raise StateError("state-mode", f"{path} is group- or world-writable")
+
+
+def _policy_ok(st: os.stat_result, want_dir: bool) -> bool:
+    """The §4.2 checks as a predicate (for entries that are ignored rather than fatal)."""
+    kind_ok = stat.S_ISDIR(st.st_mode) if want_dir else stat.S_ISREG(st.st_mode)
+    return kind_ok and st.st_uid == os.getuid() and not st.st_mode & 0o022
 
 
 def _ensure_dir(path: str, create: bool = True) -> bool:
@@ -409,7 +415,7 @@ def _ensure_dir(path: str, create: bool = True) -> bool:
 def _open_checked(path: str, flags: int, mode: int = 0o600) -> int:
     """Open a layout file with O_NOFOLLOW|O_CLOEXEC and check it (§4.2)."""
     try:
-        fd = os.open(path, flags | O_FILE, mode)
+        fd = os.open(path, flags | O_FILE | os.O_NONBLOCK, mode)  # never waits on a FIFO
     except OSError as exc:
         if exc.errno in (errno.ELOOP, errno.EMLINK):
             raise StateError("state-type", f"{path} is a symlink") from exc
@@ -545,12 +551,14 @@ def rename_noreplace(src: str, dst: str) -> None:
         if e not in _NOREPLACE_FALLBACK_ERRNOS:
             raise OSError(e, os.strerror(e), dst)
     os.link(src, dst)
-    os.unlink(src)
+    with contextlib.suppress(OSError):
+        os.unlink(src)  # if this fails, the extra name is a temporary that reconciliation removes
 
 
 _DARWIN_REFUSED = {"nfs", "smbfs", "afpfs", "webdav"}
-_LINUX_REFUSED = {0x6969, 0xFF534D42, 0xFE534D42, 0x517B, 0x65735546, 0x01021997}
-_LINUX_REFUSED_NAMES = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "9p"}
+_LINUX_REFUSED = {0x6969, 0xFF534D42, 0xFE534D42, 0x517B, 0x65735546, 0x01021997,
+                  0x786F4256, 0x00C36400, 0x5346414F, 0x6B414653}  # + vboxsf, Ceph, AFS, kAFS
+_LINUX_REFUSED_NAMES = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "vboxsf", "ceph", "afs"}
 
 
 def filesystem_type(path: str):
@@ -668,10 +676,10 @@ def size_of(raw, cpus: int) -> int:
             return raw
         raise ValueError(f"size {raw} outside [1, 4096]")
     if isinstance(raw, str):
-        m = re.fullmatch(r"([1-9][0-9]{0,2})%", raw)
-        if m and int(m.group(1)) <= 100:
+        m = re.fullmatch(r"([0-9]{1,9})%", raw)
+        if m and 1 <= int(m.group(1)) <= 100:
             return min(MAX_SIZE, max(1, cpus * int(m.group(1)) // 100))
-        m = re.fullmatch(r"-(0|[1-9][0-9]*)", raw)
+        m = re.fullmatch(r"-([0-9]{1,9})", raw)
         if m:
             return min(MAX_SIZE, max(1, cpus - int(m.group(1))))
     raise ValueError(f"invalid size {raw!r}")
@@ -839,7 +847,8 @@ class Client:
         self._cpus = cpus
         self._S: str | None = None
         self._diag = diag or (lambda msg: print(msg, file=sys.stderr, flush=True))
-        self.ignored_entries = 0
+        self.ignored_entries = 0  # queue/ entries the last election ignored (§4.4: counted)
+        self.ignored_by_reconciliation: dict[str, int] = {}
 
     # ---- locations (§4.1, §5.3)
 
@@ -864,7 +873,8 @@ class Client:
             if self._override:
                 fd = _open_checked(path, os.O_RDONLY)
             else:
-                fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+                # Through symlinks; a dangling one raises FileNotFoundError (the defaults).
+                fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     os.close(fd)
                     raise StateError("config", f"{path} is not a regular file")
@@ -905,7 +915,7 @@ class Client:
     # ---- section entry (§8)
 
     @contextlib.contextmanager
-    def _section(self, timeout: float | None = None, single: bool = False, token_only: bool = False):
+    def _section(self, timeout: float | None = None, single: bool = False):
         S = self._prepare()
         saved = self._ignore_stops()
         fd = None
@@ -927,7 +937,7 @@ class Client:
                 time.sleep(delay if deadline is None else max(0.0, min(delay, deadline - now)))
                 delay = min(delay * 2, ENTRY_BACKOFF_MAX)
             fmt = self._read_format()
-            understood = fmt in (None, FORMAT_VERSION) and not token_only
+            understood = fmt in (None, FORMAT_VERSION)
             if understood:
                 if fmt is None:
                     self._publish_replace(S, "FORMAT", b"coreslot-protocol 1\n")
@@ -1020,23 +1030,22 @@ class Client:
     def _publish_named(self, d: str, make_name, body: bytes, lock: bool) -> tuple[int | None, str]:
         """Ticket or hold: lock-carrying, final name built from the seq (no replacement)."""
         self._check_room(d)
-        fd, tmp, seq = self._create_tmp(d, _NAME_SEQ)
-        try:
-            if lock:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            _write_all(fd, body)
-            while True:
+        while True:
+            fd, tmp, seq = self._create_tmp(d, _NAME_SEQ)
+            try:
+                if lock:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _write_all(fd, body)
                 final = make_name(seq)
-                try:
-                    rename_noreplace(tmp, os.path.join(d, final))
-                    break
-                except FileExistsError:
-                    seq = _NAME_SEQ.next()
-        except BaseException:
-            os.close(fd)
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
-            raise
+                rename_noreplace(tmp, os.path.join(d, final))
+                break
+            except BaseException as exc:
+                os.close(fd)
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                if isinstance(exc, FileExistsError):
+                    continue  # the final name is taken: a new temporary and the next seq
+                raise
         if not lock:
             os.close(fd)
             return None, final
@@ -1067,19 +1076,27 @@ class Client:
         S = sec.S
         removed = False
         queue, holds, cancel = (os.path.join(S, n) for n in ("queue", "holds", "cancel"))
+        ignored = {"$S": 0, "queue": 0, "holds": 0, "cancel": 0}
         for d in (queue, holds):
             if not _ensure_dir(d, create=False):
                 continue
+            key = os.path.basename(d)
             for name in _list(d):
                 if parse_name(name) is None:
+                    if not TMP_RE.fullmatch(name):
+                        ignored[key] += 1
                     continue
                 path = os.path.join(d, name)
                 try:
                     fd = os.open(path, os.O_RDONLY | O_FILE | os.O_NONBLOCK)
+                except FileNotFoundError:
+                    continue
                 except OSError:
+                    ignored[key] += 1  # a symlink or unreadable entry: ignored, never removed
                     continue
                 try:
-                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    if not _policy_ok(os.fstat(fd), want_dir=False):
+                        ignored[key] += 1
                         continue
                     try:
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1095,23 +1112,38 @@ class Client:
         if _ensure_dir(cancel, create=False):
             live_ids = {n[:ID_LEN] for n in _list(queue) if parse_name(n) is not None}
             for name in _list(cancel):
-                if parse_cancel_name(name) is not None and name not in live_ids:
-                    with contextlib.suppress(FileNotFoundError):
-                        os.unlink(os.path.join(cancel, name))
-                        removed = True
+                if parse_cancel_name(name) is None:
+                    if not TMP_RE.fullmatch(name):
+                        ignored["cancel"] += 1
+                    continue
+                if name in live_ids:
+                    continue
+                path = os.path.join(cancel, name)
+                try:
+                    if not _policy_ok(os.lstat(path), want_dir=False):
+                        ignored["cancel"] += 1
+                        continue
+                    os.unlink(path)
+                    removed = True
+                except FileNotFoundError:
+                    pass
         now = time.time_ns()
-        for d in (S, queue, holds, cancel):
+        for key, d in (("$S", S), ("queue", queue), ("holds", holds), ("cancel", cancel)):
             for name in _list(d):
                 if not TMP_RE.fullmatch(name):
                     continue
                 path = os.path.join(d, name)
                 try:
                     st = os.lstat(path)
+                    if not _policy_ok(st, want_dir=False):
+                        ignored[key] += 1
+                        continue
                     if now - st.st_mtime_ns > TMP_AGE_NS:
                         os.unlink(path)
                         removed = True
                 except OSError:
                     pass
+        self.ignored_by_reconciliation = ignored
         sec.write_gen(gen + 1 if removed else gen, time.time_ns())
 
     # ---- tokens (§6)
@@ -1275,27 +1307,32 @@ class Client:
                                "does not implement; running token-only")
                     return Ticket(self, None, None, label, priority, need, token_only=True)
                 sec.reconcile_if_due()
-                queue = self._sub("queue")
-                arrival = time.time_ns()
-                key = order_key(arrival, priority)
-                body = _dump({"label": label, "priority": priority,
-                              "need": {r: [lo, hi] for r, (lo, hi) in need.items()},
-                              "created_ns": arrival})
-                disp = display_of(label)
-                suffix = f"-{disp}" if disp else ""
-                pid = os.getpid()
-                fd, name = self._publish_named(
-                    queue, lambda seq: f"{key:020d}-{pid:010d}-{seq:06d}{suffix}", body, lock=True)
-                try:
-                    sec.bump_gen()
-                except BaseException:
-                    os.close(fd)
-                    raise
+                fd, name = self._publish_ticket(sec, label, priority, need)
                 return Ticket(self, name, fd, label, priority, need)
         except _SectionBusy as exc:
             raise Refusal("could not enter the admission section before the deadline") from exc
         except OSError as exc:
             raise StateError("io", str(exc)) from exc
+
+    def _publish_ticket(self, sec: _Section, label: str, priority: int, need: dict) -> tuple[int, str]:
+        """§10.1 inside an understood section: publish the ticket and bump gen."""
+        queue = self._sub("queue")
+        arrival = time.time_ns()
+        key = order_key(arrival, priority)
+        body = _dump({"label": label, "priority": priority,
+                      "need": {r: [lo, hi] for r, (lo, hi) in need.items()},
+                      "created_ns": arrival})
+        disp = display_of(label)
+        suffix = f"-{disp}" if disp else ""
+        pid = os.getpid()
+        fd, name = self._publish_named(
+            queue, lambda seq: f"{key:020d}-{pid:010d}-{seq:06d}{suffix}", body, lock=True)
+        try:
+            sec.bump_gen()
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd, name
 
     def cancel(self, ticket_id: str, *, timeout: float | None = 30.0) -> bool:
         """§13.1: publish cancel/<ticket-id>. False when a request already existed."""
@@ -1353,9 +1390,15 @@ class Client:
                 disp = display_of(label)
                 suffix = f"-{disp}" if disp else ""
                 pid = os.getpid()
-                return self._publish_named(
+                published = self._publish_named(
                     self._sub("holds"), lambda seq: f"{start_ns:020d}-{pid:010d}-{seq:06d}{suffix}",
                     body, lock=True)
+                try:
+                    sec.bump_gen()
+                except BaseException:
+                    os.close(published[0])
+                    raise
+                return published
         except (_SectionBusy, OSError, StateError):
             return None
 
@@ -1386,15 +1429,20 @@ class Client:
         except (_SectionBusy, OSError, StateError):
             return False
 
-    def append_log(self, record: dict) -> bool:
-        """§20: one line, single O_APPEND write, rotation at 10 MiB inside the section."""
+    def append_log(self, record: dict, nested: bool = False) -> bool:
+        """§20: one line, single O_APPEND write outside the section; rotation at 10 MiB inside it.
+
+        A nested (pass-through) line is marked `"nested": true` and never rotates the log.
+        """
         try:
-            if self._read_format() not in (None, FORMAT_VERSION):
-                return False  # §14/§15.2: never write into a format not understood
+            if self._read_format() != FORMAT_VERSION:
+                return False  # §14/§20: only into a FORMAT read and understood; never write one
+            if nested:
+                record = dict(record, nested=True)
             d = self._sub("log")
             path = os.path.join(d, "runs.jsonl")
             try:
-                if os.lstat(path).st_size >= LOG_ROTATE_BYTES:
+                if not nested and os.lstat(path).st_size >= LOG_ROTATE_BYTES:
                     with self._section(timeout=2.0) as sec:
                         if not sec.understood:
                             return False
@@ -1424,7 +1472,13 @@ class Client:
 
 
 class Ticket:
-    """A waiting request. `step()` is one poll (§10.3); the caller sleeps `poll_delay()`."""
+    """A waiting request. `step()` is one poll (§10.3); the caller sleeps `poll_delay()`.
+
+    `step()` never sleeps, and it is also what refreshes the ticket (§10.2). The caller MUST call it
+    at least every 2 s while waiting, or other observers find the ticket STALLED and pass it over.
+    `wait()` and the CLI do so. Used as a context manager, a ticket that was not admitted is
+    withdrawn on exit.
+    """
 
     def __init__(self, client: Client, name: str | None, fd: int | None, label: str, priority: int,
                  need: dict, token_only: bool = False):
@@ -1445,6 +1499,7 @@ class Ticket:
         self._last_refresh_m = time.monotonic()
         self._last_refresh_w = time.time_ns()
         self._resume_bump_pending = False
+        self._nonmatching = 0
         self._backoff = HEAD_BACKOFF_MIN
         self.position: int | None = None
 
@@ -1483,7 +1538,7 @@ class Ticket:
             return False
         try:
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o022:
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
                 return False
             validate_cancel(parse_body(_read_upto(fd, MAX_BODY + 1)))
             return True
@@ -1507,6 +1562,7 @@ class Ticket:
         live = set(names)
         self._obs = {k: v for k, v in self._obs.items() if k in live}
         self._valid = {k: v for k, v in self._valid.items() if k in live}
+        self._nonmatching = ignored
         self.client.ignored_entries = ignored
 
     def _examine(self, name: str, now: float) -> str:
@@ -1520,7 +1576,7 @@ class Ticket:
             return "ignored"
         try:
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o022:
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
                 return "ignored"
             ok = self._valid.get(name)
             if ok is None:
@@ -1551,6 +1607,7 @@ class Ticket:
         now = self.client.observer_clock()
         ahead = [n for n in self._queue if n[:ID_LEN] < self.id]
         live = 0
+        ignored = 0
         gone = []
         for n in reversed(ahead):
             verdict = self._examine(n, now)
@@ -1558,6 +1615,9 @@ class Ticket:
                 live += 1
             elif verdict == "gone":
                 gone.append(n)
+            elif verdict == "ignored":
+                ignored += 1  # malformed, or a bad type/owner/mode: never trusted (§7.2, B1/D6)
+        self.client.ignored_entries = self._nonmatching + ignored
         if gone:
             self._queue = [n for n in self._queue if n not in gone]
         return live + 1
@@ -1645,17 +1705,37 @@ class Ticket:
                           "continuing token-only")
 
     def _step_token_only(self):
+        """§15.2: token-only admission, re-deciding the mode from FORMAT at every entry."""
+        rejoined = False
+        grant = None
         try:
-            with self.client._section(timeout=0.25, token_only=True) as sec:
-                grant = self.client._admit_locked(sec, self.label, self.need, token_only=True)
+            with self.client._section(timeout=0.25) as sec:
+                if sec.understood:  # format 1 again, or none (just written): enqueue anew (I4)
+                    sec.reconcile_if_due()
+                    fd, name = self.client._publish_ticket(sec, self.label, self.priority, self.need)
+                    self._rejoin(fd, name)
+                    rejoined = True
+                else:
+                    grant = self.client._admit_locked(sec, self.label, self.need, token_only=True)
         except _SectionBusy:
-            grant = None
+            pass
+        if rejoined:
+            self.client._diag(f"coreslot: the state format is understood again; queued as {self.id}")
+            return self.step()
         if grant is not None:
             self._grant = grant
             return ("admitted", grant)
         self._backoff = min(self._backoff * 2, HEAD_BACKOFF_MAX)
         self.position = 0
         return ("waiting", 0)
+
+    def _rejoin(self, fd: int, name: str) -> None:
+        self._fd, self.name, self.id = fd, name, name[:ID_LEN]
+        self.token_only = False
+        self._gen_seen = None
+        self._queue, self._obs, self._valid = [], {}, {}
+        self._last_refresh_m, self._last_refresh_w = time.monotonic(), time.time_ns()
+        self._backoff = HEAD_BACKOFF_MIN
 
     def withdraw(self, remove: bool = True) -> None:
         """§13.2: close the ticket descriptor; optionally remove the file in a section."""
@@ -1674,6 +1754,12 @@ class Ticket:
                         sec.bump_gen()
             except (_SectionBusy, OSError, StateError):
                 pass
+
+    def __enter__(self) -> "Ticket":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.withdraw()  # no effect once admitted: the Grant owns the descriptors then
 
     def wait(self, timeout: float | None = None) -> "Grant":
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -1737,6 +1823,12 @@ class Grant:
             env["CORESLOT_UNBUDGETED"] = self.reason
         return env
 
+    def __enter__(self) -> "Grant":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
     def close(self, remove_hold: bool = True) -> None:
         if self.closed:
             return
@@ -1764,15 +1856,15 @@ def parse_token_fds(text: str) -> list[int]:
             raise ValueError(f"bad item {item!r}")
         a = int(m.group(1))
         b = int(m.group(2)) if m.group(2) is not None else a
-        if a > b or b - a >= MAX_TOTAL + 1:
+        if a > b:
             raise ValueError(f"bad range {item!r}")
+        if len(fds) + (b - a + 1) > MAX_TOTAL:
+            raise ValueError("more than 512 descriptors")
         for fd in range(a, b + 1):
             if fd in seen:
                 raise ValueError(f"descriptor {fd} listed twice")
             seen.add(fd)
             fds.append(fd)
-        if len(fds) > MAX_TOTAL + 1:
-            raise ValueError("too many descriptors")
     return fds
 
 
@@ -1865,6 +1957,13 @@ def spawn_and_wait(argv: list[str], env: dict[str, str], hold_fd: int | None, to
                 d = fcntl.fcntl(hold_fd, fcntl.F_DUPFD_CLOEXEC, high)
                 dups.append(d)
                 actions.append((os.POSIX_SPAWN_DUP2, d, 3))
+            else:
+                # §17: no hold, so fd 3 is closed in the child even if this process has one open.
+                # dup2 first so that the close always names an open descriptor (a close of an
+                # unopened fd fails posix_spawn on some systems).
+                d = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+                dups.append(d)
+                actions += [(os.POSIX_SPAWN_DUP2, d, 3), (os.POSIX_SPAWN_CLOSE, 3)]
             for i, fd in enumerate(token_fds):
                 d = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, high)
                 dups.append(d)
@@ -1913,7 +2012,7 @@ def spawn_and_wait(argv: list[str], env: dict[str, str], hold_fd: int | None, to
 
 USAGE = """usage: coreslot_client.py run [--need RES=MIN..MAX]... [--label L] [--priority P]
            [--timeout SECONDS] [--strict] [--independent] [--subst] [--refusal-code N] -- CMD [ARG...]
-       coreslot_client.py cancel TICKET-ID"""
+       coreslot_client.py cancel [--timeout SECONDS] TICKET-ID"""
 
 
 class _RunOptions:
@@ -2013,8 +2112,8 @@ def _notices(grant: Grant, sizes_hint: dict | None = None) -> None:
                   f"{grant.need[r][0]}")
 
 
-def _run_unbudgeted(opts, needs, env, reason: str, hold=None) -> int:
-    child_env = _strip_context(env)
+def _run_unbudgeted(opts, needs, env, reason: str, hold=None, strip: bool = True) -> int:
+    child_env = _strip_context(env) if strip else dict(env)
     for r, (lo, _) in needs.items():
         child_env["CORESLOT_GRANTED_" + _env_form(r)] = str(lo)
     child_env["CORESLOT_UNBUDGETED"] = reason
@@ -2022,7 +2121,9 @@ def _run_unbudgeted(opts, needs, env, reason: str, hold=None) -> int:
     if hold_fd is not None:
         child_env["CORESLOT_HELD_FD"] = "3"
     argv = substitute(opts.command, {r: lo for r, (lo, _) in needs.items()}, opts.subst)
-    return spawn_and_wait(argv, child_env, hold_fd, [])
+    # A fail-open run builds §17 from its own hold; an inherited-unbudgeted run (§18 rule 1)
+    # passes what it inherited on untouched.
+    return spawn_and_wait(argv, child_env, hold_fd, [], remap=strip)
 
 
 def _fail_open(client: Client, opts, needs, env, err: StateError, t0: int) -> int:
@@ -2065,24 +2166,29 @@ def cli_run(args: list[str]) -> int:
         raise UsageError(f"placeholder names a resource the request does not name: {sorted(missing)}")
     t0 = time.time_ns()
     env = dict(os.environ)
-    if not opts.independent and "CORESLOT_UNBUDGETED" in env:  # §18 rule 1
+    if not opts.independent and env.get("CORESLOT_UNBUDGETED"):  # §18 rule 1
         _diag(f"coreslot: inside an unbudgeted run ({env['CORESLOT_UNBUDGETED']}); running "
               "unbudgeted with the minimum of each resource")
-        return _run_unbudgeted(opts, needs, env, env["CORESLOT_UNBUDGETED"])
-    if not opts.independent and "CORESLOT_TOKEN_FDS" in env:  # §18 rule 2
-        return _cli_passthrough(opts, needs, env)
-    if opts.independent:
-        _close_inherited_context(env)
+        started = time.monotonic()
+        status = _run_unbudgeted(opts, needs, env, env["CORESLOT_UNBUDGETED"], strip=False)
+        _nested_log(opts, needs, {r: lo for r, (lo, _) in needs.items()}, [], sorted(needs),
+                    time.monotonic() - started, status, t0, env["CORESLOT_UNBUDGETED"])
+        return status
+    if not opts.independent and env.get("CORESLOT_TOKEN_FDS"):  # §18 rule 2
+        return _cli_passthrough(opts, needs, env, t0)
+    _close_inherited_context(env)  # §17: not a pass-through, so inherited grant fds are not passed on
     client = Client(cli=True)
+    waited0 = time.monotonic()
+    deadline = None if opts.timeout is None else waited0 + opts.timeout
     try:
-        ticket = client.enqueue(opts.label, opts.priority, needs)
+        ticket = client.enqueue(opts.label, opts.priority, needs, timeout=opts.timeout)
     except StateError as err:
         return _fail_open(client, opts, needs, env, err, t0)
     except Refusal as err:
-        _diag(f"coreslot: {err}")
+        _diag(f"coreslot: {err}; refusing")
         return opts.refusal_code
-    waited0 = time.monotonic()
-    deadline = None if opts.timeout is None else waited0 + opts.timeout
+    except KeyboardInterrupt:  # interrupted while entering the section: nothing was published
+        return EXIT_INTERRUPTED
     last_line = waited0
     try:
         while True:
@@ -2131,7 +2237,11 @@ def cli_run(args: list[str]) -> int:
 
 
 def _close_inherited_context(env: dict[str, str]) -> None:
-    """--independent: inherited grant descriptors must not leak into this run's command."""
+    """§17: a run that is not a pass-through does not pass on the inherited grant descriptors.
+
+    Exactly the descriptors the inherited CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS name become
+    close-on-exec; every other inherited descriptor passes through untouched.
+    """
     fds: list[int] = []
     with contextlib.suppress(ValueError):
         fds = parse_token_fds(env.get("CORESLOT_TOKEN_FDS", "")) if env.get("CORESLOT_TOKEN_FDS") else []
@@ -2142,7 +2252,15 @@ def _close_inherited_context(env: dict[str, str]) -> None:
             os.set_inheritable(fd, False)
 
 
-def _cli_passthrough(opts, needs, env) -> int:
+def _nested_log(opts, needs, granted, clamped, unbudgeted, ran, status, t0, fail_open="") -> None:
+    """E6/§20: a pass-through appends a `"nested": true` line, outside the section, never rotating."""
+    client = Client(cli=True)
+    if not client.append_log(_log_record(opts, needs, granted, clamped, unbudgeted, 0.0, ran, status,
+                                         t0, fail_open), nested=True):
+        _diag("coreslot: no run-log line (state directory missing, not understood, or not writable)")
+
+
+def _cli_passthrough(opts, needs, env, t0) -> int:
     client = Client(cli=True)
     try:
         held = validate_passthrough(client, env["CORESLOT_TOKEN_FDS"])
@@ -2161,7 +2279,12 @@ def _cli_passthrough(opts, needs, env) -> int:
             _diag(f"coreslot: {r}: not held by the parent run; running unbudgeted with {lo}")
         child_env["CORESLOT_GRANTED_" + _env_form(r)] = str(granted[r])
     argv = substitute(opts.command, granted, opts.subst)
-    return spawn_and_wait(argv, child_env, None, [], remap=False)
+    started = time.monotonic()
+    status = spawn_and_wait(argv, child_env, None, [], remap=False)
+    clamped = sorted(r for r, (lo, _) in needs.items() if r in held and lo > held[r])
+    _nested_log(opts, needs, granted, clamped, sorted(r for r in needs if r not in held),
+                time.monotonic() - started, status, t0)
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2172,11 +2295,22 @@ def main(argv: list[str] | None = None) -> int:
         if argv[0] == "run":
             return cli_run(argv[1:])
         if argv[0] == "cancel":
-            if len(argv) != 2:
-                raise UsageError("cancel takes one ticket id")
+            rest, timeout = argv[1:], 30.0
+            if len(rest) == 3 and rest[0] == "--timeout":
+                try:
+                    timeout = float(rest[1])
+                except ValueError as exc:
+                    raise UsageError("--timeout must be a number of seconds") from exc
+                rest = rest[2:]
+            if len(rest) != 1:
+                raise UsageError("cancel takes [--timeout SECONDS] and one ticket id")
             try:
-                Client(cli=True).cancel(argv[1])
-            except (StateError, Refusal) as err:
+                if not Client(cli=True).cancel(rest[0], timeout=timeout):
+                    _diag("coreslot: cancellation already requested")
+            except Refusal as err:
+                _diag(f"coreslot: {err}; refusing")
+                return EXIT_REFUSAL
+            except StateError as err:
                 _diag(f"coreslot: {err}")
                 return EXIT_INTERNAL
             return 0
