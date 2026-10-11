@@ -3,17 +3,10 @@
 package engine
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"maps"
-	"os"
-	"path/filepath"
 	"slices"
-	"strconv"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/store"
@@ -21,8 +14,9 @@ import (
 )
 
 // Free returns resource's size minus its locked tokens now (PROTOCOL.md section 12.1 step 4),
-// never below 0. It counts by probing every existing token file outside the section, which
-// the protocol permits, so it never waits for the section and works under any format. A
+// never below 0. It counts by probing every existing token file outside the section
+// (store.CountLockedProbe), which the protocol permits, so it never waits for the section and
+// works under any format. A
 // resource the configuration does not declare is an error.
 func (e *Engine) Free(resource string) (int, error) {
 	if err := spec.ValidateName(resource); err != nil {
@@ -36,87 +30,29 @@ func (e *Engine) Free(resource string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("engine: resource %q is not declared in the configuration", resource)
 	}
-	locked, err := e.countLocked(resource)
+	locked, err := e.st.CountLockedProbe(resource)
 	if err != nil {
 		return 0, err
 	}
 	return max(0, size-locked), nil
 }
 
-// countLocked counts resource's locked tokens at every existing index by probing, outside the
-// section. A missing res/<resource>/ has none; entries that are not canonical indices are not
-// tokens and are skipped (PROTOCOL.md section 6).
-func (e *Engine) countLocked(resource string) (int, error) {
-	dir := filepath.Join(store.ResDir, resource)
-	if err := store.CheckEntry(filepath.Join(e.st.Dir(), dir), true); err != nil {
-		return 0, err
-	}
-	names, err := listNames(filepath.Join(e.st.Dir(), dir))
-	if err != nil {
-		return 0, err
-	}
-	locked := 0
-	for _, name := range names {
-		if !tokenIndex(name) {
-			continue
-		}
-		dead, err := e.st.Probe(dir, name)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return 0, err
-		}
-		if !dead {
-			locked++
-		}
-	}
-	return locked, nil
-}
-
-// listNames lists a directory of the layout, reading at most store.MaxEntries+1 names; a
-// missing directory is empty, and more than store.MaxEntries names is a state error.
-func listNames(dir string) ([]string, error) {
-	d, err := os.Open(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer d.Close()
-	names, err := d.Readdirnames(store.MaxEntries + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	if len(names) > store.MaxEntries {
-		return nil, &store.StateError{Reason: fmt.Sprintf("%s holds more than %d entries", dir, store.MaxEntries)}
-	}
-	return names, nil
-}
-
-// tokenIndex reports whether name is a token index: decimal, no leading zeros, in [0, 4095].
-func tokenIndex(name string) bool {
-	if name == "" || len(name) > 4 || (len(name) > 1 && name[0] == '0') {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		if name[i] < '0' || name[i] > '9' {
-			return false
-		}
-	}
-	n, _ := strconv.Atoi(name)
-	return n <= wire.MaxTokenIndex
-}
-
 // Snapshot reads the state directory outside the section, so that it works while another
 // client holds (or is stopped inside) the section, and writes nothing. Only a state error
 // that makes the directory unreadable is returned; a malformed FORMAT, an invalid
-// configuration and malformed entries are reported in the Report.
+// configuration and malformed or stray entries are reported in the Report.
 func (e *Engine) Snapshot() (Report, error) {
 	r := Report{StateDir: e.st.Dir(), Resources: map[string]ResourceInfo{}, Ignored: map[string]int{}}
 
-	r.Format, r.FormatUnderstood, r.FormatError = e.readFormat()
+	n, present, err := e.st.ReadFormat()
+	switch {
+	case err != nil:
+		r.FormatError = err.Error()
+	case !present:
+		r.FormatUnderstood = true // the first entry writes format 1
+	default:
+		r.Format, r.FormatUnderstood = n, slices.Contains(formats(), n)
+	}
 	g, err := e.st.ReadGen()
 	if err != nil {
 		return Report{}, err
@@ -127,7 +63,7 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.ConfigError = err.Error()
 	} else {
 		for _, name := range slices.Sorted(maps.Keys(sizes)) {
-			locked, err := e.countLocked(name)
+			locked, err := e.st.CountLockedProbe(name)
 			if err != nil {
 				return Report{}, err
 			}
@@ -142,7 +78,11 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.Ignored[store.QueueDir] = ignored
 	for _, en := range tickets {
 		body, err := e.readBody(store.QueueDir, en.Name)
-		if errors.Is(err, fs.ErrNotExist) {
+		if gone(err) {
+			continue
+		}
+		if stray(err) {
+			r.Ignored[store.QueueDir]++
 			continue
 		}
 		if err != nil {
@@ -154,7 +94,11 @@ func (e *Engine) Snapshot() (Report, error) {
 			continue
 		}
 		dead, err := e.st.Probe(store.QueueDir, en.Name)
-		if errors.Is(err, fs.ErrNotExist) {
+		if gone(err) {
+			continue
+		}
+		if stray(err) {
+			r.Ignored[store.QueueDir]++
 			continue
 		}
 		if err != nil {
@@ -176,7 +120,11 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.Ignored[store.HoldsDir] = ignored
 	for _, en := range holds {
 		body, err := e.readBody(store.HoldsDir, en.Name)
-		if errors.Is(err, fs.ErrNotExist) {
+		if gone(err) {
+			continue
+		}
+		if stray(err) {
+			r.Ignored[store.HoldsDir]++
 			continue
 		}
 		if err != nil {
@@ -188,7 +136,11 @@ func (e *Engine) Snapshot() (Report, error) {
 			continue
 		}
 		dead, err := e.st.Probe(store.HoldsDir, en.Name)
-		if errors.Is(err, fs.ErrNotExist) {
+		if gone(err) {
+			continue
+		}
+		if stray(err) {
+			r.Ignored[store.HoldsDir]++
 			continue
 		}
 		if err != nil {
@@ -224,30 +176,11 @@ func (e *Engine) Snapshot() (Report, error) {
 	return r, nil
 }
 
-// readFormat reads FORMAT outside the section with the grammar of PROTOCOL.md section 7.6:
-// `coreslot-protocol <n>`, n of 1 to 9 ASCII digits, an optional final LF. An absent FORMAT
-// is n = 0 and understood (the first entry writes format 1).
-func (e *Engine) readFormat() (n int, understood bool, malformed string) {
-	body, err := e.readBody("", store.FormatFile)
-	if errors.Is(err, fs.ErrNotExist) {
-		return 0, true, ""
-	}
-	if err != nil {
-		return 0, false, err.Error()
-	}
-	digits, ok := bytes.CutPrefix(bytes.TrimSuffix(body, []byte("\n")), []byte("coreslot-protocol "))
-	if !ok || len(digits) == 0 || len(digits) > 9 || len(bytes.Trim(digits, "0123456789")) > 0 {
-		return 0, false, fmt.Sprintf("malformed FORMAT %q", body)
-	}
-	n, _ = strconv.Atoi(string(digits))
-	return n, slices.Contains(formats(), n), ""
-}
-
 // sectionInfo probes admit.lock (one single-attempt entry, left at once) and reads its
 // informational body, tolerating an empty, stale or malformed one (PROTOCOL.md section 7.7).
 func (e *Engine) sectionInfo() (SectionInfo, error) {
 	var info SectionInfo
-	sec, entered, err := e.st.TryEnter()
+	sec, entered, err := tryEnterSection(e.st)
 	if err != nil {
 		return info, err
 	}

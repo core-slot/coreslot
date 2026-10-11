@@ -7,7 +7,6 @@ import (
 	"errors"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -89,7 +88,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	t.f.Close()
-	_ = os.Remove(filepath.Join(t.e.st.Dir(), store.QueueDir, t.name))
+	_, _ = sec.RemoveOwnTicket(t.name) // already gone counts as success (PROTOCOL.md 10.3)
 	// A failed bump does not undo the admission: waiters probe the tickets ahead of them on
 	// every election, so the closed ticket is passed over without a rescan.
 	_ = sec.BumpGen()
@@ -244,7 +243,9 @@ func (g *Grant) Files() []*os.File {
 	return append(files, g.tokens.Files...)
 }
 
-// Env is the CORESLOT_* environment matching Files: CORESLOT_GRANTED_<RES> for every requested
+// Env is the CORESLOT_* environment matching Files; the caller removes every inherited
+// CORESLOT_GRANTED_*, CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS and CORESLOT_UNBUDGETED before
+// appending it (PROTOCOL.md section 17). It holds CORESLOT_GRANTED_<RES> for every requested
 // resource, CORESLOT_HELD_FD=3 with a hold, CORESLOT_TOKEN_FDS when tokens are passed, and
 // CORESLOT_UNBUDGETED=format in token-only mode (the reason for a fail-open grant).
 func (g *Grant) Env() []string {
@@ -271,8 +272,8 @@ func (g *Grant) Env() []string {
 	return env
 }
 
-// Close closes this process's copies of the grant's descriptors; it never unlocks, so a child
-// that inherited copies keeps the grant until it exits. Then, if it can enter the section
+// Close closes this process's copies of the grant's descriptors, the hold before the tokens; it
+// never unlocks, so a child that inherited copies keeps the grant until it exits. Then, if it can enter the section
 // within 2 s, it probes the hold and removes it only when the probe succeeds (PROTOCOL.md
 // section 12.3); otherwise reconciliation removes it later. It is idempotent and returns the
 // first error from closing a descriptor.
@@ -290,11 +291,16 @@ func (g *Grant) Close() error {
 			first = err
 		}
 	}
+	// The hold first: a live hold must never list a token nobody locks (I1, I2). Tokens still
+	// locked under a dead hold are the window I2 allows until the next reconciliation.
+	if g.hold != nil {
+		keep(g.hold.Close())
+	}
+	point("grant.after-hold-close")
 	for _, f := range g.tokens.Files {
 		keep(f.Close())
 	}
 	if g.hold != nil {
-		keep(g.hold.Close())
 		g.removeHold()
 	}
 	return first
@@ -304,7 +310,7 @@ func (g *Grant) Close() error {
 func (g *Grant) removeHold() {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseWait)
 	defer cancel()
-	sec, err := g.e.st.Enter(ctx)
+	sec, err := enterSection(g.e.st, ctx)
 	if err != nil {
 		return
 	}

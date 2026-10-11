@@ -4,8 +4,6 @@ package engine
 
 import (
 	"context"
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -138,8 +136,8 @@ func (t *Ticket) Request() spec.Request { return t.req }
 // tickets ahead and hold the election; the head tries admission with backoff from 0.25 s up to
 // 2 s, repeating the election before each attempt. It returns Waiting or Admitted, or
 // ErrCancelled once a cancel request was found or the ticket was withdrawn. Section entries
-// wait at most one second, so a caller that calls Step in a loop keeps refreshing. ctx bounds
-// the section entries.
+// wait at most RefreshEvery/4, so a caller that calls Step in a loop keeps refreshing at least
+// every RefreshEvery (see RefreshEvery). ctx bounds the section entries.
 func (t *Ticket) Step(ctx context.Context) (StepResult, error) {
 	return t.step(ctx, false)
 }
@@ -204,6 +202,14 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		t.nextElection = now + ElectEvery
 		return t.last, nil
 	}
+	// Refresh again before an entry that may wait, so the entry cannot stretch the gap.
+	if !single {
+		if now := t.e.clock.Monotonic(); now-t.lastRefreshMono >= RefreshEvery/4 {
+			if err := t.refresh(now); err != nil {
+				return t.settledOr(err)
+			}
+		}
+	}
 	t.attempts++
 	g, err := t.admit(ctx, single)
 	if err != nil {
@@ -256,6 +262,7 @@ func (t *Ticket) refresh(now time.Duration) error {
 	if err := touch(f, real); err != nil {
 		return err
 	}
+	point("ticket.refreshed")
 	if now-t.lastRefreshMono > state.StallAfter || time.Duration(real-t.lastRefreshReal) > state.StallAfter {
 		t.needBump = true
 	}
@@ -267,7 +274,7 @@ func (t *Ticket) refresh(now time.Duration) error {
 // this ticket again. It never delays a refresh: it makes a single attempt to enter, and a busy
 // section is retried at the next refresh (PROTOCOL.md section 10.2).
 func (t *Ticket) resumeBump() error {
-	sec, entered, err := t.e.st.TryEnter()
+	sec, entered, err := tryEnterSection(t.e.st)
 	if err != nil || !entered {
 		return err
 	}
@@ -309,7 +316,7 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 	for _, a := range t.ahead {
 		p := filepath.Join(t.e.st.Dir(), store.QueueDir, a.name)
 		fi, err := os.Lstat(p)
-		if errors.Is(err, fs.ErrNotExist) {
+		if gone(err) {
 			t.obs.Forget(a.key)
 			continue
 		}
@@ -317,7 +324,8 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 			return false, err
 		}
 		dead, err := t.e.st.Probe(store.QueueDir, a.name)
-		if errors.Is(err, fs.ErrNotExist) {
+		if gone(err) || stray(err) {
+			// Gone, or replaced by a stray entry: either way it takes no place in the queue.
 			t.obs.Forget(a.key)
 			continue
 		}
@@ -367,10 +375,10 @@ func (t *Ticket) rescan() error {
 		ok, known := t.ticketOK[en.Name]
 		if !known {
 			body, err := t.e.readBody(store.QueueDir, en.Name)
-			if errors.Is(err, fs.ErrNotExist) {
+			if gone(err) {
 				continue
 			}
-			if err != nil {
+			if err != nil && !stray(err) {
 				return err
 			}
 			_, derr := wire.DecodeTicket(body)
@@ -404,13 +412,15 @@ func (t *Ticket) rescan() error {
 		info, known := t.holdBodies[en.Name]
 		if !known {
 			body, err := t.e.readBody(store.HoldsDir, en.Name)
-			if errors.Is(err, fs.ErrNotExist) {
+			if gone(err) {
 				continue
 			}
-			if err != nil {
+			if err != nil && !stray(err) {
 				return err
 			}
-			info = holderInfo(en, body)
+			if err == nil {
+				info = holderInfo(en, body)
+			}
 			t.holdBodies[en.Name] = info
 		}
 		if info != nil {
@@ -447,7 +457,7 @@ func (t *Ticket) liveHolders() ([]HolderInfo, error) {
 	var live []HolderInfo
 	for _, h := range t.holds {
 		dead, err := t.e.st.Probe(store.HoldsDir, h.name)
-		if errors.Is(err, fs.ErrNotExist) {
+		if gone(err) || stray(err) {
 			continue
 		}
 		if err != nil {

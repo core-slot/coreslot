@@ -27,8 +27,18 @@ import (
 
 // Timing of a waiter (PROTOCOL.md sections 10 and 22).
 const (
-	// RefreshEvery is the longest a waiter goes without refreshing its ticket. A Step refreshes
-	// once half of it has passed, so a caller polling every RefreshEvery still refreshes in time.
+	// RefreshEvery is the longest a waiter goes between two refreshes of its ticket (PROTOCOL.md
+	// section 10.2). A Step refreshes when RefreshEvery/2 has passed since the last refresh, and
+	// again just before a section entry that may wait once RefreshEvery/4 has passed; such an
+	// entry waits at most sectionWait = RefreshEvery/4. A caller that starts each Step within
+	// RefreshEvery/8 of the previous one returning (Wait polls every 250 ms) therefore refreshes
+	// at most RefreshEvery/4 + RefreshEvery/4 + RefreshEvery/8 = 1.25 s apart, plus the
+	// filesystem work of one Step: a Step that starts just under RefreshEvery/4 after a refresh
+	// does not refresh before its entry, the entry waits sectionWait, and the next Step starts
+	// RefreshEvery/8 after that. (Without the mid-step refresh the worst case would be
+	// RefreshEvery/2 + RefreshEvery/4 + RefreshEvery/8 = 1.75 s.) A Poll refreshes whenever
+	// RefreshEvery/2 has passed, so its refresh gaps are its caller's poll interval (at
+	// most 2 s).
 	RefreshEvery = 2 * time.Second
 	// ElectEvery is how often a waiter reads gen and repeats the election.
 	ElectEvery = time.Second
@@ -36,8 +46,8 @@ const (
 	HeadFirstBackoff = 250 * time.Millisecond
 	HeadMaxBackoff   = 2 * time.Second
 	// sectionWait bounds how long one Step waits to enter the section, so that a waiter keeps
-	// refreshing while another client holds it.
-	sectionWait = time.Second
+	// refreshing while another client holds it (see RefreshEvery).
+	sectionWait = RefreshEvery / 4
 	// releaseWait bounds how long a grant's Close waits to enter the section to remove its hold
 	// (PROTOCOL.md section 12.3).
 	releaseWait = 2 * time.Second
@@ -63,10 +73,13 @@ func SystemClock() Clock {
 	}
 }
 
-// Seams the tests replace: the pause-point hook, the implemented formats and the seq counter.
+// Seams the tests replace: the pause-point hook, the implemented formats, and the two ways of
+// entering the section, through which every entry of the engine goes.
 var (
-	point   = testhooks.Point
-	formats = testhooks.Formats
+	point           = testhooks.Point
+	formats         = testhooks.Formats
+	enterSection    = func(st *store.Store, ctx context.Context) (*store.Section, error) { return st.Enter(ctx) }
+	tryEnterSection = func(st *store.Store) (*store.Section, bool, error) { return st.TryEnter() }
 )
 
 // Engine runs requests against one opened state directory. It is safe for concurrent use.
@@ -123,11 +136,11 @@ func (e *Engine) sizes() (map[string]int, error) {
 // caller's own ctx ending is an error.
 func (e *Engine) enter(ctx context.Context, single bool) (sec *store.Section, entered bool, err error) {
 	if single {
-		return e.st.TryEnter()
+		return tryEnterSection(e.st)
 	}
 	wctx, cancel := context.WithTimeout(ctx, sectionWait)
 	defer cancel()
-	sec, err = e.st.Enter(wctx)
+	sec, err = enterSection(e.st, wctx)
 	if err == nil {
 		return sec, true, nil
 	}
@@ -150,7 +163,7 @@ func (e *Engine) Enqueue(req spec.Request) (*Ticket, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	sec, err := e.st.Enter(context.Background())
+	sec, err := enterSection(e.st, context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -227,4 +240,16 @@ func (e *Engine) readBody(dir, name string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(io.LimitReader(f, wire.MaxBodyBytes+1))
+}
+
+// gone reports an entry that no longer exists (PROTOCOL.md section 10.3: a vanished entry is
+// gone, never an error).
+func gone(err error) bool { return errors.Is(err, fs.ErrNotExist) }
+
+// stray reports an entry of queue/, holds/ or cancel/ that fails the filesystem policy when
+// opened or probed (a symlink, a directory, another user's or group/world-writable file put in
+// place after the listing): it is ignored and counted, never trusted (PROTOCOL.md section 4.2).
+func stray(err error) bool {
+	var se *store.StateError
+	return errors.As(err, &se)
 }

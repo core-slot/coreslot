@@ -36,7 +36,7 @@ func (e *Engine) FailOpen(req spec.Request, reason string) (*Grant, error) {
 		clamped: map[string]int{}, unbudgeted: sortedCopy(all), failOpen: reason}
 	ctx, cancel := context.WithTimeout(context.Background(), releaseWait)
 	defer cancel()
-	sec, err := e.st.Enter(ctx)
+	sec, err := enterSection(e.st, ctx)
 	if err != nil {
 		return g, err
 	}

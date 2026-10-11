@@ -141,3 +141,47 @@ func TestStrayDirectoryStaysStateError(t *testing.T) {
 	_, _, err := s.List(QueueDir)
 	wantStateError(t, err, "List of a queue/ that is a symlink")
 }
+
+// A stray never protects a cancel request: a queue/ entry ignored under the PROTOCOL.md stray rule
+// is not an entry for any purpose, so a cancel request whose only grammar-matching queue/
+// match is a stray (a symlink, a directory, a group-writable file named like the ticket) is
+// removed by reconciliation step 2, while one whose ticket is a real live entry stays.
+func TestStrayNeverProtectsACancelRequest(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	live, err := sec.Publish(QueueDir, ticketName(1), []byte(`{}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	strays := strayEntries(t, dir, QueueDir) // ticketName(901), ticketName(902), ticketName(903), a temporary
+	idOf := func(seq int) wire.ID { return wire.ID{OrderKey: 1791720000000000000, PID: 4711, Seq: seq} }
+	cancelPath := func(seq int) string { return filepath.Join(dir, CancelDir, idOf(seq).String()) }
+	for _, seq := range []int{1, 901, 902, 903} {
+		if _, err := sec.Publish(CancelDir, idOf(seq).String(), []byte(`{}`), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := sec.ReconcileIfDue(time.Now().UnixNano())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 3 {
+		t.Errorf("removed = %d, want 3 (the cancel requests whose only match is a stray)", removed)
+	}
+	for _, seq := range []int{901, 902, 903} {
+		if _, err := os.Lstat(cancelPath(seq)); !os.IsNotExist(err) {
+			t.Errorf("cancel request %d, whose only queue/ match is a stray, was kept: %v", seq, err)
+		}
+	}
+	if _, err := os.Lstat(cancelPath(1)); err != nil {
+		t.Errorf("the cancel request of a live ticket was removed: %v", err)
+	}
+	for _, p := range strays {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("reconciliation removed the stray entry %s: %v", p, err)
+		}
+	}
+}

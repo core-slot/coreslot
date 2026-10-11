@@ -24,7 +24,7 @@ func (e *Engine) Adopt(req spec.Request) (g *Grant, shortfall map[string]int, er
 	if err := req.Validate(); err != nil {
 		return nil, nil, err
 	}
-	sec, err := e.st.Enter(context.Background())
+	sec, err := enterSection(e.st, context.Background())
 	if err != nil {
 		return nil, nil, err
 	}

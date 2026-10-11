@@ -6,7 +6,14 @@
 //	w, err := c.Enqueue(coreslot.Request{Label: "ci:o-r",
 //		Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 3}}})
 //	g, err := w.Wait(ctx)          // or Poll at least every 2 s
-//	cmd.ExtraFiles, cmd.Env = g.Files(), append(os.Environ(), g.Env()...)
+//	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+//		// Inherited grant context belongs to another grant (PROTOCOL.md section 17).
+//		return strings.HasPrefix(kv, "CORESLOT_GRANTED_") ||
+//			strings.HasPrefix(kv, "CORESLOT_HELD_FD=") ||
+//			strings.HasPrefix(kv, "CORESLOT_TOKEN_FDS=") ||
+//			strings.HasPrefix(kv, "CORESLOT_UNBUDGETED=")
+//	})
+//	cmd.ExtraFiles, cmd.Env = g.Files(), append(env, g.Env()...)
 //	... run the command ...
 //	g.Close()
 //
