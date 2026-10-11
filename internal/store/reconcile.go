@@ -37,6 +37,9 @@ func (s *Store) List(dir string) ([]Entry, int, error) {
 		return nil, 0, fmt.Errorf("store: List of %q: not a directory of tickets, holds or cancel requests", dir)
 	}
 	d := s.path(dir)
+	if err := CheckEntry(d, true); err != nil {
+		return nil, 0, err
+	}
 	names, err := readNames(d)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, 0, nil
