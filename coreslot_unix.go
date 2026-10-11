@@ -93,7 +93,9 @@ func (c *Client) Free(resource string) (int, error) {
 	return n, wrap(err)
 }
 
-// Snapshot reads the state directory without writing it: the data behind `status --json`.
+// Snapshot reads the state directory without writing anything further: the data behind
+// `status --json`. Open has already created the directory, res/ and admit.lock when they were
+// missing; the coreslot command reads through a read-only open instead, which creates nothing.
 func (c *Client) Snapshot() (Report, error) {
 	r, err := c.e.Snapshot()
 	return r, wrap(err)
