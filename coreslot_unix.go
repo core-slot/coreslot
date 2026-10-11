@@ -118,9 +118,10 @@ func (w *Waiter) wrapGrant(g *engine.Grant) *Grant {
 	return w.grant
 }
 
-// Poll makes one non-blocking attempt (PROTOCOL.md section 8): it refreshes the ticket, checks
+// Poll makes one non-blocking attempt (PROTOCOL.md section 8); call it at least every 2 s: it refreshes the ticket, checks
 // for a cancel request and, when this waiter is the head, tries admission with a single try at
-// the section. ok reports an admission.
+// the section. ok reports an admission. After an error the request is still queued: poll again,
+// or Cancel to withdraw it.
 func (w *Waiter) Poll() (g *Grant, ok bool, err error) {
 	r, err := w.t.Poll()
 	if err != nil {
@@ -133,7 +134,8 @@ func (w *Waiter) Poll() (g *Grant, ok bool, err error) {
 }
 
 // Wait polls until admitted. When ctx ends first it withdraws the ticket (it is dead at once
-// to every other client) and returns ctx.Err(); a Cancel makes it return ErrCancelled.
+// to every other client) and returns ctx.Err(); a Cancel makes it return ErrCancelled. Any other
+// error (a *StateError, for example) also withdraws the ticket before it is returned.
 func (w *Waiter) Wait(ctx context.Context) (*Grant, error) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -150,6 +152,17 @@ func (w *Waiter) Wait(ctx context.Context) (*Grant, error) {
 		if err != nil {
 			if ctx.Err() != nil {
 				return w.abandon(ctx)
+			}
+			if errors.Is(err, engine.ErrCancelled) {
+				return nil, err
+			}
+			// Any other error ends the wait: withdraw, so that the ticket is dead at once
+			// instead of blocking the queue unrefreshed until it stalls. An admission that won
+			// the race is returned instead.
+			if errors.Is(w.t.Withdraw(), engine.ErrAlreadyAdmitted) {
+				if g, ok, perr := w.Poll(); ok && perr == nil {
+					return g, nil
+				}
 			}
 			return nil, wrap(err)
 		}
@@ -198,7 +211,10 @@ func (g *Grant) TokenOnly() bool { return g.g.TokenOnly() }
 // so fd 3 stays closed), then the tokens from fd 4.
 func (g *Grant) Files() []*os.File { return g.g.Files() }
 
-// Env is the CORESLOT_* environment matching Files.
+// Env is the CORESLOT_* environment matching Files. Remove every inherited
+// CORESLOT_GRANTED_*, CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS and CORESLOT_UNBUDGETED from the
+// command's environment before appending it (PROTOCOL.md section 17): inherited grant context
+// describes another grant. CORESLOT_STATE_DIR is not grant context and is kept.
 func (g *Grant) Env() []string { return g.g.Env() }
 
 // Close closes this process's copies of the descriptors (never unlocking, so a child keeps the

@@ -12,9 +12,8 @@ import (
 )
 
 // TestLibraryPurity parses every non-test Go file outside cmd/ and fails on output, process
-// exit and signal handling: the library never prints (fmt.Print*, the log package), never
-// chooses an exit code (os.Exit) and never installs signal handlers (signal.Notify,
-// signal.Ignore).
+// exit and signal handling: the library never prints (see violations), never chooses an exit
+// code (os.Exit) and never installs signal handlers (signal.Notify, signal.Ignore).
 func TestLibraryPurity(t *testing.T) {
 	fset := token.NewFileSet()
 	checked := 0
@@ -40,7 +39,7 @@ func TestLibraryPurity(t *testing.T) {
 		}
 		checked++
 		for _, v := range violations(f) {
-			t.Errorf("%s: %s", fset.Position(v.Pos()), describe(v))
+			t.Errorf("%s: %s in library code", fset.Position(v.pos), v.what)
 		}
 		return nil
 	})
@@ -66,32 +65,59 @@ func imported(f *ast.File) map[string]string {
 	return names
 }
 
-func violations(f *ast.File) []*ast.SelectorExpr {
+// violations finds, in f: fmt.Print*; fmt.Fprint* whose writer is os.Stdout or os.Stderr; any
+// use of log or log/slog (whatever their local names); os.Exit; os.Stdout and os.Stderr
+// Write* calls; signal.Notify and signal.Ignore; and the builtins print and println.
+func violations(f *ast.File) []violation {
 	names := imported(f)
-	var out []*ast.SelectorExpr
-	ast.Inspect(f, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
+	isStd := func(e ast.Expr) bool {
+		sel, ok := e.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return false
 		}
 		x, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		switch names[x.Name] {
-		case "fmt":
-			if strings.HasPrefix(sel.Sel.Name, "Print") {
-				out = append(out, sel)
+		return ok && names[x.Name] == "os" && (sel.Sel.Name == "Stdout" || sel.Sel.Name == "Stderr")
+	}
+	var out []violation
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			switch fun := n.Fun.(type) {
+			case *ast.Ident:
+				// A builtin is unresolved by the parser; a local func of that name is not.
+				if (fun.Name == "print" || fun.Name == "println") && fun.Obj == nil {
+					out = append(out, violation{fun.Pos(), "builtin " + fun.Name})
+				}
+			case *ast.SelectorExpr:
+				if x, ok := fun.X.(*ast.Ident); ok && names[x.Name] == "fmt" &&
+					strings.HasPrefix(fun.Sel.Name, "Fprint") && len(n.Args) > 0 && isStd(n.Args[0]) {
+					out = append(out, violation{fun.Pos(), "fmt." + fun.Sel.Name + " to os.Stdout/os.Stderr"})
+				}
+				if isStd(fun.X) && strings.HasPrefix(fun.Sel.Name, "Write") {
+					out = append(out, violation{fun.Pos(), "os.Stdout/os.Stderr." + fun.Sel.Name})
+				}
 			}
-		case "log":
-			out = append(out, sel)
-		case "os":
-			if sel.Sel.Name == "Exit" {
-				out = append(out, sel)
+		case *ast.SelectorExpr:
+			x, ok := n.X.(*ast.Ident)
+			if !ok {
+				return true
 			}
-		case "os/signal":
-			if sel.Sel.Name == "Notify" || sel.Sel.Name == "Ignore" {
-				out = append(out, sel)
+			what := x.Name + "." + n.Sel.Name
+			switch names[x.Name] {
+			case "fmt":
+				if strings.HasPrefix(n.Sel.Name, "Print") {
+					out = append(out, violation{n.Pos(), what})
+				}
+			case "log", "log/slog":
+				out = append(out, violation{n.Pos(), what})
+			case "os":
+				if n.Sel.Name == "Exit" {
+					out = append(out, violation{n.Pos(), what})
+				}
+			case "os/signal":
+				if n.Sel.Name == "Notify" || n.Sel.Name == "Ignore" {
+					out = append(out, violation{n.Pos(), what})
+				}
 			}
 		}
 		return true
@@ -99,6 +125,68 @@ func violations(f *ast.File) []*ast.SelectorExpr {
 	return out
 }
 
-func describe(sel *ast.SelectorExpr) string {
-	return sel.X.(*ast.Ident).Name + "." + sel.Sel.Name + " in library code"
+type violation struct {
+	pos  token.Pos
+	what string
+}
+
+// TestLibraryPurityDetector feeds the detector one sample of each forbidden pattern, and the
+// allowed look-alikes, so that a detector that misses one is red.
+func TestLibraryPurityDetector(t *testing.T) {
+	const src = `package x
+
+import (
+	"fmt"
+	"io"
+	lg "log"
+	sl "log/slog"
+	"os"
+	sig "os/signal"
+)
+
+func bad(w io.Writer) {
+	fmt.Println("a")
+	fmt.Fprintln(os.Stderr, "b")
+	fmt.Fprintf(os.Stdout, "c")
+	os.Stdout.Write(nil)
+	os.Stderr.WriteString("d")
+	lg.Print("e")
+	sl.Info("f")
+	os.Exit(1)
+	sig.Notify(nil)
+	sig.Ignore()
+	print("g")
+	println("h")
+}
+
+func good(w io.Writer) error {
+	_, err := fmt.Fprintf(w, "ok")
+	_ = fmt.Sprintf("ok")
+	_ = fmt.Errorf("ok")
+	return err
+}
+`
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, v := range violations(f) {
+		got = append(got, v.what)
+	}
+	want := []string{"fmt.Println", "fmt.Fprintln to os.Stdout/os.Stderr", "fmt.Fprintf to os.Stdout/os.Stderr",
+		"os.Stdout/os.Stderr.Write", "os.Stdout/os.Stderr.WriteString", "lg.Print", "sl.Info", "os.Exit",
+		"sig.Notify", "sig.Ignore", "builtin print", "builtin println"}
+	for _, w := range want {
+		found := false
+		for _, g := range got {
+			found = found || g == w
+		}
+		if !found {
+			t.Errorf("not detected: %s (got %v)", w, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %d findings %v, want exactly %d (the good function has none)", len(got), got, len(want))
+	}
 }
