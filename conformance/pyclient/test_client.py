@@ -6,6 +6,7 @@ Run: python3 -m unittest -v test_client   (from this directory; TMPDIR picks the
 from __future__ import annotations
 
 import fcntl
+import shutil
 import json
 import os
 import select
@@ -106,6 +107,12 @@ class Base(unittest.TestCase):
                 os.close(fd)
             except OSError:
                 pass
+        for pid in getattr(self, "kill_pids", []):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        shutil.rmtree(self.root, ignore_errors=True)
 
     def client(self, **kw) -> cc.Client:
         return cc.Client(self.S, diag=lambda m: None, **kw)
@@ -243,7 +250,10 @@ class BodyTests(unittest.TestCase):
             cc.validate_cancel(cc.parse_body(b'{"requested_ns": 1}'))
         self.assertEqual(cc.parse_format(b"coreslot-protocol 1"), 1)
         self.assertEqual(cc.parse_format(b"coreslot-protocol 2\n"), 2)
-        for raw in (b"coreslot-protocol 1\n\n", b"coreslot-protocol x", b"", b"coreslot-protocol 01"):
+        self.assertEqual(cc.parse_format(b"coreslot-protocol 01"), 1)  # leading zeros (§7.6)
+        self.assertEqual(cc.parse_format(b"coreslot-protocol 000000000"), 0)  # 9 digits, unknown
+        for raw in (b"coreslot-protocol 1\n\n", b"coreslot-protocol x", b"", b"coreslot-protocol +1",
+                    b"coreslot-protocol 0000000001", b"coreslot-protocol 1\r\n", b"coreslot-protocol  1"):
             with self.assertRaises(cc.Malformed):
                 cc.parse_format(raw)
 
@@ -259,6 +269,14 @@ class BodyTests(unittest.TestCase):
         self.assertEqual(cc.size_of("1%", 14), 1)
         self.assertEqual(cc.size_of("-20", 14), 1)
         self.assertEqual(cc.size_of(4096, 14), 4096)
+        # §5.2: 1-9 digits, leading zeros allowed; no sign, no space, no tenth digit.
+        self.assertEqual(cc.size_of("05%", 14), cc.size_of("5%", 14))
+        self.assertEqual(cc.size_of("-007", 14), 7)
+        self.assertEqual(cc.size_of("-000000000", 14), 14)
+        self.assertEqual(cc.size_of("000000100%", 14), 14)
+        for raw in ("0000000005%", "-0000000007", "+5%", " 5%", "5 %", "-+7", "000%", "-"):
+            with self.assertRaises(ValueError, msg=raw):
+                cc.size_of(raw, 14)
         for raw in (0, 4097, -3, "0%", "101%", "x", True, 1.5, {}):
             with self.assertRaises(ValueError, msg=raw):
                 cc.size_of(raw, 14)
@@ -767,6 +785,310 @@ class LauncherTests(Base):
         p = self.cli("run", "--", "true", env=env, stderr=subprocess.DEVNULL)
         self.assertEqual(p.wait(timeout=20), 75)
         self.assertEqual(self.ls("queue"), [])
+
+
+class AlignmentTests(Base):
+    """Behaviour the resolved PROTOCOL.md (merge 5c00392) and the maintainers' B1/D6 decision require."""
+
+    def _real_config_client(self, home: str):
+        """A client with no override whose password-database home is `home`."""
+        saved_home, saved_env = cc.password_home, os.environ.pop("CORESLOT_STATE_DIR", None)
+        cc.password_home = lambda: home
+        self.addCleanup(setattr, cc, "password_home", saved_home)
+        if saved_env is not None:
+            self.addCleanup(os.environ.__setitem__, "CORESLOT_STATE_DIR", saved_env)
+        return cc.Client(diag=lambda m: None)
+
+    def test_real_config_dangling_symlink_is_missing_and_fifo_is_invalid(self):
+        home = os.path.join(self.root, "home")
+        cfgdir = os.path.join(home, ".config", "coreslot")
+        os.makedirs(cfgdir)
+        path = os.path.join(cfgdir, "config.toml")
+        os.symlink(os.path.join(self.root, "nowhere.toml"), path)
+        c = self._real_config_client(home)
+        self.assertEqual(c.config_path(), path)
+        self.assertEqual(c.config().size("cpu", 14), 14)  # the defaults
+        target = os.path.join(self.root, "real.toml")
+        with open(target, "w") as fh:
+            fh.write("[resources]\ncpu = 3\n")
+        os.chmod(target, 0o666)  # no owner or mode check on the real configuration
+        os.unlink(path)
+        os.symlink(target, path)
+        self.assertEqual(c.config().size("cpu", 14), 3)
+        os.unlink(path)
+        os.mkdir(path)
+        with self.assertRaises(cc.StateError):
+            c.config()
+        os.rmdir(path)
+        os.mkfifo(path)
+        # In a subprocess, so a client that blocks on the FIFO fails the test instead of hanging it.
+        probe = ("import sys; sys.path.insert(0, sys.argv[1]); import coreslot_client as cc; "
+                 "cc.password_home = lambda: sys.argv[2]\n"
+                 "try:\n    cc.Client().config(); print('read')\n"
+                 "except cc.StateError as e:\n    print('state-error', e.reason)")
+        env = {k: v for k, v in os.environ.items() if k != "CORESLOT_STATE_DIR"}
+        out = subprocess.run([sys.executable, "-c", probe, HERE, home], env=env, capture_output=True,
+                             text=True, timeout=10)
+        self.assertEqual(out.stdout.strip(), "state-error config")
+
+    def test_override_config_fifo_does_not_block(self):
+        os.makedirs(self.S, 0o700)
+        os.mkfifo(os.path.join(self.S, "config.toml"), 0o600)
+        probe = ("import sys; sys.path.insert(0, sys.argv[1]); import coreslot_client as cc\n"
+                 "try:\n    cc.Client(sys.argv[2]).config(); print('read')\n"
+                 "except cc.StateError as e:\n    print('state-error')")
+        out = subprocess.run([sys.executable, "-c", probe, HERE, self.S], capture_output=True, text=True,
+                             timeout=10)
+        self.assertEqual(out.stdout.strip(), "state-error")
+
+    def test_negative_gen_reads_as_malformed(self):
+        self.write(os.path.join(self.S, "gen"), b'{"gen": -1, "reconciled_ns": 5}')
+        self.assertEqual(self.client()._read_gen(), (0, 0))
+        self.write(os.path.join(self.S, "gen"), b'{"gen": 0, "reconciled_ns": 5}')
+        self.assertEqual(self.client()._read_gen(), (0, 5))
+
+    def test_token_only_rejoins_the_queue_when_the_format_is_understood_again(self):
+        """D8, §15.2: FORMAT 2 → token-only; FORMAT back at 1 (or missing) → a new queued request."""
+        self.config("[resources]\ncpu = 1\n")
+        self.lock(os.path.join(self.S, "res", "cpu", "0"))  # nothing free: it stays waiting
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 2\n")
+        t = self.client().enqueue("x", 0, {"cpu": 1})
+        self.assertTrue(t.token_only)
+        self.assertEqual(t.step(), ("waiting", 0))
+        self.assertEqual(self.ls("queue"), [])
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 1\n")
+        self.assertEqual(t.step(), ("waiting", 1))
+        self.assertFalse(t.token_only)
+        self.assertEqual(self.ls("queue"), [t.name])
+        self.assertIs(cc._probe_path(os.path.join(self.S, "queue", t.name)), False)
+        t.withdraw()
+        # FORMAT missing: the entry writes it, and the token-only client queues too.
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 7\n")
+        u = self.client().enqueue("y", 0, {"cpu": 1})
+        self.assertTrue(u.token_only)
+        os.unlink(os.path.join(self.S, "FORMAT"))
+        self.assertEqual(u.step(), ("waiting", 1))
+        self.assertEqual(self.read("FORMAT"), b"coreslot-protocol 1\n")
+        self.assertIn(u.name, self.ls("queue"))
+        u.withdraw()
+
+    def test_empty_context_variables_are_unset(self):
+        out = os.path.join(self.root, "out.json")
+        env = dict(self.env, CORESLOT_TOKEN_FDS="", CORESLOT_UNBUDGETED="", CORESLOT_HELD_FD="")
+        p = self.cli("run", "--need", "cpu=1", "--", sys.executable, "-c", REPORTER, out, env=env)
+        self.assertEqual(p.wait(timeout=20), 0)  # an ordinary request, not a refusal
+        rep = load(out)["env"]
+        self.assertEqual((rep["CORESLOT_GRANTED_CPU"], rep["CORESLOT_TOKEN_FDS"], rep["CORESLOT_HELD_FD"]),
+                         ("1", "4", "3"))
+        self.assertNotIn("CORESLOT_UNBUDGETED", rep)
+
+    def test_token_fds_bound_is_512(self):
+        self.assertEqual(len(cc.parse_token_fds("4-515")), 512)
+        self.assertEqual(len(cc.parse_token_fds("4-259,300-555")), 512)
+        for raw in ("4-516", "4-259,300-556", "0-99999999999999"):
+            with self.assertRaises(ValueError, msg=raw):
+                cc.parse_token_fds(raw)
+
+    def _log(self) -> list[dict]:
+        try:
+            return [json.loads(line) for line in self.read("log", "runs.jsonl").splitlines()]
+        except FileNotFoundError:
+            return []
+
+    def test_nested_runs_append_a_nested_log_line(self):
+        """E6, §20: pass-through and inherited-unbudgeted runs log `"nested": true`, outside the section."""
+        self.config("[resources]\ncpu = 4\n")
+        inner = [sys.executable, CLIENT, "run", "--label", "inner", "--need", "cpu=2..3", "--", "true"]
+        p = self.cli("run", "--label", "outer", "--need", "cpu=4..4", "--", *inner)
+        self.assertEqual(p.wait(timeout=20), 0)
+        log = self._log()
+        self.assertEqual([(r["label"], r.get("nested", False)) for r in log],
+                         [("inner", True), ("outer", False)])
+        self.assertEqual(log[0]["grant"], {"cpu": 3})
+        env = dict(self.env, CORESLOT_UNBUDGETED="parent-reason")
+        p = self.cli("run", "--label", "unb", "--need", "cpu=2", "--", "true", env=env,
+                     stderr=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=20), 0)
+        last = self._log()[-1]
+        self.assertEqual((last["label"], last["nested"], last["fail_open"], last["grant"]),
+                         ("unb", True, "parent-reason", {"cpu": 2}))
+        self.assertNotIn("degraded", os.listdir(self.S))  # rule 1 writes no degraded record
+
+    def test_nested_run_writes_nothing_without_an_understood_format(self):
+        os.makedirs(self.S, 0o700)
+        env = dict(self.env, CORESLOT_UNBUDGETED="x")
+        p = self.cli("run", "--", "true", env=env, stderr=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=20), 0)
+        self.assertEqual(os.listdir(self.S), [])  # no FORMAT written, no log/
+
+    def test_bad_entries_are_ignored_counted_and_kept_by_reconciliation(self):
+        """B1/D6 (maintainers' decision): matching names with a bad type/owner/mode are never trusted or removed."""
+        now = time.time_ns()
+        self.write(os.path.join(self.S, "gen"), json.dumps({"gen": 5, "reconciled_ns": 0}).encode())
+        q, h, c = (os.path.join(self.S, d) for d in ("queue", "holds", "cancel"))
+        elsewhere = os.path.join(self.root, "elsewhere")
+        self.write(elsewhere, body())
+        os.makedirs(q, 0o700)
+        os.makedirs(c, 0o700)
+        os.symlink(elsewhere, os.path.join(q, "00000000000000000001-0000000001-000001"))
+        os.makedirs(os.path.join(h, "00000000000000000002-0000000001-000002"), 0o700)
+        writable = os.path.join(q, "00000000000000000003-0000000001-000003")
+        self.write(writable, body())
+        os.chmod(writable, 0o622)
+        os.symlink(elsewhere, os.path.join(c, "00000000000000000009-0000000001-000009"))  # orphan
+        old_tmp = os.path.join(h, ".tmp-0000000001-000004")
+        os.symlink(elsewhere, old_tmp)
+        os.utime(old_tmp, ns=(now - 120 * 10**9,) * 2, follow_symlinks=False)
+        dead = "00000000000000000004-0000000001-000005"
+        self.write(os.path.join(q, dead), body())  # a well-formed dead ticket is still removed
+        c1 = self.client()
+        t = c1.enqueue("x", 0, {"cpu": 1})  # reconciliation is due
+        self.assertEqual(sorted(self.ls("queue")), sorted(["00000000000000000001-0000000001-000001",
+                                                            "00000000000000000003-0000000001-000003",
+                                                            t.name]))
+        self.assertEqual(self.ls("holds"), sorted(["00000000000000000002-0000000001-000002",
+                                                   ".tmp-0000000001-000004"]))
+        self.assertEqual(self.ls("cancel"), ["00000000000000000009-0000000001-000009"])
+        self.assertEqual(c1.ignored_by_reconciliation, {"$S": 0, "queue": 2, "holds": 2, "cancel": 1})
+        g = self.gen()
+        self.assertEqual(g["gen"], 5 + 1 + 1)  # reconciliation removed `dead`, then enqueue bumped
+        self.assertLess(abs(g["reconciled_ns"] - time.time_ns()), 5 * 10**9)
+        kind, grant = t.step()  # the bad tickets ahead are ignored, not trusted
+        self.assertEqual(kind, "admitted")
+        self.assertEqual(c1.ignored_entries, 2)
+        grant.close(remove_hold=False)
+
+    def test_fd_3_is_closed_in_the_child_without_a_hold(self):
+        """§17: a token-only run passes no hold, so fd 3 is closed even when the run inherited one."""
+        self.config("[resources]\ncpu = 2\n")
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 2\n")
+        out = os.path.join(self.root, "out.json")
+        cmd = (f"exec 3</dev/null; exec '{sys.executable}' '{CLIENT}' run --need cpu=1 -- "
+               f"'{sys.executable}' -c \"$REPORTER\" '{out}'")
+        p = self.cli_sh(cmd, env=dict(self.env, REPORTER=REPORTER))
+        self.assertEqual(p.wait(timeout=20), 0)
+        rep = load(out)
+        self.assertEqual(sorted(rep["fds"]), ["4"])
+        self.assertEqual(rep["env"]["CORESLOT_UNBUDGETED"], "format")
+
+    def cli_sh(self, script: str, **kw) -> subprocess.Popen:
+        p = subprocess.Popen(["sh", "-c", script], env=kw.pop("env", self.env), stderr=subprocess.DEVNULL,
+                             **kw)
+        self.procs.append(p)
+        return p
+
+    def test_link_unlink_fallback_and_seq_retry_on_a_taken_name(self):
+        """§11 step 4 without renameat2/renamex_np: clean publish, then EEXIST → new temporary, next seq."""
+        saved = cc._NOREPLACE
+        for native in (False, True):
+            with self.subTest(native=native):
+                cc._NOREPLACE = saved if native else None
+                try:
+                    shutil.rmtree(self.S, ignore_errors=True)
+                    c = self.client()
+                    t = c.enqueue("x", 0, {"cpu": 1})
+                    self.assertEqual(self.ls("queue"), [t.name])  # no temporary left behind
+                    self.assertEqual(os.stat(os.path.join(self.S, "queue", t.name)).st_nlink, 1)
+                    self.assertIs(cc._probe_path(os.path.join(self.S, "queue", t.name)), False)
+                    d = os.path.join(self.S, "holds")
+                    os.makedirs(d, 0o700, exist_ok=True)
+                    taken = "00000000000000000001-0000000001-000001"
+                    self.write(os.path.join(d, taken), b"first")
+                    calls = []
+
+                    def make_name(seq):
+                        calls.append(seq)
+                        return taken if len(calls) == 1 else f"00000000000000000001-0000000001-{seq:06d}x"
+
+                    fd, name = c._publish_named(d, make_name, b"second", lock=True)
+                    self.fds.append(fd)
+                    self.assertEqual(len(calls), 2)
+                    self.assertNotEqual(calls[0], calls[1])
+                    self.assertEqual(self.read("holds", taken), b"first")  # never replaced
+                    self.assertEqual(self.read("holds", name), b"second")
+                    self.assertEqual(self.ls("holds"), sorted([taken, name]))  # no temporaries
+                    self.assertIs(cc._probe_path(os.path.join(d, name)), False)
+                    t.withdraw()
+                finally:
+                    cc._NOREPLACE = saved
+
+    def test_surviving_grandchild_keeps_the_hold(self):
+        """§12.3: the hold is unlinked only if its probe succeeds; a grandchild still holds fd 3."""
+        pidfile = os.path.join(self.root, "pid")
+        p = self.cli("run", "--need", "cpu=1", "--", "sh", "-c", f"sleep 60 & echo $! > '{pidfile}'",
+                     stdout=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=20), 0)
+        gpid = int(load(pidfile, raw=True))
+        self.kill_pids = [gpid]
+        [hold] = self.ls("holds")
+        self.assertIs(cc._probe_path(os.path.join(self.S, "holds", hold)), False)
+        self.assertIs(cc._probe_path(os.path.join(self.S, "res", "cpu", "0")), False)
+        os.kill(gpid, signal.SIGKILL)
+        self.wait_for(lambda: cc._probe_path(os.path.join(self.S, "holds", hold)) is True,
+                      what="the grandchild's exit to free the hold")
+
+    def test_admission_step_1_cancel_check_alone(self):
+        """§13.1/§12.1 step 1: a cancel published after the poll read cancel/, before the section."""
+        t = self.client().enqueue("b", 0, {"cpu": 1})
+        canceller = self.client()
+        real_elect = t._elect
+
+        def elect_then_cancel():
+            position = real_elect()  # the poll's own cancel check has already run
+            self.assertTrue(canceller.cancel(t.id))
+            return position
+
+        t._elect = elect_then_cancel
+        with self.assertRaises(cc.Cancelled):
+            t.step()
+        self.assertEqual((self.ls("queue"), self.ls("cancel"), self.ls("holds")), ([], [], []))
+
+    def _hold_admit_lock(self) -> int:
+        os.makedirs(self.S, 0o700, exist_ok=True)
+        return self.lock(os.path.join(self.S, "admit.lock"))
+
+    def test_cli_timeout_bounds_section_entry(self):
+        self._hold_admit_lock()
+        started = time.monotonic()
+        p = self.cli("run", "--timeout", "1", "--", "true", stderr=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=10), 75)
+        self.assertLess(time.monotonic() - started, 6)
+        p = self.cli("cancel", "--timeout", "0.5", "01791720000000000000-0000004711-000001",
+                     stderr=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=10), 75)
+
+    def test_ctrl_c_during_enqueue_exits_130_without_a_ticket(self):
+        self._hold_admit_lock()
+        p = self.cli("run", "--", "true", stderr=subprocess.PIPE)
+        time.sleep(0.5)
+        p.send_signal(signal.SIGINT)
+        _, err = p.communicate(timeout=10)
+        self.assertEqual(p.returncode, 130)
+        self.assertNotIn(b"Traceback", err)
+        self.assertEqual(self.ls("queue"), [])
+
+    def test_context_managers(self):
+        self.config("[resources]\ncpu = 1\n")
+        c = self.client()
+        with c.enqueue("a", 0, {"cpu": 1}) as a:
+            with a.wait(5) as grant:
+                [hold] = self.ls("holds")
+                with c.enqueue("b", 0, {"cpu": 1}) as b:
+                    self.assertEqual(b.step(), ("waiting", 1))
+                    path = os.path.join(self.S, "queue", b.name)
+                self.assertIs(cc._probe_path(path), None if not os.path.exists(path) else True)
+                self.assertEqual(self.ls("queue"), [])  # withdrawn and removed on exit
+            self.assertTrue(grant.closed)
+            self.assertEqual(self.ls("holds"), [])  # closed and removed on exit
+        self.assertIs(cc._probe_path(os.path.join(self.S, "res", "cpu", "0")), True)
+
+    def test_fail_open_hold_bumps_gen(self):
+        self.config("[resources]\ncpu = 0\n")
+        p = self.cli("run", "--", "true", stderr=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=20), 0)
+        # First entry reconciles (no removal) and publishes the hold (+1); removing it bumps again (+1).
+        self.assertEqual(self.gen()["gen"], 2)
+        self.assertEqual(self.ls("holds"), [])
 
 
 if __name__ == "__main__":
