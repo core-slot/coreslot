@@ -435,8 +435,11 @@ func TestListParsesSortsAndCountsIgnored(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, AdmitLock), filepath.Join(dir, QueueDir, ticketName(9))); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = s.List(QueueDir)
-	wantStateError(t, err, "List with a symlink under a ticket name")
+	entries, ignored, err = s.List(QueueDir)
+	if err != nil || ignored != 3 || len(entries) != 3 {
+		t.Errorf("List with a symlink under a ticket name = %d entries, %d ignored, %v; want 3, 3 and no error (stray rule)",
+			len(entries), ignored, err)
+	}
 }
 
 // ---------------------------------------------------------------- gen and FORMAT

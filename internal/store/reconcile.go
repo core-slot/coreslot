@@ -29,9 +29,12 @@ type Entry struct {
 
 // List lists QueueDir, HoldsDir or CancelDir: the entries whose names match the directory's
 // grammar, in name order (which is (order key or start, pid, seq) order), and the number of
-// other entries, which are ignored. Temporary files are neither listed nor counted. A matching
-// entry that is not a regular file of the user, or more than MaxEntries entries, is a
-// *StateError.
+// other entries, which are ignored. Temporary files are neither listed nor counted, unless one
+// fails the section 4.2 checks. An entry whose name matches but whose type, owner or mode fails
+// those checks (a symlink, a directory, another user's or a group- or world-writable file) is
+// ignored and counted like a malformed body: never trusted and never removed (PROTOCOL.md
+// section 4.2). The directory itself failing the checks, or more than
+// MaxEntries entries, is a *StateError.
 func (s *Store) List(dir string) ([]Entry, int, error) {
 	if !slices.Contains(noReplaceDirs, dir) {
 		return nil, 0, fmt.Errorf("store: List of %q: not a directory of tickets, holds or cancel requests", dir)
@@ -55,10 +58,8 @@ func (s *Store) List(dir string) ([]Entry, int, error) {
 	ignored := 0
 	for _, name := range names {
 		id, ok := parse(name)
-		if !ok {
-			if !isTmpName(name) {
-				ignored++
-			}
+		if !ok && !isTmpName(name) {
+			ignored++
 			continue
 		}
 		p := filepath.Join(d, name)
@@ -70,7 +71,11 @@ func (s *Store) List(dir string) ([]Entry, int, error) {
 			return nil, 0, err
 		}
 		if err := checkInfo(p, fi, false); err != nil {
-			return nil, 0, err
+			ignored++ // a stray entry, whatever its name matches
+			continue
+		}
+		if !ok {
+			continue // a sound temporary file: neither listed nor counted
 		}
 		entries = append(entries, Entry{Name: name, ID: id, MtimeNS: fi.ModTime().UnixNano()})
 	}
@@ -136,7 +141,9 @@ func removeIfDead(path string) (removed, gone bool, err error) {
 // every ticket and hold and unlinks the dead ones while holding the probe lock, removes cancel
 // requests whose ticket is gone and temporary files older than 30 s, and writes gen with
 // reconciled_ns = nowNS, increasing gen when it removed anything. Entries that do not match
-// their grammar are left alone. The caller is inside the section and reconciles before its own
+// their grammar, and stray entries of queue/, holds/ and cancel/ that fail the section 4.2
+// checks, are left alone; a stray temporary file in the state directory itself is a *StateError.
+// The caller is inside the section and reconciles before its own
 // change; admission and token-only admission never call it.
 func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	if err := sec.live(); err != nil {
@@ -159,6 +166,10 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 		}
 		for _, e := range entries {
 			r, gone, err := removeIfDead(sec.s.path(dir, e.Name))
+			var se *StateError
+			if errors.As(err, &se) {
+				continue // replaced by a stray entry since the listing: skipped, never removed
+			}
 			if err != nil {
 				return removed, err
 			}
@@ -208,7 +219,10 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 				return removed, err
 			}
 			if err := checkInfo(p, fi, false); err != nil {
-				return removed, err
+				if dir == "" {
+					return removed, err
+				}
+				continue // a stray entry of queue/, holds/ or cancel/: skipped, never removed
 			}
 			if time.Duration(nowNS-fi.ModTime().UnixNano()) <= TmpMaxAge {
 				continue
@@ -223,7 +237,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	// 4. gen.
 	g.ReconciledNS = nowNS
 	if removed > 0 {
-		g.N++
+		g.N = nextGen(g.N)
 	}
 	return removed, sec.writeGen(g)
 }
