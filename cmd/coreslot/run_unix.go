@@ -38,8 +38,8 @@ const (
 // the wait, and while its command runs the supervisor decides what reaches the command.
 var runSignals = make(chan os.Signal, 16)
 
-// handledSignals are registered for the whole run: caught (never ignored) so that the command,
-// which a caught disposition does not survive exec into, starts with the default ones.
+// handledSignals are caught for the whole run, unless the run started with one ignored. A
+// caught disposition does not survive exec, so the command starts with the default ones.
 var handledSignals = []os.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP}
 
 // run is one `coreslot run`.
@@ -62,8 +62,9 @@ func runCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: %v\n", err)
 		return exitUsage
 	}
-	signal.Notify(runSignals, handledSignals...)
+	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
+	installStops()
 	r := &run{o: o, io: io, startNS: time.Now().UnixNano(), start: time.Now(), load: load1()}
 	return r.ordinary()
 }
@@ -176,16 +177,16 @@ func (r *run) ordinary() int {
 		if r.o.noWait {
 			g, err = r.tryOnce(ctx, t)
 		} else {
-			g, err = waitLoop(ctx, t, newRealClock(), r.io.Stderr, r.waitingLine)
+			g, err = waitLoop(ctx, sectionStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
 		}
 		if err != nil {
-			_ = t.Withdraw()
+			_ = inSection(t.Withdraw)
 		}
 	}
 	r.waited = time.Since(r.start)
 	if sig := watch.end(); sig != nil {
 		if g != nil {
-			g.Close()
+			_ = inSection(g.Close)
 		}
 		if sig == syscall.SIGINT {
 			r.notice("interrupted while waiting")
@@ -221,7 +222,7 @@ var errNotAtOnce = errors.New("not admitted at once")
 
 // tryOnce is --no-wait's single attempt: one Step, whose section entry waits at most 1 s.
 func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, error) {
-	res, err := t.Step(ctx)
+	res, err := sectionStepper{t}.Step(ctx)
 	if err != nil {
 		return nil, asState(err)
 	}
@@ -241,7 +242,11 @@ func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (*engine.T
 	}
 	ch := make(chan result, 1)
 	go func() {
-		t, err := e.Enqueue(req)
+		var t *engine.Ticket
+		err := inSection(func() (err error) {
+			t, err = e.Enqueue(req)
+			return err
+		})
 		ch <- result{t, err}
 	}()
 	select {
@@ -250,7 +255,7 @@ func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (*engine.T
 	case <-ctx.Done():
 		go func() {
 			if res := <-ch; res.t != nil {
-				_ = res.t.Withdraw()
+				_ = inSection(res.t.Withdraw)
 			}
 		}()
 		return nil, ctx.Err()
@@ -260,6 +265,17 @@ func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (*engine.T
 // stepper is the part of a ticket the wait loop drives.
 type stepper interface {
 	Step(ctx context.Context) (engine.StepResult, error)
+}
+
+// sectionStepper steps a ticket inside inSection: a Step may hold the admission section.
+type sectionStepper struct{ t *engine.Ticket }
+
+func (s sectionStepper) Step(ctx context.Context) (res engine.StepResult, err error) {
+	err = inSection(func() error {
+		res, err = s.t.Step(ctx)
+		return err
+	})
+	return res, err
 }
 
 // waitClock is the wait loop's clock: monotonic time and a sleep that ends with ctx.
@@ -421,7 +437,7 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		grant:      g.Grant(),
 		clamped:    slices.Sorted(maps.Keys(g.Clamped())),
 		unbudgeted: g.Unbudgeted(),
-		release:    func() { g.Close() },
+		release:    func() { _ = inSection(g.Close) },
 	}
 	if !g.TokenOnly() {
 		c.log = e.Store() // FORMAT was understood in the admitting section
@@ -456,12 +472,15 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	var g *engine.Grant
 	var ferr error
 	if e != nil {
-		g, ferr = e.FailOpen(r.o.request(0), reason)
+		ferr = inSection(func() (err error) {
+			g, err = e.FailOpen(r.o.request(0), reason)
+			return err
+		})
 	} else {
 		ferr = errors.New("the state directory cannot be used")
 	}
 	if g != nil {
-		c.env, c.files, c.release = append(os.Environ(), g.Env()...), g.Files(), func() { g.Close() }
+		c.env, c.files, c.release = append(os.Environ(), g.Env()...), g.Files(), func() { _ = inSection(g.Close) }
 		if g.HoldName() != "" {
 			c.log = e.Store() // FORMAT was understood in the section that published the hold
 		}
@@ -529,15 +548,25 @@ func (r *run) runChild(c child) int {
 		cmd.ExtraFiles = c.files
 	}
 	_, _ = raiseChildNofile(currentNofile())
+	if sig := pendingSignal(); sig != 0 {
+		// Interrupted between the admission and the start: the command never runs.
+		c.release()
+		code, _ := classify(&interruptError{Sig: sig})
+		return code
+	}
+	terminal := terminalMode(r.io.Stdin)
+	prepareChild(cmd, terminal)
 	started := time.Now()
 	status := 0
 	if err := cmd.Start(); err != nil {
+		childDone(terminal)
 		c.release()
 		code, _ := classify(err)
 		r.notice("cannot run %s: %v", argv[0], err)
 		status = code
 	} else {
-		status = waitChild(cmd)
+		status = superviseChild(cmd, terminal)
+		childDone(terminal)
 		c.release()
 	}
 	if c.log != nil {
@@ -554,23 +583,14 @@ func (r *run) runChild(c child) int {
 	return status
 }
 
-// waitChild waits for the command and returns its status; a signal the run receives meanwhile
-// is passed to the command.
-func waitChild(cmd *exec.Cmd) int {
-	done := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case s := <-runSignals:
-				_ = cmd.Process.Signal(s)
-			case <-done:
-				return
-			}
-		}
-	}()
-	_ = cmd.Wait()
-	close(done)
-	return exitStatus(cmd.ProcessState)
+// pendingSignal returns a handled signal the run received and has not acted on, or 0.
+func pendingSignal() syscall.Signal {
+	select {
+	case s := <-runSignals:
+		return s.(syscall.Signal)
+	default:
+		return 0
+	}
 }
 
 // appendRunLog appends rec to the run log (PROTOCOL.md section 20). When the log is at or above
@@ -578,15 +598,19 @@ func waitChild(cmd *exec.Cmd) int {
 // a pass-through never rotates.
 func appendRunLog(st *store.Store, rec store.RunRecord, rotate bool) error {
 	if rotate && st.RunLogNeedsRotation() {
-		ctx, cancel := context.WithTimeout(context.Background(), logRotateWait)
-		sec, err := st.Enter(ctx)
-		cancel()
-		if err == nil {
-			if _, understood, ferr := sec.Format(testhooks.Formats()); ferr == nil && understood {
-				_ = sec.RotateLogIfNeeded()
+		_ = inSection(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), logRotateWait)
+			defer cancel()
+			sec, err := st.Enter(ctx)
+			if err != nil {
+				return err
 			}
-			sec.Leave()
-		}
+			defer sec.Leave()
+			if _, understood, err := sec.Format(testhooks.Formats()); err != nil || !understood {
+				return err
+			}
+			return sec.RotateLogIfNeeded()
+		})
 	}
 	return st.AppendRun(rec)
 }
