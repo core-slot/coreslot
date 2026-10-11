@@ -172,6 +172,8 @@ func cli(t *testing.T, env []string, args ...string) result {
 	cmd := cliCmd(t, env, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
+	// A descendant in another process group can keep the output pipes open after the kill.
+	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -50,6 +50,7 @@ type run struct {
 	start   time.Time
 	load    float64
 	waited  time.Duration
+	env     []string // the command's environment before its grant: the inherited context dropped
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -66,7 +67,7 @@ func runCommand(args []string, io IO) int {
 	defer signal.Stop(runSignals)
 	installStops()
 	r := &run{o: o, io: io, startNS: time.Now().UnixNano(), start: time.Now(), load: load1()}
-	return r.ordinary()
+	return r.decide()
 }
 
 func (r *run) notice(format string, args ...any) {
@@ -432,7 +433,7 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 			strings.Join(un, ", "), grantText(g.Grant(), un))
 	}
 	c := child{
-		env:        append(os.Environ(), g.Env()...),
+		env:        append(slices.Clone(r.env), g.Env()...),
 		files:      g.Files(),
 		grant:      g.Grant(),
 		clamped:    slices.Sorted(maps.Keys(g.Clamped())),
@@ -480,12 +481,12 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 		ferr = errors.New("the state directory cannot be used")
 	}
 	if g != nil {
-		c.env, c.files, c.release = append(os.Environ(), g.Env()...), g.Files(), func() { _ = inSection(g.Close) }
+		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() { _ = inSection(g.Close) }
 		if g.HoldName() != "" {
 			c.log = e.Store() // FORMAT was understood in the section that published the hold
 		}
 	} else {
-		c.env = append(os.Environ(), unbudgetedEnv(r.o.minGrant(), reason)...)
+		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), reason)...)
 	}
 	if ferr != nil {
 		r.notice("the hold, the degraded record and the run log were not written: %v", ferr)
@@ -513,7 +514,7 @@ func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
 		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
 	c := child{
-		env:        append(os.Environ(), unbudgetedEnv(r.o.minGrant(), "")...),
+		env:        append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), "")...),
 		grant:      r.o.minGrant(),
 		unbudgeted: r.o.sortedNeed(),
 		release:    func() {},
@@ -568,6 +569,9 @@ func (r *run) runChild(c child) int {
 		status = superviseChild(cmd, terminal)
 		childDone(terminal)
 		c.release()
+	}
+	if c.nested {
+		c.log = nestedLog() // read FORMAT outside the section only now, after the command
 	}
 	if c.log != nil {
 		rec := store.RunRecord{
