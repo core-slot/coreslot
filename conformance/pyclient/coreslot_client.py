@@ -66,7 +66,7 @@ MAX_SIZE = 4096
 MAX_INDEX = 4095
 PRIORITY_NS = 60 * 10**9
 INT64_MIN, INT64_MAX = -(1 << 63), (1 << 63) - 1
-ORDER_KEY_MAX = 10**20 - 1
+ORDER_KEY_MAX = (1 << 64) - 1  # §7.1: order-key and start-ns fit 64 unsigned bits
 
 EXIT_USAGE = 64
 EXIT_REFUSAL = 75
@@ -320,6 +320,40 @@ def parse_format(data: bytes) -> int:
     if not m:
         raise Malformed("FORMAT")
     return int(m.group(1))
+
+
+def parse_name(name: str):
+    """A ticket or hold name (§7.1): (order_key, pid, seq, display or None), or None."""
+    m = TICKET_RE.fullmatch(name)
+    if not m or int(m.group(1)) > ORDER_KEY_MAX:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+
+
+def parse_cancel_name(name: str):
+    """A cancel request's name, a ticket id without display (§7.1): (order_key, pid, seq) or None."""
+    m = ID_RE.fullmatch(name)
+    if not m or int(m.group(1)) > ORDER_KEY_MAX:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def decode_ticket(data: bytes) -> dict:
+    """A ticket body as its canonical value (known keys only); Malformed otherwise."""
+    obj = validate_ticket(parse_body(data))
+    return {"label": obj["label"], "priority": obj["priority"],
+            "need": {r: list(v) for r, v in obj["need"].items()}, "created_ns": obj["created_ns"]}
+
+
+def decode_hold(data: bytes, name_start_ns: int | None = None) -> dict:
+    obj = validate_hold(parse_body(data), name_start_ns)
+    return {k: obj[k] for k in ("label", "grant", "start_ns", "unbudgeted", "unbudgeted_resources",
+                                "clamped", "adopted")}
+
+
+def decode_cancel(data: bytes) -> dict:
+    obj = validate_cancel(parse_body(data))
+    return {"requested_ns": obj["requested_ns"], "requester_pid": obj["requester_pid"]}
 
 
 def display_of(label: str) -> str:
@@ -1037,7 +1071,7 @@ class Client:
             if not _ensure_dir(d, create=False):
                 continue
             for name in _list(d):
-                if not TICKET_RE.fullmatch(name):
+                if parse_name(name) is None:
                     continue
                 path = os.path.join(d, name)
                 try:
@@ -1059,9 +1093,9 @@ class Client:
                 finally:
                     os.close(fd)
         if _ensure_dir(cancel, create=False):
-            live_ids = {n[:ID_LEN] for n in _list(queue) if TICKET_RE.fullmatch(n)}
+            live_ids = {n[:ID_LEN] for n in _list(queue) if parse_name(n) is not None}
             for name in _list(cancel):
-                if ID_RE.fullmatch(name) and name not in live_ids:
+                if parse_cancel_name(name) is not None and name not in live_ids:
                     with contextlib.suppress(FileNotFoundError):
                         os.unlink(os.path.join(cancel, name))
                         removed = True
@@ -1265,8 +1299,7 @@ class Client:
 
     def cancel(self, ticket_id: str, *, timeout: float | None = 30.0) -> bool:
         """§13.1: publish cancel/<ticket-id>. False when a request already existed."""
-        m = TICKET_RE.fullmatch(ticket_id)
-        if not m:
+        if parse_name(ticket_id) is None:
             raise UsageError(f"not a ticket id: {ticket_id!r}")
         tid = ticket_id[:ID_LEN]
         try:
@@ -1464,7 +1497,7 @@ class Ticket:
         names = []
         ignored = 0
         for n in _list(queue):
-            if TICKET_RE.fullmatch(n):
+            if parse_name(n) is not None:
                 if n != self.name:
                     names.append(n)
             elif not TMP_RE.fullmatch(n):
