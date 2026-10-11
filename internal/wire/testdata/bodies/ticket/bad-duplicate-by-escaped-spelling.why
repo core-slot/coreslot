@@ -1,0 +1,1 @@
+duplicate resource "cpu" spelled with an escape; keys are compared after unescaping

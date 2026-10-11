@@ -1,0 +1,42 @@
+[
+ {
+  "label": "",
+  "display": ""
+ },
+ {
+  "label": "gate:unit",
+  "display": "gate_unit"
+ },
+ {
+  "label": "ci:o-r",
+  "display": "ci_o_r"
+ },
+ {
+  "label": "plain.Name_9",
+  "display": "plain.Name_9"
+ },
+ {
+  "label": "a b\tc\nd",
+  "display": "a_b_c_d"
+ },
+ {
+  "label": "../../etc",
+  "display": ".._.._etc"
+ },
+ {
+  "label": "\u001b[31mred\u001b[0m",
+  "display": "__31mred__0m"
+ },
+ {
+  "label": "caf\u00e9",
+  "display": "caf__"
+ },
+ {
+  "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "display": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ },
+ {
+  "label": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+  "display": "________________________________"
+ }
+]
