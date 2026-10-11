@@ -399,9 +399,9 @@ func TestPipelineCtrlZAndFg(t *testing.T) {
 	waitFor(t, 10*time.Second, "the shell prompting again (the job stopped)", func() bool {
 		return strings.Count(sh.output(), "csprompt$ ") > prompts
 	})
-	if procState(t, child) != "T" || procState(t, cs) != "T" {
-		t.Errorf("after Ctrl-Z: command %q, coreslot %q; want both stopped", procState(t, child), procState(t, cs))
-	}
+	waitFor(t, 5*time.Second, "the command and coreslot both stopped", func() bool {
+		return procState(t, child) == "T" && procState(t, cs) == "T"
+	})
 	before := size()
 	time.Sleep(300 * time.Millisecond)
 	if after := size(); after != before {
