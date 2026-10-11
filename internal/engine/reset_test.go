@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
@@ -100,5 +101,86 @@ func TestResetThenUse(t *testing.T) {
 	tk := enqueue(t, e, need("cpu=1"))
 	if !isAdmitted(step(t, tk)) {
 		t.Error("a request is not admitted after the reset")
+	}
+}
+
+// A reset under a well-formed FORMAT this client does not implement refuses and names it.
+func TestResetRefusesForeignFormat(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	e := newEngine(t, dir, nil)
+	g, _, err := e.Adopt(need("cpu=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, store.QueueDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.QueueDir, "v2-ticket"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := treeNames(t, dir)
+	_, err = e.Reset(context.Background())
+	var le *LiveError
+	if !errors.As(err, &le) || !errors.Is(err, ErrRefused) ||
+		!strings.Contains(err.Error(), "format 2 is not implemented by this client; use a coreslot that implements it") {
+		t.Fatalf("Reset = %v; want a refusal naming format 2", err)
+	}
+	if after := treeNames(t, dir); after != before {
+		t.Errorf("the refused reset changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// Snapshot over a store opened read-only creates nothing, on a missing and on an empty
+// directory, and reports locked tokens of resources the configuration does not declare.
+func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	empty := filepath.Join(root, "empty")
+	if err := os.Mkdir(empty, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{"missing": missing, "empty": empty} {
+		t.Run(name, func(t *testing.T) {
+			before := treeNames(t, root)
+			st, err := store.OpenReadOnly(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
+				func() (int, error) { return testCPUs, nil }, SystemClock())
+			rep, err := e.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.StateDirExists != (name == "empty") || rep.Section.Held || len(rep.Holds)+len(rep.Tickets) != 0 {
+				t.Errorf("report %+v", rep)
+			}
+			if rep.Resources["cpu"].Size != testCPUs {
+				t.Errorf("resources %v, want the default cpu budget", rep.Resources)
+			}
+			if after := treeNames(t, root); after != before {
+				t.Errorf("Snapshot created entries:\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+		})
+	}
+}
+
+func TestSnapshotReportsUndeclaredLockedTokens(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	e := newEngine(t, dir, nil)
+	startHelper(t, "lock", dir, tokenPaths(dir, "old-gpu", 0, 1))
+	rep, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.UndeclaredLocked["old-gpu"] != 2 || len(rep.UndeclaredLocked) != 1 {
+		t.Errorf("UndeclaredLocked = %v, want old-gpu 2 only", rep.UndeclaredLocked)
+	}
+	if _, ok := rep.Resources["old-gpu"]; ok {
+		t.Errorf("an undeclared resource is listed as declared: %v", rep.Resources)
 	}
 }

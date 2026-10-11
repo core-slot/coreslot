@@ -91,6 +91,15 @@ func ParseName(name string) (ID, bool) {
 	return id, true
 }
 
+// NameDisplay is the display part of a ticket or hold name (the label's informational
+// suffix), or "" when the name has none or is not a name.
+func NameDisplay(name string) string {
+	if _, ok := ParseName(name); !ok || len(name) == idLen {
+		return ""
+	}
+	return name[idLen+1:]
+}
+
 // ParseID parses exactly the three fields, the grammar of a cancel request's name.
 func ParseID(name string) (ID, bool) {
 	if len(name) != idLen || name[orderKeyDigits] != '-' || name[orderKeyDigits+1+pidDigits] != '-' {

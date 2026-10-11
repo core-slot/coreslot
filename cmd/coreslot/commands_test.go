@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -116,7 +117,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	holdToken(t, dir, "cpu", 3) // locked, and no hold lists it
 
 	doc := statusDoc(t, dir, 0)
-	const top = "cancel_requests config_error dead_holds degraded format format_error format_understood gen holds ignored observed_s reconciled_ns resources schema section state_dir tickets"
+	const top = "cancel_requests config_error dead_holds degraded format format_error format_understood gen holds ignored observed_s reconciled_ns resources schema section state_dir state_dir_exists tickets undeclared_locked"
 	if got := keysOf(doc); got != top {
 		t.Errorf("top-level keys\n got %s\nwant %s", got, top)
 	}
@@ -126,8 +127,14 @@ func TestStatusJSONSchema(t *testing.T) {
 	if doc["degraded"] != nil {
 		t.Errorf("degraded = %v, want null", doc["degraded"])
 	}
-	if got := keysOf(doc["section"].(map[string]any)); got != "entered_ns held held_for_s pid" {
+	if got := keysOf(doc["section"].(map[string]any)); got != "held holder" {
 		t.Errorf("section keys %s", got)
+	}
+	if sec := doc["section"].(map[string]any); sec["held"] != false || sec["holder"] != nil {
+		t.Errorf("a free section: %v, want held false and a null holder", sec)
+	}
+	if doc["state_dir_exists"] != true {
+		t.Errorf("state_dir_exists = %v", doc["state_dir_exists"])
 	}
 
 	cpu := doc["resources"].(map[string]any)["cpu"].(map[string]any)
@@ -160,11 +167,15 @@ func TestStatusJSONSchema(t *testing.T) {
 	if got := keysOf(tk); got != ticketKeys {
 		t.Errorf("ticket keys\n got %s\nwant %s", got, ticketKeys)
 	}
-	if tk["label"] != "waiting" || tk["position"] != float64(1) || tk["state"] != "waiting" || tk["stalled"] != false {
+	if tk["label"] != "waiting" || tk["position"] != float64(1) || tk["state"] != "waiting" {
 		t.Errorf("ticket = %v", tk)
 	}
-	if need := tk["need"].(map[string]any)["cpu"].(map[string]any); need["min"] != float64(2) || need["max"] != float64(4) {
-		t.Errorf("need = %v", need)
+	if v, present := tk["stalled"]; !present || v != nil {
+		t.Errorf("stalled = %v (present %v), want null without --observe", v, present)
+	}
+	need := tk["need"].(map[string]any)["cpu"].(map[string]any)
+	if got := keysOf(need); got != "max min" || need["min"] != float64(2) || need["max"] != float64(4) {
+		t.Errorf("need = %v (keys %s)", need, got)
 	}
 	if _, ok := wire.ParseID(tk["id"].(string)); !ok {
 		t.Errorf("ticket id %q is not an id", tk["id"])
@@ -173,6 +184,68 @@ func TestStatusJSONSchema(t *testing.T) {
 		if _, ok := doc["ignored"].(map[string]any)[k]; !ok {
 			t.Errorf("ignored lacks %q: %v", k, doc["ignored"])
 		}
+	}
+}
+
+// With --observe the JSON says, for each ticket, whether it stalled: true for one nobody
+// refreshes, false for one a waiter keeps polling. The human output says when it did not look.
+func TestStatusObserveReportsStalled(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	c := openLib(t, dir)
+	hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(4, 4)})
+	queue(t, c, "idle", map[string]coreslot.Range{"cpu": rng(1, 1)}) // never polled: nobody refreshes it
+	live := queue(t, c, "polled", map[string]coreslot.Range{"cpu": rng(1, 1)})
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(250 * time.Millisecond):
+				_, _, _ = live.Poll()
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop); <-done })
+
+	plain := cli(t, baseEnv(dir), "status")
+	if !strings.Contains(plain.stdout, "STALLED: not observed (use --observe 10s or more)") {
+		t.Errorf("status without --observe does not say STALLED was not observed:\n%s", plain.stdout)
+	}
+	short := cli(t, baseEnv(dir), "status", "--json", "--observe", "1s")
+	if short.code != 0 || !strings.Contains(short.stderr, "shorter than 10s") {
+		t.Errorf("--observe 1s: exit %d, want a warning about 10s (stderr %q)", short.code, short.stderr)
+	}
+
+	r := cli(t, baseEnv(dir), "status", "--json", "--observe", "10s")
+	if r.code != 0 {
+		t.Fatalf("status --observe 10s exited %d (stderr %q)", r.code, r.stderr)
+	}
+	if r.stderr != "" {
+		t.Errorf("--observe 10s printed %q, want no warning", r.stderr)
+	}
+	var doc struct {
+		ObservedS float64 `json:"observed_s"`
+		Tickets   []struct {
+			Label   string `json:"label"`
+			Stalled *bool  `json:"stalled"`
+			State   string `json:"state"`
+		} `json:"tickets"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, tk := range doc.Tickets {
+		if tk.Stalled == nil {
+			t.Fatalf("ticket %s: stalled is null after --observe", tk.Label)
+		}
+		got[tk.Label] = fmt.Sprintf("%v/%s", *tk.Stalled, tk.State)
+	}
+	if got["idle"] != "true/stalled" || got["polled"] != "false/waiting" || doc.ObservedS != 10 {
+		t.Errorf("tickets %v, observed %v s; want idle true/stalled, polled false/waiting, 10 s", got, doc.ObservedS)
 	}
 }
 
@@ -185,6 +258,7 @@ func TestStatusEscapesLabels(t *testing.T) {
 		"tab\there\rcarriage",
 		"rtl\u202eoverride",
 		`back\slash "quote" <tag>`,
+		"c1\u009bcontrol",
 	}
 	hold(t, c, labels[0], map[string]coreslot.Range{"cpu": rng(4, 4)})
 	for _, l := range labels[1:] {
@@ -198,6 +272,11 @@ func TestStatusEscapesLabels(t *testing.T) {
 	for i := 0; i < len(r.stdout); i++ {
 		if b := r.stdout[i]; b < 0x20 && b != '\n' || b == 0x7f {
 			t.Fatalf("status printed control byte %#x:\n%q", b, r.stdout)
+		}
+	}
+	for _, c := range r.stdout {
+		if c >= 0x80 && c <= 0x9f {
+			t.Fatalf("status printed C1 control %U:\n%q", c, r.stdout)
 		}
 	}
 	if strings.ContainsRune(r.stdout, '\u202e') {
@@ -260,6 +339,9 @@ func TestStatusExits3WhenDegraded(t *testing.T) {
 	}
 	doc := statusDoc(t, dir, 3)
 	d, ok := doc["degraded"].(map[string]any)
+	if got := keysOf(d); got != "count first_ns malformed reason" {
+		t.Errorf("degraded keys %s", got)
+	}
 	if !ok || d["reason"] != "the budget broke\nbadly" || d["count"] != float64(1) || d["malformed"] != false {
 		t.Errorf("degraded = %v", doc["degraded"])
 	}
@@ -299,8 +381,50 @@ func TestStatusNamesSectionHolder(t *testing.T) {
 	}
 	doc := statusDoc(t, dir, 0)
 	s := doc["section"].(map[string]any)
-	if s["held"] != true || s["pid"] != float64(os.Getpid()) || s["held_for_s"].(float64) < 1 {
+	h, _ := s["holder"].(map[string]any)
+	if s["held"] != true || h == nil || keysOf(h) != "alive entered_ns held_for_s pid" ||
+		h["pid"] != float64(os.Getpid()) || h["alive"] != true || h["held_for_s"].(float64) < 1 || h["entered_ns"].(float64) == 0 {
 		t.Errorf("section = %v", s)
+	}
+}
+
+// A holder admit.lock names that is gone is a stale record, not a holder: status says so.
+func TestStatusStaleSectionHolder(t *testing.T) {
+	dir := stateDir(t, "")
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	dead := gone.Process.Pid
+	body := fmt.Sprintf(`{"pid":%d,"entered_ns":%d}`, dead, time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(dir, "admit.lock"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "status")
+	want := fmt.Sprintf("admission section: held; holder unknown (last recorded pid %d has exited)", dead)
+	if !strings.Contains(r.stdout, want) {
+		t.Errorf("status lacks %q:\n%s", want, r.stdout)
+	}
+	h := statusDoc(t, dir, 0)["section"].(map[string]any)["holder"].(map[string]any)
+	if h["pid"] != float64(dead) || h["alive"] != false {
+		t.Errorf("holder = %v, want the dead pid and alive false", h)
+	}
+	// An unreadable body leaves the holder unknown, with alive null.
+	if err := os.WriteFile(filepath.Join(dir, "admit.lock"), []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h = statusDoc(t, dir, 0)["section"].(map[string]any)["holder"].(map[string]any)
+	if h["pid"] != float64(0) || h["alive"] != nil {
+		t.Errorf("holder = %v, want pid 0 and alive null", h)
 	}
 }
 
@@ -391,6 +515,14 @@ func TestStatusFlagsStalledTicket(t *testing.T) {
 	w, rep = run(state.StallAfter-time.Second, func(int) int64 { return 5 })
 	if got := v(w, rep); got != "waiting" {
 		t.Errorf("an mtime unchanged for 9 s: %s, want waiting", got)
+	}
+	w, rep = run(state.StallAfter, func(int) int64 { return 5 })
+	if h := buildStatus(rep, 0, w, state.StallAfter).human(); !strings.Contains(h, "  STALLED  id ") || strings.Contains(h, "not observed") {
+		t.Errorf("human output of a stalled ticket after an observation:\n%s", h)
+	}
+	w, rep = run(0, func(int) int64 { return 5 })
+	if h := buildStatus(rep, 0, w, 0).human(); strings.Contains(h, "  STALLED  id ") || !strings.Contains(h, "STALLED: not observed (use --observe 10s or more)") {
+		t.Errorf("human output without an observation:\n%s", h)
 	}
 	w, rep = run(30*time.Second, func(call int) int64 { return int64(call) }) // refreshed at every reading
 	if got := v(w, rep); got != "waiting" {
@@ -663,5 +795,158 @@ func TestVersionListsFormats(t *testing.T) {
 	}
 	if r := cli(t, baseEnv(stateDir(t, "")), "version", "extra"); r.code != 64 {
 		t.Errorf("version extra: exit %d, want 64", r.code)
+	}
+}
+
+// ---------------------------------------------------------------- read-only commands
+
+// status and doctor on a machine where nothing has run create nothing: not the state directory,
+// not res/, not admit.lock. A missing directory is reported as such and is not a failure.
+func TestStatusAndDoctorCreateNothing(t *testing.T) {
+	for _, shape := range []string{"missing", "empty"} {
+		t.Run(shape, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "state dir")
+			if shape == "empty" {
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := tree(t, root)
+			cmds := [][]string{{"status"}, {"status", "--json"}, {"doctor"}, {"doctor", "--clear"}}
+			noTicket := wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String()
+			if shape == "missing" { // on an existing directory a cancel enters the section, which creates admit.lock
+				if r := cli(t, baseEnv(dir), "cancel", noTicket); r.code != 75 {
+					t.Errorf("cancel on a missing directory exited %d, want 75 (stderr %q)", r.code, r.stderr)
+				}
+			}
+			if r := cli(t, baseEnv(dir), "cancel", "--label", "x"); r.code != 75 {
+				t.Errorf("cancel --label on %s directory exited %d, want 75 (stderr %q)", shape, r.code, r.stderr)
+			}
+			if shape == "missing" { // a reset of an existing directory enters the section, which creates admit.lock
+				cmds = append(cmds, []string{"doctor", "--reset"})
+			}
+			for _, args := range cmds {
+				r := cli(t, baseEnv(dir), args...)
+				if r.code != 0 {
+					t.Errorf("%v exited %d (stderr %q):\n%s", args, r.code, r.stderr, r.stdout)
+				}
+				if shape == "missing" && args[0] == "status" && args[len(args)-1] != "--json" &&
+					!strings.Contains(r.stdout, "no state directory yet (nothing has run)") {
+					t.Errorf("%v does not say nothing has run:\n%s", args, r.stdout)
+				}
+				if after := tree(t, root); after != before {
+					t.Fatalf("%v created entries:\nbefore:\n%s\nafter:\n%s", args, before, after)
+				}
+			}
+			if shape == "missing" {
+				doc := statusDoc(t, dir, 0)
+				if doc["state_dir_exists"] != false {
+					t.Errorf("state_dir_exists = %v, want false", doc["state_dir_exists"])
+				}
+				cpu := doc["resources"].(map[string]any)["cpu"].(map[string]any)
+				if cpu["locked"] != float64(0) || cpu["free"] != cpu["size"] {
+					t.Errorf("an empty budget is expected, got %v", cpu)
+				}
+			}
+		})
+	}
+}
+
+// Tokens locked under a res/<name> the configuration does not declare are still locks.
+func TestStatusReportsUndeclaredLockedTokens(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	holdToken(t, dir, "old-gpu", 0)
+	holdToken(t, dir, "old-gpu", 1)
+	r := cli(t, baseEnv(dir), "status")
+	if !strings.Contains(r.stdout, "undeclared resources with locked tokens (not in the configuration): old-gpu 2") {
+		t.Errorf("status does not report them:\n%s", r.stdout)
+	}
+	ul := statusDoc(t, dir, 0)["undeclared_locked"].(map[string]any)
+	if ul["old-gpu"] != float64(2) || len(ul) != 1 {
+		t.Errorf("undeclared_locked = %v", ul)
+	}
+}
+
+// A directory whose FORMAT is well-formed but newer is not this client's to reset or clear;
+// a malformed one cannot be cleared (a reset repairs it).
+func TestDoctorFormatRefusals(t *testing.T) {
+	setup := func(t *testing.T, format string) string {
+		dir := stateDir(t, "[resources]\ncpu = 4\n")
+		st, err := store.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecordDegraded("test"); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range []string{"queue"} {
+			if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, "queue", "v2-ticket"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte(format), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	t.Run("reset under format 2", func(t *testing.T) {
+		dir := setup(t, "coreslot-protocol 2\n")
+		before := tree(t, dir)
+		r := cli(t, baseEnv(dir), "doctor", "--reset")
+		if r.code != 75 || !strings.Contains(r.stderr, "format 2 is not implemented by this client; use a coreslot that implements it") {
+			t.Errorf("doctor --reset: exit %d, want 75 naming format 2 (stderr %q)", r.code, r.stderr)
+		}
+		if after := tree(t, dir); after != before {
+			t.Errorf("the refused reset changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+	})
+	t.Run("clear under format 2", func(t *testing.T) {
+		dir := setup(t, "coreslot-protocol 2\n")
+		before := tree(t, dir)
+		r := cli(t, baseEnv(dir), "doctor", "--clear")
+		if r.code != 75 || !strings.Contains(r.stderr, "format 2 is not implemented") {
+			t.Errorf("doctor --clear: exit %d, want 75 (stderr %q)", r.code, r.stderr)
+		}
+		if after := tree(t, dir); after != before {
+			t.Errorf("the refused clear changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+	})
+	t.Run("clear under a malformed FORMAT, then reset repairs it", func(t *testing.T) {
+		dir := setup(t, "coreslot-protocol x\n")
+		r := cli(t, baseEnv(dir), "doctor", "--clear")
+		if r.code != 75 || !strings.Contains(r.stderr, "FORMAT is malformed") || !strings.Contains(r.stderr, "doctor --reset") {
+			t.Errorf("doctor --clear: exit %d, want 75 pointing at --reset (stderr %q)", r.code, r.stderr)
+		}
+		if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
+			t.Errorf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "FORMAT")); !os.IsNotExist(err) {
+			t.Errorf("FORMAT survived the reset: %v", err)
+		}
+	})
+}
+
+// Error text that carries user input (here a state directory path with a newline and an escape in
+// it) is escaped like a label: each message stays on one line.
+func TestCommandErrorsAreEscaped(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "x\ny\x1b[31m") // a file where the directory belongs
+	if err := os.WriteFile(bad, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := baseEnv(bad)
+	id := wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String()
+	for _, args := range [][]string{{"status"}, {"status", "--json"}, {"cancel", id}, {"doctor", "--clear"}, {"doctor"}} {
+		r := cli(t, env, args...)
+		out := r.stderr + r.stdout
+		if r.code == 0 || !strings.Contains(out, `x\ny\x1b[31m`) {
+			t.Errorf("%v: exit %d, want a failure that quotes the directory escaped:\n%q", args, r.code, out)
+		}
+		if strings.ContainsAny(out, "\x1b\r") || strings.Count(r.stderr, "\n") > 1 {
+			t.Errorf("%v printed a raw control character or several error lines:\n%q", args, out)
+		}
 	}
 }

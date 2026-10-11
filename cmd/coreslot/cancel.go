@@ -32,7 +32,7 @@ func cancelCommand(args []string, io IO) int {
 			fmt.Fprintln(io.Stdout, cancelUsage)
 			return 0
 		}
-		fmt.Fprintf(io.Stderr, "coreslot: %v\n%s\n", err, cancelUsage)
+		fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), cancelUsage)
 		return exitUsage
 	}
 	byLabel := false
@@ -50,10 +50,14 @@ func cancelCommand(args []string, io IO) int {
 		}
 	}
 
-	e, _, err := openEngine()
+	e, _, err := openEngineReadOnly()
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: cancel: %v\n", err)
+		fmt.Fprintf(io.Stderr, "coreslot: cancel: %s\n", text(err.Error()))
 		return exitInternal
+	}
+	if !e.Store().Exists() { // nothing has run, so nothing waits; do not create the directory for it
+		fmt.Fprintln(io.Stderr, "coreslot: cancel: no state directory yet (nothing has run), so no ticket is waiting")
+		return exitRefusal
 	}
 	if byLabel {
 		var rep engine.Report
@@ -61,7 +65,7 @@ func cancelCommand(args []string, io IO) int {
 			rep, err = e.Snapshot()
 			return err
 		}); err != nil {
-			fmt.Fprintf(io.Stderr, "coreslot: cancel: %v\n", err)
+			fmt.Fprintf(io.Stderr, "coreslot: cancel: %s\n", text(err.Error()))
 			return exitInternal
 		}
 		var ids []string

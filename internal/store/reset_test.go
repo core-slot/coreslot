@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -86,7 +87,7 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	}
 	lockBefore, tokenBefore := inode(filepath.Join(dir, AdmitLock)), inode(tokenPath(dir, "cpu", 0))
 
-	live, removed, err := sec.Reset()
+	live, removed, err := sec.Reset([]int{1})
 	if err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %d, %v; want nothing alive and no error", live, removed, err)
 	}
@@ -163,7 +164,7 @@ func TestResetRefusesWhatIsAlive(t *testing.T) {
 			_, sec := resetFixture(t, dir)
 			c.alive(t, dir, sec)
 			before := snapshotTree(t, dir)
-			live, removed, err := sec.Reset()
+			live, removed, err := sec.Reset([]int{1})
 			if err != nil || live.Empty() || removed != 0 {
 				t.Fatalf("Reset = %+v, %d, %v; want what is alive, nothing removed", live, removed, err)
 			}
@@ -182,7 +183,7 @@ func TestResetRepairsMalformedFormat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if live, _, err := sec.Reset(); err != nil || !live.Empty() {
+	if live, _, err := sec.Reset([]int{1}); err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %v", live, err)
 	}
 	if exists(filepath.Join(dir, FormatFile)) {
@@ -201,7 +202,7 @@ func TestResetReportsWhatItCannotRemove(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stuck, "x"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := sec.Reset(); err == nil {
+	if _, _, err := sec.Reset([]int{1}); err == nil {
 		t.Fatal("Reset left a non-empty directory behind without an error")
 	}
 	if !exists(stuck) || exists(filepath.Join(dir, GenFile)) {
@@ -228,4 +229,112 @@ func snapshotTree(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// A well-formed FORMAT this client does not implement is a newer client's directory: its
+// entries may not be format-1 grammar and its waiters are invisible here, so the reset removes
+// nothing. FORMAT 0 is well-formed too.
+func TestResetRefusesForeignFormat(t *testing.T) {
+	for _, body := range []string{"coreslot-protocol 2\n", "coreslot-protocol 0", "coreslot-protocol 007\n"} {
+		t.Run(body, func(t *testing.T) {
+			dir := newDir(t)
+			_, sec := resetFixture(t, dir)
+			if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// An entry no format-1 grammar describes, as a newer format may keep.
+			if err := os.WriteFile(filepath.Join(dir, QueueDir, "v2-ticket.json"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotTree(t, dir)
+			live, removed, err := sec.Reset([]int{1})
+			if err != nil || removed != 0 || live.ForeignFormat == nil || live.Empty() {
+				t.Fatalf("Reset = %+v, %d, %v; want a refusal naming the foreign format", live, removed, err)
+			}
+			if after := snapshotTree(t, dir); after != before {
+				t.Errorf("the refused reset changed the tree:\nbefore %s\nafter  %s", before, after)
+			}
+			// The same directory is reset when this client implements that format.
+			if live, _, err := sec.Reset([]int{1, *live.ForeignFormat}); err != nil || !live.Empty() {
+				t.Errorf("Reset with the format implemented = %+v, %v", live, err)
+			}
+		})
+	}
+}
+
+// A reset that goes ahead records itself in admit.lock's body, so status names it meanwhile.
+func TestResetMarksItselfHolder(t *testing.T) {
+	dir := newDir(t)
+	_, sec := resetFixture(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, AdmitLock), []byte(`{"pid":1,"entered_ns":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := sec.Reset([]int{1}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, AdmitLock))
+	if err != nil || !strings.Contains(string(body), fmt.Sprintf(`"pid":%d`, os.Getpid())) {
+		t.Errorf("admit.lock = %q, %v; want this process as holder", body, err)
+	}
+}
+
+// OpenReadOnly creates nothing: not the state directory, not res/, not admit.lock.
+func TestOpenReadOnlyCreatesNothing(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing", "state dir")
+	s, err := OpenReadOnly(missing)
+	if err != nil || s.Exists() {
+		t.Fatalf("OpenReadOnly of a missing directory = %v, exists %v", err, s != nil && s.Exists())
+	}
+	if _, err := os.Lstat(filepath.Join(root, "missing")); !os.IsNotExist(err) {
+		t.Errorf("OpenReadOnly created a parent: %v", err)
+	}
+	if held, err := s.SectionHeld(); held || err != nil {
+		t.Errorf("SectionHeld of a missing directory = %v, %v", held, err)
+	}
+	empty := filepath.Join(root, "empty")
+	if err := os.Mkdir(empty, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, empty)
+	s, err = OpenReadOnly(empty)
+	if err != nil || !s.Exists() {
+		t.Fatalf("OpenReadOnly of an empty directory = %v", err)
+	}
+	if held, err := s.SectionHeld(); held || err != nil {
+		t.Errorf("SectionHeld of an empty directory = %v, %v", held, err)
+	}
+	if res, err := s.Resources(); err != nil || len(res) != 0 {
+		t.Errorf("Resources = %v, %v", res, err)
+	}
+	if after := snapshotTree(t, empty); after != before {
+		t.Errorf("a read-only open and probe changed the directory:\nbefore %s\nafter  %s", before, after)
+	}
+	// It still applies the policy to what exists.
+	bad := filepath.Join(root, "bad")
+	if err := os.Mkdir(bad, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(empty, filepath.Join(bad, ResDir)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = OpenReadOnly(bad)
+	wantStateError(t, err, "a symlinked res/")
+}
+
+// SectionHeld sees another description's hold without taking it.
+func TestSectionHeldProbe(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	if held, err := s.SectionHeld(); held || err != nil {
+		t.Fatalf("a free section: %v, %v", held, err)
+	}
+	sec := enter(t, s)
+	if held, err := s.SectionHeld(); !held || err != nil {
+		t.Errorf("a held section: %v, %v", held, err)
+	}
+	sec.Leave()
+	if held, err := s.SectionHeld(); held || err != nil {
+		t.Errorf("a left section: %v, %v", held, err)
+	}
 }

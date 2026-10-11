@@ -19,6 +19,7 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 )
 
 const doctorUsage = `usage: coreslot doctor [--clear] [--reset]`
@@ -48,7 +49,7 @@ func doctorCommand(args []string, io IO) int {
 			fmt.Fprintln(io.Stdout, doctorUsage)
 			return 0
 		}
-		fmt.Fprintf(io.Stderr, "coreslot: %v\n%s\n", err, doctorUsage)
+		fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), doctorUsage)
 		return exitUsage
 	}
 	if fs.NArg() > 0 {
@@ -66,10 +67,18 @@ func doctorCommand(args []string, io IO) int {
 
 // doctorAct performs --reset (which removes the degraded record too) or --clear.
 func doctorAct(doReset bool, io IO) int {
-	e, _, err := openEngine()
+	e, _, err := openEngineReadOnly()
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: doctor: %v\n", err)
+		fmt.Fprintf(io.Stderr, "coreslot: doctor: %s\n", text(err.Error()))
 		return exitInternal
+	}
+	if !e.Store().Exists() { // nothing has run: there is nothing to clear or reset, and nothing to create
+		if doReset {
+			fmt.Fprintln(io.Stdout, "reset: nothing to reset, no state directory yet (nothing has run)")
+		} else {
+			fmt.Fprintln(io.Stdout, "clear: no degraded record")
+		}
+		return 0
 	}
 	if doReset {
 		var removed int
@@ -91,6 +100,10 @@ func doctorAct(doReset bool, io IO) int {
 		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock, res/ and config.toml\n", removed)
 		return 0
 	}
+	if why := formatRefusal(e.Store()); why != "" {
+		fmt.Fprintf(io.Stderr, "coreslot: doctor --clear refused: %s\n", text(why))
+		return exitRefusal
+	}
 	rec, err := e.Store().Degraded()
 	if err != nil {
 		fmt.Fprintf(io.Stderr, "coreslot: doctor --clear: %s\n", text(err.Error()))
@@ -106,6 +119,20 @@ func doctorAct(doReset bool, io IO) int {
 	}
 	fmt.Fprintln(io.Stdout, "clear: removed the degraded record")
 	return 0
+}
+
+// formatRefusal says why a write into the directory is refused for its FORMAT, or "": a
+// malformed FORMAT, or a well-formed one this client does not implement (PROTOCOL.md section 14:
+// a client never writes into a directory whose format it has not understood).
+func formatRefusal(st *store.Store) string {
+	n, present, err := st.ReadFormat()
+	switch {
+	case err != nil:
+		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live"
+	case present && !slices.Contains(testhooks.Formats(), n):
+		return fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", n)
+	}
+	return ""
 }
 
 // doctorReport prints the findings and returns doctor's exit status.
@@ -127,6 +154,9 @@ func doctorReport(io IO) int {
 		source = config.StateDirEnv
 	}
 	line("state directory: %s (%s)", text(dir), source)
+	if _, serr := os.Lstat(dir); errors.Is(serr, os.ErrNotExist) {
+		line("no state directory yet (nothing has run)")
+	}
 
 	fsErr := store.CheckFilesystem(nearestExisting(dir))
 	if fsErr != nil {
@@ -136,7 +166,7 @@ func doctorReport(io IO) int {
 	}
 
 	var rep engine.Report
-	e, _, err := openEngine()
+	e, _, err := openEngineReadOnly()
 	if err == nil {
 		err = inSection(func() (err error) { // Snapshot probes admit.lock
 			rep, err = e.Snapshot()
@@ -148,6 +178,8 @@ func doctorReport(io IO) int {
 		line("permissions: not checked (the filesystem is refused)")
 	case err != nil:
 		problem("permissions and layout: %s", text(err.Error()))
+	case !rep.StateDirExists:
+		line("permissions: nothing to check yet")
 	default:
 		line("permissions: every entry of the layout is the user's, a regular file or directory, not group- or world-writable")
 	}
