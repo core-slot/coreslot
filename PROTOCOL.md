@@ -142,13 +142,17 @@ Every conforming client MUST preserve these invariants:
   (`getuid()`, the id section 4.1 resolves the home from); a client whose effective user id
   differs from its real one is unsupported. "Group- or world-writable" means
   `mode & 0o022 != 0`. The check applies to `$S`, to every file and directory of the layout
-  (section 4.4), and to every entry whose name matches its directory's grammar (section 7.1),
-  temporaries included, that the client opens, probes or removes: a ticket, hold, cancel request,
-  temporary or token file that is a symlink, a directory, another user's, or group- or
-  world-writable is a state error, never an ignored entry. An entry whose name does not match its
-  directory's grammar is ignored whatever its type (sections 4.4 and 6). These directories are
-  `0700` and the user's own, so only the user (or the superuser) can place an entry in them; a
-  hostile same-user process is outside the threat model.
+  (section 4.4), and to every token file (section 6) that the client opens, probes or removes; a
+  directory or top-level file of the layout, a temporary file in `$S` or a token file that is a
+  symlink, a directory, another user's, or group- or world-writable is a state error. Inside
+  `queue/`, `holds/` and `cancel/` the rule is different: an entry whose name matches the
+  directory's grammar (section 7.1, temporaries included) but whose type, owner or mode fails the
+  checks above is not a state error. It is ignored and counted exactly like an entry with a
+  malformed body (section 7.2): never trusted, never opened or probed, never removed (reconciliation
+  skips it and goes on), and `status` and `doctor` report it in the ignored count. An entry whose
+  name does not match its directory's grammar is ignored whatever its type (sections 4.4 and 6).
+  These directories are `0700` and the user's own, so only the user (or the superuser) can place an
+  entry in them; a hostile same-user process is outside the threat model.
 - Every descriptor a client opens on a file under `$S` MUST be close-on-exec (`O_CLOEXEC`), except
   the copies it deliberately passes to a child (section 17). A leaked descriptor keeps a lock alive
   for as long as the process that inherited it.
@@ -567,8 +571,8 @@ reconcile before its own change. Admission and token-only admission never reconc
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
-   that is not a regular file of the user is a state error, section 4.2, and reconciliation stops
-   without writing `gen`);
+   that is not a regular file of the user, section 4.2, is ignored and counted, never probed or
+   removed, and reconciliation goes on and writes `gen` as usual);
 2. removes every cancel request in `cancel/` whose ticket is gone: its ticket is any `queue/` entry
    whose name matches the ticket grammar and whose first three fields are that id, whatever its
    body;
