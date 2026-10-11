@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -109,11 +108,18 @@ func defaults() Config {
 	}
 }
 
-// Load reads the configuration at path. A missing file is the defaults (cpu = "100%" only), with
-// no error; an unreadable, malformed or invalid file is a *Error. Unknown tables and keys are
-// ignored.
+// notRegularError is the reason of a configuration path that resolves to something but a regular
+// file.
+type notRegularError struct{ msg string }
+
+func (e notRegularError) Error() string { return e.msg }
+
+// Load reads the configuration at path, through symbolic links. A missing file, a dangling
+// symlink included, is the defaults (cpu = "100%" only), with no error; an unreadable file, one
+// that is not a regular file (a directory, a FIFO, a device; Load never blocks on it), or a
+// malformed or invalid one is a *Error. Unknown tables and keys are ignored.
 func Load(path string) (Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := readRegular(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return defaults(), nil
 	}
