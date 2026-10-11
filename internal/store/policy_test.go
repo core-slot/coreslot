@@ -6,9 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
 // newDir returns a fresh, not yet existing state directory path under the test's temp dir.
@@ -43,28 +46,107 @@ func TestOpenCreatesLayoutWithModes(t *testing.T) {
 	want := map[string]os.FileMode{
 		".":          os.ModeDir | 0o700,
 		"res":        os.ModeDir | 0o700,
-		"queue":      os.ModeDir | 0o700,
-		"holds":      os.ModeDir | 0o700,
-		"cancel":     os.ModeDir | 0o700,
-		"log":        os.ModeDir | 0o700,
 		"admit.lock": 0o600,
 	}
-	for name, mode := range want {
-		fi, err := os.Lstat(filepath.Join(dir, name))
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
+	checkModes := func(want map[string]os.FileMode) {
+		t.Helper()
+		for name, mode := range want {
+			fi, err := os.Lstat(filepath.Join(dir, name))
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+				continue
+			}
+			if fi.Mode() != mode {
+				t.Errorf("%s: mode %v, want %v", name, fi.Mode(), mode)
+			}
 		}
-		if fi.Mode() != mode {
-			t.Errorf("%s: mode %v, want %v", name, fi.Mode(), mode)
-		}
+	}
+	checkModes(want)
+	// Before FORMAT is read, Open creates nothing else (PROTOCOL.md sections 14 and 15.2).
+	if got := names(t, dir); !slices.Equal(got, []string{"admit.lock", "res"}) {
+		t.Errorf("Open created %v, want only admit.lock and res", got)
 	}
 	// A second Open accepts the layout it created, and keeps admit.lock's inode.
 	before, _ := os.Stat(filepath.Join(dir, "admit.lock"))
-	open(t, dir)
+	s := open(t, dir)
 	after, _ := os.Stat(filepath.Join(dir, "admit.lock"))
 	if !os.SameFile(before, after) {
 		t.Error("a second Open replaced admit.lock")
+	}
+	// The other directories appear, mode 0700, when an operation first needs them.
+	sec := enter(t, s)
+	for _, d := range []string{QueueDir, HoldsDir} {
+		f, err := sec.Publish(d, ticketName(1), []byte(`{}`), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	if _, err := sec.Publish(CancelDir, wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String(), []byte(`{}`), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendRun(RunRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	checkModes(map[string]os.FileMode{"queue": os.ModeDir | 0o700, "holds": os.ModeDir | 0o700,
+		"cancel": os.ModeDir | 0o700, "log": os.ModeDir | 0o700, "log/runs.jsonl": 0o600})
+}
+
+func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
+	// A directory written by a format-2 client: the format-stable files and FORMAT only.
+	dir := newDir(t)
+	if err := os.MkdirAll(filepath.Join(dir, ResDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{AdmitLock: "", FormatFile: "coreslot-protocol 2\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := snapshot(t, dir)
+	s := open(t, dir)
+	sec := enter(t, s)
+	if n, understood, err := sec.Format([]int{1}); n != 2 || understood || err != nil {
+		t.Fatalf("Format = %d, %v, %v", n, understood, err)
+	}
+	// What a token-only client reads must work without the directories it may not create.
+	if e, ignored, err := s.List(QueueDir); len(e) != 0 || ignored != 0 || err != nil {
+		t.Errorf("List of an absent queue/ = %v, %d, %v", e, ignored, err)
+	}
+	if n, err := sec.CountLocked("cpu"); n != 0 || err != nil {
+		t.Errorf("CountLocked with no res/cpu = %d, %v", n, err)
+	}
+	if err := sec.RotateLogIfNeeded(); err != nil {
+		t.Errorf("RotateLogIfNeeded with no log/: %v", err)
+	}
+	if d, err := s.Degraded(); d != nil || err != nil {
+		t.Errorf("Degraded with no record = %v, %v", d, err)
+	}
+	if g, err := s.ReadGen(); g != (Gen{}) || err != nil {
+		t.Errorf("ReadGen with no gen = %v, %v", g, err)
+	}
+	if after := snapshot(t, dir); after != before {
+		t.Errorf("Open under an unknown format changed the directory:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestOpenChecksFilesystemBeforeCreating(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "a", "b", "state")
+	var checked []string
+	old := checkFilesystem
+	checkFilesystem = func(p string) error {
+		checked = append(checked, p)
+		return &StateError{Reason: "refused for the test"}
+	}
+	t.Cleanup(func() { checkFilesystem = old })
+	_, err := Open(dir)
+	wantStateError(t, err, "Open on a refused filesystem")
+	if !slices.Equal(checked, []string{parent}) {
+		t.Errorf("checked %v, want the nearest existing ancestor %s first", checked, parent)
+	}
+	if exists(filepath.Join(parent, "a")) {
+		t.Error("Open created directories on a refused filesystem")
 	}
 }
 
@@ -73,9 +155,6 @@ func TestOpenRejectsSymlinkedQueue(t *testing.T) {
 	open(t, dir)
 	elsewhere := t.TempDir()
 	q := filepath.Join(dir, "queue")
-	if err := os.Remove(q); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Symlink(elsewhere, q); err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +179,11 @@ func TestOpenRejectsGroupWritable(t *testing.T) {
 			dir := newDir(t)
 			open(t, dir)
 			p := filepath.Join(dir, name)
+			if name == "holds" { // Open does not create it
+				if err := os.Mkdir(p, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
 			fi, err := os.Stat(p)
 			if err != nil {
 				t.Fatal(err)
@@ -158,9 +242,6 @@ func TestOpenRejectsForeignFile(t *testing.T) {
 
 	dir3 := newDir(t)
 	open(t, dir3)
-	if err := os.Remove(filepath.Join(dir3, "cancel")); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir3, "cancel"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +308,10 @@ func TestFilesystemTypeTable(t *testing.T) {
 	magics := map[int64]bool{
 		0x6969: true, 0xFF534D42: true, 0xFE534D42: true, 0x517B: true, 0x65735546: true,
 		0x01021997: true,
+		0x786F4256: true,  // vboxsf
+		0x00C36400: true,  // Ceph
+		0x5346414F: true,  // AFS
+		0x6B414653: true,  // kAFS
 		0xEF53:     false, // ext4
 		0x58465342: false, // xfs
 		0x01021994: false, // tmpfs

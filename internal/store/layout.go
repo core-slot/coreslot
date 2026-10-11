@@ -55,28 +55,38 @@ func (s *Store) path(elem ...string) string {
 	return filepath.Join(append([]string{s.dir}, elem...)...)
 }
 
-// Open opens the state directory dir, creating it and the directories of the layout (mode
-// 0700) and admit.lock (mode 0600) when absent, and checks dir, its filesystem and every
-// existing entry of the layout, including each res/<name>/ and its token files, and
-// config.toml. Every failure is a *StateError.
+// Open opens the state directory dir. It checks the filesystem of dir's nearest existing
+// ancestor before creating anything, creates dir (mode 0700, with missing parents), admit.lock
+// (mode 0600) and res/ when absent, and checks dir, its filesystem and every existing entry of
+// the layout, including each res/<name>/ and its token files, and config.toml. It creates
+// nothing else: FORMAT has not been read yet, and a client must not write into a directory
+// whose format it does not understand, so queue/, holds/, cancel/ and log/ are created by the
+// operation that first needs them. admit.lock and res/ are fixed for every format. Every failure
+// is a *StateError.
 func Open(dir string) (*Store, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, stateErrorf("state directory %q is not an absolute path", dir)
 	}
 	dir = filepath.Clean(dir)
+	if err := checkFilesystem(nearestExisting(dir)); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, stateErrorf("cannot create the state directory: %v", err)
 	}
 	if err := CheckEntry(dir, true); err != nil {
 		return nil, err
 	}
-	if err := CheckFilesystem(dir); err != nil {
+	if err := checkFilesystem(dir); err != nil {
 		return nil, err
 	}
 	s := &Store{dir: dir}
-	for _, d := range []string{ResDir, QueueDir, HoldsDir, CancelDir, LogDir} {
-		if err := ensureDir(s.path(d)); err != nil {
-			return nil, asStateError(err)
+	if err := ensureDir(s.path(ResDir)); err != nil {
+		return nil, asStateError(err)
+	}
+	for _, d := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+		if err := CheckEntry(s.path(d), true); err != nil {
+			return nil, err
 		}
 	}
 	f, err := OpenFile(s.path(AdmitLock), os.O_RDWR|os.O_CREATE)
@@ -94,6 +104,23 @@ func Open(dir string) (*Store, error) {
 		return nil, asStateError(err)
 	}
 	return s, nil
+}
+
+// checkFilesystem is CheckFilesystem; tests replace it to observe what Open checks and when.
+var checkFilesystem = CheckFilesystem
+
+// nearestExisting returns dir, or its nearest ancestor that exists.
+func nearestExisting(dir string) string {
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir
+		}
+		dir = parent
+	}
 }
 
 // checkTokens checks every res/<name>/ directory and every token file in it. Entries whose

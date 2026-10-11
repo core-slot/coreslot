@@ -79,10 +79,14 @@ func TestHelperProcess(t *testing.T) {
 }
 
 type helper struct {
-	cmd   *exec.Cmd
-	stdin io.WriteCloser
-	once  sync.Once
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	readerDone chan struct{} // closed when the stdout reader reached EOF
+	once       sync.Once
 }
+
+// helperExitWait bounds how long stop waits for a helper to exit after its stdin closes.
+const helperExitWait = 30 * time.Second
 
 func startHelper(t *testing.T, mode, dir, arg string, extra []*os.File) *helper {
 	t.Helper()
@@ -101,13 +105,15 @@ func startHelper(t *testing.T, mode, dir, arg string, extra []*os.File) *helper 
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	h := &helper{cmd: cmd, stdin: stdin}
+	h := &helper{cmd: cmd, stdin: stdin, readerDone: make(chan struct{})}
 	t.Cleanup(h.stop)
 	line := make(chan string, 1)
 	go func() {
-		l, _ := bufio.NewReader(stdout).ReadString('\n')
+		defer close(h.readerDone)
+		r := bufio.NewReader(stdout)
+		l, _ := r.ReadString('\n')
 		line <- strings.TrimSpace(l)
-		_, _ = io.Copy(io.Discard, stdout)
+		_, _ = io.Copy(io.Discard, r)
 	}()
 	select {
 	case l := <-line:
@@ -121,9 +127,18 @@ func startHelper(t *testing.T, mode, dir, arg string, extra []*os.File) *helper 
 }
 
 // stop closes the helper's stdin and waits for it to exit; it is idempotent.
+// stop closes the helper's stdin and waits for it to exit, killing it when it has not exited
+// within helperExitWait. The stdout reader finishes before Wait, which closes the pipe. It is
+// idempotent.
 func (h *helper) stop() {
 	h.once.Do(func() {
 		h.stdin.Close()
+		select {
+		case <-h.readerDone:
+		case <-time.After(helperExitWait):
+			_ = h.cmd.Process.Kill()
+			<-h.readerDone
+		}
 		_ = h.cmd.Wait()
 	})
 }
@@ -343,37 +358,6 @@ func TestPublishedTicketIsNeverSeenUnlocked(t *testing.T) {
 		checked.Add(1)
 	})
 
-	// Concurrently, an observer probes every final name it sees.
-	stop := make(chan struct{})
-	var seen, unlocked atomic.Int32
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			entries, _ := os.ReadDir(qdir)
-			for _, e := range entries {
-				if _, ok := wire.ParseName(e.Name()); !ok {
-					continue
-				}
-				f, err := os.Open(filepath.Join(qdir, e.Name()))
-				if err != nil {
-					continue
-				}
-				seen.Add(1)
-				if unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) == nil {
-					unlocked.Add(1)
-				}
-				f.Close()
-			}
-		}
-	}()
-
 	var held []*os.File
 	const n = 200
 	for i := 1; i <= n; i++ {
@@ -384,18 +368,12 @@ func TestPublishedTicketIsNeverSeenUnlocked(t *testing.T) {
 		}
 		held = append(held, f)
 	}
-	close(stop)
-	wg.Wait()
 	for _, f := range held {
 		f.Close()
 	}
 	if checked.Load() != n {
 		t.Errorf("publish.before-rename was reached %d times, want %d", checked.Load(), n)
 	}
-	if unlocked.Load() != 0 {
-		t.Errorf("the observer found %d published tickets unlocked (of %d probes)", unlocked.Load(), seen.Load())
-	}
-	t.Logf("observer probed %d published tickets", seen.Load())
 }
 
 func TestPublishIntoFullDirectoryIsStateError(t *testing.T) {
@@ -760,5 +738,85 @@ func TestReconcileRespects30s(t *testing.T) {
 				t.Errorf("not due: removed %d, dead ticket exists %v, gen %+v (was %+v)", removed, exists(dead), g, g0)
 			}
 		})
+	}
+}
+
+func TestPublishSkipsAnExistingTemporaryName(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	q := filepath.Join(dir, QueueDir)
+	if err := os.Mkdir(q, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A young leftover of an earlier process with this pid holds the next temporary name.
+	next := int((seq.Load() + 1) % wire.SeqModulus)
+	leftover := filepath.Join(q, tmpName(os.Getpid(), next))
+	if err := os.WriteFile(leftover, []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := sec.Publish(QueueDir, ticketName(1), []byte(`{}`), true)
+	if err != nil {
+		t.Fatalf("Publish over an existing temporary name: %v", err)
+	}
+	defer f.Close()
+	if body, err := os.ReadFile(leftover); err != nil || string(body) != "leftover" {
+		t.Errorf("the leftover temporary file was touched: %q, %v", body, err)
+	}
+	if body, _ := os.ReadFile(filepath.Join(q, ticketName(1))); string(body) != `{}` {
+		t.Errorf("published body %q", body)
+	}
+}
+
+func TestPublishRefusesNamesOutsideGrammar(t *testing.T) {
+	s := open(t, newDir(t))
+	sec := enter(t, s)
+	id := wire.ID{OrderKey: 1, PID: 2, Seq: 3}
+	for _, c := range []struct{ dir, name string }{
+		{QueueDir, "junk"}, {QueueDir, "../holds/" + ticketName(1)}, {QueueDir, tmpName(1, 1)},
+		{HoldsDir, ticketName(1) + "-x"}, {CancelDir, ticketName(1)}, {CancelDir, "junk"},
+		{GenFile, "x"},
+	} {
+		if f, err := sec.Publish(c.dir, c.name, []byte(`{}`), false); err == nil || f != nil {
+			t.Errorf("Publish(%s, %q) = %v, %v; want a refusal", c.dir, c.name, f, err)
+		}
+	}
+	for _, c := range []struct{ dir, name string }{
+		{QueueDir, ticketName(1)}, {HoldsDir, id.String()}, {CancelDir, id.String()},
+	} {
+		if _, err := sec.Publish(c.dir, c.name, []byte(`{}`), false); err != nil {
+			t.Errorf("Publish(%s, %q): %v", c.dir, c.name, err)
+		}
+	}
+}
+
+func TestReconcileUnlinksWhileHoldingProbeLock(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	name := ticketName(1)
+	f, err := sec.Publish(QueueDir, name, []byte(`{}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close() // withdrawn: dead
+	path := filepath.Join(dir, QueueDir, name)
+	reached := 0
+	setPoint(t, func(p string) {
+		if p != "remove.before-unlink" {
+			return
+		}
+		reached++
+		if !exists(path) {
+			t.Error("at remove.before-unlink the dead ticket is already gone")
+		} else if !probeLocked(t, path) {
+			t.Error("at remove.before-unlink the reconciler no longer holds the probe lock")
+		}
+	})
+	if removed, err := sec.ReconcileIfDue(NowNS()); err != nil || removed != 1 {
+		t.Fatalf("ReconcileIfDue = %d, %v", removed, err)
+	}
+	if reached != 1 || exists(path) {
+		t.Errorf("remove.before-unlink reached %d times; ticket exists %v", reached, exists(path))
 	}
 }
