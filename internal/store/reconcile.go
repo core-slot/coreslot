@@ -237,7 +237,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	// 4. gen.
 	g.ReconciledNS = nowNS
 	if removed > 0 {
-		g.N++
+		g.N = nextGen(g.N)
 	}
 	return removed, sec.writeGen(g)
 }
