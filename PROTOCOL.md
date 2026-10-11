@@ -147,10 +147,11 @@ Every conforming client MUST preserve these invariants:
   symlink, a directory, another user's, or group- or world-writable is a state error. Inside
   `queue/`, `holds/` and `cancel/` the rule is different: an entry whose name matches the
   directory's grammar (section 7.1, temporaries included) but whose type, owner or mode fails the
-  checks above is not a state error. It is ignored and counted exactly like an entry with a
-  malformed body (section 7.2): never trusted, never opened or probed, never removed (reconciliation
-  skips it and goes on), and `status` and `doctor` report it in the ignored count. An entry whose
-  name does not match its directory's grammar is ignored whatever its type (sections 4.4 and 6).
+  checks above is not a state error. It is a **stray**: ignored and counted exactly like an entry
+  with a malformed body (section 7.2): never trusted, never opened or probed, never removed
+  (reconciliation skips it and goes on), and `status` and `doctor` report it in the ignored count.
+  An entry whose name does not match its directory's grammar is ignored whatever its type
+  (sections 4.4 and 6).
   These directories are `0700` and the user's own, so only the user (or the superuser) can place an
   entry in them; a hostile same-user process is outside the threat model.
 - Every descriptor a client opens on a file under `$S` MUST be close-on-exec (`O_CLOEXEC`), except
@@ -541,7 +542,7 @@ A waiter:
   `reconciled_ns` alone MAY also trigger a rescan, which does no harm);
 - each second, examines the tickets ahead of it, from the nearest: a dead one (its probe succeeds)
   is skipped; a gone one (it no longer exists: its probe fails with `ENOENT`) is skipped; a STALLED
-  one is skipped; an ignored (malformed or non-matching) entry is skipped; the
+  one is skipped; an ignored (malformed, non-matching or stray) entry is skipped; the
   first live, non-stalled ticket ends the examination. When none is found the waiter is the head:
   this examination is the **election**, and the waiter enters the section and tries admission
   (section 12);
@@ -574,8 +575,9 @@ reconcile before its own change. Admission and token-only admission never reconc
    that is not a regular file of the user, section 4.2, is ignored and counted, never probed or
    removed, and reconciliation goes on and writes `gen` as usual);
 2. removes every cancel request in `cancel/` whose ticket is gone: its ticket is any `queue/` entry
-   whose name matches the ticket grammar and whose first three fields are that id, whatever its
-   body;
+   that is not ignored as a stray (section 4.2) whose name matches the ticket grammar and whose
+   first three fields are that id, whatever its body. An entry ignored as a stray (a wrong type,
+   owner or mode) is not an entry for this purpose: it never protects a cancel request;
 3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/` and `cancel/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
@@ -665,7 +667,8 @@ A clamped CLI run prints a notice (`coreslot: cpu: requested 16, budget is 10; r
 
 ### 12.3 After the command exits
 
-The run closes its copies of the grant's descriptors. The CLI then enters the section if it can
+The run closes its copies of the grant's descriptors, the hold's before any token's, so that a
+live hold never lists a token nobody locks (I1, I2). The CLI then enters the section if it can
 within 2 s, probes its hold and unlinks it only if the probe succeeds (no descendant still holds
 it), bumping `gen` when it did (section 7.8); otherwise reconciliation removes the hold later.
 Other clients MAY remove their hold the same way, or leave it to reconciliation. This applies to

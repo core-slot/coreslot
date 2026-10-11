@@ -487,3 +487,87 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 		t.Errorf("format %d understood %v", r.Format, r.FormatUnderstood)
 	}
 }
+
+// liveHoldIndices lists, per live hold, the (resource, index) pairs its body lists.
+func liveHoldIndices(t *testing.T, e *Engine) map[string][]string {
+	t.Helper()
+	entries, _, err := e.st.List(store.HoldsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for _, en := range entries {
+		dead, err := e.st.Probe(store.HoldsDir, en.Name)
+		if err != nil || dead {
+			continue
+		}
+		body, err := e.readBody(store.HoldsDir, en.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err := wire.DecodeHold(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for res, idx := range h.Grant {
+			for _, i := range idx {
+				out[en.Name] = append(out[en.Name], fmt.Sprintf("%s/%d", res, i))
+			}
+		}
+	}
+	return out
+}
+
+// PROTOCOL.md section 12.3: Close releases the hold before the tokens, so that no live hold
+// lists a token nobody locks; a head admitted in between can never publish a second live hold
+// over the same indices (I1).
+func TestCloseReleasesHoldBeforeTokens(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 2\n")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	g := admitted(t, step(t, enqueue(t, e, need("cpu=2"))))
+	w := enqueue(t, e, need("cpu=2"))
+	if isAdmitted(step(t, w)) {
+		t.Fatal("admitted while the grant holds every token")
+	}
+
+	reached, release := make(chan struct{}), make(chan struct{})
+	defaultPoint := point
+	point = func(name string) {
+		if name == "grant.after-hold-close" {
+			close(reached)
+			<-release
+		}
+	}
+	closed := make(chan struct{})
+	go func() {
+		g.Close()
+		close(closed)
+	}()
+	<-reached // paused between the two closes (a SIGSTOP there lasts indefinitely)
+	clk.advance(time.Second)
+	r, err := w.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for hold, idx := range liveHoldIndices(t, e) {
+		for _, i := range idx {
+			if other, dup := seen[i]; dup {
+				t.Errorf("I1: live holds %s and %s both list %s", other, hold, i)
+			}
+			seen[i] = hold
+		}
+	}
+	close(release)
+	<-closed
+	point = defaultPoint
+	if a, ok := r.(Admitted); ok {
+		a.Close()
+		t.Fatal("admitted between the closes")
+	}
+	clk.advance(time.Second)
+	if !isAdmitted(step(t, w)) {
+		t.Error("not admitted once the grant is fully closed")
+	}
+}

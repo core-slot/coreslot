@@ -181,7 +181,8 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 		}
 	}
 
-	// 2. Cancel requests whose ticket is gone.
+	// 2. Cancel requests whose ticket is gone. tickets holds only the entries of step 1 that are
+	// live and not stray: a stray never protects a cancel request (PROTOCOL.md section 10.4).
 	cancels, _, err := sec.s.List(CancelDir)
 	if err != nil {
 		return removed, err

@@ -754,33 +754,51 @@ func TestCancelAlreadyRequestedIsNotAnError(t *testing.T) {
 	}
 }
 
-// The resume bump never delays a refresh: with the section busy, the Step refreshes, returns
-// without waiting, and bumps gen at a later refresh (PROTOCOL.md section 10.2).
+// countEntries replaces the section-entry seams with counting wrappers for the rest of the test.
+func countEntries(t *testing.T) (enters, tryEnters *int) {
+	t.Helper()
+	var e, te int
+	oldEnter, oldTry := enterSection, tryEnterSection
+	enterSection = func(st *store.Store, ctx context.Context) (*store.Section, error) {
+		e++
+		return oldEnter(st, ctx)
+	}
+	tryEnterSection = func(st *store.Store) (*store.Section, bool, error) {
+		te++
+		return oldTry(st)
+	}
+	t.Cleanup(func() { enterSection, tryEnterSection = oldEnter, oldTry })
+	return &e, &te
+}
+
+// The resume bump never delays a refresh (PROTOCOL.md section 10.2): it is a single attempt at
+// the section, made after the refresh, and a busy section only postpones it to the next refresh.
 func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 0))
+	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7)) // nobody can be admitted
+	ahead := enqueue(t, e, need("cpu=1"))
 	tk := enqueue(t, e, need("cpu=1"))
+	step(t, ahead)
 	step(t, tk)
 	section := startHelper(t, "section", dir, "")
 	before := readGen(t, e)
 
-	clk.advance(11 * time.Second) // suspended: a refresh gap above 10 s
-	began := time.Now()
-	if _, err := tk.Poll(); err != nil { // single attempts: only the bump could wait
-		t.Fatal(err)
+	clk.advance(11 * time.Second) // both were suspended: a refresh gap above 10 s
+	step(t, ahead)                // refreshes, so tk sees it live and stays behind it
+	enters, tryEnters := countEntries(t)
+	step(t, tk)
+	if *enters != 0 || *tryEnters != 1 {
+		t.Errorf("the Step after the gap entered %d times blocking, %d times single-attempt; want 0 and 1",
+			*enters, *tryEnters)
 	}
-	took := time.Since(began)
 	fi, err := os.Stat(filepath.Join(dir, store.QueueDir, tk.Name()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := clk.clock().Realtime(); fi.ModTime().UnixNano()/1000 != want/1000 {
 		t.Errorf("mtime %d after the Step, want the refresh at %d", fi.ModTime().UnixNano(), want)
-	}
-	if took >= sectionWait {
-		t.Errorf("the Step took %v with the section busy: the bump waited for it", took)
 	}
 	if got := readGen(t, e); got != before {
 		t.Fatalf("gen %d -> %d while the section is held", before, got)
@@ -790,6 +808,107 @@ func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
 	step(t, tk)
 	if got := readGen(t, e); got != before+1 {
 		t.Errorf("after the section is free: gen %d -> %d, want the resume bump", before, got)
+	}
+}
+
+// Refresh-to-refresh stays within the bound RefreshEvery documents while the section is busy and
+// the waiter, as head, keeps trying to enter it (PROTOCOL.md section 10.2). Deterministic: the
+// engine's injected clock, and a section entry that waits out its whole context deadline on that
+// clock, so the margin does not depend on host load. The bound is the worst case with the
+// mid-step refresh: a Step starting just under RefreshEvery/4 after a refresh does not refresh
+// before its entry, which then waits sectionWait, and the caller's next Step starts up to
+// RefreshEvery/8 after that: RefreshEvery/4 + sectionWait + RefreshEvery/8 = 1.25 s. Without
+// the mid-step refresh a Step starting just under RefreshEvery/2 after a refresh leaves up to
+// 1.75 s (1.5 s on this test's 250 ms grid).
+func TestRefreshCadenceWithBusySection(t *testing.T) {
+	const poll = 250 * time.Millisecond // Wait's poll interval
+	// RefreshEvery/4 + sectionWait + RefreshEvery/8, the documented worst case.
+	bound := RefreshEvery/4 + sectionWait + RefreshEvery/8
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	tk := enqueue(t, e, need("cpu=1"))
+
+	oldEnter := enterSection
+	enterSection = func(st *store.Store, ctx context.Context) (*store.Section, error) {
+		// The section is busy for the whole wait: the entry returns at its ctx deadline.
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Error("a Step's section entry has no deadline")
+			return nil, context.DeadlineExceeded
+		}
+		clk.advance(time.Until(dl))
+		return nil, context.DeadlineExceeded
+	}
+	defaultPoint := point
+	var refreshes []time.Duration
+	point = func(name string) {
+		if name == "ticket.refreshed" {
+			refreshes = append(refreshes, clk.clock().Monotonic())
+		}
+	}
+	t.Cleanup(func() { enterSection, point = oldEnter, defaultPoint })
+
+	start := clk.clock().Monotonic()
+	for clk.clock().Monotonic()-start < 60*time.Second {
+		step(t, tk)
+		clk.advance(poll)
+	}
+	end := clk.clock().Monotonic()
+	// Every gap counts, including the one from the start and the one up to the end. The fake
+	// clock only moves inside the entry stub and between Steps, so there is no Step work to add;
+	// time.Until(dl) is a hair under sectionWait, hence the small slack.
+	const slack = 5 * time.Millisecond
+	prev := start
+	for _, r := range append(refreshes, end) {
+		if gap := r - prev; gap > bound+slack {
+			t.Errorf("refresh gap %v above %v (refreshes at %v, start %v, end %v)", gap, bound, refreshes, start, end)
+		}
+		prev = r
+	}
+	if len(refreshes) < 10 {
+		t.Errorf("only %d refreshes in 60 s of waiting", len(refreshes))
+	}
+}
+
+// A real-clock smoke test of the same cadence against a section really held by another process.
+// It asserts only the protocol's own bound, RefreshEvery, so it keeps about 1 s of slack over
+// the 1.25 s the engine achieves and cannot see the mid-step refresh go missing; the injected
+// clock test above is the structural one.
+func TestRefreshCadenceWithBusySectionRealClockSmoke(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, nil)
+	tk := enqueue(t, e, need("cpu=1"))
+	startHelper(t, "section", dir, "")
+	var mu sync.Mutex
+	var refreshes []time.Time
+	defaultPoint := point
+	point = func(name string) {
+		if name == "ticket.refreshed" {
+			mu.Lock()
+			refreshes = append(refreshes, time.Now())
+			mu.Unlock()
+		}
+	}
+	defer func() { point = defaultPoint }()
+	start := time.Now()
+	for time.Since(start) < 4500*time.Millisecond {
+		if _, err := tk.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(250 * time.Millisecond) // Wait's poll interval
+	}
+	end := time.Now()
+	mu.Lock()
+	defer mu.Unlock()
+	// Every gap counts, including the one from the start and the one up to the end.
+	prev := start
+	for _, r := range append(refreshes, end) {
+		if gap := r.Sub(prev); gap > RefreshEvery {
+			t.Errorf("refresh gap %v above %v (start %v, refreshes %v, end %v)", gap, RefreshEvery,
+				start.Format(time.StampMilli), stamps(refreshes), end.Format(time.StampMilli))
+		}
+		prev = r
 	}
 }
 
@@ -851,4 +970,57 @@ func TestHoldStartMismatchIsIgnored(t *testing.T) {
 	if !labels["good"] || labels["bad"] || len(w.Holders) != 2 {
 		t.Errorf("holders %+v, want the well-formed hold and the admitted one, not the mismatched one", w.Holders)
 	}
+}
+
+// Stray entries (a grammar-matching name that is a symlink, a directory or a group-writable
+// file) are ignored and counted, never a state error and never trusted (PROTOCOL.md 4.2).
+func TestStrayEntriesAreIgnored(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
+	tk := enqueue(t, e, need("cpu=1"))
+	for _, d := range []string{store.HoldsDir, store.CancelDir} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A directory under the ticket's own cancel name, a symlink ticket ahead of it, and a
+	// group-writable hold.
+	if err := os.Mkdir(filepath.Join(dir, store.CancelDir, tk.ID().String()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ahead := wire.TicketName(wire.ID{OrderKey: 1, PID: 1, Seq: 1}, "")
+	if err := os.Symlink(filepath.Join(dir, store.QueueDir, tk.Name()), filepath.Join(dir, store.QueueDir, ahead)); err != nil {
+		t.Fatal(err)
+	}
+	hold := filepath.Join(dir, store.HoldsDir, wire.HoldName(5, 1, 1, ""))
+	if err := os.WriteFile(hold, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hold, 0o620); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Second)
+	if p := position(t, step(t, tk)); p != 1 {
+		t.Errorf("position %d behind a stray symlink, want 1 (head)", p)
+	}
+	r, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Ignored[store.QueueDir] != 1 || r.Ignored[store.HoldsDir] != 1 || r.Ignored[store.CancelDir] != 1 {
+		t.Errorf("ignored %v, want one stray entry in each directory", r.Ignored)
+	}
+	if len(r.Tickets) != 1 || r.Tickets[0].Name != tk.Name() {
+		t.Errorf("tickets %+v, want only the real one", r.Tickets)
+	}
+}
+
+func stamps(ts []time.Time) []string {
+	var out []string
+	for _, t := range ts {
+		out = append(out, t.Format(time.StampMilli))
+	}
+	return out
 }

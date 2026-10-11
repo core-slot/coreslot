@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 
 	"github.com/Nezhinskiy/coreslot/internal/store"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
@@ -21,7 +20,7 @@ import (
 // request already published means the cancellation is already requested: not an error. In a state directory whose format this client
 // does not implement nothing is written and Cancel returns an error matching ErrRefused.
 func (e *Engine) Cancel(id wire.ID) error {
-	sec, err := e.st.Enter(context.Background())
+	sec, err := enterSection(e.st, context.Background())
 	if err != nil {
 		return err
 	}
@@ -67,8 +66,8 @@ func (e *Engine) Cancel(id wire.ID) error {
 // malformed one is ignored, never trusted (PROTOCOL.md section 7.2).
 func (t *Ticket) cancelRequested() (bool, error) {
 	body, err := t.e.readBody(store.CancelDir, t.id.String())
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
+	if gone(err) || stray(err) {
+		return false, nil // a stray entry under the id is ignored, never trusted
 	}
 	if err != nil {
 		return false, err
@@ -139,7 +138,7 @@ func (t *Ticket) removeOwn(sec *store.Section) {
 		return
 	}
 	if sec == nil {
-		s, ok, err := t.e.st.TryEnter()
+		s, ok, err := tryEnterSection(t.e.st)
 		if err != nil || !ok {
 			return
 		}
@@ -152,11 +151,10 @@ func (t *Ticket) removeOwn(sec *store.Section) {
 		}
 		sec = s
 	}
-	dir := t.e.st.Dir()
-	// ENOENT counts as success: only a non-conforming actor removes a live ticket, and then
-	// there is nothing left to remove (PROTOCOL.md section 10.3).
-	removed := os.Remove(filepath.Join(dir, store.QueueDir, name)) == nil
-	_ = os.Remove(filepath.Join(dir, store.CancelDir, id.String()))
+	// A ticket already gone counts as success: only a non-conforming actor removes a live
+	// ticket, and then there is nothing left to remove (PROTOCOL.md section 10.3).
+	removed, _ := sec.RemoveOwnTicket(name)
+	_, _ = sec.RemoveCancel(id)
 	if removed {
 		// Removing one's own ticket bumps gen once (PROTOCOL.md section 7.8).
 		_ = sec.BumpGen()
