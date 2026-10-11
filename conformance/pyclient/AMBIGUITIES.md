@@ -91,10 +91,24 @@ alone never makes a body malformed.
 Integers are defined for keys "in a body". Is `1e999`, `1.5`, or a 30-digit integer in an unknown
 key acceptable ("unknown keys are ignored at any depth")?
 *Choice:* yes. Unknown values only need to be valid JSON, and only known keys are type-checked.
+The fixture README (`internal/wire/testdata/README.md`) takes the same reading ("their values may be
+any JSON"), and `ok-unknown-keys-at-any-depth` exercises it. `PROTOCOL.md` still does not say so.
 
 **C3. §7.4: a hold whose `start_ns` differs from its name's start-ns.** Malformed, or is the name
 "authoritative" (§7.1) and the body field only informational?
-*Choice:* malformed, as a rule violation (`validate_hold(obj, name_start_ns)`).
+*Choice:* malformed, as a rule violation (`validate_hold(obj, name_start_ns)`). The fixture
+README leaves the comparison to "the reader of the directory", which agrees.
+*Related, after the §7.1 update (start-ns at most 2^64 − 1):* a hold name whose start-ns lies in
+(2^63 − 1, 2^64 − 1] is a valid name, yet `start_ns` in the body must be a signed 64-bit integer.
+Such a hold can never be well formed under the "equal to the name's start-ns" rule. The protocol
+should give both the same bound.
+
+**C10. §7.2: duplicate keys spelled differently** (`"cpu"` and `"c\u0070u"` in one object). §7.2
+says "a duplicate key at any depth" but not whether keys are compared before or after JSON
+unescaping. The fixture `bodies/ticket/bad-duplicate-by-escaped-spelling` requires after-unescaping,
+and only the fixture README states the rule ("Keys are compared after JSON unescaping").
+*Choice:* compare after unescaping, which agrees with the fixture (Python's decoder compares decoded
+keys). `PROTOCOL.md` should state it: a byte-level decoder would accept that body.
 
 **C4. §7.4: `unbudgeted_resources` duplicates or ordering, and `clamped` keys for resources that
 are not in `grant`.** Not stated. *Choice:* neither is checked. The client writes sorted, distinct
