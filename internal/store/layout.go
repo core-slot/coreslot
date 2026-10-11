@@ -40,6 +40,9 @@ const (
 // MaxEntries is the most entries one directory of the layout may hold (section 4.4).
 const MaxEntries = 65536
 
+// maxEntries is MaxEntries; tests lower it.
+var maxEntries = MaxEntries
+
 // Store is an opened state directory. It is safe for concurrent use; a Section is not.
 type Store struct {
 	dir string
@@ -151,10 +154,10 @@ func readNames(dir string) ([]string, error) {
 	defer d.Close()
 	var names []string
 	for {
-		batch, err := d.Readdirnames(1024)
+		batch, err := d.Readdirnames(min(1024, maxEntries+1-len(names)))
 		names = append(names, batch...)
-		if len(names) > MaxEntries {
-			return nil, stateErrorf("%s holds more than %d entries", dir, MaxEntries)
+		if len(names) > maxEntries {
+			return nil, stateErrorf("%s holds more than %d entries", dir, maxEntries)
 		}
 		if errors.Is(err, io.EOF) || (err == nil && len(batch) == 0) {
 			return names, nil
