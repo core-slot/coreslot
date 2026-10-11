@@ -159,11 +159,17 @@ func (e *Engine) enter(ctx context.Context, single bool) (sec *store.Section, en
 // in token-only mode (section 15.2): its Step tries token-only admission. An invalid request
 // is a *spec.UsageError. Enqueue waits for the section as long as it takes.
 func (e *Engine) Enqueue(req spec.Request) (*Ticket, error) {
+	return e.EnqueueContext(context.Background(), req)
+}
+
+// EnqueueContext is Enqueue whose wait for the section ends with ctx: it then returns ctx.Err()
+// having published nothing. Once inside the section it completes.
+func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket, error) {
 	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	sec, err := enterSection(e.st, context.Background())
+	sec, err := enterSection(e.st, ctx)
 	if err != nil {
 		return nil, err
 	}
