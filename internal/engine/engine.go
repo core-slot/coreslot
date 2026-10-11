@@ -32,9 +32,13 @@ const (
 	// again just before a section entry that may wait once RefreshEvery/4 has passed; such an
 	// entry waits at most sectionWait = RefreshEvery/4. A caller that starts each Step within
 	// RefreshEvery/8 of the previous one returning (Wait polls every 250 ms) therefore refreshes
-	// at most RefreshEvery/2 + RefreshEvery/4 + RefreshEvery/8 = 1.75 s apart, plus the
-	// filesystem work of one Step. A Poll refreshes whenever RefreshEvery/2 has passed, so its
-	// refresh gaps are its caller's poll interval (at most 2 s).
+	// at most RefreshEvery/4 + RefreshEvery/4 + RefreshEvery/8 = 1.25 s apart, plus the
+	// filesystem work of one Step: a Step that starts just under RefreshEvery/4 after a refresh
+	// does not refresh before its entry, the entry waits sectionWait, and the next Step starts
+	// RefreshEvery/8 after that. (Without the mid-step refresh the worst case would be
+	// RefreshEvery/2 + RefreshEvery/4 + RefreshEvery/8 = 1.75 s.) A Poll refreshes whenever
+	// RefreshEvery/2 has passed, so its refresh gaps are its caller's poll interval (at
+	// most 2 s).
 	RefreshEvery = 2 * time.Second
 	// ElectEvery is how often a waiter reads gen and repeats the election.
 	ElectEvery = time.Second

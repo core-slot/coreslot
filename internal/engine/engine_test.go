@@ -811,10 +811,71 @@ func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
 	}
 }
 
-// Refresh-to-refresh stays within RefreshEvery while another process holds the section and the
-// waiter, as head, keeps trying to enter it (PROTOCOL.md section 10.2). Real clock: the bound is
-// the protocol's.
+// Refresh-to-refresh stays within the bound RefreshEvery documents while the section is busy and
+// the waiter, as head, keeps trying to enter it (PROTOCOL.md section 10.2). Deterministic: the
+// engine's injected clock, and a section entry that waits out its whole context deadline on that
+// clock, so the margin does not depend on host load. The bound is the worst case with the
+// mid-step refresh: a Step starting just under RefreshEvery/4 after a refresh does not refresh
+// before its entry, which then waits sectionWait, and the caller's next Step starts up to
+// RefreshEvery/8 after that: RefreshEvery/4 + sectionWait + RefreshEvery/8 = 1.25 s. Without
+// the mid-step refresh a Step starting just under RefreshEvery/2 after a refresh leaves up to
+// 1.75 s (1.5 s on this test's 250 ms grid).
 func TestRefreshCadenceWithBusySection(t *testing.T) {
+	const poll = 250 * time.Millisecond // Wait's poll interval
+	// RefreshEvery/4 + sectionWait + RefreshEvery/8, the documented worst case.
+	bound := RefreshEvery/4 + sectionWait + RefreshEvery/8
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	tk := enqueue(t, e, need("cpu=1"))
+
+	oldEnter := enterSection
+	enterSection = func(st *store.Store, ctx context.Context) (*store.Section, error) {
+		// The section is busy for the whole wait: the entry returns at its ctx deadline.
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Error("a Step's section entry has no deadline")
+			return nil, context.DeadlineExceeded
+		}
+		clk.advance(time.Until(dl))
+		return nil, context.DeadlineExceeded
+	}
+	defaultPoint := point
+	var refreshes []time.Duration
+	point = func(name string) {
+		if name == "ticket.refreshed" {
+			refreshes = append(refreshes, clk.clock().Monotonic())
+		}
+	}
+	t.Cleanup(func() { enterSection, point = oldEnter, defaultPoint })
+
+	start := clk.clock().Monotonic()
+	for clk.clock().Monotonic()-start < 60*time.Second {
+		step(t, tk)
+		clk.advance(poll)
+	}
+	end := clk.clock().Monotonic()
+	// Every gap counts, including the one from the start and the one up to the end. The fake
+	// clock only moves inside the entry stub and between Steps, so there is no Step work to add;
+	// time.Until(dl) is a hair under sectionWait, hence the small slack.
+	const slack = 5 * time.Millisecond
+	prev := start
+	for _, r := range append(refreshes, end) {
+		if gap := r - prev; gap > bound+slack {
+			t.Errorf("refresh gap %v above %v (refreshes at %v, start %v, end %v)", gap, bound, refreshes, start, end)
+		}
+		prev = r
+	}
+	if len(refreshes) < 10 {
+		t.Errorf("only %d refreshes in 60 s of waiting", len(refreshes))
+	}
+}
+
+// A real-clock smoke test of the same cadence against a section really held by another process.
+// It asserts only the protocol's own bound, RefreshEvery, so it keeps about 1 s of slack over
+// the 1.25 s the engine achieves and cannot see the mid-step refresh go missing; the injected
+// clock test above is the structural one.
+func TestRefreshCadenceWithBusySectionRealClockSmoke(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
 	tk := enqueue(t, e, need("cpu=1"))
