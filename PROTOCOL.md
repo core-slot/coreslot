@@ -303,7 +303,9 @@ temporary = ".tmp-" pid "-" seq
 ```
 
 All numbers in names are decimal and zero-padded to their width, so the byte order of the
-`order-key "-" pid "-" seq` prefix is the numeric order of (order-key, pid, seq). `display` contains
+`order-key "-" pid "-" seq` prefix is the numeric order of (order-key, pid, seq). An order-key or
+start-ns is at most 18 446 744 073 709 551 615 (2^64 − 1); a 20-digit value above it makes the
+name invalid, as does any name that does not match the grammar. `display` contains
 no `-`, so a name splits on `-` into three or four fields. A writer MAY include a display; how it
 derives one from the label is not part of the protocol (the examples below replace each byte
 outside the set with `_` and keep the first 32). Readers MUST NOT interpret it.
