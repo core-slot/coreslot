@@ -29,12 +29,13 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format(formats())
+	_, understood, err := sec.Format(formats())
 	if err != nil {
 		return nil, err
 	}
 	if !understood {
-		return nil, t.onUnknownFormat(n)
+		t.toTokenOnly()
+		return nil, nil
 	}
 
 	// 1. A cancel request published before this section wins.
@@ -173,6 +174,7 @@ type Grant struct {
 	unbudgeted []string
 	tokenOnly  bool
 	adopted    bool
+	failOpen   string // the reason of a fail-open run's grant
 
 	mu     sync.Mutex
 	closed bool
@@ -182,7 +184,7 @@ type Grant struct {
 func (g *Grant) publishHold(sec *store.Section, label string, adopted bool) error {
 	g.adopted = adopted
 	start := max(g.e.clock.Realtime(), 0)
-	h := wire.Hold{Label: label, Grant: g.Indices(), StartNS: uint64(start),
+	h := wire.Hold{Label: label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
 		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted}
 	f, name, err := sec.PublishHold(h, os.Getpid(), g.e.seq())
 	if err != nil {
@@ -220,7 +222,8 @@ func (g *Grant) Grant() map[string]int {
 // Clamped maps each clamped resource to its requested min (PROTOCOL.md section 12.2).
 func (g *Grant) Clamped() map[string]int { return maps.Clone(g.clamped) }
 
-// Unbudgeted lists, sorted, the requested resources the configuration does not declare.
+// Unbudgeted lists, sorted, the requested resources the configuration does not declare (every
+// requested resource for a fail-open grant).
 func (g *Grant) Unbudgeted() []string { return slices.Clone(g.unbudgeted) }
 
 // TokenOnly reports a token-only grant: no hold, CORESLOT_UNBUDGETED=format.
@@ -243,7 +246,7 @@ func (g *Grant) Files() []*os.File {
 
 // Env is the CORESLOT_* environment matching Files: CORESLOT_GRANTED_<RES> for every requested
 // resource, CORESLOT_HELD_FD=3 with a hold, CORESLOT_TOKEN_FDS when tokens are passed, and
-// CORESLOT_UNBUDGETED=format in token-only mode.
+// CORESLOT_UNBUDGETED=format in token-only mode (the reason for a fail-open grant).
 func (g *Grant) Env() []string {
 	grant := g.Grant()
 	var env []string
@@ -259,8 +262,11 @@ func (g *Grant) Env() []string {
 	case n > 1:
 		env = append(env, "CORESLOT_TOKEN_FDS=4-"+strconv.Itoa(3+n))
 	}
-	if g.tokenOnly {
+	switch {
+	case g.tokenOnly:
 		env = append(env, "CORESLOT_UNBUDGETED=format")
+	case g.failOpen != "":
+		env = append(env, "CORESLOT_UNBUDGETED="+g.failOpen)
 	}
 	return env
 }
@@ -312,4 +318,10 @@ func (g *Grant) removeHold() {
 	if removed, err := sec.ProbeAndRemoveHold(g.holdName); err == nil && removed {
 		_ = sec.BumpGen() // removing one's own hold bumps gen once (PROTOCOL.md section 7.8)
 	}
+}
+
+func sortedCopy(s []string) []string {
+	out := slices.Clone(s)
+	slices.Sort(out)
+	return out
 }

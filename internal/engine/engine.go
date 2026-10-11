@@ -142,8 +142,8 @@ func (e *Engine) enter(ctx context.Context, single bool) (sec *store.Section, en
 
 // Enqueue enters the section, reads FORMAT, reconciles if due, publishes a ticket for req
 // (PROTOCOL.md section 10.1) keeping its lock-carrying descriptor, bumps gen and leaves. When
-// the format is not one this client implements, nothing is written and the error matches
-// ErrRefused. An invalid request
+// the format is not one this client implements, nothing is written and the returned ticket is
+// in token-only mode (section 15.2): its Step tries token-only admission. An invalid request
 // is a *spec.UsageError. Enqueue waits for the section as long as it takes.
 func (e *Engine) Enqueue(req spec.Request) (*Ticket, error) {
 	req = spec.Normalize(req)
@@ -155,14 +155,16 @@ func (e *Engine) Enqueue(req spec.Request) (*Ticket, error) {
 		return nil, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format(formats())
+	_, understood, err := sec.Format(formats())
 	if err != nil {
 		return nil, err
 	}
-	if !understood {
-		return nil, fmt.Errorf("%w: the state directory has format %d, which this client does not implement", ErrRefused, n)
-	}
 	t := newTicket(e, req)
+	if !understood {
+		t.mode = modeTokenOnly
+		t.last = Waiting{}
+		return t, nil
+	}
 	if err := t.publish(sec); err != nil {
 		return nil, err
 	}
@@ -200,6 +202,12 @@ func (t *Ticket) publish(sec *store.Section) error {
 			return err
 		}
 		t.mu.Lock()
+		if t.status != statusWaiting {
+			// Withdrawn while re-enqueueing from token-only mode: the new ticket is dead at once.
+			t.mu.Unlock()
+			f.Close()
+			return ErrCancelled
+		}
 		t.f, t.id, t.name = f, id, name
 		t.mu.Unlock()
 		t.key = state.Key{OrderKey: id.OrderKey, PID: id.PID, Seq: id.Seq}
