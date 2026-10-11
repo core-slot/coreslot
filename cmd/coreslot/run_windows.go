@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/signal"
 
-	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 )
 
@@ -29,13 +28,7 @@ func runCommand(args []string, io IO) int {
 		fmt.Fprintln(io.Stderr, "coreslot: Windows has no coreslot budget; refusing (--strict)")
 		return o.refusalCode
 	}
-	cfg := config.Config{WindowsWarning: true}
-	if path, err := config.Path(); err == nil {
-		if c, err := config.Load(path); err == nil {
-			cfg = c
-		}
-	}
-	if msg := windowsNotice(cfg); msg != "" {
+	if msg := windowsNotice(windowsConfig()); msg != "" {
 		fmt.Fprintln(io.Stderr, msg)
 	}
 	argv := substitute(o.argv, o.minGrant(), o.subst)

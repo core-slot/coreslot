@@ -123,7 +123,11 @@ func ValidateInherited(env map[string]string) (held map[string][]*os.File, err e
 		if st.Mode&unix.S_IFMT != unix.S_IFREG {
 			return nil, fmt.Errorf("descriptor %d of %s is not a token file: %s", fd, EnvTokenFDs, reusedCause)
 		}
-		want[devIno{uint64(st.Dev), uint64(st.Ino)}] = fd
+		id := devIno{uint64(st.Dev), uint64(st.Ino)}
+		if other, dup := want[id]; dup {
+			return nil, fmt.Errorf("descriptors %d and %d of %s are the same token file: a launcher duplicated a descriptor, and counting both would overstate the grant", other, fd, EnvTokenFDs)
+		}
+		want[id] = fd
 	}
 	dir, err := stateDirOf(env)
 	if err != nil {

@@ -448,7 +448,9 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 		reason = se.Reason
 	}
 	if r.o.strict {
-		return r.refuse("state error: %s; refusing (--strict)", reason)
+		code, _ := classify(strictRefusal(err, r.o.refusalCode))
+		r.notice("state error: %s; refusing (--strict)", reason)
+		return code
 	}
 	r.notice("state error: %s; running unbudgeted with %s (fail-open)", reason,
 		grantText(r.o.minGrant(), r.o.sortedNeed()))
@@ -460,8 +462,6 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 			g, err = e.FailOpen(r.o.request(0), reason)
 			return err
 		})
-	} else {
-		ferr = errors.New("the state directory cannot be used")
 	}
 	if g != nil {
 		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() { _ = inSection(g.Close) }
@@ -471,10 +471,31 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	} else {
 		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), reason)...)
 	}
-	if ferr != nil {
-		r.notice("the hold, the degraded record and the run log were not written: %v", ferr)
+	if msg := failOpenNotice(e != nil, g != nil && g.HoldName() != "", ferr); msg != "" {
+		r.notice("%s", msg)
 	}
 	return r.runChild(c)
+}
+
+// strictRefusal is what --strict makes of a state error: a refusal with the run's refusal code.
+func strictRefusal(err error, code int) error {
+	return &refusalError{Msg: "state error under --strict: " + err.Error(), Code: code}
+}
+
+// failOpenNotice says what a fail-open run could not record (PROTOCOL.md section 14): opened
+// reports a usable state directory, held a published unbudgeted hold, and err what failed. The
+// degraded record is written after the hold, and the run log only with a hold, so a missing hold
+// means none of the three; a hold with an error means the degraded record alone failed.
+func failOpenNotice(opened, held bool, err error) string {
+	switch {
+	case !opened:
+		return "nothing was written (hold, degraded record, run log): the state directory cannot be used"
+	case !held:
+		return fmt.Sprintf("the unbudgeted hold, the degraded record and the run log were not written: %v", err)
+	case err != nil:
+		return fmt.Sprintf("the degraded record was not written: %v", err)
+	}
+	return ""
 }
 
 // unbudgetedEnv is the environment of a run without a grant: each resource's min, and the
@@ -511,16 +532,29 @@ func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	} else {
 		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), timeoutReason)...)
 	}
-	switch {
-	case g != nil && g.HoldName() != "":
-		c.log = e.Store() // FORMAT was understood in the section that published the hold
-	case t != nil && !t.TokenOnly():
-		c.log = e.Store() // FORMAT was understood when the ticket was published
+	if timeoutLogs(g != nil && g.HoldName() != "", herr, t != nil && !t.TokenOnly()) {
+		c.log = e.Store()
 	}
 	if herr != nil {
 		r.notice("the unbudgeted hold was not published: %v", herr)
 	}
 	return r.runChild(c)
+}
+
+// timeoutLogs decides whether a timeout run appends its run-log line (PROTOCOL.md section 14):
+// when its hold was published, FORMAT was understood in that section; when the hold's section
+// found a FORMAT it does not understand (ErrRefused) or a malformed one (a state error), it
+// writes nothing; otherwise (the section stayed busy) the FORMAT understood when its ticket was
+// published still counts.
+func timeoutLogs(holdPublished bool, holdErr error, ticketUnderstood bool) bool {
+	var se *store.StateError
+	switch {
+	case holdPublished:
+		return true
+	case errors.Is(holdErr, engine.ErrRefused), errors.As(holdErr, &se):
+		return false
+	}
+	return ticketUnderstood
 }
 
 // child is what a run starts its command with.
@@ -568,17 +602,20 @@ func (r *run) runChild(c child) int {
 		childDone(terminal)
 		c.release()
 	}
-	if c.nested {
-		c.log = nestedLog() // read FORMAT outside the section only now, after the command
-	}
-	if c.log != nil {
+	if c.log != nil || c.nested {
 		rec := store.RunRecord{
 			TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
 			UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
 			RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
 			Nested: c.nested,
 		}
-		if err := appendRunLog(c.log, rec, !c.nested); err != nil {
+		var err error
+		if c.nested {
+			err = appendNestedLog(rec) // reads FORMAT outside the section only now, after the command
+		} else {
+			err = appendRunLog(c.log, rec, true)
+		}
+		if err != nil {
 			r.notice("the run log was not written: %v", err)
 		}
 	}
@@ -595,24 +632,36 @@ func pendingSignal() syscall.Signal {
 	}
 }
 
+// errFormatChanged is the outcome of a rotation section that found a FORMAT this client does
+// not understand: the line is not appended (PROTOCOL.md section 14).
+var errFormatChanged = errors.New("the state directory's FORMAT is no longer one this client implements")
+
 // appendRunLog appends rec to the run log (PROTOCOL.md section 20). When the log is at or above
 // 10 MiB and rotate is set, it first rotates it inside the section if it can enter within 2 s;
-// a pass-through never rotates.
+// when that section finds a FORMAT this client does not understand, nothing is appended. A
+// busy section only skips the rotation. A pass-through never rotates (appendNestedLog).
 func appendRunLog(st *store.Store, rec store.RunRecord, rotate bool) error {
 	if rotate && st.RunLogNeedsRotation() {
-		_ = inSection(func() error {
+		err := inSection(func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), logRotateWait)
 			defer cancel()
 			sec, err := st.Enter(ctx)
 			if err != nil {
-				return err
+				return nil // busy: append without rotating
 			}
 			defer sec.Leave()
-			if _, understood, err := sec.Format(testhooks.Formats()); err != nil || !understood {
+			_, understood, err := sec.Format(testhooks.Formats())
+			if err != nil {
 				return err
+			}
+			if !understood {
+				return errFormatChanged
 			}
 			return sec.RotateLogIfNeeded()
 		})
+		if err != nil {
+			return err
+		}
 	}
 	return st.AppendRun(rec)
 }

@@ -352,6 +352,9 @@ func TestValidateInherited(t *testing.T) {
 			t.Errorf("%s (%q) validated: %v", name, v, held)
 		}
 	}
+	if _, err := check(list(t0, dup(tokens[0], false))); err == nil || !strings.Contains(err.Error(), "same token file") {
+		t.Errorf("two descriptors of one token file: err %v, want a diagnostic naming the same token file", err)
+	}
 	if _, err := engine.ValidateInherited(map[string]string{"CORESLOT_STATE_DIR": filepath.Join(dir, "missing"),
 		"CORESLOT_TOKEN_FDS": list(t0)}); err == nil {
 		t.Error("a context whose state directory cannot be read validated")

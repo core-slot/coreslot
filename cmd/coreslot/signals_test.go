@@ -68,9 +68,13 @@ func signalHelper(name string, args []string) (code int, ok bool) {
 			return 1, true
 		}
 		defer f.Close()
+		deadline := time.Now().Add(helperDeadline)
 		for {
 			if _, err := os.Stat(args[2]); err == nil {
 				return 0, true
+			}
+			if time.Now().After(deadline) {
+				return 3, true
 			}
 			_, _ = f.Write([]byte("t"))
 			time.Sleep(50 * time.Millisecond)
@@ -366,6 +370,67 @@ func TestCtrlZAndFg(t *testing.T) {
 }
 
 // ---------------------------------------------------------------- non-terminal mode
+
+// Ctrl-Z on a foreground pipeline whose coreslot is in non-terminal mode: coreslot forwards
+// SIGTSTP to the command's own group and stops too, so the shell sees the whole job stopped and
+// prompts again; fg continues coreslot, which forwards SIGCONT to the command's group.
+func TestPipelineCtrlZAndFg(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	tmp := t.TempDir()
+	pidFile, ticks, release := filepath.Join(tmp, "pid"), filepath.Join(tmp, "ticks"), filepath.Join(tmp, "release")
+	sh := shell(t, dir)
+	sh.write(t, fmt.Sprintf(`true | "$BIN" run --need cpu=2 --label pipeline-z -- env %s=ticker "$BIN" '%s' '%s' '%s' | cat`+"\n",
+		helperEnv, pidFile, ticks, release))
+	child, cs := readPID(t, pidFile)
+	killGroupOf(t, child)
+	killGroupOf(t, cs) // the pipeline's group is not the shell's
+	if pg, _ := unix.Getpgid(child); pg != child {
+		t.Fatalf("non-terminal mode: the command's group is %d, want its own %d", pg, child)
+	}
+	size := func() int64 {
+		fi, err := os.Stat(ticks)
+		if err != nil {
+			return 0
+		}
+		return fi.Size()
+	}
+	prompts := strings.Count(sh.output(), "csprompt$ ")
+	sh.write(t, "\x1a")
+	waitFor(t, 10*time.Second, "the shell prompting again (the job stopped)", func() bool {
+		return strings.Count(sh.output(), "csprompt$ ") > prompts
+	})
+	if procState(t, child) != "T" || procState(t, cs) != "T" {
+		t.Errorf("after Ctrl-Z: command %q, coreslot %q; want both stopped", procState(t, child), procState(t, cs))
+	}
+	before := size()
+	time.Sleep(300 * time.Millisecond)
+	if after := size(); after != before {
+		t.Errorf("the command kept running while stopped: %d -> %d ticks", before, after)
+	}
+	sh.write(t, "fg\n")
+	waitFor(t, 10*time.Second, "the command running again", func() bool { return size() > before+2 })
+	if st := procState(t, cs); st == "T" {
+		t.Errorf("coreslot is still stopped after fg")
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 30*time.Second, "coreslot's exit", gone(t, cs))
+	var exit any
+	waitFor(t, 10*time.Second, "the run-log line", func() bool {
+		for _, l := range runLog(t, dir) {
+			if l["label"] == "pipeline-z" {
+				exit = l["exit"]
+				return true
+			}
+		}
+		return false
+	})
+	if exit != float64(0) {
+		t.Errorf("coreslot's status was %v, want 0", exit)
+	}
+	tokensFree(t, dir, 2)
+}
 
 func TestPipelineCtrlCTerminatesChildGroup(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 2\n")

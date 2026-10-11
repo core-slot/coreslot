@@ -178,16 +178,14 @@ func (r *run) passThroughUnbudgeted(reason string) int {
 	})
 }
 
-// nestedLog is the run log a pass-through appends its line to: only when FORMAT, read outside
-// the section, names a format this client implements (PROTOCOL.md section 20).
-func nestedLog() *store.Store {
+// appendNestedLog appends a pass-through's run-log line (PROTOCOL.md section 20): only when
+// FORMAT, read outside the section, names a format this client implements, and without opening
+// the state directory as a Store, so nothing but log/ and its file is ever created. No line is
+// not an error.
+func appendNestedLog(rec store.RunRecord) error {
 	dir, _, err := config.StateDir()
 	if err != nil || !engine.FormatUnderstood(dir) {
 		return nil
 	}
-	st, err := store.Open(dir)
-	if err != nil {
-		return nil
-	}
-	return st
+	return store.AppendRunAt(dir, rec)
 }
