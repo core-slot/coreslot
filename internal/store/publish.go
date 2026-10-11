@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -248,6 +249,15 @@ func (s *Store) ReadGen() (Gen, error) {
 	return Gen{N: uint64(w.Gen), ReconciledNS: w.ReconciledNS}, nil
 }
 
+// nextGen is gen increased by one. gen is in [0, 2^63-1] (PROTOCOL.md section 7.8), so the bump
+// from the maximum wraps to 0 rather than writing a value no reader accepts.
+func nextGen(n uint64) uint64 {
+	if n >= math.MaxInt64 {
+		return 0
+	}
+	return n + 1
+}
+
 func (sec *Section) writeGen(g Gen) error {
 	body, err := wire.EncodeGen(wire.Gen{Gen: int64(g.N), ReconciledNS: g.ReconciledNS})
 	if err != nil {
@@ -256,7 +266,7 @@ func (sec *Section) writeGen(g Gen) error {
 	return sec.replaceFile(GenFile, body)
 }
 
-// BumpGen writes gen with gen increased by one and reconciled_ns unchanged.
+// BumpGen writes gen with gen increased by one (0 after 2^63-1) and reconciled_ns unchanged.
 func (sec *Section) BumpGen() error {
 	if err := sec.live(); err != nil {
 		return err
@@ -266,7 +276,7 @@ func (sec *Section) BumpGen() error {
 	if err != nil {
 		return err
 	}
-	g.N++
+	g.N = nextGen(g.N)
 	return sec.writeGen(g)
 }
 
