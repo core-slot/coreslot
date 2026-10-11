@@ -1,0 +1,15 @@
+//go:build unix && !darwin && !linux
+
+package main
+
+import "golang.org/x/sys/unix"
+
+// load1 is the one-minute load average; this platform does not report it here.
+func load1() float64 { return 0 }
+
+// fileCap is the most a soft RLIMIT_NOFILE can be set to below the hard limit; 0, none here.
+func fileCap() uint64 { return 0 }
+
+// stopSelf stops the process with SIGSTOP; a signal a process sends itself is delivered before
+// kill returns.
+func stopSelf() { _ = unix.Kill(unix.Getpid(), unix.SIGSTOP) }
