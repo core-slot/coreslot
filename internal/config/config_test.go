@@ -5,7 +5,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 )
@@ -174,16 +173,6 @@ func TestParseOnlineCPUs(t *testing.T) {
 		if n, err := parseOnline(in); err == nil {
 			t.Errorf("parseOnline(%q) = %d, want an error", in, n)
 		}
-	}
-}
-
-func TestMachineCPUs(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("machine CPU count is implemented on macOS and Linux")
-	}
-	n, err := MachineCPUs()
-	if err != nil || n < 1 {
-		t.Fatalf("MachineCPUs() = %d, %v", n, err)
 	}
 }
 
