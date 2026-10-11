@@ -5,6 +5,7 @@ package state
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -94,16 +95,53 @@ func Effective(need map[string]spec.Range, sizes map[string]int) (eff map[string
 
 // Plan sizes an admission (PROTOCOL.md section 12.1 steps 4 to 6). locked counts the locked
 // tokens of each resource at every index, including at or above the size (I3), so
-// free = size - locked. It takes min(max, free) of each resource and is not ok, with a nil take,
-// when any free is below that resource's min.
+// free = size - locked. It is not ok, with a nil take, when any free is below that resource's
+// min. Otherwise take holds every effective min (the minimum pass) and then, in ascending
+// resource name, further tokens up to min(max, free) per resource while the grant holds fewer
+// than spec.MaxPerGrant tokens in total (the extra pass), so the cap never starves a later
+// resource below its minimum.
 func Plan(eff map[string]spec.Range, sizes, locked map[string]int) (take map[string]int, ok bool) {
-	take = make(map[string]int, len(eff))
+	free := make(map[string]int, len(eff))
+	mins := make(map[string]int, len(eff))
 	for name, r := range eff {
-		free := sizes[name] - locked[name]
-		if free < r.Min {
+		free[name] = sizes[name] - locked[name]
+		if free[name] < r.Min {
 			return nil, false
 		}
-		take[name] = min(r.Max, free)
+		mins[name] = r.Min
 	}
-	return take, true
+	return fill(eff, free, mins), true
+}
+
+// AdoptPlan sizes an adoption (PROTOCOL.md section 12.4), which has no minimum: the minimum pass
+// takes min(min, free) of each resource (free = size - locked, never below 0), and the extra
+// pass takes further tokens up to min(max, free) per resource, in ascending resource name,
+// while the grant holds fewer than spec.MaxPerGrant tokens in total. The caller reports
+// max(0, requested min - take) as the shortfall.
+func AdoptPlan(eff map[string]spec.Range, sizes, locked map[string]int) (take map[string]int) {
+	free := make(map[string]int, len(eff))
+	mins := make(map[string]int, len(eff))
+	for name, r := range eff {
+		free[name] = max(sizes[name]-locked[name], 0)
+		mins[name] = min(r.Min, free[name])
+	}
+	return fill(eff, free, mins)
+}
+
+// fill starts from the minimum pass's mins and adds the extra pass: in ascending resource name,
+// up to min(max, free) per resource while the total stays at most spec.MaxPerGrant.
+func fill(eff map[string]spec.Range, free, mins map[string]int) map[string]int {
+	take := make(map[string]int, len(eff))
+	total := 0
+	for name, n := range mins {
+		take[name] = n
+		total += n
+	}
+	for _, name := range slices.Sorted(maps.Keys(eff)) {
+		room := min(eff[name].Max, free[name]) - take[name]
+		add := max(0, min(room, spec.MaxPerGrant-total))
+		take[name] += add
+		total += add
+	}
+	return take
 }

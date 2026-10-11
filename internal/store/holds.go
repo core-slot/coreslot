@@ -51,3 +51,52 @@ func (sec *Section) ProbeAndRemoveHold(name string) (bool, error) {
 	removed, _, err := removeIfDead(sec.s.path(HoldsDir, name))
 	return removed, err
 }
+
+// RemoveOwnTicket removes this client's own ticket name inside the section after the client
+// closed its descriptor (admission, cancellation, withdrawal): it probes the ticket and unlinks
+// it while holding the probe lock, only when the probe succeeds, so a ticket some description
+// still locks is never removed. A ticket that no longer exists counts as removed by someone else:
+// removed is false and err nil (PROTOCOL.md section 10.3). A stray entry under that name (not a
+// regular file of the user) is left alone: removed false, err nil (section 4.2). The caller
+// bumps gen when removed is true (section 7.8).
+func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
+	if err := sec.live(); err != nil {
+		return false, err
+	}
+	if _, ok := wire.ParseName(name); !ok {
+		return false, fmt.Errorf("store: %q is not a ticket name", name)
+	}
+	removed, _, err = removeIfDead(sec.s.path(QueueDir, name))
+	var se *StateError
+	if errors.As(err, &se) {
+		return false, nil
+	}
+	return removed, err
+}
+
+// RemoveCancel removes the cancel request for the ticket id inside the section, once its owner
+// found it (PROTOCOL.md section 13.1). A missing request is not an error, and a stray entry
+// under that name (not a regular file of the user) is left alone (section 4.2).
+func (sec *Section) RemoveCancel(id wire.ID) (removed bool, err error) {
+	if err := sec.live(); err != nil {
+		return false, err
+	}
+	p := sec.s.path(CancelDir, id.String())
+	fi, err := os.Lstat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if checkInfo(p, fi, false) != nil {
+		return false, nil
+	}
+	if err := os.Remove(p); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}

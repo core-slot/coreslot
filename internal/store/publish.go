@@ -317,6 +317,23 @@ func (sec *Section) Format(implemented []int) (n int, understood bool, err error
 	return n, true, nil
 }
 
+// ReadFormat reads FORMAT outside the section, for a reader that writes nothing (status): n is
+// the format and present false when FORMAT is absent. A malformed FORMAT is a *StateError.
+func (s *Store) ReadFormat() (n int, present bool, err error) {
+	body, err := s.readSmall(FormatFile, 64)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	n, err = parseFormat(body)
+	if err != nil {
+		return 0, true, err
+	}
+	return n, true, nil
+}
+
 func parseFormat(body []byte) (int, error) {
 	line := bytes.TrimSuffix(body, []byte("\n"))
 	digits, ok := bytes.CutPrefix(line, []byte(formatPrefix))

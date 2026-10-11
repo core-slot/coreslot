@@ -69,7 +69,18 @@ func (sec *Section) CountLocked(resource string) (locked int, err error) {
 	if err := sec.live(); err != nil {
 		return 0, err
 	}
-	d, err := sec.s.resPath(resource)
+	return sec.s.countLocked(resource)
+}
+
+// CountLockedProbe counts like CountLocked, outside the section: probing is permitted inside and
+// outside it (PROTOCOL.md section 6), so a reader such as Free or status never waits for the
+// section. A probe's momentary lock can only make another client see a token as locked.
+func (s *Store) CountLockedProbe(resource string) (locked int, err error) {
+	return s.countLocked(resource)
+}
+
+func (s *Store) countLocked(resource string) (locked int, err error) {
+	d, err := s.resPath(resource)
 	if err != nil {
 		return 0, err
 	}

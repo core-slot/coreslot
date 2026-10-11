@@ -271,3 +271,46 @@ func TestPlanAllResourcesMustFit(t *testing.T) {
 		t.Errorf("one resource without room: take = %v ok = %v, want not ok", take, ok)
 	}
 }
+
+func TestPlanCapsGrantAt512(t *testing.T) {
+	// PROTOCOL.md section 12.1: every minimum first, then extra in ascending resource name while
+	// the grant holds fewer than 512 tokens.
+	eff := map[string]spec.Range{
+		"gpu": {Min: 100, Max: 256},
+		"cpu": {Min: 100, Max: 256},
+		"db":  {Min: 100, Max: 256},
+	}
+	sizes := map[string]int{"cpu": 300, "db": 300, "gpu": 300}
+	take, ok := Plan(eff, sizes, nil)
+	want := map[string]int{"cpu": 256, "db": 156, "gpu": 100}
+	if !ok || !reflect.DeepEqual(take, want) {
+		t.Errorf("take = %v ok = %v, want %v", take, ok, want)
+	}
+	// Below the cap nothing changes: each resource gets min(max, free).
+	take, ok = Plan(map[string]spec.Range{"cpu": {Min: 1, Max: 200}, "db": {Min: 1, Max: 200}},
+		map[string]int{"cpu": 300, "db": 150}, map[string]int{"cpu": 10})
+	if want := map[string]int{"cpu": 200, "db": 150}; !ok || !reflect.DeepEqual(take, want) {
+		t.Errorf("take = %v ok = %v, want %v", take, ok, want)
+	}
+}
+
+func TestAdoptPlanHasNoMinimum(t *testing.T) {
+	// PROTOCOL.md section 21.7: size 10, 8 locked, need 3..3: takes the 2 free.
+	eff := map[string]spec.Range{"cpu": {Min: 3, Max: 3}}
+	if take := AdoptPlan(eff, map[string]int{"cpu": 10}, map[string]int{"cpu": 8}); take["cpu"] != 2 {
+		t.Errorf("take = %v, want cpu 2", take)
+	}
+	// Locks above the size never make free negative (I3).
+	if take := AdoptPlan(eff, map[string]int{"cpu": 10}, map[string]int{"cpu": 12}); take["cpu"] != 0 {
+		t.Errorf("locked above size: take = %v, want cpu 0", take)
+	}
+	// The minimum pass covers every resource before the extra pass, under the 512 cap.
+	eff = map[string]spec.Range{
+		"a": {Min: 200, Max: 256}, "b": {Min: 200, Max: 256}, "c": {Min: 100, Max: 256},
+	}
+	sizes := map[string]int{"a": 300, "b": 300, "c": 300}
+	take := AdoptPlan(eff, sizes, map[string]int{"c": 250})
+	if want := map[string]int{"a": 256, "b": 206, "c": 50}; !reflect.DeepEqual(take, want) {
+		t.Errorf("take = %v, want %v", take, want)
+	}
+}
