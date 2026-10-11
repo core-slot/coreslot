@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a change to what coreslot does.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        coreslot is deliberately small: a cooperative, machine-wide core budget built on `flock(2)`.
+        Describe the problem before the solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Behaviour you would like, as seen from the CLI or the library.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including doing nothing, or solving it outside coreslot.
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Effect on the protocol and existing clients
+      description: Would this change the on-disk format or `PROTOCOL.md`, and could an older client misbehave?
