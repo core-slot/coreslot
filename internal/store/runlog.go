@@ -36,6 +36,7 @@ type RunRecord struct {
 	Exit                int
 	Load1               float64
 	FailOpen            string
+	Nested              bool // a pass-through run (PROTOCOL.md section 18); encoded only when true
 }
 
 type runJSON struct {
@@ -50,6 +51,7 @@ type runJSON struct {
 	Exit                int               `json:"exit"`
 	Load1               float64           `json:"load1"`
 	FailOpen            string            `json:"fail_open"`
+	Nested              bool              `json:"nested,omitempty"`
 }
 
 func (r RunRecord) wire() runJSON {
@@ -59,7 +61,7 @@ func (r RunRecord) wire() runJSON {
 	}
 	j := runJSON{TimeNS: r.TimeNS, Label: r.Label, Need: need, Grant: r.Grant,
 		Clamped: r.Clamped, UnbudgetedResources: r.UnbudgetedResources, WaitedS: r.WaitedS,
-		RanS: r.RanS, Exit: r.Exit, Load1: r.Load1, FailOpen: r.FailOpen}
+		RanS: r.RanS, Exit: r.Exit, Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
 	if j.Grant == nil {
 		j.Grant = map[string]int{}
 	}
@@ -108,8 +110,10 @@ func encodeJSON(v any) ([]byte, error) {
 }
 
 // AppendRun appends r to log/runs.jsonl with one O_APPEND write of at most 4 KiB, outside the
-// section. It recreates log/ when a reset removed it. Rotation is separate: a caller that finds
-// RunLogNeedsRotation rotates inside the section first.
+// section. It recreates log/ when a reset removed it. It never rotates, so a pass-through run
+// (a record with Nested set, PROTOCOL.md sections 18 and 20) can call it without entering the
+// section. Rotation is separate: a caller that is inside the section anyway, and finds
+// RunLogNeedsRotation, rotates first with Section.RotateLogIfNeeded.
 func (s *Store) AppendRun(r RunRecord) error {
 	line, err := r.line()
 	if err != nil {
