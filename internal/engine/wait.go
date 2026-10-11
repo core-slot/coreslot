@@ -5,7 +5,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -21,9 +20,10 @@ import (
 // StepResult is what one Step reports: Waiting or Admitted.
 type StepResult interface{ stepResult() }
 
-// Waiting reports a ticket still in the queue. Position is 1 when the last election made it the
-// head, otherwise 1 plus the number of live, non-STALLED tickets ahead of it. Holders are the
-// live holds at the last election.
+// Waiting reports a ticket still waiting. Position is 1 when the last election made it the
+// head, otherwise 1 plus the number of live, non-STALLED tickets ahead of it; it is 0 in
+// token-only mode, which has no place in the queue. Holders are the live holds at the last
+// election (none in token-only mode).
 type Waiting struct {
 	Position int
 	Holders  []HolderInfo
@@ -145,17 +145,32 @@ func (t *Ticket) Step(ctx context.Context) (StepResult, error) {
 }
 
 // Poll is a Step whose section entries make a single attempt each (PROTOCOL.md section 8).
+// While another Step or Poll of this ticket runs, it returns at once: the settled outcome, or a
+// zero Waiting.
 func (t *Ticket) Poll() (StepResult, error) {
 	return t.step(context.Background(), true)
 }
 
 func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
-	t.stepMu.Lock()
+	if single {
+		// A Poll never waits for a concurrent Step: that Step is doing the work.
+		if !t.stepMu.TryLock() {
+			if r, err, done := t.settled(); done {
+				return r, err
+			}
+			return Waiting{}, nil
+		}
+	} else {
+		t.stepMu.Lock()
+	}
 	defer t.stepMu.Unlock()
 	if r, err, done := t.settled(); done {
 		return r, err
 	}
 	now := t.e.clock.Monotonic()
+	if t.mode == modeTokenOnly {
+		return t.stepTokenOnly(ctx, single, now)
+	}
 
 	if now-t.lastRefreshMono >= RefreshEvery/2 {
 		if err := t.refresh(now); err != nil {
@@ -164,6 +179,9 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		if t.needBump {
 			if err := t.resumeBump(); err != nil {
 				return t.settledOr(err)
+			}
+			if t.mode == modeTokenOnly {
+				return t.last, nil
 			}
 		}
 	}
@@ -193,6 +211,9 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	}
 	if g != nil {
 		return Admitted{g}, nil
+	}
+	if t.mode == modeTokenOnly {
+		return t.last, nil // the format changed under the ticket: token-only from the next Step
 	}
 	if t.backoff == 0 {
 		t.backoff = HeadFirstBackoff
@@ -251,12 +272,13 @@ func (t *Ticket) resumeBump() error {
 		return err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format(formats())
+	_, understood, err := sec.Format(formats())
 	if err != nil {
 		return err
 	}
 	if !understood {
-		return t.onUnknownFormat(n)
+		t.toTokenOnly()
+		return nil
 	}
 	if _, err := sec.ReconcileIfDue(t.e.clock.Realtime()); err != nil {
 		return err
@@ -266,12 +288,6 @@ func (t *Ticket) resumeBump() error {
 	}
 	t.needBump = false
 	return nil
-}
-
-// onUnknownFormat handles a FORMAT this client does not implement, found while waiting: no
-// change is written, and the caller gets an error matching ErrRefused (and withdraws).
-func (t *Ticket) onUnknownFormat(n int) error {
-	return fmt.Errorf("%w: the state directory has format %d, which this client does not implement", ErrRefused, n)
 }
 
 // elect is the election (PROTOCOL.md section 10.3): it reads gen, rescans queue/ and holds/
