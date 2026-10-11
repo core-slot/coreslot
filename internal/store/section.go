@@ -90,9 +90,6 @@ func (sec *Section) Leave() {
 	}
 }
 
-// Store is the store the section belongs to.
-func (sec *Section) Store() *Store { return sec.s }
-
 func (sec *Section) live() error {
 	if sec.f == nil {
 		return errLeft
