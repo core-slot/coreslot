@@ -1,0 +1,49 @@
+name: Bug report
+description: Something coreslot did, or failed to do, that the documentation says it should not.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Do not paste secrets: `coreslot` never logs argv or the environment,
+        but the output of your own command may contain them.
+  - type: input
+    id: version
+    attributes:
+      label: coreslot version
+      description: Output of `coreslot version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system, architecture and Go version
+      description: For example "macOS 15 arm64, Go 1.27.2" or "Ubuntu 24.04 amd64".
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The command or library call, its output and exit code.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows it, including the configuration file if one is involved.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `coreslot status` and `coreslot doctor`
+      description: Taken while the problem is visible, if you can.
+      render: text

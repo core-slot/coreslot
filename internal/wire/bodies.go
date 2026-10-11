@@ -150,8 +150,7 @@ func (t Ticket) wire() ticketJSON {
 }
 
 func (h Hold) wire() holdJSON {
-	j := holdJSON{Label: h.Label, Grant: h.Grant, StartNS: h.StartNS, Unbudgeted: h.Unbudgeted,
-		UnbudgetedResources: h.UnbudgetedResources, Clamped: h.Clamped, Adopted: h.Adopted}
+	j := holdJSON(h)
 	if j.Grant == nil {
 		j.Grant = map[string][]int{}
 	}
