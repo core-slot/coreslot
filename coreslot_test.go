@@ -299,3 +299,37 @@ func TestUsageErrorBeforeQueueing(t *testing.T) {
 		t.Errorf("snapshot %+v, %v: want no ticket", r.Tickets, err)
 	}
 }
+
+// A Wait that fails withdraws its ticket: it is dead at once to every other client instead of
+// blocking the queue until it stalls.
+func TestWaitWithdrawsOnStateError(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 0\n") // invalid: read only at admission
+	c := open(t, dir)
+	w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.Snapshot()
+	if err != nil || len(r.Tickets) != 1 || r.Tickets[0].Dead {
+		t.Fatalf("before Wait: tickets %+v, %v; want one live ticket", r.Tickets, err)
+	}
+	queued := filepath.Join(dir, "queue", r.Tickets[0].Name)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var se *StateError
+	if _, err := w.Wait(ctx); !errors.As(err, &se) {
+		t.Fatalf("Wait: %v, want a *StateError", err)
+	}
+	if f, err := os.Open(queued); err == nil {
+		lerr := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		f.Close()
+		if lerr != nil {
+			t.Fatalf("after the failed Wait the ticket is still locked (live): %v", lerr)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := w.Cancel(); err != nil {
+		t.Errorf("Cancel after the failed Wait: %v, want nil (already withdrawn)", err)
+	}
+}
