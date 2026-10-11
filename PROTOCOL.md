@@ -5,7 +5,7 @@ directory, its files and their bodies, the admission critical section, and the d
 environment contract between a run and the command it starts. A client written from this document
 alone, in any language, shares one budget with every other conforming client on the machine.
 
-It is the normative subset of the design (`PROTOCOL.md`, revision 4a).
+It is the normative subset of the design (`PROTOCOL.md`, revision 4b).
 Section references of the form "spec §N" point there; they are for traceability only, and nothing
 in this document depends on reading the design.
 
@@ -95,7 +95,8 @@ Every conforming client MUST preserve these invariants:
   token's path reports degraded mode (section 14).
 - **I2 truthful grant:** a live hold's body lists exactly the tokens it locks. Tokens may be locked
   without a published hold only inside the admission section, by a token-only client
-  (section 15.2), or between a holder's last close and the next reconciliation.
+  (section 15.2), momentarily by a probe (section 6, inside or outside the section), or between a
+  holder's last close and the next reconciliation.
 - **I3 bounded admission:** an admission or adoption never brings the number of locked tokens of a
   resource — at **any** index that exists, including indices at or above the current size — above
   that resource's current size. A later shrink may leave locked tokens above the new size; no
@@ -183,8 +184,12 @@ count); they are never removed except by reconciliation's rules (section 10.4).
 
 The directory is not a cache: token files are permanent and liveness is decided by locks. Deleting
 or resetting `$S` while any client is live creates a second set of token inodes and is not
-supported. (The CLI's `doctor --reset` removes the directory's contents only after checking, inside
-the admission section, that no holds, tickets, other section holder or locked tokens exist.)
+supported. The CLI's `doctor --reset` runs inside the admission section and checks that no holds,
+tickets, other section holder or locked tokens exist; only then does it remove the entries of
+`queue/`, `holds/` and `cancel/`, `gen`, `FORMAT`, `degraded` and `log/`. It keeps `admit.lock`,
+`res/` and `config.toml`: the format-stable files (section 15.1), whose inodes live clients may hold
+open, and the configuration. A reset never deletes, renames or replaces `admit.lock` or a token
+file.
 
 ## 5. Resources, sizes and configuration
 
@@ -270,7 +275,9 @@ while the run or any process that inherited the copies is alive. Processes that 
 (a container started through a daemon) do not extend a grant.
 
 A grant holds at most 256 tokens of one resource and at most 512 in total, so a run never needs more
-than 513 inherited descriptors. A run SHOULD raise the soft `RLIMIT_NOFILE` it passes to the command
+than 513 inherited descriptors. A request whose minimums sum above 512 is invalid (a usage error,
+section 14); admission (section 12.1) and adoption (section 12.4) never take more than 512 tokens in
+total. A run SHOULD raise the soft `RLIMIT_NOFILE` it passes to the command
 to at least the inherited count plus 256 when the hard limit allows.
 
 The **locked count** of a resource is the number of its existing token files, at every index that
@@ -314,6 +321,10 @@ name exists takes its next `seq` and retries.
   whitespace. A writer MUST write every key of its table.
 - A body is **malformed** when it is not such an object, exceeds 8 KiB, lacks a key of its table,
   has a key of the wrong type or outside its rule, or has a duplicate key at any depth.
+- In particular, a body is malformed when a key inside `need`, `grant` or `clamped` does not match
+  the resource-name grammar (section 5.1), when `grant` maps a resource to an empty array, or when
+  a string anywhere in it contains an unpaired UTF-16 surrogate escape (a `\uD800`-`\uDBFF` escape
+  not followed by a `\uDC00`-`\uDFFF` escape, or a `\uDC00`-`\uDFFF` escape not preceded by one).
 - Unknown keys are ignored at any depth: bodies only gain optional keys within a format.
 - A malformed body makes its entry ignored and counted, never trusted. An ignored ticket takes no
   place in the queue.
@@ -327,8 +338,8 @@ Body:
 |---|---|---|
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
 | `priority` | integer | `-1000..1000` |
-| `need` | object | resource name → `[min, max]`, an array of exactly two integers, `1 ≤ min ≤ max ≤ 256`; 1 to 8 entries; names need not be declared (section 14) |
-| `created_ns` | integer | the wall clock read for `arrival_ns` (section 9) |
+| `need` | object | resource name → `[min, max]`, an array of exactly two integers, `1 ≤ min ≤ max ≤ 256`; 1 to 8 entries; the minimums sum to at most 512; names need not be declared (section 14) |
+| `created_ns` | integer | `≥ 0`; the wall clock read for `arrival_ns` (section 9) |
 
 ### 7.4 Hold
 
@@ -338,11 +349,11 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | as in the ticket |
-| `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; at most 256 per resource and 512 in total; `{}` when no token is held |
+| `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held |
 | `start_ns` | integer | equal to the name's start-ns |
 | `unbudgeted` | boolean | `true` for a fail-open run (section 14) |
 | `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a fail-open run could not budget (section 14) |
-| `clamped` | object | resource name → the requested `min` (integer), for each resource clamped (section 12.2) |
+| `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2) |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
 
 ### 7.5 Cancel request
@@ -351,8 +362,8 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 
 | Key | Type | Rule |
 |---|---|---|
-| `requested_ns` | integer | wall clock at publication |
-| `requester_pid` | integer | the canceller's pid; informational |
+| `requested_ns` | integer | `≥ 0`; wall clock at publication |
+| `requester_pid` | integer | `≥ 0`; the canceller's pid; informational |
 
 ### 7.6 FORMAT
 
@@ -423,6 +434,8 @@ one priority point per minute, which gives the same order as a static key:
 order-key = arrival_ns − priority × 60 000 000 000      (ascending; ties by pid, then seq)
 ```
 
+An order key computed below zero is 0.
+
 `arrival_ns` is the wall clock read inside the enqueue section. A ticket is **ahead** of another
 when its (order-key, pid, seq) is smaller. A wall-clock step misorders the tickets enqueued across
 it by at most the size of the step and affects nothing else.
@@ -468,10 +481,11 @@ holders: gate pid 4711 cpu12 (3m12s), ci-job pid 5120 cpu3 (1m05s)` (informative
 ### 10.4 Reconciliation
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide:
-a client that enters the section for enqueue, cancellation publication, removal of its own ticket
-or hold, a resume bump, adoption or log rotation, and finds `reconciled_ns` in `gen` older than
-30 s on its wall clock (or in the future by more than 30 s), MUST reconcile before its own change.
-Admission and token-only admission never reconcile. Reconciliation:
+a client that enters the section for any purpose other than admission and token-only admission
+(enqueue, cancellation publication, removal of its own ticket or hold, a resume bump, adoption,
+publication of a fail-open hold, a `degraded` or `FORMAT` write, log rotation, a reset) and finds
+`reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
+reconcile before its own change. Admission and token-only admission never reconcile. Reconciliation:
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
    the file **while still holding the probe lock**, then closes it;
@@ -490,7 +504,8 @@ whole machine.
 Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FORMAT` or `degraded`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
-   target's directory;
+   target's directory; on `EEXIST` (a young leftover of an earlier process with the same pid) the
+   writer takes its next `seq` and retries;
 2. takes `flock(LOCK_EX)` on it if the file is lock-carrying (ticket, hold);
 3. writes the body;
 4. moves it to its final name:
@@ -516,17 +531,25 @@ Inside the section the head:
 4. counts, for each such resource, the tokens locked at **every** existing index (section 6);
    `free = size − locked`;
 5. if any resource's `free` is below its effective `min`, leaves the section and waits;
-6. otherwise takes tokens with `LOCK_EX|LOCK_NB`, at indices below the size, in ascending resource
-   name and then ascending index, creating missing token files, stopping at
-   `min(effective max, free)` per resource; a token that turns out locked is skipped; if any
-   resource ends below its effective `min` (a race with a non-queued taker), it closes everything it
-   took this round, leaves the section and waits;
+6. otherwise takes tokens with `LOCK_EX|LOCK_NB` at indices below the size, creating missing token
+   files and skipping a token that turns out locked, in two passes, each in ascending resource name
+   and then ascending index:
+   1. the **minimum pass** takes the effective `min` of every resource; if any resource ends it
+      below its effective `min` (a race with a non-queued taker), the head closes everything it
+      took this round, leaves the section and waits;
+   2. the **extra pass** takes further tokens of each resource, up to `min(effective max, free)`
+      for that resource, while the grant holds fewer than 512 tokens in total;
 7. publishes its hold listing exactly the indices it holds, closes its ticket descriptor, unlinks its
    ticket, bumps `gen`, and leaves the section.
 
 Resources the request names that the configuration does not declare are not budgeted: they take
 no tokens, appear in the hold's `unbudgeted_resources`, and the run prints one notice line; this is
 not degraded mode.
+
+Taking every minimum first means the 512-token cap can never starve a later resource below its
+minimum. For example, with sizes of at least 256 and everything free, `cpu=100..256`,
+`db=100..256` and `gpu=100..256` take 100 each in the minimum pass; the extra pass then gives `cpu`
+156 more (256) and `db` the remaining 56 (156), and `gpu` stays at 100: 512 in total.
 
 A 1-token request on a free 8-token resource leaves 7 acquirable (I2). After a shrink from 14 to 12
 with a live hold on indices 10-13, the next request sees `locked = 4`, `free = 8`, and can take at
@@ -553,11 +576,13 @@ way, or leave it to reconciliation.
 ### 12.4 Adoption
 
 Adoption admits already-running work without queueing (for example containers that survived a pool
-restart). Inside the section the adopter recomputes sizes, counts locked tokens as in step 4, takes
-up to `max` of each requested declared resource from what is free, under I3 and with the order of
-step 6, and publishes a hold with `"adopted": true` listing exactly what it took. It has no
-minimum: the **shortfall** is `max(0, min − granted)` per resource, reported to the caller, and the
-survivor runs partly unbudgeted.
+restart). Inside the section the adopter recomputes sizes, counts locked tokens as in step 4, and
+takes tokens from what is free, under I3 (indices below the size, `free = size − locked`), in the
+two passes of step 6: the minimum pass takes up to `min(min, size)` of each requested declared
+resource (as many as are free), the extra pass takes more up to `max` per resource while the grant
+holds fewer than 512 tokens in total. It then publishes a hold with `"adopted": true` listing
+exactly what it took. It has no minimum: the **shortfall** is `max(0, min − granted)` per resource,
+reported to the caller, and the survivor runs partly unbudgeted.
 
 ## 13. Cancellation and withdrawal
 
@@ -582,7 +607,7 @@ remove its ticket in a section; otherwise reconciliation removes it.
 
 | Class | Examples | Outcome |
 |---|---|---|
-| usage | malformed need, `min > max`, `max > 256`, more than 8 resources, duplicate resource, unknown flag | exit 64; nothing runs |
+| usage | malformed need, `min > max`, `max > 256`, more than 8 resources, minimums summing above 512, duplicate resource, unknown flag | exit 64; nothing runs |
 | refusal | a no-wait or fail-on-timeout request expiring, cancellation, invalid nested context (section 18), strict mode turning any of the next row into a refusal | the refusal code (section 19); nothing runs |
 | state error | unusable directory, refused filesystem, unexpected file types or owners, directory full, malformed `FORMAT`, invalid configuration, an inode mismatch at a held token (I1) | fail-open unless strict |
 | internal | the command cannot be started | exit 70, or 126 / 127 |
@@ -645,7 +670,7 @@ A run that starts a command with a grant gives it:
 
 | Descriptor | Content |
 |---|---|
-| fd 3 | the hold's lock-carrying descriptor, when the run has a hold |
+| fd 3 | the hold's lock-carrying descriptor, when the run has a hold; otherwise fd 3 is closed in the child and the tokens still start at fd 4 (a Go launcher passes a nil `ExtraFiles[0]`) |
 | fd 4 onward | the token descriptors, in ascending resource name and then ascending index |
 
 and this environment:
@@ -663,7 +688,9 @@ item      = fd [ "-" fd ]       ; "a-b" is every fd from a to b inclusive, a <= 
 fd        = 1*DIGIT
 ```
 
-Writers usually write a single range (`4-13`); readers MUST accept the whole grammar. Every
+Writers usually write a single range (`4-13`); readers MUST accept the whole grammar. A list that
+names one descriptor twice, directly or through overlapping ranges, is invalid: a pass-through
+treats it as a context that does not validate (section 18). Every
 descriptor not in this contract stays close-on-exec. A launcher that starts nested runs passes these
 descriptors through (Python: `subprocess.run(..., pass_fds=...)`; Go: `exec.Cmd.ExtraFiles`).
 
@@ -679,16 +706,17 @@ A run decides its context from the environment it inherited, in this order:
    `min` of each resource, prints a notice, passes the variable on, and writes no degraded record
    of its own.
 2. `CORESLOT_TOKEN_FDS` is set (and the run is not `--independent`): it is a **pass-through**. The
-   context is valid when every descriptor listed is open, its `(st_dev, st_ino)` equals that of some
-   `$S/res/<name>/<i>`, and a fresh probe of that path fails. A valid pass-through does not queue,
-   enter the section or lock anything. Per resource it names, it runs with `min(max, held)`, where
-   `held` is the number of valid token descriptors of that resource, counted from the descriptors
-   and not from the environment; a resource it names that the parent does not hold is listed as
-   unbudgeted with a notice; a `min` above what the parent holds is clamped with a notice. It
-   passes the parent's descriptors on unchanged and sets `CORESLOT_GRANTED_<RES>` to the narrowed
-   value for each resource it names. A context that does not validate (a launcher closed the
-   descriptors, or the parent is gone) is a refusal with a diagnostic naming the likely cause; the
-   run never queues behind a parent that may hold the whole budget.
+   context is valid when no descriptor is listed twice, every descriptor listed is open, its
+   `(st_dev, st_ino)` equals that of some `$S/res/<name>/<i>`, and a fresh probe of that path fails.
+   A valid pass-through does not queue, enter the section or lock anything. Per resource it names,
+   it runs with `min(max, held)`, where `held` is the number of valid token descriptors of that
+   resource, counted from the descriptors and not from the environment; a resource it names that the
+   parent does not hold is listed as unbudgeted with a notice; a `min` above what the parent holds
+   is clamped with a notice. It passes the parent's descriptors on unchanged and sets
+   `CORESLOT_GRANTED_<RES>` to the narrowed value for each resource it names. A context that does
+   not validate (a launcher closed the descriptors, or the parent is gone) is a refusal with a
+   diagnostic naming the likely cause; the run never queues behind a parent that may hold the whole
+   budget.
 3. Otherwise, or with `--independent`, it is an ordinary request.
 
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
@@ -726,9 +754,10 @@ Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` wit
 | `fail_open` | string | the fail-open reason, or empty |
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
-secrets. A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it inside the
-section: re-checks the size, then renames it to `runs.1.jsonl` (replacing the previous generation).
-One generation is kept. A token-only client writes no log.
+secrets. The log's `clamped` is an array of resource names, unlike the hold body's `clamped` object
+(section 7.4). A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
+inside the section: re-checks the size, then renames it to `runs.1.jsonl` (replacing the previous
+generation). One generation is kept. A token-only client writes no log.
 
 ## 21. Worked examples
 
@@ -736,7 +765,9 @@ All examples use one Linux machine: `/sys/devices/system/cpu/online` is `0-13` (
 configuration declares `cpu = "-4"` (size 10) and `pg-local = 2`, and `$S` is
 `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 1` unless stated. Listings show
 the entries under `$S` that matter; `[L]` marks a file whose lock is held by a live process.
-`T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns.
+`T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is independent of the others;
+except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old when the example starts, so
+reconciliation is not due.
 
 ### 21.1 Enqueue
 
