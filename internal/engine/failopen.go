@@ -21,8 +21,19 @@ import (
 // FORMAT this client does not implement or that is malformed) it has no hold, and err says why;
 // the caller still runs and reports it. Close removes the hold as after any run (section 12.3).
 func (e *Engine) FailOpen(req spec.Request, reason string) (*Grant, error) {
+	return e.unbudgetedHold(req, reason, true)
+}
+
+// UnbudgetedHold is FailOpen for a run outside the budget that is not a state error, such as a
+// wait that timed out with --on-timeout run: the same unbudgeted hold, so that status shows the
+// run, and CORESLOT_UNBUDGETED=reason, but no degraded record.
+func (e *Engine) UnbudgetedHold(req spec.Request, reason string) (*Grant, error) {
+	return e.unbudgetedHold(req, reason, false)
+}
+
+func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) (*Grant, error) {
 	if reason == "" || reason == "format" {
-		return nil, fmt.Errorf("engine: fail-open reason %q: want non-empty text other than \"format\"", reason)
+		return nil, fmt.Errorf("engine: unbudgeted reason %q: want non-empty text other than \"format\"", reason)
 	}
 	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {
@@ -55,5 +66,8 @@ func (e *Engine) FailOpen(req spec.Request, reason string) (*Grant, error) {
 		return g, err
 	}
 	_ = sec.BumpGen()
+	if !degraded {
+		return g, nil
+	}
 	return g, sec.RecordDegraded(reason)
 }

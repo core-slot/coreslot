@@ -6,7 +6,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -466,4 +470,74 @@ func TestInSectionDefersStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, "the run after continuing", exists(after))
+}
+
+// sectionMethods are the engine and store calls that may enter the admission section. The run
+// must make each of them inside inSection, so that it never stops itself while holding the
+// section: its self-stop is deferred only there.
+var sectionMethods = map[string]bool{"Enqueue": true, "EnqueueContext": true, "Step": true,
+	"Poll": true, "Withdraw": true, "FailOpen": true, "UnbudgetedHold": true, "Snapshot": true,
+	"Enter": true, "TryEnter": true, "Adopt": true, "Cancel": true}
+
+// TestSectionCallsAreInSection checks the CLI's sources: every call (or method value) of a
+// method in sectionMethods, and every Close of a grant (named g), sits inside an argument of
+// inSection.
+func TestSectionCallsAreInSection(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			var stack []ast.Node
+			ast.Inspect(f, func(n ast.Node) bool {
+				if n == nil {
+					stack = stack[:len(stack)-1]
+					return true
+				}
+				stack = append(stack, n)
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				x, isIdent := sel.X.(*ast.Ident)
+				grantClose := sel.Sel.Name == "Close" && isIdent && x.Name == "g"
+				if !sectionMethods[sel.Sel.Name] && !grantClose {
+					return true
+				}
+				if isIdent && (x.Name == "signal" || x.Name == "unix") {
+					return true
+				}
+				checked++
+				for i := len(stack) - 2; i >= 0; i-- {
+					if call, ok := stack[i].(*ast.CallExpr); ok {
+						if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "inSection" && stack[i+1] != call.Fun {
+							return true
+						}
+					}
+				}
+				t.Errorf("%s: %s.%s is called outside inSection", fset.Position(sel.Pos()), exprString(sel.X), sel.Sel.Name)
+				return true
+			})
+		}
+	}
+	if checked < 8 {
+		t.Fatalf("only %d section calls found: the check no longer sees the run's code", checked)
+	}
+}
+
+func exprString(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		return exprString(x.X) + "." + x.Sel.Name
+	case *ast.CompositeLit:
+		return "composite"
+	}
+	return "expr"
 }
