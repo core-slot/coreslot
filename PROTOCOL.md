@@ -213,7 +213,10 @@ tickets, other section holder or locked tokens exist; only then does it remove t
 `queue/`, `holds/` and `cancel/`, `gen`, `FORMAT`, `degraded` and `log/`. It keeps `admit.lock`,
 `res/` and `config.toml`: the format-stable files (section 15.1), whose inodes live clients may hold
 open, and the configuration. A reset never deletes, renames or replaces `admit.lock` or a token
-file.
+file. It refuses when `FORMAT` is well-formed and names a format the client does not implement (a
+newer client's waiters are invisible to it and its entries are not format-1 grammar); a missing,
+malformed or implemented `FORMAT` does not stop it. It removes every entry reconciliation would
+remove, and more, so it does not reconcile first (section 10.4).
 
 ## 5. Resources, sizes and configuration
 
@@ -568,9 +571,10 @@ holders: gate pid 4711 cpu12 (3m12s), ci-job pid 5120 cpu3 (1m05s)` (informative
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide:
 a client that enters the section for any purpose other than admission and token-only admission
 (enqueue, cancellation publication, removal of its own ticket or hold, a resume bump, adoption,
-publication of a fail-open hold, a `degraded` or `FORMAT` write, log rotation, a reset) and finds
+publication of a fail-open hold, a `degraded` or `FORMAT` write, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
-reconcile before its own change. Admission and token-only admission never reconcile. Reconciliation:
+reconcile before its own change. Admission and token-only admission never reconcile, and neither does a
+reset (section 4.4), which removes everything reconciliation would. Reconciliation:
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
@@ -878,6 +882,7 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error before the command could run |
 | 3 | `status` and `doctor`: degraded mode |
+| 1 | `doctor`: it found a problem (an unusable directory, filesystem or configuration) |
 
 ## 20. Run log
 

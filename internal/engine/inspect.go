@@ -38,11 +38,14 @@ func (e *Engine) Free(resource string) (int, error) {
 }
 
 // Snapshot reads the state directory outside the section, so that it works while another
-// client holds (or is stopped inside) the section, and writes nothing. Only a state error
-// that makes the directory unreadable is returned; a malformed FORMAT, an invalid
-// configuration and malformed or stray entries are reported in the Report.
+// client holds (or is stopped inside) the section, and writes nothing: it creates no file, not
+// even admit.lock, and works on a store opened read-only over a directory that does not exist
+// (StateDirExists is then false and everything else empty). Only a state error that makes the
+// directory unreadable is returned; a malformed FORMAT, an invalid configuration and malformed
+// or stray entries are reported in the Report.
 func (e *Engine) Snapshot() (Report, error) {
-	r := Report{StateDir: e.st.Dir(), Resources: map[string]ResourceInfo{}, Ignored: map[string]int{}}
+	r := Report{StateDir: e.st.Dir(), StateDirExists: e.st.Exists(), Resources: map[string]ResourceInfo{},
+		UndeclaredLocked: map[string]int{}, Ignored: map[string]int{}}
 
 	n, present, err := e.st.ReadFormat()
 	switch {
@@ -68,6 +71,24 @@ func (e *Engine) Snapshot() (Report, error) {
 				return Report{}, err
 			}
 			r.Resources[name] = ResourceInfo{Size: sizes[name], Locked: locked, Free: max(0, sizes[name]-locked)}
+		}
+		// Tokens of a resource the configuration no longer declares are still locks (PROTOCOL.md
+		// section 6): report them.
+		dirs, err := e.st.Resources()
+		if err != nil {
+			return Report{}, err
+		}
+		for _, name := range dirs {
+			if _, declared := sizes[name]; declared {
+				continue
+			}
+			locked, err := e.st.CountLockedProbe(name)
+			if err != nil {
+				return Report{}, err
+			}
+			if locked > 0 {
+				r.UndeclaredLocked[name] = locked
+			}
 		}
 	}
 
@@ -176,18 +197,16 @@ func (e *Engine) Snapshot() (Report, error) {
 	return r, nil
 }
 
-// sectionInfo probes admit.lock (one single-attempt entry, left at once) and reads its
-// informational body, tolerating an empty, stale or malformed one (PROTOCOL.md section 7.7).
+// sectionInfo probes admit.lock (one single-attempt flock, released at once, never creating the
+// file) and reads its informational body, tolerating an empty, stale or malformed one
+// (PROTOCOL.md section 7.7).
 func (e *Engine) sectionInfo() (SectionInfo, error) {
 	var info SectionInfo
-	sec, entered, err := tryEnterSection(e.st)
+	held, err := e.st.SectionHeld()
 	if err != nil {
 		return info, err
 	}
-	if entered {
-		sec.Leave()
-	}
-	info.Held = !entered
+	info.Held = held
 	body, err := e.readBody("", store.AdmitLock)
 	if err != nil {
 		return info, nil
