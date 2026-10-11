@@ -10,7 +10,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -549,46 +548,54 @@ var sectionMethods = map[string]bool{"Enqueue": true, "EnqueueContext": true, "S
 // inSection.
 func TestSectionCallsAreInSection(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
 	checked := 0
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			var stack []ast.Node
-			ast.Inspect(f, func(n ast.Node) bool {
-				if n == nil {
-					stack = stack[:len(stack)-1]
-					return true
-				}
-				stack = append(stack, n)
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				x, isIdent := sel.X.(*ast.Ident)
-				grantClose := sel.Sel.Name == "Close" && isIdent && x.Name == "g"
-				if !sectionMethods[sel.Sel.Name] && !grantClose {
-					return true
-				}
-				if isIdent && (x.Name == "signal" || x.Name == "unix") {
-					return true
-				}
-				checked++
-				for i := len(stack) - 2; i >= 0; i-- {
-					if call, ok := stack[i].(*ast.CallExpr); ok {
-						if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "inSection" && stack[i+1] != call.Fun {
-							return true
-						}
+	for _, f := range files {
+		var stack []ast.Node
+		ast.Inspect(f, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			stack = append(stack, n)
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			x, isIdent := sel.X.(*ast.Ident)
+			grantClose := sel.Sel.Name == "Close" && isIdent && x.Name == "g"
+			if !sectionMethods[sel.Sel.Name] && !grantClose {
+				return true
+			}
+			if isIdent && (x.Name == "signal" || x.Name == "unix") {
+				return true
+			}
+			checked++
+			for i := len(stack) - 2; i >= 0; i-- {
+				if call, ok := stack[i].(*ast.CallExpr); ok {
+					if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "inSection" && stack[i+1] != call.Fun {
+						return true
 					}
 				}
-				t.Errorf("%s: %s.%s is called outside inSection", fset.Position(sel.Pos()), exprString(sel.X), sel.Sel.Name)
-				return true
-			})
-		}
+			}
+			t.Errorf("%s: %s.%s is called outside inSection", fset.Position(sel.Pos()), exprString(sel.X), sel.Sel.Name)
+			return true
+		})
 	}
 	if checked < 8 {
 		t.Fatalf("only %d section calls found: the check no longer sees the run's code", checked)
