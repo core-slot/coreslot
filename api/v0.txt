@@ -28,7 +28,9 @@ field Report.ReconciledNS int64
 field Report.Resources map[string]ResourceInfo
 field Report.Section SectionInfo
 field Report.StateDir string
+field Report.StateDirExists bool
 field Report.Tickets []TicketInfo
+field Report.UndeclaredLocked map[string]int
 field Request.Label string
 field Request.Need map[string]Range
 field Request.Priority int

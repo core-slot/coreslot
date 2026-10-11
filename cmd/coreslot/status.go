@@ -9,17 +9,25 @@ import (
 	"flag"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Nezhinskiy/coreslot"
+	"github.com/Nezhinskiy/coreslot/internal/config"
+	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-const statusUsage = `usage: coreslot status [--json] [--observe DURATION]`
+const statusUsage = `usage: coreslot status [--json] [--observe DURATION]
+
+--observe watches the queue for DURATION to find STALLED tickets; a ticket is
+STALLED after 10s without a refresh, so use 10s or more.`
 
 // statusSchema is the version of the --json document (spec section 6.2).
 const statusSchema = 1
@@ -39,34 +47,38 @@ func statusCommand(args []string, io IO) int {
 			fmt.Fprintln(io.Stdout, statusUsage)
 			return 0
 		}
-		fmt.Fprintf(io.Stderr, "coreslot: %v\n%s\n", err, statusUsage)
+		fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), statusUsage)
 		return exitUsage
 	}
 	if fs.NArg() > 0 || *observe < 0 {
 		fmt.Fprintf(io.Stderr, "coreslot: status: unexpected arguments\n%s\n", statusUsage)
 		return exitUsage
 	}
-	c, err := coreslot.Open(coreslot.Options{})
+	if *observe > 0 && *observe < state.StallAfter {
+		fmt.Fprintf(io.Stderr, "coreslot: status: --observe %s is shorter than %s, so no ticket can be found STALLED; use %s or more\n",
+			*observe, state.StallAfter, state.StallAfter)
+	}
+	e, _, err := openEngineReadOnly()
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: status: %v\n", err)
+		fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
 		return exitInternal
 	}
 	snap := func() (rep coreslot.Report, err error) {
 		err = inSection(func() (err error) { // Snapshot probes admit.lock
-			rep, err = c.Snapshot()
+			rep, err = e.Snapshot()
 			return err
 		})
 		return rep, err
 	}
 	rep, w, err := observeQueue(snap, *observe, monotonicClock())
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: status: %v\n", err)
+		fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
 		return exitInternal
 	}
 	v := buildStatus(rep, store.NowNS(), w, *observe)
 	if *asJSON {
 		if err := v.writeJSON(io.Stdout); err != nil {
-			fmt.Fprintf(io.Stderr, "coreslot: status: %v\n", err)
+			fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
 			return exitInternal
 		}
 	} else {
@@ -76,6 +88,27 @@ func statusCommand(args []string, io IO) int {
 		return exitDegraded
 	}
 	return 0
+}
+
+// openEngineReadOnly opens the state directory like openEngine, but creates nothing: not the
+// directory, res/ or admit.lock (status and doctor leave a machine where nothing has run as
+// they found it). The returned engine's Snapshot reports a missing directory as empty.
+func openEngineReadOnly() (*engine.Engine, string, error) {
+	dir, override, err := config.StateDir()
+	if err != nil {
+		return nil, "", &stateError{Reason: err.Error()}
+	}
+	cfgPath := filepath.Join(dir, store.ConfigFile)
+	if !override {
+		if cfgPath, err = config.Path(); err != nil {
+			return nil, "", &stateError{Reason: err.Error()}
+		}
+	}
+	st, err := store.OpenReadOnly(dir)
+	if err != nil {
+		return nil, "", asState(err)
+	}
+	return engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{}), cfgPath, nil
 }
 
 // obsClock is the clock of an observation: the observer's own monotonic time, and a sleep.
@@ -122,12 +155,12 @@ func (w *stallWatcher) stalled(t coreslot.TicketInfo) bool {
 // tell, since a first sighting never is. It returns the last snapshot.
 func observeQueue(snap func() (coreslot.Report, error), window time.Duration, clk obsClock) (coreslot.Report, *stallWatcher, error) {
 	w := &stallWatcher{}
-	start := clk.now()
 	rep, err := snap()
 	if err != nil {
 		return rep, w, err
 	}
-	w.see(rep, clk.now())
+	start := clk.now()
+	w.see(rep, start) // the window runs from the first sighting, so a ticket seen then can reach StallAfter in it
 	for clk.now()-start < window {
 		clk.sleep(min(observeEvery, window-(clk.now()-start)))
 		if rep, err = snap(); err != nil {
@@ -187,6 +220,13 @@ func buildStatus(rep coreslot.Report, nowNS int64, w *stallWatcher, observed tim
 	return v
 }
 
+// holderAlive reports whether the process admit.lock names still exists (kill with signal 0:
+// a process of another user exists too, which EPERM reports).
+func holderAlive(pid int) bool {
+	err := unix.Kill(pid, 0)
+	return err == nil || errors.Is(err, unix.EPERM)
+}
+
 func (v statusView) sectionFor() time.Duration {
 	if !v.rep.Section.Held || v.rep.Section.EnteredNS == 0 {
 		return 0
@@ -211,6 +251,9 @@ func (v statusView) human() string {
 	p := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	r := v.rep
 	p("state directory: %s", text(r.StateDir))
+	if !r.StateDirExists {
+		p("no state directory yet (nothing has run)")
+	}
 	switch {
 	case r.FormatError != "":
 		p("format: MALFORMED (%s)", text(r.FormatError))
@@ -224,6 +267,8 @@ func (v statusView) human() string {
 	switch {
 	case !r.Section.Held:
 		p("admission section: free")
+	case r.Section.PID != 0 && !holderAlive(r.Section.PID):
+		p("admission section: held; holder unknown (last recorded pid %d has exited)", r.Section.PID)
 	case r.Section.PID != 0:
 		p("admission section: held by pid %d for %s (as recorded in admit.lock)", r.Section.PID, duration(v.sectionFor()))
 	default:
@@ -283,6 +328,14 @@ func (v statusView) human() string {
 		p("%s", line)
 	}
 
+	if len(r.UndeclaredLocked) > 0 {
+		var parts []string
+		for _, name := range slices.Sorted(maps.Keys(r.UndeclaredLocked)) {
+			parts = append(parts, fmt.Sprintf("%s %d", name, r.UndeclaredLocked[name]))
+		}
+		p("undeclared resources with locked tokens (not in the configuration): %s", strings.Join(parts, ", "))
+	}
+
 	if len(v.unlisted) > 0 {
 		var parts []string
 		for _, name := range slices.Sorted(maps.Keys(v.unlisted)) {
@@ -311,8 +364,11 @@ func (v statusView) human() string {
 		}
 		p("%s  id %s", line, t.info.ID)
 	}
-	if v.observed > 0 {
+	switch {
+	case v.observed > 0:
 		p("queue observed for %s", duration(v.observed))
+	case len(v.tickets) > 0:
+		p("STALLED: not observed (use --observe %s or more)", state.StallAfter)
 	}
 
 	if n := len(r.DeadHolds); n > 0 {
@@ -373,6 +429,7 @@ func needText(need map[string][2]int) string {
 type jsonStatus struct {
 	Schema           int                     `json:"schema"`
 	StateDir         string                  `json:"state_dir"`
+	StateDirExists   bool                    `json:"state_dir_exists"`
 	Format           int                     `json:"format"`
 	FormatUnderstood bool                    `json:"format_understood"`
 	FormatError      string                  `json:"format_error"`
@@ -382,6 +439,7 @@ type jsonStatus struct {
 	Degraded         *jsonDegraded           `json:"degraded"`
 	Section          jsonSection             `json:"section"`
 	Resources        map[string]jsonResource `json:"resources"`
+	UndeclaredLocked map[string]int          `json:"undeclared_locked"`
 	Holds            []jsonHold              `json:"holds"`
 	Tickets          []jsonTicket            `json:"tickets"`
 	DeadHolds        []string                `json:"dead_holds"`
@@ -397,11 +455,19 @@ type jsonDegraded struct {
 	Malformed bool   `json:"malformed"`
 }
 
+// jsonSection is the admission section. Holder is null while the section is free. Its fields
+// come from admit.lock's informational body: PID and EnteredNS are 0 when it is unreadable,
+// and Alive (kill with signal 0) is null then; a holder that is not alive is a stale record.
 type jsonSection struct {
-	Held      bool    `json:"held"`
+	Held   bool        `json:"held"`
+	Holder *jsonHolder `json:"holder"`
+}
+
+type jsonHolder struct {
 	PID       int     `json:"pid"`
 	EnteredNS int64   `json:"entered_ns"`
 	HeldForS  float64 `json:"held_for_s"`
+	Alive     *bool   `json:"alive"`
 }
 
 type jsonResource struct {
@@ -439,19 +505,29 @@ type jsonTicket struct {
 	WaitedS   float64              `json:"waited_s"`
 	Position  int                  `json:"position"` // 1 is the head; 0 for a dead ticket
 	State     string               `json:"state"`    // waiting, stalled or dead
-	Stalled   bool                 `json:"stalled"`
+	Stalled   *bool                `json:"stalled"`  // null unless --observe ran
 }
 
 func (v statusView) document() jsonStatus {
 	r := v.rep
 	d := jsonStatus{
-		Schema: statusSchema, StateDir: r.StateDir, Format: r.Format, FormatUnderstood: r.FormatUnderstood,
+		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatUnderstood: r.FormatUnderstood,
 		FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError,
-		Section: jsonSection{Held: r.Section.Held, PID: r.Section.PID, EnteredNS: r.Section.EnteredNS,
-			HeldForS: v.sectionFor().Seconds()},
-		Resources: map[string]jsonResource{}, Holds: []jsonHold{}, Tickets: []jsonTicket{},
+		Section:   jsonSection{Held: r.Section.Held},
+		Resources: map[string]jsonResource{}, UndeclaredLocked: maps.Clone(r.UndeclaredLocked), Holds: []jsonHold{}, Tickets: []jsonTicket{},
 		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
+	}
+	if d.UndeclaredLocked == nil {
+		d.UndeclaredLocked = map[string]int{}
+	}
+	if r.Section.Held {
+		h := &jsonHolder{PID: r.Section.PID, EnteredNS: r.Section.EnteredNS, HeldForS: v.sectionFor().Seconds()}
+		if r.Section.PID != 0 {
+			alive := holderAlive(r.Section.PID)
+			h.Alive = &alive
+		}
+		d.Section.Holder = h
 	}
 	if x := r.Degraded; x != nil {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
@@ -473,9 +549,14 @@ func (v statusView) document() jsonStatus {
 		for name, mm := range t.info.Need {
 			need[name] = jsonRange{Min: mm[0], Max: mm[1]}
 		}
-		d.Tickets = append(d.Tickets, jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
+		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
 			Priority: t.info.Priority, Need: need, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
-			Position: t.position, State: t.state, Stalled: t.state == "stalled"})
+			Position: t.position, State: t.state}
+		if v.observed > 0 {
+			stalled := t.state == "stalled"
+			jt.Stalled = &stalled
+		}
+		d.Tickets = append(d.Tickets, jt)
 	}
 	return d
 }

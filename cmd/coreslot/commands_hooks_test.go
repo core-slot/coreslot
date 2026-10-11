@@ -67,8 +67,11 @@ func TestStatusNamesSectionHolderOfPausedRun(t *testing.T) {
 	// The run reaches the point again for its hold; release it every time until it exits.
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
+	deadline := time.After(60 * time.Second)
 	for {
 		select {
+		case <-deadline:
+			t.Fatalf("the paused run did not finish within 60 s of being released (load: %s)", uptime())
 		case err := <-done:
 			if err != nil {
 				t.Errorf("the paused run: %v", err)

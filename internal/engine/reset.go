@@ -44,7 +44,7 @@ func (e *Engine) Reset(ctx context.Context) (removed int, err error) {
 		return 0, err
 	}
 	defer sec.Leave()
-	live, removed, err := sec.Reset()
+	live, removed, err := sec.Reset(formats())
 	if err != nil {
 		return removed, err
 	}
@@ -71,6 +71,9 @@ func (e *Engine) sectionHolderReason() string {
 
 func liveReasons(l store.LiveState) []string {
 	var out []string
+	if l.ForeignFormat != nil {
+		out = append(out, fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", *l.ForeignFormat))
+	}
 	add := func(kind string, names []string) {
 		if len(names) == 0 {
 			return
@@ -107,9 +110,8 @@ func entryText(name string) string {
 	if !ok {
 		return name
 	}
-	const idLen = 20 + 1 + 10 + 1 + 6
-	if len(name) > idLen+1 {
-		return fmt.Sprintf("pid %d, %s", id.PID, name[idLen+1:])
+	if d := wire.NameDisplay(name); d != "" {
+		return fmt.Sprintf("pid %d, %s", id.PID, d)
 	}
 	return fmt.Sprintf("pid %d", id.PID)
 }

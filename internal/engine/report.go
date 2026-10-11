@@ -56,6 +56,7 @@ type DegradedInfo struct {
 // outside the admission section, so it can be momentarily inconsistent.
 type Report struct {
 	StateDir         string
+	StateDirExists   bool   // false on a machine where nothing has run yet: everything else is empty
 	Format           int    // 0 when FORMAT is absent
 	FormatUnderstood bool   // this client implements Format (an absent FORMAT counts as 1)
 	FormatError      string // set when FORMAT is malformed
@@ -63,6 +64,7 @@ type Report struct {
 	ReconciledNS     int64
 	Resources        map[string]ResourceInfo // declared resources
 	ConfigError      string                  // set when sizes could not be computed
+	UndeclaredLocked map[string]int          // res/<name> directories the configuration does not declare, with locked tokens
 	Tickets          []TicketInfo            // in queue order
 	Holds            []HolderInfo            // live holds, in name order
 	DeadHolds        []string                // names of holds whose probe succeeded, awaiting reconciliation
