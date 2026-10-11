@@ -949,7 +949,7 @@ class AlignmentTests(Base):
         self.assertEqual(self.ls("holds"), sorted(["00000000000000000002-0000000001-000002",
                                                    ".tmp-0000000001-000004"]))
         self.assertEqual(self.ls("cancel"), ["00000000000000000009-0000000001-000009"])
-        self.assertEqual(c1.ignored_by_reconciliation, {"$S": 0, "queue": 2, "holds": 2, "cancel": 1})
+        self.assertEqual(c1.ignored_by_reconciliation, {"queue": 2, "holds": 2, "cancel": 1})
         g = self.gen()
         self.assertEqual(g["gen"], 5 + 1 + 1)  # reconciliation removed `dead`, then enqueue bumped
         self.assertLess(abs(g["reconciled_ns"] - time.time_ns()), 5 * 10**9)
@@ -957,6 +957,34 @@ class AlignmentTests(Base):
         self.assertEqual(kind, "admitted")
         self.assertEqual(c1.ignored_entries, 2)
         grant.close(remove_hold=False)
+
+    def test_stray_temporary_in_the_state_directory_is_a_state_error(self):
+        """§4.2 (resolution): the stray rule covers queue/, holds/, cancel/ only, not $S."""
+        for make, reason in ((lambda p: os.symlink(os.path.join(self.root, "elsewhere"), p), "state-type"),
+                             (lambda p: os.mkdir(p, 0o700), "state-type"),
+                             (lambda p: (self.write(p, b""), os.chmod(p, 0o620)), "state-mode")):
+            with self.subTest(reason=reason):
+                shutil.rmtree(self.S, ignore_errors=True)
+                os.makedirs(self.S, 0o700)
+                self.write(os.path.join(self.S, "gen"), b'{"gen": 3, "reconciled_ns": 0}')  # due
+                stray = os.path.join(self.S, ".tmp-0000000001-000001")
+                make(stray)
+                with self.assertRaises(cc.StateError) as ctx:
+                    self.client().enqueue("x", 0, {"cpu": 1})
+                self.assertEqual(ctx.exception.reason, reason)
+                self.assertTrue(os.path.lexists(stray))
+                self.assertEqual(self.ls("queue"), [])  # nothing published after the state error
+                self.assertEqual(self.gen(), {"gen": 3, "reconciled_ns": 0})  # gen not written
+        # The same stray inside queue/ is ignored and counted, and reconciliation completes.
+        shutil.rmtree(self.S, ignore_errors=True)
+        os.makedirs(os.path.join(self.S, "queue"), 0o700)
+        self.write(os.path.join(self.S, "gen"), b'{"gen": 3, "reconciled_ns": 0}')
+        os.symlink(os.path.join(self.root, "elsewhere"), os.path.join(self.S, "queue", ".tmp-0000000001-000001"))
+        c = self.client()
+        t = c.enqueue("x", 0, {"cpu": 1})
+        self.assertEqual(c.ignored_by_reconciliation["queue"], 1)
+        self.assertGreater(self.gen()["reconciled_ns"], 0)
+        t.withdraw()
 
     def test_fd_3_is_closed_in_the_child_without_a_hold(self):
         """§17: a token-only run passes no hold, so fd 3 is closed even when the run inherited one."""

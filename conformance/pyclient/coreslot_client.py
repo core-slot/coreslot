@@ -395,6 +395,32 @@ def _policy_ok(st: os.stat_result, want_dir: bool) -> bool:
     return kind_ok and st.st_uid == os.getuid() and not st.st_mode & 0o022
 
 
+def _open_entry(path: str):
+    """Open a queue/, holds/ or cancel/ entry only if it passes §4.2 (stray rule B1/D6).
+
+    Returns a descriptor, "gone" (ENOENT), or "ignored": an entry whose type, owner or mode fails
+    the checks is never opened or probed. The inode is re-checked after the open, so a swap
+    between lstat and open is also ignored.
+    """
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return "gone"
+    if not _policy_ok(before, want_dir=False):
+        return "ignored"
+    try:
+        fd = os.open(path, os.O_RDONLY | O_FILE | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return "gone"
+    except OSError:
+        return "ignored"
+    after = os.fstat(fd)
+    if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino) or not _policy_ok(after, False):
+        os.close(fd)
+        return "ignored"
+    return fd
+
+
 def _ensure_dir(path: str, create: bool = True) -> bool:
     """Create (0700, EEXIST tolerated) and check a layout directory; False if absent."""
     if create:
@@ -1076,7 +1102,7 @@ class Client:
         S = sec.S
         removed = False
         queue, holds, cancel = (os.path.join(S, n) for n in ("queue", "holds", "cancel"))
-        ignored = {"$S": 0, "queue": 0, "holds": 0, "cancel": 0}
+        ignored = {"queue": 0, "holds": 0, "cancel": 0}
         for d in (queue, holds):
             if not _ensure_dir(d, create=False):
                 continue
@@ -1087,17 +1113,13 @@ class Client:
                         ignored[key] += 1
                     continue
                 path = os.path.join(d, name)
-                try:
-                    fd = os.open(path, os.O_RDONLY | O_FILE | os.O_NONBLOCK)
-                except FileNotFoundError:
+                fd = _open_entry(path)
+                if fd == "gone":
                     continue
-                except OSError:
-                    ignored[key] += 1  # a symlink or unreadable entry: ignored, never removed
+                if fd == "ignored":
+                    ignored[key] += 1  # bad type/owner/mode: never probed or removed (§4.2, §10.4)
                     continue
                 try:
-                    if not _policy_ok(os.fstat(fd), want_dir=False):
-                        ignored[key] += 1
-                        continue
                     try:
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     except BlockingIOError:
@@ -1128,7 +1150,7 @@ class Client:
                 except FileNotFoundError:
                     pass
         now = time.time_ns()
-        for key, d in (("$S", S), ("queue", queue), ("holds", holds), ("cancel", cancel)):
+        for key, d in (("$S", S), ("queue", queue), ("holds", holds), ("cancel", cancel)):  # step 3
             for name in _list(d):
                 if not TMP_RE.fullmatch(name):
                     continue
@@ -1136,12 +1158,14 @@ class Client:
                 try:
                     st = os.lstat(path)
                     if not _policy_ok(st, want_dir=False):
+                        if key == "$S":  # §4.2: a temporary in $S itself is checked like the layout
+                            _check_stat(st, False, path)
                         ignored[key] += 1
                         continue
                     if now - st.st_mtime_ns > TMP_AGE_NS:
                         os.unlink(path)
                         removed = True
-                except OSError:
+                except OSError:  # StateError is not an OSError: a bad $S temporary propagates
                     pass
         self.ignored_by_reconciliation = ignored
         sec.write_gen(gen + 1 if removed else gen, time.time_ns())
@@ -1532,14 +1556,10 @@ class Ticket:
 
     def _cancel_requested(self) -> bool:
         path = os.path.join(self.client.state_dir(), "cancel", self.id)
+        fd = _open_entry(path)
+        if not isinstance(fd, int):
+            return False  # gone, or ignored (never trusted)
         try:
-            fd = os.open(path, os.O_RDONLY | O_FILE | os.O_NONBLOCK)
-        except OSError:
-            return False
-        try:
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
-                return False
             validate_cancel(parse_body(_read_upto(fd, MAX_BODY + 1)))
             return True
         except Malformed:
@@ -1568,16 +1588,11 @@ class Ticket:
     def _examine(self, name: str, now: float) -> str:
         """One ticket ahead: 'gone', 'ignored', 'dead', 'stalled' or 'live' (§10.3)."""
         path = os.path.join(self.client.state_dir(), "queue", name)
-        try:
-            fd = os.open(path, os.O_RDONLY | O_FILE | os.O_NONBLOCK)
-        except FileNotFoundError:
-            return "gone"
-        except OSError:
-            return "ignored"
+        fd = _open_entry(path)
+        if not isinstance(fd, int):
+            return fd  # "gone", or "ignored" without opening it (§4.2, B1/D6)
         try:
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
-                return "ignored"
             ok = self._valid.get(name)
             if ok is None:
                 try:

@@ -1,7 +1,7 @@
 # PROTOCOL.md ambiguities found by the independent Python client
 
 All 41 entries are resolved: 39 by the revised `PROTOCOL.md` (merge 5c00392), and B1/D6 by the
-maintainers' decision, which supersedes that merge's §4.2/§10.4 text. Each entry ends with its status.
+maintainers' decision, which PROTOCOL §4.2/§10.4 carry since merge 8c3a32e. Each entry ends with its status.
 
 Each entry is a place where `PROTOCOL.md` (format 1) is silent, ambiguous or self-contradictory
 for someone implementing from it alone. Each one gives the section, the readings, and the choice
@@ -72,7 +72,7 @@ able to drop a symlink into `queue/` turns every client into fail-open.
 holds and cancel requests with a wrong type, owner or mode are ignored. Reconciliation skips
 non-regular entries.
 
-**Status — resolved by the maintainers' decision, which supersedes the PROTOCOL §4.2 text in this merge (PROTOCOL will carry it in a later commit). An entry of queue/, holds/ or cancel/ whose name matches the grammar but fails the type/owner/mode checks is ignored and counted: never trusted and never removed by reconciliation, and reconciliation still completes and writes reconciled_ns. Client changed: reconciliation steps 1-3 apply the checks and count (ignored_by_reconciliation), and the election counts (ignored_entries).**
+**Status — resolved by the maintainers' decision, now PROTOCOL §4.2 and §10.4 step 1 (merge 8c3a32e). Resolution: the rule covers grammar-matching entries of queue/, holds/ and cancel/ (temporaries included) only; a stray temporary in $S itself remains a state error (client changed, test `test_stray_temporary_in_the_state_directory_is_a_state_error`). Such entries are never opened or probed: the client lstat-checks before opening and re-checks the inode after. An entry of queue/, holds/ or cancel/ whose name matches the grammar but fails the type/owner/mode checks is ignored and counted: never trusted and never removed by reconciliation, and reconciliation still completes and writes reconciled_ns. Client changed: reconciliation steps 1-3 apply the checks and count (ignored_by_reconciliation), and the election counts (ignored_entries).**
 
 **B2. §4.2: "owned by the process's user id": real or effective uid?** §4.1 uses `getuid()` for the
 home. *Choice:* `geteuid()` for ownership checks, and `getuid()` for the home, as §4.1 says.
@@ -217,7 +217,7 @@ malformed or not a regular file? *Choice:* any name matching the ticket grammar.
 **D6. §10.4 step 1: entries matching the ticket or hold grammar that are not regular files.**
 *Choice:* not probed and not removed.
 
-**Status — resolved by the maintainers' decision (see B1), superseding the PROTOCOL §10.4 step 1 text in this merge. Such entries are ignored and counted, never removed, and reconciliation completes and writes reconciled_ns. Client changed (see B1).**
+**Status — resolved by the maintainers' decision (see B1), now PROTOCOL §10.4 step 1 (merge 8c3a32e). Such entries are ignored and counted, never removed, and reconciliation completes and writes reconciled_ns. Client changed (see B1).**
 
 **D7. §15.2: when must a waiter look for a format change?** On every poll, or only at section
 entry? *Choice:* both.
