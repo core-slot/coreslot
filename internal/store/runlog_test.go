@@ -254,3 +254,33 @@ func TestRecordDegradedGivesUpOnABusySection(t *testing.T) {
 		t.Error("a degraded record was written without the section")
 	}
 }
+
+// writeOnce makes one write(2): on a non-blocking pipe nobody reads, a 1 MiB write returns
+// short at once, where a looping write would block until the pipe is read.
+func TestWriteOnceIssuesOneWrite(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	b := make([]byte, 1<<20)
+	type result struct {
+		n   int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		n, err := writeOnce(w, b)
+		done <- result{n, err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil || res.n <= 0 || res.n >= len(b) {
+			t.Errorf("writeOnce = %d, %v; want one short write", res.n, res.err)
+		}
+	case <-time.After(10 * time.Second):
+		r.Close() // unblock the writer
+		t.Fatal("writeOnce did not return: it wrote more than once")
+	}
+}

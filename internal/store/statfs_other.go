@@ -2,14 +2,9 @@
 
 package store
 
-import "golang.org/x/sys/unix"
-
-// CheckFilesystem on other Unix systems only checks that the directory can be examined:
-// PROTOCOL.md section 4.3 lists refused filesystems for macOS and Linux only.
+// CheckFilesystem cannot tell a host-local filesystem from a network, FUSE or VM-shared one on
+// this system (PROTOCOL.md section 4.3 lists the refused filesystems for macOS and Linux only),
+// so it is always a state error and the caller fails open.
 func CheckFilesystem(dir string) error {
-	var st unix.Stat_t
-	if err := unix.Stat(dir, &st); err != nil {
-		return stateErrorf("stat %s: %v", dir, err)
-	}
-	return nil
+	return stateErrorf("%s: cannot verify a host-local filesystem on this system", dir)
 }

@@ -3,6 +3,7 @@
 package store
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -39,7 +40,8 @@ var flockPackages = map[string]bool{"golang.org/x/sys/unix": true, "syscall": tr
 // TestNoUnlockInPackage parses every Go file of every package in the module and fails on any
 // flock(2) call whose operation is not built from LOCK_EX and LOCK_NB alone: LOCK_UN, the
 // literal 8, LOCK_SH, a variable or any other expression. Release is by closing (PROTOCOL.md
-// section 6). It also refuses Flock used as a value, which would hide the operation.
+// section 6). It also refuses Flock used as a value, a dot-import of unix or syscall (which
+// would hide the calls) and any use of SYS_FLOCK (a raw system call).
 func TestNoUnlockInPackage(t *testing.T) {
 	root := moduleRoot(t)
 	fset := token.NewFileSet()
@@ -62,7 +64,9 @@ func TestNoUnlockInPackage(t *testing.T) {
 			return err
 		}
 		files++
-		checkFlockCalls(t, fset, f)
+		for _, finding := range flockFindings(fset, f) {
+			t.Error(finding)
+		}
 		return nil
 	})
 	if err != nil {
@@ -73,8 +77,53 @@ func TestNoUnlockInPackage(t *testing.T) {
 	}
 }
 
-func checkFlockCalls(t *testing.T, fset *token.FileSet, f *ast.File) {
-	t.Helper()
+// TestNoUnlockDetector checks the detector itself on sources that must and must not pass.
+func TestNoUnlockDetector(t *testing.T) {
+	const header = "package p\nimport (\n\t\"golang.org/x/sys/unix\"\n\tsc \"syscall\"\n)\nvar _ = sc.Getpid\n"
+	cases := map[string]bool{ // body -> must be refused
+		"func f(fd int) error { return unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB) }": false,
+		"func f(fd int) error { return unix.Flock(fd, (unix.LOCK_EX)) }":            false,
+		"func f(fd int) error { return sc.Flock(fd, sc.LOCK_EX|sc.LOCK_NB) }":       false,
+		"func f(fd int) error { return unix.Flock(fd, unix.LOCK_UN) }":              true,
+		"func f(fd int) error { return unix.Flock(fd, 8) }":                         true,
+		"func f(fd int) error { return sc.Flock(fd, sc.LOCK_SH) }":                  true,
+		"func f(fd, op int) error { return unix.Flock(fd, op) }":                    true,
+		"func f(fd int) error { return unix.Flock(fd, unix.LOCK_EX&unix.LOCK_NB) }": true,
+		"var g = unix.Flock": true,
+		"func f(fd int) { unix.Syscall(unix.SYS_FLOCK, uintptr(fd), 8, 0) }": true,
+		"var n = sc.SYS_FLOCK": true,
+	}
+	for body, refuse := range cases {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "x.go", header+body+"\n", parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		if got := len(flockFindings(fset, f)) > 0; got != refuse {
+			t.Errorf("%s: refused = %v, want %v", body, got, refuse)
+		}
+	}
+	for _, src := range []string{
+		"package p\nimport . \"golang.org/x/sys/unix\"\nfunc f(fd int) error { return Flock(fd, 8) }\n",
+		"package p\nimport . \"syscall\"\nvar _ = Getpid\n",
+	} {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "x.go", src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(flockFindings(fset, f)) == 0 {
+			t.Errorf("a dot-import was not refused:\n%s", src)
+		}
+	}
+}
+
+// flockFindings lists the refused uses of flock in one file.
+func flockFindings(fset *token.FileSet, f *ast.File) []string {
+	var findings []string
+	report := func(pos token.Pos, msg string) {
+		findings = append(findings, fmt.Sprintf("%s: %s", fset.Position(pos), msg))
+	}
 	pkgs := map[string]bool{} // local names of the flock packages in this file
 	for _, imp := range f.Imports {
 		p, _ := strconv.Unquote(imp.Path.Value)
@@ -85,10 +134,14 @@ func checkFlockCalls(t *testing.T, fset *token.FileSet, f *ast.File) {
 		if imp.Name != nil {
 			name = imp.Name.Name
 		}
+		if name == "." {
+			report(imp.Pos(), "dot-import of "+p+" hides its flock calls from this check")
+			continue
+		}
 		pkgs[name] = true
 	}
 	if len(pkgs) == 0 {
-		return
+		return findings
 	}
 	isPkgSel := func(e ast.Expr, sel ...string) bool {
 		s, ok := e.(*ast.SelectorExpr)
@@ -121,17 +174,21 @@ func checkFlockCalls(t *testing.T, fset *token.FileSet, f *ast.File) {
 		if c, ok := n.(*ast.CallExpr); ok && isPkgSel(c.Fun, "Flock") {
 			calls[c.Fun] = true
 			if len(c.Args) != 2 || !allowed(c.Args[1]) {
-				t.Errorf("%s: flock with an operation other than LOCK_EX/LOCK_NB: release by closing, never LOCK_UN",
-					fset.Position(c.Pos()))
+				report(c.Pos(), "flock with an operation other than LOCK_EX/LOCK_NB: release by closing, never LOCK_UN")
 			}
 		}
 		return true
 	})
 	ast.Inspect(f, func(n ast.Node) bool {
-		if e, ok := n.(ast.Expr); ok && isPkgSel(e, "Flock") && !calls[e] {
-			t.Errorf("%s: Flock used as a value; call it directly so its operation can be checked",
-				fset.Position(e.Pos()))
+		e, ok := n.(ast.Expr)
+		switch {
+		case !ok:
+		case isPkgSel(e, "Flock") && !calls[e]:
+			report(e.Pos(), "Flock used as a value; call it directly so its operation can be checked")
+		case isPkgSel(e, "SYS_FLOCK"):
+			report(e.Pos(), "raw flock system call; use Flock with LOCK_EX/LOCK_NB")
 		}
 		return true
 	})
+	return findings
 }

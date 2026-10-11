@@ -11,6 +11,8 @@ import (
 	"os"
 	"unicode/utf8"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 )
 
@@ -105,8 +107,6 @@ func encodeJSON(v any) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-func jsonString(s string) ([]byte, error) { return encodeJSON(s) }
-
 // AppendRun appends r to log/runs.jsonl with one O_APPEND write of at most 4 KiB, outside the
 // section. It recreates log/ when a reset removed it. Rotation is separate: a caller that finds
 // RunLogNeedsRotation rotates inside the section first.
@@ -123,11 +123,37 @@ func (s *Store) AppendRun(r RunRecord) error {
 		return err
 	}
 	defer f.Close()
-	n, err := f.Write(line)
+	n, err := writeOnce(f, line)
 	if err == nil && n != len(line) {
 		err = fmt.Errorf("store: short run-log write: %d of %d bytes", n, len(line))
 	}
 	return err
+}
+
+// writeOnce issues exactly one write(2) of b on f (repeated only when it was interrupted before
+// writing anything), so an O_APPEND line is never split across two writes. os.File.Write would
+// loop on a short write and append the rest separately.
+func writeOnce(f *os.File, b []byte) (int, error) {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	var werr error
+	if err := rc.Control(func(fd uintptr) {
+		for {
+			n, werr = unix.Write(int(fd), b)
+			if !errors.Is(werr, unix.EINTR) {
+				return
+			}
+		}
+	}); err != nil {
+		return 0, err
+	}
+	if werr != nil {
+		return 0, &os.PathError{Op: "write", Path: f.Name(), Err: werr}
+	}
+	return n, nil
 }
 
 // RunLogNeedsRotation reports whether log/runs.jsonl is at or above 10 MiB.
