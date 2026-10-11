@@ -1,0 +1,85 @@
+field DegradedInfo.Count int64
+field DegradedInfo.FirstNS int64
+field DegradedInfo.Malformed bool
+field DegradedInfo.Reason string
+field HolderInfo.Adopted bool
+field HolderInfo.Clamped map[string]int
+field HolderInfo.Grant map[string]int
+field HolderInfo.Label string
+field HolderInfo.Name string
+field HolderInfo.PID int
+field HolderInfo.StartNS int64
+field HolderInfo.Unbudgeted bool
+field HolderInfo.UnbudgetedResources []string
+field Options.StateDir string
+field Range.Max int
+field Range.Min int
+field Report.Cancels []string
+field Report.ConfigError string
+field Report.DeadHolds []string
+field Report.Degraded *DegradedInfo
+field Report.Format int
+field Report.FormatError string
+field Report.FormatUnderstood bool
+field Report.Gen uint64
+field Report.Holds []HolderInfo
+field Report.Ignored map[string]int
+field Report.ReconciledNS int64
+field Report.Resources map[string]ResourceInfo
+field Report.Section SectionInfo
+field Report.StateDir string
+field Report.Tickets []TicketInfo
+field Request.Label string
+field Request.Need map[string]Range
+field Request.Priority int
+field ResourceInfo.Free int
+field ResourceInfo.Locked int
+field ResourceInfo.Size int
+field SectionInfo.EnteredNS int64
+field SectionInfo.Held bool
+field SectionInfo.PID int
+field StateError.Reason string
+field TicketInfo.CreatedNS int64
+field TicketInfo.Dead bool
+field TicketInfo.ID string
+field TicketInfo.Label string
+field TicketInfo.MtimeNS int64
+field TicketInfo.Name string
+field TicketInfo.Need map[string][2]int
+field TicketInfo.PID int
+field TicketInfo.Priority int
+field UsageError.Msg string
+func Open(Options) (*Client, error)
+method (*Client) Adopt(Request) (*Grant, map[string]int, error)
+method (*Client) Enqueue(Request) (*Waiter, error)
+method (*Client) Free(string) (int, error)
+method (*Client) Snapshot() (Report, error)
+method (*Grant) Clamped() map[string]int
+method (*Grant) Close() error
+method (*Grant) Env() []string
+method (*Grant) Files() []*os.File
+method (*Grant) Grant() map[string]int
+method (*Grant) TokenOnly() bool
+method (*Grant) Unbudgeted() []string
+method (*StateError) Error() string
+method (*Waiter) Cancel() error
+method (*Waiter) Poll() (*Grant, bool, error)
+method (*Waiter) Wait(context.Context) (*Grant, error)
+type Client struct
+type DegradedInfo = engine.DegradedInfo
+type Grant struct
+type HolderInfo = engine.HolderInfo
+type Options struct
+type Range = spec.Range
+type Report = engine.Report
+type Request = spec.Request
+type ResourceInfo = engine.ResourceInfo
+type SectionInfo = engine.SectionInfo
+type StateError struct
+type TicketInfo = engine.TicketInfo
+type UsageError = spec.UsageError
+type Waiter struct
+var ErrAlreadyAdmitted
+var ErrCancelled
+var ErrRefused
+var ErrUnsupported

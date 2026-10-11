@@ -665,7 +665,8 @@ A clamped CLI run prints a notice (`coreslot: cpu: requested 16, budget is 10; r
 
 ### 12.3 After the command exits
 
-The run closes its copies of the grant's descriptors. The CLI then enters the section if it can
+The run closes its copies of the grant's descriptors, the hold's before any token's, so that a
+live hold never lists a token nobody locks (I1, I2). The CLI then enters the section if it can
 within 2 s, probes its hold and unlinks it only if the probe succeeds (no descendant still holds
 it), bumping `gen` when it did (section 7.8); otherwise reconciliation removes the hold later.
 Other clients MAY remove their hold the same way, or leave it to reconciliation. This applies to
