@@ -791,6 +791,10 @@ A run that starts a command with a grant gives it:
 | fd 3 | the hold's lock-carrying descriptor, when the run has a hold; otherwise fd 3 is closed in the child and the tokens still start at fd 4 (a Go launcher passes a nil `ExtraFiles[0]`) |
 | fd 4 onward | the token descriptors, in ascending resource name and then ascending index |
 
+Descriptors 3 through 3 + n of the command, n being the number of token descriptors, are the
+run's: an inherited descriptor at one of those numbers is not passed on, so a launcher that
+needs its own descriptors in the command places them above.
+
 and this environment:
 
 | Variable | Value |

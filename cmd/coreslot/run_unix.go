@@ -223,7 +223,7 @@ var errNotAtOnce = errors.New("not admitted at once")
 
 // tryOnce is --no-wait's single attempt: one Step, whose section entry waits at most 1 s.
 func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, error) {
-	res, err := sectionStepper{t}.Step(ctx)
+	res, err := sectionStepper{t}.step(ctx)
 	if err != nil {
 		return nil, asState(err)
 	}
@@ -233,45 +233,25 @@ func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, err
 	return nil, errNotAtOnce
 }
 
-// enqueue publishes the request's ticket. The engine waits for the section as long as it takes,
-// so the wait is bounded here by ctx: when ctx ends first the run gives up, and a ticket the
-// abandoned call still publishes is withdrawn at once (or dies with this process).
-func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (*engine.Ticket, error) {
-	type result struct {
-		t   *engine.Ticket
-		err error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		var t *engine.Ticket
-		err := inSection(func() (err error) {
-			t, err = e.Enqueue(req)
-			return err
-		})
-		ch <- result{t, err}
-	}()
-	select {
-	case res := <-ch:
-		return res.t, asState(res.err)
-	case <-ctx.Done():
-		go func() {
-			if res := <-ch; res.t != nil {
-				_ = inSection(res.t.Withdraw)
-			}
-		}()
-		return nil, ctx.Err()
-	}
+// enqueue publishes the request's ticket, waiting for the section only until ctx ends; it then
+// returns the context's error having published nothing.
+func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (t *engine.Ticket, err error) {
+	err = inSection(func() (err error) {
+		t, err = e.EnqueueContext(ctx, req)
+		return err
+	})
+	return t, asState(err)
 }
 
 // stepper is the part of a ticket the wait loop drives.
 type stepper interface {
-	Step(ctx context.Context) (engine.StepResult, error)
+	step(ctx context.Context) (engine.StepResult, error)
 }
 
 // sectionStepper steps a ticket inside inSection: a Step may hold the admission section.
 type sectionStepper struct{ t *engine.Ticket }
 
-func (s sectionStepper) Step(ctx context.Context) (res engine.StepResult, err error) {
+func (s sectionStepper) step(ctx context.Context) (res engine.StepResult, err error) {
 	err = inSection(func() error {
 		res, err = s.t.Step(ctx)
 		return err
@@ -308,7 +288,7 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 	start := clk.Now()
 	next := start + waitLineEvery
 	for {
-		res, err := s.Step(ctx)
+		res, err := s.step(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -343,8 +323,11 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 
 // holdersText describes the live holds and the section's holder, for a --no-wait refusal.
 func (r *run) holdersText(e *engine.Engine) string {
-	rep, err := e.Snapshot()
-	if err != nil {
+	var rep engine.Report
+	if err := inSection(func() (err error) { // Snapshot probes admit.lock
+		rep, err = e.Snapshot()
+		return err
+	}); err != nil {
 		return ""
 	}
 	s := holderList(rep.Holds, time.Now().UnixNano())
@@ -507,20 +490,35 @@ func unbudgetedEnv(grant map[string]int, reason string) []string {
 	return env
 }
 
+// timeoutReason is the reason a timeout run gives in its hold, its run-log line and
+// CORESLOT_UNBUDGETED.
+const timeoutReason = "timeout"
+
 // timeoutRun is --on-timeout run: the ticket is withdrawn and the command runs with min of each
-// resource outside the budget, recorded in the run log as unbudgeted. It is not a state error:
-// nothing is recorded as degraded.
+// resource outside the budget. Its unbudgeted hold shows it in status and its run-log line gives
+// the reason, but a timeout is not a state error: nothing is recorded as degraded.
 func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
 		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
-	c := child{
-		env:        append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), "")...),
-		grant:      r.o.minGrant(),
-		unbudgeted: r.o.sortedNeed(),
-		release:    func() {},
+	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: timeoutReason, release: func() {}}
+	var g *engine.Grant
+	herr := inSection(func() (err error) {
+		g, err = e.UnbudgetedHold(r.o.request(0), timeoutReason)
+		return err
+	})
+	if g != nil {
+		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() { _ = inSection(g.Close) }
+	} else {
+		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), timeoutReason)...)
 	}
-	if t != nil && !t.TokenOnly() {
+	switch {
+	case g != nil && g.HoldName() != "":
+		c.log = e.Store() // FORMAT was understood in the section that published the hold
+	case t != nil && !t.TokenOnly():
 		c.log = e.Store() // FORMAT was understood when the ticket was published
+	}
+	if herr != nil {
+		r.notice("the unbudgeted hold was not published: %v", herr)
 	}
 	return r.runChild(c)
 }

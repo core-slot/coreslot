@@ -3,11 +3,8 @@
 package engine
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -157,56 +154,17 @@ func ValidateInherited(env map[string]string) (held map[string][]*os.File, err e
 	return held, nil
 }
 
-// findTokens scans $S/res/ for the token files whose identity want lists and returns them by
-// descriptor. $S and res/ must exist and pass the filesystem policy; a matching token file must
-// pass it too.
+// findTokens finds, among the token files of dir, those whose identity want lists, by
+// descriptor. It creates nothing (store.TokenFiles).
 func findTokens(dir string, want map[devIno]int) (map[int]tokenFile, error) {
-	res := filepath.Join(dir, store.ResDir)
-	for _, d := range []string{dir, res} {
-		if _, err := os.Lstat(d); err != nil {
-			return nil, err
-		}
-		if err := store.CheckEntry(d, true); err != nil {
-			return nil, err
-		}
-	}
-	names, err := listNames(res)
+	files, err := store.TokenFiles(dir)
 	if err != nil {
 		return nil, err
 	}
 	found := make(map[int]tokenFile, len(want))
-	for _, name := range names {
-		if spec.ValidateName(name) != nil {
-			continue
-		}
-		rd := filepath.Join(res, name)
-		if err := store.CheckEntry(rd, true); err != nil {
-			return nil, err
-		}
-		idx, err := listNames(rd)
-		if err != nil {
-			return nil, err
-		}
-		for _, i := range idx {
-			if !tokenIndex(i) {
-				continue
-			}
-			p := filepath.Join(rd, i)
-			var st unix.Stat_t
-			if err := unix.Lstat(p, &st); err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					continue
-				}
-				return nil, &os.PathError{Op: "lstat", Path: p, Err: err}
-			}
-			fd, ok := want[devIno{uint64(st.Dev), uint64(st.Ino)}]
-			if !ok {
-				continue
-			}
-			if err := store.CheckEntry(p, false); err != nil {
-				return nil, err
-			}
-			found[fd] = tokenFile{resource: name, path: p}
+	for _, f := range files {
+		if fd, ok := want[devIno{f.Dev, f.Ino}]; ok {
+			found[fd] = tokenFile{resource: f.Resource, path: f.Path}
 		}
 	}
 	return found, nil
@@ -236,19 +194,6 @@ func probeLocked(path string) (bool, error) {
 // run-log line (PROTOCOL.md section 20): true only when FORMAT exists, is well-formed and names
 // a format this client implements. It never writes a missing FORMAT.
 func FormatUnderstood(dir string) bool {
-	f, err := store.OpenFile(filepath.Join(dir, store.FormatFile), os.O_RDONLY)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	body, err := io.ReadAll(io.LimitReader(f, 64))
-	if err != nil {
-		return false
-	}
-	digits, ok := bytes.CutPrefix(bytes.TrimSuffix(body, []byte("\n")), []byte("coreslot-protocol "))
-	if !ok || len(digits) == 0 || len(digits) > 9 || len(bytes.Trim(digits, "0123456789")) > 0 {
-		return false
-	}
-	n, _ := strconv.Atoi(string(digits))
-	return slices.Contains(formats(), n)
+	n, present, err := store.ReadFormatAt(dir)
+	return err == nil && present && slices.Contains(formats(), n)
 }

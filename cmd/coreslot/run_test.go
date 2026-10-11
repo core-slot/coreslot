@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +63,22 @@ func runHelper(name string, args []string) int {
 			if unix.Fstat(fd, &st) == nil {
 				fmt.Println("fd", fd, uint64(st.Dev), uint64(st.Ino))
 			}
+		}
+		return 0
+	case "snapshot":
+		// Print the live holds of the state directory, one `hold <label> unbudgeted=<bool>` each.
+		e, _, err := openEngine()
+		if err != nil {
+			fmt.Println("error:", err)
+			return 1
+		}
+		rep, err := e.Snapshot()
+		if err != nil {
+			fmt.Println("error:", err)
+			return 1
+		}
+		for _, h := range rep.Holds {
+			fmt.Printf("hold %s unbudgeted=%v\n", h.Label, h.Unbudgeted)
 		}
 		return 0
 	case "close-and-wait":
@@ -474,21 +491,28 @@ func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
 		t.Fatalf("--on-timeout defaults to fail: exit %d, want 75 (stderr %q)", r.code, r.stderr)
 	}
 
-	r = cli(t, baseEnv(dir), "run", "--need", "cpu=1", "--timeout", "1s", "--on-timeout", "run", "--",
-		"sh", "-c", `echo "granted=$CORESLOT_GRANTED_CPU unbudgeted=$CORESLOT_UNBUDGETED tokens=$CORESLOT_TOKEN_FDS"`)
+	r = cli(t, append(baseEnv(dir), "SNAPSHOT="+strings.Join(helper(t, "snapshot"), " ")), "run", "--need", "cpu=1",
+		"--label", "late", "--timeout", "1s", "--on-timeout", "run", "--", "sh", "-c",
+		`echo "granted=$CORESLOT_GRANTED_CPU unbudgeted=$CORESLOT_UNBUDGETED tokens=$CORESLOT_TOKEN_FDS"; $SNAPSHOT`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if got := strings.TrimSpace(r.stdout); got != "granted=1 unbudgeted= tokens=" {
+	if got := strings.Split(strings.TrimSpace(r.stdout), "\n")[0]; got != "granted=1 unbudgeted=timeout tokens=" {
 		t.Errorf("command saw %q", got)
+	}
+	if !strings.Contains(r.stdout, "hold late unbudgeted=true") {
+		t.Errorf("the snapshot taken while the command ran shows no unbudgeted hold: %q", r.stdout)
 	}
 	lines := runLog(t, dir)
 	if len(lines) != before+1 {
 		t.Fatalf("run log has %d lines, want %d", len(lines), before+1)
 	}
 	last := lines[len(lines)-1]
-	if fmt.Sprint(last["unbudgeted_resources"]) != "[cpu]" || last["fail_open"] != "" {
-		t.Errorf("run log line %v: want unbudgeted_resources [cpu] and no fail-open reason", last)
+	if fmt.Sprint(last["unbudgeted_resources"]) != "[cpu]" || last["fail_open"] != "timeout" {
+		t.Errorf("run log line %v: want unbudgeted_resources [cpu] and the reason timeout", last)
+	}
+	if h := entries(t, dir, "holds"); len(h) != 0 {
+		t.Errorf("the unbudgeted hold outlived the run: %q", h)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "degraded")); err == nil {
 		t.Error("a timeout recorded degraded mode")
@@ -663,7 +687,7 @@ func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 
 type fakeStepper struct{ calls int }
 
-func (s *fakeStepper) Step(context.Context) (engine.StepResult, error) {
+func (s *fakeStepper) step(context.Context) (engine.StepResult, error) {
 	s.calls++
 	return engine.Waiting{Position: 2, Holders: []engine.HolderInfo{{Label: "gate", PID: 4711,
 		Grant: map[string]int{"cpu": 12}, StartNS: time.Now().Add(-192 * time.Second).UnixNano()}}}, nil
@@ -720,3 +744,66 @@ func TestWaitingLineEvery30s(t *testing.T) {
 }
 
 var _ io.Writer = (*bytes.Buffer)(nil)
+
+// A --timeout that expires while another process holds the section ends the run in time, with
+// no ticket left behind.
+func TestTimeoutWhileSectionHeld(t *testing.T) {
+	dir := stateDir(t, "")
+	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		t.Fatalf("setup run: %d %q", r.code, r.stderr)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "admit.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	r := cli(t, baseEnv(dir), "run", "--timeout", "1s", "--", "true")
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("refused after %v, want soon after the 1 s timeout (load: %s)", took, uptime())
+	}
+	if r.code != 75 {
+		t.Errorf("exit %d (stderr %q), want 75", r.code, r.stderr)
+	}
+	if q := entries(t, dir, "queue"); len(q) != 0 {
+		t.Errorf("tickets left behind: %q", q)
+	}
+}
+
+// enqueue is bounded by its context and leaves no goroutine behind.
+func TestEnqueueBoundedLeavesNothing(t *testing.T) {
+	dir := stateDir(t, "")
+	t.Setenv("CORESLOT_STATE_DIR", dir)
+	e, _, err := openEngine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "admit.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	installStops() // its goroutines live as long as the process
+	time.Sleep(100 * time.Millisecond)
+	baseline := runtime.NumGoroutine()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	tk, err := enqueue(ctx, e, spec.Request{Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}})
+	if !errors.Is(err, context.DeadlineExceeded) || tk != nil {
+		t.Fatalf("enqueue = %v, %v; want the deadline and no ticket", tk, err)
+	}
+	f.Close() // the section is free now: an abandoned Enqueue would publish a ticket
+	time.Sleep(500 * time.Millisecond)
+	if n := runtime.NumGoroutine(); n > baseline {
+		t.Errorf("%d goroutines after enqueue returned, %d before", n, baseline)
+	}
+	if q := entries(t, dir, "queue"); len(q) != 0 {
+		t.Errorf("a ticket was published after enqueue returned: %q", q)
+	}
+}
