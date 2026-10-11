@@ -139,10 +139,11 @@ Every conforming client MUST preserve these invariants:
 - On open, a client MUST check that each existing path is a regular file or directory of the
   expected type, owned by the user, not a symlink, and not group- or world-writable; anything else
   is a state error (section 14). "Owned by the user" means owned by the process's real user id
-  (`getuid()`, the id section 4.1 resolves the home from); "group- or world-writable" means
+  (`getuid()`, the id section 4.1 resolves the home from); a client whose effective user id
+  differs from its real one is unsupported. "Group- or world-writable" means
   `mode & 0o022 != 0`. The check applies to `$S`, to every file and directory of the layout
   (section 4.4), and to every entry whose name matches its directory's grammar (section 7.1),
-  temporaries included, that the client lists, opens or probes: a ticket, hold, cancel request,
+  temporaries included, that the client opens, probes or removes: a ticket, hold, cancel request,
   temporary or token file that is a symlink, a directory, another user's, or group- or
   world-writable is a state error, never an ignored entry. An entry whose name does not match its
   directory's grammar is ignored whatever its type (sections 4.4 and 6). These directories are
@@ -160,7 +161,7 @@ At least these MUST be refused, as a state error:
 | System | Refused filesystems |
 |---|---|
 | macOS (`f_fstypename`) | `nfs`, `smbfs`, `afpfs`, `webdav`, and every macFUSE type (names beginning with `macfuse` or `osxfuse`) |
-| Linux (`f_type`) | NFS `0x6969`, CIFS `0xFF534D42`, SMB2 `0xFE534D42`, SMB `0x517B`, FUSE `0x65735546`, 9p `0x01021997` |
+| Linux (`f_type`) | NFS `0x6969`, CIFS `0xFF534D42`, SMB2 `0xFE534D42`, SMB `0x517B`, FUSE `0x65735546`, 9p `0x01021997`, vboxsf `0x786F4256`, Ceph `0x00C36400`, AFS `0x5346414F`, kAFS `0x6B414653` |
 
 On Linux, `f_type` is compared in its low 32 bits (`f_type & 0xFFFFFFFF`): its C type is a signed
 `long` on some architectures, and the magic numbers are 32-bit values. A client that cannot
@@ -254,9 +255,10 @@ together: a client MUST NOT pair an overridden state directory with the user's r
 Under the override, `config.toml` is a permitted top-level entry of `$S`, checked as in section 4.2
 (regular file, owned by the user, not a symlink, not group- or world-writable). The real
 configuration file lies outside `$S` and is not checked that way: it is read through symbolic links
-(dotfile managers link it), with no owner or mode check. When it exists but does not resolve to a
-regular file that can be read (a directory, a FIFO, a device, a dangling link), the configuration
-is invalid; a client never blocks opening it.
+(dotfile managers link it), with no owner or mode check. A path that does not exist, including a
+dangling symbolic link, reads as a missing file (the defaults above). A path that resolves to
+anything but a regular file that can be read (a directory, a FIFO, a device) is an invalid
+configuration, and a client detects that without blocking (it never waits on a FIFO).
 
 The file is TOML 1.0:
 
@@ -359,7 +361,7 @@ is its target's id, not its writer's `seq`; section 11 says what an existing one
   whitespace. A writer MUST write every key of its table.
 - A body is **malformed** when it is not such an object, exceeds 8 KiB, lacks a key of its table,
   has a key of the wrong type or outside its rule, or has a duplicate key at any depth. Keys are
-  compared after JSON unescaping: `"cpu"` duplicates `"cpu"`, so a reader that compares raw
+  compared after JSON unescaping: `"c\u0070u"` duplicates `"cpu"`, so a reader that compares raw
   bytes is not conforming.
 - Nesting depth alone never makes a body malformed: a reader MUST accept any depth that fits in
   8 KiB (about 4 096 levels).
@@ -544,10 +546,12 @@ A waiter:
   rescan when `gen` changed) before each attempt.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
-whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting:
-the budget is counted from token locks, not tickets, so I3 and I7 still hold, and cancel requests
-still name its id. When it later removes its ticket (admission, cancellation, withdrawal), `ENOENT`
-counts as success.
+whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting, and
+the budget stays safe: it is counted from token locks, not tickets, so I3 and I7 still hold. The
+waiter does lose its place, though. No other client sees the ticket any more, so waiters behind it
+may be elected and admitted first, `status` does not show it, and it cannot be cancelled by label;
+a cancel request naming its exact id still reaches it. When it later removes its ticket
+(admission, cancellation, withdrawal), `ENOENT` counts as success.
 
 A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2;
 holders: gate pid 4711 cpu12 (3m12s), ci-job pid 5120 cpu3 (1m05s)` (informative).
@@ -591,7 +595,9 @@ Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FOR
      library wrapper is missing, or it fails with `ENOSYS`) or unsupported by the filesystem (it
      fails with `EINVAL`, `ENOTSUP` or `EOPNOTSUPP`), `link(2)` to the final name followed by
      `unlink(2)` of the temporary name. Any other error fails the publication. On `EEXIST` a
-     ticket or hold writer takes its next `seq` and retries with the new name. A cancel request is
+     ticket or hold writer removes its temporary (closing its descriptor, which nothing else
+     shares yet) and starts again at step 1, in the same section, with a new temporary and a final
+     name carrying its next `seq`. A cancel request is
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
      already requested, which is not an error (section 13.1);
@@ -669,8 +675,9 @@ takes tokens from what is free, under I3 (indices below the size, `free = size �
 two passes of step 6: the minimum pass takes up to `min(min, size)` of each requested declared
 resource (as many as are free), the extra pass takes more up to `max` per resource while the grant
 holds fewer than 512 tokens in total. It then publishes a hold with `"adopted": true` listing
-exactly what it took. It has no minimum: the **shortfall** is `max(0, min − granted)` per resource,
-reported to the caller, and the survivor runs partly unbudgeted.
+exactly what it took, and bumps `gen` (section 7.8). It has no minimum: the **shortfall** is
+`max(0, min − granted)` per resource, reported to the caller, and the survivor runs partly
+unbudgeted.
 
 ## 13. Cancellation and withdrawal
 
@@ -708,7 +715,7 @@ unknown format (section 15.2).
 
 - prints a diagnostic to stderr immediately, always;
 - publishes a hold with `"unbudgeted": true` and an empty `grant` when the directory is usable and
-  its format understood, so `status` shows it;
+  its format understood, so `status` shows it, and bumps `gen` in that section (section 7.8);
 - records the reason in the run log and in `degraded` when those are writable, and says on stderr
   when they are not;
 - exports `CORESLOT_UNBUDGETED=<reason>` to the command, so nested runs pass through (section 18);
@@ -796,15 +803,19 @@ Writers usually write a single range (`4-13`); a single descriptor may be writte
 both conform. Readers MUST accept the whole grammar. A list that
 names one descriptor twice, directly or through overlapping ranges, is invalid: a pass-through
 treats it as a context that does not validate (section 18). Every
-descriptor not in this contract stays close-on-exec. A launcher that starts nested runs passes these
+descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section 4.2).
+A launcher that starts nested runs passes these
 descriptors through (Python: `subprocess.run(..., pass_fds=...)`; Go: `exec.Cmd.ExtraFiles`).
 
 A run that is not a pass-through (section 18 rules 1 and 2) builds this contract from its own grant
-only: an ordinary or `--independent` request, a fail-open run and a token-only run remove every
+only. An ordinary or `--independent` request, a fail-open run and a token-only run remove every
 inherited `CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS` and `CORESLOT_UNBUDGETED`
-from the command's environment before setting their own, and pass the command no inherited
-descriptor outside their own contract. Otherwise a grandchild would pass through to a grant that is
-not its parent's. `CORESLOT_STATE_DIR` is not grant context and is passed on.
+from the command's environment before setting their own, and close (do not pass on) exactly the
+inherited descriptors those inherited variables name: the `CORESLOT_HELD_FD` descriptor and every
+descriptor `CORESLOT_TOKEN_FDS` lists. Otherwise a grandchild would pass through to a grant that is
+not its parent's. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
+user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not grant context and
+is passed on.
 
 **Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
 `cpu` (or of `RES`); `{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with
@@ -837,8 +848,8 @@ empty variable is absent), in this order:
    cannot check because `$S`, `res/` or a token file cannot be read.
 3. Otherwise, or with `--independent`, it is an ordinary request.
 
-A pass-through, valid (rule 2) or unbudgeted (rule 1), writes nothing under `$S`: no run log and
-no degraded record. The outer run accounts for the grant.
+A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and writes nothing under
+`$S` but its run-log line (section 20): no ticket, hold, `gen` bump or degraded record.
 
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
 grant both run with 8. A parent that wants concurrent children partitions its grant itself.
@@ -857,9 +868,12 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 
 ## 20. Run log
 
-Each run that is not a pass-through (section 18) SHOULD append one JSON line of at most 4 KiB to
-`$S/log/runs.jsonl` with a single `O_APPEND` write (outside the section), into a directory whose
-`FORMAT` it has read and understood during the run (section 14). The object carries:
+Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` with a single
+`O_APPEND` write (outside the section), into a directory whose `FORMAT` it has read and understood
+during the run (section 14). A pass-through (section 18), valid or unbudgeted, appends too: it
+reads `FORMAT` outside the section (it never writes a missing one, and then writes no line), marks
+its line `"nested": true`, and never rotates the log. A token-only run writes no log. The object
+carries:
 
 | Key | Type | Content |
 |---|---|---|
@@ -874,6 +888,7 @@ Each run that is not a pass-through (section 18) SHOULD append one JSON line of 
 | `exit` | integer | the run's exit status |
 | `load1` | number | one-minute load average at start |
 | `fail_open` | string | the fail-open reason, or empty |
+| `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. The log's `clamped` is an array of resource names, unlike the hold body's `clamped` object
@@ -998,26 +1013,31 @@ Pid 8000 runs `coreslot cancel 01791719345000000000-0000005120-000007` at 12:01:
 Before:
 
 ```
+gen                                                   {"gen": 44, "reconciled_ns": ...}
 queue/01791719345000000000-0000005120-000007-ci_o_r   [L]
 cancel/                                               (empty)
 ```
 
 Pid 8000 publishes, inside the section, `cancel/01791719345000000000-0000005120-000007` with
-`{"requested_ns": 1791720060000000000, "requester_pid": 8000}`.
+`{"requested_ns": 1791720060000000000, "requester_pid": 8000}`. Publishing a cancel request does
+not bump `gen` (section 7.8).
 
 After publication:
 
 ```
+gen                                                   {"gen": 44, "reconciled_ns": ...}
 queue/01791719345000000000-0000005120-000007-ci_o_r   [L]
 cancel/01791719345000000000-0000005120-000007
 ```
 
 Pid 5120 finds the request on its next poll, closes its ticket descriptor (the ticket is dead at
-once), enters the section, unlinks both files, and exits with the refusal code 75.
+once), enters the section, unlinks both files, bumps `gen` (it removed its own ticket), and exits
+with the refusal code 75.
 
 After the owner's section:
 
 ```
+gen                                                   {"gen": 45, "reconciled_ns": ...}
 queue/                                                (no entry for pid 5120)
 cancel/                                               (empty)
 ```
@@ -1077,17 +1097,19 @@ At 12:30:00 a restarted CI pool (pid 6001) adopts a surviving job container with
 Before:
 
 ```
+gen                                                    {"gen": 80, "reconciled_ns": ...}
 holds/01791721500000000000-0000007400-000002-gate      [L] (grant: cpu 0-7)
 res/cpu/0 ... res/cpu/7                                [L]
 res/cpu/8, res/cpu/9                                   (not locked)
 ```
 
-Inside the section, without a ticket: size 10, locked 8, `free = 2`. It takes `cpu` 8 and 9 and
-publishes the hold; the shortfall `max(0, 3 − 2) = 1` is returned to the caller.
+Inside the section, without a ticket: size 10, locked 8, `free = 2`. It takes `cpu` 8 and 9,
+publishes the hold and bumps `gen`; the shortfall `max(0, 3 − 2) = 1` is returned to the caller.
 
 After:
 
 ```
+gen                                                    {"gen": 81, "reconciled_ns": ...}
 holds/01791721500000000000-0000007400-000002-gate      [L]
 holds/01791721800000000000-0000006001-000012-ci_o_r    [L]
 res/cpu/0 ... res/cpu/9                                [L]
@@ -1137,7 +1159,9 @@ The nested run checks fds 4-14: each is open, each matches the inode of a token 
 `CORESLOT_GRANTED_CPU=4`; `CORESLOT_GRANTED_PG_LOCAL=1`, `CORESLOT_HELD_FD=3` and
 `CORESLOT_TOKEN_FDS=4-14` are passed on unchanged.
 
-Before and after, `$S` is unchanged: a pass-through does not enter the section or lock anything.
+A pass-through does not enter the section or lock anything. After `make` exits it reads `FORMAT`
+(`coreslot-protocol 1`, understood) and appends one run-log line marked `"nested": true`
+(section 20); apart from that line, `$S` is unchanged before and after.
 
 ## 22. Timing constants
 
