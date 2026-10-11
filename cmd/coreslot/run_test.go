@@ -79,6 +79,9 @@ func runHelper(name string, args []string) int {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
+	if code, ok := signalHelper(name, args); ok {
+		return code
+	}
 	fmt.Fprintln(os.Stderr, "unknown helper", name)
 	return 2
 }

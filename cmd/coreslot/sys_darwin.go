@@ -32,3 +32,7 @@ func fileCap() uint64 {
 	}
 	return uint64(n)
 }
+
+// stopSelf stops the process with SIGSTOP; a signal a process sends itself is delivered before
+// kill returns.
+func stopSelf() { _ = unix.Kill(unix.Getpid(), unix.SIGSTOP) }
