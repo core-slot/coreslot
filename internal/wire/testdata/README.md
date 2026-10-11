@@ -23,7 +23,7 @@ Everything is UTF-8 except a few bodies that are deliberately not (named `*inval
 
 Each file `bodies/<kind>/<name>.body` is one body, **exactly the bytes a client would find in the
 file**. Read it as bytes. Do not parse and rewrite it, and do not normalise newlines or whitespace:
-leading and trailing whitespace, key order, escaped spellings of keys (`"cpu"`) and the exact
+leading and trailing whitespace, key order, escaped spellings of keys (`"c\u0070u"` for `"cpu"`) and the exact
 length are the point of several fixtures. A `.body` file has no trailing newline unless the body
 itself has one.
 
@@ -46,6 +46,13 @@ Verdict reminders, all from `PROTOCOL.md`:
 - A body is one JSON object of at most 8192 bytes, optionally surrounded by JSON whitespace
   (space, tab, LF, CR). Anything else, including a byte order mark, a second value after the
   object, or invalid UTF-8, is malformed.
+- A string anywhere in the body (a value, or the name of a key, known or unknown) that contains an
+  unpaired UTF-16 surrogate escape is malformed: a `\uD800`-`\uDBFF` escape not immediately followed by
+  a `\uDC00`-`\uDFFF` escape, or a `\uDC00`-`\uDFFF` escape not preceded by one (hex digits in either
+  case). A backslash escaped by a backslash does not start an escape: `"\\ud800"` is the six
+  characters backslash, u, d, 8, 0, 0. Many JSON libraries replace a lone surrogate with U+FFFD or
+  keep it as a lone code unit before you can see it, so scan the raw bytes. `bad-*surrogate*` and
+  `ok-escaped-backslash-then-u-is-not-an-escape` exercise this.
 - Every key of the table is required. A missing key, a `null`, a value of another JSON type, or a
   value outside the key's rule is malformed.
 - An integer has no fraction and no exponent and fits a signed 64-bit integer: `1.0`, `5e0`
@@ -55,6 +62,12 @@ Verdict reminders, all from `PROTOCOL.md`:
 - Unknown keys, at any depth, are ignored (their values may be any JSON).
 - Resource names (the keys of `need`, `grant` and `clamped`, and the elements of
   `unbudgeted_resources`) must match `[a-z][a-z0-9-]{0,31}`.
+- Ticket: `created_ns` is at least 0; the minimums of `need` sum to at most 512
+  (`bad-created-ns-negative`, `bad-need-minimums-sum-513`, `ok-eight-resources-minimums-sum-512`).
+- Hold: `grant` never maps a resource to an empty array (`bad-grant-empty-array*`); each value of
+  `clamped` is an integer in 1..256 (`bad-clamped-*`, `ok-clamped-bounds`).
+- Cancel: `requested_ns` and `requester_pid` are at least 0 (`bad-requested-ns-negative`,
+  `bad-requester-pid-negative`, `ok-zeros`).
 - `hold` fixtures do not check that `start_ns` equals the start time in the hold's name; that
   comparison needs the name and belongs to the reader of the directory.
 
@@ -70,19 +83,25 @@ name-case = { "name": the file name,
               "order_key": 20 decimal digits, as a string (it can exceed 2^53; it is the
                            start-ns of a hold),
               "pid": integer, "seq": integer,
-              "display": the display suffix, or null when the name has none }
+              "display": the display suffix, or null when the name has none;
+                         the key is present in "valid" cases and absent from "cancel_valid"
+                         cases, whose names never have a display }
 ```
 
 A ticket or hold name is `<20 digits>-<10 digits>-<6 digits>` with an optional `-<display>`
 (1 to 32 characters from `A-Z a-z 0-9 . _`). A cancel request's name is the three fields only,
-so every cancel name with a display is refused, as listed in `cancel_invalid`. A parser returns
-the three numbers; the display is checked against its character set and otherwise ignored. A name
+so every cancel name with a display is refused, as listed in `cancel_invalid`. The order key (or start-ns) is
+at most 18446744073709551615, 2^64 - 1: a 20-digit value above it, such as
+`18446744073709551616` or `99999999999999999999`, makes the name invalid. A parser returns the
+three numbers; the display is checked against its character set and otherwise ignored. A name
 that does not match is not an entry of the directory.
 
 ## order_keys.json
 
 A list of `{ "arrival_ns", "priority", "order_key" }`. `order_key` is
-`arrival_ns - priority * 60000000000` as a 20-digit zero-padded string.
+`arrival_ns - priority * 60000000000` as a 20-digit zero-padded string, and **0 when that value is
+below zero** (`PROTOCOL.md` section 9): for example `arrival_ns` 0 with priority 1000 gives
+`00000000000000000000`. The vectors assume a priority already validated to `[-1000, 1000]`.
 
 ## display.json (informational)
 
