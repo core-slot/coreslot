@@ -1,0 +1,136 @@
+name: ci
+
+# Private repository: macOS minutes bill at 10x, so feature branches are checked through their
+# pull request only, not on every push.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A merge to main is never cancelled by a later push; superseded pull request runs are.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Pinned analysis tools. Bump deliberately, in a reviewed change.
+  # staticcheck is pinned to a commit, not a release: the newest release (v0.8.1, 2026-08-21)
+  # cannot read Go 1.27 export data ("export data version 5 is greater than maximum supported
+  # version 4") and fails on every package under the "stable" cell. This commit (2026-10-09,
+  # "Use latest Go 1.27 release in CI") is the first that works. Move back to a release tag
+  # once one newer than v0.8.1 exists.
+  STATICCHECK_VERSION: 452d5bb86b45416c35891262f6a11dbd6a970117 # honnef.co/go/tools
+  GOVULNCHECK_VERSION: v1.8.0 # golang.org/x/vuln, released 2026-09-08
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / go ${{ matrix.go }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+        # "1.26" is go.mod's minimum; "stable" is the latest release (1.27 as of
+        # 2026-10). setup-go resolves "1.26" to the newest 1.26 patch release.
+        go: ["1.26", stable]
+        exclude:
+          # macOS minutes bill at 10x: macOS runs the latest Go only.
+          - os: macos-latest
+            go: "1.26"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install analysis tools
+        run: |
+          go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would change these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go mod tidy leaves no diff
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: go vet
+        run: |
+          go vet ./...
+          go vet -tags coreslot_testhooks ./...
+
+      - name: staticcheck
+        run: |
+          staticcheck ./...
+          staticcheck -tags coreslot_testhooks ./...
+
+      - name: govulncheck
+        run: govulncheck ./...
+
+      - name: go test -race
+        run: go test -race ./...
+
+      - name: conformance
+        run: go test -tags coreslot_testhooks -race -short ./conformance/
+
+      - name: Python interop client
+        working-directory: conformance/pyclient
+        run: python3 -m unittest
+
+      - name: Fuzz targets (30 s each)
+        # Fuzzing runs once, on ubuntu-latest with the latest Go; the other cells only run the seed corpus via go test.
+        if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+        run: |
+          # Every Fuzz function in every package, discovered rather than listed,
+          # so a new target is run without editing this file. -fuzz accepts one
+          # target per invocation. A failing `go test -list` (build error) fails the step;
+          # only grep's "no match" (status 1, a package without fuzz targets) is tolerated.
+          found=0
+          for pkg in $(go list ./...); do
+            listing="$(go test -list '^Fuzz' "$pkg")"
+            targets="$(printf '%s\n' "$listing" | grep '^Fuzz' || [ $? -eq 1 ])"
+            for target in $targets; do
+              found=$((found + 1))
+              echo "::group::fuzz $pkg $target"
+              go test -run '^$' -fuzz "^${target}\$" -fuzztime 30s "$pkg"
+              echo "::endgroup::"
+            done
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no fuzz targets discovered"
+            exit 1
+          fi
+
+      - name: Upload fuzz failure inputs
+        if: failure() && matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
+
+      - name: Windows cross-build
+        run: GOOS=windows go build ./...
+
+      - name: Home directory comes from the passwd database, not $HOME (cgo off)
+        if: runner.os == 'macOS'
+        run: CGO_ENABLED=0 go test ./internal/config/ -run TestHomeIgnoresHOME
