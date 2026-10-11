@@ -124,6 +124,7 @@ func removeIfDead(path string) (removed, gone bool, err error) {
 	if err != nil || !ok {
 		return false, false, err
 	}
+	point("remove.before-unlink")
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, false, err
 	}

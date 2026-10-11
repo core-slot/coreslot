@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -39,17 +40,11 @@ func (s *Store) Degraded() (*DegradedRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	obj, err := strictObject(body)
+	d, err := wire.DecodeDegraded(body)
 	if err != nil {
 		return &DegradedRecord{Malformed: true}, nil
 	}
-	reason, err1 := obj.str("reason")
-	first, err2 := obj.integer("first_ns")
-	count, err3 := obj.integer("count")
-	if err1 != nil || err2 != nil || err3 != nil {
-		return &DegradedRecord{Malformed: true}, nil
-	}
-	return &DegradedRecord{Reason: reason, FirstNS: first, Count: count}, nil
+	return &DegradedRecord{Reason: d.Reason, FirstNS: d.FirstNS, Count: d.Count}, nil
 }
 
 // RecordDegraded records a fail-open run inside the section: reason becomes the most recent
@@ -88,16 +83,19 @@ func (sec *Section) ClearDegraded() error {
 // encodeDegraded writes the record's body, shortening the reason (on a rune boundary) until the
 // body fits the 8 KiB every body must fit.
 func encodeDegraded(r DegradedRecord) ([]byte, error) {
+	r.Reason = strings.ToValidUTF8(r.Reason, "\uFFFD")
 	for {
-		reason, err := jsonString(r.Reason)
-		if err != nil {
-			return nil, err
-		}
-		body := fmt.Appendf(nil, `{"reason":%s,"first_ns":%d,"count":%d}`, reason, r.FirstNS, r.Count)
-		if len(body) <= wire.MaxBodyBytes {
+		body, err := wire.EncodeDegraded(wire.Degraded{Reason: r.Reason, FirstNS: r.FirstNS, Count: r.Count})
+		if err == nil {
 			return body, nil
 		}
-		cut := max(len(r.Reason)-(len(body)-wire.MaxBodyBytes), 0)
+		raw, jerr := encodeJSON(r.Reason)
+		if jerr != nil || r.Reason == "" {
+			return nil, err
+		}
+		// Drop at least the excess of the escaped reason, on a rune boundary, and try again.
+		over := len(raw) + len(fmt.Sprintf(`{"reason":,"first_ns":%d,"count":%d}`, r.FirstNS, r.Count)) - wire.MaxBodyBytes
+		cut := max(len(r.Reason)-max(over, 1), 0)
 		for cut > 0 && !utf8.RuneStart(r.Reason[cut]) {
 			cut--
 		}

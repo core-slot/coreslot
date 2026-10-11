@@ -5,7 +5,7 @@ directory, its files and their bodies, the admission critical section, and the d
 environment contract between a run and the command it starts. A client written from this document
 alone, in any language, shares one budget with every other conforming client on the machine.
 
-It is the normative subset of the design (`PROTOCOL.md`, revision 4b).
+It is the normative subset of the design (`PROTOCOL.md`, revision 4c).
 Section references of the form "§N" point there; they are for traceability only, and nothing
 in this document depends on reading the design.
 
@@ -29,6 +29,8 @@ OPTIONAL are to be interpreted as described in RFC 2119.
   proves that no other open file description holds it.
 - **Integer** (in a body): a JSON number with no fraction and no exponent part, within the signed
   64-bit range. `1.0` and `1e3` are not integers.
+- **Set** (an environment variable): present with a non-empty value. A variable whose value is
+  empty is treated exactly as an absent one, everywhere in this document.
 - Sizes: `KiB` = 1 024 bytes, `MiB` = 1 048 576 bytes.
 
 ## 2. Contract inventory
@@ -136,9 +138,16 @@ Every conforming client MUST preserve these invariants:
   `O_NOFOLLOW`.
 - On open, a client MUST check that each existing path is a regular file or directory of the
   expected type, owned by the user, not a symlink, and not group- or world-writable; anything else
-  is a state error (section 14). "Owned by the user" means owned by the process's user id;
-  "group- or world-writable" means `mode & 0o022 != 0`. The check applies to `$S` and to every entry
-  under it that the client uses.
+  is a state error (section 14). "Owned by the user" means owned by the process's real user id
+  (`getuid()`, the id section 4.1 resolves the home from); "group- or world-writable" means
+  `mode & 0o022 != 0`. The check applies to `$S`, to every file and directory of the layout
+  (section 4.4), and to every entry whose name matches its directory's grammar (section 7.1),
+  temporaries included, that the client lists, opens or probes: a ticket, hold, cancel request,
+  temporary or token file that is a symlink, a directory, another user's, or group- or
+  world-writable is a state error, never an ignored entry. An entry whose name does not match its
+  directory's grammar is ignored whatever its type (sections 4.4 and 6). These directories are
+  `0700` and the user's own, so only the user (or the superuser) can place an entry in them; a
+  hostile same-user process is outside the threat model.
 - Every descriptor a client opens on a file under `$S` MUST be close-on-exec (`O_CLOEXEC`), except
   the copies it deliberately passes to a child (section 17). A leaked descriptor keeps a lock alive
   for as long as the process that inherited it.
@@ -152,6 +161,12 @@ At least these MUST be refused, as a state error:
 |---|---|
 | macOS (`f_fstypename`) | `nfs`, `smbfs`, `afpfs`, `webdav`, and every macFUSE type (names beginning with `macfuse` or `osxfuse`) |
 | Linux (`f_type`) | NFS `0x6969`, CIFS `0xFF534D42`, SMB2 `0xFE534D42`, SMB `0x517B`, FUSE `0x65735546`, 9p `0x01021997` |
+
+On Linux, `f_type` is compared in its low 32 bits (`f_type & 0xFFFFFFFF`): its C type is a signed
+`long` on some architectures, and the magic numbers are 32-bit values. A client that cannot
+determine the filesystem type (`statfs` fails or is not available to it) treats that as a state
+error. A client MAY read the type from another kernel source when `statfs` cannot be called (for
+example `/proc/self/mountinfo` on Linux), provided it refuses at least the filesystems above.
 
 A run inside a container sees the container's filesystem and therefore its own budget; containers
 take part through a client on the host.
@@ -174,7 +189,10 @@ config.toml      configuration (section 5.3); optional, present only under the o
 `log/` may also contain `runs.1.jsonl`. Each of `queue/`, `holds/`, `cancel/` and `$S` itself may
 contain temporary files named `.tmp-<pid>-<seq>` (section 11). A client creates a directory of the
 layout when it first needs it, with mode `0700`; `EEXIST` is not an error, and the existing entry is
-checked as in section 4.2.
+checked as in section 4.2. Missing ancestors of `$S` (`~/.local/state/` often does not exist) are
+created with mode `0700` and are not checked: the policy of section 4.2 starts at `$S`. `queue/`,
+`holds/`, `cancel/` and `log/` are created only by a client that has read a `FORMAT` it understands
+(section 15.2).
 
 Directory listings are bounded: a directory holds at most 65 536 entries. A reader MUST NOT read
 more than 65 537 entries of one directory, and a directory with more than 65 536 is a state error.
@@ -209,9 +227,13 @@ A size is an integer in `[1, 4096]`. A configured size is one of:
 | a string `"N%"`, `N` an integer `1..100` | `max(1, ⌊cpus × N / 100⌋)` |
 | a string `"-K"`, `K` a non-negative integer | `max(1, cpus − K)` |
 
-Any other value (an integer outside `[1, 4096]` such as `0`, `4097` or `-3`, `"0%"`, `"101%"`, a
-string of another shape, a boolean, a float, a table) is invalid. A computed size above 4096 is
-4096.
+In both string forms, `N` and `K` are written as 1 to 9 ASCII decimal digits, leading zeros allowed
+(`"05%"` means `"5%"`, `"-007"` means `"-7"`), with nothing else in the string: no sign before the
+digits, no space.
+
+Any other value (an integer outside `[1, 4096]` such as `0`, `4097` or `-3`, `"0%"`, `"101%"`,
+`"+5%"`, `" 5%"`, a digit string longer than 9, a string of another shape, a boolean, a float, a
+table) is invalid. A computed size above 4096 is 4096.
 
 `cpus` is the machine-wide online CPU count:
 
@@ -230,7 +252,11 @@ The configuration is `<home>/.config/coreslot/config.toml` (`<home>` as in secti
 `CORESLOT_STATE_DIR` override it is `$S/config.toml` instead, so state and configuration switch
 together: a client MUST NOT pair an overridden state directory with the user's real configuration.
 Under the override, `config.toml` is a permitted top-level entry of `$S`, checked as in section 4.2
-(regular file, owned by the user, not a symlink, not group- or world-writable).
+(regular file, owned by the user, not a symlink, not group- or world-writable). The real
+configuration file lies outside `$S` and is not checked that way: it is read through symbolic links
+(dotfile managers link it), with no owner or mode check. When it exists but does not resolve to a
+regular file that can be read (a directory, a FIFO, a device, a dangling link), the configuration
+is invalid; a client never blocks opening it.
 
 The file is TOML 1.0:
 
@@ -266,6 +292,11 @@ Token files are `$S/res/<name>/<i>`, where `<name>` is a resource name and `<i>`
 on first use (`open` with `O_CREAT|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, no `O_EXCL`) and never
 deleted; its content is empty and never read. A holder holds a token by keeping `flock(LOCK_EX)` on
 an open file description of it.
+
+An entry of `res/` whose name is not a resource name, and an entry of `res/<name>/` whose name is
+not an index written as above (`007`, `5000`, `x`), is not a token file: it is never probed,
+counted, checked (section 4.2) or removed. "An index that exists" below means a token file at such
+a name.
 
 Ownership is by open file description, and release is by **closing**: a client MUST NOT release a
 token, ticket or hold with `LOCK_UN`, because `LOCK_UN` releases the lock for every descriptor
@@ -307,27 +338,39 @@ All numbers in names are decimal and zero-padded to their width, so the byte ord
 start-ns is at most 18 446 744 073 709 551 615 (2^64 − 1); a 20-digit value above it makes the
 name invalid, as does any name that does not match the grammar. `display` contains
 no `-`, so a name splits on `-` into three or four fields. A writer MAY include a display; how it
-derives one from the label is not part of the protocol (the examples below replace each byte
-outside the set with `_` and keep the first 32). Readers MUST NOT interpret it.
+derives one from the label is not part of the protocol, and any derivation that matches the grammar
+conforms (the examples below replace each byte outside the set with `_` and keep the first 32).
+Readers MUST NOT interpret it.
 
 The **name is authoritative** for identity: a ticket's or hold's owner is the pid in its name, its
 order-key or start time is the one in its name, and a ticket's id is its first three fields.
 
-Each process numbers its publications with its own `seq` counter. Two live entries of one directory
-never share a name: publication never replaces an existing file (section 11); a writer whose final
-name exists takes its next `seq` and retries.
+`seq` keeps one process's names apart; how a process draws it is not part of the protocol. A
+process MAY number every name and temporary from one counter or use several counters, and a
+temporary's `seq` need not equal the `seq` of the name it is moved to. Uniqueness never rests on the
+counter: a temporary is created with `O_EXCL`, a final name is taken without replacing an existing
+file (section 11), and a writer whose temporary or final name exists takes another `seq` and
+retries. Two live entries of one directory therefore never share a name. (A cancel request's name
+is its target's id, not its writer's `seq`; section 11 says what an existing one means.)
 
 ### 7.2 Rules for every body
 
 - A body is one UTF-8 JSON object, at most 8 KiB (8 192 bytes), optionally surrounded by JSON
   whitespace. A writer MUST write every key of its table.
 - A body is **malformed** when it is not such an object, exceeds 8 KiB, lacks a key of its table,
-  has a key of the wrong type or outside its rule, or has a duplicate key at any depth.
+  has a key of the wrong type or outside its rule, or has a duplicate key at any depth. Keys are
+  compared after JSON unescaping: `"cpu"` duplicates `"cpu"`, so a reader that compares raw
+  bytes is not conforming.
+- Nesting depth alone never makes a body malformed: a reader MUST accept any depth that fits in
+  8 KiB (about 4 096 levels).
 - In particular, a body is malformed when a key inside `need`, `grant` or `clamped` does not match
   the resource-name grammar (section 5.1), when `grant` maps a resource to an empty array, or when
   a string anywhere in it contains an unpaired UTF-16 surrogate escape (a `\uD800`-`\uDBFF` escape
   not followed by a `\uDC00`-`\uDFFF` escape, or a `\uDC00`-`\uDFFF` escape not preceded by one).
-- Unknown keys are ignored at any depth: bodies only gain optional keys within a format.
+- Unknown keys are ignored at any depth: bodies only gain optional keys within a format. The value
+  of an unknown key may be any JSON value; the integer rule of section 1 applies only to the keys of
+  a table, so `1.5`, `1e999` or a 30-digit number under an unknown key is accepted. (The duplicate,
+  surrogate and size rules still apply inside unknown keys.)
 - A malformed body makes its entry ignored and counted, never trusted. An ignored ticket takes no
   place in the queue.
 
@@ -352,11 +395,17 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 |---|---|---|
 | `label` | string | as in the ticket |
 | `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held |
-| `start_ns` | integer | equal to the name's start-ns |
+| `start_ns` | integer | `≥ 0`; equal to the name's start-ns, and a body whose `start_ns` differs is malformed |
 | `unbudgeted` | boolean | `true` for a fail-open run (section 14) |
-| `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a fail-open run could not budget (section 14) |
-| `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2) |
+| `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a fail-open run could not budget (section 14); writers list distinct names in ascending order, readers check neither |
+| `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
+
+Comparing `start_ns` with the name needs the name, so it is done by the reader of `holds/`, not by
+a body decoder. A start-ns in a name may be as large as 2^64 − 1 (section 7.1) while `start_ns` is
+a signed 64-bit integer: a hold whose name carries a start-ns above 2^63 − 1 never has a
+well-formed body and is ignored and counted. No writer produces one, because the wall clock is a
+signed 64-bit value.
 
 ### 7.5 Cancel request
 
@@ -369,9 +418,12 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 
 ### 7.6 FORMAT
 
-`$S/FORMAT` holds the line `coreslot-protocol <n>` where `<n>` is a decimal integer; writers write
-it followed by one LF. Readers MUST accept the line with or without the final LF. Any other content
-is a malformed `FORMAT`: a state error. Section 15 defines what a client does with it.
+`$S/FORMAT` holds the line `coreslot-protocol <n>` where `<n>` is 1 to 9 ASCII decimal digits, read
+as a decimal number; leading zeros are allowed (`01` is format 1) and writers write none. Writers
+write the line followed by one LF. Readers MUST accept the line with or without the final LF. Any
+other content (a sign, more than 9 digits, a CR or other whitespace, a second line) is a malformed
+`FORMAT`: a state error. A well-formed `<n>` other than 1, including 0, is a format this document
+does not define (section 15.2). Section 15 defines what a client does with it.
 
 ### 7.7 admit.lock
 
@@ -386,8 +438,18 @@ but display, and MUST tolerate an empty, stale or malformed body. A token-only c
 
 `$S/gen` is the JSON object `{"gen": <integer>, "reconciled_ns": <integer>}` (body rules of
 section 7.2). A missing or malformed `gen` reads as `{"gen": 0, "reconciled_ns": 0}`. It is written
-only inside the section and replaced with a plain `rename` (section 11). **Bumping** `gen` means
-writing it with `gen` increased by one and `reconciled_ns` unchanged.
+only inside the section and replaced with a plain `rename` (section 11). `gen` is an integer in
+`[0, 2^63 − 1]`; a negative `gen` makes the file malformed. **Bumping** `gen` means writing it with
+`gen` increased by one, or 0 when it was 2^63 − 1, and `reconciled_ns` unchanged.
+
+A section bumps `gen` once when it publishes or removes a ticket or hold: enqueue (section 10.1),
+admission (12.1), adoption (12.4), publication of a fail-open hold (14), and removal of the client's
+own ticket after cancellation or withdrawal (13) or of its own hold (12.3); the resume bump of
+section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
+removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
+itself), nor does writing `FORMAT`, `degraded`, `admit.lock` or the run log. A crash can separate a
+removal from its bump, so a reader never relies on a bump to learn that an entry is gone
+(section 10.3).
 
 ### 7.9 degraded
 
@@ -396,7 +458,8 @@ writing it with `gen` increased by one and `reconciled_ns` unchanged.
 the wall clock of the first fail-open since the record was created, and the number of fail-open
 runs recorded since. It is written inside the section and replaced with a plain `rename`.
 Degraded mode is recorded exactly while the file exists, whatever its body; a reader that finds it
-malformed still reports degraded mode.
+malformed still reports degraded mode. A client recording a fail-open over a malformed record
+starts a new record: `first_ns` is now and `count` is 1.
 
 ### 7.10 log/ (run log)
 
@@ -461,21 +524,30 @@ first saw the ticket). A ticket is **STALLED**, for that observer, when no chang
 for 10 s. A refresh that is observed makes the ticket WAITING again.
 
 When a waiter's own refresh gap exceeded 10 s on either its monotonic or its wall clock (it was
-suspended), it bumps `gen` in the section after refreshing.
+suspended), it bumps `gen` in the section after refreshing. The bump never delays a refresh: a
+waiter that cannot enter the section at once retries the bump at its next refresh.
 
 ### 10.3 Waiting and election
 
 A waiter:
 
-- reads `gen` once per second; when it changed, rescans `queue/`;
+- reads `gen` once per second; when its `gen` field changed, rescans `queue/` (a change of
+  `reconciled_ns` alone MAY also trigger a rescan, which does no harm);
 - each second, examines the tickets ahead of it, from the nearest: a dead one (its probe succeeds)
-  is skipped; a STALLED one is skipped; an ignored (malformed or non-matching) entry is skipped; the
+  is skipped; a gone one (it no longer exists: its probe fails with `ENOENT`) is skipped; a STALLED
+  one is skipped; an ignored (malformed or non-matching) entry is skipped; the
   first live, non-stalled ticket ends the examination. When none is found the waiter is the head:
   this examination is the **election**, and the waiter enters the section and tries admission
   (section 12);
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 2 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.
+
+Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
+whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting:
+the budget is counted from token locks, not tickets, so I3 and I7 still hold, and cancel requests
+still name its id. When it later removes its ticket (admission, cancellation, withdrawal), `ENOENT`
+counts as success.
 
 A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2;
 holders: gate pid 4711 cpu12 (3m12s), ci-job pid 5120 cpu3 (1m05s)` (informative).
@@ -490,9 +562,12 @@ publication of a fail-open hold, a `degraded` or `FORMAT` write, log rotation, a
 reconcile before its own change. Admission and token-only admission never reconcile. Reconciliation:
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
-   the file **while still holding the probe lock**, then closes it;
-2. removes every cancel request in `cancel/` whose ticket (a `queue/` entry with that ticket id) is
-   gone;
+   the file **while still holding the probe lock**, then closes it (an entry whose name matches but
+   that is not a regular file of the user is a state error, section 4.2, and reconciliation stops
+   without writing `gen`);
+2. removes every cancel request in `cancel/` whose ticket is gone: its ticket is any `queue/` entry
+   whose name matches the ticket grammar and whose first three fields are that id, whatever its
+   body;
 3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/` and `cancel/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
@@ -512,14 +587,24 @@ Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FOR
 3. writes the body;
 4. moves it to its final name:
    - ticket, hold, cancel request: without replacing an existing file: `renameat2(RENAME_NOREPLACE)`
-     on Linux, `renamex_np(RENAME_EXCL)` on macOS, and where those are unavailable or fail with
-     `EINVAL`, `link(2)` to the final name followed by `unlink(2)` of the temporary name. On
-     `EEXIST` the writer takes its next `seq` and retries with the new name;
+     on Linux, `renamex_np(RENAME_EXCL)` on macOS, and where those are unavailable (the call or its
+     library wrapper is missing, or it fails with `ENOSYS`) or unsupported by the filesystem (it
+     fails with `EINVAL`, `ENOTSUP` or `EOPNOTSUPP`), `link(2)` to the final name followed by
+     `unlink(2)` of the temporary name. Any other error fails the publication. On `EEXIST` a
+     ticket or hold writer takes its next `seq` and retries with the new name. A cancel request is
+     not retried: its name is its target's id, so an existing one means that ticket's cancellation
+     is already requested; the canceller removes its temporary and reports the cancellation as
+     already requested, which is not an error (section 13.1);
    - `gen`, `FORMAT`, `degraded`: with a plain `rename`.
 
 The writer keeps its original descriptor: writing the body never closes the only lock-carrying
-descriptor. Temporary files are created only inside the section; one left behind belongs to a writer
-that died inside the section and is removed by reconciliation. Nothing else removes temporary files.
+descriptor. Temporary files are created only inside the section. A writer whose publication fails
+(writing the body fails, the move fails, a final name is taken) removes its own temporary before it
+leaves the section. A temporary left behind belongs to a writer that died inside the section and is
+removed by reconciliation; no client removes another writer's temporary in any other way. After a
+`link(2)` fallback whose `unlink(2)` failed, the temporary name is a second link to the published
+entry; the entry stays published, and reconciliation removes the extra name once its mtime is
+older than 30 s (section 10.4).
 
 ## 12. Admission
 
@@ -572,8 +657,9 @@ A clamped CLI run prints a notice (`coreslot: cpu: requested 16, budget is 10; r
 
 The run closes its copies of the grant's descriptors. The CLI then enters the section if it can
 within 2 s, probes its hold and unlinks it only if the probe succeeds (no descendant still holds
-it); otherwise reconciliation removes the hold later. Other clients MAY remove their hold the same
-way, or leave it to reconciliation.
+it), bumping `gen` when it did (section 7.8); otherwise reconciliation removes the hold later.
+Other clients MAY remove their hold the same way, or leave it to reconciliation. This applies to
+every hold a run published, including a fail-open run's unbudgeted hold (section 14).
 
 ### 12.4 Adoption
 
@@ -593,17 +679,18 @@ reported to the caller, and the survivor runs partly unbudgeted.
 Cancelling never signals across processes. A canceller publishes `$S/cancel/<ticket-id>` inside
 the section. The owner checks `cancel/` for its id on every poll and again at admission step 1, so a
 cancel published before the owner's admitting section wins; one published later finds no ticket and
-has no effect: cancellation never revokes a grant. On finding it, the owner closes its ticket
-descriptor (the ticket is dead at once), removes the ticket and the cancel request in its next
-section if it can enter one, and stops: the CLI exits with the refusal code, a library returns its
-cancellation error.
+has no effect: cancellation never revokes a grant. A canceller that finds the request already
+published (section 11) treats the cancellation as already requested; that is not an error. On
+finding it, the owner closes its ticket descriptor (the ticket is dead at once), removes the ticket
+and the cancel request in its next section if it can enter one (bumping `gen`, section 7.8), and
+stops: the CLI exits with the refusal code, a library returns its cancellation error.
 
 ### 13.2 Withdrawal
 
 A waiter whose own deadline passes, whose wait is abandoned by its caller, or that is interrupted
 (`Ctrl-C` on a waiting CLI, which then exits 130) withdraws by closing its ticket descriptor: the
 ticket is dead at once, and withdrawal never depends on entering the section. The waiter MAY then
-remove its ticket in a section; otherwise reconciliation removes it.
+remove its ticket in a section, bumping `gen` (section 7.8); otherwise reconciliation removes it.
 
 ## 14. Errors, fail-open and degraded mode
 
@@ -625,7 +712,13 @@ unknown format (section 15.2).
 - records the reason in the run log and in `degraded` when those are writable, and says on stderr
   when they are not;
 - exports `CORESLOT_UNBUDGETED=<reason>` to the command, so nested runs pass through (section 18);
-- MUST NOT write into a directory whose `FORMAT` it does not understand.
+- MUST NOT write anything (hold, run log, `degraded`) into a directory whose `FORMAT` it has not
+  read and understood during the run; a malformed `FORMAT` is not understood.
+
+The reason, in `CORESLOT_UNBUDGETED` and in `degraded`'s `reason`, is informational text that no
+client interprets: section 18 acts on the variable being set, never on its value. Any non-empty
+text conforms, except that a fail-open run MUST NOT use `format`, which marks a token-only run
+(section 15.2).
 
 `status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record.
 
@@ -652,13 +745,22 @@ A client that finds a format it does not implement runs in **token-only** mode:
   that many are free, in the order of step 6; otherwise it leaves and retries with the head's
   backoff;
 - it publishes nothing and writes nothing in the state directory (no ticket, hold, log, degraded
-  record, `gen` bump or `admit.lock` body) except creating missing token files; it prints a
-  diagnostic and exports `CORESLOT_UNBUDGETED=format`;
+  record, `gen` bump or `admit.lock` body) except creating what the format-stable namespace
+  (section 15.1) needs: missing token files, `res/` and `res/<name>/` for them (mode `0700`), and
+  `admit.lock` when it is missing (`O_CREAT` without `O_TRUNC`). It never creates `queue/`,
+  `holds/`, `cancel/` or `log/`. It prints a diagnostic and exports `CORESLOT_UNBUDGETED=format`;
 - because every format counts locks, its tokens are counted by every other client (I6); it has no
   place in the queue, so ordering does not apply to it.
 
-A waiting client that finds the format changed under it withdraws its ticket (section 13.2) and
-continues in token-only mode.
+The mode is decided at every section entry from the `FORMAT` read there (section 8). A client in
+token-only mode that, on a later entry before it holds tokens, finds a format it implements, or no
+`FORMAT` (which it then writes, as every entry does), is no longer token-only: it enqueues in that
+section as a new request (section 10.1, with a fresh `arrival_ns`) and waits in the queue, so it
+never bypasses the queue of a format it understands (I4).
+
+A waiting client reads `FORMAT` at every section entry and MAY also read it on its polls; one that
+finds the format changed under it withdraws its ticket (section 13.2) and continues in token-only
+mode.
 
 ## 16. Windows
 
@@ -690,19 +792,31 @@ item      = fd [ "-" fd ]       ; "a-b" is every fd from a to b inclusive, a <= 
 fd        = 1*DIGIT
 ```
 
-Writers usually write a single range (`4-13`); readers MUST accept the whole grammar. A list that
+Writers usually write a single range (`4-13`); a single descriptor may be written `4` or `4-4`, and
+both conform. Readers MUST accept the whole grammar. A list that
 names one descriptor twice, directly or through overlapping ranges, is invalid: a pass-through
 treats it as a context that does not validate (section 18). Every
 descriptor not in this contract stays close-on-exec. A launcher that starts nested runs passes these
 descriptors through (Python: `subprocess.run(..., pass_fds=...)`; Go: `exec.Cmd.ExtraFiles`).
 
+A run that is not a pass-through (section 18 rules 1 and 2) builds this contract from its own grant
+only: an ordinary or `--independent` request, a fail-open run and a token-only run remove every
+inherited `CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS` and `CORESLOT_UNBUDGETED`
+from the command's environment before setting their own, and pass the command no inherited
+descriptor outside their own contract. Otherwise a grandchild would pass through to a grant that is
+not its parent's. `CORESLOT_STATE_DIR` is not grant context and is passed on.
+
 **Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
-`cpu` (or of `RES`); `{{n}}` is a literal `{n}`; with `--subst`, placeholders inside arguments are
-replaced too (`make -j{n}`).
+`cpu` (or of `RES`); `{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with
+`--subst`, placeholders inside arguments are replaced too (`make -j{n}`). The grant of a resource
+run unbudgeted is the value of its `CORESLOT_GRANTED_<RES>`. A placeholder naming a resource the
+request does not name (`{n}` in a request without `cpu`, `{n:RES}` for another `RES`) is a usage
+error, detected before the request queues.
 
 ## 18. Nested runs: pass-through
 
-A run decides its context from the environment it inherited, in this order:
+A run decides its context from the environment it inherited ("set" as defined in section 1: an
+empty variable is absent), in this order:
 
 1. `CORESLOT_UNBUDGETED` is set (and the run is not `--independent`): it runs unbudgeted with its
    `min` of each resource, prints a notice, passes the variable on, and writes no degraded record
@@ -718,8 +832,13 @@ A run decides its context from the environment it inherited, in this order:
    `CORESLOT_GRANTED_<RES>` to the narrowed value for each resource it names. A context that does
    not validate (a launcher closed the descriptors, or the parent is gone) is a refusal with a
    diagnostic naming the likely cause; the run never queues behind a parent that may hold the whole
-   budget.
+   budget. A list naming more than 512 descriptors does not validate (a grant holds at most 512
+   tokens; a reader checks the count before expanding a range), and neither does a context the run
+   cannot check because `$S`, `res/` or a token file cannot be read.
 3. Otherwise, or with `--independent`, it is an ordinary request.
+
+A pass-through, valid (rule 2) or unbudgeted (rule 1), writes nothing under `$S`: no run log and
+no degraded record. The outer run accounts for the grant.
 
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
 grant both run with 8. A parent that wants concurrent children partitions its grant itself.
@@ -738,8 +857,9 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 
 ## 20. Run log
 
-Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` with a single
-`O_APPEND` write (outside the section). The object carries:
+Each run that is not a pass-through (section 18) SHOULD append one JSON line of at most 4 KiB to
+`$S/log/runs.jsonl` with a single `O_APPEND` write (outside the section), into a directory whose
+`FORMAT` it has read and understood during the run (section 14). The object carries:
 
 | Key | Type | Content |
 |---|---|---|
@@ -769,7 +889,15 @@ configuration declares `cpu = "-4"` (size 10) and `pg-local = 2`, and `$S` is
 the entries under `$S` that matter; `[L]` marks a file whose lock is held by a live process.
 `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is independent of the others;
 except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old when the example starts, so
-reconciliation is not due.
+reconciliation is not due. The writers in these examples number ticket and hold names and their
+temporaries from one counter and the temporaries of `gen`, `FORMAT` and `degraded` from another;
+any numbering conforms (section 7.1).
+
+The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
+[--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
+[--no-wait] [--strict] [--independent] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
+`N..N`; with no `--need` the request is `cpu=1..1`; `--on-timeout` defaults to `fail`, so a
+`--timeout` that expires refuses; strict mode is `--strict`.
 
 ### 21.1 Enqueue
 

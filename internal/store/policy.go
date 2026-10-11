@@ -119,11 +119,21 @@ func refusedType(name string) bool {
 	return strings.HasPrefix(name, "macfuse") || strings.HasPrefix(name, "osxfuse")
 }
 
-// refusedMagic reports whether a Linux filesystem magic (statfs f_type) is one the protocol
-// refuses: NFS, CIFS, SMB2, SMB, FUSE and 9p (PROTOCOL.md section 4.3).
+// refusedMagic reports whether a Linux filesystem magic (statfs f_type) is a network, FUSE or
+// VM-shared filesystem: NFS, CIFS, SMB2, SMB, FUSE and 9p (PROTOCOL.md section 4.3), and the
+// VirtualBox shared folder, Ceph and AFS (the spec's network and VM-shared filesystems).
 func refusedMagic(m int64) bool {
 	switch m {
-	case 0x6969, 0xFF534D42, 0xFE534D42, 0x517B, 0x65735546, 0x01021997:
+	case 0x6969, // NFS
+		0xFF534D42, // CIFS
+		0xFE534D42, // SMB2
+		0x517B,     // SMB
+		0x65735546, // FUSE
+		0x01021997, // 9p
+		0x786F4256, // vboxsf
+		0x00C36400, // Ceph
+		0x5346414F, // AFS (OpenAFS, kAFS superblock)
+		0x6B414653: // kAFS ("kAFS")
 		return true
 	}
 	return false

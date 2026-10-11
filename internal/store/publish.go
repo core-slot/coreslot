@@ -4,7 +4,6 @@ package store
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 
@@ -71,7 +69,8 @@ const maxTmpAttempts = 1000
 var noReplaceDirs = []string{QueueDir, HoldsDir, CancelDir}
 
 // Publish publishes body as dir/name inside the section (PROTOCOL.md section 11), where dir is
-// QueueDir, HoldsDir or CancelDir: it creates dir/.tmp-<pid>-<seq> with O_EXCL (taking the next
+// QueueDir, HoldsDir or CancelDir and name matches that directory's grammar (a ticket or hold
+// name, or a ticket id for a cancel request): it creates dir/.tmp-<pid>-<seq> with O_EXCL (taking the next
 // seq on EEXIST), takes flock(LOCK_EX) on it when lockCarrying, writes the body, and moves it to
 // name without replacing an existing file. When name exists it removes its temporary file and
 // returns an error matching fs.ErrExist: the caller takes its next seq and retries.
@@ -86,8 +85,8 @@ func (sec *Section) Publish(dir, name string, body []byte, lockCarrying bool) (*
 	if !slices.Contains(noReplaceDirs, dir) {
 		return nil, fmt.Errorf("store: Publish into %q: not a directory of tickets, holds or cancel requests", dir)
 	}
-	if name == "" || name != filepath.Base(name) || name[0] == '.' {
-		return nil, fmt.Errorf("store: Publish of %q: not an entry name", name)
+	if !nameMatches(dir, name) {
+		return nil, fmt.Errorf("store: Publish of %q into %s: the name does not match the directory's grammar", name, dir)
 	}
 	d := sec.s.path(dir)
 	if err := ensureDir(d); err != nil {
@@ -116,6 +115,17 @@ func (sec *Section) Publish(dir, name string, body []byte, lockCarrying bool) (*
 		return nil, nil
 	}
 	return f, nil
+}
+
+// nameMatches reports whether name matches dir's grammar: a ticket or hold name in QueueDir and
+// HoldsDir, a ticket id in CancelDir (PROTOCOL.md section 7.1).
+func nameMatches(dir, name string) bool {
+	if dir == CancelDir {
+		_, ok := wire.ParseID(name)
+		return ok
+	}
+	_, ok := wire.ParseName(name)
+	return ok
 }
 
 // writeTmp creates a fresh temporary file in d, locks it when lockCarrying, and writes body,
@@ -231,20 +241,19 @@ func (s *Store) ReadGen() (Gen, error) {
 	if err != nil {
 		return Gen{}, err
 	}
-	obj, err := strictObject(body)
+	w, err := wire.DecodeGen(body)
 	if err != nil {
 		return Gen{}, nil
 	}
-	n, err1 := obj.integer("gen")
-	r, err2 := obj.integer("reconciled_ns")
-	if err1 != nil || err2 != nil || n < 0 {
-		return Gen{}, nil
-	}
-	return Gen{N: uint64(n), ReconciledNS: r}, nil
+	return Gen{N: uint64(w.Gen), ReconciledNS: w.ReconciledNS}, nil
 }
 
 func (sec *Section) writeGen(g Gen) error {
-	return sec.replaceFile(GenFile, fmt.Appendf(nil, `{"gen":%d,"reconciled_ns":%d}`, g.N, g.ReconciledNS))
+	body, err := wire.EncodeGen(wire.Gen{Gen: int64(g.N), ReconciledNS: g.ReconciledNS})
+	if err != nil {
+		return err
+	}
+	return sec.replaceFile(GenFile, body)
 }
 
 // BumpGen writes gen with gen increased by one and reconciled_ns unchanged.
@@ -314,96 +323,4 @@ func parseFormat(body []byte) (int, error) {
 		return 0, stateErrorf("malformed FORMAT %q", body)
 	}
 	return n, nil
-}
-
-// ---------------------------------------------------------------- strict JSON
-
-// object is a decoded body object: values are json.Number, string, bool, nil, object or []any.
-type object map[string]any
-
-var errMalformed = errors.New("malformed body")
-
-// strictObject decodes one UTF-8 JSON object of at most 8 KiB, optionally surrounded by
-// whitespace, refusing duplicate keys at any depth (PROTOCOL.md section 7.2).
-func strictObject(body []byte) (object, error) {
-	if len(body) > wire.MaxBodyBytes || !utf8.Valid(body) {
-		return nil, errMalformed
-	}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.UseNumber()
-	v, err := readValue(dec)
-	if err != nil {
-		return nil, err
-	}
-	obj, ok := v.(object)
-	if !ok {
-		return nil, errMalformed
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, errMalformed
-	}
-	return obj, nil
-}
-
-func readValue(dec *json.Decoder) (any, error) {
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, errMalformed
-	}
-	switch tok {
-	case json.Delim('{'):
-		obj := object{}
-		for dec.More() {
-			k, err := dec.Token()
-			if err != nil {
-				return nil, errMalformed
-			}
-			key, ok := k.(string)
-			if _, dup := obj[key]; !ok || dup {
-				return nil, errMalformed
-			}
-			if obj[key], err = readValue(dec); err != nil {
-				return nil, err
-			}
-		}
-		if _, err := dec.Token(); err != nil {
-			return nil, errMalformed
-		}
-		return obj, nil
-	case json.Delim('['):
-		var arr []any
-		for dec.More() {
-			v, err := readValue(dec)
-			if err != nil {
-				return nil, err
-			}
-			arr = append(arr, v)
-		}
-		if _, err := dec.Token(); err != nil {
-			return nil, errMalformed
-		}
-		return arr, nil
-	}
-	return tok, nil
-}
-
-// integer returns key as a signed 64-bit integer with no fraction or exponent.
-func (o object) integer(key string) (int64, error) {
-	num, ok := o[key].(json.Number)
-	if !ok {
-		return 0, errMalformed
-	}
-	n, err := strconv.ParseInt(string(num), 10, 64)
-	if err != nil {
-		return 0, errMalformed
-	}
-	return n, nil
-}
-
-func (o object) str(key string) (string, error) {
-	s, ok := o[key].(string)
-	if !ok {
-		return "", errMalformed
-	}
-	return s, nil
 }
