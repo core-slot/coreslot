@@ -212,7 +212,7 @@ could require an I1-style inode check on the own ticket.
 **D5. §10.4 step 2: what counts as "a `queue/` entry with that ticket id"** when that entry is
 malformed or not a regular file? *Choice:* any name matching the ticket grammar.
 
-**Status — resolved: PROTOCOL §10.4 step 2. Any grammar-matching queue/ entry with that id, whatever its body. Matches.**
+**Status — resolved: PROTOCOL §10.4 step 2. Any queue/ entry with that id that is not ignored as a stray, whatever its body; a stray (wrong type, owner or mode, B1/D6) never protects a cancel request (ruling, 2026-10-11). Client changed: step 2 counts only the tickets that survive step 1.**
 
 **D6. §10.4 step 1: entries matching the ticket or hold grammar that are not regular files.**
 *Choice:* not probed and not removed.

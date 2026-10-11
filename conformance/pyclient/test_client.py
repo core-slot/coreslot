@@ -697,6 +697,31 @@ class ReconciliationTests(Base):
         self.assertEqual(g["gen"], 72)
         self.assertLess(abs(g["reconciled_ns"] - time.time_ns()), 5 * 10**9)
 
+    def test_a_stray_never_protects_a_cancel_request(self):
+        """§10.3/§10.4 step 2: a queue/ entry ignored as a stray is no entry; its cancel request goes."""
+        self.write(os.path.join(self.S, "gen"), b'{"gen": 3, "reconciled_ns": 0}')  # reconciliation due
+        q, c = os.path.join(self.S, "queue"), os.path.join(self.S, "cancel")
+        elsewhere = os.path.join(self.root, "elsewhere")
+        self.write(elsewhere, body())
+        link_t = "01791720000000000000-0000004711-000901-link"
+        dir_t = "01791720000000000000-0000004711-000902-dir"
+        writable_t = "01791720000000000000-0000004711-000903-writable"
+        live_t = "01791721150000000000-0000006100-000002-lint"
+        os.makedirs(q, 0o700)
+        os.symlink(elsewhere, os.path.join(q, link_t))
+        os.makedirs(os.path.join(q, dir_t), 0o700)
+        self.write(os.path.join(q, writable_t), body())
+        os.chmod(os.path.join(q, writable_t), 0o622)
+        self.write(os.path.join(q, live_t), body(), lock=True)
+        for name in (link_t, dir_t, writable_t, live_t):
+            self.write(os.path.join(c, name[:38]), b'{"requested_ns": 1, "requester_pid": 1}')
+        c1 = self.client()
+        t = c1.enqueue("x", 0, {"cpu": 1})
+        self.assertEqual(self.ls("cancel"), [live_t[:38]])  # only the live ticket's request stays
+        self.assertEqual(self.ls("queue"), sorted([link_t, dir_t, writable_t, live_t, t.name]))  # strays untouched
+        self.assertEqual(c1.ignored_by_reconciliation["queue"], 3)
+        self.assertTrue(os.path.exists(elsewhere))
+
     def test_admission_never_reconciles(self):
         self.write(os.path.join(self.S, "gen"), b'{"gen": 3, "reconciled_ns": 1}')
         t = self.client().enqueue("x", 0, {"cpu": 1})  # enqueue reconciles

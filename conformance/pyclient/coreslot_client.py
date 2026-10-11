@@ -1103,6 +1103,7 @@ class Client:
         removed = False
         queue, holds, cancel = (os.path.join(S, n) for n in ("queue", "holds", "cancel"))
         ignored = {"queue": 0, "holds": 0, "cancel": 0}
+        live_ids: set[str] = set()  # ids of the queue/ tickets that survive step 1; a stray is none
         for d in (queue, holds):
             if not _ensure_dir(d, create=False):
                 continue
@@ -1123,6 +1124,8 @@ class Client:
                     try:
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     except BlockingIOError:
+                        if d == queue:
+                            live_ids.add(name[:ID_LEN])  # live: its cancel request stays
                         continue
                     try:
                         os.unlink(path)  # while still holding the probe lock
@@ -1132,7 +1135,6 @@ class Client:
                 finally:
                     os.close(fd)
         if _ensure_dir(cancel, create=False):
-            live_ids = {n[:ID_LEN] for n in _list(queue) if parse_name(n) is not None}
             for name in _list(cancel):
                 if parse_cancel_name(name) is None:
                     if not TMP_RE.fullmatch(name):
