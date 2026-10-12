@@ -655,17 +655,35 @@ func pendingSignal() syscall.Signal {
 	}
 }
 
-// errFormatChanged is the outcome of a rotation section that found a FORMAT this client does
-// not understand: the line is not appended (PROTOCOL.md section 14).
+// errFormatChanged is the outcome of a run-log append that found a FORMAT this client does not
+// understand, in the rotation section or when re-reading it just before the append: the line is
+// not appended (PROTOCOL.md sections 14 and 20).
 var errFormatChanged = errors.New("the state directory's FORMAT is no longer one this client implements")
+
+// formatStillUnderstood re-reads FORMAT outside the section immediately before a run-log line is
+// appended, since it may have changed while the command ran (PROTOCOL.md section 20). It returns
+// errFormatChanged when FORMAT is absent or names a format this client does not implement, and
+// the state error of a malformed one; present reports whether FORMAT exists.
+func formatStillUnderstood(dir string) (present bool, err error) {
+	n, present, err := store.ReadFormatAt(dir)
+	switch {
+	case err != nil:
+		return present, err
+	case !present || !slices.Contains(testhooks.Formats(), n):
+		return present, errFormatChanged
+	}
+	return true, nil
+}
 
 // appendRunLog appends rec to the run log outside the section (PROTOCOL.md section 20). When the
 // log is at or above 10 MiB it first rotates it inside the section, if it can enter within 2 s,
-// reconciling first when reconciliation is due (section 10.4).
-// Only a FORMAT that section does not understand, or a malformed one, stops the append, which
-// would otherwise write into a directory of an unknown format (section 14). Any other rotation
-// failure costs the rotation, not the line: notice reports it and the line is appended. A busy
-// section only skips the rotation. A pass-through never rotates (appendNestedLog).
+// reconciling first when reconciliation is due (section 10.4). Then it re-reads FORMAT and
+// appends only when it is still one this client implements.
+// Only a FORMAT that is not understood, or a malformed one, in the rotation section or at that
+// re-read, stops the append, which would otherwise write into a directory of an unknown format
+// (section 14). Any other rotation failure costs the rotation, not the line: notice reports it
+// and the line is appended. A busy section only skips the rotation. A pass-through never rotates
+// (appendNestedLog).
 func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format string, args ...any)) error {
 	if st.RunLogNeedsRotation() {
 		var rotateErr error
@@ -701,6 +719,9 @@ func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format strin
 		if rotateErr != nil {
 			notice("the run log was not rotated: %v", rotateErr)
 		}
+	}
+	if _, err := formatStillUnderstood(st.Dir()); err != nil {
+		return err
 	}
 	return st.AppendRun(rec)
 }

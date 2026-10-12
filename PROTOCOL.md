@@ -957,9 +957,11 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 
 Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` with a single
 `O_APPEND` write (outside the section), into a directory whose `FORMAT` it has read and understood
-during the run (section 14). A pass-through (section 18), valid or unbudgeted, appends too: it
-reads `FORMAT` outside the section (it never writes a missing one, and then writes no line), marks
-its line `"nested": true`, and never rotates the log. A token-only run writes no log. A line that
+during the run (section 14). `FORMAT` may change while the command runs, so the writer reads it
+again, outside the section, immediately before the write, and writes no line when it is absent,
+malformed or names a format the writer does not implement. A pass-through (section 18), valid or
+unbudgeted, appends too: that read is its only one (it never writes a missing `FORMAT`, and then
+writes no line), it marks its line `"nested": true`, and it never rotates the log. A token-only run writes no log. A line that
 would exceed 4 KiB MAY be fitted by shortening an informative string; a writer that cannot fit it
 writes no line. The object carries:
 
