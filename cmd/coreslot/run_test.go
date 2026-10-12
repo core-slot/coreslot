@@ -604,7 +604,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 
 func TestRunAppendsOneLogLine(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 4\n")
-	env := append(baseEnv(dir), "WAVE_E_SECRET=env-secret-value")
+	env := append(baseEnv(dir), "CORESLOT_TEST_SECRET=env-secret-value")
 	r := cli(t, env, "run", "--need", "cpu=2..3", "--label", "gate:unit", "--", "sh", "-c", "exit 0", "argv-secret-value")
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
