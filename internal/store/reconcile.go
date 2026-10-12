@@ -65,15 +65,7 @@ func (s *Store) List(dir string) ([]Entry, int, error) {
 		}
 		entries = append(entries, Entry{Name: name, ID: id, MtimeNS: fi.ModTime().UnixNano()})
 	}
-	slices.SortFunc(entries, func(a, b Entry) int {
-		switch {
-		case a.Name < b.Name:
-			return -1
-		case a.Name > b.Name:
-			return 1
-		}
-		return 0
-	})
+	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Name, b.Name) })
 	return entries, ignored, nil
 }
 
