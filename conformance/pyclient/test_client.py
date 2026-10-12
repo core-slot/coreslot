@@ -628,6 +628,22 @@ class LivenessTests(Base):
         self.assertEqual(elect(31, 2)[1], True)  # 10 s watched after its change
         t.withdraw()
 
+    def test_observer_watches_at_the_poll_contract(self):
+        """§10.2: elections 2.0-2.4 s apart (the 2 s poll contract plus jitter) are all watched, so a
+        stopped ticket is STALLED once 10 s of them have passed, and not before."""
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+        now = 1000.0
+        t._begin_pass(now)
+        self.assertFalse(t._observe("x", 7, now))
+        elapsed = 0.0
+        for gap in (2.2, 2.4, 2.0, 2.3, 2.1, 2.2):
+            now += gap
+            elapsed += gap
+            t._begin_pass(now)
+            self.assertEqual(t._observe("x", 7, now), elapsed >= 10.0, f"after {elapsed:.1f} s")
+        self.assertGreaterEqual(elapsed, 10.0)
+        t.withdraw()
+
     def test_dead_ticket_ahead_is_skipped_at_once(self):
         """§21.5: a withdrawn (unlocked) ticket ahead is skipped without waiting 10 s."""
         self.config("[resources]\ncpu = 1\n")

@@ -49,7 +49,7 @@ import tomllib
 FORMAT_VERSION = 1
 REFRESH_S = 2.0
 STALL_S = 10.0
-MAX_PASS_GAP_S = 2.0  # §10.2: a longer interval between an observer's own passes is not watched
+MAX_PASS_GAP_S = 3.0  # §10.2: a longer interval between an observer's own passes is not watched
 POLL_S = 1.0
 HEAD_BACKOFF_MIN, HEAD_BACKOFF_MAX = 0.25, 2.0
 FRONT_WINDOW = 4  # §10.3: tickets at the front of the queue every election also watches
