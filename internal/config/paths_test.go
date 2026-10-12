@@ -66,3 +66,51 @@ func TestStateDirOverride(t *testing.T) {
 		t.Error("Path() accepted a relative override")
 	}
 }
+
+// StateDirFrom applies the CORESLOT_STATE_DIR rule of PROTOCOL.md section 4.1 to the variables
+// getenv reads, and to nothing else: a non-empty value is the state directory, cleaned, and must
+// be absolute; an empty one means the default under the home directory. Mutation: dropping the
+// IsAbs check reddens "relative" and "dot"; returning the value uncleaned reddens "unclean";
+// reading os.Getenv for the variable reddens "unset".
+func TestStateDirFrom(t *testing.T) {
+	t.Setenv(StateDirEnv, "/process/environment") // not getenv's: it must not count
+	home, err := Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := filepath.Join(home, ".local", "state", "coreslot")
+	if runtime.GOOS == "darwin" {
+		def = filepath.Join(home, "Library", "Application Support", "coreslot")
+	}
+	for _, tc := range []struct {
+		name, value string
+		dir         string
+		override    bool
+		err         string
+	}{
+		{name: "unset", value: "", dir: def, override: false},
+		{name: "absolute", value: "/srv/state", dir: "/srv/state", override: true},
+		{name: "unclean", value: "/srv//state/./x/..", dir: "/srv/state", override: true},
+		{name: "relative", value: "relative/dir", override: true, err: `CORESLOT_STATE_DIR="relative/dir" is not an absolute path`},
+		{name: "dot", value: ".", override: true, err: `CORESLOT_STATE_DIR="." is not an absolute path`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			getenv := func(k string) string {
+				if k == StateDirEnv {
+					return tc.value
+				}
+				return ""
+			}
+			dir, override, err := StateDirFrom(getenv)
+			if tc.err != "" {
+				if err == nil || err.Error() != tc.err || override != tc.override {
+					t.Fatalf("StateDirFrom(%q) = %q, %v, %v; want the error %q", tc.value, dir, override, err, tc.err)
+				}
+				return
+			}
+			if err != nil || dir != tc.dir || override != tc.override {
+				t.Fatalf("StateDirFrom(%q) = %q, %v, %v; want %q, %v", tc.value, dir, override, err, tc.dir, tc.override)
+			}
+		})
+	}
+}
