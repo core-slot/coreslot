@@ -23,6 +23,13 @@ type Client struct {
 // Open opens the state directory: Options.StateDir when set (with its configuration at
 // <StateDir>/config.toml), otherwise the CORESLOT_STATE_DIR override or the default of
 // PROTOCOL.md section 4.1. An unusable directory is a *StateError.
+//
+// The default comes from the user's home directory in the password database. A build without cgo
+// for a Unix other than macOS reads /etc/passwd alone, and when that has no record for the user
+// (an account that only NSS knows, through LDAP, SSSD or systemd-homed), Open runs getent as a
+// short-lived child process and waits at most 5 s for each run of it. A caller that reaps every child, such as
+// a PID 1 calling wait4(-1), can take getent's exit status, and Open then fails with a
+// *StateError; such a caller names the directory in Options.StateDir or CORESLOT_STATE_DIR.
 func Open(o Options) (*Client, error) {
 	dir, cfgPath := o.StateDir, ""
 	if dir == "" {
