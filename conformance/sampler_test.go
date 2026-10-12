@@ -33,7 +33,10 @@ import (
 // released by the next sample; a token locked and listed by no live hold in two consecutive
 // samples is reported. The sampler owns the configuration: Resize rewrites it inside the
 // section, so that every admission is linearized before or after the size change and the I3
-// bound can follow it.
+// bound can follow it. Because Resize writes the configuration inside the section, a client
+// that read the configuration before entering the section and admits on those stale sizes
+// after the rewrite is not caught as such: the sampler sees it only if the stale size takes the
+// locked count above the bound.
 
 // sampleGap is the least time between two samples whose findings are compared.
 const sampleGap = 100 * time.Millisecond
@@ -74,13 +77,24 @@ type observation struct {
 	malformed   []string // live holds whose body does not decode
 }
 
+// TokenOnly is what the test knows, at one sample, of the token-only grants it started: they
+// publish nothing, so no hold lists their tokens.
+type TokenOnly struct {
+	// Inodes are the token files that live token-only commands reported among their
+	// descriptors: those tokens are accounted for.
+	Inodes map[[2]uint64]bool
+	// Pending is, per resource, how many tokens the live token-only runs that have not
+	// reported yet may hold: the sum of their minimums clamped to the size, since a token-only
+	// admission takes exactly its effective minimum. Up to that many unlisted tokens of the
+	// resource are put down to them; more are reported.
+	Pending map[string]int
+}
+
 // Sampler samples one state directory. Its methods are safe for concurrent use.
 type Sampler struct {
-	// Exempt reports a locked token, listed by no live hold for unlisted so far, that belongs
-	// to a token-only grant the test itself started (it publishes nothing, so no hold lists
-	// it), or may still belong to one whose tokens the test cannot tell yet. Nil exempts
-	// nothing.
-	Exempt func(k Token, inode [2]uint64, unlisted time.Duration) bool
+	// TokenOnly returns, for the sizes in effect, the token-only grants the test started. Nil
+	// means there are none.
+	TokenOnly func(sizes map[string]int) TokenOnly
 	// Request returns the request behind a hold's label, for I7. Holds whose label it does not
 	// know are not checked for I7.
 	Request func(label string) (map[string]spec.Range, bool)
@@ -90,11 +104,12 @@ type Sampler struct {
 	scratch     string // where a configuration is written before it is renamed into place
 	st          *store.Store
 	sizes       map[string]int
-	ceiling     map[string]int // I3 bound: the size, or the locked count a shrink left above it
-	inodes      map[Token][2]uint64
-	unlisted    map[Token]time.Time  // since when each locked token is listed by no live hold
-	prev        map[string]Violation // candidates of the previous sample
-	reported    map[string]bool      // violations reported and still found by the latest sample
+	ceiling     map[string]int            // I3 bound: the size, or the locked count a shrink left above it
+	inodes      map[Token][2]uint64       // each token file's inode when the sampler first saw it
+	window      map[string]int            // the smallest size in effect since the previous sample
+	admitMin    map[string]map[string]int // per live hold, window when the hold was first seen
+	prev        map[string]Violation      // candidates of the previous sample
+	reported    map[string]bool           // violations reported and still found by the latest sample
 	violations  []Violation
 	last        time.Time // when the previous sample was taken
 	samples     int
@@ -111,7 +126,7 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 		t.Fatal(err)
 	}
 	s := &Sampler{dir: e.Dir, scratch: t.TempDir(), inodes: map[Token][2]uint64{},
-		unlisted: map[Token]time.Time{}, prev: map[string]Violation{}, reported: map[string]bool{}}
+		admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
 	var err error
 	if s.st, err = store.Open(e.Dir); err != nil {
 		t.Fatal(err)
@@ -129,7 +144,7 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 	if err := s.writeConfig(sizes); err != nil {
 		t.Fatal(err)
 	}
-	s.sizes, s.ceiling = maps.Clone(sizes), maps.Clone(sizes)
+	s.sizes, s.ceiling, s.window = maps.Clone(sizes), maps.Clone(sizes), maps.Clone(sizes)
 	return s
 }
 
@@ -171,27 +186,31 @@ func (s *Sampler) Sizes() map[string]int {
 // Resize rewrites the configuration inside the admission section. Every admission is then
 // either before the change, with the old sizes, or after it, with the new ones. A shrink may
 // leave more tokens locked than the new size; the I3 bound becomes that locked count and falls
-// with it, until it reaches the size.
-func (s *Sampler) Resize(ctx context.Context, sizes map[string]int) error {
+// with it, until it reaches the size. It returns the locked count of each resource at the
+// change.
+func (s *Sampler) Resize(ctx context.Context, sizes map[string]int) (locked map[string]int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sec, err := s.st.Enter(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer sec.Leave()
 	if err := s.writeConfig(sizes); err != nil {
-		return err
+		return nil, err
 	}
 	obs, err := s.observe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.sizes = maps.Clone(sizes)
 	for r, n := range sizes {
 		s.ceiling[r] = max(n, obs.lockedCount[r])
+		if w, ok := s.window[r]; !ok || n < w {
+			s.window[r] = n
+		}
 	}
-	return nil
+	return obs.lockedCount, nil
 }
 
 // Sample takes one sample inside the admission section, at least sampleGap after the previous
@@ -329,7 +348,8 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 	}
 
 	// I1: a token file keeps its inode for ever (token files are never deleted), and no two
-	// live holds list one token.
+	// live holds list one token. The inode a token file has when the sampler first sees it is
+	// its identity: a file replaced before that first sighting is not caught.
 	for k, ino := range obs.inodes {
 		if first, seen := s.inodes[k]; !seen {
 			s.inodes[k] = ino
@@ -358,25 +378,32 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		}
 	}
 
-	// I2: a locked token is listed by a live hold, or inside a token-only grant of the test.
-	for k := range s.unlisted {
-		if !obs.locked[k] || len(listed[k]) > 0 {
-			delete(s.unlisted, k)
-		}
+	// I2: a locked token is listed by a live hold, or inside a token-only grant of the test:
+	// one whose command reported the token, or, up to the minimums they take, one that has
+	// not reported yet.
+	var tokenOnly TokenOnly
+	if s.TokenOnly != nil {
+		tokenOnly = s.TokenOnly(maps.Clone(s.sizes))
 	}
+	unlisted := map[string][]Token{}
 	for k := range obs.locked {
-		if len(listed[k]) > 0 {
+		if len(listed[k]) > 0 || tokenOnly.Inodes[obs.inodes[k]] {
 			continue
 		}
-		since, seen := s.unlisted[k]
-		if !seen {
-			since = obs.at
-			s.unlisted[k] = since
-		}
-		if s.Exempt != nil && s.Exempt(k, obs.inodes[k], obs.at.Sub(since)) {
+		unlisted[k.Res] = append(unlisted[k.Res], k)
+	}
+	for r, ks := range unlisted {
+		slices.SortFunc(ks, func(a, b Token) int { return a.Idx - b.Idx })
+		if pending := tokenOnly.Pending[r]; pending > 0 {
+			if len(ks) > pending {
+				add("I2", "I2 unlisted "+r, "%d tokens of %s are locked and listed by no live hold (%v), "+
+					"more than the %d the unreported token-only runs take", len(ks), r, ks, pending)
+			}
 			continue
 		}
-		add("I2", "I2 unlisted "+k.String(), "token %s is locked and listed by no live hold", k)
+		for _, k := range ks {
+			add("I2", "I2 unlisted "+k.String(), "token %s is locked and listed by no live hold", k)
+		}
 	}
 
 	// I3: the locked count of a resource, at every index, stays within the bound.
@@ -388,8 +415,23 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		s.ceiling[r] = max(size, min(bound, n))
 	}
 
-	// I7: an ordinary admission grants at least min(min, size); a clamped one records the
-	// requested min and holds fewer.
+	// I7: an ordinary admission grants at least min(min, size): the request's min when it is
+	// not clamped; when it is, the clamp records the min and grants the whole size at the
+	// admission, at least the smallest size in effect between the previous sample and the one
+	// that first saw the hold, and fewer than the min.
+	live := map[string]bool{}
+	for _, h := range obs.holds {
+		live[h.Name] = true
+		if _, seen := s.admitMin[h.Name]; !seen {
+			s.admitMin[h.Name] = maps.Clone(s.window)
+		}
+	}
+	for name := range s.admitMin {
+		if !live[name] {
+			delete(s.admitMin, name)
+		}
+	}
+	s.window = maps.Clone(s.sizes)
 	for _, h := range obs.holds {
 		if h.Body.Unbudgeted {
 			add("fail-open", "fail-open "+h.Name, "hold %s is unbudgeted (a client failed open)", h.Name)
@@ -406,7 +448,11 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 			cl, clamped := h.Body.Clamped[r]
 			bad := false
 			if clamped {
-				bad = cl != rg.Min || n < 1 || n >= rg.Min
+				floor := rg.Min
+				if w, ok := s.admitMin[h.Name][r]; ok {
+					floor = min(floor, w)
+				}
+				bad = cl != rg.Min || n < floor || n >= rg.Min
 			} else {
 				bad = n < rg.Min || n > rg.Max
 			}
@@ -466,11 +512,58 @@ func lockToken(t *testing.T, e Env, k Token) int {
 	return fd
 }
 
-// fakeHolds publishes, inside the section, one hold per entry of lists (label, then the cpu
-// indices it lists), after taking take tokens of cpu at indices below below. The holds list
-// what they are given, not what was taken: that is how a defective client is built. close
-// releases everything.
-func fakeHolds(t *testing.T, e Env, take, below int, lists map[string][]int) (close func()) {
+// fakeHold is the body of a constructed hold labelled label that lists the cpu indices idx.
+func fakeHold(label string, idx ...int) wire.Hold {
+	return wire.Hold{Label: label, Grant: map[string][]int{"cpu": idx}}
+}
+
+// fakeHolds takes take tokens of cpu at indices below below and publishes the holds, inside
+// the section. The holds list what they are given, not what was taken: that is how a defective
+// client is built. close releases everything.
+func fakeHolds(t *testing.T, e Env, take, below int, holds ...wire.Hold) (close func()) {
+	t.Helper()
+	var files []*os.File
+	ts := inSection(t, e, func(sec *store.Section) *store.TokenSet {
+		ts, got, err := sec.TakeTokens(map[string]int{"cpu": take}, map[string]int{"cpu": below})
+		if err != nil || got["cpu"] != take {
+			t.Fatalf("take %d tokens: got %v, %v", take, got, err)
+		}
+		for _, h := range holds {
+			h.StartNS = uint64(store.NowNS())
+			f, _, err := sec.PublishHold(h, os.Getpid(), store.NextSeq())
+			if err != nil {
+				t.Fatal(err)
+			}
+			files = append(files, f)
+		}
+		return ts
+	})
+	return func() {
+		for _, f := range files {
+			f.Close()
+		}
+		ts.Close()
+	}
+}
+
+// fakeRawHold publishes, inside the section, a live hold labelled label whose body is body as
+// given, valid or not. close releases it.
+func fakeRawHold(t *testing.T, e Env, label string, body []byte) (close func()) {
+	t.Helper()
+	var f *os.File
+	inSection(t, e, func(sec *store.Section) *store.TokenSet {
+		var err error
+		name := wire.HoldName(uint64(store.NowNS()), os.Getpid(), store.NextSeq(), label)
+		if f, err = sec.Publish(store.HoldsDir, name, body, true); err != nil {
+			t.Fatal(err)
+		}
+		return &store.TokenSet{}
+	})
+	return func() { f.Close() }
+}
+
+// inSection runs build inside the admission section and bumps gen after it.
+func inSection(t *testing.T, e Env, build func(*store.Section) *store.TokenSet) *store.TokenSet {
 	t.Helper()
 	st, err := store.Open(e.Dir)
 	if err != nil {
@@ -483,33 +576,18 @@ func fakeHolds(t *testing.T, e Env, take, below int, lists map[string][]int) (cl
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	ts, got, err := sec.TakeTokens(map[string]int{"cpu": take}, map[string]int{"cpu": below})
-	if err != nil || got["cpu"] != take {
-		t.Fatalf("take %d tokens: got %v, %v", take, got, err)
-	}
-	var files []*os.File
-	for _, label := range slices.Sorted(maps.Keys(lists)) {
-		h := wire.Hold{Label: label, Grant: map[string][]int{"cpu": lists[label]}, StartNS: uint64(store.NowNS())}
-		f, _, err := sec.PublishHold(h, os.Getpid(), store.NextSeq())
-		if err != nil {
-			t.Fatal(err)
-		}
-		files = append(files, f)
-	}
+	ts := build(sec)
 	if err := sec.BumpGen(); err != nil {
 		t.Fatal(err)
 	}
-	return func() {
-		for _, f := range files {
-			f.Close()
-		}
-		ts.Close()
-	}
+	return ts
 }
 
 // TestSamplerCatchesAViolation passes the sampler a valid history of real runs, then builds
-// real violations of I1, I2, I3 and I7 in the state directory and checks that the sampler
-// reports each one, and only it, once two samples saw it; a momentary one is not reported.
+// real violations of I1, I2, I3 and I7, a fail-open hold and a malformed one in the state
+// directory and checks that the sampler reports each one, and only it, once two samples saw
+// it; a momentary one, locks a shrink left above the size and the tokens of an unreported
+// token-only run are not reported.
 func TestSamplerCatchesAViolation(t *testing.T) {
 	e := State(t)
 	s := NewSampler(t, e, map[string]int{"cpu": 4})
@@ -532,6 +610,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 	// expect takes two samples: the first reports nothing new, the second exactly want.
 	expect := func(what string, want ...string) {
 		t.Helper()
+		slices.Sort(want)
 		if got := sample(); len(got) != 0 {
 			t.Errorf("%s: the first sample already reported %v", what, got)
 		}
@@ -545,6 +624,12 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		t.Helper()
 		if got := sample(); len(got) != 0 {
 			t.Errorf("after the violation was removed, the sampler reported %v", got)
+		}
+	}
+	resize := func(n int) {
+		t.Helper()
+		if _, err := s.Resize(ctx, map[string]int{"cpu": n}); err != nil {
+			t.Fatal(err)
 		}
 	}
 
@@ -583,41 +668,109 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 			t.Errorf("the sample after cpu/2 was released reported %v", got)
 		}
 	})
+	t.Run("an unreported token-only run covers its minimum, not more (I2)", func(t *testing.T) {
+		runs := &tokenOnlyRuns{markDir: e.MarkDir}
+		runs.add("t.tok.c1_1", map[string]spec.Range{"cpu": {Min: 1, Max: 1}},
+			func(ChildReport, bool) bool { return true })
+		s.TokenOnly = runs.grants
+		defer func() { s.TokenOnly = nil }()
+		fd0 := lockToken(t, e, Token{"cpu", 0})
+		expect("one cpu token of a token-only run that has not reported")
+		fd1 := lockToken(t, e, Token{"cpu", 1})
+		fdIO := lockToken(t, e, Token{"io", 0})
+		expect("a second cpu token and an io token", "I2 unlisted cpu", "I2 unlisted io/0")
+		for _, fd := range []int{fd0, fd1, fdIO} {
+			unix.Close(fd)
+		}
+		settle()
+	})
 	t.Run("more tokens locked than the size is reported (I3)", func(t *testing.T) {
-		release := fakeHolds(t, e, 6, 8, map[string][]int{"x.lib.c6_6": {0, 1, 2, 3, 4, 5}})
+		release := fakeHolds(t, e, 6, 8, fakeHold("x.lib.c6_6", 0, 1, 2, 3, 4, 5))
 		expect("6 tokens held under size 4", "I3 cpu")
 		release()
 		settle()
 	})
+	t.Run("a shrink leaves locks above the size; the bound falls with them (I3)", func(t *testing.T) {
+		releaseA := fakeHolds(t, e, 3, 4, fakeHold("ra.lib.c3_3", 0, 1, 2))
+		releaseB := fakeHolds(t, e, 1, 4, fakeHold("rb.lib.c1_1", 3))
+		resize(2)
+		expect("4 tokens held after a shrink to 2")
+		releaseB()
+		settle() // the bound falls to 3
+		releaseC := fakeHolds(t, e, 1, 4, fakeHold("rc.lib.c1_1", 3))
+		expect("a token taken while 3 are locked above size 2", "I3 cpu")
+		releaseA()
+		releaseC()
+		settle()
+		resize(4)
+	})
 	t.Run("a token listed by two live holds is reported (I1)", func(t *testing.T) {
-		release := fakeHolds(t, e, 1, 4, map[string][]int{"y.lib.c1_1": {0}, "z.lib.c1_1": {0}})
+		release := fakeHolds(t, e, 1, 4, fakeHold("y.lib.c1_1", 0), fakeHold("z.lib.c1_1", 0))
 		expect("cpu/0 listed twice", "I1 shared cpu/0")
 		release()
 		settle()
 	})
 	t.Run("a grant below its minimum is reported (I7)", func(t *testing.T) {
-		release := fakeHolds(t, e, 1, 4, map[string][]int{"w.lib.c3_3": {0}})
+		release := fakeHolds(t, e, 1, 4, fakeHold("w.lib.c3_3", 0))
 		expect("1 token granted for cpu=3", "I7 "+holdNamed(t, e, "w.lib.c3_3")+" cpu")
 		release()
 		settle()
 	})
+	t.Run("a clamped grant below the size is reported (I7)", func(t *testing.T) {
+		short := fakeHold("k.lib.c9_9", 0)
+		short.Clamped = map[string]int{"cpu": 9}
+		release := fakeHolds(t, e, 1, 4, short)
+		expect("1 token of size 4 granted for a clamped cpu=9", "I7 "+holdNamed(t, e, "k.lib.c9_9")+" cpu")
+		release()
+		settle()
+		whole := fakeHold("kw.lib.c9_9", 0, 1, 2, 3)
+		whole.Clamped = map[string]int{"cpu": 9}
+		release = fakeHolds(t, e, 4, 4, whole)
+		expect("the whole size 4 granted for a clamped cpu=9")
+		release()
+		settle()
+	})
 	t.Run("a live hold listing a token nobody locks is reported (I2)", func(t *testing.T) {
-		release := fakeHolds(t, e, 1, 4, map[string][]int{"u.lib.c2_2": {0, 1}})
+		release := fakeHolds(t, e, 1, 4, fakeHold("u.lib.c2_2", 0, 1))
 		expect("cpu/1 listed, not locked", "I2 unlocked "+holdNamed(t, e, "u.lib.c2_2")+" cpu/1")
 		release()
 		settle()
 	})
-	t.Run("a shrink leaves locks above the size without a violation", func(t *testing.T) {
-		release := fakeHolds(t, e, 4, 4, map[string][]int{"r.lib.c4_4": {0, 1, 2, 3}})
-		if err := s.Resize(ctx, map[string]int{"cpu": 2}); err != nil {
-			t.Fatal(err)
-		}
-		expect("4 tokens held after a shrink to 2")
+	t.Run("an unbudgeted hold is reported (fail-open)", func(t *testing.T) {
+		h := fakeHold("f.lib.c1_1", 0)
+		h.Unbudgeted = true
+		release := fakeHolds(t, e, 1, 4, h)
+		expect("a fail-open hold", "fail-open "+holdNamed(t, e, "f.lib.c1_1"))
 		release()
 		settle()
-		if err := s.Resize(ctx, map[string]int{"cpu": 4}); err != nil {
+	})
+	t.Run("a live hold with a malformed body is reported", func(t *testing.T) {
+		release := fakeRawHold(t, e, "m", []byte(`{"label":"m"}`))
+		entries, _ := os.ReadDir(filepath.Join(e.Dir, store.HoldsDir))
+		name := ""
+		for _, en := range entries {
+			if strings.HasSuffix(en.Name(), "-m") {
+				name = en.Name()
+			}
+		}
+		expect("a malformed hold", "malformed "+name)
+		release()
+		settle()
+	})
+	// Last: the replaced token file keeps its new inode.
+	t.Run("a token file replaced under its holder is reported (I1)", func(t *testing.T) {
+		release := fakeHolds(t, e, 1, 4, fakeHold("i.lib.c1_1", 0))
+		name := holdNamed(t, e, "i.lib.c1_1")
+		settle() // the sampler has seen cpu/0 as the hold locks it
+		dir := filepath.Join(e.Dir, store.ResDir, "cpu")
+		if err := os.WriteFile(filepath.Join(dir, "replacement"), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Rename(filepath.Join(dir, "replacement"), filepath.Join(dir, "0")); err != nil {
+			t.Fatal(err)
+		}
+		expect("cpu/0 replaced by a new file", "I1 inode cpu/0", "I2 unlocked "+name+" cpu/0")
+		release()
 	})
 }
 
