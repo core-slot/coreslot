@@ -91,8 +91,9 @@ Every conforming client MUST preserve these invariants:
 
 - **I1 identity:** no two live holds list the same (resource, index), and every token a live hold
   lists is locked through an open file description whose inode equals
-  `stat($S/res/<name>/<i>).st_ino`. A holder that finds `st_nlink == 0` or a different inode at its
-  token's path reports degraded mode (section 14).
+  `stat($S/res/<name>/<i>).st_ino`. A holder checks this when it takes tokens (section 12.1 step 6)
+  and again at release (section 12.3); a holder that finds `st_nlink == 0` or a different inode at
+  its token's path has a state error (section 14) and reports degraded mode to its user.
 - **I2 truthful grant:** a live hold's body lists exactly the tokens it locks. Tokens may be locked
   without a published hold only inside the admission section, by a token-only client
   (section 15.2), momentarily by a probe (section 6, inside or outside the section), or between a
@@ -714,8 +715,25 @@ A clamped CLI run prints a notice (`coreslot: cpu: requested 16, budget is 10; r
 
 ### 12.3 After the command exits
 
-The run closes its copies of the grant's descriptors, the hold's before any token's, so that a
-live hold never lists a token nobody locks (I1, I2). The CLI then enters the section if it can
+At release, before it closes anything, a holder MUST check the identity of its hold and of every
+token it holds, comparing `fstat` of each descriptor with its path. A **mismatch** is any of: a held
+file with `st_nlink == 0`; a path whose `(st_dev, st_ino)` is not the held file's; a hold path that
+is missing. A mismatch is a state error (section 14): the directory is no longer the one the grant
+was taken in. On a mismatch the holder MUST close every descriptor of the grant, the hold's first,
+and MUST NOT write anything into the state directory as it now exists:
+
+- it MUST NOT remove its hold by path;
+- it MUST NOT enter the admission section: entering may write `FORMAT` (section 15.1) into a
+  directory this run never read (section 14);
+- it MUST NOT write a `degraded` record;
+- it MUST NOT append a run-log line (section 20).
+
+It reports the state error to its caller (a library) or on stderr (the CLI); the CLI still exits
+with the command's own status (section 19). Reporting degraded mode at release therefore means
+telling the user, not writing a `degraded` record.
+
+Without a mismatch, the run closes its copies of the grant's descriptors, the hold's before any
+token's, so that a live hold never lists a token nobody locks (I1, I2). The CLI then enters the section if it can
 within 2 s, probes its hold and unlinks it only if the probe succeeds (no descendant still holds
 it), bumping `gen` when it did (section 7.8); otherwise reconciliation removes the hold later.
 Other clients MAY remove their hold the same way, or leave it to reconciliation. This applies to
@@ -789,6 +807,9 @@ client interprets: section 18 acts on the variable being set, never on its value
 text conforms, except that a fail-open run MUST NOT use `format`, which marks a token-only run
 (section 15.2).
 
+A state error found at release (section 12.3) is not a fail-open: the command has already run with
+its grant. It is reported and nothing is written; the rules above do not apply to it.
+
 A run whose wait timed out and that runs anyway (the CLI's `--on-timeout run`) withdraws its ticket
 (section 13.2) and runs with `min` of each named resource outside the budget. It is not a state
 error: it publishes the same unbudgeted hold, exports `CORESLOT_UNBUDGETED=<reason>` and records
@@ -797,7 +818,8 @@ rule applies.
 
 > **Implementation note.** The Go CLI's reason for such a run is `timeout`.
 
-`status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record.
+`status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record. It
+also exits 3 while a state error makes runs fail open (section 19).
 
 ## 15. Formats and token-only mode
 
@@ -950,12 +972,16 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14); `--refusal-code` changes it for commands whose own 75 matters |
+| 75 | refusal (section 14); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
-| 70 | internal error before the command could run |
-| 3 | `status` and `doctor`: degraded mode |
-| 1 | `doctor`: it found a problem (an unusable directory, filesystem or configuration) |
+| 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
+| 3 | `status`: runs fail open, because degraded mode is recorded or a state error (an unusable directory, a malformed `FORMAT`, an invalid configuration) stands; `doctor`: degraded mode is recorded and nothing else is wrong |
+| 1 | `doctor`: it found a problem (an unusable directory, filesystem, `FORMAT` or configuration), including one that keeps `--clear` or `--reset` from acting |
+
+A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
+`status` exits 3, `doctor` exits 1 and `cancel` refuses with 75. `--help` prints on stdout and exits
+0 for every command.
 
 ## 20. Run log
 
@@ -1008,8 +1034,11 @@ any numbering conforms (section 7.1).
 The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
 [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
 [--no-wait] [--strict] [--independent] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
-`N..N`; with no `--need` the request is `cpu=1..1`; `--on-timeout` defaults to `fail`, so a
-`--timeout` that expires refuses; strict mode is `--strict`.
+`N..N`; with no `--need` the request is `cpu=1..1`; `--timeout` defaults to 0, no limit, and a
+negative one is a usage error; `--on-timeout` defaults to `fail`, so a `--timeout` that expires
+refuses; strict mode is `--strict`; `--refusal-code` defaults to 75. The other commands are
+`coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
+`coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]` and `coreslot version`.
 
 ### 21.1 Enqueue
 

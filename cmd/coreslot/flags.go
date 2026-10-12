@@ -33,18 +33,42 @@ const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--pr
        [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--subst]
        [--refusal-code N] -- COMMAND...`
 
+// runHelp is what `coreslot run --help` prints: the synopsis, then each flag with its default.
+const runHelp = runUsage + `
+
+Runs COMMAND once the budget grants it between MIN and MAX tokens of each resource it needs.
+
+  --need RES=MIN..MAX   tokens of RES the command needs, RES=N for N..N; repeatable
+                        (default cpu=1..1 when no --need is given)
+  --label L             a name for the request, shown by status and kept in the run log, so
+                        never a secret (default none)
+  --priority P          -1000 to 1000: the request queues as if it arrived P minutes earlier
+                        (default the configuration's [priorities] entry for the label, else 0)
+  --timeout D           stop waiting after D, for example 90s or 10m (default 0, no limit)
+  --on-timeout run|fail when --timeout passes: fail refuses, run runs the command outside the
+                        budget with MIN of each resource (default fail)
+  --no-wait             refuse unless the request is admitted at once
+  --strict              refuse instead of running unbudgeted when the state directory or the
+                        configuration cannot be used
+  --independent         queue as a request of its own, even inside another run's grant
+  --subst               replace placeholders inside arguments too, as in make -j{n}
+  --refusal-code N      exit status of a refusal, 1 to 255 (default 75)
+
+An argument that is exactly {n} becomes the number of cpu tokens granted, {n:RES} the number of
+RES tokens; {{n}} and {{n:RES}} stand for the literal text.`
+
 type needList []string
 
 func (n *needList) String() string     { return strings.Join(*n, ",") }
 func (n *needList) Set(v string) error { *n = append(*n, v); return nil }
 
-// errHelp is returned for -h and --help: the usage was printed and the run exits 0.
+// errHelp is returned for -h and --help: the help was printed on stdout and the run exits 0.
 var errHelp = errors.New("help requested")
 
 // parseRun parses the arguments of `coreslot run`. Every error is a *spec.UsageError (exit 64),
 // detected before anything queues: a malformed or duplicate need, an invalid request, a bad flag
 // value, a missing command, or a placeholder naming a resource the request does not name.
-func parseRun(args []string, stderr io.Writer) (runOptions, error) {
+func parseRun(args []string, streams IO) (runOptions, error) {
 	o := runOptions{onTimeout: "fail", refusalCode: exitRefusal}
 	fs := flag.NewFlagSet("coreslot run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -61,7 +85,7 @@ func parseRun(args []string, stderr io.Writer) (runOptions, error) {
 	fs.IntVar(&o.refusalCode, "refusal-code", exitRefusal, "exit status of a refusal")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stderr, runUsage)
+			fmt.Fprintln(streams.Stdout, runHelp)
 			return o, errHelp
 		}
 		return o, usagef("%v\n%s", err, runUsage)
@@ -88,7 +112,7 @@ func parseRun(args []string, stderr io.Writer) (runOptions, error) {
 	case o.onTimeout != "fail" && o.onTimeout != "run":
 		return o, usagef("--on-timeout %q: want run or fail", o.onTimeout)
 	case o.timeout < 0:
-		return o, usagef("--timeout %v: want a positive duration", o.timeout)
+		return o, usagef("--timeout %v: want a duration of 0 or more (0 means no limit)", o.timeout)
 	case o.refusalCode < 1 || o.refusalCode > 255:
 		return o, usagef("--refusal-code %d: want 1 to 255", o.refusalCode)
 	}

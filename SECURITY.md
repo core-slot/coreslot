@@ -40,7 +40,9 @@ The full rules are in
 - The directory is `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`
   elsewhere, where `~` comes from the password database (`getpwuid(getuid())`), never from `$HOME`
   or `XDG_*`. `CORESLOT_STATE_DIR` (an absolute path) overrides it for tests and moves the
-  configuration with it.
+  configuration with it. Never point `CORESLOT_STATE_DIR` below a directory another user can write to:
+  coreslot follows the ancestors of the state directory without checking them, so that user could
+  replace one of them.
 - Every directory coreslot creates is mode `0700`, every file `0600`, created with `O_NOFOLLOW`.
 - Every existing path of the layout must be of the expected type, owned by the real user id, not a
   symlink, and not group- or world-writable; anything else is a state error. coreslot then fails

@@ -92,8 +92,33 @@ jobs:
       - name: go test -race
         run: go test -race ./...
 
-      - name: conformance
-        run: go test -tags coreslot_testhooks -race -short ./conformance/
+      - name: Tests that need the test hooks (conformance and the rest)
+        # Only the tests that exist with the coreslot_testhooks tag alone: `go test -race ./...`
+        # above ran every other one, so they do not run twice. They are discovered, not listed,
+        # so a new one needs no workflow change; finding none fails the step. All of
+        # ./conformance/ is in that set.
+        shell: bash
+        run: |
+          plain_pkgs="$(go list ./...)"
+          found=0
+          for pkg in $(go list -tags coreslot_testhooks ./...); do
+            tagged="$(go test -tags coreslot_testhooks -list . "$pkg")"
+            plain=""
+            if grep -qx "$pkg" <<<"$plain_pkgs"; then
+              plain="$(go test -list . "$pkg")"
+            fi
+            only="$(comm -13 <(grep -E '^(Test|Fuzz|Example)' <<<"$plain" | sort || true) \
+              <(grep -E '^(Test|Fuzz|Example)' <<<"$tagged" | sort || true))"
+            [ -n "$only" ] || continue
+            found=$((found + $(wc -l <<<"$only")))
+            echo "::group::$pkg"
+            go test -tags coreslot_testhooks -race -short -run "^($(paste -sd'|' - <<<"$only"))\$" "$pkg"
+            echo "::endgroup::"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no test needing the test hooks was discovered"
+            exit 1
+          fi
 
       - name: Python interop client
         working-directory: conformance/pyclient

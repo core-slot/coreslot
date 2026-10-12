@@ -36,7 +36,8 @@ const statusSchema = 1
 const observeEvery = time.Second
 
 // statusCommand is `coreslot status`: the budget, its holders and its queue, read without
-// writing. It exits 3 while degraded mode is recorded (PROTOCOL.md section 14).
+// writing. It exits 3 while runs fail open (PROTOCOL.md sections 14 and 19): degraded mode is
+// recorded, or the state directory, FORMAT or the configuration cannot be used.
 func statusCommand(args []string, io IO) int {
 	fs := flag.NewFlagSet("coreslot status", flag.ContinueOnError)
 	fs.SetOutput(&bytes.Buffer{})
@@ -50,8 +51,12 @@ func statusCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), statusUsage)
 		return exitUsage
 	}
-	if fs.NArg() > 0 || *observe < 0 {
+	if fs.NArg() > 0 {
 		fmt.Fprintf(io.Stderr, "coreslot: status: unexpected arguments\n%s\n", statusUsage)
+		return exitUsage
+	}
+	if *observe < 0 {
+		fmt.Fprintf(io.Stderr, "coreslot: status: --observe %s: want a duration of 0 or more\n%s\n", *observe, statusUsage)
 		return exitUsage
 	}
 	if *observe > 0 && *observe < state.StallAfter {
@@ -60,8 +65,7 @@ func statusCommand(args []string, io IO) int {
 	}
 	e, _, err := openEngineReadOnly()
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
-		return exitInternal
+		return statusFailed(err, io)
 	}
 	snap := func() (rep coreslot.Report, err error) {
 		err = inSection(func() (err error) { // Snapshot probes admit.lock
@@ -72,8 +76,7 @@ func statusCommand(args []string, io IO) int {
 	}
 	rep, w, err := observeQueue(snap, *observe, monotonicClock())
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
-		return exitInternal
+		return statusFailed(err, io)
 	}
 	v := buildStatus(rep, store.NowNS(), w, *observe)
 	if *asJSON {
@@ -84,10 +87,22 @@ func statusCommand(args []string, io IO) int {
 	} else {
 		fmt.Fprint(io.Stdout, v.human())
 	}
-	if rep.Degraded != nil {
+	if rep.Degraded != nil || rep.FormatError != "" || rep.ConfigError != "" {
 		return exitDegraded
 	}
 	return 0
+}
+
+// statusFailed reports an error that kept status from reading the state. A state error
+// (PROTOCOL.md section 14) exits 3, like a recorded degraded mode: runs fail open while it lasts.
+// Anything else is an internal error, exit 70.
+func statusFailed(err error, io IO) int {
+	if _, stateErr := classify(err); stateErr {
+		fmt.Fprintf(io.Stderr, "coreslot: status: %s; runs fail open until it is fixed (`coreslot doctor` checks it)\n", text(err.Error()))
+		return exitDegraded
+	}
+	fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
+	return exitInternal
 }
 
 // openEngineReadOnly opens the state directory like openEngine, but creates nothing: not the
@@ -227,11 +242,27 @@ func holderAlive(pid int) bool {
 	return err == nil || errors.Is(err, unix.EPERM)
 }
 
-func (v statusView) sectionFor() time.Duration {
-	if !v.rep.Section.Held || v.rep.Section.EnteredNS == 0 {
+func (v statusView) sectionFor() time.Duration { return sectionHeldFor(v.rep.Section, v.nowNS) }
+
+func sectionHeldFor(s coreslot.SectionInfo, nowNS int64) time.Duration {
+	if !s.Held || s.EnteredNS == 0 {
 		return 0
 	}
-	return time.Duration(max(v.nowNS-v.rep.Section.EnteredNS, 0))
+	return time.Duration(max(nowNS-s.EnteredNS, 0))
+}
+
+// sectionHolder describes the admission section from admit.lock's informational body, which
+// may be stale: `free`, or `held by pid 4711 for 3s (as recorded in admit.lock)`.
+func sectionHolder(s coreslot.SectionInfo, nowNS int64) string {
+	switch {
+	case !s.Held:
+		return "free"
+	case s.PID != 0 && !holderAlive(s.PID):
+		return fmt.Sprintf("held; holder unknown (last recorded pid %d has exited)", s.PID)
+	case s.PID != 0:
+		return fmt.Sprintf("held by pid %d for %s (as recorded in admit.lock)", s.PID, duration(sectionHeldFor(s, nowNS)))
+	}
+	return "held (the holder is not recorded)"
 }
 
 // ---------------------------------------------------------------- human output
@@ -265,16 +296,7 @@ func (v statusView) human() string {
 	default:
 		p("format: %d", r.Format)
 	}
-	switch {
-	case !r.Section.Held:
-		p("admission section: free")
-	case r.Section.PID != 0 && !holderAlive(r.Section.PID):
-		p("admission section: held; holder unknown (last recorded pid %d has exited)", r.Section.PID)
-	case r.Section.PID != 0:
-		p("admission section: held by pid %d for %s (as recorded in admit.lock)", r.Section.PID, duration(v.sectionFor()))
-	default:
-		p("admission section: held (the holder is not recorded)")
-	}
+	p("admission section: %s", sectionHolder(r.Section, v.nowNS))
 	if d := r.Degraded; d != nil {
 		if d.Malformed {
 			p("DEGRADED: the record is unreadable; `coreslot doctor --clear` removes it")
@@ -289,9 +311,10 @@ func (v statusView) human() string {
 		p("CONFIGURATION ERROR: %s", text(r.ConfigError))
 	}
 
-	p("resources:")
-	if len(r.Resources) == 0 {
-		p("  none declared")
+	if r.ConfigError != "" {
+		p("resources: not known, the configuration cannot be read (runs fail open until it is fixed)")
+	} else {
+		p("resources:")
 	}
 	for _, name := range slices.Sorted(maps.Keys(r.Resources)) {
 		ri := r.Resources[name]
@@ -576,11 +599,17 @@ func nonNilMap(m map[string]int) map[string]int {
 	return m
 }
 
-// writeJSON writes the document with labels exactly as stored: encoding/json escapes control
-// characters and keeps every valid UTF-8 label decodable to the same string.
+// writeJSON writes the document with labels exactly as stored: encoding/json escapes the C0
+// controls, wire.EscapeJSON the other characters that act on a terminal (C1 controls, bidi
+// controls), and every valid UTF-8 label decodes to the same string.
 func (v statusView) writeJSON(w interface{ Write([]byte) (int, error) }) error {
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	return enc.Encode(v.document())
+	if err := enc.Encode(v.document()); err != nil {
+		return err
+	}
+	_, err := w.Write(wire.EscapeJSON(buf.Bytes()))
+	return err
 }

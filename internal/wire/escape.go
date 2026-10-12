@@ -79,3 +79,47 @@ func isLineOrBidi(r rune) bool {
 	}
 	return false
 }
+
+// EscapeJSON rewrites, in encoded JSON, every character that encoding/json leaves raw but that
+// acts on a terminal or on the line it sits in as a `\uNNNN` escape: DEL, the C1 controls
+// U+0080 to U+009F, and the characters that separate lines or reorder text (U+061C, U+200E,
+// U+200F, U+2028, U+2029, U+202A to U+202E, U+2066 to U+2069). encoding/json already escapes the
+// C0 controls, so a document printed or appended to a log cannot act on the terminal that shows
+// it. Each of these characters can only occur inside a JSON string, where the escape stands for
+// the same character, so the result is valid JSON that decodes to the same values. A document
+// with nothing to rewrite is returned as it is.
+func EscapeJSON(doc []byte) []byte {
+	first := -1
+	for i := 0; i < len(doc) && first < 0; {
+		r, size := utf8.DecodeRune(doc[i:])
+		if jsonEscaped(r, size) {
+			first = i
+		}
+		i += size
+	}
+	if first < 0 {
+		return doc
+	}
+	const hex = "0123456789abcdef"
+	out := make([]byte, first, len(doc)+16)
+	copy(out, doc[:first])
+	for i := first; i < len(doc); {
+		r, size := utf8.DecodeRune(doc[i:])
+		if jsonEscaped(r, size) {
+			out = append(out, '\\', 'u')
+			for shift := 12; shift >= 0; shift -= 4 {
+				out = append(out, hex[(r>>shift)&15])
+			}
+		} else {
+			out = append(out, doc[i:i+size]...)
+		}
+		i += size
+	}
+	return out
+}
+
+// jsonEscaped reports a decoded rune EscapeJSON rewrites; size 1 with utf8.RuneError is a byte
+// that is not UTF-8, which encoding/json never emits and which is kept.
+func jsonEscaped(r rune, size int) bool {
+	return r == 0x7f || r >= 0x80 && size > 1 && (unicode.IsControl(r) || isLineOrBidi(r))
+}

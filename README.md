@@ -100,16 +100,11 @@ descriptors keeps them.
 
 ### Exit status
 
-| Status | Meaning |
-|---|---|
-| the command's own | the command ran (`128 + signal` when it was killed) |
-| 130 | interrupted with `Ctrl-C` while waiting (another signal gives `128 + signal`) |
-| 75 | refused (`--no-wait`, `--on-timeout fail`, cancellation, `--strict`); `--refusal-code N` changes it |
-| 64 | usage error |
-| 126 / 127 | the command is not executable / not found |
-| 70 | internal error before the command could run |
-| 3 | `status` or `doctor`: degraded mode (`coreslot doctor --clear` clears the record) |
-| 1 | `doctor` found a problem |
+A run exits with its command's own status. Otherwise 75 means refused (`--no-wait`,
+`--on-timeout fail`, cancellation, `--strict`; `--refusal-code N` changes it), 64 a usage error,
+130 `Ctrl-C` while waiting, 126 / 127 a command that is not executable / not found, and 70 an
+internal error. `status` exits 3 while runs fail open, and `doctor` 1 when it finds a problem.
+[`PROTOCOL.md` section 19](PROTOCOL.md#19-exit-status) has the full table.
 
 When the state directory cannot be used (a network filesystem, wrong permissions, an invalid
 configuration), `run` fails open: it runs the command at once with its minimum, says so on stderr,
