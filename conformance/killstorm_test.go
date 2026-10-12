@@ -142,8 +142,9 @@ func readReport(markDir, name string) (ChildReport, bool) {
 	return r, true
 }
 
-// tokenOnlyRun is a token-only run the test started: it publishes nothing, and its command
-// reports the descriptors it inherited.
+// tokenOnlyRun is a token-only run the test started: it publishes nothing. Its command
+// creates NAME.begun in the marker directory as its very first action, so the run is known to
+// be admitted, and then reports the descriptors it inherited in NAME.started.
 type tokenOnlyRun struct {
 	name  string
 	need  map[string]spec.Range
@@ -164,13 +165,17 @@ func (r *tokenOnlyRuns) add(name string, need map[string]spec.Range, alive func(
 	r.runs = append(r.runs, &tokenOnlyRun{name: name, need: need, alive: alive})
 }
 
-// grants is the sampler's TokenOnly: the inodes the live runs' commands reported, and, per
-// resource, the minimums (clamped to the size) of the live runs that have not reported.
-func (r *tokenOnlyRuns) grants(sizes map[string]int) TokenOnly {
+// begunPath is the start marker of the token-only command named name.
+func begunPath(markDir, name string) string { return filepath.Join(markDir, name+".begun") }
+
+// grants is the sampler's TokenOnly: the inodes the live runs' commands reported, and the
+// minimums of the live runs that were admitted (their command began) and have not reported.
+// A run still waiting has neither.
+func (r *tokenOnlyRuns) grants() TokenOnly {
 	r.mu.Lock()
 	runs := slices.Clone(r.runs)
 	r.mu.Unlock()
-	out := TokenOnly{Inodes: map[[2]uint64]bool{}, Pending: map[string]int{}}
+	out := TokenOnly{Inodes: map[[2]uint64]bool{}}
 	for _, run := range runs {
 		rep, reported := readReport(r.markDir, run.name)
 		if !run.alive(rep, reported) {
@@ -184,15 +189,33 @@ func (r *tokenOnlyRuns) grants(sizes map[string]int) TokenOnly {
 			}
 			continue
 		}
-		for res, rg := range run.need {
-			n := rg.Min
-			if size, ok := sizes[res]; ok {
-				n = min(n, size)
-			}
-			out.Pending[res] += n
+		if _, err := os.Stat(begunPath(r.markDir, run.name)); err != nil {
+			continue // waiting: no grant
 		}
+		mins := map[string]int{}
+		for res, rg := range run.need {
+			mins[res] = rg.Min
+		}
+		out.Admitted = append(out.Admitted, mins)
 	}
 	return out
+}
+
+// reportLatency is the longest time, over the runs that reported, from a command's start
+// marker to its report.
+func (r *tokenOnlyRuns) reportLatency() (longest time.Duration, runs int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, run := range r.runs {
+		b, err1 := os.Stat(begunPath(r.markDir, run.name))
+		s, err2 := os.Stat(filepath.Join(r.markDir, run.name+".started"))
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		runs++
+		longest = max(longest, s.ModTime().Sub(b.ModTime()))
+	}
+	return longest, runs
 }
 
 // ---------------------------------------------------------------- the storm
@@ -357,6 +380,10 @@ func needFlags(need map[string]spec.Range, flag string) []string {
 // argv is c's command line.
 func (st *storm) argv(c *stormClient) []string {
 	leaf := []string{bins.child, "hold", st.e.MarkDir, c.name}
+	if c.outer == "tok" {
+		// The start marker first, then the command that reports its descriptors.
+		leaf = append([]string{"/bin/sh", "-c", `: > "$0" && exec "$@"`, begunPath(st.e.MarkDir, c.name)}, leaf...)
+	}
 	cmd := leaf
 	switch c.inner {
 	case "go":
@@ -419,6 +446,27 @@ func (st *storm) release(c *stormClient) {
 func (st *storm) holding(c *stormClient) bool {
 	_, ok := readReport(st.e.MarkDir, c.name)
 	return ok
+}
+
+// firstWaveArrived reports whether every first-wave client has been seen queued or with its
+// command running (a token-only run, which has no ticket, once its command began); seen keeps
+// the clients already seen, so a cancelled or killed one stays arrived.
+func (st *storm) firstWaveArrived(seen map[int]bool) bool {
+	all := true
+	for id := 1; id <= firstWave; id++ {
+		if seen[id] {
+			continue
+		}
+		c := st.plan(id)
+		_, queued := st.ticketID(c)
+		_, begun := os.Stat(begunPath(st.e.MarkDir, c.name))
+		if queued || st.holding(c) || begun == nil {
+			seen[id] = true
+			continue
+		}
+		all = false
+	}
+	return all
 }
 
 // waitHolding waits until c's command runs: false when the storm ended or the process exited.
@@ -755,12 +803,34 @@ func TestKillStorm(t *testing.T) {
 	st.started = time.Now()
 	var wg sync.WaitGroup
 	wg.Go(func() { st.sizer(ctx) })
+	// The first wave arrives before every other client: the slots after it start once each
+	// first-wave client is queued or holding (or after 5 s), so that a slow start under load
+	// cannot put a first-wave waiter behind a random request that blocks the queue.
+	arrived := make(chan struct{})
+	go func() {
+		defer close(arrived)
+		seen := map[int]bool{}
+		for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && ctx.Err() == nil; time.Sleep(pollStep) {
+			if st.firstWaveArrived(seen) {
+				return
+			}
+		}
+	}()
 	for slot := range clients {
 		wg.Go(func() {
-			select { // stagger the first arrivals
+			delay := time.Duration(slot) * 40 * time.Millisecond // stagger the first arrivals
+			if slot >= firstWave {
+				select {
+				case <-ctx.Done():
+					return
+				case <-arrived:
+				}
+				delay = time.Duration(slot-firstWave) * 40 * time.Millisecond
+			}
+			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Duration(slot) * 40 * time.Millisecond):
+			case <-time.After(delay):
 			}
 			for ctx.Err() == nil {
 				st.mu.Lock()
@@ -842,13 +912,24 @@ func TestKillStorm(t *testing.T) {
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	summary := fmt.Sprintf("kill-storm seed %d: %d clients in %v, %d samples (%d missed), %d violations; events %v; endings %v; load after: %s",
+	latency, reportedRuns := st.tok.reportLatency()
+	summary := fmt.Sprintf("kill-storm seed %d: %d clients in %v, %d samples (%d missed), %d violations; "+
+		"token-only start-to-report latency max %v over %d runs (bound %v); events %v; endings %v; load after: %s",
 		seed, len(st.results), time.Since(st.started).Round(time.Second), samples, missed, len(violations),
-		st.counts, codes, uptime())
+		latency, reportedRuns, st.s.TokenOnlyBound, st.counts, codes, uptime())
 	t.Log(summary)
 	fmt.Fprintln(os.Stderr, summary)
 
-	// The run exercised what it is for: floors on what happened, scaled for -short.
+	// The sampler's token-only bound must cover every start-to-report latency the run saw;
+	// one that does not is its own failure here, not a false I2 above.
+	if latency >= st.s.TokenOnlyBound {
+		t.Errorf("a token-only command took %v from its start marker to its report: the sampler's bound %v is too tight",
+			latency, st.s.TokenOnlyBound)
+	}
+
+	// The run exercised what it is for: floors on what happened, scaled for -short. The first
+	// shrink is deterministic (cpu 4 to 2 while the first wave holds 4), so the floor on a
+	// shrink below the locked count checks that the schedule ran, not that chance produced one.
 	admitted := 0
 	for k, n := range st.counts {
 		if strings.HasPrefix(k, "admitted ") && k != "admitted nested" {
@@ -867,9 +948,19 @@ func TestKillStorm(t *testing.T) {
 	if st.py != "" {
 		floors = append(floors, "admitted py")
 	}
+	floorFailed := false
 	for _, what := range floors {
 		if st.counts[what] < 1 {
+			floorFailed = true
 			t.Errorf("the storm never exercised %q", what)
+		}
+	}
+	if floorFailed {
+		for _, r := range st.results {
+			if r.c.id <= firstWave {
+				t.Logf("first wave %s (pid %d, fate %s): exit %d, killed %v, admitted %v; stderr:\n%s",
+					r.c.name, r.c.proc.pid, r.c.fate, r.code, r.c.killed, r.admitted, r.stderr)
+			}
 		}
 	}
 	if minSamples := int(3 * dur.Seconds()); samples < minSamples || missed > 3 {
