@@ -347,6 +347,11 @@ func (st *storm) plan(id int) *stormClient {
 		c.inner = ""
 		c.need = map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
 		c.priority, c.timeout, c.fate = 0, 0, "release"
+		if id > 4 {
+			// The highest priority a random client draws, so that one arriving later with it
+			// cannot overtake the first wave (equal order keys fall back to arrival).
+			c.priority = 2
+		}
 		switch id {
 		case 1, 2, 3, 4:
 			c.afterShrink = true
