@@ -816,8 +816,8 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := cli(t, baseEnv(dir), "doctor", "--reset")
-	if r.code == 0 {
-		t.Fatalf("doctor --reset left %s behind and exited 0", stuck)
+	if r.code != 1 {
+		t.Fatalf("doctor --reset left %s behind and exited %d, want 1: a state problem is never 70", stuck, r.code)
 	}
 	// The run log, gen and FORMAT were removed although the stuck entry could not be.
 	if !strings.Contains(r.stderr, "removed 3 entries; 1 could not be removed: ") {

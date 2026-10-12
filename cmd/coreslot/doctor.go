@@ -102,7 +102,7 @@ func doctorAct(doReset bool, io IO) int {
 			// The removal is best effort: everything else was removed. Say how much, and what not.
 			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: removed %d entries; %d could not be removed: %s\n",
 				removed, incomplete.Left, text(incomplete.Err.Error()))
-			return exitInternal
+			return exitProblems
 		case err != nil:
 			return doctorFailed(what, err, io)
 		}
