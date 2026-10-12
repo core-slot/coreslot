@@ -7,6 +7,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -17,7 +18,8 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-// admit is the head's admission attempt (PROTOCOL.md section 12.1 steps 1 to 7). It returns
+// admit is the head's admission attempt (PROTOCOL.md section 12.1 steps 1 to 7, with the
+// re-election of step 5). It returns
 // the grant when admitted, nil with no error when the head must keep waiting (the section was
 // busy, not enough is free, or a non-queued taker won a race), and ErrCancelled when a cancel
 // request was published before this section.
@@ -65,6 +67,10 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if !ok {
 		return nil, nil
 	}
+	// 5. The re-election: a ticket published ahead of this one since its election wins.
+	if ok, err := t.reelect(); err != nil || !ok {
+		return nil, err
+	}
 	ts, ok, err := takeTwoPasses(sec, eff, take, sizes)
 	if err != nil || !ok {
 		return nil, err
@@ -94,6 +100,65 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	_ = sec.BumpGen()
 	t.status, t.grant = statusAdmitted, g
 	return g, nil
+}
+
+// reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
+// lists the names in queue/ again and reports whether every well-formed ticket ahead of this one
+// is dead, gone or STALLED for this observer, reading the mtime (lstat) of only those tickets.
+// A ticket this observer has never watched, such as one published after the election, counts as
+// live; the next election then rescans whatever gen says, so a ticket published without a gen
+// bump is watched from then on and cannot keep the head out for longer than a stall.
+func (t *Ticket) reelect() (ok bool, err error) {
+	entries, err := t.e.st.ListNames(store.QueueDir)
+	if err != nil {
+		return false, err
+	}
+	now := t.e.clock.Monotonic()
+	for _, en := range entries {
+		k := state.Key{OrderKey: en.ID.OrderKey, PID: en.ID.PID, Seq: en.ID.Seq}
+		if !k.Less(t.key) {
+			continue
+		}
+		well, known := t.ticketOK[en.Name]
+		if !known {
+			body, err := t.e.readBody(store.QueueDir, en.Name)
+			if gone(err) {
+				continue
+			}
+			if err != nil && !stray(err) {
+				return false, err
+			}
+			_, derr := wire.DecodeTicket(body)
+			well = err == nil && derr == nil
+			t.ticketOK[en.Name] = well
+		}
+		if !well {
+			continue
+		}
+		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.Name))
+		if gone(err) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		dead, err := probe(t.e.st, store.QueueDir, en.Name)
+		if gone(err) || stray(err) || (err == nil && dead) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if _, seen := t.obs.Seen(k); !seen {
+			t.haveGen = false // rescan at the next election, so that it is watched from then on
+			return false, nil // first seen inside the section: live
+		}
+		t.obs.Observe(k, fi.ModTime().UnixNano(), now)
+		if !t.obs.Stalled(k, now) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // takeTwoPasses takes tokens in the two passes of PROTOCOL.md section 12.1 step 6: the

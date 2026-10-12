@@ -23,8 +23,12 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
-// Bounds of the traces. I5 lets a stopped head block the queue for 11 s; the traces allow
-// twice that, because OS scheduling of the processes involved is not part of the claim.
+// Bounds of the traces. I5 lets up to 4 stopped tickets at the front block the queue for about
+// 11 s; the traces allow twice that, because OS scheduling of the processes involved is not part
+// of the claim. That bound cannot tell a waiter that watches the front window from one that does
+// not (a missed window costs about 10 s more per successor, and a tighter bound would flake on a
+// loaded host): the front window is enforced by the Go engine tests (wait_test.go) and the Python
+// client's tests, not here.
 const (
 	stalledHeadBound = 22 * time.Second
 	pollBound        = 100 * time.Millisecond // a library Poll while the section is held
@@ -374,13 +378,18 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	}
 	noHold(t, e, "C", "C was admitted past B")
 
+	// C has watched A (the head, in its front window) since before A stopped; observeWait more
+	// makes sure it has judged A STALLED. No token is free (X and B hold both), so nothing can be
+	// admitted meanwhile.
+	time.Sleep(observeWait)
 	a.Cont()
 	defer a.AutoRelease("admit.before-enter")()
 	waitRefreshed(e, "A", mtime)
 	time.Sleep(observeWait)
 
-	// One token frees up: C would fit, A (needing two) does not, and C, which saw A stall, must
-	// now see it live again and wait behind it. Then the second token: A is next.
+	// One token frees up: C would fit, A (needing two) does not, and C, which judged A STALLED,
+	// must now see it live again (STALLED to WAITING) and wait behind it. Then the second token:
+	// A is next.
 	e.ReleaseChild("B")
 	b.ExitCode(0)
 	time.Sleep(observeWait)
@@ -441,6 +450,10 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 		t.Errorf("C (admitted %v) went before D (admitted %v), which is ahead of it", admittedAt(hc), admittedAt(hd))
 	}
 
+	// E watches A and B (both in its front window) from its arrival, just after C's; C was
+	// admitted 10 s after it arrived, so observeWait more makes sure E has judged both STALLED.
+	// No token is free (X, D and C hold all three), so nothing can be admitted meanwhile.
+	time.Sleep(observeWait)
 	a.Cont()
 	defer a.AutoRelease("admit.before-enter")()
 	b.Cont()
@@ -448,8 +461,8 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 	waitRefreshed(e, "B", tkB.MtimeNS)
 	time.Sleep(observeWait)
 
-	// One token frees up: E would fit, A and B (needing three) do not, and E, which saw them
-	// stall, must now see them live again and wait behind them.
+	// One token frees up: E would fit, A and B (needing three) do not, and E, which judged them
+	// STALLED, must now see them live again (STALLED to WAITING) and wait behind them.
 	e.ReleaseChild("D")
 	d.ExitCode(0)
 	time.Sleep(observeWait)
@@ -478,18 +491,47 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 
 // A higher-priority ticket published after the head won an election, while the head waits
 // before a section that cannot admit it, is admitted first: the head repeats the election
-// before its next attempt (PROTOCOL.md section 10.3). One published while the head is inside
-// the section that admits it is admitted after it.
-//
-// PENDING phase, not implemented: re-election inside the admitting section is scheduled
-// separately. When it lands, this trace gains the phase "P admissible (capacity free at H's
-// section), H caught at admit.before-enter after winning its election, P (priority 10)
-// published, H released: P is admitted first", whose mutation is "skip re-election inside the
-// section". Today H is admitted first in that interleaving, which I4 as written permits (P was
-// published after H's election); the subtest below marks the gap in every run.
+// before its next attempt (PROTOCOL.md section 10.3). One published after the head's election
+// but before the section that could admit it is admitted first too: that section repeats the
+// election (section 12.1 step 5), where a ticket first seen counts as live. One published while
+// the head is inside the section that admits it is admitted after it.
 func TestArrivalBeforeAndAfterElection(t *testing.T) {
-	t.Run("pending: admissible P published between H's election and its admitting section", func(t *testing.T) {
-		t.Skip("PENDING: needs re-election inside the admitting section (scheduled separately); see the comment above")
+	t.Run("admissible P published between H's election and its admitting section", func(t *testing.T) {
+		e := State(t)
+		e.WriteConfig(cpuConfig(1))
+		h := e.Pausing("admit.before-enter", "section.entered").Run("H", "--need", "cpu=1")
+		autoSec := h.AutoRelease("section.entered")
+		e.WaitTicket("H")
+		h.WaitReached("admit.before-enter") // H won an election with the token free
+		autoSec()
+
+		// P (priority 10), ahead of H, is published and elected too, and is held before its
+		// own admitting section.
+		p := e.Pausing("admit.before-enter").Run("P", "--priority", "10", "--need", "cpu=1")
+		e.WaitTicket("P")
+		p.WaitReached("admit.before-enter")
+		if rep := e.Status(); len(rep.Tickets) != 2 || rep.Tickets[0].Label != "P" {
+			t.Fatalf("queue %v: P is not ahead of H", rep.Tickets)
+		}
+
+		// H enters the section it was elected for, with the token free: it must not take it.
+		h.Release("admit.before-enter")
+		h.WaitReached("section.entered")
+		defer h.AutoRelease("admit.before-enter")()
+		h.Release("section.entered")
+		defer h.AutoRelease("section.entered")()
+		e.Eventually(startWait, "H leaves its section", func() bool { return !e.Status().Section.Held })
+		noHold(t, e, "H", "H was admitted past P, published before its admitting section")
+
+		p.Release("admit.before-enter")
+		defer p.AutoRelease("admit.before-enter")()
+		e.WaitHold("P", startWait)
+		noHold(t, e, "H", "H was admitted beside P")
+		e.ReleaseChild("P")
+		p.ExitCode(0)
+		e.WaitHold("H", startWait)
+		e.ReleaseChild("H")
+		h.ExitCode(0)
 	})
 	e := State(t)
 	e.WriteConfig("[resources]\ncpu = 1\npg = 1\n")
