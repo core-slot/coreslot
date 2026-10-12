@@ -1850,11 +1850,12 @@ class Grant:
         if self.closed:
             return
         self.closed = True
-        for fd in self.token_fds():
-            os.close(fd)
+        # §12.3: the hold before any token, so that a live hold never lists a token nobody locks.
         if self.hold_fd is not None:
             os.close(self.hold_fd)
             self.hold_fd = None
+        for fd in self.token_fds():
+            os.close(fd)
         if remove_hold and self.hold_name and self.client is not None:
             self.client.remove_hold(self.hold_name)
 
