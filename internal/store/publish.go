@@ -276,7 +276,7 @@ func (s *Store) ReadGen() (Gen, error) {
 // nextGen is gen increased by one. gen is in [0, 2^63-1] (PROTOCOL.md section 7.8), so the bump
 // from the maximum wraps to 0 rather than writing a value no reader accepts.
 func nextGen(n int64) int64 {
-	if n >= math.MaxInt64 {
+	if n == math.MaxInt64 {
 		return 0
 	}
 	return n + 1
