@@ -213,10 +213,10 @@ func doctorReport(io IO) int {
 	case err != nil:
 	case rep.FormatError != "":
 		problem("format: FORMAT is malformed (%s); `coreslot doctor --reset` repairs it when nothing is live", text(rep.FormatError))
-	case rep.Format == 0:
-		line("format: FORMAT not written yet (the first client writes 1)")
-	case !rep.FormatUnderstood:
+	case !rep.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
 		line("format: %d, which this client does not implement; runs use token-only mode", rep.Format)
+	case !rep.FormatPresent:
+		line("format: FORMAT not written yet (the first client writes 1)")
 	default:
 		line("format: %d", rep.Format)
 	}

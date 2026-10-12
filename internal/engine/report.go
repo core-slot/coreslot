@@ -63,9 +63,10 @@ type DegradedInfo struct {
 type Report struct {
 	StateDir         string
 	StateDirExists   bool   // false on a machine where nothing has run yet: everything else is empty
-	Format           int    // 0 when FORMAT is absent
+	Format           int    // 0 when FORMAT is absent, unreadable or malformed, and when it names format 0
+	FormatPresent    bool   // FORMAT was read, well-formed or malformed; false when it is absent or unreadable
 	FormatUnderstood bool   // this client implements Format (an absent FORMAT counts as 1)
-	FormatError      string // set when FORMAT is malformed
+	FormatError      string // set when FORMAT is malformed or unreadable
 	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)
 	ReconciledNS     int64
 	Resources        map[string]ResourceInfo // declared resources

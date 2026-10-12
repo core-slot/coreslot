@@ -47,6 +47,9 @@ func (e *Engine) Snapshot() (Report, error) {
 		UndeclaredLocked: map[string]int{}, Ignored: map[string]int{}}
 
 	n, present, err := e.st.ReadFormat()
+	// Format 0 is well-formed and names a format this document does not define (PROTOCOL.md
+	// section 7.6), so Format alone cannot tell it from an absent FORMAT: FormatPresent does.
+	r.FormatPresent = present
 	switch {
 	case err != nil:
 		r.FormatError = err.Error()

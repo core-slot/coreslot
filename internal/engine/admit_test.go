@@ -458,6 +458,40 @@ func TestFailOpenHold(t *testing.T) {
 	}
 }
 
+// Format 0 is well-formed and undefined (PROTOCOL.md section 7.6): Snapshot reports it present
+// and not understood, so that no reader takes it for an absent FORMAT, which also has Format 0.
+// Mutation: drop the FormatPresent assignment in Snapshot and the format-0 case turns red.
+func TestSnapshotTellsFormatZeroFromAbsent(t *testing.T) {
+	for _, c := range []struct {
+		name, body          string // body "" leaves FORMAT absent
+		format              int
+		present, understood bool
+		malformed           bool
+	}{
+		{"absent", "", 0, false, true, false},
+		{"format 0", "coreslot-protocol 0\n", 0, true, false, false},
+		{"format 00", "coreslot-protocol 00", 0, true, false, false},
+		{"format 1", "coreslot-protocol 1\n", 1, true, true, false},
+		{"format 2", "coreslot-protocol 2\n", 2, true, false, false},
+		{"malformed", "coreslot-protocol x\n", 0, true, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := newStateDir(t, "")
+			if c.body != "" {
+				writeFormat(t, dir, c.body)
+			}
+			r, err := newEngine(t, dir, nil).Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Format != c.format || r.FormatPresent != c.present || r.FormatUnderstood != c.understood || (r.FormatError != "") != c.malformed {
+				t.Errorf("format %d present %v understood %v error %q; want %d, %v, %v, malformed %v",
+					r.Format, r.FormatPresent, r.FormatUnderstood, r.FormatError, c.format, c.present, c.understood, c.malformed)
+			}
+		})
+	}
+}
+
 func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()

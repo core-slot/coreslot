@@ -20,6 +20,7 @@ field Report.DeadHolds []string
 field Report.Degraded *DegradedInfo
 field Report.Format int
 field Report.FormatError string
+field Report.FormatPresent bool
 field Report.FormatUnderstood bool
 field Report.Gen int64
 field Report.Holds []HolderInfo

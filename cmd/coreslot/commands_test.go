@@ -157,7 +157,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	holdToken(t, dir, "cpu", 3) // locked, and no hold lists it
 
 	doc := statusDoc(t, dir, 0)
-	const top = "cancel_requests config_error dead_holds degraded format format_error format_understood gen holds ignored observed_s reconciled_ns resources schema section state_dir state_dir_exists tickets undeclared_locked"
+	const top = "cancel_requests config_error dead_holds degraded format format_error format_present format_understood gen holds ignored observed_s reconciled_ns resources schema section state_dir state_dir_exists tickets undeclared_locked"
 	if got := keysOf(doc); got != top {
 		t.Errorf("top-level keys\n got %s\nwant %s", got, top)
 	}
@@ -1257,6 +1257,39 @@ func TestStatusWithMalformedFormat(t *testing.T) {
 	}
 	if r := cli(t, baseEnv(dir), "status"); r.code != 3 || !strings.Contains(r.stdout, "format: MALFORMED (") {
 		t.Errorf("status: exit %d, want 3 reporting FORMAT malformed (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+}
+
+// FORMAT naming format 0 is a format this client does not implement (PROTOCOL.md section 7.6),
+// not an absent FORMAT: status and doctor say so, as run's token-only mode does. Mutation: take
+// Format == 0 for absence again, before FormatUnderstood, in either command and its case turns red.
+func TestStatusAndDoctorReportFormatZero(t *testing.T) {
+	dir := stateDir(t, "")
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := cli(t, baseEnv(dir), "status"); r.code != 0 ||
+		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement (token-only mode)\n") {
+		t.Errorf("status: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+	if r := cli(t, baseEnv(dir), "doctor"); r.code != 0 ||
+		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement; runs use token-only mode\n") {
+		t.Errorf("doctor: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+	doc := statusDoc(t, dir, 0)
+	if doc["format"] != float64(0) || doc["format_present"] != true || doc["format_understood"] != false {
+		t.Errorf("status --json: format %v, format_present %v, format_understood %v; want 0, true, false",
+			doc["format"], doc["format_present"], doc["format_understood"])
+	}
+	if err := os.Remove(filepath.Join(dir, "FORMAT")); err != nil {
+		t.Fatal(err)
+	}
+	if r := cli(t, baseEnv(dir), "status"); !strings.Contains(r.stdout, "\nformat: not written yet (the first client writes 1)\n") {
+		t.Errorf("status without FORMAT: exit %d:\n%s", r.code, r.stdout)
+	}
+	if doc := statusDoc(t, dir, 0); doc["format_present"] != false || doc["format_understood"] != true {
+		t.Errorf("status --json without FORMAT: format_present %v, format_understood %v; want false, true",
+			doc["format_present"], doc["format_understood"])
 	}
 }
 
