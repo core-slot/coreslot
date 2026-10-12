@@ -890,10 +890,11 @@ func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
 // malformed one, writes no line and says so on stderr, though FORMAT was understood when it was
 // admitted.
 func TestRunLogSkippedWhenFormatChangesDuringRun(t *testing.T) {
-	for name, format := range map[string]string{
-		"unknown":   "coreslot-protocol 2\n",
-		"malformed": "coreslot-protocol x\n",
+	for name, c := range map[string]struct{ format, notice string }{
+		"unknown":   {"coreslot-protocol 2\n", "FORMAT is missing or names a format this client does not implement"},
+		"malformed": {"coreslot-protocol x\n", "malformed FORMAT"},
 	} {
+		format := c.format
 		t.Run(name, func(t *testing.T) {
 			dir := stateDir(t, "")
 			env := append(baseEnv(dir), "S="+dir, "F="+format)
@@ -904,8 +905,8 @@ func TestRunLogSkippedWhenFormatChangesDuringRun(t *testing.T) {
 			if lines := runLog(t, dir); len(lines) != 0 {
 				t.Errorf("a run-log line was written after FORMAT became %q: %v", format, lines)
 			}
-			if !strings.Contains(r.stderr, "the run log was not written") {
-				t.Errorf("stderr %q: want a notice that the run log was not written", r.stderr)
+			if !strings.Contains(r.stderr, "the run log was not written: ") || !strings.Contains(r.stderr, c.notice) {
+				t.Errorf("stderr %q: want a notice that the run log was not written naming %q", r.stderr, c.notice)
 			}
 		})
 	}
