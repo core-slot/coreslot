@@ -200,9 +200,10 @@ func (s *lockedSampler) check(t *testing.T, minSamples int) {
 // also a refresh gap above 10 s on every waiter's wall clock: each bumps gen once (the resume
 // bump's wall-clock arm); a backward step bumps nothing.
 //
-// Mutation: judge STALLED by the observer's wall clock (wall clock minus mtime above 10 s) in
-// elect instead of observing changes. Forward reddens at once (B passes the live, silent A);
-// backward reddens at the bound (A's mtime lies in B's future, so A never stalls).
+// Mutation: judge STALLED by the observer's wall clock (wall clock minus the last mtime read
+// above 10 s) in Observer.Stalled instead of observing changes. Forward reddens at once (B passes
+// the live, silent A); backward reddens at the bound (A's mtime lies in B's future, so A never
+// stalls).
 // Mutation: drop the wall-clock arm of the resume bump (refresh checks the monotonic gap only):
 // the forward step bumps nothing.
 //
