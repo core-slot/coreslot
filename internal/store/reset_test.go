@@ -4,6 +4,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -211,6 +212,10 @@ func TestResetReportsWhatItCannotRemove(t *testing.T) {
 	}
 	if removed != 9 {
 		t.Errorf("removed %d entries alongside the error, want 9 (everything but the stuck entry)", removed)
+	}
+	var incomplete *ResetIncompleteError
+	if !errors.As(err, &incomplete) || incomplete.Left != 1 {
+		t.Errorf("error %v (%T): want a *ResetIncompleteError with one entry left", err, err)
 	}
 	if body, err := os.ReadFile(filepath.Join(dir, AdmitLock)); err != nil || recordedPID(body) != os.Getpid() {
 		t.Errorf("admit.lock = %q, %v; a reset that removed things must have marked itself first", body, err)

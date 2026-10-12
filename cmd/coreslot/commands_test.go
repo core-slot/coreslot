@@ -746,7 +746,8 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	}
 }
 
-// A reset that fails part-way says how much it removed before the failure, besides the error.
+// A reset removes what it can (best effort) and, when an entry cannot be removed, says how many
+// entries it removed and how many it could not, besides the error.
 func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	dir := stateDir(t, "")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
@@ -765,9 +766,9 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	if r.code == 0 {
 		t.Fatalf("doctor --reset left %s behind and exited 0", stuck)
 	}
-	// The run log, gen and FORMAT were removed before the stuck entry failed.
-	if !strings.Contains(r.stderr, "removed 3 entries") {
-		t.Errorf("stderr %q: want how many entries were removed before the failure (3)", r.stderr)
+	// The run log, gen and FORMAT were removed although the stuck entry could not be.
+	if !strings.Contains(r.stderr, "removed 3 entries; 1 could not be removed: ") {
+		t.Errorf("stderr %q: want how many entries were removed (3) and how many could not be (1)", r.stderr)
 	}
 	for _, f := range []string{"FORMAT", "gen", filepath.Join("log", "runs.jsonl")} {
 		if _, err := os.Lstat(filepath.Join(dir, f)); !os.IsNotExist(err) {
