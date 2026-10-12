@@ -144,14 +144,16 @@ func readReport(markDir, name string) (ChildReport, bool) {
 	return r, true
 }
 
-// tokenOnlyRun is a token-only run the test started: it publishes nothing. Its command
-// creates NAME.begun in the marker directory as its very first action, so the run is known to
-// be admitted, and then reports the descriptors it inherited in NAME.started.
+// tokenOnlyRun is a token-only run the test started: it publishes nothing. The run is known to
+// be admitted once the CLI prints its token-only admission notice on stderr, or once its
+// command creates NAME.begun in the marker directory as its very first action; the command
+// then reports the descriptors it inherited in NAME.started.
 type tokenOnlyRun struct {
-	name  string
-	need  map[string]spec.Range
-	start time.Time                                 // taken before the run's process started
-	alive func(rep ChildReport, reported bool) bool // the run, or its reported command, lives
+	name   string
+	stderr string // the run's stderr file, "" when there is none
+	need   map[string]spec.Range
+	start  time.Time                                 // taken before the run's process started
+	alive  func(rep ChildReport, reported bool) bool // the run, or its reported command, lives
 }
 
 // tokenOnlyRuns are the token-only runs of one state directory, for the sampler's TokenOnly.
@@ -162,18 +164,36 @@ type tokenOnlyRuns struct {
 	runs []*tokenOnlyRun
 }
 
-func (r *tokenOnlyRuns) add(name string, need map[string]spec.Range, start time.Time,
+func (r *tokenOnlyRuns) add(name, stderr string, need map[string]spec.Range, start time.Time,
 	alive func(ChildReport, bool) bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.runs = append(r.runs, &tokenOnlyRun{name: name, need: need, start: start, alive: alive})
+	r.runs = append(r.runs, &tokenOnlyRun{name: name, stderr: stderr, need: need, start: start, alive: alive})
+}
+
+// tokenOnlyAdmitted is the notice the CLI prints once it is admitted token-only, before it
+// starts its command. A waiting token-only run prints another line ("waiting for …: token-only
+// mode, …"), which never contains this one.
+const tokenOnlyAdmitted = "running in token-only mode, outside the queue"
+
+// admitted reports whether run was admitted: its command wrote the start marker, or the CLI
+// printed its token-only admission notice, which comes earlier (before the command starts).
+func (r *tokenOnlyRuns) admitted(run *tokenOnlyRun) bool {
+	if _, err := os.Stat(begunPath(r.markDir, run.name)); err == nil {
+		return true
+	}
+	if run.stderr == "" {
+		return false
+	}
+	data, err := os.ReadFile(run.stderr)
+	return err == nil && strings.Contains(string(data), tokenOnlyAdmitted)
 }
 
 // begunPath is the start marker of the token-only command named name.
 func begunPath(markDir, name string) string { return filepath.Join(markDir, name+".begun") }
 
 // grants is the sampler's TokenOnly: the inodes the live runs' commands reported, and the
-// minimums of the live runs that were admitted (their command began) and have not reported.
+// minimums of the live runs that were admitted (admitted reports it) and have not reported.
 // A run still waiting has neither.
 func (r *tokenOnlyRuns) grants() TokenOnly {
 	r.mu.Lock()
@@ -193,7 +213,7 @@ func (r *tokenOnlyRuns) grants() TokenOnly {
 			}
 			continue
 		}
-		if _, err := os.Stat(begunPath(r.markDir, run.name)); err != nil {
+		if !r.admitted(run) {
 			continue // waiting: no grant
 		}
 		mins := map[string]int{}
@@ -504,7 +524,7 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 	st.live[c] = true
 	st.mu.Unlock()
 	if c.outer == "tok" {
-		st.tok.add(c.name, c.need, start, func(rep ChildReport, reported bool) bool {
+		st.tok.add(c.name, c.proc.stderr.Name(), c.need, start, func(rep ChildReport, reported bool) bool {
 			return !c.proc.Exited() || (reported && pidAlive(rep.PID))
 		})
 	}
@@ -619,11 +639,21 @@ func (st *storm) cancel(ctx context.Context, c *stormClient) {
 	}
 }
 
-// canceller cancels one client while it is seen queued: it picks a live client with a ticket
-// whose command does not run, publishes a cancel request for it by label, and checks that the
-// client then exits with the refusal code. A request that loses the race (the client was
-// admitted first) is retried with another queued client, at most cancelTries times and only
-// while the storm runs; none found or none taking effect leaves the floor to fail by name.
+// cancelledMessage is what each kind of client prints on stderr when a cancel request ended its
+// wait: the evidence, besides the refusal code, that the cancel acted. Token-only clients are
+// never queued and have none.
+var cancelledMessage = map[string]string{
+	"cli": "coreslot: the request was cancelled",  // the Go CLI
+	"py":  " was cancelled",                       // the Python client: "coreslot: ticket <id> was cancelled"
+	"lib": "libclient: the request was cancelled", // conformance/libclient on coreslot.ErrCancelled
+}
+
+// canceller cancels one client while it is seen queued: it picks a live CLI, Python or library
+// client with a ticket, no timeout and a command that does not run, publishes a cancel request
+// for it by label, and checks that the client then exits with the refusal code and its kind's
+// cancelled message. A request that loses the race (the client was admitted first) is retried
+// with another queued client, at most cancelTries times and only while the storm runs; none
+// found or none taking effect leaves the floor to fail by name.
 func (st *storm) canceller(ctx context.Context) {
 	const cancelTries = 10
 	select {
@@ -636,7 +666,10 @@ func (st *storm) canceller(ctx context.Context) {
 		var queued []*stormClient
 		st.mu.Lock()
 		for c := range st.live {
-			if c.outer == "tok" || c.stopped.Load() || c.cancelled.Load() || c.proc.Exited() || st.holding(c) {
+			// A client with a timeout could exit with the refusal code on its own, and a
+			// token-only one has no ticket.
+			if c.outer == "tok" || c.timeout > 0 || c.stopped.Load() || c.cancelled.Load() || c.proc.Exited() ||
+				st.holding(c) {
 				continue
 			}
 			if _, ok := st.ticketID(c); ok {
@@ -675,8 +708,9 @@ func (st *storm) canceller(ctx context.Context) {
 		st.count("cancel published")
 		select {
 		case <-c.proc.done:
-			if c.proc.code == exitRefusal {
+			if c.proc.code == exitRefusal && strings.Contains(c.proc.Stderr(), cancelledMessage[c.outer]) {
 				st.count("cancel took effect")
+				st.count("cancel took effect on " + c.kind)
 				return
 			}
 		case <-time.After(5 * time.Second):

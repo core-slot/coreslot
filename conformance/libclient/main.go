@@ -90,8 +90,12 @@ func main() {
 		defer cancel()
 	}
 	g, err := w.Wait(wctx)
-	if errors.Is(err, coreslot.ErrCancelled) || errors.Is(err, context.DeadlineExceeded) {
-		fmt.Fprintln(os.Stderr, "libclient: withdrawn:", err)
+	switch {
+	case errors.Is(err, coreslot.ErrCancelled):
+		fmt.Fprintln(os.Stderr, "libclient: the request was cancelled")
+		os.Exit(75)
+	case errors.Is(err, context.DeadlineExceeded):
+		fmt.Fprintln(os.Stderr, "libclient: not admitted before the deadline; withdrawn")
 		os.Exit(75)
 	}
 	if err != nil {
