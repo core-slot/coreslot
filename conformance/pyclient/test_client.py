@@ -17,6 +17,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -741,6 +742,25 @@ class AdmissionTests(Base):
                                            "CORESLOT_HELD_FD": "3", "CORESLOT_TOKEN_FDS": "4-14"})
         g.close()
         self.assertEqual(self.ls("holds"), [])
+
+    def test_close_releases_the_hold_before_any_token(self):
+        """§12.3: the hold's descriptor closes before any token's, so a live hold never lists
+        a token nobody locks (I1, I2)."""
+        self.config('[resources]\ncpu = 4\n')
+        t = self.client().enqueue("job", 0, {"cpu": (2, 2)})
+        kind, g = t.step()
+        self.assertEqual(kind, "admitted")
+        hold_fd, token_fds = g.hold_fd, g.token_fds()
+        closed = []
+        real_close = os.close
+
+        def recording_close(fd):
+            closed.append(fd)
+            real_close(fd)
+
+        with unittest.mock.patch.object(cc.os, "close", recording_close):
+            g.close(remove_hold=False)
+        self.assertEqual(closed[:1 + len(token_fds)], [hold_fd, *token_fds])
 
     def test_cap_of_512_takes_minimums_first(self):
         """§12.1: cpu/db/gpu 100..256 each, sizes 300: 256 + 156 + 100."""
