@@ -8,7 +8,6 @@
 package conformance
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +22,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot"
 	"github.com/Nezhinskiy/coreslot/internal/store"
@@ -94,33 +95,37 @@ func moduleRoot() (string, error) {
 
 // ---------------------------------------------------------------- process registry
 
-// Every process the harness starts is registered with its process group, so that a test that
-// fails, and a test binary about to hit its -timeout, kill them all.
+// Every process the harness starts is registered, so that a test that fails, and a test binary
+// about to hit its -timeout, kill them all with their process groups.
 var registry struct {
 	sync.Mutex
-	pgids map[int]bool
+	procs map[*Proc]bool
 }
 
-func register(pgid int) {
+func register(p *Proc) {
 	registry.Lock()
 	defer registry.Unlock()
-	if registry.pgids == nil {
-		registry.pgids = map[int]bool{}
+	if registry.procs == nil {
+		registry.procs = map[*Proc]bool{}
 	}
-	registry.pgids[pgid] = true
+	registry.procs[p] = true
 }
 
-func unregister(pgid int) {
+func unregister(p *Proc) {
 	registry.Lock()
 	defer registry.Unlock()
-	delete(registry.pgids, pgid)
+	delete(registry.procs, p)
 }
 
 func killAll() {
 	registry.Lock()
-	defer registry.Unlock()
-	for pgid := range registry.pgids {
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	procs := make([]*Proc, 0, len(registry.procs))
+	for p := range registry.procs {
+		procs = append(procs, p)
+	}
+	registry.Unlock()
+	for _, p := range procs {
+		p.kill(-p.pid, syscall.SIGKILL)
 	}
 }
 
@@ -158,6 +163,7 @@ type Env struct {
 	Dir     string // the state directory; its path contains a space
 	HookDir string
 	MarkDir string
+	OutDir  string // the processes' stdout and stderr files
 	shared  *shared
 
 	pause  []string      // CORESLOT_TESTHOOK_PAUSE of the next Start
@@ -177,8 +183,9 @@ func State(t *testing.T) Env {
 	Build(t)
 	base := t.TempDir()
 	e := Env{t: t, Dir: filepath.Join(base, "Application Support", "coreslot"),
-		HookDir: filepath.Join(base, "hooks"), MarkDir: filepath.Join(base, "marks"), shared: &shared{}}
-	for _, d := range []string{e.HookDir, e.MarkDir} {
+		HookDir: filepath.Join(base, "hooks"), MarkDir: filepath.Join(base, "marks"), OutDir: filepath.Join(base, "out"),
+		shared: &shared{}}
+	for _, d := range []string{e.HookDir, e.MarkDir, e.OutDir} {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -196,6 +203,22 @@ func (e Env) WriteConfig(body string) {
 	if err := os.WriteFile(filepath.Join(e.Dir, store.ConfigFile), []byte(body), 0o600); err != nil {
 		e.t.Fatal(err)
 	}
+}
+
+// on returns e reporting to t, for a subtest.
+func (e Env) on(t *testing.T) Env {
+	e.t = t
+	return e
+}
+
+// SectionLeft waits until the admission section is observed free. A ticket or hold becomes
+// visible inside the section that publishes it, before that section bumps gen and leaves; once
+// the section is seen free, every section that published what the trace has observed so far
+// has ended, its gen bump included. Call it before stopping a process whose publication was
+// just observed, or before reading a gen baseline.
+func (e Env) SectionLeft() {
+	e.t.Helper()
+	e.Eventually(startWait, "the admission section is observed free", func() bool { return !e.Status().Section.Held })
 }
 
 // Pausing returns e whose next Start pauses at points.
@@ -239,43 +262,81 @@ func (e Env) StartChild(args ...string) *Proc {
 	return e.StartCommand(append([]string{bins.child}, args...)...)
 }
 
-// StartCommand starts argv in its own process group with e's environment. The process is
-// killed, with its group, when the test ends.
+// StartCommand starts argv in its own process group with e's environment, its output going
+// to files. The process is killed, with its group, when the test ends.
+//
+// The harness reaps the process itself (wait4 with WNOHANG, under the Proc's mutex), and every
+// signal is sent under that mutex only while the process is not reaped: until then its pid,
+// which is also its process group id, cannot be reused, so a signal never reaches a stranger.
 func (e Env) StartCommand(argv ...string) *Proc {
 	e.t.Helper()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = e.environ()
-	p := &Proc{t: e.t, env: e, cmd: cmd, done: make(chan struct{}), name: filepath.Base(argv[0])}
-	cmd.Stdout, cmd.Stderr = &p.stdout, &p.stderr
+	p := &Proc{t: e.t, env: e, done: make(chan struct{}), name: filepath.Base(argv[0])}
+	var err error
+	if p.stdout, err = os.CreateTemp(e.OutDir, "stdout-"); err != nil {
+		e.t.Fatal(err)
+	}
+	if p.stderr, err = os.CreateTemp(e.OutDir, "stderr-"); err != nil {
+		e.t.Fatal(err)
+	}
+	cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		e.t.Fatalf("start %v: %v", argv, err)
 	}
 	p.pid = cmd.Process.Pid
-	register(p.pid)
-	go func() {
-		err := cmd.Wait()
-		p.code = cmd.ProcessState.ExitCode()
-		p.waitErr = err
-		close(p.done)
-	}()
+	register(p)
+	go p.reap(cmd.Process)
 	e.t.Cleanup(func() {
-		select {
-		case <-p.done:
-		default:
-			_ = syscall.Kill(-p.pid, syscall.SIGKILL)
+		// Whatever a run started in another group (its command) dies with its run: the helper
+		// child exits when it is reparented.
+		if p.kill(-p.pid, syscall.SIGKILL) {
 			select {
 			case <-p.done:
 			case <-time.After(exitWait):
 				e.t.Errorf("pid %d did not exit after SIGKILL", p.pid)
 			}
 		}
-		// Whatever the run started in another group (its command) dies with its run: the
-		// helper child exits when it is reparented.
-		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
-		unregister(p.pid)
+		p.stdout.Close()
+		p.stderr.Close()
 	})
 	return p
+}
+
+// reap waits for the process to exit and reaps it, holding p.mu while it reaps.
+func (p *Proc) reap(proc *os.Process) {
+	defer close(p.done)
+	defer unregister(p)
+	for {
+		p.mu.Lock()
+		var ws unix.WaitStatus
+		wpid, err := unix.Wait4(p.pid, &ws, unix.WNOHANG, nil)
+		if wpid == p.pid || (err != nil && !errors.Is(err, unix.EINTR)) {
+			p.reaped = true
+			p.code = -1
+			if err == nil && ws.Exited() {
+				p.code = ws.ExitStatus()
+			}
+			p.mu.Unlock()
+			_ = proc.Release()
+			return
+		}
+		p.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// kill sends sig to target (the pid, or the process group as -pid) while the process is not
+// reaped; it reports whether it signalled.
+func (p *Proc) kill(target int, sig syscall.Signal) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reaped {
+		return false
+	}
+	_ = syscall.Kill(target, sig)
+	return true
 }
 
 // Run starts `coreslot run` of a helper child that reports and holds until ReleaseChild(name):
@@ -345,8 +406,10 @@ func (e Env) Client() *coreslot.Client {
 // Report is the library's snapshot of the state directory.
 type Report = coreslot.Report
 
-// Status reads the state directory through the library's Snapshot, which never enters the
-// section, so it works while a process is stopped inside it.
+// Status reads the state directory through the library's Snapshot. Snapshot reads outside the
+// section and only probes admit.lock with one non-blocking attempt to enter (left at once when
+// it succeeds), so it never waits and works while a process is stopped inside the section; the
+// probe can make another client's single attempt find the section busy for that instant.
 func (e Env) Status() Report {
 	e.t.Helper()
 	r, err := e.Client().Snapshot()
@@ -467,23 +530,28 @@ func (e Env) HoldBody(name string) wire.Hold {
 type Proc struct {
 	t    *testing.T
 	env  Env
-	cmd  *exec.Cmd
 	pid  int
 	name string
 
-	stdout, stderr syncBuffer
+	stdout, stderr *os.File
 
-	done    chan struct{}
-	code    int
-	waitErr error
+	mu     sync.Mutex // held while reaping and while signalling
+	reaped bool
+	done   chan struct{}
+	code   int
 }
 
 // PID is the process id.
 func (p *Proc) PID() int { return p.pid }
 
 // Stdout and Stderr are what the process wrote so far.
-func (p *Proc) Stdout() string { return p.stdout.String() }
-func (p *Proc) Stderr() string { return p.stderr.String() }
+func (p *Proc) Stdout() string { return readAll(p.stdout) }
+func (p *Proc) Stderr() string { return readAll(p.stderr) }
+
+func readAll(f *os.File) string {
+	data, _ := os.ReadFile(f.Name())
+	return string(data)
+}
 
 func (p *Proc) hookPath(point, suffix string) string {
 	return filepath.Join(p.env.HookDir, fmt.Sprintf("%d.%s.%s", p.pid, point, suffix))
@@ -575,8 +643,8 @@ func (p *Proc) Kill() {
 
 func (p *Proc) signal(target int, sig syscall.Signal) {
 	p.t.Helper()
-	if err := syscall.Kill(target, sig); err != nil {
-		p.t.Fatalf("kill(%d, %v): %v", target, sig, err)
+	if !p.kill(target, sig) {
+		p.t.Fatalf("%s (pid %d) already exited (%d) before %v; stderr:\n%s", p.name, p.pid, p.code, sig, p.Stderr())
 	}
 }
 
@@ -608,24 +676,6 @@ func (p *Proc) ExitCode(want int) {
 	if got := p.Wait(); got != want {
 		p.t.Fatalf("%s (pid %d) exited %d, want %d; stderr:\n%s", p.name, p.pid, got, want, p.Stderr())
 	}
-}
-
-// syncBuffer is a bytes.Buffer safe for the process's writer goroutines and the test.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.String()
 }
 
 // uptime is the host's load, recorded beside every timing failure.

@@ -97,9 +97,20 @@ func checkDescriptors(t *testing.T, e Env, r ChildReport, holdName string, grant
 	if got := r.Env["CORESLOT_TOKEN_FDS"]; fd > 4 && !slices.Contains(want, got) {
 		t.Errorf("CORESLOT_TOKEN_FDS = %q, want %v", got, want)
 	}
-	if _, extra := r.FDs[fd]; extra {
-		t.Errorf("fd %d is open beyond the grant", fd)
+	for _, n := range sortedFDs(r.FDs) {
+		if n >= fd {
+			t.Errorf("fd %d is open beyond the grant (which ends at fd %d)", n, fd-1)
+		}
 	}
+}
+
+func sortedFDs(fds map[int][2]uint64) []int {
+	out := make([]int, 0, len(fds))
+	for fd := range fds {
+		out = append(out, fd)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -153,8 +164,8 @@ func python() (string, error) {
 
 // ---------------------------------------------------------------- environment traces
 
-// The default macOS state directory contains a space. The CLI, the descriptor mapping and the
-// independent Python client work there unchanged, sharing one budget.
+// The default macOS state directory contains a space. Every CLI command, the descriptor
+// mapping and the independent Python client work there unchanged, sharing one budget.
 func TestStateDirWithSpace(t *testing.T) {
 	e := State(t)
 	if !strings.Contains(e.Dir, " ") {
@@ -170,11 +181,54 @@ func TestStateDirWithSpace(t *testing.T) {
 		t.Errorf("environment %v", r.Env)
 	}
 
-	if py, err := python(); err != nil {
-		t.Logf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
-		e.ReleaseChild("go")
-		g.ExitCode(0)
-	} else {
+	// status, human and --json, while one run holds and one waits.
+	w := e.Run("waiting", "--need", "cpu=1")
+	tkW := e.WaitTicket("waiting")
+	st := e.Start("status")
+	st.ExitCode(0)
+	for _, want := range []string{"go", "waiting", tkW.ID} {
+		if !strings.Contains(st.Stdout(), want) {
+			t.Errorf("status does not show %q:\n%s", want, st.Stdout())
+		}
+	}
+	sj := e.Start("status", "--json")
+	sj.ExitCode(0)
+	var doc struct {
+		StateDir string `json:"state_dir"`
+		Holds    []struct {
+			Label string         `json:"label"`
+			Grant map[string]int `json:"grant"`
+		} `json:"holds"`
+		Tickets []struct {
+			ID    string `json:"id"`
+			Label string `json:"label"`
+		} `json:"tickets"`
+	}
+	if err := json.Unmarshal([]byte(sj.Stdout()), &doc); err != nil {
+		t.Fatalf("status --json: %v\n%s", err, sj.Stdout())
+	}
+	if doc.StateDir != e.Dir || len(doc.Holds) != 1 || doc.Holds[0].Label != "go" || doc.Holds[0].Grant["cpu"] != 2 ||
+		len(doc.Tickets) != 1 || doc.Tickets[0].ID != tkW.ID {
+		t.Errorf("status --json: %+v", doc)
+	}
+
+	// cancel, by id and by label.
+	e.Start("cancel", tkW.ID).ExitCode(0)
+	w.ExitCode(exitRefusal)
+	w2 := e.Run("waiting2", "--need", "cpu=1")
+	e.WaitTicket("waiting2")
+	e.Start("cancel", "--label", "waiting2").ExitCode(0)
+	w2.ExitCode(exitRefusal)
+
+	t.Run("python", func(t *testing.T) {
+		py, err := python()
+		if err != nil {
+			if os.Getenv("CORESLOT_REQUIRE_PYTHON") == "1" {
+				t.Fatalf("CORESLOT_REQUIRE_PYTHON=1 and no Python 3.11+: %v", err)
+			}
+			t.Skipf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
+		}
+		e := e.on(t)
 		root, err := moduleRoot()
 		if err != nil {
 			t.Fatal(err)
@@ -191,18 +245,23 @@ func TestStateDirWithSpace(t *testing.T) {
 		v.ExitCode(exitRefusal)
 
 		e.ReleaseChild("go")
-		g.ExitCode(0)
 		pr := e.WaitStarted("py")
 		ph := e.WaitHold("py", startWait)
 		checkDescriptors(t, e, pr, ph.Name, e.HoldBody(ph.Name).Grant)
 		e.ReleaseChild("py")
 		p.ExitCode(0)
-	}
+	})
+	e.ReleaseChild("go")
+	g.ExitCode(0)
 	if l := logLine(t, e, "go"); l["exit"] != float64(0) || l["fail_open"] != "" {
 		t.Errorf("run log line %v", l)
 	}
 	if rep := e.Status(); len(rep.Holds) != 0 || len(rep.Tickets) != 0 || rep.Degraded != nil {
 		t.Errorf("state after the runs: holds %v, tickets %v, degraded %v", rep.Holds, rep.Tickets, rep.Degraded)
+	}
+	d := e.Start("doctor")
+	if code := d.Wait(); code != 0 {
+		t.Errorf("doctor exited %d in the directory with a space; stdout:\n%s\nstderr:\n%s", code, d.Stdout(), d.Stderr())
 	}
 }
 
@@ -300,6 +359,7 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	noHold(t, e, "B", "B was backfilled past the live head A")
 
 	stoppedAt, mtime := stopOutsideSection(e, a, autoA)
+	e.SectionLeft() // C's enqueue section, ticket observed above, has bumped gen and left
 	gen := e.Status().Gen
 	hb := e.WaitHold("B", stalledHeadBound+startWait)
 	if at := admittedAt(hb); at.Before(stoppedAt) {
@@ -352,10 +412,12 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 	e.WaitTicket("D")
 	noHold(t, e, "D", "D was backfilled past the live head A")
 
-	// B waits behind the live head and never enters the section; A is caught outside it.
-	tkB, _ := e.Ticket("B")
+	// B waits behind the live head and never enters the section once its enqueue section (and
+	// D's, after it) has ended; A is caught outside it.
+	e.SectionLeft()
 	b.Stop()
 	sectionFreeOf(t, e, b.PID())
+	tkB, _ := e.Ticket("B")
 	stoppedAt, mtimeA := stopOutsideSection(e, a, autoA)
 
 	// C arrives after both stopped: its first sighting of them is already stale. E arrives too,
@@ -414,10 +476,21 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 
 // ---------------------------------------------------------------- order
 
-// A higher-priority ticket published before the head's admitting section is admitted first,
-// even though the head had already won an election; one published while the head is inside its
-// admitting section is admitted after it.
+// A higher-priority ticket published after the head won an election, while the head waits
+// before a section that cannot admit it, is admitted first: the head repeats the election
+// before its next attempt (PROTOCOL.md section 10.3). One published while the head is inside
+// the section that admits it is admitted after it.
+//
+// PENDING phase, not implemented: re-election inside the admitting section is scheduled
+// separately. When it lands, this trace gains the phase "P admissible (capacity free at H's
+// section), H caught at admit.before-enter after winning its election, P (priority 10)
+// published, H released: P is admitted first", whose mutation is "skip re-election inside the
+// section". Today H is admitted first in that interleaving, which I4 as written permits (P was
+// published after H's election); the subtest below marks the gap in every run.
 func TestArrivalBeforeAndAfterElection(t *testing.T) {
+	t.Run("pending: admissible P published between H's election and its admitting section", func(t *testing.T) {
+		t.Skip("PENDING: needs re-election inside the admitting section (scheduled separately); see the comment above")
+	})
 	e := State(t)
 	e.WriteConfig("[resources]\ncpu = 1\npg = 1\n")
 	x := e.Run("X", "--need", "cpu=1")
@@ -453,7 +526,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	e.ReleaseChild("X")
 	x.ExitCode(0)
 	time.Sleep(observeWait)
-	noHold(t, e, "H", "H was admitted past P, which was published before H's admitting section")
+	noHold(t, e, "H", "H was admitted past P: it did not repeat the election before its next attempt")
 	e.ReleaseChild("Y")
 	y.ExitCode(0)
 	e.WaitHold("P", startWait)
@@ -522,9 +595,9 @@ func TestPublishPausedAtEveryPoint(t *testing.T) {
 	}
 }
 
-// restored checks the state a killed writer leaves after a reconciliation: no temporary file,
+// restored checks the state after a forced reconciliation: no temporary file, nothing dead,
 // nothing ignored, and exactly the live entries listed.
-func restored(t *testing.T, e Env, tickets, holds []string, locked int) {
+func restored(t *testing.T, e Env, tickets, holds, cancels []string, locked int) {
 	t.Helper()
 	if tmps := e.AllTmps(); len(tmps) != 0 {
 		t.Errorf("temporary files after the reconciliation: %v", tmps)
@@ -540,7 +613,7 @@ func restored(t *testing.T, e Env, tickets, holds []string, locked int) {
 	for _, h := range rep.Holds {
 		gotH = append(gotH, h.Label)
 	}
-	if !slices.Equal(gotT, tickets) || !slices.Equal(gotH, holds) || len(rep.DeadHolds) != 0 || len(rep.Cancels) != 0 {
+	if !slices.Equal(gotT, tickets) || !slices.Equal(gotH, holds) || len(rep.DeadHolds) != 0 || !slices.Equal(rep.Cancels, cancels) {
 		t.Errorf("tickets %v (want %v), holds %v (want %v), dead holds %v, cancels %v",
 			gotT, tickets, gotH, holds, rep.DeadHolds, rep.Cancels)
 	}
@@ -570,7 +643,7 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 		if n := e.Reconcile(); n < 1 {
 			t.Errorf("the reconciliation removed %d entries", n)
 		}
-		restored(t, e, nil, []string{"X"}, 2)
+		restored(t, e, nil, []string{"X"}, nil, 2)
 		z := e.Run("Z", "--need", "cpu=1")
 		e.WaitTicket("Z")
 		e.ReleaseChild("X")
@@ -592,6 +665,7 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 	if _, ok := e.Hold("X"); !ok {
 		t.Fatal("the reconciliation lost X's live hold")
 	}
+	restored(t, e, []string{"W"}, []string{"X"}, nil, 2)
 	e.ReleaseChild("X")
 	x.ExitCode(0)
 	e.WaitHold("W", startWait)
@@ -602,6 +676,9 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 func publishHold(t *testing.T, e Env, point string, killed bool) {
 	w := e.Pausing(point).Run("W", "--need", "cpu=1")
 	w.CatchPublication(point, store.HoldsDir) // inside the admitting section, tokens taken
+	if rep := e.Status(); len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 {
+		t.Fatalf("a hold is visible before W's publication completed: holds %v, dead %v", rep.Holds, rep.DeadHolds)
+	}
 	if killed {
 		w.Kill()
 		if tmps := e.Tmps(store.HoldsDir, w.PID()); len(tmps) != 1 {
@@ -613,7 +690,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 		if n := e.Reconcile(); n < 2 {
 			t.Errorf("the reconciliation removed %d entries, want the ticket and the temporary", n)
 		}
-		restored(t, e, nil, nil, 0)
+		restored(t, e, nil, nil, nil, 0)
 		e.Start("run", "--no-wait", "--need", "cpu=2", "--", "true").ExitCode(0)
 		return
 	}
@@ -628,9 +705,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 	if !ok || h.Grant["cpu"] != 1 || r.Env["CORESLOT_GRANTED_CPU"] != "1" {
 		t.Fatalf("after the reconciliation W's hold is %+v (present %v), its command saw %v", h, ok, r.Env)
 	}
-	if got := e.Status().Resources["cpu"].Locked; got != 1 {
-		t.Errorf("%d cpu tokens locked, want 1", got)
-	}
+	restored(t, e, nil, []string{"W"}, nil, 1)
 	e.ReleaseChild("W")
 	w.ExitCode(0)
 }
@@ -642,13 +717,18 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 	e.WaitTicket("V")
 	w := e.Run("W", "--need", "cpu=1")
 	tk := e.WaitTicket("W")
-	// W waits behind the head V and never enters the section. Stopped, it cannot act on its
-	// cancel request, so the request must survive the reconciliation on its own.
+	// W waits behind the head V and never enters the section once its enqueue section has
+	// ended. Stopped, it cannot act on its cancel request, so the request must survive the
+	// reconciliation on its own.
+	e.SectionLeft()
 	w.Stop()
 	sectionFreeOf(t, e, w.PID())
 
 	k := e.Pausing(point).StartChild("cancel", e.Dir, tk.ID)
 	k.CatchPublication(point, store.CancelDir)
+	if rep := e.Status(); len(rep.Cancels) != 0 {
+		t.Fatalf("a cancel request is visible before its publication completed: %v", rep.Cancels)
+	}
 	if killed {
 		k.Kill()
 		if tmps := e.Tmps(store.CancelDir, k.PID()); len(tmps) != 1 {
@@ -657,7 +737,7 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 		if n := e.Reconcile(); n < 1 {
 			t.Errorf("the reconciliation removed %d entries", n)
 		}
-		restored(t, e, []string{"V", "W"}, []string{"X"}, 2)
+		restored(t, e, []string{"V", "W"}, []string{"X"}, nil, 2)
 		w.Cont()
 		e.Pausing().StartChild("cancel", e.Dir, tk.ID).ExitCode(0)
 		w.ExitCode(exitRefusal)
@@ -672,6 +752,7 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 		if !slices.Contains(rep.Cancels, tk.ID) {
 			t.Fatalf("the reconciliation lost the cancel request of W's live ticket: cancels %v", rep.Cancels)
 		}
+		restored(t, e, []string{"V", "W"}, []string{"X"}, []string{tk.ID}, 2)
 		w.Cont()
 		w.ExitCode(exitRefusal)
 	}
