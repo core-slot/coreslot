@@ -184,7 +184,7 @@ func (r *run) passThrough(held map[string][]*os.File) int {
 // 1): with min of each resource, passing CORESLOT_UNBUDGETED on, writing no degraded record.
 func (r *run) passThroughUnbudgeted(reason string) int {
 	grant := r.o.minGrant()
-	r.notice("the parent run is unbudgeted (%s); running unbudgeted with %s", reason,
+	r.notice("the parent run is unbudgeted (%s); running unbudgeted with %s", text(reason),
 		grantText(grant, r.o.sortedNeed()))
 	return r.runChild(child{
 		env:        withGrant(grant),

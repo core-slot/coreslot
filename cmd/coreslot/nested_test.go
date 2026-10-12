@@ -263,6 +263,25 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 		}
 	})
 
+	// The inherited reason is untrusted text: the notice escapes it like a label, and the command
+	// still receives it unchanged. Mutation: print the reason raw in passThroughUnbudgeted.
+	t.Run("the notice escapes the reason", func(t *testing.T) {
+		dir := stateDir(t, "")
+		reason := "evil\x1b[2J\nsecond line"
+		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED="+reason)
+		r := cli(t, env, "run", "--", "sh", "-c", `printf %s "$CORESLOT_UNBUDGETED"`)
+		if r.code != 0 {
+			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+		}
+		want := `the parent run is unbudgeted (evil\x1b[2J\nsecond line); running unbudgeted with `
+		if raw := rawTerminalControls([]byte(r.stderr)); len(raw) != 0 || !strings.Contains(r.stderr, want) {
+			t.Errorf("stderr %q: want the reason escaped on the notice's line, %q", r.stderr, want)
+		}
+		if r.stdout != reason {
+			t.Errorf("the command saw CORESLOT_UNBUDGETED %q, want %q unchanged", r.stdout, reason)
+		}
+	})
+
 	t.Run("format understood", func(t *testing.T) {
 		dir := stateDir(t, "")
 		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
