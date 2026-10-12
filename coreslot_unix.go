@@ -244,5 +244,7 @@ func (g *Grant) Env() []string { return g.g.Env() }
 
 // Close closes this process's copies of the descriptors (never unlocking, so a child keeps the
 // grant until it exits) and removes the hold when no child holds it, waiting at most 2 s for
-// the section. It is idempotent.
+// the section. It is idempotent. When the hold or a token is no longer the file at its path (the
+// state directory was removed, or removed and recreated, while the grant was held) it closes the
+// descriptors, writes nothing into the directory as it now exists, and returns a *StateError.
 func (g *Grant) Close() error { return wrap(g.g.Close()) }

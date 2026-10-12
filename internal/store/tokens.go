@@ -36,21 +36,32 @@ func (ts *TokenSet) Close() {
 // and the file is still linked. A mismatch is a *StateError (degraded mode).
 func (ts *TokenSet) CheckIdentity() error {
 	for _, f := range ts.Files {
-		held, err := f.Stat()
-		if err != nil {
-			return stateErrorf("token %s: %v", f.Name(), err)
+		if err := CheckHeld(f, f.Name()); err != nil {
+			return err
 		}
-		hst, ok := held.Sys().(*syscall.Stat_t)
-		if !ok || hst.Nlink == 0 {
-			return stateErrorf("token %s: the held file is no longer linked", f.Name())
-		}
-		now, err := os.Lstat(f.Name())
-		if err != nil {
-			return stateErrorf("token %s: %v", f.Name(), err)
-		}
-		if !os.SameFile(held, now) {
-			return stateErrorf("token %s: the path names another inode than the held file", f.Name())
-		}
+	}
+	return nil
+}
+
+// CheckHeld checks that the file f holds is still the one at path (I1, PROTOCOL.md section 3):
+// still linked (st_nlink > 0), and path, which must exist, names the same (st_dev, st_ino). A
+// mismatch, a missing path included, is a *StateError: the state directory, or the entry, was
+// replaced under the holder.
+func CheckHeld(f *os.File, path string) error {
+	held, err := f.Stat()
+	if err != nil {
+		return stateErrorf("%s: %v", path, err)
+	}
+	hst, ok := held.Sys().(*syscall.Stat_t)
+	if !ok || hst.Nlink == 0 {
+		return stateErrorf("%s: the held file is no longer linked", path)
+	}
+	now, err := os.Lstat(path)
+	if err != nil {
+		return stateErrorf("%s: %v", path, err)
+	}
+	if !os.SameFile(held, now) {
+		return stateErrorf("%s: the path names another inode than the held file", path)
 	}
 	return nil
 }

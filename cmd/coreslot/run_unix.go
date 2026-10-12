@@ -433,7 +433,7 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		grant:      g.Grant(),
 		clamped:    slices.Sorted(maps.Keys(g.Clamped())),
 		unbudgeted: g.Unbudgeted(),
-		release:    func() { _ = inSection(g.Close) },
+		release:    func() error { return inSection(g.Close) },
 	}
 	if !g.TokenOnly() {
 		c.log = e.Store() // FORMAT was understood in the admitting section
@@ -466,7 +466,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	}
 	r.notice("state error: %s; running unbudgeted with %s (fail-open)", reason,
 		grantText(r.o.minGrant(), r.o.sortedNeed()))
-	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: reason, release: func() {}}
+	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: reason, release: func() error { return nil }}
 	var g *engine.Grant
 	var ferr error
 	if e != nil {
@@ -476,7 +476,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 		})
 	}
 	if g != nil {
-		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() { _ = inSection(g.Close) }
+		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() error { return inSection(g.Close) }
 		if g.HoldName() != "" {
 			c.log = e.Store() // FORMAT was understood in the section that published the hold
 		}
@@ -533,14 +533,14 @@ const timeoutReason = "timeout"
 func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
 		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
-	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: timeoutReason, release: func() {}}
+	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: timeoutReason, release: func() error { return nil }}
 	var g *engine.Grant
 	herr := inSection(func() (err error) {
 		g, err = e.UnbudgetedHold(r.o.request(0), timeoutReason)
 		return err
 	})
 	if g != nil {
-		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() { _ = inSection(g.Close) }
+		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() error { return inSection(g.Close) }
 	} else {
 		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), timeoutReason)...)
 	}
@@ -578,12 +578,15 @@ type child struct {
 	unbudgeted []string
 	failOpen   string
 	nested     bool
-	release    func()       // closes the run's copies of the grant once the command exited
+	release    func() error // closes the run's copies of the grant once the command exited
 	log        *store.Store // the run log to append to; nil writes none
 }
 
 // runChild starts the command with c, waits for it, releases the grant and appends the run
 // log line. It returns the command's status, or the status of a command that could not start.
+// A release that finds the grant's files replaced (the state directory was removed or recreated
+// under the run, I1) has written nothing into the directory: the run says so and appends no
+// run-log line, and still returns the command's status.
 func (r *run) runChild(c child) int {
 	argv := substitute(r.o.argv, c.grant, r.o.subst)
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -595,7 +598,7 @@ func (r *run) runChild(c child) int {
 	_, _ = raiseChildNofile(currentNofile())
 	if sig := pendingSignal(); sig != 0 {
 		// Interrupted between the admission and the start: the command never runs.
-		c.release()
+		_ = c.release()
 		code, _ := classify(&interruptError{Sig: sig})
 		return code
 	}
@@ -603,16 +606,25 @@ func (r *run) runChild(c child) int {
 	prepareChild(cmd, terminal)
 	started := time.Now()
 	status := 0
+	var released error
 	if err := cmd.Start(); err != nil {
 		childDone(terminal)
-		c.release()
+		released = c.release()
 		code, _ := classify(err)
 		r.notice("cannot run %s: %v", argv[0], err)
 		status = code
 	} else {
 		status = superviseChild(cmd, terminal)
 		childDone(terminal)
-		c.release()
+		released = c.release()
+	}
+	if released != nil {
+		reason := released.Error()
+		if rs, ok := engine.StateReason(released); ok {
+			reason = rs
+		}
+		r.notice("state error at release: %s; nothing more was written into the state directory, not even the run log", reason)
+		return status
 	}
 	if c.log != nil || c.nested {
 		rec := store.RunRecord{

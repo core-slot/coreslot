@@ -160,3 +160,24 @@ func TestBoundedEnqueueAndAdopt(t *testing.T) {
 		t.Errorf("snapshot: %d tickets, %d holds, %v; want nothing published", len(r.Tickets), len(r.Holds), err)
 	}
 }
+
+// A grant whose state directory was removed and recreated under it reports a *StateError at Close
+// and writes nothing into the new directory: no admit.lock, FORMAT or gen.
+func TestCloseAfterTheStateDirectoryWasReplaced(t *testing.T) {
+	dir := stateDir(t, "")
+	c := open(t, dir)
+	g := waitGrant(t, c, Request{Need: map[string]Range{"cpu": {Min: 3, Max: 3}}})
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var se *StateError
+	if err := g.Close(); !errors.As(err, &se) {
+		t.Fatalf("Close: %v, want a *StateError", err)
+	}
+	if names, err := os.ReadDir(dir); err != nil || len(names) != 0 {
+		t.Errorf("the new state directory after Close: %v, %v; want it empty", names, err)
+	}
+}
