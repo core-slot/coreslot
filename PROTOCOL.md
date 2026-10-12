@@ -644,7 +644,12 @@ Inside the section the head:
 3. computes the effective request of each requested declared resource (section 12.2);
 4. counts, for each such resource, the tokens locked at **every** existing index (section 6);
    `free = size − locked`;
-5. if any resource's `free` is below its effective `min`, leaves the section and waits;
+5. if any resource's `free` is below its effective `min`, leaves the section and waits. Otherwise it
+   repeats the election (section 10.3) over a fresh listing of `queue/`, the **re-election**: every
+   well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
+   this observer (its mtime from the listing counts as an observation), the head leaves the section
+   and waits. A ticket the head has never observed, such as one published after its election,
+   counts as live;
 6. otherwise takes tokens with `LOCK_EX|LOCK_NB` at indices below the size, creating missing token
    files and skipping a token that turns out locked, in two passes, each in ascending resource name
    and then ascending index:

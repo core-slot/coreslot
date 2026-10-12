@@ -571,3 +571,36 @@ func TestCloseReleasesHoldBeforeTokens(t *testing.T) {
 		t.Error("not admitted once the grant is fully closed")
 	}
 }
+
+// A ticket published ahead of the head between its election and its admitting section wins:
+// the section repeats the election over a fresh listing, where a ticket the head has never
+// watched counts as live (PROTOCOL.md section 12.1 step 5).
+func TestReelectionInsideTheSection(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	h := enqueue(t, e, need("cpu=1"))
+	var p *Ticket
+	defaultPoint := point
+	point = func(name string) {
+		if name == "admit.before-enter" && p == nil {
+			req := needLabel("cpu=1", "p")
+			req.Priority = 10 // ahead of h
+			p = enqueue(t, newEngine(t, dir, clk), req)
+		}
+	}
+	t.Cleanup(func() { point = defaultPoint })
+	if r := step(t, h); isAdmitted(r) {
+		t.Fatal("h was admitted past p, published after h's election but before its section")
+	}
+	if p == nil || !p.key.Less(h.key) {
+		t.Fatal("p was not published ahead of h")
+	}
+	clk.advance(time.Second)
+	if pos := position(t, step(t, h)); pos != 2 {
+		t.Fatalf("h at position %d behind the live p, want 2", pos)
+	}
+	if r := step(t, p); !isAdmitted(r) {
+		t.Fatalf("p: %#v, want admitted", r)
+	}
+}

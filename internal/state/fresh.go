@@ -64,6 +64,12 @@ func (o *Observer) Stalled(k Key, now time.Duration) bool {
 	return ok && now-s.since >= StallAfter
 }
 
+// Seen reports whether k has been observed (and not forgotten since), and the last mtime read.
+func (o *Observer) Seen(k Key) (mtime int64, ok bool) {
+	s, ok := o.seen[k]
+	return s.mtime, ok
+}
+
 // Forget drops k, for a ticket that is gone.
 func (o *Observer) Forget(k Key) {
 	delete(o.seen, k)
