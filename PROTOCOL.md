@@ -5,10 +5,6 @@ directory, its files and their bodies, the admission critical section, and the d
 environment contract between a run and the command it starts. A client written from this document
 alone, in any language, shares one budget with every other conforming client on the machine.
 
-It is the normative subset of the design (`PROTOCOL.md`, revision 4c).
-Section references of the form "spec §N" point there; they are for traceability only, and nothing
-in this document depends on reading the design.
-
 Format 1 is not frozen until the conformance suite, including its adversarial interleavings, passes
 on macOS and Linux.
 
@@ -39,36 +35,36 @@ requirement on a client.
 
 Every shared file, field, environment variable and transition of format 1, and where it is defined.
 
-| Item | Kind | Defined in | Spec |
-|---|---|---|---|
-| `FORMAT` | file | [7.6](#76-format), [15](#15-formats-and-token-only-mode) | §5.12 |
-| `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) | §5.5 |
-| `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) | §5.7 |
-| `res/` | directory of token files | [6](#6-tokens-and-descriptor-ownership) | §5.3 |
-| `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) | §5.4, §5.7 |
-| `holds/` | directory of holds | [7.4](#74-hold), [12](#12-admission) | §5.4, §5.9 |
-| `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) | §5.10 |
-| `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) | §5.11 |
-| `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) | §6.5 |
-| `config.toml` (under the override only) | file | [5.3](#53-configuration-file) | §5.1, §7 |
-| ticket body | body | [7.3](#73-ticket) | §5.4 |
-| hold body | body | [7.4](#74-hold) | §5.4 |
-| cancel body | body | [7.5](#75-cancel-request) | §5.4 |
-| `CORESLOT_GRANTED_*` | environment | [17](#17-descriptor-and-environment-contract) | §6.1 |
-| `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) | §6.1 |
-| `CORESLOT_TOKEN_FDS` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) | §6.1, §6.3 |
-| `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) | §5.11, §6.3 |
-| `CORESLOT_STATE_DIR` | environment | [4.1](#41-location) | §5.1 |
-| enqueue | transition | [10.1](#101-enqueue), example [21.1](#211-enqueue) | §4, §5.6 |
-| refresh | transition | [10.2](#102-refresh-and-stalled), example [21.2](#212-refresh) | §5.7 |
-| admission | transition | [12](#12-admission), example [21.3](#213-admission-with-clamp) | §5.9 |
-| clamp | transition | [12.2](#122-effective-request-and-clamp), example [21.3](#213-admission-with-clamp) | §5.9, D11 |
-| cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) | §5.10 |
-| withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) | §5.10 |
-| reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) | §5.7 |
-| adoption | transition | [12.4](#124-adoption), example [21.7](#217-adoption) | §8.1, §9 |
-| token-only admission | transition | [15.2](#152-token-only-mode), example [21.8](#218-token-only-admission) | §5.12 |
-| pass-through | transition | [18](#18-nested-runs-pass-through), example [21.9](#219-pass-through) | §6.3 |
+| Item | Kind | Defined in |
+|---|---|---|
+| `FORMAT` | file | [7.6](#76-format), [15](#15-formats-and-token-only-mode) |
+| `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) |
+| `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
+| `res/` | directory of token files | [6](#6-tokens-and-descriptor-ownership) |
+| `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
+| `holds/` | directory of holds | [7.4](#74-hold), [12](#12-admission) |
+| `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
+| `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
+| `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
+| `config.toml` (under the override only) | file | [5.3](#53-configuration-file) |
+| ticket body | body | [7.3](#73-ticket) |
+| hold body | body | [7.4](#74-hold) |
+| cancel body | body | [7.5](#75-cancel-request) |
+| `CORESLOT_GRANTED_*` | environment | [17](#17-descriptor-and-environment-contract) |
+| `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) |
+| `CORESLOT_TOKEN_FDS` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
+| `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
+| `CORESLOT_STATE_DIR` | environment | [4.1](#41-location) |
+| enqueue | transition | [10.1](#101-enqueue), example [21.1](#211-enqueue) |
+| refresh | transition | [10.2](#102-refresh-and-stalled), example [21.2](#212-refresh) |
+| admission | transition | [12](#12-admission), example [21.3](#213-admission-with-clamp) |
+| clamp | transition | [12.2](#122-effective-request-and-clamp), example [21.3](#213-admission-with-clamp) |
+| cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
+| withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
+| reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
+| adoption | transition | [12.4](#124-adoption), example [21.7](#217-adoption) |
+| token-only admission | transition | [15.2](#152-token-only-mode), example [21.8](#218-token-only-admission) |
+| pass-through | transition | [18](#18-nested-runs-pass-through), example [21.9](#219-pass-through) |
 
 ## 3. State machine and invariants
 
@@ -1009,7 +1005,7 @@ reconciliation is not due. The writers in these examples number ticket and hold 
 temporaries from one counter and the temporaries of `gen`, `FORMAT` and `degraded` from another;
 any numbering conforms (section 7.1).
 
-The examples use the CLI of spec §6.1, which is not part of the protocol: `coreslot run
+The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
 [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
 [--no-wait] [--strict] [--independent] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
 `N..N`; with no `--need` the request is `cpu=1..1`; `--on-timeout` defaults to `fail`, so a
@@ -1054,7 +1050,7 @@ No name changes. Pid 4711 calls `futimens` on its ticket every 2 s; pid 6001, a 
 observes the mtime once per second on its own monotonic clock `m`:
 
 | `m` (s) | mtime pid 6001 reads | Last change observed at | Verdict |
-|---|---|---|---|
+|---|---|---|
 | 100 | 12:00:02 | 100 (first sight) | WAITING |
 | 101 | 12:00:04 | 101 | WAITING |
 | 103 | 12:00:06 | 103 | WAITING |

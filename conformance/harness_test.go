@@ -1,10 +1,10 @@
 //go:build coreslot_testhooks && unix
 
-// Package conformance drives real coreslot processes through the traces of spec section 10.1:
-// the CLI binary and the helper in conformance/child, both built with the coreslot_testhooks
-// tag, against temporary state directories whose paths contain a space. A trace pauses a
-// process at a named test-hook point, stops, continues or kills it, and reads the state
-// directory through the library's Snapshot.
+// Package conformance drives real coreslot processes through deterministic traces: the CLI binary
+// and the helper in conformance/child, both built with the coreslot_testhooks tag, against
+// temporary state directories whose paths contain a space. A trace pauses a process at a named
+// test-hook point, stops, continues or kills it, and reads the state directory through the
+// library's Snapshot.
 package conformance
 
 import (

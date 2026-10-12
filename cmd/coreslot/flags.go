@@ -12,7 +12,8 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 )
 
-// runOptions are the flags of `coreslot run` (spec section 6.1).
+// runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the
+// CLI is not part of the protocol).
 type runOptions struct {
 	need        map[string]spec.Range // as requested; cpu=1..1 when no --need is given
 	label       string

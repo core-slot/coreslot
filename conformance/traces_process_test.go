@@ -469,12 +469,11 @@ func TestRepeatedClose(t *testing.T) {
 
 // ---------------------------------------------------------------- signals
 
-// The signal behaviour of `coreslot run` (spec section 6.1) through the built binary, with
-// the helper child as the command: under a PTY in terminal mode, SIGTERM and SIGHUP to
-// coreslot's pid, Ctrl-C reaching the command exactly once, Ctrl-C while waiting, Ctrl-Z and
-// fg; in non-terminal mode, a foreground pipeline interrupted with Ctrl-C or stopped with Ctrl-Z,
-// and SIGINT, SIGQUIT, SIGTERM and SIGHUP sent to the wrapper's pid. Every case leaves nothing
-// behind.
+// The signal behaviour of `coreslot run` through the built binary, with the helper child as the
+// command: under a PTY in terminal mode, SIGTERM and SIGHUP to coreslot's pid, Ctrl-C reaching the
+// command exactly once, Ctrl-C while waiting, Ctrl-Z and fg; in non-terminal mode, a foreground
+// pipeline interrupted with Ctrl-C or stopped with Ctrl-Z, and SIGINT, SIGQUIT, SIGTERM and SIGHUP
+// sent to the wrapper's pid. Every case leaves nothing behind.
 //
 // Mutation: terminal mode forwards SIGINT to the command too (it is not ignored in terminal
 // mode): the command receives Ctrl-C twice.

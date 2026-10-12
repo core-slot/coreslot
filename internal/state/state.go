@@ -73,10 +73,10 @@ func PassedOver(t Ticket, obs *Observer, now time.Duration) bool {
 	return t.Dead || obs.Stalled(t.Key, now)
 }
 
-// Effective computes each requested declared resource's effective range (PROTOCOL.md section
-// 12.2). A resource missing from sizes is undeclared (D12): it is excluded from eff and listed,
-// sorted, in undeclared. When min exceeds the size the range becomes size..size (D11) and
-// clamped records the requested min; otherwise max is lowered to the size.
+// Effective computes each requested declared resource's effective range (PROTOCOL.md section 12.2).
+// A resource missing from sizes is undeclared (section 12.1): it is excluded from eff and listed,
+// sorted, in undeclared. When min exceeds the size the range becomes size..size and clamped records
+// the requested min; otherwise max is lowered to the size.
 func Effective(need map[string]spec.Range, sizes map[string]int) (eff map[string]spec.Range, clamped map[string]int, undeclared []string) {
 	eff = make(map[string]spec.Range, len(need))
 	clamped = make(map[string]int)

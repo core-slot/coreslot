@@ -9,8 +9,8 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 )
 
-// versionCommand prints the CLI's version and the protocol formats it implements (spec section
-// 6.2), for example `coreslot 0.1.0 (protocol formats: 1)`.
+// versionCommand prints the CLI's version and the protocol formats it implements, for example
+// `coreslot 0.1.0 (protocol formats: 1)`.
 func versionCommand(args []string, io IO) int {
 	if len(args) > 0 {
 		fmt.Fprintf(io.Stderr, "coreslot: version takes no arguments\n")

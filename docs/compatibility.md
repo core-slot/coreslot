@@ -30,19 +30,20 @@ writes to `FORMAT` (`coreslot-protocol <n>`); the meaning of a number that a rel
 never changes, before `v1.0.0` as after it. The bump is what tells older clients apart: a client
 compares the number in `FORMAT` with the formats it implements, and an unknown number is what puts
 it in token-only mode (below). Two things never change with a format, so a format change never
-creates a second budget (design decision D8):
+creates a second budget ([`PROTOCOL.md` section 15.1](../PROTOCOL.md#151-what-every-format-keeps)):
 
 - `admit.lock`, an exclusive `flock` held briefly by whoever changes admission state;
 - the token files `res/<name>/<i>`, held by `flock(LOCK_EX)`, released by closing, and counted by
   probing their locks.
 
-A client that finds a format it does not implement runs in **token-only** mode (D10): under
-`admit.lock` it takes the minimum of each declared resource if that many tokens are free, publishes
-nothing (no ticket, hold, log line or degraded record), prints a diagnostic and exports
-`CORESLOT_UNBUDGETED=format` to the command. Its tokens are counted by every other client, so the
-budget still holds, but it has no place in the queue and gets no elastic share. Mixing releases
-across a format change is therefore safe but degrades the older clients; upgrade every client of a
-machine together. The release that introduces a format writes its number, and its notes say so.
+A client that finds a format it does not implement runs in **token-only** mode ([`PROTOCOL.md`
+section 15.2](../PROTOCOL.md#152-token-only-mode)): under `admit.lock` it takes the minimum of each
+declared resource if that many tokens are free, publishes nothing (no ticket, hold, log line or
+degraded record), prints a diagnostic and exports `CORESLOT_UNBUDGETED=format` to the command. Its
+tokens are counted by every other client, so the budget still holds, but it has no place in the
+queue and gets no elastic share. Mixing releases across a format change is therefore safe but
+degrades the older clients; upgrade every client of a machine together. The release that introduces
+a format writes its number, and its notes say so.
 
 ## CLI
 

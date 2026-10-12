@@ -27,10 +27,10 @@ func (e *LiveError) Error() string {
 func (e *LiveError) Unwrap() error { return ErrRefused }
 
 // Reset removes the contents of the state directory except the format-stable files and the
-// configuration (`coreslot doctor --reset`, spec section 6.2): inside the admission section it
-// checks that there are no holds, no tickets, no other section holder and no locked tokens, and
-// only then removes the entries of queue/, holds/, cancel/ and log/, gen, FORMAT and degraded,
-// keeping admit.lock, res/ and config.toml. It returns the number of entries removed.
+// configuration (`coreslot doctor --reset`): inside the admission section it checks that there are
+// no holds, no tickets, no other section holder and no locked tokens, and only then removes the
+// entries of queue/, holds/, cancel/ and log/, gen, FORMAT and degraded, keeping admit.lock, res/
+// and config.toml. It returns the number of entries removed.
 //
 // When something is alive it removes nothing and returns a *LiveError naming it. A section that
 // ctx does not let it enter is one more live thing: another client is inside it. The state is
