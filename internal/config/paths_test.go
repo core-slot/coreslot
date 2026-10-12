@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -110,6 +111,48 @@ func TestStateDirFrom(t *testing.T) {
 			}
 			if err != nil || dir != tc.dir || override != tc.override {
 				t.Fatalf("StateDirFrom(%q) = %q, %v, %v; want %q, %v", tc.value, dir, override, err, tc.dir, tc.override)
+			}
+		})
+	}
+}
+
+// The state directory and the configuration file derive from one home directory lookup, since a
+// lookup can start getent (Home); an override needs none. Mutation: look the home directory up
+// again for the configuration file in locate and the default case counts 2.
+func TestLocateLooksUpHomeOnce(t *testing.T) {
+	const home = "/nonexistent/home"
+	def := filepath.Join(home, ".local", "state", "coreslot")
+	if runtime.GOOS == "darwin" {
+		def = filepath.Join(home, "Library", "Application Support", "coreslot")
+	}
+	for _, tc := range []struct {
+		name, value, dir, cfg string
+		homeErr               error
+		lookups               int
+	}{
+		{name: "default", dir: def, cfg: filepath.Join(home, ".config", "coreslot", "config.toml"), lookups: 1},
+		{name: "override", value: "/srv/state", dir: "/srv/state", cfg: filepath.Join("/srv/state", "config.toml"), lookups: 0},
+		{name: "lookup error", homeErr: errors.New("no record"), lookups: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookups := 0
+			lookup := func() (string, error) {
+				lookups++
+				if tc.homeErr != nil {
+					return "", tc.homeErr
+				}
+				return home, nil
+			}
+			getenv := func(k string) string {
+				if k == StateDirEnv {
+					return tc.value
+				}
+				return ""
+			}
+			dir, _, cfg, err := locate(getenv, lookup)
+			if !errors.Is(err, tc.homeErr) || dir != tc.dir || cfg != tc.cfg || lookups != tc.lookups {
+				t.Errorf("locate = %q, %q, %v after %d lookups; want %q, %q, %v after %d",
+					dir, cfg, err, lookups, tc.dir, tc.cfg, tc.homeErr, tc.lookups)
 			}
 		})
 	}
