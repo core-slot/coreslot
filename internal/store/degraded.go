@@ -33,7 +33,7 @@ type DegradedRecord struct {
 
 // Degraded reads the degraded record: nil when degraded mode is not recorded.
 func (s *Store) Degraded() (*DegradedRecord, error) {
-	body, err := s.readSmall(DegradedFile, wire.MaxBodyBytes)
+	body, err := s.ReadSmall(DegradedFile, wire.MaxBodyBytes)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

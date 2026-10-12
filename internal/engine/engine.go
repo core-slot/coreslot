@@ -10,8 +10,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -51,8 +49,6 @@ const (
 	// releaseWait bounds how long a grant's Close waits to enter the section to remove its hold
 	// (PROTOCOL.md section 12.3).
 	releaseWait = 2 * time.Second
-	// maxNameAttempts bounds the seq retries of a ticket whose final name exists.
-	maxNameAttempts = 1000
 )
 
 // Clock is the engine's view of time. Realtime is the wall clock in nanoseconds since the
@@ -225,48 +221,37 @@ func (t *Ticket) publish(sec *store.Section) error {
 	if err != nil {
 		return err
 	}
-	key := wire.OrderKey(arrival, t.req.Priority)
-	pid := os.Getpid()
-	for attempt := 0; attempt < maxNameAttempts; attempt++ {
-		id := wire.ID{OrderKey: key, PID: pid, Seq: e.seq()}
-		name := wire.TicketName(id, t.req.Label)
-		f, err := sec.Publish(store.QueueDir, name, body, true)
-		if errors.Is(err, fs.ErrExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if err := sec.BumpGen(); err != nil {
-			f.Close() // the ticket is dead at once; reconciliation removes it
-			return err
-		}
-		t.mu.Lock()
-		if t.status != statusWaiting {
-			// Withdrawn while re-enqueueing from token-only mode: the new ticket is dead at once.
-			t.mu.Unlock()
-			f.Close()
-			return ErrCancelled
-		}
-		t.f, t.id, t.name = f, id, name
-		t.mu.Unlock()
-		t.key = state.Key(id)
-		t.lastRefreshMono, t.lastRefreshReal = e.clock.Monotonic(), arrival
-		t.mode = modeQueued
-		return nil
+	id := wire.ID{OrderKey: wire.OrderKey(arrival, t.req.Priority), PID: os.Getpid()}
+	f, name, seq, err := sec.PublishNamed(store.QueueDir, body, e.seq(), e.seq, func(seq int) string {
+		return wire.TicketName(wire.ID{OrderKey: id.OrderKey, PID: id.PID, Seq: seq}, t.req.Label)
+	})
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("engine: no free ticket name after %d attempts", maxNameAttempts)
+	id.Seq = seq
+	if err := sec.BumpGen(); err != nil {
+		f.Close() // the ticket is dead at once; reconciliation removes it
+		return err
+	}
+	t.mu.Lock()
+	if t.status != statusWaiting {
+		// Withdrawn while re-enqueueing from token-only mode: the new ticket is dead at once.
+		t.mu.Unlock()
+		f.Close()
+		return ErrCancelled
+	}
+	t.f, t.id, t.name = f, id, name
+	t.mu.Unlock()
+	t.key = state.Key(id)
+	t.lastRefreshMono, t.lastRefreshReal = e.clock.Monotonic(), arrival
+	t.mode = modeQueued
+	return nil
 }
 
-// readBody reads an entry of the layout of at most wire.MaxBodyBytes+1 bytes through the
-// filesystem policy. A missing entry returns an error matching fs.ErrNotExist.
+// readBody reads the entry dir/name of the layout, of at most wire.MaxBodyBytes+1 bytes, through
+// the filesystem policy. A missing entry returns an error matching fs.ErrNotExist.
 func (e *Engine) readBody(dir, name string) ([]byte, error) {
-	f, err := store.OpenFile(filepath.Join(e.st.Dir(), dir, name), os.O_RDONLY)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, wire.MaxBodyBytes+1))
+	return e.st.ReadSmall(filepath.Join(dir, name), wire.MaxBodyBytes)
 }
 
 // gone reports an entry that no longer exists (PROTOCOL.md section 10.3: a vanished entry is

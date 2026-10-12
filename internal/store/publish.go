@@ -237,9 +237,10 @@ func (sec *Section) replaceFile(name string, body []byte) error {
 	return nil
 }
 
-// readSmall reads a regular file of the layout of at most limit bytes; a missing file returns
+// ReadSmall reads the regular file name of the layout, a path relative to the state directory,
+// of at most limit bytes, through the filesystem policy; a missing file returns an error matching
 // fs.ErrNotExist, a larger one returns its first limit+1 bytes.
-func (s *Store) readSmall(name string, limit int) ([]byte, error) {
+func (s *Store) ReadSmall(name string, limit int) ([]byte, error) {
 	f, err := OpenFile(s.path(name), os.O_RDONLY)
 	if err != nil {
 		return nil, err
@@ -259,7 +260,7 @@ type Gen struct {
 // ReadGen reads gen. A missing or malformed gen reads as the zero Gen; a gen that breaks the
 // filesystem policy is a *StateError.
 func (s *Store) ReadGen() (Gen, error) {
-	body, err := s.readSmall(GenFile, wire.MaxBodyBytes)
+	body, err := s.ReadSmall(GenFile, wire.MaxBodyBytes)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Gen{}, nil
 	}
@@ -317,7 +318,7 @@ func (sec *Section) Format(implemented []int) (n int, understood bool, err error
 	if err := sec.live(); err != nil {
 		return 0, false, err
 	}
-	body, err := sec.s.readSmall(FormatFile, 64)
+	body, err := sec.s.ReadSmall(FormatFile, 64)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		if err := sec.replaceFile(FormatFile, []byte(formatPrefix+"1\n")); err != nil {
@@ -344,7 +345,7 @@ func (sec *Section) Format(implemented []int) (n int, understood bool, err error
 // ReadFormat reads FORMAT outside the section, for a reader that writes nothing (status): n is
 // the format and present false when FORMAT is absent. A malformed FORMAT is a *StateError.
 func (s *Store) ReadFormat() (n int, present bool, err error) {
-	body, err := s.readSmall(FormatFile, 64)
+	body, err := s.ReadSmall(FormatFile, 64)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, false, nil
 	}
