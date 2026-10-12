@@ -46,11 +46,13 @@ func dispatch(args []string, io IO) int {
 	case "run":
 		return runCommand(args[1:], io)
 	case "version", "--version":
-		fmt.Fprintf(io.Stdout, "coreslot %s (protocol formats: 1)\n", version)
-		return 0
-	case "status", "cancel", "doctor":
-		fmt.Fprintf(io.Stderr, "coreslot: %s is not available in this build\n", args[0])
-		return exitInternal
+		return versionCommand(args[1:], io)
+	case "status":
+		return statusCommand(args[1:], io)
+	case "cancel":
+		return cancelCommand(args[1:], io)
+	case "doctor":
+		return doctorCommand(args[1:], io)
 	case "help", "-h", "--help":
 		fmt.Fprintln(io.Stdout, usage)
 		return 0
