@@ -441,9 +441,11 @@ func TestStoppedHeadIsPassedOver(t *testing.T) {
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d behind a fresh ticket, want 2", p)
 	}
-	clk.advance(9 * time.Second)
-	if p := position(t, step(t, s)); p != 2 || s.attempts != 0 {
-		t.Fatalf("9 s without a change: position %d, %d attempts; want 2 and none", p, s.attempts)
+	for sec := 1; sec <= 9; sec++ { // one election per second: an absence would not be watched
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 || s.attempts != 0 {
+			t.Fatalf("%d s without a change: position %d, %d attempts; want 2 and none", sec, p, s.attempts)
+		}
 	}
 	clk.advance(time.Second) // the next election, once per second
 	if r := step(t, s); !isAdmitted(r) {
@@ -465,7 +467,13 @@ func TestStalledTicketResumesItsPlace(t *testing.T) {
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d, want 2", p)
 	}
-	clk.advance(10 * time.Second)
+	for sec := 1; sec <= 9; sec++ { // one election per second: an absence would not be watched
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 {
+			t.Fatalf("%d s without a change: position %d, want 2", sec, p)
+		}
+	}
+	clk.advance(time.Second)
 	if p := position(t, step(t, s)); p != 1 || s.attempts != 1 {
 		t.Fatalf("stalled ticket ahead: position %d, %d attempts; want head with one attempt", p, s.attempts)
 	}
@@ -474,9 +482,11 @@ func TestStalledTicketResumesItsPlace(t *testing.T) {
 	if p := position(t, step(t, s)); p != 2 || s.attempts != 1 {
 		t.Fatalf("after the refresh: position %d, %d attempts; want 2 and no new attempt", p, s.attempts)
 	}
-	clk.advance(9 * time.Second)
-	if p := position(t, step(t, s)); p != 2 {
-		t.Fatalf("9 s after the observed refresh: position %d, want 2", p)
+	for sec := 1; sec <= 9; sec++ {
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 {
+			t.Fatalf("%d s after the observed refresh: position %d, want 2", sec, p)
+		}
 	}
 	clk.advance(time.Second)
 	if p := position(t, step(t, s)); p != 1 {

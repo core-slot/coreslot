@@ -323,25 +323,25 @@ func TestObserverCountsOnlyConsecutiveExaminations(t *testing.T) {
 	key := k(1, 1, 1)
 	sec := func(s int) time.Duration { return time.Duration(s) * time.Second }
 	for s := 0; s <= 4; s++ { // watched 0..4 s
-		obs.Pass()
+		obs.Pass(sec(s))
 		obs.Observe(key, 42, sec(s))
 	}
 	for s := 5; s < 30; s++ { // passes that stop before key
-		obs.Pass()
+		obs.Pass(sec(s))
 	}
-	obs.Pass()
+	obs.Pass(sec(30))
 	obs.Observe(key, 42, sec(30))
 	if obs.Stalled(key, sec(30)) {
 		t.Fatal("stalled on 4 s of watching and a 26 s gap nobody watched")
 	}
 	for s := 31; s <= 35; s++ {
-		obs.Pass()
+		obs.Pass(sec(s))
 		obs.Observe(key, 42, sec(s))
 		if obs.Stalled(key, sec(s)) {
 			t.Fatalf("stalled at %d s after %d s of watching", s, 4+s-30)
 		}
 	}
-	obs.Pass()
+	obs.Pass(sec(36))
 	obs.Observe(key, 42, sec(36))
 	if !obs.Stalled(key, sec(36)) {
 		t.Error("10 s of watching without a change across the gap: want stalled")
@@ -349,18 +349,76 @@ func TestObserverCountsOnlyConsecutiveExaminations(t *testing.T) {
 
 	// A value that changed during the gap restarts the timer.
 	other := k(2, 2, 2)
-	obs.Pass()
+	obs.Pass(sec(100))
 	obs.Observe(other, 1, sec(100))
 	for s := 101; s < 140; s++ {
-		obs.Pass()
+		obs.Pass(sec(s))
 	}
-	obs.Pass()
+	obs.Pass(sec(140))
 	obs.Observe(other, 2, sec(140))
 	for s := 141; s <= 149; s++ {
-		obs.Pass()
+		obs.Pass(sec(s))
 		obs.Observe(other, 2, sec(s))
 	}
 	if obs.Stalled(other, sec(149)) {
 		t.Error("stalled 9 s after an observed change")
+	}
+}
+
+// The observer's own absence is not watched (PROTOCOL.md section 10.2): an interval of more than
+// MaxPassGap between two consecutive passes adds no watched time to any ticket, one of at most
+// MaxPassGap adds it as usual, and a ticket that stopped while the observer was away is STALLED
+// only after StallAfter of watched time once the observer is back.
+func TestObserverDoesNotCountItsOwnAbsence(t *testing.T) {
+	sec := func(s int) time.Duration { return time.Duration(s) * time.Second }
+	obs := &Observer{}
+	same, changed := k(1, 1, 1), k(2, 2, 2)
+	pass := func(s int, changedValue int64) {
+		obs.Pass(sec(s))
+		obs.Observe(same, 42, sec(s))
+		obs.Observe(changed, changedValue, sec(s))
+	}
+	for s := 0; s <= 4; s++ { // 1 s passes: 4 s watched
+		pass(s, 1)
+	}
+	pass(6, 1) // a gap of exactly MaxPassGap is watched: 6 s
+	// The observer is away for 15 s; meanwhile changed refreshes once more and stops.
+	pass(21, 2)
+	if obs.Stalled(same, sec(21)) {
+		t.Fatal("same is STALLED right after the observer's 15 s absence: the absence was counted as watched")
+	}
+	for s := 22; s <= 24; s++ { // 7..9 s watched
+		pass(s, 2)
+		if obs.Stalled(same, sec(s)) {
+			t.Fatalf("same is STALLED at %d s after %d s of watching", s, 6+s-21)
+		}
+	}
+	pass(25, 2)
+	if !obs.Stalled(same, sec(25)) {
+		t.Error("same unchanged for 10 s of watching (6 before the absence, 4 after): want STALLED")
+	}
+	for s := 26; s <= 30; s++ {
+		pass(s, 2)
+		if obs.Stalled(changed, sec(s)) {
+			t.Fatalf("changed is STALLED at %d s, %d s after its change was observed", s, s-21)
+		}
+	}
+	pass(31, 2)
+	if !obs.Stalled(changed, sec(31)) {
+		t.Error("changed unchanged for 10 s of watching after the absence: want STALLED")
+	}
+
+	// The boundary: a gap just above MaxPassGap adds nothing.
+	edge := &Observer{}
+	edge.Pass(0)
+	edge.Observe(same, 42, 0)
+	at := time.Duration(0)
+	for range 9 {
+		at += MaxPassGap + time.Nanosecond
+		edge.Pass(at)
+		edge.Observe(same, 42, at)
+	}
+	if edge.Stalled(same, at) {
+		t.Errorf("STALLED after nine gaps of %v, none of them watched", MaxPassGap+time.Nanosecond)
 	}
 }
