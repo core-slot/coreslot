@@ -77,24 +77,31 @@ type observation struct {
 	malformed   []string // live holds whose body does not decode
 }
 
-// TokenOnly is what the test knows, at one sample, of the token-only grants it started: they
+// TokenOnly is what the test knows, at one sample, of the token-only runs it started: they
 // publish nothing, so no hold lists their tokens.
 type TokenOnly struct {
 	// Inodes are the token files that live token-only commands reported among their
 	// descriptors: those tokens are accounted for.
 	Inodes map[[2]uint64]bool
-	// Pending is, per resource, how many tokens the live token-only runs that have not
-	// reported yet may hold: the sum of their minimums clamped to the size, since a token-only
-	// admission takes exactly its effective minimum. Up to that many unlisted tokens of the
-	// resource are put down to them; more are reported.
-	Pending map[string]int
+	// Admitted lists, for each live token-only run that has been admitted (its command has
+	// started) and whose command has not reported its descriptors yet, the minimum of each
+	// resource it requested. A waiting run is not here: it has no grant. The minimum is the
+	// requested one, an upper bound on what the run took (min(min, size at its admission)):
+	// the test does not know the size its run saw.
+	Admitted []map[string]int
 }
+
+// DefaultTokenOnlyBound is the default of Sampler.TokenOnlyBound.
+const DefaultTokenOnlyBound = 2 * time.Second
 
 // Sampler samples one state directory. Its methods are safe for concurrent use.
 type Sampler struct {
-	// TokenOnly returns, for the sizes in effect, the token-only grants the test started. Nil
-	// means there are none.
-	TokenOnly func(sizes map[string]int) TokenOnly
+	// TokenOnly returns the token-only runs the test started. Nil means there are none.
+	TokenOnly func() TokenOnly
+	// TokenOnlyBound is how long a locked token listed by no live hold may be put down to an
+	// admitted token-only run whose command has not reported yet: a started command reports
+	// within milliseconds. NewSampler sets DefaultTokenOnlyBound.
+	TokenOnlyBound time.Duration
 	// Request returns the request behind a hold's label, for I7. Holds whose label it does not
 	// know are not checked for I7.
 	Request func(label string) (map[string]spec.Range, bool)
@@ -106,6 +113,7 @@ type Sampler struct {
 	sizes       map[string]int
 	ceiling     map[string]int            // I3 bound: the size, or the locked count a shrink left above it
 	inodes      map[Token][2]uint64       // each token file's inode when the sampler first saw it
+	unlisted    map[Token]time.Time       // since when each locked token is listed by no live hold
 	window      map[string]int            // the smallest size in effect since the previous sample
 	admitMin    map[string]map[string]int // per live hold, window when the hold was first seen
 	prev        map[string]Violation      // candidates of the previous sample
@@ -125,8 +133,8 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 	if err := os.MkdirAll(e.Dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := &Sampler{dir: e.Dir, scratch: t.TempDir(), inodes: map[Token][2]uint64{},
-		admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
+	s := &Sampler{TokenOnlyBound: DefaultTokenOnlyBound, dir: e.Dir, scratch: t.TempDir(),
+		inodes: map[Token][2]uint64{}, unlisted: map[Token]time.Time{}, admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
 	var err error
 	if s.st, err = store.Open(e.Dir); err != nil {
 		t.Fatal(err)
@@ -378,32 +386,51 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		}
 	}
 
-	// I2: a locked token is listed by a live hold, or inside a token-only grant of the test:
-	// one whose command reported the token, or, up to the minimums they take, one that has
-	// not reported yet.
+	// I2: a locked token is listed by a live hold, or inside a token-only grant of the test.
+	// Tokens a live token-only command reported are accounted for. Beyond them, a token may
+	// be put down to a token-only run only while all of these hold: some run that requested
+	// its resource has been admitted (its command started) and has not reported yet; the
+	// token has been unlisted for less than TokenOnlyBound; and the resource has no more such
+	// tokens than those runs' minimums sum to. Every other unlisted token is reported on its
+	// own; tokens over the count are reported together, as the same set in both samples.
 	var tokenOnly TokenOnly
 	if s.TokenOnly != nil {
-		tokenOnly = s.TokenOnly(maps.Clone(s.sizes))
+		tokenOnly = s.TokenOnly()
 	}
-	unlisted := map[string][]Token{}
+	allowance := map[string]int{}
+	for _, run := range tokenOnly.Admitted {
+		for r, n := range run {
+			allowance[r] += n
+		}
+	}
+	for k := range s.unlisted {
+		if !obs.locked[k] || len(listed[k]) > 0 {
+			delete(s.unlisted, k)
+		}
+	}
+	eligible := map[string][]Token{}
 	for k := range obs.locked {
 		if len(listed[k]) > 0 || tokenOnly.Inodes[obs.inodes[k]] {
 			continue
 		}
-		unlisted[k.Res] = append(unlisted[k.Res], k)
-	}
-	for r, ks := range unlisted {
-		slices.SortFunc(ks, func(a, b Token) int { return a.Idx - b.Idx })
-		if pending := tokenOnly.Pending[r]; pending > 0 {
-			if len(ks) > pending {
-				add("I2", "I2 unlisted "+r, "%d tokens of %s are locked and listed by no live hold (%v), "+
-					"more than the %d the unreported token-only runs take", len(ks), r, ks, pending)
-			}
+		since, seen := s.unlisted[k]
+		if !seen {
+			since = obs.at
+			s.unlisted[k] = since
+		}
+		if allowance[k.Res] > 0 && obs.at.Sub(since) < s.TokenOnlyBound {
+			eligible[k.Res] = append(eligible[k.Res], k)
 			continue
 		}
-		for _, k := range ks {
-			add("I2", "I2 unlisted "+k.String(), "token %s is locked and listed by no live hold", k)
+		add("I2", "I2 unlisted "+k.String(), "token %s is locked and listed by no live hold", k)
+	}
+	for r, ks := range eligible {
+		if len(ks) <= allowance[r] {
+			continue
 		}
+		slices.SortFunc(ks, func(a, b Token) int { return a.Idx - b.Idx })
+		add("I2", fmt.Sprintf("I2 unlisted %s %v", r, ks), "%d tokens of %s are locked and listed by no live "+
+			"hold (%v), more than the %d the admitted, unreported token-only runs take", len(ks), r, ks, allowance[r])
 	}
 
 	// I3: the locked count of a resource, at every index, stays within the bound.
@@ -668,18 +695,38 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 			t.Errorf("the sample after cpu/2 was released reported %v", got)
 		}
 	})
-	t.Run("an unreported token-only run covers its minimum, not more (I2)", func(t *testing.T) {
+	t.Run("a waiting token-only run exempts nothing (I2)", func(t *testing.T) {
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("t.tok.c1_1", map[string]spec.Range{"cpu": {Min: 1, Max: 1}},
+		runs.add("tw.tok.c1_1", map[string]spec.Range{"cpu": {Min: 1, Max: 1}},
 			func(ChildReport, bool) bool { return true })
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
+		fd := lockToken(t, e, Token{"cpu", 0})
+		expect("a cpu token while a token-only run waits (no start marker)", "I2 unlisted cpu/0")
+		unix.Close(fd)
+		settle()
+	})
+	t.Run("an admitted, unreported token-only run exempts its minimum, within the bound (I2)", func(t *testing.T) {
+		runs := &tokenOnlyRuns{markDir: e.MarkDir}
+		runs.add("ta.tok.c1_1", map[string]spec.Range{"cpu": {Min: 1, Max: 1}},
+			func(ChildReport, bool) bool { return true })
+		if err := os.WriteFile(begunPath(e.MarkDir, "ta.tok.c1_1"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s.TokenOnly = runs.grants
+		defer func() { s.TokenOnly = nil }()
 		fd0 := lockToken(t, e, Token{"cpu", 0})
-		expect("one cpu token of a token-only run that has not reported")
+		expect("its one cpu token, within the bound")
+		time.Sleep(s.TokenOnlyBound)
+		expect("its cpu token, past the bound", "I2 unlisted cpu/0")
+		unix.Close(fd0)
+		settle()
 		fd1 := lockToken(t, e, Token{"cpu", 1})
+		fd2 := lockToken(t, e, Token{"cpu", 2})
 		fdIO := lockToken(t, e, Token{"io", 0})
-		expect("a second cpu token and an io token", "I2 unlisted cpu", "I2 unlisted io/0")
-		for _, fd := range []int{fd0, fd1, fdIO} {
+		expect("two cpu tokens for a minimum of one, and an io token it did not request",
+			"I2 unlisted cpu [cpu/1 cpu/2]", "I2 unlisted io/0")
+		for _, fd := range []int{fd1, fd2, fdIO} {
 			unix.Close(fd)
 		}
 		settle()
