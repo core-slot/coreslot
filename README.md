@@ -10,10 +10,11 @@ at `v0` until it is ([compatibility policy](docs/compatibility.md)).
 
 Several coding-agent sessions, each in its own worktree, each running its own `pytest -n <cores>`
 or `make -j<cores>`, oversubscribe a machine several times over: timing-sensitive tests fail
-falsely and a gate that takes minutes alone takes an hour. `coreslot` gives every such command a
+falsely and every gate runs far slower than it would alone. `coreslot` gives every such command a
 share of one machine-wide budget. A command asks for `min..max` cores, waits in one queue (first
-come, first served at equal priority) until `min` is free, and runs with what it got. There is no daemon: the budget is a directory of
-token files and `flock(2)` locks, so a killed client never leaks its share.
+come, first served at equal priority) until `min` is free, and runs with what it got. There is no
+daemon: the budget is a directory of token files and `flock(2)` locks, so a killed client never
+leaks its share.
 
 ## Install
 
@@ -175,10 +176,20 @@ written that way lives in [`conformance/pyclient`](conformance/pyclient).
 
 ## Performance
 
-The design's benchmark gate (a thousand waiters under bursts of arrivals, admissions,
-cancellations and stall recoveries cost under 2 % of one core in aggregate) is pending
-re-measurement. Measured claims and the scripts behind them are in
-[`evidence/README.md`](evidence/README.md).
+The release gate ([design §10.4](PROTOCOL.md#10-verification)) is 100
+waiters under the stated bursts of arrivals, admissions, cancellations and stall recoveries, at
+most 10 % of one core in aggregate, as the median of five 120 s runs on the macOS reference host.
+All figures are from [`evidence/README.md`](evidence/README.md#waiter-benchmark-design-section-104),
+which has the scripts, the setup and every run:
+
+- **The gate:** measured
+  [5.70 % of one core](evidence/README.md#the-gate-run-2026-10-12-a56c198) (min 5.10 %, max
+  6.24 %): pass.
+- **Linux, 1000 waiters:** 361.4 % of one core, measured once inside Docker Desktop's VM on the
+  same loaded host; published, not gated.
+- **macOS, 1000 waiters:** not measured.
+  [A projection](evidence/README.md#projection-to-1000-waiters-on-macos-not-a-measurement) from the
+  measured runs gives about 150 % of one core; it is an extrapolation, not a measurement.
 
 ## More
 
