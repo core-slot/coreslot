@@ -756,12 +756,16 @@ func mapsEqual(a, b map[string]string) bool {
 
 // A cancel request published before the owner's admitting section wins even though the owner
 // already won its election and capacity is free: admission step 1 finds it, nothing runs and
-// nothing is left. One published while the owner is inside the section that admits it waits
-// for the section, finds no ticket, and has no effect: cancellation never revokes a grant.
+// nothing is left. One made while the owner is inside the section that admits it waits for the
+// section, finds no ticket, and has no effect: cancellation never revokes a grant. The CLI's
+// cancel waits for the section for 1 s at most: an owner that stays inside longer makes it
+// refuse, naming the holder, with nothing published, and the owner is admitted as if no cancel
+// had been made.
 //
 // Mutations: skip admission step 1's cancel check (the "before" run is admitted and its command
 // runs); publish a cancel request without checking that the ticket exists (the "after" cancel
-// succeeds and leaves a request behind).
+// succeeds and leaves a request behind); wait for the section without a bound ("after, past the
+// bound": cancel does not exit while V is paused).
 func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 	t.Run("before", func(t *testing.T) {
 		e := State(t)
@@ -809,11 +813,12 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		if !ok {
 			t.Fatal("V has no ticket inside its admitting section")
 		}
-		// The canceller starts while V holds its admitting section, so whenever it enters the
-		// section V's admission is complete and the ticket gone. (Whether it has tried to enter
-		// before V leaves depends on scheduling; the outcome does not.)
+		// The canceller starts while V holds its admitting section, and V leaves it well within
+		// cancel's 1 s bound, so whenever cancel enters the section V's admission is complete and
+		// the ticket gone. (Whether it has tried to enter before V leaves depends on scheduling;
+		// the outcome does not.)
 		c := e.Start("cancel", tk.ID)
-		time.Sleep(time.Second)
+		time.Sleep(200 * time.Millisecond)
 		if c.Exited() {
 			t.Fatalf("cancel exited %d while V held the section; stderr:\n%s", c.Wait(), c.Stderr())
 		}
@@ -821,13 +826,42 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		defer v.AutoRelease("publish.after-create")()
 		c.ExitCode(exitRefusal)
 		if !strings.Contains(c.Stderr(), "no waiting ticket") {
-			t.Errorf("cancel stderr %q", c.Stderr())
+			t.Errorf("cancel stderr %q, want no waiting ticket (load: %s)", c.Stderr(), uptime())
 		}
 		e.WaitStarted("V")
 		e.WaitHold("V", startWait)
 		if rep := e.Status(); len(rep.Cancels) != 0 {
 			t.Errorf("a cancel request was left for the admitted ticket: %v", rep.Cancels)
 		}
+		e.ReleaseChild("V")
+		v.ExitCode(0)
+	})
+
+	t.Run("after, past the bound", func(t *testing.T) {
+		e := State(t)
+		e.WriteConfig(cpuConfig(1))
+		v := e.Pausing("publish.after-create").Run("V", "--need", "cpu=1")
+		v.CatchPublication("publish.after-create", store.HoldsDir)
+		tk, ok := e.Ticket("V")
+		if !ok {
+			t.Fatal("V has no ticket inside its admitting section")
+		}
+		// V stays inside its admitting section until cancel has given up: cancel refuses, names
+		// V as the holder, and publishes nothing.
+		c := e.Start("cancel", tk.ID)
+		c.ExitCode(exitRefusal)
+		holder := fmt.Sprintf("held by pid %d", v.PID())
+		if !strings.Contains(c.Stderr(), "stayed held") || !strings.Contains(c.Stderr(), holder) ||
+			!strings.Contains(c.Stderr(), "no cancel request was published") {
+			t.Errorf("cancel stderr %q, want a refusal naming %q", c.Stderr(), holder)
+		}
+		if rep := e.Status(); len(rep.Cancels) != 0 {
+			t.Errorf("a refused cancel published a request: %v", rep.Cancels)
+		}
+		v.Release("publish.after-create")
+		defer v.AutoRelease("publish.after-create")()
+		e.WaitStarted("V")
+		e.WaitHold("V", startWait)
 		e.ReleaseChild("V")
 		v.ExitCode(0)
 	})

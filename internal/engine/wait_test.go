@@ -387,15 +387,16 @@ func TestFrontWindowCoversFourStoppedTickets(t *testing.T) {
 	w1 := enqueue(t, e, need("cpu=1"))
 	w2 := enqueue(t, e, need("cpu=1"))
 	at := map[string]int{}
+	// The waiters step in a fixed order, W1 then W2, so W2 steps after W1 in every second,
+	// including the one that admits W1.
+	waiters := []struct {
+		name string
+		w    *Ticket
+	}{{"W1", w1}, {"W2", w2}}
 	for sec := 0; sec <= 25 && len(at) < 2; sec++ {
-		for name, w := range map[string]*Ticket{"W1": w1, "W2": w2} {
-			if _, done := at[name]; !done && isAdmitted(step(t, w)) {
-				at[name] = sec
-			}
-		}
-		if _, ok := at["W1"]; ok { // W2 steps after W1 in the same second
-			if _, done := at["W2"]; !done && isAdmitted(step(t, w2)) {
-				at["W2"] = sec
+		for _, x := range waiters {
+			if _, done := at[x.name]; !done && isAdmitted(step(t, x.w)) {
+				at[x.name] = sec
 			}
 		}
 		clk.advance(time.Second)

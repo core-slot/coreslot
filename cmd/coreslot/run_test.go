@@ -342,10 +342,18 @@ func TestClassify(t *testing.T) {
 		{"strict turns a state error into a refusal", strictRefusal(&coreslot.StateError{Reason: "x"}, 75), 75, false},
 		{"strict with --refusal-code", strictRefusal(&stateError{Reason: "x"}, 99), 99, false},
 		{"interrupted", &interruptError{Sig: syscall.SIGINT}, 130, false},
-		{"not found", &exec.Error{Name: "nope", Err: exec.ErrNotFound}, 127, false},
-		{"missing path", &os.PathError{Op: "fork/exec", Path: "/nope", Err: syscall.ENOENT}, 127, false},
-		{"not executable", &os.PathError{Op: "fork/exec", Path: "/etc", Err: syscall.EACCES}, 126, false},
-		{"other", errors.New("boom"), 70, false},
+		{"engine refusal", fmt.Errorf("%w: format 2", engine.ErrRefused), 75, false},
+		{"not found", &execError{Err: &exec.Error{Name: "nope", Err: exec.ErrNotFound}}, 127, false},
+		{"missing path", &execError{Err: &os.PathError{Op: "fork/exec", Path: "/nope", Err: syscall.ENOENT}}, 127, false},
+		{"not executable", &execError{Err: &os.PathError{Op: "fork/exec", Path: "/etc", Err: syscall.EACCES}}, 126, false},
+		{"exec failure of another kind", &execError{Err: &os.PathError{Op: "fork/exec", Path: "/bin/sh", Err: syscall.E2BIG}}, 70, false},
+		// Only the run's own exec gives 126 and 127: the same errnos elsewhere are I/O on the state.
+		{"state entry missing", &os.PathError{Op: "open", Path: "/s/queue", Err: syscall.ENOENT}, 0, true},
+		{"state entry unreadable", &os.PathError{Op: "open", Path: "/s/queue", Err: syscall.EACCES}, 0, true},
+		{"store state error", fmt.Errorf("list: %w", &store.StateError{Reason: "x"}), 0, true},
+		{"untyped error", errors.New("boom"), 0, true},
+		{"cancelled context", context.Canceled, 70, false},
+		{"no such ticket", engine.ErrNoTicket, 70, false},
 	}
 	for _, c := range cases {
 		code, failOpen := classify(c.err)

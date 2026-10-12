@@ -41,7 +41,7 @@ func runCommand(args []string, io IO) int {
 	// The console delivers Ctrl-C to the command too; the run only waits for it.
 	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	if err := cmd.Start(); err != nil {
-		code, _ := classify(err)
+		code, _ := classify(&execError{Err: err})
 		fmt.Fprintf(io.Stderr, "coreslot: cannot run %s: %v\n", argv[0], err)
 		return code
 	}
@@ -49,4 +49,5 @@ func runCommand(args []string, io IO) int {
 	return exitStatus(cmd.ProcessState)
 }
 
-func isStoreStateError(error) bool { return false }
+// engineStateReason: Windows has no budget and no engine, so no error is the engine's state error.
+func engineStateReason(error) (string, bool) { return "", false }

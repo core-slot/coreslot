@@ -95,7 +95,9 @@ func cancelCommand(args []string, io IO) int {
 
 	ctx, stop := context.WithTimeout(context.Background(), cancelWait)
 	defer stop()
-	// CancelContext gives up entering the section when ctx ends, publishing nothing.
+	// CancelContext gives up entering the section when ctx ends, publishing nothing. Only that
+	// is a busy section: an error after a timely entry is reported as itself.
+	var busy *engine.SectionBusyError
 	switch err := inSection(func() error { return e.CancelContext(ctx, id) }); {
 	case err == nil:
 		fmt.Fprintf(io.Stdout, "coreslot: cancel requested for ticket %s\n", id)
@@ -103,7 +105,7 @@ func cancelCommand(args []string, io IO) int {
 	case errors.Is(err, engine.ErrNoTicket):
 		fmt.Fprintf(io.Stderr, "coreslot: cancel: no waiting ticket %s (it was admitted, withdrawn or removed)\n", id)
 		return exitRefusal
-	case errors.Is(err, context.DeadlineExceeded), ctx.Err() != nil && !errors.Is(err, engine.ErrRefused):
+	case errors.As(err, &busy), errors.Is(err, context.DeadlineExceeded):
 		fmt.Fprintf(io.Stderr, "coreslot: cancel refused: %s; no cancel request was published\n", sectionBusyText(e, cancelWait))
 		return exitRefusal
 	default:
@@ -129,7 +131,7 @@ func sectionBusyText(e *engine.Engine, waited time.Duration) string {
 // engine and a state error (PROTOCOL.md section 14: the directory or its configuration cannot be
 // used) are refusals, exit 75; anything else is an internal error, exit 70.
 func cancelFailed(err error, io IO) int {
-	if _, stateErr := classify(err); stateErr || errors.Is(err, engine.ErrRefused) {
+	if code, stateErr := classify(err); stateErr || code == exitRefusal {
 		fmt.Fprintf(io.Stderr, "coreslot: cancel refused: %s\n", text(refusalText(err)))
 		return exitRefusal
 	}

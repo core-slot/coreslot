@@ -686,8 +686,8 @@ Inside the section the head:
    `(st_dev, st_ino)` of its path is the held file's. A mismatch (the token file was deleted or
    replaced) is a state error (section 14): the head closes every token it took and leaves the
    section without publishing anything. The check MAY be made per token as it is taken;
-7. publishes its hold listing exactly the indices it holds, closes its ticket descriptor, unlinks its
-   ticket, bumps `gen`, and leaves the section.
+7. publishes its hold listing exactly the indices it holds, closes its ticket descriptor, unlinks
+   its ticket, bumps `gen`, and leaves the section.
 
 Resources the request names that the configuration does not declare are not budgeted: they take
 no tokens, appear in the hold's `unbudgeted_resources`, and the run prints one notice line; this is
@@ -717,10 +717,11 @@ A clamped CLI run prints a notice (`coreslot: cpu: requested 16, budget is 10; r
 
 At release, before it closes anything, a holder MUST check the identity of its hold and of every
 token it holds, comparing `fstat` of each descriptor with its path. A **mismatch** is any of: a held
-file with `st_nlink == 0`; a path whose `(st_dev, st_ino)` is not the held file's; a hold path that
-is missing. A mismatch is a state error (section 14): the directory is no longer the one the grant
-was taken in. On a mismatch the holder MUST close every descriptor of the grant, the hold's first,
-and MUST NOT write anything into the state directory as it now exists:
+file with `st_nlink == 0`; a path whose `(st_dev, st_ino)` is not the held file's; a hold or token
+path that is missing or cannot be stat'ed. A mismatch is a state error (section 14): the grant's
+paths no longer name the files it holds, because the directory, or an entry in it, was removed or
+replaced. On a mismatch the holder MUST close every descriptor of the grant, the hold's first, and
+MUST NOT write anything into the state directory as it now exists:
 
 - it MUST NOT remove its hold by path;
 - it MUST NOT enter the admission section: entering may write `FORMAT` (section 15.1) into a
@@ -733,9 +734,10 @@ with the command's own status (section 19). Reporting degraded mode at release t
 telling the user, not writing a `degraded` record.
 
 Without a mismatch, the run closes its copies of the grant's descriptors, the hold's before any
-token's, so that a live hold never lists a token nobody locks (I1, I2). The CLI then enters the section if it can
-within 2 s, probes its hold and unlinks it only if the probe succeeds (no descendant still holds
-it), bumping `gen` when it did (section 7.8); otherwise reconciliation removes the hold later.
+token's, so that a live hold never lists a token nobody locks (I1, I2). The CLI then enters the
+section if it can within 2 s, probes its hold and unlinks it only if the probe succeeds (no
+descendant still holds it), bumping `gen` when it did (section 7.8); otherwise reconciliation
+removes the hold later.
 Other clients MAY remove their hold the same way, or leave it to reconciliation. This applies to
 every hold a run published, including a fail-open run's unbudgeted hold (section 14).
 
@@ -972,12 +974,12 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound) |
+| 75 | refusal (section 14); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a locked token, a client inside the admission section) or `FORMAT` names a format it does not implement |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
 | 3 | `status`: runs fail open, because degraded mode is recorded or a state error (an unusable directory, a malformed `FORMAT`, an invalid configuration) stands; `doctor`: degraded mode is recorded and nothing else is wrong |
-| 1 | `doctor`: it found a problem (an unusable directory, filesystem, `FORMAT` or configuration), including one that keeps `--clear` or `--reset` from acting |
+| 1 | `doctor`: it found a problem (an unusable directory, filesystem, `FORMAT` or configuration), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusals of `--clear` and `--reset` are 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
 `status` exits 3, `doctor` exits 1 and `cancel` refuses with 75. `--help` prints on stdout and exits
@@ -987,11 +989,12 @@ A state error (section 14) is never exit 70: `run` fails open (or refuses under 
 
 Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` with a single
 `O_APPEND` write (outside the section), into a directory whose `FORMAT` it has read and understood
-during the run (section 14). `FORMAT` may change while the command runs, so the writer reads it
-again, outside the section, immediately before the write, and writes no line when it is absent,
-malformed or names a format the writer does not implement. A pass-through (section 18), valid or
-unbudgeted, appends too: that read is its only one (it never writes a missing `FORMAT`, and then
-writes no line), it marks its line `"nested": true`, and it never rotates the log. A token-only run writes no log. A line that
+during the run (section 14); a run whose release found a mismatch writes no line (section 12.3).
+`FORMAT` may change while the command runs, so the writer reads it again, outside the section,
+immediately before the write, and writes no line when it is absent, malformed or names a format
+the writer does not implement. A pass-through (section 18), valid or unbudgeted, appends too: that
+read is its only one (it never writes a missing `FORMAT`, and then writes no line), it marks its
+line `"nested": true`, and it never rotates the log. A token-only run writes no log. A line that
 would exceed 4 KiB MAY be fitted by shortening an informative string; a writer that cannot fit it
 writes no line. The object carries:
 
@@ -1093,8 +1096,8 @@ Pid 4711, resuming after a gap above 10 s, refreshes and then bumps `gen` in the
 ### 21.3 Admission with clamp
 
 Pid 7300 runs `coreslot run --need cpu=16..16 --need pg-local=1 --label gate:big -- ...` and is
-head at 12:10:00. Token files 0-13 of `cpu` exist from before the size dropped from 14 to 10; none is
-locked. `pg-local` has only token 0.
+head at 12:10:00. Token files 0-13 of `cpu` exist from before the size dropped from 14 to 10; none
+is locked. `pg-local` has only token 0.
 
 Before:
 
