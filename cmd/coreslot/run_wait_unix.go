@@ -103,8 +103,8 @@ func (c realClock) Sleep(ctx context.Context, d time.Duration) error {
 
 // waitLoop steps the ticket whenever it next has work due (once per second while it is not the
 // head, on the admission backoff while it is) until it is admitted, ctx ends or the budget
-// fails, and writes a waiting line to w every 30 s of waiting.
-func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, time.Duration) string) (*engine.Grant, error) {
+// fails, and writes a waiting line to w every 30 s of waiting, with the live holds listed then.
+func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, []engine.HolderInfo, time.Duration) string) (*engine.Grant, error) {
 	start := clk.Now()
 	next := start + waitLineEvery
 	for {
@@ -120,10 +120,11 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 			return v.Grant, nil
 		case engine.Waiting:
 			if now := clk.Now(); now >= next {
-				if v.Holders, err = s.holders(); err != nil { // informative: a failure leaves them out
-					v.Holders = nil
+				holders, err := s.holders()
+				if err != nil { // informative: a failure leaves them out
+					holders = nil
 				}
-				fmt.Fprintln(w, line(v, now-start))
+				fmt.Fprintln(w, line(v, holders, now-start))
 				next = now + waitLineEvery
 			}
 		}
@@ -136,13 +137,13 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 // waitingLine is the line a waiting run prints every 30 s, for example `coreslot: waiting for
 // cpu 4..12: position 2 (1m00s); holders: gate pid 4711 cpu12 (3m12s)`, where 1m00s is how long
 // the run has waited.
-func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
+func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited time.Duration) string {
 	if w.Position == 0 {
 		return fmt.Sprintf("coreslot: waiting for %s: token-only mode, the state directory's format is not implemented here (%s)",
 			r.o.needText(), duration(waited))
 	}
 	return fmt.Sprintf("coreslot: waiting for %s: position %d (%s)%s", r.o.needText(), w.Position,
-		duration(waited), holderList(w.Holders, time.Now().UnixNano()))
+		duration(waited), holderList(holders, time.Now().UnixNano()))
 }
 
 // holdersText describes the live holds and the section's holder, for a --no-wait refusal.

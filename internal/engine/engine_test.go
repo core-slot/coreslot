@@ -1011,13 +1011,12 @@ func TestHoldStartMismatchIsIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := Waiting{Holders: holders}
 	labels := map[string]bool{}
-	for _, h := range w.Holders {
+	for _, h := range holders {
 		labels[h.Label] = true
 	}
-	if !labels["good"] || labels["bad"] || len(w.Holders) != 2 {
-		t.Errorf("holders %+v, want the well-formed hold and the admitted one, not the mismatched one", w.Holders)
+	if !labels["good"] || labels["bad"] || len(holders) != 2 {
+		t.Errorf("holders %+v, want the well-formed hold and the admitted one, not the mismatched one", holders)
 	}
 }
 
