@@ -128,6 +128,11 @@ Every conforming client MUST preserve these invariants:
 - `<home>` MUST come from the password database (`getpwuid(getuid())`), not `$HOME` or any
   `XDG_*` variable, so a shell, a cron job, a user service and an ssh session of the same user
   resolve the same directory.
+
+  > **Implementation note.** A cgo-free build of the Go CLI or library (the release archives)
+  > reads `/etc/passwd` alone on Linux, so when that has no entry for the uid it runs
+  > `getent passwd <uid>` from a fixed system path, never through `$PATH`, for at most 5 s and
+  > takes the home directory from its answer, which resolves through NSS as `getpwuid` does.
 - The only override is the environment variable `CORESLOT_STATE_DIR` (a library MAY offer the same
   override as an option). When it is set and non-empty, its value is the state directory; it MUST
   be an absolute path, and a relative value is a state error (section 14). The override is for

@@ -66,19 +66,27 @@ func TestPointPausesUntilReleased(t *testing.T) {
 func TestRealtimeOffsetAndFormatsEnabled(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_REALTIME_OFFSET", "")
 	t.Setenv("CORESLOT_TESTHOOK_FORMATS", "")
+	t.Setenv("CORESLOT_TESTHOOK_GETENT", "")
 	if got := RealtimeOffset(); got != 0 {
 		t.Errorf("unset RealtimeOffset() = %v, want 0", got)
 	}
 	if got := Formats(); !slices.Equal(got, []int{1}) {
 		t.Errorf("unset Formats() = %v, want [1]", got)
 	}
+	if got := Getent(); got != "" {
+		t.Errorf("unset Getent() = %q, want \"\"", got)
+	}
 	t.Setenv("CORESLOT_TESTHOOK_REALTIME_OFFSET", "-90s")
 	t.Setenv("CORESLOT_TESTHOOK_FORMATS", "1,2")
+	t.Setenv("CORESLOT_TESTHOOK_GETENT", "/tmp/fake-getent")
 	if got := RealtimeOffset(); got != -90*time.Second {
 		t.Errorf("RealtimeOffset() = %v, want -1m30s", got)
 	}
 	if got := Formats(); !slices.Equal(got, []int{1, 2}) {
 		t.Errorf("Formats() = %v, want [1 2]", got)
+	}
+	if got := Getent(); got != "/tmp/fake-getent" {
+		t.Errorf("Getent() = %q, want /tmp/fake-getent", got)
 	}
 }
 
