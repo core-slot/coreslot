@@ -1535,7 +1535,8 @@ class Ticket:
         self._last_refresh_w = time.time_ns()
         self._resume_bump_pending = False
         self._nonmatching = 0
-        self._backoff = HEAD_BACKOFF_MIN
+        self._backoff = HEAD_BACKOFF_MIN  # the head's next retry interval (§10.3)
+        self._delay = POLL_S  # what poll_delay() returns after this poll
         self.position: int | None = None
 
     # ---- queue observation
@@ -1785,17 +1786,22 @@ class Ticket:
                 if grant is not None:
                     self._grant = grant
                     return ("admitted", grant)
-                self._backoff = min(self._backoff * 2, HEAD_BACKOFF_MAX)
+                self._back_off()
             else:
                 self._backoff = HEAD_BACKOFF_MIN
+                self._delay = POLL_S
             return ("waiting", self.position)
         except OSError as exc:
             raise StateError("io", str(exc)) from exc
 
+    def _back_off(self) -> None:
+        """A failed head (or token-only) attempt: retry after the current interval, 0.25 s first,
+        and double the next one up to 2 s (§10.3, §15.2)."""
+        self._delay = self._backoff
+        self._backoff = min(self._backoff * 2, HEAD_BACKOFF_MAX)
+
     def poll_delay(self) -> float:
-        if self.token_only or self.position == 1:
-            return self._backoff
-        return POLL_S
+        return self._delay
 
     def _try_admit(self) -> "Grant | None":
         try:
@@ -1859,7 +1865,7 @@ class Ticket:
         if grant is not None:
             self._grant = grant
             return ("admitted", grant)
-        self._backoff = min(self._backoff * 2, HEAD_BACKOFF_MAX)
+        self._back_off()
         self.position = 0
         return ("waiting", 0)
 
@@ -1870,6 +1876,7 @@ class Ticket:
         self._queue, self._obs, self._valid = [], {}, {}
         self._last_refresh_m, self._last_refresh_w = time.monotonic(), time.time_ns()
         self._backoff = HEAD_BACKOFF_MIN
+        self._delay = POLL_S
 
     def withdraw(self, remove: bool = True) -> None:
         """§13.2: close the ticket descriptor; optionally remove the file in a section."""

@@ -600,6 +600,38 @@ class LivenessTests(Base):
             clock.t += 1.0
         self.fail("W1 was never admitted")
 
+    def test_head_backoff_starts_at_a_quarter_second(self):
+        """§10.3, §22: the head retries admission after 0.25 s, then doubles up to 2 s; a waiter
+        that is not the head polls every second and starts over at 0.25 s when it is head again.
+        A token-only waiter (§15.2) retries with the same backoff."""
+        self.config("[resources]\ncpu = 1\n")
+        self.lock(os.path.join(self.S, "res", "cpu", "0"))  # nothing is free
+        clock = FakeClock()
+        h = self.client(observer_clock=clock).enqueue("h", 0, {"cpu": 1})
+        delays = []
+        for _ in range(6):
+            self.assertEqual(h.step(), ("waiting", 1))
+            delays.append(h.poll_delay())
+        self.assertEqual(delays, [0.25, 0.5, 1.0, 2.0, 2.0, 2.0])
+        ahead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+        self.write(ahead, body(), lock=True)
+        g = self.gen()
+        self.write(os.path.join(self.S, "gen"), json.dumps(dict(g, gen=g["gen"] + 1)).encode())
+        self.assertEqual(h.step(), ("waiting", 2))
+        self.assertEqual(h.poll_delay(), 1.0)
+        os.unlink(ahead)
+        self.assertEqual(h.step(), ("waiting", 1))
+        self.assertEqual(h.poll_delay(), 0.25)
+        h.withdraw()
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 2\n")
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+        self.assertTrue(t.token_only)
+        delays = []
+        for _ in range(3):
+            self.assertEqual(t.step(), ("waiting", 0))
+            delays.append(t.poll_delay())
+        self.assertEqual(delays, [0.25, 0.5, 1.0])
+
     def test_position_counts_only_well_formed_tickets(self):
         """§10.3: position is 1 plus the tickets ahead not passed over, malformed ones excluded."""
         self.config("[resources]\ncpu = 1\n")
