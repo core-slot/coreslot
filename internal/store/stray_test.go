@@ -142,9 +142,9 @@ func TestStrayDirectoryStaysStateError(t *testing.T) {
 	wantStateError(t, err, "List of a queue/ that is a symlink")
 }
 
-// A stray never protects a cancel request: a queue/ entry ignored under the owner's stray rule
-// is not an entry for any purpose, so a cancel request whose only grammar-matching queue/
-// match is a stray (a symlink, a directory, a group-writable file named like the ticket) is
+// A stray never protects a cancel request: a queue/ entry ignored as a stray (PROTOCOL.md sections
+// 4.2 and 10.4) is not an entry for any purpose, so a cancel request whose only grammar-matching
+// queue/ match is a stray (a symlink, a directory, a group-writable file named like the ticket) is
 // removed by reconciliation step 2, while one whose ticket is a real live entry stays.
 func TestStrayNeverProtectsACancelRequest(t *testing.T) {
 	dir := newDir(t)
