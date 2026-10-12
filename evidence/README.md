@@ -3,55 +3,109 @@
 ## Waiter benchmark (design section 10.4): FAIL
 
 The gate is that a thousand waiters, under bursts of arrivals, admissions, cancellations and stall
-recoveries, cost under 2 % of one core in aggregate. That is 20 ms of CPU per second of wall time
-for all of them together, or 20 us per waiter per second. The release candidate is blocked: the
-measured cost is about 500 times the target, and it grows quadratically with the number of waiters.
+recoveries, cost under 2 % of one core in aggregate: 20 ms of CPU per second for all of them, or
+20 us per waiter per second. **It still fails after the gate fix of 2026-10-12, by about 5.5 times
+at 100 waiters and, projected, by about 200 times at 1000.** The runtime alone, a Go process per
+waiter that only wakes once per second, already costs 54 us per waiter-second on macOS, 2.7 times
+the budget.
 
-### Results
+### Results, before and after the gate fix (2026-10-12)
 
-The table gives aggregate waiter CPU as a percentage of one core over the measured window.
+Aggregate waiter CPU as a percentage of one core over the measured window. "Before" is the
+benchmark of 2026-10-11 on 2b40885; "after" is a677509, where the election stops at the first
+live, non-STALLED ticket and a waiter that is not the head works once per second (PROTOCOL.md
+section 10.3, design section 5.7). Every run held the host's heavy-work lock; the load averages
+are the host's 1/5/15-minute ones at the run's start and end.
 
-| Platform | Waiters | Window | Runs | % of one core: min / median / max | CPU per waiter-second |
-|---|---|---|---|---|---|
-| macOS (host) | 1000 | 318.4 s (planned 120 s, see below) | 1 | 1028.4 | 10.4 ms |
-| Linux (Docker Desktop VM) | 1000 | 120.0 s | 1 | 889.7 | 8.9 ms |
-| macOS (host) | 200 | 60.0 s | 1 (profiled) | 99.8 | 5.0 ms |
-| macOS (host) | 100 | 120.0 s | 5 | 25.01 / 25.80 / 28.99 | 2.52 to 2.93 ms |
-| macOS (host) | 50 | 30.0 s | 1 (trial, bursts every 5 s) | 9.7 | 2.0 ms |
+| Platform | Waiters | Before: % of one core (us per waiter-second) | After: % of one core (us per waiter-second) | After: load, start to end |
+|---|---|---|---|---|
+| macOS | 50 | 9.7 (2.0 ms); a 30 s trial, bursts every 5 s | 4.40 (892); 120 s, standard bursts | 7.30 13.51 22.59 to 7.44 11.47 20.48 |
+| macOS | 100, 5 runs | min 25.01 / **median 25.80** / max 28.99 (2.5 to 2.9 ms) | min 9.62 / **median 11.04** / max 11.87 (974 to 1192) | 7.44 11.47 20.48 to 30.86 18.66 17.92 over the five |
+| macOS | 200 | 99.8 (5.0 ms); 60 s, profiled | **30.77** (1546); 120 s | 30.86 18.66 17.92 to 53.25 26.11 20.65 |
+| macOS | 200, profiled | | 22.54 (1130); 120 s | 11.94 18.35 18.09 to 29.41 24.90 20.82 |
+| Linux (Docker VM) | 100 | not run | **13.67** (1375); 120 s | 0.30 0.09 3.94 to 3.19 1.13 3.81 (the VM's) |
+| macOS | 1000 | 1028.4 (10.4 ms); 318 s, a lower bound | not run (no run above 200); **projected 365 to 503** | |
+| Linux (Docker VM) | 1000 | 889.7 (8.9 ms) | not run; see the projection | |
 
-**The macOS series at 1000 waiters was stopped after its first run, so it has no 5-run spread.**
-That run kept 10 cores busy for more than five minutes and drove the shared host's load average
-from 43 to 556. Its own harness was CPU-starved: the event loop ran late, so the 120 s window
-stretched to 318 s and only 8 of the planned cancel requests were published. Running four more
-copies would only have taken CPU from the other work on the host. The figure is still CPU divided
-by wall time over the window that actually ran. It is a lower bound on what 1000 waiters demand,
-because the machine could not give them more. The 5-run spread was measured at 100 waiters
-instead, where it is narrow (25.0 to 29.0 %). Even there the gate fails by a factor of 13.
+The five n=100 runs after the fix: 11.038, 11.869, 10.728, 11.577 and 9.617 %, with 130 to 146
+arrivals, 11 to 27 admissions, 60 cancellations, 60 withdrawals and 36 stops each, and 0 errors.
+In every run the wait4 sum equals the harness's RUSAGE_CHILDREN delta to the millisecond. The two
+n=200 runs differ by a third; the first started right after the fifth n=100 run, at a 1-minute
+load of 31, and the host's load rose to 53 during it. The Linux run used go1.26.9 in `golang:1.26`
+(linuxkit 7.0.14, 14 CPUs) as an unprivileged user; the macOS runs used go1.27.2.
 
-Per-run detail:
+### Where a waiter's CPU goes after the fix
 
-- **macOS, n=1000, run 1:** waiters used 3274.6 s of CPU over 318.4 s, a mean of 990 queued.
-  There were 121 arrivals, 10 admissions, 8 cancellations, 10 withdrawals and 22 stops, with
-  0 errors. Warm-up took 159 s. The whole run's wait4 sum and RUSAGE_CHILDREN both came to
-  4817.463 s. Load average went from 42.93 34.64 31.05 to 429.33 337.65 190.41.
-- **Linux, n=1000, run 1:** waiters used 1067.6 s of CPU over 120.0 s, a mean of 1001 queued.
-  There were 135 arrivals, 15 admissions, 60 cancellations, 60 withdrawals and 33 stops, with
-  0 errors. Warm-up took 185 s. The whole run's wait4 sum was 2634.780 s against 2634.782 s of
-  RUSAGE_CHILDREN. The VM's load average went from 1.20 0.50 0.64 to 976.84 348.26 137.15.
-- **macOS, n=100, runs 1 to 5:**
+**A waiter that is not the head, in a queue whose `gen` does not change**, measured with
+`bench/floor -mode waiter`: 20 library waiters behind a head that never gets the only token, each
+measured over 120 s by its own getrusage after a 10 s warm-up. It costs **743 us per
+waiter-second** on macOS (median of 20; 704 to 772). Its once-per-second work is 18 system calls:
+the refresh (`futimes`), the cancel check (one `open`, ENOENT), the `gen` read (`open`, `fstat`,
+two `fcntl`, two `read`, `close`) and the examination of the nearest ticket ahead (`lstat`, then
+`open`, `fstat`, two `fcntl`, `flock`, `close`). The merged profile of the 20 waiters
+(`floor-waiter-darwin-20x120s.pprof`, 1172 ms of samples, about two thirds of the rusage CPU)
+splits it as follows; the microseconds scale each share to the 743 us measured.
 
-  | Run | % of one core | Load average, start to end (1/5/15 min) |
-  |---|---|---|
-  | 1 | 25.012 | 24.50 188.01 223.70 to 10.29 126.60 194.29 |
-  | 2 | 25.234 | 10.29 126.60 194.29 to 12.14 87.22 169.29 |
-  | 3 | 28.985 | 12.14 87.22 169.29 to 29.54 67.96 149.91 |
-  | 4 | 27.751 | 29.54 67.96 149.91 to 21.74 50.85 131.81 |
-  | 5 | 25.795 | 21.74 50.85 131.81 to 9.89 37.00 115.27 |
+| Share | us per waiter-second | What |
+|---|---|---|
+| 61 % | about 450 | Go scheduler outside the waiter's code: idle Ms parking and waking (`findRunnable`, `wakep`/`startm` → `pthread_cond_signal`, `pthread_cond_wait`, `kevent` netpoll) |
+| 13 % | about 97 | `gen` read (`ReadGen`: `OpenFile`, read, decode) |
+| 10 % | about 72 | refresh (`futimes`) |
+| 6 % | about 45 | lock probe of the ticket ahead |
+| 4 % | about 29 | cancel check |
+| 2 % | about 18 | `lstat` of the ticket ahead |
+| 4 % | about 30 | the rest: allocation, decoding, timers; no GC in the window |
 
-  Each run had 133 to 135 arrivals, 14 to 16 admissions, 60 cancellations, 60 withdrawals and
-  36 stops, with 0 errors. The high 5- and 15-minute averages are what remained of the
-  1000-waiter run.
-- **macOS, n=200, profiled:** load average went from 48.22 230.57 240.43 to 24.50 188.01 223.70.
+**The floor: what a process costs before coreslot's work** (`bench/floor`, 20 processes, 60 s,
+median us per process-second; the loop has the shape of `Wait`'s, a timer reset once per second):
+
+| Process | macOS, default GOMAXPROCS (14) | macOS, GOMAXPROCS=1 | Linux VM, default | Linux VM, GOMAXPROCS=1 |
+|---|---|---|---|---|
+| sleeps 1 s in a loop, no system calls | **54** | 50 | 211 | 179 |
+| the same plus the 18 system calls above, made directly | 213 | 210 | 275 | 274 |
+| the library waiter that is not the head | 743 | **300** | 440 | 489 |
+
+- On macOS the runtime alone is 54 us per waiter-second, 2.7 times the budget: a thousand idle
+  Go processes that wake once per second cost 5.4 % of one core.
+- The 18 system calls themselves add about 160 us. Going through the engine adds about 530 us more,
+  and almost all of it is the scheduler cost of a 14-P runtime around those calls: with
+  GOMAXPROCS=1 the same waiter costs 300 us instead of 743.
+- The Linux figures come from a Docker Desktop VM whose rusage is tick-sampled; their spread is
+  wide (the sleep loop: 142 to 801 us), so read them as an order of magnitude only.
+
+**What the benchmark adds on top**, from the n=200 profile after the fix
+(`waiter-bench-n200-darwin-after.pprof`, the waiter in the middle of the initial queue, 110 s at
+1000 Hz, 129 ms of samples, 1.17 ms per second): 44 % is `rescan`, of which `store.List` is 40 %
+(`lstat` of every entry 26 %, `readdir` 9 %), and 10 % is the hold probes that follow a rescan.
+A waiter rescans `queue/` whenever `gen` changed (PROTOCOL.md section 10.3), and the bursts change
+it several times every 10 s (arrivals, admissions, the owners' removals after a cancellation,
+resume bumps). Each rescan costs O(n), so this term is again quadratic for the queue as a whole,
+though it is paid at most once per second per waiter and only after a change. An arrival costs
+about 6.3 ms of CPU as a whole process (start-up, `Open`, enqueue; a Go process that only starts
+and exits costs 3.3 ms), so the roughly 1.1 arrivals per second cost about 7 ms per second whatever
+n is.
+
+### Projection to 1000 waiters (not a measurement)
+
+The per-waiter-second cost grows with n: 892 us at n=50, 1109 us at n=100 (median) and 1130 to
+1546 us at n=200. A straight-line fit through those points, extrapolated to n=1000, gives 3.65 ms
+per waiter-second using the mean of the two n=200 runs, or 5.03 ms using the first n=200 run only:
+**about 365 to 503 % of one core for a thousand waiters**, against the 2 % gate and the 1028 % (a
+lower bound) measured before the fix. The n-dependent part is the rescan. Even with no `gen`
+change at all, a thousand non-head waiters would cost 1000 x 743 us = 74 % of one core on macOS
+(30 % with GOMAXPROCS=1), and the runtime floor alone 5.4 %. The gate cannot be met with one Go
+process per waiter that wakes once per second, whatever coreslot does inside the wake-up; meeting
+it needs a different waiting design or a different target, which is the maintainers' decision.
+
+### Before the fix: the profile that found the quadratic scan
+
+`waiter-bench-n200-darwin.pprof` covers the middle waiter of the n=200 run of 2026-10-11 (about
+100 tickets ahead of it) for 50 s: 92 % `engine.(*Ticket).elect`, 75 % `store.Probe` (`open(2)`
+alone 72 %), 13 % `lstat(2)`. The election then read the mtime and probed the lock of every
+ticket ahead each second instead of stopping at the first live, non-STALLED one, so a waiter at
+position k made O(k) system calls per second, and `Wait` stepped every 250 ms, each Step reading
+the cancel file. Both were deviations from PROTOCOL.md section 10.3 and design section 5.7, fixed
+in a677509.
 
 ### Setup
 
@@ -64,7 +118,9 @@ Per-run detail:
   raised there either.
 - **Waiters:** each waiter is its own process: `bench/waiters waiter`, built on the public library.
   It calls `Open` (with `CORESLOT_STATE_DIR` and `<statedir>/config.toml`), then
-  `Enqueue cpu=1..1`, then `Wait`. `Wait` steps every 250 ms, the same cadence as `coreslot run`.
+  `Enqueue cpu=1..1`, then `Wait`. Before the gate fix `Wait` stepped every 250 ms; since then it
+  steps when the ticket's next work is due (`Ticket.Due`), as `coreslot run` does: once per second
+  for a waiter that is not the head, on the 0.25 s to 2 s backoff for the head.
   The waiters use the default `GOMAXPROCS`. Once admitted, a waiter closes its grant and exits.
 - **Budget:** `cpu = 8`. Between bursts the harness holds all 8 tokens as eight adopted 1-token
   grants, so the budget is always held.
@@ -91,61 +147,38 @@ Per-run detail:
   by the wall clock and does not depend on load, but scheduling delays can shift when the work
   happens. At 1000 waiters the waiters themselves saturate the machine.
 
-### Profile: where a waiter's CPU goes
-
-The profile is in `waiter-bench-n200-darwin.pprof`. It covers the waiter in the middle of the
-initial queue (serial 100 of 200, so about 100 tickets were ahead of it) for 50 s of the n=200
-run, at a requested 500 Hz. It has 316 ms of samples, 6.3 ms per second, consistent with the run's
-mean of 5.0 ms per waiter-second.
-
-| Share | Function | What it does |
-|---|---|---|
-| 92 % | `engine.(*Ticket).elect` | The election each second |
-| 75 % | ↳ `store.Probe` (`OpenFile`, `unix.Open`) | `open(2)`, 72 % of all samples |
-| 13 % | ↳ `os.Lstat` | `lstat(2)` |
-| 8 % | ↳ `rescan` | `List`, the directory read when `gen` changed |
-| 4 % | ↳ `liveHolders` | Hold probes |
-| about 2 % | `flock(2)` and `close(2)` | Together |
-| about 5 % | Runtime scheduling (`kevent`) | |
-
-System calls account for 89 % of the samples. They are dominated by `open(2)`, then `lstat(2)`.
-
-The cause is in `internal/engine/wait.go`, `elect`. Every second, a waiter runs `Lstat` and
-`Probe` (open, `flock LOCK_NB`, close) on **every** ticket ahead of it, not only up to the first
-live, non-STALLED one. So a waiter at position k costs O(k) system calls per second, and the queue
-as a whole costs O(n²/2). That is about 500,000 probes per second at n=1000. The cost per
-waiter-second grows with n: 2.0 ms at n=50, 2.5 to 2.9 ms at n=100, 5.0 ms at n=200, and 8.9 to
-10.4 ms at n=1000. The term that does not depend on queue position comes to roughly 1 ms per
-waiter-second at small n. This is an extrapolation from the four sizes above, and it includes the
-start-up of arrivals spread over the window. That term alone is about 50 times the 20 us budget.
-It covers 4 Steps per second (cancel check, `gen` read, refresh) plus the Go runtime's wake-ups.
-Removing the quadratic term would therefore not be enough on its own to pass the gate.
-
-PROTOCOL.md section 10.3 and design section 5.7 both say that the first live, non-STALLED ticket
-ends the examination. Observing every ticket ahead makes stall detection prompt for tickets
-further ahead, and that is the trade-off the engine makes. No change was made to the protocol or
-the engine. The finding goes to the owner.
-
 ### Reproduce
 
-These commands run from the repository root. Wrap each run in the host's heavy-work lock.
+These commands run from the repository root. Wrap each run in the host's heavy-work lock, for
+example `until mkdir /tmp/coreslot-heavy.lock 2>/dev/null; do sleep 5; done;
+<command>; rmdir /tmp/coreslot-heavy.lock`. Do not run above 200 waiters on a
+shared host: 1000 waiters saturated it before the fix.
 
 ```sh
 B=$(mktemp -d)
 go build -o "$B/coreslot" ./cmd/coreslot
 go build -o "$B/waiters" ./bench/waiters
-"$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -json "$B/results.json"   # the gate: n=1000, 5 x 120 s
-"$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 100 -runs 5              # the 5-run spread above
-"$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 200 -runs 1 -duration 60s \
-	-profile "$B/waiter.pprof"                                                    # the profile
+go build -o "$B/floor" ./bench/floor
+"$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 100 -runs 5 -json "$B/n100.json"   # the 5-run spread
+"$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 50 -runs 1
+"$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 200 -runs 1
+"$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 200 -runs 1 \
+	-profile "$B/waiter.pprof" -profile-hz 1000                                   # the in-queue profile
 go tool pprof -top -cum "$B/waiters" "$B/waiter.pprof"
+for m in sleep refresh cancel gen probe syscalls; do "$B/floor" -mode $m -procs 20 -duration 60s; done
+"$B/floor" -mode waiter -procs 20 -duration 120s -cpuprofile "$B/prof"           # steady non-head waiter
+GOMAXPROCS=1 "$B/floor" -mode waiter -procs 20 -duration 60s
+go tool pprof -top -cum "$B/floor" "$B"/prof/waiter-*.pprof
 ```
 
-The exit status is 0 when the median meets the gate, 1 when it does not and 2 on an error. Every
-child is in one process group, which the harness kills on every exit path, including its own
-SIGINT, SIGTERM or SIGHUP. A child whose harness died sees its stdin pipe close and exits. For the
-Linux figure, the same binary was built and run with `-runs 1` inside `golang:1.26` as an
-unprivileged user.
+`waiters` exits 0 when the median meets the gate, 1 when it does not and 2 on an error; its
+default, `-n 1000 -runs 5`, is the gate itself. Every child is in one process group, which the
+harness kills on every exit path, including its own SIGINT, SIGTERM or SIGHUP; a child whose
+harness died sees its stdin pipe close and exits. For the Linux figures the same commands ran
+inside `golang:1.26` as an unprivileged user, built there, the way `scripts/linux-test.sh` runs.
+The per-family floor modes on macOS gave 126 (`refresh`), 103 (`cancel`), 177 (`gen`) and
+130 (`probe`) us per process-second against 54 for `sleep`; the families do not add up, because
+most of each one's cost is waking a cold process and runtime.
 
 ### Other evidence
 
