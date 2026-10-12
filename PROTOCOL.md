@@ -109,8 +109,10 @@ Every conforming client MUST preserve these invariants:
   Adoption and token-only admission are outside the queue by definition.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's minimum is free and no process is stopped inside the admission section, the head is
-  admitted within 3 s; a stopped head stops blocking the queue within 11 s (10 s without an
-  observed change, plus one poll).
+  admitted within 3 s; up to 4 consecutive stopped tickets at the front of the queue stop blocking
+  it within ≈ 11 s (10 s without an observed change plus one poll). A stopped ticket further back
+  stops blocking a waiter within 11 s of becoming the nearest ticket that waiter has not passed
+  over.
 - **I6 one budget:** every client of every format counts the same token files under the same
   admission lock.
 - **I7 minimum:** an ordinary admission grants at least `min(min, size)` of every declared resource
@@ -533,7 +535,10 @@ equivalent); a refresh is done outside the section and writes no content. An obs
 compare an mtime with a clock: for each ticket it watches, it remembers the last mtime value it saw
 and the time, on its **own** monotonic clock, at which that value last changed (or at which it
 first saw the ticket). A ticket is **STALLED**, for that observer, when no change has been observed
-for 10 s. A refresh that is observed makes the ticket WAITING again.
+for 10 s. A refresh that is observed makes the ticket WAITING again. Only time the observer spent
+watching the ticket counts: when an election leaves a ticket unexamined (section 10.3), the time
+until the observer next examines it is not counted towards the 10 s, though a value that changed
+meanwhile still counts as a change.
 
 When a waiter's own refresh gap exceeded 10 s on either its monotonic or its wall clock (it was
 suspended), it bumps `gen` in the section after refreshing. The bump never delays a refresh: a
@@ -551,6 +556,13 @@ A waiter:
   first live, non-stalled ticket ends the examination. When none is found the waiter is the head:
   this examination is the **election**, and the waiter enters the section and tries admission
   (section 12);
+- in each election also watches the **front window**: the first 4 tickets of the queue that are
+  not gone (fewer when fewer are ahead of it), reading their mtimes as an observer (section 10.2)
+  even when the examination ended before reaching them. The front window only keeps every
+  waiter's timers on the front of the queue running; the election's rule is unchanged. A dead
+  ticket that is not yet removed still takes a slot of the window until reconciliation removes it
+  (section 10.4). The conformance traces' 22 s bound cannot tell a waiter that watches the window
+  from one that does not; the Go and Python unit tests enforce it;
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 2 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.
@@ -635,7 +647,12 @@ Inside the section the head:
 3. computes the effective request of each requested declared resource (section 12.2);
 4. counts, for each such resource, the tokens locked at **every** existing index (section 6);
    `free = size − locked`;
-5. if any resource's `free` is below its effective `min`, leaves the section and waits;
+5. if any resource's `free` is below its effective `min`, leaves the section and waits. Otherwise it
+   repeats the election (section 10.3) over a fresh listing of `queue/`, the **re-election**: every
+   well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
+   this observer (its mtime from the listing counts as an observation), the head leaves the section
+   and waits. A ticket the head has never observed, such as one published after its election,
+   counts as live;
 6. otherwise takes tokens with `LOCK_EX|LOCK_NB` at indices below the size, creating missing token
    files and skipping a token that turns out locked, in two passes, each in ascending resource name
    and then ascending index:

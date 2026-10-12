@@ -59,13 +59,18 @@ func Ahead(tickets []Ticket, me Key, obs *Observer, now time.Duration) (wouldBeH
 	})
 	// Nearest first: the ticket just ahead of me is the last in ascending order.
 	for i := len(ahead) - 1; i >= 0; i-- {
-		t := ahead[i]
-		if t.Dead || obs.Stalled(t.Key, now) {
+		if PassedOver(ahead[i], obs, now) {
 			continue
 		}
 		return false
 	}
 	return true
+}
+
+// PassedOver reports whether the election skips t: it is dead or, for obs at now, STALLED. The
+// first ticket ahead, from the nearest, that is not passed over ends the election.
+func PassedOver(t Ticket, obs *Observer, now time.Duration) bool {
+	return t.Dead || obs.Stalled(t.Key, now)
 }
 
 // Effective computes each requested declared resource's effective range (PROTOCOL.md section

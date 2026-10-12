@@ -821,7 +821,7 @@ func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
 // the mid-step refresh a Step starting just under RefreshEvery/2 after a refresh leaves up to
 // 1.75 s (1.5 s on this test's 250 ms grid).
 func TestRefreshCadenceWithBusySection(t *testing.T) {
-	const poll = 250 * time.Millisecond // Wait's poll interval
+	const poll = 250 * time.Millisecond // a caller polling faster than Due asks
 	// RefreshEvery/4 + sectionWait + RefreshEvery/8, the documented worst case.
 	bound := RefreshEvery/4 + sectionWait + RefreshEvery/8
 	dir := newStateDir(t, "")
@@ -896,7 +896,7 @@ func TestRefreshCadenceWithBusySectionRealClockSmoke(t *testing.T) {
 		if _, err := tk.Step(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(250 * time.Millisecond) // Wait's poll interval
+		time.Sleep(250 * time.Millisecond) // a caller polling faster than Due asks
 	}
 	end := time.Now()
 	mu.Lock()
@@ -962,7 +962,12 @@ func TestHoldStartMismatchIsIgnored(t *testing.T) {
 	// The ticket is head and admitted; a second ticket behind it reports the holders.
 	step(t, tk)
 	behind := enqueue(t, e, need("cpu=8"))
-	w := step(t, behind).(Waiting)
+	step(t, behind)
+	holders, err := behind.Holders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := Waiting{Holders: holders}
 	labels := map[string]bool{}
 	for _, h := range w.Holders {
 		labels[h.Label] = true
