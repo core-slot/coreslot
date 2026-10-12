@@ -28,10 +28,9 @@ import (
 
 // Timing of a waiting run (PROTOCOL.md section 22).
 const (
-	pollEvery     = 250 * time.Millisecond // a Step at least this often, well inside the 2 s refresh
-	waitLineEvery = 30 * time.Second       // the waiting line
-	noWaitFor     = time.Second            // --no-wait: how long the section is tried
-	logRotateWait = 2 * time.Second        // entering the section to rotate the run log
+	waitLineEvery = 30 * time.Second // the waiting line
+	noWaitFor     = time.Second      // --no-wait: how long the section is tried
+	logRotateWait = 2 * time.Second  // entering the section to rotate the run log
 )
 
 // runSignals receives the signals a run handles from its start: while it waits they interrupt
@@ -243,9 +242,11 @@ func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (t *engine
 	return t, asState(err)
 }
 
-// stepper is the part of a ticket the wait loop drives.
+// stepper is the part of a ticket the wait loop drives: a Step, and how long until the next
+// one has work due.
 type stepper interface {
 	step(ctx context.Context) (engine.StepResult, error)
+	due() time.Duration
 }
 
 // sectionStepper steps a ticket inside inSection: a Step may hold the admission section.
@@ -258,6 +259,8 @@ func (s sectionStepper) step(ctx context.Context) (res engine.StepResult, err er
 	})
 	return res, err
 }
+
+func (s sectionStepper) due() time.Duration { return s.t.Due() }
 
 // waitClock is the wait loop's clock: monotonic time and a sleep that ends with ctx.
 type waitClock interface {
@@ -282,8 +285,9 @@ func (c realClock) Sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// waitLoop steps the ticket every 250 ms until it is admitted, ctx ends or the budget fails,
-// and writes a waiting line to w every 30 s of waiting.
+// waitLoop steps the ticket whenever it next has work due (once per second while it is not the
+// head, on the admission backoff while it is) until it is admitted, ctx ends or the budget
+// fails, and writes a waiting line to w every 30 s of waiting.
 func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, time.Duration) string) (*engine.Grant, error) {
 	start := clk.Now()
 	next := start + waitLineEvery
@@ -304,7 +308,7 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 				next = now + waitLineEvery
 			}
 		}
-		if err := clk.Sleep(ctx, pollEvery); err != nil {
+		if err := clk.Sleep(ctx, s.due()); err != nil {
 			return nil, err
 		}
 	}
