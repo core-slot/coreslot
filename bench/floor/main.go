@@ -10,6 +10,12 @@
 //	floor -mode sleep    -procs 20 -duration 60s
 //	floor -mode syscalls -procs 20 -duration 60s   # also: refresh, cancel, gen, probe alone
 //	floor -mode waiter   -procs 20 -duration 60s [-cpuprofile DIR]
+//	floor -mode cli      -procs 20 -duration 60s -coreslot BIN
+//
+// The cli mode runs `coreslot run --need cpu=1 -- true` waiters, which cannot report their own
+// CPU: it runs two batches, one for the warm-up alone and one for the warm-up plus the window,
+// ends each waiter with SIGINT (it withdraws and exits), and reports the difference of the
+// batches' mean wait4 rusage over the window.
 package main
 
 import (
@@ -60,10 +66,11 @@ func parent(args []string) int {
 	duration := fs.Duration("duration", 60*time.Second, "measured window")
 	warmup := fs.Duration("warmup", 10*time.Second, "wait before the window")
 	profDir := fs.String("cpuprofile", "", "waiter mode: write each child's CPU profile of the window here")
+	cliBin := fs.String("coreslot", "", "cli mode: the coreslot binary")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if _, ok := families[*mode]; !ok && *mode != "waiter" {
+	if _, ok := families[*mode]; !ok && *mode != "waiter" && *mode != "cli" {
 		fmt.Fprintln(os.Stderr, "floor: unknown mode", *mode)
 		return 2
 	}
@@ -80,6 +87,9 @@ func parent(args []string) int {
 	}
 	defer stop()
 
+	if *mode == "cli" {
+		return cliMode(*cliBin, dir, *procs, *warmup, *duration)
+	}
 	self, _ := os.Executable()
 	var cmds []*exec.Cmd
 	var outs []*bufio.Scanner
@@ -131,7 +141,7 @@ func parent(args []string) int {
 // finds it live. Waiter mode: a state directory with cpu = 1, the token adopted by this process
 // and a ticket ahead of every child kept fresh by this process's Polls.
 func prepare(mode, dir string) (stop func(), err error) {
-	if mode != "waiter" {
+	if mode != "waiter" && mode != "cli" {
 		if err := os.WriteFile(filepath.Join(dir, "gen"), []byte("{\"gen\":12345,\"reconciled_ns\":1760000000000000000}\n"), 0o600); err != nil {
 			return nil, err
 		}
@@ -268,6 +278,43 @@ func syscallWork(fams []string, dir string) (func(), error) {
 			f()
 		}
 	}, nil
+}
+
+// cliMode measures CLI waiters (see the package comment).
+func cliMode(bin, dir string, procs int, warmup, duration time.Duration) int {
+	batch := func(life time.Duration) (float64, error) {
+		var cmds []*exec.Cmd
+		for i := 0; i < procs; i++ {
+			cmd := exec.Command(bin, "run", "--need", "cpu=1", "--", "true")
+			cmd.Env = append(os.Environ(), "CORESLOT_STATE_DIR="+dir)
+			if err := cmd.Start(); err != nil {
+				return 0, err
+			}
+			cmds = append(cmds, cmd)
+		}
+		time.Sleep(life)
+		total := 0.0
+		for _, cmd := range cmds {
+			_ = cmd.Process.Signal(syscall.SIGINT)
+			_ = cmd.Wait() // exits 130 after withdrawing
+			ru := cmd.ProcessState.SysUsage().(*syscall.Rusage)
+			total += float64(ru.Utime.Nano() + ru.Stime.Nano())
+		}
+		return total / float64(procs), nil
+	}
+	short, err := batch(warmup)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "floor:", err)
+		return 2
+	}
+	long, err := batch(warmup + duration)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "floor:", err)
+		return 2
+	}
+	fmt.Printf("mode cli: %d processes per batch, %s window (GOOS %s, %s): us CPU per process-second: %.1f (mean of the long batch %.0f us minus the short batch %.0f us, over the window)\n",
+		procs, duration, runtime.GOOS, runtime.Version(), (long-short)/1e3/duration.Seconds(), long/1e3, short/1e3)
+	return 0
 }
 
 func selfCPU() int64 {
