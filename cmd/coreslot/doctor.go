@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -22,8 +21,6 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 )
 
-const doctorUsage = `usage: coreslot doctor [--clear] [--reset]`
-
 const (
 	// exitProblems is doctor's status when it found a problem (PROTOCOL.md section 19).
 	exitProblems = 1
@@ -41,10 +38,7 @@ const (
 // section 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
 // a refused --clear or --reset is 75 (PROTOCOL.md section 19).
 func doctorCommand(args []string, io IO) int {
-	fs := flag.NewFlagSet("coreslot doctor", flag.ContinueOnError)
-	fs.SetOutput(&bytes.Buffer{})
-	doClear := fs.Bool("clear", false, "remove the degraded-mode record")
-	doReset := fs.Bool("reset", false, "empty the state directory, if nothing is live")
+	fs, doClear, doReset := doctorFlags()
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(io.Stdout, doctorUsage)

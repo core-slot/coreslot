@@ -888,8 +888,10 @@ but writes nothing.
 ## 16. Windows
 
 The CLI runs the command without a budget and prints one warning per run; `[platform]
-windows_warning = false` silences it; strict mode refuses instead. A library's open operation
-returns its unsupported error; no other library function is reachable on Windows.
+windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel` and `doctor`
+exit 70 on Windows (there is no budget to inspect, cancel or repair), and their `--help` exits 0. A
+library's open operation returns its unsupported error; no other library function is reachable on
+Windows.
 
 ## 17. Descriptor and environment contract
 
