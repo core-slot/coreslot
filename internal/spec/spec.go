@@ -103,6 +103,18 @@ func ParseNeeds(args []string) (map[string]Range, error) {
 	return need, nil
 }
 
+// ParseDigits parses one to nine ASCII decimal digits and nothing else: no sign, no space,
+// leading zeros allowed. It is the number of the FORMAT line (PROTOCOL.md section 7.6), of a
+// descriptor in CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS (section 17), and of the configuration's
+// sizes and the CPU list; nine digits always fit an int.
+func ParseDigits(s string) (int, bool) {
+	if s == "" || len(s) > 9 || strings.Trim(s, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
+}
+
 // parseCount accepts decimal digits only: no sign, no spaces.
 func parseCount(s string) (int, error) {
 	if s == "" || len(s) > 6 || strings.TrimLeft(s, "0123456789") != "" {

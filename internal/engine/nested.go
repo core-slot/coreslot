@@ -5,7 +5,6 @@ package engine
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -61,15 +60,9 @@ func ParseTokenFDs(s string) ([]int, error) {
 }
 
 // ParseFD parses one descriptor number of the descriptor contract (PROTOCOL.md section 17): one
-// to nine decimal digits and nothing else, no sign and no space. It serves CORESLOT_HELD_FD and
-// each fd of CORESLOT_TOKEN_FDS.
-func ParseFD(s string) (int, bool) {
-	if s == "" || len(s) > 9 || strings.Trim(s, "0123456789") != "" {
-		return 0, false
-	}
-	n, err := strconv.Atoi(s)
-	return n, err == nil
-}
+// to nine decimal digits and nothing else, no sign and no space (spec.ParseDigits). It serves
+// CORESLOT_HELD_FD and each fd of CORESLOT_TOKEN_FDS.
+func ParseFD(s string) (int, bool) { return spec.ParseDigits(s) }
 
 // stateDirOf is the state directory a context names: its CORESLOT_STATE_DIR when set (an
 // absolute path), otherwise the default of PROTOCOL.md section 4.1. Only env counts, not this
