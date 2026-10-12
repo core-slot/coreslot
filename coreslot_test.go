@@ -266,8 +266,8 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 	t.Logf("outcomes seen: admitted %v, cancelled %v", sawAdmitted, sawCancelled)
 }
 
-// Options.StateDir moves the configuration to <StateDir>/config.toml, which must pass the
-// state directory's policy.
+// PROTOCOL.md section 5.3: Options.StateDir moves the configuration to <StateDir>/config.toml,
+// which must pass the state directory's policy.
 func TestStateDirOptionMovesConfiguration(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 3\n")
 	c := open(t, dir)

@@ -37,8 +37,9 @@ const (
 // doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
 // permissions, format, the configuration, the descriptor limits and the degraded record, and
 // reports every finding. --clear removes the degraded record. --reset empties the state, but only
-// when nothing is live: no hold, no ticket, no other section holder and no locked token. It exits 1
-// when it found a problem, else 3 while degraded mode is recorded, else 0; a refused reset is 75.
+// when nothing is live and FORMAT names no format this client does not implement (PROTOCOL.md
+// section 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
+// a refused reset is 75.
 func doctorCommand(args []string, io IO) int {
 	fs := flag.NewFlagSet("coreslot doctor", flag.ContinueOnError)
 	fs.SetOutput(&bytes.Buffer{})

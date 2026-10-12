@@ -1050,7 +1050,7 @@ No name changes. Pid 4711 calls `futimens` on its ticket every 2 s; pid 6001, a 
 observes the mtime once per second on its own monotonic clock `m`:
 
 | `m` (s) | mtime pid 6001 reads | Last change observed at | Verdict |
-|---|---|---|
+|---|---|---|---|
 | 100 | 12:00:02 | 100 (first sight) | WAITING |
 | 101 | 12:00:04 | 101 | WAITING |
 | 103 | 12:00:06 | 103 | WAITING |
