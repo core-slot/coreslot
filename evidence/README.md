@@ -31,9 +31,9 @@ The rounds are measured on this host, each in its own session:
 
 | Round | Commit | Changes |
 |---|---|---|
-| Before | 2b40885, 2026-10-11 | The election probed every ticket ahead; `Wait` stepped every 250 ms. |
-| Round 1 | a677509 | The election stops at the first live, non-STALLED ticket; a non-head waiter works once per second. |
-| Round 2 | 7806513 | The front window of 4; re-election inside the admitting section; names-only rescans; holds probed on request; one P while the CLI waits; the harness's gen churn fixed. |
+| Before | 229c1fc, 2026-10-11 | The election probed every ticket ahead; `Wait` stepped every 250 ms. |
+| Round 1 | 4503cb7 | The election stops at the first live, non-STALLED ticket; a non-head waiter works once per second. |
+| Round 2 | c9215fe | The front window of 4; re-election inside the admitting section; names-only rescans; holds probed on request; one P while the CLI waits; the harness's gen churn fixed. |
 
 | Platform | Waiters | Before | Round 1 | Round 2 |
 |---|---|---|---|---|
@@ -146,7 +146,7 @@ Applying the Linux growth to the macOS median at 100 gives about 1490 us per wai
 **about 150 % of one core for a thousand waiters on macOS**. A flat per-waiter cost gives a lower
 bound of about 67 %. Both are extrapolations.
 
-### The gate run (2026-10-12, a56c198)
+### The gate run (2026-10-12, 2a17702)
 
 The gate, re-run after the fixes of round 2, on the macOS reference host:
 

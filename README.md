@@ -189,7 +189,7 @@ recoveries that `bench/waiters` drives, at most 10 % of one core in aggregate, a
 the setup and every run:
 
 - **The gate:** measured
-  [5.70 % of one core](evidence/README.md#the-gate-run-2026-10-12-a56c198) (min 5.10 %, max
+  [5.70 % of one core](evidence/README.md#the-gate-run-2026-10-12-2a17702) (min 5.10 %, max
   6.24 %): pass.
 - **Linux, 1000 waiters:** 361.4 % of one core, measured once inside Docker Desktop's VM on the
   same loaded host; published, not gated.
