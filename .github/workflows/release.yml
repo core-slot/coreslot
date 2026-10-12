@@ -8,7 +8,13 @@ name: release
 #
 # GoReleaser builds with --skip=publish: the open-source GoReleaser cannot split building from
 # publishing, so the publish job creates the release itself, from the archives the attest job
-# attested, after `gh attestation verify` has checked each archive against its attestation.
+# attested, after checking them against checksums.txt and, with `gh attestation verify`, each
+# against its attestation.
+#
+# Artifact attestations need a public repository: for a private one they need GitHub Enterprise
+# Cloud, which a personal account cannot have. In a repository that is not public the attest job
+# and the attestation check are skipped, the publish job says so in a notice, and the release
+# carries checksums.txt alone.
 on:
   push:
     tags:
@@ -78,9 +84,11 @@ jobs:
             dist/checksums.txt
           if-no-files-found: error
 
-  # The one job that signs. It runs no build and nothing from the checkout.
+  # The one job that signs. It runs no build and nothing from the checkout. Skipped in a
+  # repository that is not public (see above).
   attest:
     needs: build
+    if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -100,9 +108,14 @@ jobs:
         with:
           subject-checksums: ${{ runner.temp }}/dist/checksums.txt
 
-  # The one job that writes, and only after the archives were attested.
+  # The one job that writes, and only after the archives were attested: attest must have
+  # succeeded, or have been skipped because the repository is not public.
   publish:
     needs: [build, attest]
+    if: >-
+      !cancelled() && needs.build.result == 'success' &&
+      (needs.attest.result == 'success' ||
+      (needs.attest.result == 'skipped' && github.event.repository.visibility != 'public'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -113,9 +126,13 @@ jobs:
         with:
           name: dist
           path: ${{ runner.temp }}/dist
+      - name: The archives match checksums.txt
+        working-directory: ${{ runner.temp }}/dist
+        run: sha256sum -c checksums.txt
       # Each archive must carry a provenance attestation signed by this workflow in this
       # repository: what is published is what the attest job attested.
       - name: The archives' attestations verify
+        if: github.event.repository.visibility == 'public'
         working-directory: ${{ runner.temp }}/dist
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,15 +142,26 @@ jobs:
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
               --source-ref "$GITHUB_REF"
           done
+      - name: No attestations in a repository that is not public
+        if: github.event.repository.visibility != 'public'
+        env:
+          VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          echo "::notice title=No attestations::the repository is $VISIBILITY: artifact attestations need a public repository (or GitHub Enterprise Cloud), so the archives were not attested and the release carries checksums.txt alone"
       - name: Publish the GitHub release
         working-directory: ${{ runner.temp }}/dist
         env:
           GH_TOKEN: ${{ github.token }}
+          VISIBILITY: ${{ github.event.repository.visibility }}
         run: |
           # A tag with a pre-release part (v0.2.0-rc.1) is a pre-release, as SemVer has it.
           prerelease=()
           case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
+          notes="Changes: see CHANGELOG.md. Verify an archive with \`shasum -a 256 -c checksums.txt --ignore-missing\`"
+          if [ "$VISIBILITY" = public ]; then
+            notes="$notes and its provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\`"
+          fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
             "${prerelease[@]}" --title "coreslot ${GITHUB_REF_NAME#v}" \
-            --notes "Changes: see CHANGELOG.md. Verify an archive with \`shasum -a 256 -c checksums.txt --ignore-missing\` and its provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\`." \
+            --notes "$notes." \
             ./*.tar.gz checksums.txt

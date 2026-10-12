@@ -25,7 +25,7 @@ format 1 is frozen.
   `Snapshot`, `Grant`), with its exported API pinned in `api/v0.txt`.
 - Conformance suite with deterministic queue traces, and an independent Python client written from
   `PROTOCOL.md` alone.
-- Release archives with checksums and build-provenance attestations, and a Homebrew formula
-  template that builds from source.
+- Release archives with checksums, build-provenance attestations for releases of the public
+  repository, and a Homebrew formula template that builds from source.
 
 [Unreleased]: https://github.com/Nezhinskiy/coreslot/commits/HEAD

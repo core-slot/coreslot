@@ -33,7 +33,8 @@ brew install Nezhinskiy/tap/coreslot
 
 Or download a release archive (macOS and Linux, amd64 and arm64) from the
 [releases page](https://github.com/Nezhinskiy/coreslot/releases). Each release carries
-`checksums.txt` and a build-provenance attestation for every archive:
+`checksums.txt`; releases of the public repository also carry a build-provenance attestation for
+every archive:
 
 ```sh
 shasum -a 256 -c checksums.txt --ignore-missing
