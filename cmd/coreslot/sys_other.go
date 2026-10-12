@@ -10,6 +10,10 @@ func load1() float64 { return 0 }
 // fileCap is the most a soft RLIMIT_NOFILE can be set to below the hard limit; 0, none here.
 func fileCap() uint64 { return 0 }
 
+// fdDir is the directory that lists this process's open descriptors by number; none is known
+// here. A BSD's /dev/fd lists only 0 to 2 unless fdescfs is mounted, which would understate them.
+const fdDir = ""
+
 // stopSelf stops the process with SIGSTOP; a signal a process sends itself is delivered before
 // kill returns.
 func stopSelf() { _ = unix.Kill(unix.Getpid(), unix.SIGSTOP) }

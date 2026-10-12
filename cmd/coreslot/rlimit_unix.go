@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -173,12 +174,16 @@ func (p *nofileProbe) originalNofile() uint64 {
 	return currentNofile()
 }
 
-// raiseChildNofile sets the soft RLIMIT_NOFILE the command inherits to original + 256, within the
-// hard limit (and, on macOS, within kern.maxfilesperproc, above which setrlimit fails), and
-// returns the soft limit set. original is the soft limit coreslot was started with; inherited is
-// how many descriptors the command gets at fixed numbers from 0 (the standard streams and the
-// grant from 3), or 0 when it gets none that way. A command never gets less than inherited + 256:
-// below inherited the run could not even place the grant's descriptors at their numbers.
+// raiseChildNofile sets the soft RLIMIT_NOFILE before the command starts and returns the soft
+// limit set (childNofile). original is the soft limit coreslot was started with; inherited is how
+// many descriptors the command gets at fixed numbers from 0 (the standard streams and ExtraFiles
+// from fd 3), or 0 when it gets none that way.
+//
+// The limit is coreslot's own as much as the command's: coreslot creates the exec-status pipe and
+// places ExtraFiles at their numbers under it, and opens the run log under it once the command
+// exited. So it is measured against the descriptors coreslot has open just before the call,
+// listed in fdDir: the standard streams, whatever it inherited, the grant it holds or, as a
+// pass-through, passes on by inheritance, and the runtime's own.
 //
 // It must go through syscall.Setrlimit: the Go runtime restores the original limit in every child
 // it starts unless the program sets the limit itself through that function. After this call a
@@ -188,21 +193,69 @@ func raiseChildNofile(original uint64, inherited int) (soft uint64, err error) {
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
 		return 0, err
 	}
-	base := max(original, uint64(max(inherited, 0)))
-	if base > math.MaxUint64-extraNofile {
-		soft = math.MaxUint64
-	} else {
-		soft = base + extraNofile
-	}
-	soft = min(soft, uint64(lim.Max))
-	if c := fileCap(); c > 0 {
-		soft = min(soft, c)
-	}
+	highest, listed := highestOpenFD()
+	soft = childNofile(original, inherited, highest, listed, uint64(lim.Cur), uint64(lim.Max))
 	setLimit(&lim.Cur, soft)
 	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
 		return 0, err
 	}
 	return soft, nil
+}
+
+// childNofile is the soft RLIMIT_NOFILE raiseChildNofile sets:
+//
+//	min(max(original, highest+1, inherited) + 256, hard, kern.maxfilesperproc on macOS)
+//
+// where highest is the highest descriptor this process has open (highestOpenFD). So coreslot
+// never lowers its own soft limit below the descriptors it already has open plus 256, and a
+// pass-through, whose command inherits the grant at the numbers the pass-through holds it, gives
+// that command at least the grant's highest descriptor plus 257. When the descriptors could not be
+// listed (listed is false), current, the soft limit this process observes, which the Go runtime
+// raised at start-up, takes the place of highest+1: the limit is not lowered at all, as before the
+// original limit was learned. The cap applies because macOS refuses a soft limit above
+// kern.maxfilesperproc.
+func childNofile(original uint64, inherited, highest int, listed bool, current, hard uint64) uint64 {
+	floor := uint64(max(inherited, 0))
+	if listed {
+		floor = max(floor, uint64(highest)+1)
+	} else {
+		floor = max(floor, current)
+	}
+	base := max(original, floor)
+	soft := uint64(math.MaxUint64)
+	if base <= math.MaxUint64-extraNofile {
+		soft = base + extraNofile
+	}
+	soft = min(soft, hard)
+	if c := fileCap(); c > 0 {
+		soft = min(soft, c)
+	}
+	return soft
+}
+
+// highestOpenFD is the highest descriptor this process has open, read from the listing of fdDir;
+// ok is false when no listing is known on this platform or it cannot be read. The listing's own
+// descriptor is among those it lists, which can only raise the answer.
+func highestOpenFD() (highest int, ok bool) {
+	if fdDir == "" {
+		return 0, false
+	}
+	f, err := os.Open(fdDir)
+	if err != nil {
+		return 0, false
+	}
+	names, err := f.Readdirnames(-1)
+	_ = f.Close()
+	if err != nil {
+		return 0, false
+	}
+	highest = -1
+	for _, name := range names {
+		if fd, err := strconv.Atoi(name); err == nil && fd > highest {
+			highest = fd
+		}
+	}
+	return highest, highest >= 0
 }
 
 // currentNofile is the soft RLIMIT_NOFILE this process observes: the limit the Go runtime raised
