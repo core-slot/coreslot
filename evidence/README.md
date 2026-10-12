@@ -145,11 +145,11 @@ waiters -coreslot coreslot -dir work    # the default: -n 100 -runs 5 -duration 
 **PASS: min 5.10 / median 5.70 / max 6.24 % of one core.** Against 10 %, the margin is 1.75 times
 the median and 1.60 times the worst run.
 
-The earlier round-2 runs, 6.38 to 6.92 %, came before one fix. The burst stopped the queue head
-only once per run. From then on the previous head was still stopped, so the other two stops went to
-random waiters; that much is derived from the timing (stall-for 12 s is longer than burst-every
-10 s), since those runs recorded nothing per burst. The burst now stops the first waiter in queue order that is not already stopped (the head at the first burst; later usually position 2, behind the previous burst's still-stopped head) and 2 random waiters, and records the
-first one's queue position.
+The earlier round-2 runs, 6.38 to 6.92 %, came before one fix: their burst stopped the first
+live ticket of a snapshot when its waiter was a stall candidate, and otherwise 3 random
+candidates; they recorded nothing per burst. The burst now stops the first waiter in queue order
+that is a stall candidate (not stopped, leaving or profiled), plus Stall-1 random candidates, and
+records the first one's queue position.
 
 | Run | % of one core | us per waiter-second | Arrivals | Admitted | gen, start to end | Seconds with a gen change | Load, start to end |
 |---|---|---|---|---|---|---|---|
@@ -162,14 +162,16 @@ first one's queue position.
 **Stops per burst.** Each run had 12 bursts and 36 stops. The table gives the queue position of the
 first waiter each burst stopped.
 
-| Position | Bursts | What it means |
-|---|---|---|
-| 1 | 5 of 60 (the first burst of each run) | The queue head itself. |
-| 2 | 54 of 60 | The waiter right behind position 1. That position 1 was the previous burst's head, still stopped, is derived from the timing (stall-for 12 s is longer than burst-every 10 s), not recorded. |
-| 3 | 1 of 60 | Run 2, last burst; why positions 1 and 2 were excluded is not recorded. |
+| Position | Bursts |
+|---|---|
+| 1 | 5 of 60 (the first burst of each run) |
+| 2 | 54 of 60 |
+| 3 | 1 of 60 (run 2, last burst) |
 
-Admissions are fewer than in the earlier round-2 runs (11 to 16 against 30 to 41). Each burst now
-stops the waiter that would be admitted next, so the following ones wait the 10 s stall first.
+Why position 2 dominates is derived from the timing, not recorded: stall-for (12 s) outlasts
+burst-every (10 s), so the previous burst's first stopped waiter is usually still stopped.
+
+Admissions are fewer than in the earlier round-2 runs: 11 to 16 against 30 to 41.
 
 **Caveats on the margin:**
 
@@ -219,7 +221,9 @@ read the cancel file. Both were deviations from PROTOCOL.md section 10.3 and des
   2. It spawns arrivals to refill the queue to n.
   3. It releases 4 tokens for 3 s. Heads are admitted and exit, which frees the token for the
      next head, and then the harness adopts the tokens back.
-  4. At +4 s it sends SIGSTOP to the first waiter in queue order that is not already stopped (the head at the first burst; later usually position 2, behind the previous burst's still-stopped head) and 2 random waiters, and sends SIGCONT 12 s later. Their successors find them STALLED, and on resume they make the resume bump of `gen`.
+  4. At +4 s it sends SIGSTOP to the first waiter in queue order that is a stall candidate (not
+     stopped, leaving or profiled), plus Stall-1 (2) random candidates, and sends SIGCONT 12 s
+     later. Their successors find them STALLED, and on resume they make the resume bump of `gen`.
 - **Window:** the window opens after every one of the n waiters has enqueued, plus 5 s to settle,
   once every waiter has reported its CPU baseline (since round 2; the CPU between a waiter's report
   and the opening is counted, its wall time is not). The harness reads `gen` at the window's start
@@ -262,7 +266,8 @@ go tool pprof -top -cum "$B/floor" "$B"/prof/waiter-*.pprof
 ```
 
 `waiters` exits 0 when the median meets the gate, 1 when it does not and 2 on an error; its
-default, `-n 1000 -runs 5`, is the gate itself. Every child is in one process group, which the
+default, `-n 100 -runs 5 -duration 120s`, is the gate itself, and any other size is a measurement
+with no verdict (exit 0). Every child is in one process group, which the
 harness kills on every exit path, including its own SIGINT, SIGTERM or SIGHUP; a child whose
 harness died sees its stdin pipe close and exits. For the Linux figures the same commands ran
 inside `golang:1.26` as an unprivileged user, built there, the way `scripts/linux-test.sh` runs:

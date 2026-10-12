@@ -553,9 +553,8 @@ func (b *bench) candidates() []*proc {
 }
 
 // burst is one burst: cancel requests and withdrawals, refill arrivals, released tokens for the
-// admission window, then the first waiter in queue order that is not already stopped (the head
-// at the first burst; later usually position 2, behind the previous burst's still-stopped head)
-// and Stall-1 random waiters stopped for stall-for.
+// admission window, then the first waiter in queue order that is a stall candidate (not
+// stopped, leaving or profiled), plus Stall-1 random candidates, stopped for stall-for.
 func (b *bench) burst() error {
 	rep, err := b.client.Snapshot()
 	if err != nil {
@@ -652,12 +651,9 @@ func (b *bench) adoptAll(within time.Duration) error {
 	return nil
 }
 
-// stallSome stops the first waiter in queue order that a burst may act on (the first live ticket
-// of a snapshot whose waiter is not already stopped, leaving or profiled) and Stall-1 random
-// others, and continues them after stall-for. It records that waiter's position among the live
-// tickets: 1 when it was the queue head itself, more when the waiters ahead of it were excluded
-// (still stopped from the previous burst, since stall-for is longer than burst-every, or leaving
-// or profiled). Which exclusion applied is not recorded.
+// stallSome stops the first waiter in queue order that is a stall candidate (not stopped, leaving
+// or profiled), plus Stall-1 random candidates, and continues them after stall-for. It records
+// the first one's position among the live tickets of the snapshot (1 is the queue head).
 func (b *bench) stallSome() error {
 	cands := b.candidates()
 	if len(cands) == 0 || b.p.Stall == 0 {
