@@ -97,8 +97,8 @@ type TokenOnly struct {
 	// descriptors, each with the time the reporting run started: those tokens are accounted
 	// for.
 	Inodes map[[2]uint64]time.Time
-	// Admitted lists, for each live token-only run that has been admitted (its command has
-	// started) and whose command has not reported its descriptors yet, the minimum of each
+	// Admitted lists, for each live token-only run that has been admitted (the CLI printed its
+	// token-only admission notice, or its command started) and whose command has not reported its descriptors yet, the minimum of each
 	// resource it requested. A waiting run is not here: it has no grant. The minimum is the
 	// requested one, an upper bound on what the run took (min(min, size at its admission)):
 	// the test does not know the size its run saw.
@@ -410,7 +410,7 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 	// I2: a locked token is listed by a live hold, or inside a token-only grant of the test.
 	// Tokens a live token-only command reported are accounted for. Beyond them, a token may
 	// be put down to a token-only run only while all of these hold: some run that requested
-	// its resource has been admitted (its command started) and has not reported yet; the
+	// its resource has been admitted (TokenOnly.Admitted) and has not reported yet; the
 	// token has been unlisted for less than TokenOnlyBound; and the resource has no more such
 	// tokens than those runs' minimums sum to. Every other unlisted token is reported on its
 	// own; tokens over the count are reported together, as the same set in both samples.
@@ -785,7 +785,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 	})
 	t.Run("a waiting token-only run exempts nothing (I2)", func(t *testing.T) {
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("tw.tok.c1_1", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
+		runs.add("tw.tok.c1_1", "", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
 			func(ChildReport, bool) bool { return true })
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
@@ -796,7 +796,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 	})
 	t.Run("an admitted, unreported token-only run exempts its minimum, within the bound (I2)", func(t *testing.T) {
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("ta.tok.c1_1", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
+		runs.add("ta.tok.c1_1", "", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
 			func(ChildReport, bool) bool { return true })
 		if err := os.WriteFile(begunPath(e.MarkDir, "ta.tok.c1_1"), nil, 0o600); err != nil {
 			t.Fatal(err)
@@ -819,9 +819,38 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		}
 		settle()
 	})
+	t.Run("a token-only run's admission notice grants its allowance; its waiting line does not (I2)", func(t *testing.T) {
+		need := map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
+		stderr := func(name, text string) string {
+			path := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		}
+		runs := &tokenOnlyRuns{markDir: e.MarkDir}
+		s.TokenOnly = runs.grants
+		defer func() { s.TokenOnly = nil }()
+
+		runs.add("tn.tok.c1_1", stderr("waiting", "coreslot: waiting for cpu 1..1: token-only mode, "+
+			"the state directory's format is not implemented here (30s)\n"), need, time.Now(),
+			func(ChildReport, bool) bool { return true })
+		fd := lockToken(t, e, Token{"cpu", 0})
+		expect("a cpu token while the only token-only run prints its waiting line", "I2 unlisted cpu/0")
+		unix.Close(fd)
+		settle()
+
+		runs.add("tm.tok.c1_1", stderr("admitted", "coreslot: the state directory's format is not "+
+			"implemented here; running in token-only mode, outside the queue\n"), need, time.Now(),
+			func(ChildReport, bool) bool { return true })
+		fd = lockToken(t, e, Token{"cpu", 1})
+		expect("a cpu token of a run that printed its admission notice, before any start marker")
+		unix.Close(fd)
+		settle()
+	})
 	t.Run("a token-only report after the bound is the oracle's latency failure, not an I2", func(t *testing.T) {
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("tl.tok.c1_1", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
+		runs.add("tl.tok.c1_1", "", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
 			func(ChildReport, bool) bool { return true })
 		begin(t, e, "tl.tok.c1_1")
 		s.TokenOnly = runs.grants
@@ -858,7 +887,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		fd := lockToken(t, e, Token{"cpu", 0})
 		expect("cpu/0 locked with no hold and no token-only run", "I2 unlisted cpu/0")
 		late := &tokenOnlyRuns{markDir: e.MarkDir}
-		late.add("tp.tok.c1_1", need, time.Now(), func(ChildReport, bool) bool { return true })
+		late.add("tp.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
 		begin(t, e, "tp.tok.c1_1")
 		report(t, e, "tp.tok.c1_1", Token{"cpu", 0})
 		s.TokenOnly = late.grants
@@ -871,14 +900,14 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		// Confirmed by the age bound while an admitted run could hold it, but reported by a
 		// run that started after the token was first seen unlisted.
 		admitted := &tokenOnlyRuns{markDir: e.MarkDir}
-		admitted.add("tq.tok.c1_1", need, time.Now(), func(ChildReport, bool) bool { return true })
+		admitted.add("tq.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
 		begin(t, e, "tq.tok.c1_1")
 		s.TokenOnly = admitted.grants
 		fd = lockToken(t, e, Token{"cpu", 1})
 		expect("cpu/1 within the bound of the admitted run")
 		time.Sleep(s.TokenOnlyBound)
 		expect("cpu/1 past the bound", "I2 unlisted cpu/1")
-		admitted.add("tr.tok.c1_1", need, time.Now(), func(ChildReport, bool) bool { return true })
+		admitted.add("tr.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
 		begin(t, e, "tr.tok.c1_1")
 		report(t, e, "tr.tok.c1_1", Token{"cpu", 1})
 		settle()
@@ -890,7 +919,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		// Reported by a run started before the lock, but the I2 was confirmed with no
 		// admitted run to hold the token (the run had not begun), not by the age bound.
 		early := &tokenOnlyRuns{markDir: e.MarkDir}
-		early.add("ts.tok.c1_1", need, time.Now(), func(ChildReport, bool) bool { return true })
+		early.add("ts.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
 		s.TokenOnly = early.grants
 		fd = lockToken(t, e, Token{"cpu", 2})
 		expect("cpu/2 while the run has not begun", "I2 unlisted cpu/2")
@@ -906,7 +935,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		aLive.Store(true)
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
 		need := map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
-		runs.add("ha.tok.c1_1", need, time.Now(), func(ChildReport, bool) bool { return aLive.Load() })
+		runs.add("ha.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return aLive.Load() })
 		begin(t, e, "ha.tok.c1_1")
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
@@ -921,7 +950,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		// A ends; B, admitted and not reported yet, holds the same token (the lock stands in
 		// for B's).
 		aLive.Store(false)
-		runs.add("hb.tok.c1_1", need, time.Now(), func(ChildReport, bool) bool { return true })
+		runs.add("hb.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
 		begin(t, e, "hb.tok.c1_1")
 		expect("the token taken over by run B, within the bound")
 		unix.Close(fd)
