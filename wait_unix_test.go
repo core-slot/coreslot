@@ -4,6 +4,8 @@ package coreslot
 
 import (
 	"context"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +32,15 @@ func TestWaitStepsWhenDue(t *testing.T) {
 		t.Fatalf("stepWhenDue = %v, %v; want nil, nil at the context's end", r, err)
 	}
 	if s.steps != 2 {
-		t.Fatalf("%d Steps in 1.5 s with work due every second, want 2", s.steps)
+		t.Fatalf("%d Steps in 1.5 s with work due every second, want 2 (host load: %s)", s.steps, uptime())
 	}
+}
+
+// uptime is the host's load line, for a real-clock failure that load could explain.
+func uptime() string {
+	out, err := exec.Command("uptime").Output()
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	return strings.TrimSpace(string(out))
 }
