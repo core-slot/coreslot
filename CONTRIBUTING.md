@@ -46,7 +46,7 @@ go vet ./... && go vet -tags coreslot_testhooks ./...
 staticcheck ./... && staticcheck -tags coreslot_testhooks ./...
 govulncheck ./...
 go test -race ./...
-go test -tags coreslot_testhooks -race -short ./conformance/
+go test -tags coreslot_testhooks -race -short ./...  # CI runs only the tests this tag adds
 (cd conformance/pyclient && python3 -m unittest)
 GOOS=windows go build ./...
 ```
@@ -56,7 +56,9 @@ The pinned versions of `staticcheck` and `govulncheck` are in
 
 - **Test hooks.** Pause points for deterministic traces compile only with the build tag
   `coreslot_testhooks` and are inert without it. `go test -tags coreslot_testhooks ./...` runs the
-  hook-dependent tests of every package.
+  hook-dependent tests of every package. CI discovers the tests that exist only with the tag
+  (`go test -list` with and without it) and runs just those, all of `./conformance/` among them,
+  so a new one needs no workflow change.
 - **Conformance.** `./conformance/` builds the CLI and a helper client with the test-hook tag and
   drives real processes through the queue traces, against temporary state directories whose paths
   contain a space.
