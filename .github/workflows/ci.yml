@@ -27,7 +27,6 @@ env:
   STATICCHECK_VERSION: 452d5bb86b45416c35891262f6a11dbd6a970117 # honnef.co/go/tools
   GOVULNCHECK_VERSION: v1.8.0 # golang.org/x/vuln, released 2026-09-08
   GO_LICENSES_VERSION: v2.0.1 # github.com/google/go-licenses/v2, released 2025-09-08
-  GORELEASER_VERSION: v2.18.2 # github.com/goreleaser/goreleaser/v2, released 2026-09-17
 
 jobs:
   test:
@@ -139,11 +138,12 @@ jobs:
         if: runner.os == 'macOS'
         run: CGO_ENABLED=0 go test ./internal/config/ -run TestHomeIgnoresHOME
 
-  # The release archives build, and the macOS binary from them runs: the same GoReleaser
-  # configuration the release workflow uses, without publishing anything.
-  snapshot:
-    name: release snapshot (macOS)
-    runs-on: macos-latest
+  # The release archives build, and the Linux binary from them runs: the same GoReleaser
+  # configuration and version the release workflow uses, without publishing anything. Every
+  # pull request runs this one.
+  snapshot-linux:
+    name: release snapshot (Linux)
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
@@ -155,10 +155,57 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
+      - name: GoReleaser version
+        id: goreleaser
+        run: |
+          v="$(cat .github/goreleaser-version)"
+          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.github/goreleaser-version: '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: ${{ env.GORELEASER_VERSION }}
+          version: ${{ steps.goreleaser.outputs.version }}
+          args: release --snapshot --clean
+      - name: The linux/amd64 snapshot binary runs
+        env:
+          # A separate budget whose path contains a space, like the default macOS one.
+          CORESLOT_STATE_DIR: ${{ runner.temp }}/coreslot state
+        run: |
+          [ "$(uname -m)" = x86_64 ] || { echo "::error::runner is $(uname -m), not x86_64"; exit 1; }
+          bin=$(ls dist/coreslot_linux_amd64*/coreslot)
+          "$bin" version
+          "$bin" doctor
+          "$bin" run -- true
+          "$bin" doctor
+
+  # The same for the macOS binary, the platform the snapshot cannot cover from Linux.
+  snapshot-macos:
+    name: release snapshot (macOS)
+    runs-on: macos-latest
+    # macOS minutes bill at 10x: on pushes to main (and a release's tag, which calls this
+    # workflow) and on demand, not on pull requests.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - name: GoReleaser version
+        id: goreleaser
+        run: |
+          v="$(cat .github/goreleaser-version)"
+          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.github/goreleaser-version: '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: ${{ steps.goreleaser.outputs.version }}
           args: release --snapshot --clean
       - name: The darwin/arm64 snapshot binary runs
         env:

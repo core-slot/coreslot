@@ -660,7 +660,8 @@ func pendingSignal() syscall.Signal {
 var errFormatChanged = errors.New("the state directory's FORMAT is no longer one this client implements")
 
 // appendRunLog appends rec to the run log outside the section (PROTOCOL.md section 20). When the
-// log is at or above 10 MiB it first rotates it inside the section, if it can enter within 2 s.
+// log is at or above 10 MiB it first rotates it inside the section, if it can enter within 2 s,
+// reconciling first when reconciliation is due (section 10.4).
 // Only a FORMAT that section does not understand, or a malformed one, stops the append, which
 // would otherwise write into a directory of an unknown format (section 14). Any other rotation
 // failure costs the rotation, not the line: notice reports it and the line is appended. A busy
@@ -682,6 +683,11 @@ func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format strin
 					return err // malformed FORMAT
 				}
 				return errFormatChanged
+			}
+			if err == nil {
+				// A section entered to rotate reconciles first when it is due, like every entry
+				// other than admission (PROTOCOL.md section 10.4).
+				_, err = sec.ReconcileIfDue(store.NowNS())
 			}
 			if err == nil {
 				err = sec.RotateLogIfNeeded()

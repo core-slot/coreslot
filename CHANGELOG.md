@@ -17,7 +17,8 @@ format 1 is frozen.
   runs.
 - `coreslot` CLI with `run`, `status` (`--json` schema 1, `--observe`), `cancel`, `doctor`
   (`--clear`, `--reset`) and `version`, for macOS and Linux on amd64 and arm64. On Windows commands
-  run without a budget, with a warning.
+  run without a budget, with a warning. `coreslot version` reports the module version of a
+  `go install` build when no version was set at link time.
 - Configuration in `~/.config/coreslot/config.toml` (`[resources]`, `[priorities]`, `[platform]`),
   moved into the state directory together with the state under `CORESLOT_STATE_DIR`.
 - Go library in the root package (`Open`, `Enqueue`, `Poll`, `Wait`, `Cancel`, `Adopt`, `Free`,

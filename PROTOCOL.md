@@ -217,8 +217,10 @@ tickets, other section holder or locked tokens exist; only then does it remove t
 open, and the configuration. A reset never deletes, renames or replaces `admit.lock` or a token
 file. It refuses when `FORMAT` is well-formed and names a format the client does not implement (a
 newer client's waiters are invisible to it and its entries are not format-1 grammar); a missing,
-malformed or implemented `FORMAT` does not stop it. It removes every entry reconciliation would
-remove, and more, so it does not reconcile first (section 10.4).
+malformed or implemented `FORMAT` does not stop it. It does not reconcile first (section 10.4):
+it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation would remove, and more.
+Temporary files directly in `$S` (section 11) are not entries it removes; the next
+reconciliation removes them once they are older than 30 s.
 
 ## 5. Resources, sizes and configuration
 
@@ -289,9 +291,15 @@ windows_warning = false   # default true (section 16)
   5.2). `cpu` is `"100%"` when not declared.
 - `[priorities]`: each key is a label prefix and each value an integer in `[-1000, 1000]`. A request
   without an explicit priority takes the value of the longest prefix of its label; with no matching
-  prefix its priority is 0.
+  prefix its priority is 0. This applies where a request can leave its priority unset (the CLI
+  without `--priority`); a library whose request always carries a priority MAY use that value as
+  given.
+
+  > **Implementation note.** The Go library uses `Request.Priority` as given and does not read
+  > `[priorities]`; the Go CLI applies it when `--priority` is absent.
 - `[platform]`: `windows_warning`, a boolean.
-- Other tables and keys are ignored.
+- `resources`, `priorities` and `platform`, when present, MUST be tables; any other value of one of
+  them is invalid. Other tables and keys are ignored.
 
 A missing file means `cpu = "100%"` and nothing else, with no notice. A file that is not valid TOML
 or violates the rules above is an invalid configuration: a state error (section 14). Clients
@@ -408,8 +416,8 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | `label` | string | as in the ticket |
 | `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns, and a body whose `start_ns` differs is malformed |
-| `unbudgeted` | boolean | `true` for a fail-open run (section 14) |
-| `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a fail-open run could not budget (section 14); writers list distinct names in ascending order, readers check neither |
+| `unbudgeted` | boolean | `true` for a run outside the budget: a fail-open run, or a run whose wait timed out and that runs anyway (section 14) |
+| `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a run outside the budget could not budget (section 14); writers list distinct names in ascending order, readers check neither |
 | `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
 
@@ -455,13 +463,13 @@ only inside the section and replaced with a plain `rename` (section 11). `gen` i
 `gen` increased by one, or 0 when it was 2^63 − 1, and `reconciled_ns` unchanged.
 
 A section bumps `gen` once when it publishes or removes a ticket or hold: enqueue (section 10.1),
-admission (12.1), adoption (12.4), publication of a fail-open hold (14), and removal of the client's
-own ticket after cancellation or withdrawal (13) or of its own hold (12.3); the resume bump of
-section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
+admission (12.1), adoption (12.4), publication of an unbudgeted hold (14), and removal of the
+client's own ticket after cancellation or withdrawal (13) or of its own hold (12.3); the resume bump
+of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
 removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
 itself), nor does writing `FORMAT`, `degraded`, `admit.lock` or the run log. A crash can separate a
-removal from its bump, so a reader never relies on a bump to learn that an entry is gone
-(section 10.3).
+removal from its bump, so a reader never relies on a bump to learn that an entry is gone (section
+10.3).
 
 ### 7.9 degraded
 
@@ -561,32 +569,39 @@ A waiter:
   even when the examination ended before reaching them. The front window only keeps every
   waiter's timers on the front of the queue running; the election's rule is unchanged. A dead
   ticket that is not yet removed still takes a slot of the window until reconciliation removes it
-  (section 10.4). The conformance traces' 22 s bound cannot tell a waiter that watches the window
-  from one that does not; the Go and Python unit tests enforce it;
+  (section 10.4);
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 2 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.
+
+> **Implementation note.** The conformance traces' 22 s bound cannot tell a waiter that watches the
+> front window from one that does not; the Go and Python unit tests enforce it.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting, and
 the budget stays safe: it is counted from token locks, not tickets, so I3 and I7 still hold. The
 waiter does lose its place, though. No other client sees the ticket any more, so waiters behind it
 may be elected and admitted first, `status` does not show it, and it cannot be cancelled by label;
-a cancel request naming its exact id still reaches it. When it later removes its ticket
+a cancel request naming its exact id still reaches it, but only from a canceller that publishes
+without checking `queue/` first (section 13.1). When it later removes its ticket
 (admission, cancellation, withdrawal), `ENOENT` counts as success.
 
-A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2;
-holders: gate pid 4711 cpu12 (3m12s), ci-job pid 5120 cpu3 (1m05s)` (informative).
+A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2
+(1m30s); holders: gate:unit pid 4711 cpu12 (3m12s), ci:o-r pid 5120 cpu3 (1m05s)`: the request, its
+position, how long it has waited and the live holds with their grants and ages (informative).
+The position is an upper bound: tickets beyond the one that ended the examination are counted
+without being examined.
 
 ### 10.4 Reconciliation
 
-Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide:
-a client that enters the section for any purpose other than admission and token-only admission
+Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
+client that enters the section for any purpose other than admission and token-only admission
 (enqueue, cancellation publication, removal of its own ticket or hold, a resume bump, adoption,
-publication of a fail-open hold, a `degraded` or `FORMAT` write, log rotation) and finds
+publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
-reconcile before its own change. Admission and token-only admission never reconcile, and neither does a
-reset (section 4.4), which removes everything reconciliation would. Reconciliation:
+reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
+finds it missing and does not by itself make that entry reconcile. Admission and token-only
+admission never reconcile, and neither does a reset (section 4.4). Reconciliation:
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
@@ -661,6 +676,11 @@ Inside the section the head:
       took this round, leaves the section and waits;
    2. the **extra pass** takes further tokens of each resource, up to `min(effective max, free)`
       for that resource, while the grant holds fewer than 512 tokens in total;
+
+   and checks I1 for every token it now holds: the held file is still linked (`st_nlink > 0`) and
+   `(st_dev, st_ino)` of its path is the held file's. A mismatch (the token file was deleted or
+   replaced) is a state error (section 14): the head closes every token it took and leaves the
+   section without publishing anything. The check MAY be made per token as it is taken;
 7. publishes its hold listing exactly the indices it holds, closes its ticket descriptor, unlinks its
    ticket, bumps `gen`, and leaves the section.
 
@@ -704,8 +724,9 @@ restart). Inside the section the adopter recomputes sizes, counts locked tokens 
 takes tokens from what is free, under I3 (indices below the size, `free = size − locked`), in the
 two passes of step 6: the minimum pass takes up to `min(min, size)` of each requested declared
 resource (as many as are free), the extra pass takes more up to `max` per resource while the grant
-holds fewer than 512 tokens in total. It then publishes a hold with `"adopted": true` listing
-exactly what it took, and bumps `gen` (section 7.8). It has no minimum: the **shortfall** is
+holds fewer than 512 tokens in total. It checks I1 for the tokens it took, as in step 6, then
+publishes a hold with `"adopted": true` listing exactly what it took, and bumps `gen` (section 7.8).
+Adoption reconciles first when it is due (section 10.4). It has no minimum: the **shortfall** is
 `max(0, min − granted)` per resource, reported to the caller, and the survivor runs partly
 unbudgeted.
 
@@ -713,14 +734,20 @@ unbudgeted.
 
 ### 13.1 Cancellation
 
-Cancelling never signals across processes. A canceller publishes `$S/cancel/<ticket-id>` inside
-the section. The owner checks `cancel/` for its id on every poll and again at admission step 1, so a
-cancel published before the owner's admitting section wins; one published later finds no ticket and
-has no effect: cancellation never revokes a grant. A canceller that finds the request already
-published (section 11) treats the cancellation as already requested; that is not an error. On
-finding it, the owner closes its ticket descriptor (the ticket is dead at once), removes the ticket
-and the cancel request in its next section if it can enter one (bumping `gen`, section 7.8), and
-stops: the CLI exits with the refusal code, a library returns its cancellation error.
+Cancelling never signals across processes. A canceller publishes `$S/cancel/<ticket-id>` inside the
+section. It MAY first check, in that section, that `queue/` holds a ticket with that id and publish
+nothing when it does not; a request whose ticket is gone is removed by reconciliation either way
+(section 10.4, step 2). The owner checks `cancel/` for its id on every poll and again at admission
+step 1, so a cancel published before the owner's admitting section wins; one published later finds
+no ticket and has no effect: cancellation never revokes a grant. A canceller that finds the request
+already published (section 11) treats the cancellation as already requested; that is not an error.
+On finding it, the owner closes its ticket descriptor (the ticket is dead at once), removes the
+ticket and the cancel request in its next section if it can enter one (bumping `gen`, section 7.8),
+and stops: the CLI exits with the refusal code, a library returns its cancellation error.
+
+> **Implementation note.** The Go CLI and library check `queue/` first and refuse, with a
+> diagnostic that no such ticket is waiting, when there is none; the independent Python client in
+> `conformance/pyclient` publishes without checking.
 
 ### 13.2 Withdrawal
 
@@ -744,8 +771,9 @@ unknown format (section 15.2).
 **Fail-open** runs the command at once with `min` of each named resource, and:
 
 - prints a diagnostic to stderr immediately, always;
-- publishes a hold with `"unbudgeted": true` and an empty `grant` when the directory is usable and
-  its format understood, so `status` shows it, and bumps `gen` in that section (section 7.8);
+- publishes a hold with `"unbudgeted": true`, an empty `grant` and every resource it names in
+  `unbudgeted_resources` when the directory is usable and its format understood, so `status` shows
+  it, and bumps `gen` in that section (section 7.8);
 - records the reason in the run log and in `degraded` when those are writable, and says on stderr
   when they are not;
 - exports `CORESLOT_UNBUDGETED=<reason>` to the command, so nested runs pass through (section 18);
@@ -756,6 +784,14 @@ The reason, in `CORESLOT_UNBUDGETED` and in `degraded`'s `reason`, is informatio
 client interprets: section 18 acts on the variable being set, never on its value. Any non-empty
 text conforms, except that a fail-open run MUST NOT use `format`, which marks a token-only run
 (section 15.2).
+
+A run whose wait timed out and that runs anyway (the CLI's `--on-timeout run`) withdraws its ticket
+(section 13.2) and runs with `min` of each named resource outside the budget. It is not a state
+error: it publishes the same unbudgeted hold, exports `CORESLOT_UNBUDGETED=<reason>` and records
+the reason in its run-log line's `fail_open`, but it writes no `degraded` record. The same `FORMAT`
+rule applies.
+
+> **Implementation note.** The Go CLI's reason for such a run is `timeout`.
 
 `status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record.
 
@@ -779,8 +815,8 @@ A client that finds a format it does not implement runs in **token-only** mode:
 
 - it enters the section, computes sizes from its own configuration, counts locked tokens as in
   section 12.1 step 4, and takes `min` (clamped as in section 12.2) of each declared resource if
-  that many are free, in the order of step 6; otherwise it leaves and retries with the head's
-  backoff;
+  that many are free, in the order of step 6, and checks I1 for them as step 6 does; otherwise it
+  leaves and retries with the head's backoff;
 - it publishes nothing and writes nothing in the state directory (no ticket, hold, log, degraded
   record, `gen` bump or `admit.lock` body) except creating what the format-stable namespace
   (section 15.1) needs: missing token files, `res/` and `res/<name>/` for them (mode `0700`), and
@@ -797,7 +833,16 @@ never bypasses the queue of a format it understands (I4).
 
 A waiting client reads `FORMAT` at every section entry and MAY also read it on its polls; one that
 finds the format changed under it withdraws its ticket (section 13.2) and continues in token-only
-mode.
+mode. It only closes the ticket's descriptor: removing the file would be a write into a format it
+does not implement, so the file is left to a client of that format.
+
+Every other operation that would write follows the same rule. Under a format it does not implement,
+a client publishes no cancel request, adoption hold or unbudgeted hold, records and clears no
+`degraded`, and does not remove its own hold after a run. A fail-open run still runs its command
+but writes nothing.
+
+> **Implementation note.** The Go CLI and library refuse cancellation, adoption, `doctor --clear`
+> and `doctor --reset` under a format they do not implement.
 
 ## 16. Windows
 
@@ -847,9 +892,14 @@ inherited `CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS` and `CO
 from the command's environment before setting their own, and close (do not pass on) exactly the
 inherited descriptors those inherited variables name: the `CORESLOT_HELD_FD` descriptor and every
 descriptor `CORESLOT_TOKEN_FDS` lists. Otherwise a grandchild would pass through to a grant that is
-not its parent's. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
+not its parent's. A named descriptor that is a standard stream (0, 1 or 2) or not a regular file
+cannot be a grant's (its number was reused after a launcher closed the original), and a client
+SHOULD leave it open. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
 user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not grant context and
 is passed on.
+
+> **Implementation note.** The Go CLI closes only the named descriptors that are regular files at
+> fd 3 or above.
 
 **Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
 `cpu` (or of `RES`); `{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with
@@ -869,6 +919,8 @@ empty variable is absent), in this order:
 2. `CORESLOT_TOKEN_FDS` is set (and the run is not `--independent`): it is a **pass-through**. The
    context is valid when no descriptor is listed twice, every descriptor listed is open, its
    `(st_dev, st_ino)` equals that of some `$S/res/<name>/<i>`, and a fresh probe of that path fails.
+   Two listed descriptors with the same `(st_dev, st_ino)` (a launcher duplicated one) hold one
+   token, not two: such a context does not validate.
    A valid pass-through does not queue, enter the section or lock anything. Per resource it names,
    it runs with `min(max, held)`, where `held` is the number of valid token descriptors of that
    resource, counted from the descriptors and not from the environment; a resource it names that the
@@ -907,8 +959,9 @@ Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` wit
 `O_APPEND` write (outside the section), into a directory whose `FORMAT` it has read and understood
 during the run (section 14). A pass-through (section 18), valid or unbudgeted, appends too: it
 reads `FORMAT` outside the section (it never writes a missing one, and then writes no line), marks
-its line `"nested": true`, and never rotates the log. A token-only run writes no log. The object
-carries:
+its line `"nested": true`, and never rotates the log. A token-only run writes no log. A line that
+would exceed 4 KiB MAY be fitted by shortening an informative string; a writer that cannot fit it
+writes no line. The object carries:
 
 | Key | Type | Content |
 |---|---|---|
@@ -930,6 +983,9 @@ secrets. The log's `clamped` is an array of resource names, unlike the hold body
 (section 7.4). A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
 inside the section: re-checks the size, then renames it to `runs.1.jsonl` (replacing the previous
 generation). One generation is kept. A token-only client writes no log.
+
+> **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open` and the
+> independent Python client shortens `label`.
 
 ## 21. Worked examples
 
@@ -1016,9 +1072,10 @@ res/pg-local/0
 
 Inside the section: no `cancel/01791720540000000000-0000007300-000003`; sizes `cpu = 10`,
 `pg-local = 2`; `cpu` `min = 16 > 10`, so the effective request is `10..10`, clamped; `pg-local` is
-`1..1`. Locked counts: `cpu` 0 over 14 indices (`free = 10`), `pg-local` 0 (`free = 2`). It takes
-`cpu` 0-9 and `pg-local` 0, publishes `holds/.tmp-0000007300-000004` as the hold below, closes and
-unlinks its ticket, bumps `gen`, and leaves.
+`1..1`. Locked counts: `cpu` 0 over 14 indices (`free = 10`), `pg-local` 0 (`free = 2`). The
+re-election (section 12.1 step 5) lists `queue/` again and finds no ticket ahead of its own. It
+takes `cpu` 0-9 and `pg-local` 0, publishes `holds/.tmp-0000007300-000004` as the hold below,
+closes and unlinks its ticket, bumps `gen`, and leaves.
 
 After:
 
@@ -1186,7 +1243,9 @@ res/cpu/6 ... res/cpu/9                                (not locked)
 ### 21.9 Pass-through
 
 Under the run of section 21.3 (fd 3 = hold, fds 4-13 = `cpu` 0-9, fd 14 = `pg-local` 0,
-`CORESLOT_TOKEN_FDS=4-14`), the command starts `coreslot run --need cpu=2..4 -- make -j{n}`.
+`CORESLOT_TOKEN_FDS=4-14`), the command starts
+`coreslot run --need cpu=2..4 --subst -- make -j{n}` (`--subst`, because `{n}` is inside the
+argument `-j{n}`; section 17).
 
 The nested run checks fds 4-14: each is open, each matches the inode of a token file
 (`res/cpu/0` ... `res/cpu/9`, `res/pg-local/0`), and a fresh probe of each path fails. `held` for
@@ -1205,6 +1264,7 @@ A pass-through does not enter the section or lock anything. After `make` exits i
 | ticket refresh | every 2 s |
 | STALLED | 10 s without an observed mtime change, on the observer's monotonic clock |
 | `gen` read and election | every 1 s |
+| front window | the first 4 tickets of the queue, watched in every election |
 | head admission retry | backoff from 0.25 s up to 2 s |
 | section entry retry | `LOCK_NB`, backoff from 10 ms up to 250 ms |
 | reconciliation | at most once per 30 s machine-wide; temporary files older than 30 s |

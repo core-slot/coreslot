@@ -1,16 +1,19 @@
 # Compatibility policy
 
 What a coreslot release promises to keep working, and for how long.
-[`CHANGELOG.md`](../CHANGELOG.md) records every change against this policy: anything removed or changed incompatibly appears there
-under **Removed** or **Changed** first, and under **Deprecated** before that where this policy asks.
+[`CHANGELOG.md`](../CHANGELOG.md) records every change against this policy: anything removed or
+changed incompatibly appears there under **Removed** or **Changed** first, and under
+**Deprecated** before that where this policy asks.
 
 ## Versions
 
-coreslot is at **`v0`** and stays there until on-disk format 1 is frozen, which happens when the
+coreslot is at **`v0`** and stays there until the on-disk format is frozen, which happens when the
 conformance suite, including its adversarial interleavings, passes on macOS and Linux. Until then a
-minor release (`0.x`) may change anything below, within the deprecation window. `v1.0.0` freezes
-format 1, the CLI surface and the library API listed here; after it, an incompatible change to any
-of them needs a new major version.
+minor release (`0.x`) may change the CLI surface and the library API within the deprecation window,
+and may introduce a new format number (below); it never changes what a number a release has already
+shipped means. `v1.0.0` freezes the format then current (format 1, unless a `v0` release introduced
+a newer one), the CLI surface and the library API listed here; after it, an incompatible change to
+any of them needs a new major version.
 
 ## On-disk formats
 
@@ -22,7 +25,11 @@ of them needs a new major version.
 `coreslot 0.1.0 (protocol formats: 1)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 1.
 
 A format number versions the metadata: the names, bodies and layout of the state directory other
-than `admit.lock` and `res/`. Two things never change with a format, so a format change never
+than `admit.lock` and `res/`. A release that changes the metadata in any way bumps the number it
+writes to `FORMAT` (`coreslot-protocol <n>`); the meaning of a number that a release has shipped
+never changes, before `v1.0.0` as after it. The bump is what tells older clients apart: a client
+compares the number in `FORMAT` with the formats it implements, and an unknown number is what puts
+it in token-only mode (below). Two things never change with a format, so a format change never
 creates a second budget:
 
 - `admit.lock`, an exclusive `flock` held briefly by whoever changes admission state;
@@ -35,8 +42,7 @@ nothing (no ticket, hold, log line or degraded record), prints a diagnostic and 
 `CORESLOT_UNBUDGETED=format` to the command. Its tokens are counted by every other client, so the
 budget still holds, but it has no place in the queue and gets no elastic share. Mixing releases
 across a format change is therefore safe but degrades the older clients; upgrade every client of a
-machine together. Writing a newer `FORMAT` is the business of the release that introduces it, and
-that release's notes say so.
+machine together. The release that introduces a format writes its number, and its notes say so.
 
 ## CLI
 
@@ -85,9 +91,11 @@ While at `v0`:
 - A flag, command, configuration key, environment variable or exported library identifier is
   first marked **Deprecated** in `CHANGELOG.md` (and, for the CLI, warns on stderr when used), and
   keeps working for at least one further minor release before it is removed.
-- A change to format 1 before it is frozen is announced in `CHANGELOG.md` and `PROTOCOL.md` in the
-  release that makes it. A client of the older format then runs in token-only mode, as described
-  above; it is never silently given a second budget.
+- The deprecation window does not apply to the on-disk format, because an older client is never
+  cut off: a release that changes the metadata bumps the `FORMAT` number (above), is announced in
+  `CHANGELOG.md` and `PROTOCOL.md`, and from then on older clients on the same machine run in
+  token-only mode, degraded but still counted in the one budget. Before `v1.0.0` this may happen
+  in any minor release; from `v1.0.0` it needs a new major version.
 - `status --json` changes follow the schema rule above.
 
 From `v1.0.0`: deprecated surfaces keep working until the next major version.

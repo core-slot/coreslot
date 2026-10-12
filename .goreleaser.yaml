@@ -1,6 +1,7 @@
-# GoReleaser configuration. The release workflow runs it on a v* tag; CI runs it with --snapshot.
-# Binaries are cgo-free and unsigned (no Apple Developer ID in v1); every archive is listed in
-# checksums.txt, and the release workflow attests each one's build provenance.
+# GoReleaser configuration. The release workflow runs it on a v* tag with --skip=publish and
+# publishes the GitHub release itself after attesting the archives (.github/workflows/release.yml);
+# CI runs it with --snapshot. The GoReleaser version is .github/goreleaser-version. Binaries are
+# cgo-free and unsigned (no Apple Developer ID in v1); every archive is listed in checksums.txt.
 version: 2
 
 project_name: coreslot
@@ -49,9 +50,3 @@ checksum:
 # CHANGELOG.md is the change record; the release notes point at it.
 changelog:
   disable: true
-
-release:
-  prerelease: auto
-  footer: |
-    Changes: see CHANGELOG.md. Verify an archive with `shasum -a 256 -c checksums.txt --ignore-missing`
-    and its provenance with `gh attestation verify <archive> --repo Nezhinskiy/coreslot`.
