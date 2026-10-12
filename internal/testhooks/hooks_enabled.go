@@ -7,6 +7,9 @@
 //   - CORESLOT_TESTHOOK_DIR: directory for the pause handshake files.
 //   - CORESLOT_TESTHOOK_PAUSE: comma-separated point names to pause at.
 //   - CORESLOT_TESTHOOK_REALTIME_OFFSET: a Go duration added to the wall clock.
+//   - <CORESLOT_TESTHOOK_DIR>/realtime-offset: when this file exists, its content (a Go
+//     duration) replaces CORESLOT_TESTHOOK_REALTIME_OFFSET, re-read whenever the file changes,
+//     so that a test steps the wall clock of every running process at once.
 //   - CORESLOT_TESTHOOK_FORMATS: comma-separated formats the client implements.
 package testhooks
 
@@ -17,8 +20,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// OffsetFile is the name, under CORESLOT_TESTHOOK_DIR, of the steppable wall-clock offset.
+const OffsetFile = "realtime-offset"
 
 const pollInterval = 100 * time.Millisecond
 
@@ -47,8 +54,17 @@ func Point(name string) {
 	}
 }
 
-// RealtimeOffset returns CORESLOT_TESTHOOK_REALTIME_OFFSET, or 0 when it is unset.
+// RealtimeOffset returns the wall-clock offset: the content of <CORESLOT_TESTHOOK_DIR>/realtime-offset
+// when that file exists, otherwise CORESLOT_TESTHOOK_REALTIME_OFFSET, otherwise 0. The file is
+// stat'ed on every call and parsed again only when its mtime or size changed, so a test that
+// rewrites it (through a rename) steps the clock of every running process that shares the
+// directory.
 func RealtimeOffset() time.Duration {
+	if dir := os.Getenv("CORESLOT_TESTHOOK_DIR"); dir != "" {
+		if d, ok := fileOffset(filepath.Join(dir, OffsetFile)); ok {
+			return d
+		}
+	}
 	v := os.Getenv("CORESLOT_TESTHOOK_REALTIME_OFFSET")
 	if v == "" {
 		return 0
@@ -58,6 +74,39 @@ func RealtimeOffset() time.Duration {
 		panic(fmt.Sprintf("testhooks: CORESLOT_TESTHOOK_REALTIME_OFFSET: %v", err))
 	}
 	return d
+}
+
+// offsetCache holds the last parsed offset file, keyed by path, mtime and size.
+var offsetCache struct {
+	sync.Mutex
+	path  string
+	mtime time.Time
+	size  int64
+	d     time.Duration
+}
+
+// fileOffset reads the offset file at path; ok is false when it does not exist.
+func fileOffset(path string) (time.Duration, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	c := &offsetCache
+	c.Lock()
+	defer c.Unlock()
+	if c.path == path && c.mtime.Equal(fi.ModTime()) && c.size == fi.Size() {
+		return c.d, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false // removed between the stat and the read
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(string(data)))
+	if err != nil {
+		panic(fmt.Sprintf("testhooks: %s: %v", path, err))
+	}
+	c.path, c.mtime, c.size, c.d = path, fi.ModTime(), fi.Size(), d
+	return d, true
 }
 
 // Formats returns CORESLOT_TESTHOOK_FORMATS, or [1] when it is unset.
