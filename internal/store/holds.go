@@ -23,19 +23,30 @@ func (sec *Section) PublishHold(h wire.Hold, pid, seq int) (*os.File, string, er
 	if err != nil {
 		return nil, "", err
 	}
+	f, name, _, err := sec.PublishNamed(HoldsDir, body, seq, NextSeq, func(seq int) string {
+		return wire.HoldName(h.StartNS, pid, seq, h.Label)
+	})
+	return f, name, err
+}
+
+// PublishNamed publishes body as a lock-carrying entry of dir (QueueDir or HoldsDir) named
+// nameFor(seq), as Publish does. When that name exists it takes the seq next returns and retries,
+// up to 1000 names. It returns the locked descriptor, the name it published and the seq that name
+// carries.
+func (sec *Section) PublishNamed(dir string, body []byte, seq int, next func() int, nameFor func(seq int) string) (*os.File, string, int, error) {
 	for attempt := 0; attempt < maxNameAttempts; attempt++ {
-		name := wire.HoldName(h.StartNS, pid, seq, h.Label)
-		f, err := sec.Publish(HoldsDir, name, body, true)
+		name := nameFor(seq)
+		f, err := sec.Publish(dir, name, body, true)
 		if errors.Is(err, fs.ErrExist) {
-			seq = NextSeq()
+			seq = next()
 			continue
 		}
 		if err != nil {
-			return nil, "", err
+			return nil, "", 0, err
 		}
-		return f, name, nil
+		return f, name, seq, nil
 	}
-	return nil, "", fmt.Errorf("store: no free hold name after %d attempts", maxNameAttempts)
+	return nil, "", 0, fmt.Errorf("store: no free name in %s after %d attempts", dir, maxNameAttempts)
 }
 
 // ProbeAndRemoveHold probes the hold name and unlinks it, while holding the probe lock, only
