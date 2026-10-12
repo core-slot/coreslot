@@ -204,10 +204,15 @@ func TestHelperProcess(t *testing.T) {
 			fail(err)
 		}
 		detail = tk.Name()
-	case "section": // hold the admission section
+	case "section", "section-marked": // hold the admission section; marked: admit.lock names this pid
 		sec, err := st.Enter(context.Background())
 		if err != nil {
 			fail(err)
+		}
+		if mode == "section-marked" {
+			if _, _, err := sec.Format(formats()); err != nil {
+				fail(err)
+			}
 		}
 		keep = append(keep, sec)
 	case "lock": // lock each token path listed, one per line
@@ -726,7 +731,7 @@ func TestSeqWraps(t *testing.T) {
 
 // ---------------------------------------------------------------- protocol clarifications
 
-func readGen(t *testing.T, e *Engine) uint64 {
+func readGen(t *testing.T, e *Engine) int64 {
 	t.Helper()
 	g, err := e.st.ReadGen()
 	if err != nil {

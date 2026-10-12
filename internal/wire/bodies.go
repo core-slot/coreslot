@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"unicode/utf8"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 )
@@ -183,8 +182,8 @@ func (c Cancel) validate() error {
 }
 
 func (h Hold) validate() error {
-	if len(h.Label) > spec.MaxLabelBytes || !utf8.ValidString(h.Label) {
-		return malformed("label is not valid UTF-8 of at most %d bytes", spec.MaxLabelBytes)
+	if err := spec.ValidateLabel(h.Label); err != nil {
+		return malformed("%v", err)
 	}
 	if h.StartNS > math.MaxInt64 {
 		return malformed("start_ns %d is outside the signed 64-bit range", h.StartNS)

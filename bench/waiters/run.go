@@ -78,8 +78,8 @@ type result struct {
 	AllChildrenS   float64 `json:"all_children_wait4_cpu_s"`
 	RusageChildren float64 `json:"rusage_children_delta_s"`
 	WarmupS        float64 `json:"warmup_s"`
-	GenStart       uint64  `json:"gen_start"`
-	GenEnd         uint64  `json:"gen_end"`
+	GenStart       int64   `json:"gen_start"`
+	GenEnd         int64   `json:"gen_end"`
 	GenSeconds     int     `json:"seconds_with_gen_change"`
 	StopPositions  []int   `json:"stop_positions"` // per burst: queue position of the first waiter stopped (1 = the head)
 	LoadStart      string  `json:"load_start"`
@@ -136,7 +136,7 @@ type bench struct {
 	t0      time.Time
 	inWin   bool
 	res     result
-	lastGen uint64
+	lastGen int64
 	st      *store.Store
 }
 
@@ -317,7 +317,7 @@ func runOnce(p params, run int) (result, error) {
 }
 
 // gen reads the state directory's gen counter (one small file read, no listing or probe).
-func (b *bench) gen() (uint64, error) {
+func (b *bench) gen() (int64, error) {
 	if b.st == nil {
 		st, err := store.Open(b.state)
 		if err != nil {

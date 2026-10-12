@@ -4,7 +4,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -49,7 +48,7 @@ func (e *Engine) Reset(ctx context.Context) (removed int, err error) {
 		return removed, err
 	}
 	if !live.Empty() {
-		return 0, &LiveError{Reasons: liveReasons(live)}
+		return 0, &LiveError{Reasons: e.liveReasons(live)}
 	}
 	return removed, nil
 }
@@ -57,35 +56,29 @@ func (e *Engine) Reset(ctx context.Context) (removed int, err error) {
 // sectionHolderReason names the client inside the section from admit.lock's informational
 // body, which may be stale or unreadable.
 func (e *Engine) sectionHolderReason() string {
-	body, err := e.readBody("", store.AdmitLock)
-	if err == nil {
-		var b struct {
-			PID int `json:"pid"`
-		}
-		if json.Unmarshal(body, &b) == nil && b.PID > 0 {
-			return fmt.Sprintf("another client is inside the admission section (admit.lock records pid %d)", b.PID)
-		}
+	if a, ok := e.sectionHolder(); ok {
+		return fmt.Sprintf("another client is inside the admission section (admit.lock records pid %d)", a.PID)
 	}
 	return "another client is inside the admission section"
 }
 
-func liveReasons(l store.LiveState) []string {
+func (e *Engine) liveReasons(l store.LiveState) []string {
 	var out []string
 	if l.ForeignFormat != nil {
 		out = append(out, fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", *l.ForeignFormat))
 	}
-	add := func(kind string, names []string) {
+	add := func(kind, dir string, names []string) {
 		if len(names) == 0 {
 			return
 		}
 		parts := make([]string, len(names))
 		for i, n := range names {
-			parts[i] = entryText(n)
+			parts[i] = e.entryText(dir, n)
 		}
 		out = append(out, fmt.Sprintf("%d live %s (%s)", len(names), plural(kind, len(names)), strings.Join(parts, ", ")))
 	}
-	add("hold", l.Holds)
-	add("ticket", l.Tickets)
+	add("hold", store.HoldsDir, l.Holds)
+	add("ticket", store.QueueDir, l.Tickets)
 	if len(l.Tokens) > 0 {
 		var parts []string
 		for _, r := range slices.Sorted(maps.Keys(l.Tokens)) {
@@ -103,12 +96,26 @@ func plural(kind string, n int) string {
 	return kind + "s"
 }
 
-// entryText is "pid N" and the display of a ticket or hold name, both safe to print: a name
-// only holds [A-Za-z0-9._-] and digits.
-func entryText(name string) string {
+// entryText names a live ticket or hold of dir for a person: "pid N" and its label from the
+// body, escaped for a terminal (wire.EscapeHuman). Without a readable body or label it falls back
+// to the display part of the name, which only holds [A-Za-z0-9._] and is safe to print.
+func (e *Engine) entryText(dir, name string) string {
 	id, ok := wire.ParseName(name)
 	if !ok {
 		return name
+	}
+	label := ""
+	if body, err := e.readBody(dir, name); err == nil {
+		if dir == store.HoldsDir {
+			if h, err := wire.DecodeHold(body); err == nil {
+				label = h.Label
+			}
+		} else if tk, err := wire.DecodeTicket(body); err == nil {
+			label = tk.Label
+		}
+	}
+	if label != "" {
+		return fmt.Sprintf("pid %d, %s", id.PID, wire.EscapeHuman(label))
 	}
 	if d := wire.NameDisplay(name); d != "" {
 		return fmt.Sprintf("pid %d, %s", id.PID, d)

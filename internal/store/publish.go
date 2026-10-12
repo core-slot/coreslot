@@ -22,13 +22,19 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-// seq is this process's publication counter (PROTOCOL.md section 7.1), shared by every Store
-// in the process so that two publications of one process never share a name.
-var seq atomic.Uint64
+// seq is the last seq of this process's publication counter (PROTOCOL.md section 7.1), shared
+// by every Store in the process so that two publications of one process never share a name.
+var seq atomic.Int64
 
-// NextSeq returns this process's next seq: 1, 2, ... 999999, 0, 1, ...
+// NextSeq returns this process's next seq, as wire.NextSeq orders them: 1, 2, ... 999999, 0, 1, ...
 func NextSeq() int {
-	return int(seq.Add(1) % wire.SeqModulus)
+	for {
+		last := seq.Load()
+		next := wire.NextSeq(int(last))
+		if seq.CompareAndSwap(last, int64(next)) {
+			return next
+		}
+	}
 }
 
 // tmpName is a temporary file's name, ".tmp-" pid "-" seq (section 7.1).
@@ -131,9 +137,15 @@ func nameMatches(dir, name string) bool {
 
 // writeTmp creates a fresh temporary file in d, locks it when lockCarrying, and writes body,
 // passing the publish.after-create, publish.after-lock and publish.after-write points.
+//
+// The body is written through the read-write description that created the file. A lock-carrying
+// file's lock is taken on a second, read-only description of it, which is the one returned and
+// kept: the descriptor a hold's command inherits as fd 3 (PROTOCOL.md section 17) carries the
+// same lock but cannot write, so a command writing to fd 3 cannot corrupt the body. The
+// read-write description is closed before the file is published.
 func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File, string, error) {
 	pid := os.Getpid()
-	var f *os.File
+	var w *os.File
 	var tmp string
 	for attempt := 0; ; attempt++ {
 		if attempt == maxTmpAttempts {
@@ -141,7 +153,7 @@ func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File
 		}
 		tmp = filepath.Join(d, tmpName(pid, NextSeq()))
 		var err error
-		f, err = OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL)
+		w, err = OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL)
 		if errors.Is(err, fs.ErrExist) {
 			continue // a young leftover of an earlier process with this pid
 		}
@@ -150,13 +162,20 @@ func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File
 		}
 		break
 	}
+	f := w // the description returned: w itself unless the file is lock-carrying
 	fail := func(err error) (*os.File, string, error) {
 		os.Remove(tmp)
+		w.Close()
 		f.Close()
 		return nil, "", err
 	}
 	point("publish.after-create")
 	if lockCarrying {
+		ro, err := OpenFile(tmp, os.O_RDONLY)
+		if err != nil {
+			return fail(err)
+		}
+		f = ro
 		ok, err := flockNB(f)
 		if err != nil {
 			return fail(err)
@@ -166,8 +185,13 @@ func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File
 		}
 	}
 	point("publish.after-lock")
-	if _, err := f.Write(body); err != nil {
+	if _, err := w.Write(body); err != nil {
 		return fail(err)
+	}
+	if lockCarrying {
+		if err := w.Close(); err != nil {
+			return fail(err)
+		}
 	}
 	point("publish.after-write")
 	return f, tmp, nil
@@ -228,7 +252,7 @@ func (s *Store) readSmall(name string, limit int) ([]byte, error) {
 
 // Gen is the content of gen (PROTOCOL.md section 7.8).
 type Gen struct {
-	N            uint64
+	N            int64 // in [0, 2^63-1], as wire.Gen
 	ReconciledNS int64
 }
 
@@ -246,20 +270,20 @@ func (s *Store) ReadGen() (Gen, error) {
 	if err != nil {
 		return Gen{}, nil
 	}
-	return Gen{N: uint64(w.Gen), ReconciledNS: w.ReconciledNS}, nil
+	return Gen{N: w.Gen, ReconciledNS: w.ReconciledNS}, nil
 }
 
 // nextGen is gen increased by one. gen is in [0, 2^63-1] (PROTOCOL.md section 7.8), so the bump
 // from the maximum wraps to 0 rather than writing a value no reader accepts.
-func nextGen(n uint64) uint64 {
-	if n >= math.MaxInt64 {
+func nextGen(n int64) int64 {
+	if n == math.MaxInt64 {
 		return 0
 	}
 	return n + 1
 }
 
 func (sec *Section) writeGen(g Gen) error {
-	body, err := wire.EncodeGen(wire.Gen{Gen: int64(g.N), ReconciledNS: g.ReconciledNS})
+	body, err := wire.EncodeGen(wire.Gen{Gen: g.N, ReconciledNS: g.ReconciledNS})
 	if err != nil {
 		return err
 	}

@@ -70,7 +70,7 @@ func isContext(key string) bool {
 func dropInherited(env map[string]string) []string {
 	var fds []int
 	if v := env[engine.EnvHeldFD]; v != "" {
-		if fd, err := strconv.Atoi(v); err == nil {
+		if fd, ok := engine.ParseFD(v); ok {
 			fds = append(fds, fd)
 		}
 	}
@@ -159,7 +159,10 @@ func (r *run) passThrough(held map[string][]*os.File) int {
 		clamped:    slices.Sorted(maps.Keys(clamped)),
 		unbudgeted: unbudgeted,
 		nested:     true,
-		release:    func() { runtime.KeepAlive(held) },
+		release: func() error {
+			runtime.KeepAlive(held)
+			return nil
+		},
 	})
 }
 
@@ -174,7 +177,7 @@ func (r *run) passThroughUnbudgeted(reason string) int {
 		grant:      grant,
 		unbudgeted: r.o.sortedNeed(),
 		nested:     true,
-		release:    func() {},
+		release:    func() error { return nil },
 	})
 }
 

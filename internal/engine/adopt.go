@@ -16,15 +16,21 @@ import (
 // requested declared resource, as many as are free, then more up to max while the grant holds
 // fewer than 512 tokens), and publishes a hold with "adopted": true listing exactly what it
 // took. It has no minimum: shortfall maps every requested declared resource to
-// max(0, min - granted). Adopt waits for the section as long as it takes; in a state directory
-// whose format this client does not implement it writes nothing and returns an error matching
-// ErrRefused.
+// max(0, min - granted). Adopt waits for the section as long as it takes (AdoptContext bounds
+// that wait); in a state directory whose format this client does not implement it writes
+// nothing and returns an error matching ErrRefused.
 func (e *Engine) Adopt(req spec.Request) (g *Grant, shortfall map[string]int, err error) {
+	return e.AdoptContext(context.Background(), req)
+}
+
+// AdoptContext is Adopt whose wait for the section ends with ctx, as EnqueueContext's does:
+// nothing is taken or published then.
+func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, shortfall map[string]int, err error) {
 	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {
 		return nil, nil, err
 	}
-	sec, err := enterSection(e.st, context.Background())
+	sec, err := e.enterUntil(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -69,6 +75,7 @@ func (e *Engine) Adopt(req spec.Request) (g *Grant, shortfall map[string]int, er
 		return nil, nil, err
 	}
 	ts := mergeTokens(first, second)
+	point("tokens.taken")
 	if err := ts.CheckIdentity(); err != nil {
 		ts.Close()
 		return nil, nil, err

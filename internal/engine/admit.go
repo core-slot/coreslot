@@ -71,10 +71,12 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if ok, err := t.reelect(); err != nil || !ok {
 		return nil, err
 	}
+	point("admit.planned")
 	ts, ok, err := takeTwoPasses(sec, eff, take, sizes)
 	if err != nil || !ok {
 		return nil, err
 	}
+	point("tokens.taken")
 	if err := ts.CheckIdentity(); err != nil {
 		ts.Close()
 		return nil, err
@@ -338,10 +340,16 @@ func (g *Grant) Env() []string {
 }
 
 // Close closes this process's copies of the grant's descriptors, the hold before the tokens; it
-// never unlocks, so a child that inherited copies keeps the grant until it exits. Then, if it can enter the section
-// within 2 s, it probes the hold and removes it only when the probe succeeds (PROTOCOL.md
-// section 12.3); otherwise reconciliation removes it later. It is idempotent and returns the
-// first error from closing a descriptor.
+// never unlocks, so a child that inherited copies keeps the grant until it exits. Then, if it can
+// enter the section within 2 s, it probes the hold and removes it only when the probe succeeds
+// (PROTOCOL.md section 12.3); otherwise reconciliation removes it later.
+//
+// Before closing it checks I1 for the hold and every token: each must still be linked and its
+// path must name the same file. When one is not (the state directory was removed, or removed and
+// recreated, under the holder), the holder reports it and writes nothing into the directory as it
+// now exists: it closes the descriptors, removes no hold, enters no section, and returns the
+// mismatch as a *store.StateError. It is idempotent and otherwise returns the first error from
+// closing a descriptor.
 func (g *Grant) Close() error {
 	g.mu.Lock()
 	if g.closed {
@@ -356,6 +364,7 @@ func (g *Grant) Close() error {
 			first = err
 		}
 	}
+	identity := g.checkHeld()
 	// The hold first: a live hold must never list a token nobody locks (I1, I2). Tokens still
 	// locked under a dead hold are the window I2 allows until the next reconciliation.
 	if g.hold != nil {
@@ -365,10 +374,23 @@ func (g *Grant) Close() error {
 	for _, f := range g.tokens.Files {
 		keep(f.Close())
 	}
+	if identity != nil {
+		return identity
+	}
 	if g.hold != nil {
 		g.removeHold()
 	}
 	return first
+}
+
+// checkHeld checks I1 for the grant's hold and tokens before Close closes them.
+func (g *Grant) checkHeld() error {
+	if g.hold != nil {
+		if err := store.CheckHeld(g.hold, filepath.Join(g.e.st.Dir(), store.HoldsDir, g.holdName)); err != nil {
+			return err
+		}
+	}
+	return g.tokens.CheckIdentity()
 }
 
 // removeHold is the best-effort removal of a closed grant's hold.

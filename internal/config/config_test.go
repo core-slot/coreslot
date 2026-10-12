@@ -176,44 +176,50 @@ func TestParseOnlineCPUs(t *testing.T) {
 	}
 }
 
-func TestWatcherReloadsOnMtime(t *testing.T) {
-	path := writeConfig(t, "[resources]\ncpu = 3\n")
+// The configuration is read at every call (PROTOCOL.md section 5.2): a replacement that keeps
+// the size and the mtime, by rewriting in place or by renaming another file over it, is seen at
+// once.
+func TestWatcherReadsEveryCall(t *testing.T) {
+	path := writeConfig(t, "[resources]\ncpu = 10\n")
 	old := time.Now().Add(-time.Hour).Truncate(time.Second)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
 	w := &Watcher{Path: path}
-	c, err := w.Current()
-	if err != nil || c.Sizes(14)["cpu"] != 3 {
+	if c, err := w.Current(); err != nil || c.Sizes(14)["cpu"] != 10 {
 		t.Fatalf("first Current() = %v, %v", c.Sizes(14), err)
 	}
 
-	// Same size, same mtime: the cached configuration is kept.
-	if err := os.WriteFile(path, []byte("[resources]\ncpu = 4\n"), 0o600); err != nil {
+	// Renamed over, same size, same mtime (cp -p to a temporary name, then mv).
+	tmp := path + ".new"
+	if err := os.WriteFile(tmp, []byte("[resources]\ncpu = 12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(tmp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := w.Current(); err != nil || c.Sizes(14)["cpu"] != 12 {
+		t.Errorf("Current() after a rename keeping size and mtime: cpu = %d, %v; want 12", c.Sizes(14)["cpu"], err)
+	}
+
+	// Rewritten in place, same size, same mtime.
+	if err := os.WriteFile(path, []byte("[resources]\ncpu = 11\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := w.Current(); c.Sizes(14)["cpu"] != 3 {
-		t.Errorf("Current() reloaded without an mtime change: cpu = %d", c.Sizes(14)["cpu"])
-	}
-
-	// A new mtime: reloaded.
-	newer := old.Add(time.Minute)
-	if err := os.Chtimes(path, newer, newer); err != nil {
-		t.Fatal(err)
-	}
-	if c, err := w.Current(); err != nil || c.Sizes(14)["cpu"] != 4 {
-		t.Errorf("Current() after an mtime change: cpu = %d, %v; want 4", c.Sizes(14)["cpu"], err)
+	if c, err := w.Current(); err != nil || c.Sizes(14)["cpu"] != 11 {
+		t.Errorf("Current() after an in-place rewrite keeping size and mtime: cpu = %d, %v; want 11", c.Sizes(14)["cpu"], err)
 	}
 
 	// An invalid file is reported as a *config.Error.
 	if err := os.WriteFile(path, []byte("[resources]\ncpu = 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	newer = newer.Add(time.Minute)
-	_ = os.Chtimes(path, newer, newer)
 	var ce *Error
 	if _, err := w.Current(); !errors.As(err, &ce) {
 		t.Errorf("Current() of an invalid file: %v, want a *config.Error", err)

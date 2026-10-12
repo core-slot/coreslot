@@ -143,10 +143,16 @@ func (r Request) Validate() error {
 	if r.Priority < MinPriority || r.Priority > MaxPriority {
 		return usagef("priority %d is outside [%d, %d]", r.Priority, MinPriority, MaxPriority)
 	}
-	if len(r.Label) > MaxLabelBytes {
-		return usagef("label is %d bytes, at most %d", len(r.Label), MaxLabelBytes)
+	return ValidateLabel(r.Label)
+}
+
+// ValidateLabel checks the label rule every request and hold body follows: valid UTF-8 of at
+// most MaxLabelBytes bytes (PROTOCOL.md section 7.3). A label that breaks it is a *UsageError.
+func ValidateLabel(label string) error {
+	if len(label) > MaxLabelBytes {
+		return usagef("label is %d bytes, at most %d", len(label), MaxLabelBytes)
 	}
-	if !utf8.ValidString(r.Label) {
+	if !utf8.ValidString(label) {
 		return usagef("label is not valid UTF-8")
 	}
 	return nil

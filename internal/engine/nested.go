@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,10 +34,10 @@ func ParseTokenFDs(s string) ([]int, error) {
 	total := 0
 	for _, item := range strings.Split(s, ",") {
 		lo, hi, isRange := strings.Cut(item, "-")
-		a, ok := fdNumber(lo)
+		a, ok := ParseFD(lo)
 		b := a
 		if ok && isRange {
-			b, ok = fdNumber(hi)
+			b, ok = ParseFD(hi)
 		}
 		if !ok || b < a {
 			return nil, fmt.Errorf("%s=%q is malformed", EnvTokenFDs, s)
@@ -62,7 +61,10 @@ func ParseTokenFDs(s string) ([]int, error) {
 	return fds, nil
 }
 
-func fdNumber(s string) (int, bool) {
+// ParseFD parses one descriptor number of the descriptor contract (PROTOCOL.md section 17): one
+// to nine decimal digits and nothing else, no sign and no space. It serves CORESLOT_HELD_FD and
+// each fd of CORESLOT_TOKEN_FDS.
+func ParseFD(s string) (int, bool) {
 	if s == "" || len(s) > 9 || strings.Trim(s, "0123456789") != "" {
 		return 0, false
 	}
@@ -141,7 +143,7 @@ func ValidateInherited(env map[string]string) (held map[string][]*os.File, err e
 		if !ok {
 			return nil, fmt.Errorf("descriptor %d of %s is not a token file of %s: %s, or the parent run used another state directory", fd, EnvTokenFDs, dir, reusedCause)
 		}
-		locked, err := probeLocked(tok.path)
+		locked, err := store.ProbeLocked(tok.path)
 		if err != nil {
 			return nil, fmt.Errorf("the inherited grant cannot be checked: %v", err)
 		}
@@ -171,24 +173,4 @@ func findTokens(dir string, want map[devIno]int) (map[int]tokenFile, error) {
 		}
 	}
 	return found, nil
-}
-
-// probeLocked opens path afresh and reports whether another open file description holds its
-// lock; a lock the probe obtains is released at once by closing.
-func probeLocked(path string) (bool, error) {
-	f, err := store.OpenFile(path, os.O_RDONLY)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	for {
-		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if !errors.Is(err, unix.EINTR) {
-			break
-		}
-	}
-	if errors.Is(err, unix.EWOULDBLOCK) {
-		return true, nil
-	}
-	return false, err
 }

@@ -42,13 +42,13 @@ func exportedAPI(t *testing.T, goos string) []string {
 			}
 		}
 	}
-	// An alias exposes its target's exported fields: pin them too.
+	// An alias exposes its target's exported fields and methods: pin them too.
 	for line := range set {
 		alias, target, ok := strings.Cut(strings.TrimPrefix(line, "type "), " = ")
 		if !ok || !strings.HasPrefix(line, "type ") {
 			continue
 		}
-		for _, f := range aliasFields(t, fset, alias, target) {
+		for _, f := range aliasMembers(t, fset, alias, target) {
 			set[f] = true
 		}
 	}
@@ -164,9 +164,10 @@ func TestExportedAPIGolden(t *testing.T) {
 	}
 }
 
-// aliasFields lists the exported fields of an alias's target struct, "pkg.Name" with pkg one of
-// the module's internal packages, as fields of the alias.
-func aliasFields(t *testing.T, fset *token.FileSet, alias, target string) []string {
+// aliasMembers lists the exported fields and methods of an alias's target, "pkg.Name" with pkg
+// one of the module's internal packages, as members of the alias: "field Alias.F T" and
+// "method (Alias) M(...)" or "method (*Alias) M(...)".
+func aliasMembers(t *testing.T, fset *token.FileSet, alias, target string) []string {
 	t.Helper()
 	pkg, name, ok := strings.Cut(target, ".")
 	if !ok {
@@ -184,6 +185,17 @@ func aliasFields(t *testing.T, fset *token.FileSet, alias, target string) []stri
 		f, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
 			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil || !fd.Name.IsExported() {
+				continue
+			}
+			recv := types.ExprString(fd.Recv.List[0].Type)
+			if strings.TrimPrefix(recv, "*") != name {
+				continue
+			}
+			out = append(out, "method ("+strings.Replace(recv, name, alias, 1)+") "+fd.Name.Name+signature(fd.Type))
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			ts, ok := n.(*ast.TypeSpec)
