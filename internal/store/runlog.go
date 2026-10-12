@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
 // Run-log limits (PROTOCOL.md section 20).
@@ -106,7 +107,7 @@ func encodeJSON(v any) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+	return wire.EscapeJSON(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))), nil
 }
 
 // AppendRun appends r to log/runs.jsonl with one O_APPEND write of at most 4 KiB, outside the
