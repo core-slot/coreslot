@@ -26,7 +26,7 @@ var errNotAtOnce = errors.New("not admitted at once")
 func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, error) {
 	res, err := sectionStepper{t}.step(ctx)
 	if err != nil {
-		return nil, asState(err)
+		return nil, err
 	}
 	if a, ok := res.(engine.Admitted); ok {
 		return a.Grant, nil
@@ -41,7 +41,7 @@ func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (t *engine
 		t, err = e.EnqueueContext(ctx, req)
 		return err
 	})
-	return t, asState(err)
+	return t, err
 }
 
 // stepper is the part of a ticket the wait loop drives: a Step, how long until the next one
@@ -112,7 +112,7 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			return nil, asState(err)
+			return nil, err
 		}
 		switch v := res.(type) {
 		case engine.Admitted:

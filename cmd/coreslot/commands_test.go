@@ -1164,6 +1164,59 @@ func TestUnusableStateDirectoryExitStatuses(t *testing.T) {
 	}
 }
 
+// An entry of the state directory that cannot be read is a state error like any other (PROTOCOL.md
+// section 19): never exit 70. status exits 3, cancel refuses with 75 and doctor --clear and
+// --reset exit 1, with the I/O error's own text. Each case reads the entry before it can act.
+func TestUnreadableStateEntryExitStatuses(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 entry")
+	}
+	id := wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String()
+	for _, c := range []struct {
+		entry string
+		args  []string
+		code  int
+		want  string
+	}{
+		{"queue", []string{"status"}, 3, "coreslot: status: open "},
+		{"queue", []string{"cancel", id}, 75, "coreslot: cancel refused: open "},
+		{"queue", []string{"cancel", "--label", "x"}, 75, "coreslot: cancel refused: open "},
+		{"queue", []string{"doctor", "--reset"}, 1, "coreslot: doctor --reset: open "},
+		{"holds", []string{"status"}, 3, "coreslot: status: open "},
+		{"holds", []string{"cancel", "--label", "x"}, 75, "coreslot: cancel refused: open "},
+		{"holds", []string{"doctor", "--reset"}, 1, "coreslot: doctor --reset: open "},
+		{"gen", []string{"status"}, 3, "coreslot: status: open "},
+		{"gen", []string{"cancel", id}, 75, "coreslot: cancel refused: open "},
+		{"gen", []string{"doctor", "--clear"}, 1, "coreslot: doctor --clear: open "},
+		{"degraded", []string{"status"}, 3, "coreslot: status: open "},
+		{"degraded", []string{"cancel", "--label", "x"}, 75, "coreslot: cancel refused: open "},
+		{"degraded", []string{"doctor", "--clear"}, 1, "coreslot: doctor --clear: open "},
+	} {
+		dir := stateDir(t, "")
+		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+			t.Fatalf("setup run: exit %d (stderr %q)", r.code, r.stderr)
+		}
+		st, err := store.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecordDegraded("fail-open: test"); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, c.entry)
+		if err := os.Chmod(p, 0); err != nil {
+			t.Fatal(err)
+		}
+		r := cli(t, baseEnv(dir), c.args...)
+		if err := os.Chmod(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if r.code != c.code || !strings.HasPrefix(r.stderr, c.want) || !strings.Contains(r.stderr, "permission denied") {
+			t.Errorf("%s unreadable: %v: exit %d, want %d and stderr starting %q (stderr %q)", c.entry, c.args, r.code, c.code, c.want, r.stderr)
+		}
+	}
+}
+
 // An invalid configuration leaves the budget unknown: status says so rather than "none declared"
 // and exits 3, since runs fail open.
 func TestStatusWithInvalidConfiguration(t *testing.T) {

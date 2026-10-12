@@ -3,10 +3,14 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Nezhinskiy/coreslot/internal/engine"
+	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
 // A run whose state directory is removed and recreated while its command runs finds out when it
@@ -47,5 +51,39 @@ func TestRunReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 				t.Error("a run log was written into the new state directory")
 			}
 		})
+	}
+}
+
+// Only a release identity mismatch stops the run from writing at release; a descriptor that
+// fails to close is reported, and the run log is still appended.
+func TestReleaseFailureStopsWritingOnlyOnAMismatch(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		stop bool
+		want string
+	}{
+		{"released", nil, false, ""},
+		{"identity mismatch", &engine.IdentityError{Err: &store.StateError{Reason: "holds/h: the held file is no longer linked"}}, true,
+			"coreslot: state error at release: holds/h: the held file is no longer linked; nothing more was written into the state directory, not even the run log\n"},
+		{"close error", fmt.Errorf("close res/cpu/0: %w", os.ErrInvalid), false,
+			"coreslot: the grant's descriptors did not all close: close res/cpu/0: invalid argument\n"},
+		{"state error from closing", &store.StateError{Reason: "x"}, false,
+			"coreslot: the grant's descriptors did not all close: coreslot state error: x\n"},
+	} {
+		f, err := os.CreateTemp(t.TempDir(), "stderr")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := &run{io: IO{Stderr: f}}
+		stop := r.releaseFailed(c.err)
+		got, err := os.ReadFile(f.Name())
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stop != c.stop || string(got) != c.want {
+			t.Errorf("%s: releaseFailed = %v, stderr %q; want %v, %q", c.name, stop, got, c.stop, c.want)
+		}
 	}
 }

@@ -58,8 +58,9 @@ func TestReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 				before := listing(t, filepath.Dir(dir))
 				err := g.Close()
 				var se *store.StateError
-				if !errors.As(err, &se) {
-					t.Fatalf("Close after the state directory was replaced (recreated %v): %v, want a state error", recreate, err)
+				var mismatch *IdentityError
+				if !errors.As(err, &se) || !errors.As(err, &mismatch) {
+					t.Fatalf("Close after the state directory was replaced (recreated %v): %v, want a state error that is an *IdentityError", recreate, err)
 				}
 				if after := listing(t, filepath.Dir(dir)); after != before {
 					t.Errorf("Close wrote into the replaced state directory:\n%s\n->\n%s", before, after)
@@ -87,8 +88,9 @@ func TestReleaseAfterATokenWasReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	var se *store.StateError
-	if err := g.Close(); !errors.As(err, &se) {
-		t.Fatalf("Close after a token was replaced: %v, want a state error", err)
+	var mismatch *IdentityError
+	if err := g.Close(); !errors.As(err, &se) || !errors.As(err, &mismatch) {
+		t.Fatalf("Close after a token was replaced: %v, want a state error that is an *IdentityError", err)
 	}
 	if !exists(hold) {
 		t.Error("the hold was removed after the identity check failed")

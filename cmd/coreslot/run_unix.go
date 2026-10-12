@@ -67,7 +67,7 @@ func (r *run) refuse(format string, args ...any) int {
 func (r *run) priority(cfgPath, stateDir string) (int, error) {
 	if filepath.Dir(cfgPath) == stateDir {
 		if err := store.CheckEntry(cfgPath, false); err != nil {
-			return 0, asState(err)
+			return 0, err
 		}
 	}
 	cfg, err := config.Load(cfgPath)
