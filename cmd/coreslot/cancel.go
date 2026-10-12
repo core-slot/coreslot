@@ -95,14 +95,8 @@ func cancelCommand(args []string, io IO) int {
 
 	ctx, stop := context.WithTimeout(context.Background(), cancelWait)
 	defer stop()
-	// An engine with CancelContext gives up entering the section when ctx ends; one without it
-	// waits for the section.
-	switch err := inSection(func() error {
-		if c, ok := any(e).(contextCanceller); ok {
-			return c.CancelContext(ctx, id)
-		}
-		return e.Cancel(id)
-	}); {
+	// CancelContext gives up entering the section when ctx ends, publishing nothing.
+	switch err := inSection(func() error { return e.CancelContext(ctx, id) }); {
 	case err == nil:
 		fmt.Fprintf(io.Stdout, "coreslot: cancel requested for ticket %s\n", id)
 		return 0
@@ -115,12 +109,6 @@ func cancelCommand(args []string, io IO) int {
 	default:
 		return cancelFailed(err, io)
 	}
-}
-
-// contextCanceller is an engine whose Cancel gives up when ctx ends before it has entered the
-// admission section.
-type contextCanceller interface {
-	CancelContext(ctx context.Context, id wire.ID) error
 }
 
 // sectionBusyText says that the admission section stayed held for waited and, from admit.lock's
