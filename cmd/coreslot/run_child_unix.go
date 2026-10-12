@@ -94,7 +94,7 @@ func (r *run) runChild(c child) int {
 	if err := cmd.Start(); err != nil {
 		childDone(terminal)
 		released = c.release()
-		code, _ := classify(err)
+		code, _ := classify(&execError{Err: err})
 		r.notice("cannot run %s: %v", argv[0], err)
 		status = code
 	} else {
@@ -102,12 +102,7 @@ func (r *run) runChild(c child) int {
 		childDone(terminal)
 		released = c.release()
 	}
-	if released != nil {
-		reason := released.Error()
-		if rs, ok := engine.StateReason(released); ok {
-			reason = rs
-		}
-		r.notice("state error at release: %s; nothing more was written into the state directory, not even the run log", reason)
+	if r.releaseFailed(released) {
 		return status
 	}
 	if c.log != nil || c.nested {
@@ -128,6 +123,27 @@ func (r *run) runChild(c child) int {
 		}
 	}
 	return status
+}
+
+// releaseFailed reports a release that returned err and says whether the run must stop writing.
+// Only an identity mismatch (*engine.IdentityError, PROTOCOL.md section 12.3) stops it: the
+// release wrote nothing into the state directory as it now exists, and neither does the run, not
+// even its run-log line. A descriptor that failed to close is reported, and the run goes on.
+func (r *run) releaseFailed(err error) (stop bool) {
+	var mismatch *engine.IdentityError
+	switch {
+	case err == nil:
+		return false
+	case errors.As(err, &mismatch):
+		reason, ok := stateReason(mismatch.Err)
+		if !ok {
+			reason = mismatch.Error()
+		}
+		r.notice("state error at release: %s; nothing more was written into the state directory, not even the run log", reason)
+		return true
+	}
+	r.notice("the grant's descriptors did not all close: %v", err)
+	return false
 }
 
 // errFormatChanged is the outcome of a run-log append that found a FORMAT this client does not

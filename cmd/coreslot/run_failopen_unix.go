@@ -19,10 +19,9 @@ import (
 // degraded record and the run log when the directory is usable and its format understood, and
 // CORESLOT_UNBUDGETED. e is nil when the directory could not be opened.
 func (r *run) failOpen(e *engine.Engine, err error) int {
-	reason := err.Error()
-	var se *stateError
-	if errors.As(err, &se) {
-		reason = se.Reason
+	reason, ok := stateReason(err)
+	if !ok {
+		reason = err.Error()
 	}
 	if r.o.strict {
 		code, _ := classify(strictRefusal(err, r.o.refusalCode))
