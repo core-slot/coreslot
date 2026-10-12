@@ -559,7 +559,10 @@ A waiter:
 - in each election also watches the **front window**: the first 4 tickets of the queue that are
   not gone (fewer when fewer are ahead of it), reading their mtimes as an observer (section 10.2)
   even when the examination ended before reaching them. The front window only keeps every
-  waiter's timers on the front of the queue running; the election's rule is unchanged;
+  waiter's timers on the front of the queue running; the election's rule is unchanged. A dead
+  ticket that is not yet removed still takes a slot of the window until reconciliation removes it
+  (section 10.4). The conformance traces' 22 s bound cannot tell a waiter that watches the window
+  from one that does not; the Go and Python unit tests enforce it;
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 2 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.

@@ -81,6 +81,7 @@ type result struct {
 	GenStart       uint64  `json:"gen_start"`
 	GenEnd         uint64  `json:"gen_end"`
 	GenSeconds     int     `json:"seconds_with_gen_change"`
+	StopPositions  []int   `json:"stop_positions"` // per burst: queue position of the first waiter stopped (1 = the head)
 	LoadStart      string  `json:"load_start"`
 	LoadEnd        string  `json:"load_end"`
 }
@@ -89,10 +90,10 @@ func (r result) line() string {
 	return fmt.Sprintf("run %d: %.3f %% of one core (waiters %.3f s CPU over %.1f s; mean %.0f waiters, "+
 		"%.1f us CPU per waiter-second); arrivals %d, admitted %d, cancelled %d, withdrawn %d, stopped %d, "+
 		"errors %d; control %.3f s; whole run: wait4 sum %.3f s, RUSAGE_CHILDREN %.3f s; warm-up %.0f s; "+
-		"gen %d -> %d, changed in %d of the window's seconds; load %s -> %s",
+		"gen %d -> %d, changed in %d of the window's seconds; first stopped waiter's queue position per burst %v (1 = the head); load %s -> %s",
 		r.Run, r.Percent, r.WaiterCPUS, r.WindowS, r.MeanWaiters, r.MicrosPerWS, r.Arrivals, r.Admitted,
 		r.Cancelled, r.Withdrawn, r.Stopped, r.Errors, r.ControlCPUS, r.AllChildrenS, r.RusageChildren,
-		r.WarmupS, r.GenStart, r.GenEnd, r.GenSeconds, r.LoadStart, r.LoadEnd)
+		r.WarmupS, r.GenStart, r.GenEnd, r.GenSeconds, r.StopPositions, r.LoadStart, r.LoadEnd)
 }
 
 // group is the live process group, killed by the harness's own signal handler.
@@ -649,8 +650,11 @@ func (b *bench) adoptAll(within time.Duration) error {
 	return nil
 }
 
-// stallSome stops the queue head (the first live ticket of a snapshot, when its waiter may be
-// stopped) and Stall-1 others, and continues them after stall-for.
+// stallSome stops the first waiter in queue order that a burst may act on (the first live ticket
+// of a snapshot whose waiter is not already stopped, leaving or profiled) and Stall-1 random
+// others, and continues them after stall-for. It records that waiter's position among the live
+// tickets: 1 when it was the queue head itself, more when the head was still stopped from the
+// previous burst (stall-for is longer than burst-every) or otherwise excluded.
 func (b *bench) stallSome() error {
 	cands := b.candidates()
 	if len(cands) == 0 || b.p.Stall == 0 {
@@ -660,17 +664,23 @@ func (b *bench) stallSome() error {
 	if err != nil {
 		return err
 	}
+	byPID := make(map[int]int, len(cands))
+	for i, w := range cands {
+		byPID[w.pid] = i
+	}
+	position, live := 0, 0
 	for _, tk := range rep.Tickets { // in queue order
 		if tk.Dead {
 			continue
 		}
-		for i, w := range cands {
-			if w.pid == tk.PID {
-				cands[0], cands[i] = cands[i], cands[0]
-			}
+		live++
+		if i, ok := byPID[tk.PID]; ok {
+			cands[0], cands[i] = cands[i], cands[0]
+			position = live
+			break
 		}
-		break
 	}
+	b.res.StopPositions = append(b.res.StopPositions, position) // 0: no candidate had a ticket
 	for _, w := range cands[:min(b.p.Stall, len(cands))] {
 		if err := syscall.Kill(w.pid, syscall.SIGSTOP); err != nil {
 			continue

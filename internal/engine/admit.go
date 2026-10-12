@@ -7,6 +7,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -102,12 +103,13 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
-// lists queue/ again and reports whether every well-formed ticket ahead of this one is dead,
-// gone or STALLED for this observer. The mtimes come from the listing; a ticket this observer
-// has never watched, such as one published after the election, counts as live, so admission
-// waits for the next election instead of passing it.
+// lists the names in queue/ again and reports whether every well-formed ticket ahead of this one
+// is dead, gone or STALLED for this observer, reading the mtime (lstat) of only those tickets.
+// A ticket this observer has never watched, such as one published after the election, counts as
+// live; the next election then rescans whatever gen says, so a ticket published without a gen
+// bump is watched from then on and cannot keep the head out for longer than a stall.
 func (t *Ticket) reelect() (ok bool, err error) {
-	entries, _, err := t.e.st.List(store.QueueDir)
+	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
 		return false, err
 	}
@@ -133,6 +135,13 @@ func (t *Ticket) reelect() (ok bool, err error) {
 		if !well {
 			continue
 		}
+		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.Name))
+		if gone(err) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
 		dead, err := probe(t.e.st, store.QueueDir, en.Name)
 		if gone(err) || stray(err) || (err == nil && dead) {
 			continue
@@ -141,9 +150,10 @@ func (t *Ticket) reelect() (ok bool, err error) {
 			return false, err
 		}
 		if _, seen := t.obs.Seen(k); !seen {
+			t.haveGen = false // rescan at the next election, so that it is watched from then on
 			return false, nil // first seen inside the section: live
 		}
-		t.obs.Observe(k, en.MtimeNS, now)
+		t.obs.Observe(k, fi.ModTime().UnixNano(), now)
 		if !t.obs.Stalled(k, now) {
 			return false, nil
 		}
