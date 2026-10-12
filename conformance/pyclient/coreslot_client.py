@@ -2010,12 +2010,18 @@ def validate_passthrough(client: Client, text: str) -> dict[str, int]:
     except (OSError, StateError) as exc:
         raise InvalidContext(f"cannot read the state directory to validate the context: {exc}") from exc
     held: dict[str, int] = {}
+    seen: dict[tuple[int, int], int] = {}
     for fd in fds:
         try:
             st = os.fstat(fd)
         except OSError as exc:
             raise InvalidContext(f"descriptor {fd} is not open (did a launcher close the inherited "
                                  "descriptors?)") from exc
+        if (st.st_dev, st.st_ino) in seen:
+            raise InvalidContext(f"descriptors {seen[(st.st_dev, st.st_ino)]} and {fd} are the same "
+                                 "token file: a launcher duplicated a descriptor, and counting both "
+                                 "would overstate the grant")
+        seen[(st.st_dev, st.st_ino)] = fd
         key = index.get((st.st_dev, st.st_ino))
         if key is None:
             raise InvalidContext(f"descriptor {fd} is not a token file of {S}")
@@ -2358,8 +2364,11 @@ def cli_run(args: list[str]) -> int:
 def _close_inherited_context(env: dict[str, str]) -> None:
     """§17: a run that is not a pass-through does not pass on the inherited grant descriptors.
 
-    Exactly the descriptors the inherited CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS name become
-    close-on-exec; every other inherited descriptor passes through untouched.
+    The descriptors the inherited CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS name become
+    close-on-exec when they are regular files at fd 3 or above. A named standard stream (0-2) or a
+    descriptor that is not a regular file cannot be a grant's (a launcher closed the original and
+    its number was reused), so it is left open; every other inherited descriptor passes through
+    untouched.
     """
     fds: list[int] = []
     with contextlib.suppress(ValueError):
@@ -2367,8 +2376,11 @@ def _close_inherited_context(env: dict[str, str]) -> None:
     if env.get("CORESLOT_HELD_FD", "").isdigit():
         fds.append(int(env["CORESLOT_HELD_FD"]))
     for fd in fds:
+        if fd < 3:
+            continue
         with contextlib.suppress(OSError):
-            os.set_inheritable(fd, False)
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                os.set_inheritable(fd, False)
 
 
 def _nested_log(opts, needs, granted, clamped, unbudgeted, ran, status, t0, fail_open="") -> None:
