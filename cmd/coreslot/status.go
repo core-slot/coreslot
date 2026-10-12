@@ -120,6 +120,16 @@ func openEngineReadOnly() (*engine.Engine, string, error) {
 	return engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{}), cfgPath, nil
 }
 
+// asState gives openEngineReadOnly's failure the CLI's own form, "state error: <reason>" with one
+// prefix, for the messages status, cancel and doctor print. Classification needs no
+// wrapping: classify judges every error the same way (stateReason).
+func asState(err error) error {
+	if reason, ok := stateReason(err); ok {
+		return &stateError{Reason: reason}
+	}
+	return err
+}
+
 // obsClock is the clock of an observation: the observer's own monotonic time, and a sleep.
 type obsClock struct {
 	now   func() time.Duration

@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"path/filepath"
 	"slices"
@@ -15,8 +16,9 @@ import (
 // TestLibraryPurity parses every non-test Go file outside the programs (cmd/ and bench/), except
 // the files of a command (package main, such as the conformance suite's helper), and fails on
 // what only a program may do (see violations): the library never prints or touches the standard
-// streams, never chooses an exit code, never handles signals, and never changes process-wide
-// state its caller owns (the environment, the working directory, the umask, GOMAXPROCS).
+// streams, never chooses an exit code, never handles or sends signals, and never changes
+// process-wide state its caller owns (the environment, the working directory, the umask, the
+// resource limits, GOMAXPROCS).
 func TestLibraryPurity(t *testing.T) {
 	fset := token.NewFileSet()
 	checked := 0
@@ -74,18 +76,19 @@ func imported(f *ast.File) map[string]string {
 	return names
 }
 
-// processWide maps an import path to the functions of it that change process-wide state or end
-// the process.
+// processWide maps an import path to the functions of it that change process-wide state, end
+// the process or signal a process.
 var processWide = map[string][]string{
 	"os":                    {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir"},
-	"syscall":               {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask"},
-	"golang.org/x/sys/unix": {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask"},
+	"syscall":               {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask", "Setrlimit", "Kill"},
+	"golang.org/x/sys/unix": {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask", "Setrlimit", "Prlimit", "Kill"},
 	"runtime":               {"GOMAXPROCS"},
 }
 
 // violations finds, in f: any reference to os.Stdin, os.Stdout or os.Stderr, called or used as a
 // value; fmt.Print*; any use of log, log/slog or os/signal (whatever their local names); the
-// functions of processWide; and the builtins print and println.
+// functions of processWide; a method Kill called without arguments on a value (os.Process.Kill:
+// without type information every such call counts); and the builtins print and println.
 func violations(f *ast.File) []violation {
 	names := imported(f)
 	var out []violation
@@ -95,6 +98,11 @@ func violations(f *ast.File) []violation {
 			// A builtin is unresolved by the parser; a local func of that name is not.
 			if fun, ok := n.Fun.(*ast.Ident); ok && (fun.Name == "print" || fun.Name == "println") && fun.Obj == nil {
 				out = append(out, violation{fun.Pos(), "builtin " + fun.Name})
+			}
+			if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Kill" && len(n.Args) == 0 {
+				if x, ok := sel.X.(*ast.Ident); !ok || names[x.Name] == "" { // a value, not a package
+					out = append(out, violation{sel.Pos(), types.ExprString(sel)})
+				}
 			}
 		case *ast.SelectorExpr:
 			x, ok := n.X.(*ast.Ident)
@@ -170,6 +178,15 @@ func bad(w io.Writer) {
 	runtime.GOMAXPROCS(1)
 	print("h")
 	println("i")
+	syscall.Setrlimit(syscall.RLIMIT_NOFILE, nil)
+	unix.Setrlimit(unix.RLIMIT_NOFILE, nil)
+	unix.Prlimit(0, unix.RLIMIT_NOFILE, nil, nil)
+	syscall.Kill(1, syscall.SIGTERM)
+	unix.Kill(1, unix.SIGTERM)
+	p, _ := os.FindProcess(1)
+	p.Kill()
+	cmd.Process.Kill()
+	start().Process.Kill()
 }
 
 func good(w io.Writer) error {
@@ -179,6 +196,8 @@ func good(w io.Writer) error {
 	_ = os.Getenv("k")
 	_ = runtime.NumGoroutine()
 	_ = unix.Getpid()
+	var lim unix.Rlimit
+	_ = unix.Getrlimit(unix.RLIMIT_NOFILE, &lim)
 	return err
 }
 `
@@ -194,7 +213,8 @@ func good(w io.Writer) error {
 		"lg.Print", "sl.Info", "os.Exit", "syscall.Exit", "unix.Exit",
 		"sig.Notify", "sig.Ignore", "sig.Reset", "sig.Stop",
 		"os.Setenv", "os.Unsetenv", "os.Clearenv", "os.Chdir", "syscall.Umask", "unix.Umask",
-		"runtime.GOMAXPROCS", "builtin print", "builtin println"}
+		"runtime.GOMAXPROCS", "builtin print", "builtin println",
+		"syscall.Setrlimit", "unix.Setrlimit", "unix.Prlimit", "syscall.Kill", "unix.Kill", "p.Kill", "cmd.Process.Kill", "start().Process.Kill"}
 	if !slices.Equal(got, want) {
 		t.Errorf("findings:\n got %v\nwant %v", got, want)
 	}

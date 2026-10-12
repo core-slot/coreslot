@@ -348,8 +348,8 @@ func (g *Grant) Env() []string {
 // path must name the same file. When one is not (the state directory was removed, or removed and
 // recreated, under the holder), the holder reports it and writes nothing into the directory as it
 // now exists: it closes the descriptors, removes no hold, enters no section, and returns the
-// mismatch as a *store.StateError. It is idempotent and otherwise returns the first error from
-// closing a descriptor.
+// mismatch as an *IdentityError around a *store.StateError. It is idempotent and otherwise
+// returns the first error from closing a descriptor.
 func (g *Grant) Close() error {
 	g.mu.Lock()
 	if g.closed {
@@ -375,7 +375,7 @@ func (g *Grant) Close() error {
 		keep(f.Close())
 	}
 	if identity != nil {
-		return identity
+		return &IdentityError{Err: identity}
 	}
 	if g.hold != nil {
 		g.removeHold()

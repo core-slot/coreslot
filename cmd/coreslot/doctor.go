@@ -39,7 +39,7 @@ const (
 // reports every finding. --clear removes the degraded record. --reset empties the state, but only
 // when nothing is live and FORMAT names no format this client does not implement (PROTOCOL.md
 // section 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
-// a refused reset is 75.
+// a refused --clear or --reset is 75 (PROTOCOL.md section 19).
 func doctorCommand(args []string, io IO) int {
 	fs := flag.NewFlagSet("coreslot doctor", flag.ContinueOnError)
 	fs.SetOutput(&bytes.Buffer{})
@@ -102,14 +102,18 @@ func doctorAct(doReset bool, io IO) int {
 			// The removal is best effort: everything else was removed. Say how much, and what not.
 			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: removed %d entries; %d could not be removed: %s\n",
 				removed, incomplete.Left, text(incomplete.Err.Error()))
-			return exitInternal
+			return exitProblems
 		case err != nil:
 			return doctorFailed(what, err, io)
 		}
 		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock, res/ and config.toml\n", removed)
 		return 0
 	}
-	if why := formatRefusal(e.Store()); why != "" {
+	why, err := formatRefusal(e.Store())
+	if err != nil {
+		return doctorFailed(what, err, io)
+	}
+	if why != "" {
 		fmt.Fprintf(io.Stderr, "coreslot: doctor --clear refused: %s\n", text(why))
 		return exitRefusal
 	}
@@ -141,16 +145,19 @@ func doctorFailed(what string, err error, io IO) int {
 
 // formatRefusal says why a write into the directory is refused for its FORMAT, or "": a
 // malformed FORMAT, or a well-formed one this client does not implement (PROTOCOL.md section 14:
-// a client never writes into a directory whose format it has not understood).
-func formatRefusal(st *store.Store) string {
+// a client never writes into a directory whose format it has not understood). A FORMAT that
+// cannot be read at all is not a refusal but a state error, returned as err.
+func formatRefusal(st *store.Store) (why string, err error) {
 	n, present, err := st.ReadFormat()
 	switch {
+	case err != nil && !present:
+		return "", err
 	case err != nil:
-		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live"
+		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live", nil
 	case present && !slices.Contains(testhooks.Formats(), n):
-		return fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", n)
+		return fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", n), nil
 	}
-	return ""
+	return "", nil
 }
 
 // doctorReport prints the findings and returns doctor's exit status.

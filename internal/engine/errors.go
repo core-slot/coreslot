@@ -40,3 +40,16 @@ func (e *SectionBusyError) Error() string {
 }
 
 func (e *SectionBusyError) Unwrap() error { return e.Err }
+
+// IdentityError is Grant.Close's report of a release identity mismatch (I1, PROTOCOL.md section
+// 12.3): a hold or token path no longer names the file the grant holds. Err is the mismatch, a
+// state error; the holder has written nothing into the state directory, and a caller that writes
+// at release (such as the CLI's run log) must not either. Every other error of Close is a failure
+// to close a descriptor.
+type IdentityError struct {
+	Err error
+}
+
+func (e *IdentityError) Error() string { return e.Err.Error() }
+
+func (e *IdentityError) Unwrap() error { return e.Err }
