@@ -560,6 +560,30 @@ class LivenessTests(Base):
 
 
 class AdmissionTests(Base):
+    def test_reelection_inside_the_section(self):
+        """§12.1 step 5: a ticket published ahead after the head's election, before its admitting
+        section, is first seen there and counts as live: the head does not take the free token."""
+        self.config("[resources]\ncpu = 1\n")
+        clock = FakeClock()
+        h = self.client(observer_clock=clock).enqueue("h", 0, {"cpu": 1})
+        ahead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+        real_elect = h._elect
+
+        def elect_then_publish():
+            position = real_elect()  # h wins the election ...
+            self.write(ahead, body(), lock=True)  # ... and a live ticket appears ahead of it
+            g = self.gen()  # published as a writer does: with a gen bump
+            self.write(os.path.join(self.S, "gen"), json.dumps(dict(g, gen=g["gen"] + 1)).encode())
+            return position
+
+        h._elect = elect_then_publish
+        self.assertEqual(h.step(), ("waiting", 1))
+        self.assertEqual(self.ls("holds"), [])
+        h._elect = real_elect
+        clock.t += 1.0
+        self.assertEqual(h.step(), ("waiting", 2))
+        h.withdraw()
+
     def test_admission_with_clamp(self):
         """§21.3: cpu size 10 with 14 token files, cpu=16..16 and pg-local=1."""
         self.config('[resources]\ncpu = 10\npg-local = 2\n')

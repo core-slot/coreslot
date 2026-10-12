@@ -478,18 +478,47 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 
 // A higher-priority ticket published after the head won an election, while the head waits
 // before a section that cannot admit it, is admitted first: the head repeats the election
-// before its next attempt (PROTOCOL.md section 10.3). One published while the head is inside
-// the section that admits it is admitted after it.
-//
-// PENDING phase, not implemented: re-election inside the admitting section is scheduled
-// separately. When it lands, this trace gains the phase "P admissible (capacity free at H's
-// section), H caught at admit.before-enter after winning its election, P (priority 10)
-// published, H released: P is admitted first", whose mutation is "skip re-election inside the
-// section". Today H is admitted first in that interleaving, which I4 as written permits (P was
-// published after H's election); the subtest below marks the gap in every run.
+// before its next attempt (PROTOCOL.md section 10.3). One published after the head's election
+// but before the section that could admit it is admitted first too: that section repeats the
+// election (section 12.1 step 5), where a ticket first seen counts as live. One published while
+// the head is inside the section that admits it is admitted after it.
 func TestArrivalBeforeAndAfterElection(t *testing.T) {
-	t.Run("pending: admissible P published between H's election and its admitting section", func(t *testing.T) {
-		t.Skip("PENDING: needs re-election inside the admitting section (scheduled separately); see the comment above")
+	t.Run("admissible P published between H's election and its admitting section", func(t *testing.T) {
+		e := State(t)
+		e.WriteConfig(cpuConfig(1))
+		h := e.Pausing("admit.before-enter", "section.entered").Run("H", "--need", "cpu=1")
+		autoSec := h.AutoRelease("section.entered")
+		e.WaitTicket("H")
+		h.WaitReached("admit.before-enter") // H won an election with the token free
+		autoSec()
+
+		// P (priority 10), ahead of H, is published and elected too, and is held before its
+		// own admitting section.
+		p := e.Pausing("admit.before-enter").Run("P", "--priority", "10", "--need", "cpu=1")
+		e.WaitTicket("P")
+		p.WaitReached("admit.before-enter")
+		if rep := e.Status(); len(rep.Tickets) != 2 || rep.Tickets[0].Label != "P" {
+			t.Fatalf("queue %v: P is not ahead of H", rep.Tickets)
+		}
+
+		// H enters the section it was elected for, with the token free: it must not take it.
+		h.Release("admit.before-enter")
+		h.WaitReached("section.entered")
+		defer h.AutoRelease("admit.before-enter")()
+		h.Release("section.entered")
+		defer h.AutoRelease("section.entered")()
+		e.Eventually(startWait, "H leaves its section", func() bool { return !e.Status().Section.Held })
+		noHold(t, e, "H", "H was admitted past P, published before its admitting section")
+
+		p.Release("admit.before-enter")
+		defer p.AutoRelease("admit.before-enter")()
+		e.WaitHold("P", startWait)
+		noHold(t, e, "H", "H was admitted beside P")
+		e.ReleaseChild("P")
+		p.ExitCode(0)
+		e.WaitHold("H", startWait)
+		e.ReleaseChild("H")
+		h.ExitCode(0)
 	})
 	e := State(t)
 	e.WriteConfig("[resources]\ncpu = 1\npg = 1\n")

@@ -1244,6 +1244,8 @@ class Client:
         free = {r: sizes[r] - self._count_locked(S, r) for r in eff}
         if any(free[r] < eff[r][0] for r in eff):
             return None
+        if ticket is not None and not ticket._reelect():  # §12.1 step 5
+            return None
         raise_nofile(sum(e[1] for e in eff.values()) + 64)
         taken: dict[str, list[tuple[int, int]]] = {r: [] for r in eff}
 
@@ -1651,6 +1653,37 @@ class Ticket:
         try:
             self._observe(name, os.fstat(fd).st_mtime_ns, now)
             return "watched"
+        finally:
+            os.close(fd)
+
+    def _reelect(self) -> bool:
+        """§12.1 step 5, inside the admitting section: re-list queue/; True when every
+        well-formed ticket ahead is dead, gone or STALLED. One never observed counts as live."""
+        now = self.client.observer_clock()
+        queue = os.path.join(self.client.state_dir(), "queue")
+        names = sorted((n for n in _list(queue) if parse_name(n) is not None and n != self.name),
+                       key=lambda n: n[:ID_LEN])
+        for n in names:
+            if n[:ID_LEN] >= self.id:
+                continue
+            seen = n in self._obs
+            verdict = self._examine(n, now) if seen else self._probe_only(n)
+            if verdict in ("gone", "ignored", "dead", "stalled"):
+                continue
+            return False  # live, or first seen here
+        return True
+
+    def _probe_only(self, name: str) -> str:
+        """A ticket never observed: 'gone', 'ignored', 'dead' or 'live' (§12.1 step 5)."""
+        fd = self._open_valid(name)
+        if not isinstance(fd, int):
+            return fd
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return "dead"
+            except BlockingIOError:
+                return "live"
         finally:
             os.close(fd)
 
