@@ -1191,6 +1191,7 @@ func TestUnreadableStateEntryExitStatuses(t *testing.T) {
 		{"degraded", []string{"status"}, 3, "coreslot: status: open "},
 		{"degraded", []string{"cancel", "--label", "x"}, 75, "coreslot: cancel refused: open "},
 		{"degraded", []string{"doctor", "--clear"}, 1, "coreslot: doctor --clear: open "},
+		{"FORMAT", []string{"doctor", "--clear"}, 1, "coreslot: doctor --clear: open "},
 	} {
 		dir := stateDir(t, "")
 		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {

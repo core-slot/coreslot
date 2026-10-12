@@ -109,7 +109,11 @@ func doctorAct(doReset bool, io IO) int {
 		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock, res/ and config.toml\n", removed)
 		return 0
 	}
-	if why := formatRefusal(e.Store()); why != "" {
+	why, err := formatRefusal(e.Store())
+	if err != nil {
+		return doctorFailed(what, err, io)
+	}
+	if why != "" {
 		fmt.Fprintf(io.Stderr, "coreslot: doctor --clear refused: %s\n", text(why))
 		return exitRefusal
 	}
@@ -141,16 +145,19 @@ func doctorFailed(what string, err error, io IO) int {
 
 // formatRefusal says why a write into the directory is refused for its FORMAT, or "": a
 // malformed FORMAT, or a well-formed one this client does not implement (PROTOCOL.md section 14:
-// a client never writes into a directory whose format it has not understood).
-func formatRefusal(st *store.Store) string {
+// a client never writes into a directory whose format it has not understood). A FORMAT that
+// cannot be read at all is not a refusal but a state error, returned as err.
+func formatRefusal(st *store.Store) (why string, err error) {
 	n, present, err := st.ReadFormat()
 	switch {
+	case err != nil && !present:
+		return "", err
 	case err != nil:
-		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live"
+		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live", nil
 	case present && !slices.Contains(testhooks.Formats(), n):
-		return fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", n)
+		return fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", n), nil
 	}
-	return ""
+	return "", nil
 }
 
 // doctorReport prints the findings and returns doctor's exit status.
