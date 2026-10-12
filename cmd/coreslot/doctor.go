@@ -95,7 +95,8 @@ func doctorAct(doReset bool, io IO) int {
 			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset refused: %s\n", text(strings.Join(live.Reasons, "; ")))
 			return exitRefusal
 		case err != nil:
-			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: %s\n", text(err.Error()))
+			// A reset that fails part-way has still removed what it could: say how much.
+			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: removed %d entries, then failed: %s\n", removed, text(err.Error()))
 			return exitInternal
 		}
 		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock, res/ and config.toml\n", removed)

@@ -746,6 +746,36 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	}
 }
 
+// A reset that fails part-way says how much it removed before the failure, besides the error.
+func TestDoctorResetReportsPartialRemoval(t *testing.T) {
+	dir := stateDir(t, "")
+	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		t.Fatalf("setup run: %d %q", r.code, r.stderr)
+	}
+	// A directory under a ticket's name is a stray no client owns, and os.Remove cannot remove it
+	// while it holds a file.
+	stuck := filepath.Join(dir, "queue", "00000000000000000001-0000000001-000001")
+	if err := os.MkdirAll(stuck, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "doctor", "--reset")
+	if r.code == 0 {
+		t.Fatalf("doctor --reset left %s behind and exited 0", stuck)
+	}
+	// The run log, gen and FORMAT were removed before the stuck entry failed.
+	if !strings.Contains(r.stderr, "removed 3 entries") {
+		t.Errorf("stderr %q: want how many entries were removed before the failure (3)", r.stderr)
+	}
+	for _, f := range []string{"FORMAT", "gen", filepath.Join("log", "runs.jsonl")} {
+		if _, err := os.Lstat(filepath.Join(dir, f)); !os.IsNotExist(err) {
+			t.Errorf("%s survived: %v", f, err)
+		}
+	}
+}
+
 func inodeOf(t *testing.T, path string) uint64 {
 	t.Helper()
 	var st unix.Stat_t
