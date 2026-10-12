@@ -8,7 +8,7 @@ name: release
 #
 # GoReleaser builds with --skip=publish: the open-source GoReleaser cannot split building from
 # publishing, so the publish job creates the release itself, from the archives the attest job
-# attested, after checking them against checksums.txt.
+# attested, after `gh attestation verify` has checked each archive against its attestation.
 on:
   push:
     tags:
@@ -107,17 +107,29 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write # create the release and upload its assets
+      attestations: read # verify the archives' attestations before publishing them
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: ${{ runner.temp }}/dist
+      # Each archive must carry a provenance attestation signed by this workflow in this
+      # repository: what is published is what the attest job attested.
+      - name: The archives' attestations verify
+        working-directory: ${{ runner.temp }}/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for archive in ./*.tar.gz; do
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF"
+          done
       - name: Publish the GitHub release
         working-directory: ${{ runner.temp }}/dist
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha256sum -c checksums.txt
           # A tag with a pre-release part (v0.2.0-rc.1) is a pre-release, as SemVer has it.
           prerelease=()
           case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
