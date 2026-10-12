@@ -8,9 +8,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// terminalMode reports whether a run supervises its command in terminal mode (spec section
-// 6.1): stdin is a terminal and coreslot's process group is that terminal's foreground group.
-// The command then stays in coreslot's group, so the keys of the terminal reach both.
+// terminalMode reports whether a run supervises its command in terminal mode: stdin is a terminal
+// and coreslot's process group is that terminal's foreground group. The command then stays in
+// coreslot's group, so the keys of the terminal reach both.
 func terminalMode(stdin *os.File) bool {
 	if stdin == nil {
 		return false

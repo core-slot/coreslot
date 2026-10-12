@@ -1,15 +1,14 @@
 //go:build unix
 
-// Command waiters is the waiter benchmark, the release gate: waiters,
-// each its own process on the public library, wait against a held budget while the harness
-// drives bursts of arrivals, admissions, cancellations and stall recoveries. It reports the
-// waiters' aggregate CPU per second of wall time, as a percentage of one core, for each run and
-// the spread over the runs.
+// Command waiters is the waiter benchmark, the release gate: waiters, each its own process on the
+// public library, wait against a held budget while the harness drives bursts of arrivals,
+// admissions, cancellations and stall recoveries. It reports the waiters' aggregate CPU per second
+// of wall time, as a percentage of one core, for each run and the spread over the runs.
 //
 // The gate is its default: 100 waiters, five 120 s runs, median at most 10 % of one core, on the
-// macOS reference host (evidence/README.md); it exits 1 when the median
-// exceeds it. Any other -n, -runs or -duration is a measurement with no verdict (exit 0), for
-// example the published 1000-waiter figure.
+// macOS reference host (evidence/README.md); it exits 1 when the median exceeds it. Any other -n,
+// -runs or -duration is a measurement with no verdict (exit 0), for example the published
+// 1000-waiter figure.
 //
 // CPU accounting: each waiter's CPU comes from the kernel's rusage of that child (wait4(2):
 // ru_utime + ru_stime), minus, for a waiter that already existed when the measured window
@@ -39,7 +38,7 @@ import (
 	"time"
 )
 
-// The benchmark gate.
+// The release gate; failing it blocks a release candidate.
 const (
 	gateWaiters  = 100
 	gateRuns     = 5

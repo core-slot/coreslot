@@ -25,7 +25,7 @@ import (
 const doctorUsage = `usage: coreslot doctor [--clear] [--reset]`
 
 const (
-	// exitProblems is doctor's status when it found a problem (status 3 means degraded mode).
+	// exitProblems is doctor's status when it found a problem (PROTOCOL.md section 19).
 	exitProblems = 1
 	// resetWait is how long --reset waits to enter the admission section before it refuses.
 	resetWait = time.Second
@@ -34,11 +34,12 @@ const (
 	wantDescriptors = 600
 )
 
-// doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its
-// filesystem, permissions, format, the configuration, the descriptor limits and the degraded
-// record, and reports every finding. --clear removes the degraded record. --reset empties the
-// state, but only when nothing is live. It exits 1 when it found a problem,
-// else 3 while degraded mode is recorded, else 0; a refused reset is 75.
+// doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
+// permissions, format, the configuration, the descriptor limits and the degraded record, and
+// reports every finding. --clear removes the degraded record. --reset empties the state, but only
+// when nothing is live and FORMAT names no format this client does not implement (PROTOCOL.md
+// section 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
+// a refused reset is 75.
 func doctorCommand(args []string, io IO) int {
 	fs := flag.NewFlagSet("coreslot doctor", flag.ContinueOnError)
 	fs.SetOutput(&bytes.Buffer{})

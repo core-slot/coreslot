@@ -398,7 +398,7 @@ def _policy_ok(st: os.stat_result, want_dir: bool) -> bool:
 
 
 def _open_entry(path: str):
-    """Open a queue/, holds/ or cancel/ entry only if it passes §4.2 (stray rule B1/D6).
+    """Open a queue/, holds/ or cancel/ entry only if it passes the §4.2/§10.4 stray rule (B1/D6).
 
     Returns a descriptor, "gone" (ENOENT), or "ignored": an entry whose type, owner or mode fails
     the checks is never opened or probed. The inode is re-checked after the open, so a swap

@@ -178,8 +178,9 @@ func TestEnvMatchesFiles(t *testing.T) {
 	runChild(t, dir, to, []string{"res/cpu/0", "res/cpu/1"})
 }
 
-// The first Poll or Wait to admit wins and the others return the same grant; Cancel
-// after admission is ErrAlreadyAdmitted; Cancel before it makes Wait return ErrCancelled.
+// The Waiter's concurrency contract: the first Poll or Wait to admit wins and the others return the
+// same grant; Cancel after admission is ErrAlreadyAdmitted; Cancel before it makes Wait return
+// ErrCancelled.
 func TestConcurrentPollWaitCancel(t *testing.T) {
 	dir := stateDir(t, "")
 	c := open(t, dir)
@@ -265,8 +266,8 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 	t.Logf("outcomes seen: admitted %v, cancelled %v", sawAdmitted, sawCancelled)
 }
 
-// Options.StateDir moves the configuration to <StateDir>/config.toml, which must pass the
-// state directory's policy.
+// PROTOCOL.md section 5.3: Options.StateDir moves the configuration to <StateDir>/config.toml,
+// which must pass the state directory's policy.
 func TestStateDirOptionMovesConfiguration(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 3\n")
 	c := open(t, dir)

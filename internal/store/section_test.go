@@ -437,7 +437,7 @@ func TestListParsesSortsAndCountsIgnored(t *testing.T) {
 	}
 	entries, ignored, err = s.List(QueueDir)
 	if err != nil || ignored != 3 || len(entries) != 3 {
-		t.Errorf("List with a symlink under a ticket name = %d entries, %d ignored, %v; want 3, 3 and no error (stray rule)",
+		t.Errorf("List with a symlink under a ticket name = %d entries, %d ignored, %v; want 3, 3 and no error (a stray, PROTOCOL.md section 4.2)",
 			len(entries), ignored, err)
 	}
 }

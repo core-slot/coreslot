@@ -29,11 +29,11 @@ func (l LiveState) Empty() bool {
 	return len(l.Holds) == 0 && len(l.Tickets) == 0 && len(l.Tokens) == 0 && l.ForeignFormat == nil
 }
 
-// Reset empties the state directory of everything a reset removes (PROTOCOL.md section 6.2's
-// `doctor --reset`), inside the section the caller entered: every entry of queue/, holds/ and
-// cancel/ and of log/, then degraded, gen and FORMAT. It keeps admit.lock, res/ and config.toml
-// (the format-stable files whose inodes live clients may hold open, and the configuration) and
-// the four directories themselves.
+// Reset empties the state directory of everything a reset (`coreslot doctor --reset`) removes,
+// inside the section the caller entered: every entry of queue/, holds/ and cancel/ and of log/,
+// then degraded, gen and FORMAT. It keeps admit.lock, res/ and config.toml (the format-stable files
+// whose inodes live clients may hold open, and the configuration) and the four directories
+// themselves.
 //
 // It first checks that nothing is alive: no hold or ticket whose lock is held and no locked
 // token of any resource under res/, whether or not the configuration declares it. When anything

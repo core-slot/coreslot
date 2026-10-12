@@ -120,8 +120,8 @@ func refusedType(name string) bool {
 }
 
 // refusedMagic reports whether a Linux filesystem magic (statfs f_type) is a network, FUSE or
-// VM-shared filesystem: NFS, CIFS, SMB2, SMB, FUSE and 9p (PROTOCOL.md section 4.3), and the
-// VirtualBox shared folder, Ceph and AFS (the spec's network and VM-shared filesystems).
+// VM-shared filesystem the protocol refuses (PROTOCOL.md section 4.3): NFS, CIFS, SMB2, SMB, FUSE,
+// 9p, the VirtualBox shared folder, Ceph, AFS and kAFS.
 func refusedMagic(m int64) bool {
 	switch m {
 	case 0x6969, // NFS
