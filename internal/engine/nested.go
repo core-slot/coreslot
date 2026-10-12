@@ -5,7 +5,6 @@ package engine
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -73,15 +72,10 @@ func ParseFD(s string) (int, bool) {
 }
 
 // stateDirOf is the state directory a context names: its CORESLOT_STATE_DIR when set (an
-// absolute path), otherwise the default of PROTOCOL.md section 4.1.
+// absolute path), otherwise the default of PROTOCOL.md section 4.1. Only env counts, not this
+// process's environment.
 func stateDirOf(env map[string]string) (string, error) {
-	if v := env[config.StateDirEnv]; v != "" {
-		if !filepath.IsAbs(v) {
-			return "", fmt.Errorf("%s=%q is not an absolute path", config.StateDirEnv, v)
-		}
-		return filepath.Clean(v), nil
-	}
-	dir, _, err := config.StateDir()
+	dir, _, err := config.StateDirFrom(func(k string) string { return env[k] })
 	return dir, err
 }
 

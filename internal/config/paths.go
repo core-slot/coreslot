@@ -147,7 +147,15 @@ func getentHome(paths []string, uid int, timeout time.Duration) (string, error) 
 // StateDir returns the state directory and whether it comes from CORESLOT_STATE_DIR. The
 // override must be an absolute path.
 func StateDir() (dir string, override bool, err error) {
-	if v := os.Getenv(StateDirEnv); v != "" {
+	return StateDirFrom(os.Getenv)
+}
+
+// StateDirFrom is StateDir for the environment getenv reads: the one rule of PROTOCOL.md section
+// 4.1 for this process and for a context it is handed, such as an inherited grant's. Only the
+// override comes from getenv; the default comes from the password database, never the
+// environment.
+func StateDirFrom(getenv func(string) string) (dir string, override bool, err error) {
+	if v := getenv(StateDirEnv); v != "" {
 		if !filepath.IsAbs(v) {
 			return "", true, fmt.Errorf("%s=%q is not an absolute path", StateDirEnv, v)
 		}
