@@ -1137,11 +1137,11 @@ class LauncherTests(Base):
         self.assertEqual(self.ls("queue"), [])
 
 
-    def test_json_output_escapes_c1_line_and_bidi_controls(self):
-        """The run log, tickets and holds escape C1 controls, the line and paragraph separators and
-        the bidirectional controls in a label as \\uXXXX, so no line carries them raw; the decoded
-        label is unchanged."""
-        controls = ["\u0080", "\u0085", "\u009f", "؜", "‎", "‏", " ", " ",
+    def test_json_output_escapes_del_c1_line_and_bidi_controls(self):
+        """The run log, tickets and holds escape DEL, the C1 controls, the line and paragraph
+        separators and the bidirectional controls in a label as \\uXXXX, so no line carries them
+        raw; the decoded label is unchanged."""
+        controls = ["\u007f", "\u0080", "\u0085", "\u009f", "؜", "‎", "‏", " ", " ",
                     *map(chr, range(0x202A, 0x202F)), *map(chr, range(0x2066, 0x206A))]
         label = "a" + "".join(controls) + "é"
         self.config("[resources]\ncpu = 2\n")
