@@ -4,6 +4,7 @@ package testhooks
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -16,6 +17,9 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_PAUSE", "admit.before-enter,x")
 	t.Setenv("CORESLOT_TESTHOOK_REALTIME_OFFSET", "-5m")
 	t.Setenv("CORESLOT_TESTHOOK_FORMATS", "1,2")
+	if err := os.WriteFile(filepath.Join(dir, "realtime-offset"), []byte("1h"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -31,8 +35,8 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Errorf("Point created %d files without the tag: %v", len(entries), entries[0].Name())
+	if len(entries) != 1 || entries[0].Name() != "realtime-offset" {
+		t.Errorf("Point created files without the tag: %v", entries)
 	}
 	if got := RealtimeOffset(); got != 0 {
 		t.Errorf("RealtimeOffset() = %v, want 0", got)
