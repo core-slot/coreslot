@@ -541,7 +541,7 @@ func TestInSectionDefersStop(t *testing.T) {
 // section: its self-stop is deferred only there.
 var sectionMethods = map[string]bool{"Enqueue": true, "EnqueueContext": true, "Step": true,
 	"Poll": true, "Withdraw": true, "FailOpen": true, "UnbudgetedHold": true, "Snapshot": true,
-	"Enter": true, "TryEnter": true, "Adopt": true, "Cancel": true, "Reset": true, "ClearDegraded": true}
+	"Enter": true, "TryEnter": true, "Adopt": true, "Cancel": true, "CancelContext": true, "Reset": true, "ClearDegraded": true}
 
 // TestSectionCallsAreInSection checks the CLI's sources: every call (or method value) of a
 // method in sectionMethods, and every Close of a grant (named g), sits inside an argument of
