@@ -3,8 +3,8 @@
 All notable changes to this project are recorded here. The format follows
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as the
-[compatibility policy](docs/compatibility.md) applies it: the module stays at `v0` until on-disk
-format 1 is frozen.
+[compatibility policy](docs/compatibility.md) applies it: the module stays at `v0` until the
+on-disk format is frozen, and `v1.0.0` freezes the format then current.
 
 ## [Unreleased]
 

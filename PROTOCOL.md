@@ -15,7 +15,9 @@ on macOS and Linux.
 ## 1. Conventions
 
 The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, MAY and
-OPTIONAL are to be interpreted as described in RFC 2119.
+OPTIONAL are to be interpreted as described in RFC 2119. Passages marked **Implementation note**
+are informative: they say what a particular implementation or test does, and impose no
+requirement on a client.
 
 - **Client:** any process that reads or changes the state directory: the `coreslot` CLI, a program
   embedding a library, an independent implementation.
@@ -582,8 +584,9 @@ whose own ticket's name disappears while it still holds the ticket's descriptor 
 the budget stays safe: it is counted from token locks, not tickets, so I3 and I7 still hold. The
 waiter does lose its place, though. No other client sees the ticket any more, so waiters behind it
 may be elected and admitted first, `status` does not show it, and it cannot be cancelled by label;
-a cancel request naming its exact id still reaches it, but only from a canceller that publishes
-without checking `queue/` first (section 13.1). When it later removes its ticket
+a cancel request naming its exact id may still reach it, but only from a canceller that publishes
+without checking `queue/` first (section 13.1), and only until a reconciliation removes the request,
+whose ticket name is gone (section 10.4, step 2). When it later removes its ticket
 (admission, cancellation, withdrawal), `ENOENT` counts as success.
 
 A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2
