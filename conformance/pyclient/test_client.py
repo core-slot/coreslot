@@ -1097,6 +1097,7 @@ class LauncherTests(Base):
         self.assertEqual(holds, [fd3])
 
     def test_exit_statuses_and_placeholders(self):
+        self.config("[resources]\ncpu = 3\n")  # the size the placeholders assert, on any machine
         out = os.path.join(self.root, "args")
         p = self.cli("run", "--need", "cpu=3..3", "--subst", "--", "sh", "-c",
                      f"echo {{n}} -j{{n}} {{{{n}}}} > '{out}'")
