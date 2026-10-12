@@ -569,6 +569,37 @@ class LivenessTests(Base):
         self.assertEqual(kind, "admitted")
         g.close(remove_hold=False)
 
+    def test_front_window_is_four_tickets_wide(self):
+        """§10.3, I5: four stopped tickets, then a live W1, then W2. W2's elections end at W1, but
+        its front window watches all four stopped tickets, so once W1 is admitted W2 is admitted in
+        the same second. A window of three leaves the fourth unwatched until W1 goes."""
+        self.config("[resources]\ncpu = 2\n")
+        q = os.path.join(self.S, "queue")
+        for i in range(1, 5):
+            self.write(os.path.join(q, f"0000000000000000000{i}-0000000001-000001"), body(), lock=True)
+        clock = FakeClock()
+        w1 = self.client(observer_clock=clock).enqueue("w1", 0, {"cpu": 1})
+        w2 = self.client(observer_clock=clock).enqueue("w2", 0, {"cpu": 1})
+        w1_path = os.path.join(q, w1.name)
+        g1 = None
+        for s in range(15):
+            os.utime(w1_path, ns=(s + 1, s + 1))  # W1 refreshes every second, as a live waiter does
+            kind, value = w1.step()
+            if kind == "admitted":
+                g1 = value
+            kind2, value2 = w2.step()
+            if g1 is None:
+                self.assertEqual(kind2, "waiting", f"W2 admitted before W1, at {s} s")
+            else:
+                self.assertEqual(kind2, "admitted", f"W2 not admitted in the second W1 was, at {s} s")
+                self.assertGreaterEqual(s, 10)
+                self.assertEqual((g1.tokens, value2.tokens), ({"cpu": [0]}, {"cpu": [1]}))
+                value2.close(remove_hold=False)
+                g1.close(remove_hold=False)
+                return
+            clock.t += 1.0
+        self.fail("W1 was never admitted")
+
     def test_position_counts_only_well_formed_tickets(self):
         """§10.3: position is 1 plus the tickets ahead not passed over, malformed ones excluded."""
         self.config("[resources]\ncpu = 1\n")
@@ -714,6 +745,36 @@ class AdmissionTests(Base):
         clock.t += 1.0
         self.assertEqual(h.step(), ("waiting", 2))
         h.withdraw()
+
+    def test_minimum_pass_shortfall_leaves_without_publishing(self):
+        """§12.1 step 6.1, I7: a probe locks a token momentarily after the head counted it free and
+        before the minimum pass. The pass ends below the minimum, so the head closes what it took,
+        publishes nothing and waits; once the probe is gone it is admitted with its minimum."""
+        self.config("[resources]\ncpu = 2\n")
+        h = self.client(observer_clock=FakeClock()).enqueue("h", 0, {"cpu": 2})
+        token0 = os.path.join(self.S, "res", "cpu", "0")
+        os.makedirs(os.path.dirname(token0), 0o700)
+        real_reelect = h._reelect
+        probe: list[int] = []
+
+        def reelect_then_probe():
+            ok = real_reelect()  # counted free and re-elected: the plan is made ...
+            fd = os.open(token0, os.O_RDONLY | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # ... and a probe takes token 0
+            probe.append(fd)
+            return ok
+
+        h._reelect = reelect_then_probe
+        self.assertEqual(h.step(), ("waiting", 1))
+        self.assertEqual(self.ls("holds"), [])
+        self.assertIs(cc._probe_path(os.path.join(self.S, "res", "cpu", "1")), True,
+                      "token 1, taken in the minimum pass, was not closed")
+        h._reelect = real_reelect
+        os.close(probe.pop())  # the probe is over
+        kind, g = h.step()
+        self.assertEqual(kind, "admitted")
+        self.assertEqual(g.tokens, {"cpu": [0, 1]})
+        g.close(remove_hold=False)
 
     def test_admission_with_clamp(self):
         """§21.3: cpu size 10 with 14 token files, cpu=16..16 and pg-local=1."""
@@ -910,6 +971,25 @@ class ReconciliationTests(Base):
         self.assertEqual(g["gen"], 72)
         self.assertLess(abs(g["reconciled_ns"] - time.time_ns()), 5 * 10**9)
 
+    def test_reconciliation_runs_at_most_once_per_30_s(self):
+        """§10.4: an entry reconciles only when `reconciled_ns` is more than 30 s old, or more than
+        30 s in the future. Within 30 s either way a dead ticket stays and only the enqueue bumps."""
+        c = self.client()
+        for offset_s, due in ((-25, False), (25, False), (-35, True), (35, True)):
+            dead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+            self.write(dead, body())
+            r = time.time_ns() + offset_s * 10**9
+            self.write(os.path.join(self.S, "gen"), json.dumps({"gen": 5, "reconciled_ns": r}).encode())
+            t = c.enqueue("x", 0, {"cpu": 1})
+            g = self.gen()
+            self.assertEqual(not os.path.exists(dead), due, f"reconciled_ns {offset_s:+d} s")
+            if due:
+                self.assertEqual(g["gen"], 7, f"reconciled_ns {offset_s:+d} s")
+                self.assertLess(abs(g["reconciled_ns"] - time.time_ns()), 5 * 10**9)
+            else:
+                self.assertEqual(g, {"gen": 6, "reconciled_ns": r}, f"reconciled_ns {offset_s:+d} s")
+            t.withdraw()
+
     def test_a_stray_never_protects_a_cancel_request(self):
         """§10.3/§10.4 step 2: a queue/ entry ignored as a stray is no entry; its cancel request goes."""
         self.write(os.path.join(self.S, "gen"), b'{"gen": 3, "reconciled_ns": 0}')  # reconciliation due
@@ -1023,6 +1103,19 @@ class LauncherTests(Base):
         p = self.cli("run", "--", "true", env=env, stderr=subprocess.DEVNULL)
         self.assertEqual(p.wait(timeout=20), 75)
         self.assertEqual(self.ls("queue"), [])
+
+
+    def test_pass_through_needs_a_fresh_probe_to_fail(self):
+        """§18 rule 2: a descriptor on a token file validates only while a fresh probe of the
+        token's path fails. An unlocked one (the parent run is gone) is an invalid context."""
+        token = os.path.join(self.S, "res", "cpu", "0")
+        self.write(token, b"")
+        fd = os.open(token, os.O_RDONLY)
+        self.fds.append(fd)
+        with self.assertRaisesRegex(cc.InvalidContext, "is not held"):
+            cc.validate_passthrough(self.client(), str(fd))
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # now the grant holds it
+        self.assertEqual(cc.validate_passthrough(self.client(), str(fd)), {"cpu": 1})
 
 
 class AlignmentTests(Base):
