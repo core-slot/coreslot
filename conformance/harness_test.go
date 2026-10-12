@@ -27,6 +27,7 @@ import (
 
 	"github.com/Nezhinskiy/coreslot"
 	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
@@ -233,6 +234,21 @@ func (e Env) Offset(d time.Duration) Env {
 	return e
 }
 
+// StepClock sets the wall-clock offset of every process sharing e's hook directory to d, at
+// once and while they run: it replaces the hook directory's realtime-offset file through a
+// rename, which each process re-reads on its next wall-clock read. The file overrides the offset
+// a process was started with (Offset).
+func (e Env) StepClock(d time.Duration) {
+	e.t.Helper()
+	path := filepath.Join(e.HookDir, testhooks.OffsetFile)
+	if err := os.WriteFile(path+".partial", []byte(d.String()+"\n"), 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.Rename(path+".partial", path); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 func (e Env) environ() []string {
 	var env []string
 	for _, kv := range os.Environ() {
@@ -272,18 +288,35 @@ func (e Env) StartCommand(argv ...string) *Proc {
 	e.t.Helper()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = e.environ()
-	p := &Proc{t: e.t, env: e, done: make(chan struct{}), name: filepath.Base(argv[0])}
+	return e.startCmd(cmd, nil)
+}
+
+// startCmd starts cmd as StartCommand describes: its own process group, its output to files,
+// reaped and killed with its group by the harness. With a non-nil tty the process instead
+// leads a new session whose controlling terminal, stdin, stdout and stderr are tty, and its
+// output is read from the terminal.
+func (e Env) startCmd(cmd *exec.Cmd, tty *os.File) *Proc {
+	e.t.Helper()
+	p := &Proc{t: e.t, env: e, done: make(chan struct{}), name: filepath.Base(cmd.Path)}
 	var err error
 	if p.stdout, err = os.CreateTemp(e.OutDir, "stdout-"); err != nil {
 		e.t.Fatal(err)
 	}
 	if p.stderr, err = os.CreateTemp(e.OutDir, "stderr-"); err != nil {
+		p.stdout.Close()
 		e.t.Fatal(err)
 	}
-	cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if tty != nil {
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	} else {
+		cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if err := cmd.Start(); err != nil {
-		e.t.Fatalf("start %v: %v", argv, err)
+		p.stdout.Close()
+		p.stderr.Close()
+		e.t.Fatalf("start %v: %v", cmd.Args, err)
 	}
 	p.pid = cmd.Process.Pid
 	register(p)

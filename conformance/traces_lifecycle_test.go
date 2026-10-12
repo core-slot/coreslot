@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot"
+	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
@@ -78,7 +79,28 @@ func cpuLocked(e Env) int {
 	return n
 }
 
-// indices are the cpu token indices the live hold labelled label lists.
+// stableLocked is the locked cpu count once it persists across two samples 100 ms apart. A
+// client's probe locks a free token for an instant (PROTOCOL.md section 6), so one sample
+// taken while a waiter counts tokens may read high; a real lock persists (spec section 10.2).
+func stableLocked(e Env) int {
+	e.t.Helper()
+	prev := cpuLocked(e)
+	for range 20 {
+		time.Sleep(100 * time.Millisecond)
+		n := cpuLocked(e)
+		if n == prev {
+			return n
+		}
+		prev = n
+	}
+	e.t.Fatalf("the locked cpu count did not hold still across two samples 100 ms apart in 2 s (last %d)", prev)
+	return 0
+}
+
+// indices are the cpu token indices the live hold labelled label lists. Call it only while no
+// admission is in flight: a snapshot probes the tokens, and a probe can make an admitting
+// client skip a token (PROTOCOL.md section 6), so exact indices are read once the commands
+// started (WaitStarted reads marker files and probes nothing).
 func indices(e Env, label string) []int {
 	e.t.Helper()
 	h, ok := e.Hold(label)
@@ -96,13 +118,17 @@ func span(from, to int) []int {
 	return s
 }
 
-// lockedSampler records the largest number of locked cpu tokens seen, and the size then, until
-// stop is called; it reads through the library's Snapshot every 20 ms.
+// lockedSampler samples the locked cpu count and the size every 100 ms through the library's
+// Snapshot, until stop is called. A count above the size is a violation only when it persists
+// across two consecutive samples (spec section 10.2): a client's probe locks a free token for
+// an instant. It records how many samples it took and every Snapshot error.
 type lockedSampler struct {
-	stop      func()
-	mu        sync.Mutex
-	maxLocked int
-	overSize  []string
+	stop       func()
+	mu         sync.Mutex
+	samples    int
+	maxLocked  int // the largest count that persisted across two samples
+	violations []string
+	errs       []error
 }
 
 func sampleLocked(e Env) *lockedSampler {
@@ -111,22 +137,32 @@ func sampleLocked(e Env) *lockedSampler {
 	c := e.Client()
 	go func() {
 		defer close(finished)
+		prevOver, prev := false, -1
 		for {
 			select {
 			case <-quit:
 				return
-			case <-time.After(pollStep):
+			case <-time.After(100 * time.Millisecond):
 			}
 			rep, err := c.Snapshot()
+			s.mu.Lock()
 			if err != nil {
+				s.errs = append(s.errs, err)
+				prevOver, prev = false, -1
+				s.mu.Unlock()
 				continue
 			}
 			r := rep.Resources["cpu"]
-			s.mu.Lock()
-			s.maxLocked = max(s.maxLocked, r.Locked)
-			if r.Locked > r.Size {
-				s.overSize = append(s.overSize, fmt.Sprintf("%s: %d locked, size %d", time.Now().Format(time.StampMicro), r.Locked, r.Size))
+			s.samples++
+			if prev >= 0 {
+				s.maxLocked = max(s.maxLocked, min(prev, r.Locked))
 			}
+			over := r.Locked > r.Size
+			if over && prevOver {
+				s.violations = append(s.violations, fmt.Sprintf("%s: %d locked, size %d (and above it 100 ms earlier)",
+					time.Now().Format(time.StampMicro), r.Locked, r.Size))
+			}
+			prevOver, prev = over, r.Locked
 			s.mu.Unlock()
 		}
 	}()
@@ -135,27 +171,49 @@ func sampleLocked(e Env) *lockedSampler {
 	return s
 }
 
+// check stops the sampler and fails the test on a persisting violation, on any Snapshot error,
+// or when it took fewer than minSamples samples.
+func (s *lockedSampler) check(t *testing.T, minSamples int) {
+	t.Helper()
+	s.stop()
+	if len(s.errs) > 0 {
+		t.Errorf("the sampler's Snapshot failed %d times; first: %v", len(s.errs), s.errs[0])
+	}
+	if s.samples < minSamples {
+		t.Errorf("the sampler took %d samples, want at least %d", s.samples, minSamples)
+	}
+	if len(s.violations) > 0 {
+		t.Errorf("locked tokens exceeded the size: %v", s.violations)
+	}
+	t.Logf("the sampler took %d samples; the most locked tokens that persisted: %d", s.samples, s.maxLocked)
+}
+
 // ---------------------------------------------------------------- wall-clock steps
 
-// A wall-clock step between the head's last refresh and its observer changes nothing:
-// freshness is observed on the observer's monotonic clock, never computed from an mtime. B's
-// clock is an hour behind (backward) or ahead (forward) of the head A's, so every mtime A
-// writes, its last one included, reads to B as an hour off. While A refreshes, B waits behind
-// it for longer than the stall threshold; once A stops, B is admitted within the bound.
+// A wall-clock step of every process changes nothing, because freshness is observed on each
+// observer's monotonic clock and never computed from an mtime. The head A needs both tokens
+// and B, behind it, needs the free one. Twice, A is caught right after a refresh, every
+// process's wall clock steps by an hour (backward, or forward), and A stays live but silent for
+// 3 s. B must not pass it. The first time A then goes on refreshing on the stepped clock, and B
+// still waits behind it for longer than the stall threshold. The second time A is stopped: B
+// passes it within the bound, but never before 10 s after A's last refresh. A forward step is
+// also a refresh gap above 10 s on every waiter's wall clock: each bumps gen once (the resume
+// bump's wall-clock arm); a backward step bumps nothing.
 //
-// Mutation: judge STALLED by comparing the mtime with the observer's wall clock (wall clock
-// minus mtime above 10 s) instead of observing changes. Forward reddens at once (B passes the
-// live head); backward reddens at the bound (A's mtime lies in B's future, so A never stalls).
+// Mutation: judge STALLED by the observer's wall clock (wall clock minus mtime above 10 s) in
+// elect instead of observing changes. Forward reddens at once (B passes the live, silent A);
+// backward reddens at the bound (A's mtime lies in B's future, so A never stalls).
+// Mutation: drop the wall-clock arm of the resume bump (refresh checks the monotonic gap only):
+// the forward step bumps nothing.
 //
 // -short runs the backward step only.
 func TestClockStepThenHeadStops(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		step time.Duration
-		prio string // keeps B behind A: its arrival is stepped too
 	}{
-		{"backward", -time.Hour, "-61"},
-		{"forward", time.Hour, "0"},
+		{"backward", -time.Hour},
+		{"forward", time.Hour},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if testing.Short() && c.step > 0 {
@@ -164,46 +222,83 @@ func TestClockStepThenHeadStops(t *testing.T) {
 			e := State(t)
 			e.WriteConfig(cpuConfig(2))
 			x := e.Run("X", "--need", "cpu=1")
-			e.WaitHold("X", startWait)
+			e.WaitStarted("X")
 
-			// A needs both tokens and waits at the head; B needs the free one but waits behind it.
-			a, autoA := startStoppableHead(e, "A", "--need", "cpu=2")
+			a := e.Pausing("admit.before-enter", "ticket.refreshed").Run("A", "--need", "cpu=2")
+			defer a.AutoRelease("admit.before-enter")()
+			autoRefresh := a.AutoRelease("ticket.refreshed")
+			defer func() { autoRefresh() }()
 			tkA := e.WaitTicket("A")
-			b := e.Offset(c.step).Run("B", "--priority", c.prio, "--need", "cpu=1")
+			b := e.Run("B", "--need", "cpu=1")
 			e.Eventually(startWait, "B is queued", func() bool {
 				tk, queued := e.Ticket("B")
 				_, held := e.Hold("B")
 				return queued && !tk.Dead || held
 			})
-			noHold(t, e, "B", "B passed the live head A at once: its stepped clock made A's refreshes look stale")
-			if rep := e.Status(); len(rep.Tickets) != 2 || rep.Tickets[0].Label != "A" {
-				t.Fatalf("queue %v: A is not ahead of B", rep.Tickets)
+			noHold(t, e, "B", "B passed the live head A")
+			waitRefreshed(e, "A", tkA.MtimeNS)
+
+			// catchRefreshed holds A just after a refresh; it returns that refresh's mtime.
+			catchRefreshed := func() int64 {
+				t.Helper()
+				autoRefresh()
+				a.WaitReached("ticket.refreshed")
+				tk, ok := e.Ticket("A")
+				if !ok || tk.Dead {
+					t.Fatal("A, held after a refresh, has no live ticket")
+				}
+				return tk.MtimeNS
 			}
 
-			// A refreshes; B, an hour off, must keep seeing it live past the stall threshold.
-			waitRefreshed(e, "A", tkA.MtimeNS)
+			// Phase 1: a step while A is live.
+			catchRefreshed()
+			e.SectionLeft()
+			gen := e.Status().Gen
+			e.StepClock(c.step)
+			time.Sleep(3 * time.Second)
+			noHold(t, e, "B", "B passed the live head A right after the clock stepped")
+			a.Release("ticket.refreshed")
+			autoRefresh = a.AutoRelease("ticket.refreshed")
 			time.Sleep(12 * time.Second)
-			noHold(t, e, "B", "B passed the live head A: its stepped clock made A's refreshes look stale")
+			noHold(t, e, "B", "B passed the live head A, refreshing on the stepped clock")
+			want := gen
+			if c.step > 0 {
+				want = gen + 2 // A and B
+			}
+			e.SectionLeft()
+			if got := e.Status().Gen; got != want {
+				t.Errorf("gen went from %d to %d across the step, want %d", gen, got, want)
+			}
 
-			stoppedAt, _ := stopOutsideSection(e, a, autoA)
+			// Phase 2: A refreshes, the clock steps again, and A stops.
+			mtime := catchRefreshed()
+			lastRefresh := time.Unix(0, mtime-int64(c.step)) // A's clock was stepped once
+			e.StepClock(2 * c.step)
+			time.Sleep(3 * time.Second)
+			noHold(t, e, "B", "B passed the live head A right after the clock stepped")
+			a.Stop()
+			stoppedAt := time.Now()
+			a.Release("ticket.refreshed")
+			autoRefresh = a.AutoRelease("ticket.refreshed")
+			sectionFreeOf(t, e, a.PID())
 			hb := e.WaitHold("B", stalledHeadBound+startWait)
-			at := admittedAt(hb).Add(-c.step) // B's start_ns is on its own, stepped, clock
-			if at.Before(stoppedAt) {
-				t.Fatalf("B was admitted at %v, before A stopped at %v", at, stoppedAt)
+			at := admittedAt(hb).Add(-2 * c.step) // B's start_ns is on its stepped clock
+			if earliest := lastRefresh.Add(state.StallAfter); at.Before(earliest) {
+				t.Fatalf("B was admitted at %v, %v after A's last refresh: before A could have been STALLED for 10 s",
+					at, at.Sub(lastRefresh))
 			}
 			if d := at.Sub(stoppedAt); d > stalledHeadBound {
 				t.Fatalf("B was admitted %v after the head stopped, bound %v (load: %s)", d, stalledHeadBound, uptime())
 			} else {
-				t.Logf("B was admitted %v after the head stopped", d)
+				t.Logf("B was admitted %v after the head stopped, %v after its last refresh", d, at.Sub(lastRefresh))
 			}
 
 			a.Cont()
-			defer a.AutoRelease("admit.before-enter")()
 			e.ReleaseChild("B")
 			b.ExitCode(0)
 			e.ReleaseChild("X")
 			x.ExitCode(0)
-			e.WaitHold("A", startWait)
+			e.WaitStarted("A")
 			e.ReleaseChild("A")
 			a.ExitCode(0)
 		})
@@ -216,8 +311,8 @@ func TestClockStepThenHeadStops(t *testing.T) {
 // waiter then refreshes and the queue resumes in order: once every waiter's refresh is
 // observable, a token that the head cannot use but a later waiter could is not given to the
 // later waiter (no backfill behind a live head), and the head is admitted first when its
-// minimum frees up. Then, with capacity freed while every waiter is stopped, someone is
-// admitted within the I5 bound of the resumption.
+// minimum frees up. Then, with capacity freed while every waiter is stopped, both remaining
+// waiters (each fits) are admitted within the I5 bound of the resumption.
 //
 // Which waiter is admitted first in the second phase is not asserted: right after a common
 // resumption each waiter has observed no change of the others for 15 s, so until it observes
@@ -225,6 +320,9 @@ func TestClockStepThenHeadStops(t *testing.T) {
 //
 // Mutation: a STALLED verdict sticks (Observer.Observe ignores a changed mtime once the ticket
 // is stalled): after the resumption W2 keeps passing over the live head W1 and takes the token.
+// Mutation: a resumed waiter waits too long before its next election (refresh, on a refresh gap
+// above 10 s, also defers the next election by 25 s): in the second phase the waiter that was
+// not caught mid-attempt is admitted only after the bound.
 //
 // -short skips the second phase.
 func TestSuspendAllWaiters(t *testing.T) {
@@ -330,9 +428,16 @@ func TestSuspendAllWaiters(t *testing.T) {
 	} else {
 		t.Logf("%s was admitted %v after the resumption", first.Label, d)
 	}
-	h3 := e.WaitHold("W3", startWait)
-	h4 := e.WaitHold("W4", startWait)
-	t.Logf("W3 admitted at %v, W4 at %v", admittedAt(h3), admittedAt(h4))
+	// Both fit: whichever goes first, the other is then the head with its minimum free (I5), so
+	// both are admitted within the bound of the resumption.
+	h3 := e.WaitHold("W3", stalledHeadBound+startWait)
+	h4 := e.WaitHold("W4", stalledHeadBound+startWait)
+	for _, h := range []coreslot.HolderInfo{h3, h4} {
+		if d := admittedAt(h).Sub(resumedAt); d > stalledHeadBound {
+			t.Errorf("%s was admitted %v after the resumption, bound %v (load: %s)", h.Label, d, stalledHeadBound, uptime())
+		}
+	}
+	t.Logf("W3 admitted %v after the resumption, W4 %v", admittedAt(h3).Sub(resumedAt), admittedAt(h4).Sub(resumedAt))
 	e.ReleaseChild("W3")
 	e.ReleaseChild("W4")
 	w3.ExitCode(0)
@@ -353,11 +458,11 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(cpuConfig(14))
 	l := e.Run("L", "--need", "cpu=10")
-	e.WaitHold("L", startWait)
+	e.WaitStarted("L")
 	h1 := e.Run("H1", "--need", "cpu=2")
-	e.WaitHold("H1", startWait)
+	e.WaitStarted("H1")
 	h2 := e.Run("H2", "--need", "cpu=2")
-	e.WaitHold("H2", startWait)
+	e.WaitStarted("H2")
 	if got := indices(e, "H1"); !slices.Equal(got, []int{10, 11}) {
 		t.Fatalf("H1 holds %v, want 10-11", got)
 	}
@@ -368,8 +473,8 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	l.ExitCode(0)
 
 	writeConfigAtomic(e, cpuConfig(12)+"# shrunk\n")
-	if r := e.Status().Resources["cpu"]; r.Size != 12 || cpuLocked(e) != 4 {
-		t.Fatalf("after the shrink: size %d, %d tokens locked; want 12 and 4", r.Size, cpuLocked(e))
+	if r := e.Status().Resources["cpu"]; r.Size != 12 || stableLocked(e) != 4 {
+		t.Fatalf("after the shrink: size %d, %d tokens locked; want 12 and 4", r.Size, stableLocked(e))
 	}
 
 	// Adoption during the reduced period takes from what is free.
@@ -385,11 +490,11 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 
 	// A queued request may take at most what is left below the size: 5, from 3-7.
 	r1 := e.Run("R1", "--need", "cpu=1..12")
-	e.WaitHold("R1", startWait)
+	e.WaitStarted("R1")
 	if got := indices(e, "R1"); !slices.Equal(got, span(3, 7)) {
 		t.Errorf("R1 holds %v, want 3-7", got)
 	}
-	if got := cpuLocked(e); got != 12 {
+	if got := stableLocked(e); got != 12 {
 		t.Errorf("%d tokens locked under a size of 12", got)
 	}
 
@@ -406,14 +511,14 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	e.WaitTicket("R2")
 	time.Sleep(observeWait)
 	noHold(t, e, "R2", "R2 was admitted with 12 tokens locked under a size of 12")
-	if got := cpuLocked(e); got != 12 {
+	if got := stableLocked(e); got != 12 {
 		t.Errorf("%d tokens locked under a size of 12", got)
 	}
 
 	// Partial release: the holds above the new size go, and R2 fits at index 8.
 	e.ReleaseChild("H2")
 	h2.ExitCode(0)
-	e.WaitHold("R2", startWait)
+	e.WaitStarted("R2")
 	if got := indices(e, "R2"); !slices.Equal(got, []int{8}) {
 		t.Errorf("R2 holds %v, want 8", got)
 	}
@@ -421,11 +526,11 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	// Growth back to 14: 9, 12 and 13 are free (10 and 11 are H1's).
 	writeConfigAtomic(e, cpuConfig(14))
 	r3 := e.Run("R3", "--need", "cpu=3")
-	e.WaitHold("R3", startWait)
+	e.WaitStarted("R3")
 	if got := indices(e, "R3"); !slices.Equal(got, []int{9, 12, 13}) {
 		t.Errorf("R3 holds %v, want 9, 12 and 13", got)
 	}
-	if got := cpuLocked(e); got != 14 {
+	if got := stableLocked(e); got != 14 {
 		t.Errorf("%d tokens locked, want 14", got)
 	}
 	for _, p := range []*Proc{h1, r1, r2, r3} {
@@ -478,6 +583,9 @@ func layout(t *testing.T, e Env) map[string]string {
 //
 // Mutation: a token-only run appends its run-log line (runChild given the store's log for a
 // token-only grant): lines for W1, W2 and N appear.
+// Mutation: token-only admission is not bounded by the size (tokenOnlyAttempt skips the free
+// check and takes at indices up to the size plus 4): W1 takes indices 3 and 4 while H and W2
+// hold the other three, and the sampler sees 5 locked under a size of 3.
 func TestUnknownFormatTokenOnly(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(cpuConfig(3))
@@ -514,7 +622,7 @@ func TestUnknownFormatTokenOnly(t *testing.T) {
 	if _, ok := r2.FDs[3]; ok {
 		t.Errorf("the token-only command has fd 3 open: %v", r2.FDs)
 	}
-	if got := cpuLocked(e); got != 3 {
+	if got := stableLocked(e); got != 3 {
 		t.Errorf("%d tokens locked, want 3 (H's two and W2's one)", got)
 	}
 	e.Eventually(startWait, "W1's ticket is dead", func() bool {
@@ -550,10 +658,7 @@ func TestUnknownFormatTokenOnly(t *testing.T) {
 	e.ReleaseChild("N")
 	w1.ExitCode(0)
 	n.ExitCode(0)
-	sampler.stop()
-	if sampler.maxLocked > 3 || len(sampler.overSize) > 0 {
-		t.Errorf("locked tokens exceeded the size: max %d, %v", sampler.maxLocked, sampler.overSize)
-	}
+	sampler.check(t, 20)
 	for _, p := range []*Proc{w1, w2, n} {
 		if !strings.Contains(p.Stderr(), "token-only") {
 			t.Errorf("%s printed no token-only diagnostic: %q", p.name, p.Stderr())
@@ -647,13 +752,17 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		e := State(t)
 		e.WriteConfig(cpuConfig(1))
 		v := e.Pausing("publish.after-create").Run("V", "--need", "cpu=1")
-		v.CatchPublication("publish.after-create", store.HoldsDir) // inside the admitting section
+		// A hold is published only inside the section that admits it, so V is paused in it.
+		v.CatchPublication("publish.after-create", store.HoldsDir)
 		tk, ok := e.Ticket("V")
 		if !ok {
 			t.Fatal("V has no ticket inside its admitting section")
 		}
+		// The canceller starts while V holds its admitting section, so whenever it enters the
+		// section V's admission is complete and the ticket gone. (Whether it has tried to enter
+		// before V leaves depends on scheduling; the outcome does not.)
 		c := e.Start("cancel", tk.ID)
-		time.Sleep(time.Second) // the canceller waits for the section V holds
+		time.Sleep(time.Second)
 		if c.Exited() {
 			t.Fatalf("cancel exited %d while V held the section; stderr:\n%s", c.Wait(), c.Stderr())
 		}

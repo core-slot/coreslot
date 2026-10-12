@@ -38,46 +38,6 @@ func (e Env) startWith(files []*os.File, extraEnv []string, argv ...string) *Pro
 	return e.startCmd(cmd, nil)
 }
 
-// startCmd starts cmd as StartCommand does (its own process group, output to files, reaped
-// and killed with its group by the harness). With a non-nil tty the process instead leads a
-// new session whose controlling terminal, stdin, stdout and stderr are tty.
-func (e Env) startCmd(cmd *exec.Cmd, tty *os.File) *Proc {
-	e.t.Helper()
-	p := &Proc{t: e.t, env: e, done: make(chan struct{}), name: filepath.Base(cmd.Path)}
-	var err error
-	if p.stdout, err = os.CreateTemp(e.OutDir, "stdout-"); err != nil {
-		e.t.Fatal(err)
-	}
-	if p.stderr, err = os.CreateTemp(e.OutDir, "stderr-"); err != nil {
-		e.t.Fatal(err)
-	}
-	if tty != nil {
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
-	} else {
-		cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-	if err := cmd.Start(); err != nil {
-		e.t.Fatalf("start %v: %v", cmd.Args, err)
-	}
-	p.pid = cmd.Process.Pid
-	register(p)
-	go p.reap(cmd.Process)
-	e.t.Cleanup(func() {
-		if p.kill(-p.pid, syscall.SIGKILL) {
-			select {
-			case <-p.done:
-			case <-time.After(exitWait):
-				e.t.Errorf("pid %d did not exit after SIGKILL", p.pid)
-			}
-		}
-		p.stdout.Close()
-		p.stderr.Close()
-	})
-	return p
-}
-
 // ptyProc is a process whose controlling terminal is a PTY; the test reads all its output.
 type ptyProc struct {
 	*Proc
@@ -94,11 +54,18 @@ func (e Env) startPTY(extraEnv []string, argv ...string) *ptyProc {
 	if err != nil {
 		e.t.Fatal(err)
 	}
+	started := false
+	defer func() {
+		tty.Close() // the session holds its own descriptors once started
+		if !started {
+			master.Close()
+		}
+	}()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(e.environ(), extraEnv...)
 	p := &ptyProc{master: master}
 	p.Proc = e.startCmd(cmd, tty)
-	tty.Close()
+	started = true
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -169,8 +136,8 @@ func procState(pid int) string {
 	return ""
 }
 
-// killGroupOf kills pid's process group, after continuing it, when the test ends: a job a shell
-// started, or a command in its own group, never outlives a failing test.
+// killGroupOf kills pid's process group, after continuing it, when the test ends if pid is still
+// in it: a job a shell started, or a command in its own group, never outlives a failing test.
 func killGroupOf(t *testing.T, pid int) {
 	t.Helper()
 	pg, err := unix.Getpgid(pid)
@@ -178,6 +145,10 @@ func killGroupOf(t *testing.T, pid int) {
 		return
 	}
 	t.Cleanup(func() {
+		// Only while pid is still a member of pg: once it is gone the group id may be reused.
+		if cur, err := unix.Getpgid(pid); err != nil || cur != pg {
+			return
+		}
 		_ = unix.Kill(-pg, unix.SIGCONT)
 		_ = unix.Kill(-pg, unix.SIGKILL)
 	})
@@ -361,7 +332,7 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 		t.Errorf("Free(cpu) = %d, %v; want 7", free, err)
 	}
 	seven := e.Run("seven", "--no-wait", "--need", "cpu=7")
-	e.WaitHold("seven", startWait)
+	e.WaitStarted("seven") // no snapshot probes the tokens while seven takes them
 	if got := indices(e, "seven"); !slices.Equal(got, span(1, 7)) {
 		t.Errorf("seven holds %v, want 1-7", got)
 	}
@@ -490,7 +461,9 @@ func TestRepeatedClose(t *testing.T) {
 			t.Errorf("second grant, Close %d: %v", i+1, err)
 		}
 	}
-	e.Reconcile() // the first grant's hold was dead while its command ran; a later Close removes none
+	// The first grant's hold stayed live while its command held fd 3 (Close found it locked and
+	// left it); once the command exited it was dead, and a repeated Close removes nothing.
+	e.Reconcile()
 	settled(t, e)
 }
 
