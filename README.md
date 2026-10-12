@@ -103,7 +103,8 @@ descriptors keeps them.
 A run exits with its command's own status. Otherwise 75 means refused (`--no-wait`,
 `--on-timeout fail`, cancellation, `--strict`; `--refusal-code N` changes it), 64 a usage error,
 130 `Ctrl-C` while waiting, 126 / 127 a command that is not executable / not found, and 70 an
-internal error. `status` exits 3 while runs fail open, and `doctor` 1 when it finds a problem.
+internal error. `status` exits 3 while runs fail open, and `doctor` 1 when it finds a problem;
+`cancel`, `doctor --clear` and `doctor --reset` exit 75 when they refuse.
 [`PROTOCOL.md` section 19](PROTOCOL.md#19-exit-status) has the full table.
 
 When the state directory cannot be used (a network filesystem, wrong permissions, an invalid
