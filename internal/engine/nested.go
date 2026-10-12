@@ -34,10 +34,10 @@ func ParseTokenFDs(s string) ([]int, error) {
 	total := 0
 	for _, item := range strings.Split(s, ",") {
 		lo, hi, isRange := strings.Cut(item, "-")
-		a, ok := fdNumber(lo)
+		a, ok := ParseFD(lo)
 		b := a
 		if ok && isRange {
-			b, ok = fdNumber(hi)
+			b, ok = ParseFD(hi)
 		}
 		if !ok || b < a {
 			return nil, fmt.Errorf("%s=%q is malformed", EnvTokenFDs, s)
@@ -61,7 +61,10 @@ func ParseTokenFDs(s string) ([]int, error) {
 	return fds, nil
 }
 
-func fdNumber(s string) (int, bool) {
+// ParseFD parses one descriptor number of the descriptor contract (PROTOCOL.md section 17): one
+// to nine decimal digits and nothing else, no sign and no space. It serves CORESLOT_HELD_FD and
+// each fd of CORESLOT_TOKEN_FDS.
+func ParseFD(s string) (int, bool) {
 	if s == "" || len(s) > 9 || strings.Trim(s, "0123456789") != "" {
 		return 0, false
 	}

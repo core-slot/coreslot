@@ -71,10 +71,12 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if ok, err := t.reelect(); err != nil || !ok {
 		return nil, err
 	}
+	point("admit.planned")
 	ts, ok, err := takeTwoPasses(sec, eff, take, sizes)
 	if err != nil || !ok {
 		return nil, err
 	}
+	point("tokens.taken")
 	if err := ts.CheckIdentity(); err != nil {
 		ts.Close()
 		return nil, err

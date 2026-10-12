@@ -373,3 +373,34 @@ func TestElectionPassesDeadAndStalledUpToTheFirstLive(t *testing.T) {
 		t.Fatalf("only dead and STALLED tickets ahead: want admitted, got %#v", r)
 	}
 }
+
+// Four stopped tickets at the front, then the live waiters W1 and W2: W2's front window watches
+// all four from the start, so once W1 is admitted past them W2 is admitted in the same second,
+// not a stall later (PROTOCOL.md I5: up to 4 consecutive stopped tickets).
+func TestFrontWindowCoversFourStoppedTickets(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	for i := 0; i < 4; i++ {
+		startHelper(t, "enqueue", dir, "cpu=1") // stopped
+	}
+	w1 := enqueue(t, e, need("cpu=1"))
+	w2 := enqueue(t, e, need("cpu=1"))
+	at := map[string]int{}
+	for sec := 0; sec <= 25 && len(at) < 2; sec++ {
+		for name, w := range map[string]*Ticket{"W1": w1, "W2": w2} {
+			if _, done := at[name]; !done && isAdmitted(step(t, w)) {
+				at[name] = sec
+			}
+		}
+		if _, ok := at["W1"]; ok { // W2 steps after W1 in the same second
+			if _, done := at["W2"]; !done && isAdmitted(step(t, w2)) {
+				at["W2"] = sec
+			}
+		}
+		clk.advance(time.Second)
+	}
+	if at["W1"] != 10 || at["W2"] != at["W1"] {
+		t.Fatalf("admitted at %v (waiter -> second), want W1 at 10 s and W2 in the same second", at)
+	}
+}
