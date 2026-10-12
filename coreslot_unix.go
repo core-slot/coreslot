@@ -15,9 +15,6 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
-// pollEvery is how often Wait polls; well inside the 2 s refresh period.
-const pollEvery = 250 * time.Millisecond
-
 // Client is an opened budget. It is safe for concurrent use.
 type Client struct {
 	e *engine.Engine
@@ -139,36 +136,50 @@ func (w *Waiter) Poll() (g *Grant, ok bool, err error) {
 // to every other client) and returns ctx.Err(); a Cancel makes it return ErrCancelled. Any other
 // error (a *StateError, for example) also withdraws the ticket before it is returned.
 func (w *Waiter) Wait(ctx context.Context) (*Grant, error) {
+	r, err := stepWhenDue(ctx, w.t)
+	if a, ok := r.(engine.Admitted); ok && err == nil {
+		return w.wrapGrant(a.Grant), nil
+	}
+	if err == nil || ctx.Err() != nil {
+		return w.abandon(ctx)
+	}
+	if errors.Is(err, engine.ErrCancelled) {
+		return nil, err
+	}
+	// Any other error ends the wait: withdraw, so that the ticket is dead at once instead of
+	// blocking the queue unrefreshed until it stalls. An admission that won the race is
+	// returned instead.
+	if errors.Is(w.t.Withdraw(), engine.ErrAlreadyAdmitted) {
+		if g, ok, perr := w.Poll(); ok && perr == nil {
+			return g, nil
+		}
+	}
+	return nil, wrap(err)
+}
+
+// stepper is the part of a ticket Wait drives.
+type stepper interface {
+	Step(ctx context.Context) (engine.StepResult, error)
+	Due() time.Duration
+}
+
+// stepWhenDue Steps s at once and then whenever s next has work due (a waiter that is not the
+// head: once per second; the head: on its admission backoff), until a Step admits or fails. It
+// returns that Step's outcome, or nil and nil when ctx ended between Steps.
+func stepWhenDue(ctx context.Context, s stepper) (engine.StepResult, error) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return w.abandon(ctx)
+			return nil, nil
 		case <-timer.C:
 		}
-		r, err := w.t.Step(ctx)
-		if a, ok := r.(engine.Admitted); ok && err == nil {
-			return w.wrapGrant(a.Grant), nil
+		r, err := s.Step(ctx)
+		if _, ok := r.(engine.Admitted); ok || err != nil {
+			return r, err
 		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return w.abandon(ctx)
-			}
-			if errors.Is(err, engine.ErrCancelled) {
-				return nil, err
-			}
-			// Any other error ends the wait: withdraw, so that the ticket is dead at once
-			// instead of blocking the queue unrefreshed until it stalls. An admission that won
-			// the race is returned instead.
-			if errors.Is(w.t.Withdraw(), engine.ErrAlreadyAdmitted) {
-				if g, ok, perr := w.Poll(); ok && perr == nil {
-					return g, nil
-				}
-			}
-			return nil, wrap(err)
-		}
-		timer.Reset(pollEvery)
+		timer.Reset(s.Due())
 	}
 }
 

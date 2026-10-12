@@ -571,3 +571,76 @@ func TestCloseReleasesHoldBeforeTokens(t *testing.T) {
 		t.Error("not admitted once the grant is fully closed")
 	}
 }
+
+// A ticket published ahead of the head between its election and its admitting section wins:
+// the section repeats the election over a fresh listing, where a ticket the head has never
+// watched counts as live (PROTOCOL.md section 12.1 step 5).
+func TestReelectionInsideTheSection(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	h := enqueue(t, e, need("cpu=1"))
+	var p *Ticket
+	defaultPoint := point
+	point = func(name string) {
+		if name == "admit.before-enter" && p == nil {
+			req := needLabel("cpu=1", "p")
+			req.Priority = 10 // ahead of h
+			p = enqueue(t, newEngine(t, dir, clk), req)
+		}
+	}
+	t.Cleanup(func() { point = defaultPoint })
+	if r := step(t, h); isAdmitted(r) {
+		t.Fatal("h was admitted past p, published after h's election but before its section")
+	}
+	if p == nil || !p.key.Less(h.key) {
+		t.Fatal("p was not published ahead of h")
+	}
+	clk.advance(time.Second)
+	if pos := position(t, step(t, h)); pos != 2 {
+		t.Fatalf("h at position %d behind the live p, want 2", pos)
+	}
+	if r := step(t, p); !isAdmitted(r) {
+		t.Fatalf("p: %#v, want admitted", r)
+	}
+}
+
+// A live ticket published ahead without a gen bump (a non-conforming writer) is first seen by
+// the re-election, which keeps the head out; the next election rescans, so the head watches it
+// and, as it is never refreshed, passes it over once it is STALLED instead of being kept out
+// for ever.
+func TestReelectionWatchesATicketPublishedWithoutBump(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	holder := startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 0))
+	h := enqueue(t, e, need("cpu=1"))
+	if pos := position(t, step(t, h)); pos != 1 { // elected, gen known; the token is held
+		t.Fatalf("h at position %d, want the head", pos)
+	}
+	// x: a well-formed, live ticket ahead of h, published without bumping gen.
+	body, err := wire.Encode(wire.Ticket{Label: "x", Need: need("cpu=1").Need, CreatedNS: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := filepath.Join(dir, store.QueueDir, wire.TicketName(wire.ID{OrderKey: 1, PID: 1, Seq: 1}, "x"))
+	if err := os.WriteFile(x, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startHelper(t, "lock", dir, x)
+	holder.stop() // the token is free
+	clk.advance(time.Second)
+	if r := step(t, h); isAdmitted(r) {
+		t.Fatal("h was admitted past x, live and first seen in the section")
+	}
+	admittedAt := -1
+	for sec := 1; sec <= 15 && admittedAt < 0; sec++ {
+		clk.advance(time.Second)
+		if isAdmitted(step(t, h)) {
+			admittedAt = sec
+		}
+	}
+	if admittedAt < 10 || admittedAt > 11 {
+		t.Fatalf("h admitted %d s after the re-election first saw x, want 10 or 11 (x watched until STALLED)", admittedAt)
+	}
+}
