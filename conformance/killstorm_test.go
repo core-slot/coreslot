@@ -1047,7 +1047,7 @@ func TestKillStorm(t *testing.T) {
 			floorFailed = true
 			t.Errorf("the storm never exercised %q", what)
 			if what == "cancel took effect" {
-				t.Logf("canceller: %d requests published, %d looks found no queued client",
+				t.Logf("canceller: %d cancel requests published by any client, %d canceller looks found no queued client",
 					st.counts["cancel published"], st.counts["canceller found no queued client"])
 			}
 		}
