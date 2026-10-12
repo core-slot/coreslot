@@ -13,4 +13,4 @@
 - [ ] `go test -race ./...` and `go test -tags coreslot_testhooks -race -short ./conformance/` pass
 - [ ] `GOOS=windows go build ./...` passes
 - [ ] On-disk format or `PROTOCOL.md` changes are called out above, and the Python client still passes
-- [ ] No new dependency (or the owner approved it)
+- [ ] No new dependency (or a maintainer approved it)

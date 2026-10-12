@@ -19,19 +19,21 @@ import (
 //
 // The guarantee covers a closed set of forms, and only those:
 //
-//   - a Markdown file name or path (any token ending in ".md", in prose, code, links or
-//     backticks) that does not resolve to a file of the repository, plus the directory and name
+//   - a Markdown file name or path (any token ending in ".md" or ".markdown", in any case, in
+//     prose, code, links or backticks) that does not resolve to a file of the repository, plus the directory and name
 //     prefixes of documents kept elsewhere, which name no file and so carry no ".md" to resolve;
 //   - a section marker (a § sign or "section N") within three words of the word spec,
-//     specification or design, in either order;
+//     specification or design, in either order, the word and the marker separated by spaces,
+//     brackets, a colon, comma, slash or dash;
 //   - closed id families: D followed by one to twelve, "R-" followed by a letter and a number, an
-//     O followed by a number next to "decision" or "owner", and the phrases "owner" followed by
+//     O followed by a number next to "decision(s)", "owner('s)" or "decided", and the phrases "owner" followed by
 //     decision, ruling, rule or decided, and "controller" or "maintainer" followed by ruling.
 //
 // Free prose about a specification or design ("as the design intends", "the spec says") is out
 // of scope: its input space is open, so no pattern list can both catch it and leave ordinary prose
 // alone, and review covers it. So are bare dotted numbers ("spec 1.0" is a version) and a bare O
-// with a number (a compiler flag). This file is scanned like every other: the patterns' sources do
+// with a number (a compiler flag). Matching is per line: a citation split across a line break is
+// out of scope too. This file is scanned like every other: the patterns' sources do
 // not match themselves, and the test cases are spelled with a "|" removed before matching.
 var forbiddenForms = []struct {
 	why string
@@ -40,11 +42,11 @@ var forbiddenForms = []struct {
 	{"a directory of documents kept elsewhere", regexp.MustCompile(`docs/(specs|plans)/`)},
 	{"the name of a document kept elsewhere", regexp.MustCompile(`coreslot-(design)\b`)},
 	{"a section of a specification or design", regexp.MustCompile(
-		`(?i)\b(spec|specification|design)s?('s|’s)?,?(\s+[^\s§]+){0,3}?[\s(]*(§|\bsections?\s+\d)`)},
+		`(?i)\b(spec|specification|design)s?('s|’s)?[,:]?(\s+[^\s§]+){0,3}?[\s(:,/—–-]*(§|\bsections?\s+\d)`)},
 	{"a section of a specification or design", regexp.MustCompile(
 		`(?i)(§\s*\d|\bsections?\s+\d)[\d.]*(\s+\S+){0,3}?\s+(spec|specification|design)s?\b`)},
 	{"a review item id", regexp.MustCompile(`\bR-[A-Z]\d+\b`)},
-	{"a decision id", regexp.MustCompile(`\b(?i:decision|owner)\s+O[1-9]\d?\b|\bO[1-9]\d?\s+(?i:decision|ruling)\b`)},
+	{"a decision id", regexp.MustCompile(`\b(?i:decisions?|owner('s|’s)?)\s+O[1-9]\d?\b|\bO[1-9]\d?\s+(?i:decision|ruling|decided)\b`)},
 	{"process language", regexp.MustCompile(
 		`(?i)\b(owner('s|’s)?\s+(decision|ruling|rule)s?|owner\s+decided|(controller|maintainer)\s+ruling)\b`)},
 }
@@ -64,8 +66,8 @@ var (
 var citationAllowlist = map[string][]string{}
 
 var (
-	// mdName is a Markdown file name or path; urlRE is a URL, whose .md names another site's file.
-	mdName = regexp.MustCompile(`[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.md\b`)
+	// mdName is a Markdown file name or path; urlRE is a URL, whose Markdown name is another site's.
+	mdName = regexp.MustCompile(`(?i)[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.(md|markdown)\b`)
 	urlRE  = regexp.MustCompile(`[a-z]+://\S+`)
 )
 
@@ -131,6 +133,15 @@ func TestCitationMatcher(t *testing.T) {
 		"desi|gn section 10.4",
 		"the specifi|cation, section 9",
 		"desi|gn§5",
+		"the desi|gn: section 4",
+		"the spe|c: §4",
+		"the spe|c/§5",
+		"the spe|c—§5",
+		"decisions O|3",
+		"owner's O|3",
+		"O|3 decided",
+		"see DESI|GN.M|D",
+		"see notes/desi|gn.markdow|n",
 		"spe|c(§5.7)",
 		"the spe|c, §5.7",
 		"the desi|gn's section 10.4",
@@ -225,6 +236,9 @@ func walkFiles(t *testing.T, keep func(string) bool) []string {
 		if err != nil {
 			return err
 		}
+		if p == ".git" && !d.IsDir() {
+			return nil // a worktree's .git file, which points at the repository
+		}
 		if d.IsDir() {
 			if p == ".git" || p == "dist" {
 				return filepath.SkipDir
@@ -242,8 +256,12 @@ func walkFiles(t *testing.T, keep func(string) bool) []string {
 	return files
 }
 
-// checkListing fails when a .go or .md file under the module root that git does not ignore is
-// missing from listed, so a listing that lost files cannot make the scan pass.
+// binaryText reports whether b is binary rather than text: a NUL byte in its first 8000 bytes, as
+// in the pprof profiles. Binary files are not scanned.
+func binaryText(b []byte) bool { return bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 }
+
+// checkListing fails when a text file under the module root that git does not ignore is missing
+// from listed, so a listing that lost files cannot make the scan pass.
 func checkListing(t *testing.T, listed []string) {
 	t.Helper()
 	have := map[string]bool{}
@@ -251,8 +269,15 @@ func checkListing(t *testing.T, listed []string) {
 		have[f] = true
 	}
 	var unlisted []string
-	for _, f := range walkFiles(t, func(p string) bool { return strings.HasSuffix(p, ".go") || strings.HasSuffix(p, ".md") }) {
-		if !have[f] {
+	for _, f := range walkFiles(t, nil) {
+		if have[f] {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !binaryText(b) {
 			unlisted = append(unlisted, f)
 		}
 	}
@@ -287,18 +312,20 @@ func TestNoExternalCitations(t *testing.T) {
 		files[f] = true
 		bases[path.Base(f)] = true
 	}
-	checked, binary, missing := 0, 0, 0
+	checked, binary := 0, 0
+	var missing []string
 	for _, f := range listed {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			if os.IsNotExist(err) {
-				missing++ // deleted in the working tree, still in the index
+				// Deleted in the working tree but still in the index: it would go unscanned.
+				missing = append(missing, f)
 				continue
 			}
 			t.Fatal(err)
 		}
-		if bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 {
-			binary++ // the pprof profiles
+		if binaryText(b) {
+			binary++
 			continue
 		}
 		for i, line := range strings.Split(string(b), "\n") {
@@ -308,10 +335,14 @@ func TestNoExternalCitations(t *testing.T) {
 		}
 		checked++
 	}
-	if want := len(listed) - binary - missing; checked != want {
-		t.Fatalf("checked %d text files, want %d (%d listed, %d binary, %d missing)",
-			checked, want, len(listed), binary, missing)
+	for _, f := range missing {
+		t.Errorf("%s is listed but missing from the working tree, so it is not scanned", f)
 	}
+	if want := len(listed) - binary - len(missing); checked != want {
+		t.Fatalf("checked %d text files, want %d (%d listed, %d binary, %d missing)",
+			checked, want, len(listed), binary, len(missing))
+	}
+	t.Logf("checked %d text files (%d listed, %d binary, git listing %v)", checked, len(listed), binary, git)
 	if checked < minTextFiles {
 		t.Fatalf("checked %d text files, fewer than %d: the listing lost the tree", checked, minTextFiles)
 	}
