@@ -28,7 +28,7 @@ func fakeGetent(t *testing.T, body string) string {
 // The NSS fallback takes the home directory from exactly one well-formed passwd line for the uid
 // asked, and refuses everything else. Mutation: taking field 5 (the GECOS field) instead of
 // field 6 reddens "success"; dropping the uid comparison reddens "wrong uid"; dropping the
-// one-line check reddens "two lines"; running without a deadline reddens "timeout".
+// one-line check reddens "two lines". The deadline has a test of its own, TestGetentHomeTimeout.
 func TestGetentHome(t *testing.T) {
 	const uid = 4242
 	missing := filepath.Join(t.TempDir(), "getent")

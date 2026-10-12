@@ -163,14 +163,12 @@ func probeFallback(t *testing.T) uint64 {
 	if hard < 1024 {
 		t.Skipf("the hard limit %d leaves no room above 256 + 256", hard)
 	}
-	if fileCap() == 0 && hard >= 1<<62 {
-		t.Skip("Linux refuses a soft limit just below an unlimited hard limit, so the runtime raises nothing")
-	}
 	raised := hard - 1
 	if c := fileCap(); c > 0 {
 		raised = min(raised, c)
 	}
-	want := min(raised+extraNofile, hard)
+	// min(raised + 256, hard), without overflowing when the hard limit is unlimited.
+	want := min(raised, hard-extraNofile) + extraNofile
 	if c := fileCap(); c > 0 {
 		want = min(want, c)
 	}
