@@ -75,6 +75,7 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, 
 		return nil, nil, err
 	}
 	ts := mergeTokens(first, second)
+	point("tokens.taken")
 	if err := ts.CheckIdentity(); err != nil {
 		ts.Close()
 		return nil, nil, err

@@ -70,7 +70,7 @@ func isContext(key string) bool {
 func dropInherited(env map[string]string) []string {
 	var fds []int
 	if v := env[engine.EnvHeldFD]; v != "" {
-		if fd, err := strconv.Atoi(v); err == nil {
+		if fd, ok := engine.ParseFD(v); ok {
 			fds = append(fds, fd)
 		}
 	}
