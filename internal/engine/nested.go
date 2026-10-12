@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -192,12 +191,4 @@ func probeLocked(path string) (bool, error) {
 		return true, nil
 	}
 	return false, err
-}
-
-// FormatUnderstood reads $S/FORMAT outside the section, as a pass-through does before its
-// run-log line (PROTOCOL.md section 20): true only when FORMAT exists, is well-formed and names
-// a format this client implements. It never writes a missing FORMAT.
-func FormatUnderstood(dir string) bool {
-	n, present, err := store.ReadFormatAt(dir)
-	return err == nil && present && slices.Contains(formats(), n)
 }

@@ -777,7 +777,8 @@ func TestWaitingLineEvery30s(t *testing.T) {
 var _ io.Writer = (*bytes.Buffer)(nil)
 
 // A --timeout that expires while another process holds the section ends the run in time, with
-// no ticket left behind.
+// no ticket left behind, and says why: the enqueue deadline's refusal prints the same notice as
+// a timeout that expires in the queue.
 func TestTimeoutWhileSectionHeld(t *testing.T) {
 	dir := stateDir(t, "")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
@@ -796,8 +797,8 @@ func TestTimeoutWhileSectionHeld(t *testing.T) {
 	if took := time.Since(start); took > 3*time.Second {
 		t.Errorf("refused after %v, want soon after the 1 s timeout (load: %s)", took, uptime())
 	}
-	if r.code != 75 {
-		t.Errorf("exit %d (stderr %q), want 75", r.code, r.stderr)
+	if r.code != 75 || !strings.Contains(r.stderr, "not admitted within 1s (--timeout); refusing") {
+		t.Errorf("exit %d (stderr %q), want 75 and the timeout refusal notice", r.code, r.stderr)
 	}
 	if q := entries(t, dir, "queue"); len(q) != 0 {
 		t.Errorf("tickets left behind: %q", q)
@@ -881,6 +882,84 @@ func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, "log", "runs.1.jsonl")); err == nil {
 			t.Errorf("FORMAT %q: the run log was rotated", format)
 		}
+	}
+}
+
+// FORMAT is re-read immediately before the run-log line is appended (PROTOCOL.md section 20):
+// a run whose command replaces FORMAT with one this client does not implement, or with a
+// malformed one, writes no line and says so on stderr, though FORMAT was understood when it was
+// admitted.
+func TestRunLogSkippedWhenFormatChangesDuringRun(t *testing.T) {
+	for name, c := range map[string]struct{ format, notice string }{
+		"unknown":   {"coreslot-protocol 2\n", "FORMAT is missing or names a format this client does not implement"},
+		"malformed": {"coreslot-protocol x\n", "malformed FORMAT"},
+	} {
+		format := c.format
+		t.Run(name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			env := append(baseEnv(dir), "S="+dir, "F="+format)
+			r := cli(t, env, "run", "--label", "changed", "--", "sh", "-c", `printf %s "$F" > "$S/FORMAT"`)
+			if r.code != 0 {
+				t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+			}
+			if lines := runLog(t, dir); len(lines) != 0 {
+				t.Errorf("a run-log line was written after FORMAT became %q: %v", format, lines)
+			}
+			if !strings.Contains(r.stderr, "the run log was not written: ") || !strings.Contains(r.stderr, c.notice) {
+				t.Errorf("stderr %q: want a notice that the run log was not written naming %q", r.stderr, c.notice)
+			}
+		})
+	}
+}
+
+// At the re-read just before the append, a FORMAT that is missing or cannot be read stops the
+// append too (PROTOCOL.md section 20): appendRunLog returns the error and writes nothing.
+func TestRunLogSkippedWhenFormatMissingOrUnreadable(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, dir string){
+		"missing": func(t *testing.T, dir string) {},
+		"a directory": func(t *testing.T, dir string) {
+			if err := os.Mkdir(filepath.Join(dir, "FORMAT"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			st, err := store.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setup(t, dir)
+			notice := func(f string, args ...any) { t.Errorf("notice: "+f, args...) }
+			err = appendRunLog(st, store.RunRecord{Label: "x"}, notice)
+			if err == nil || (name == "missing") != errors.Is(err, errFormatChanged) {
+				t.Errorf("appendRunLog: %v; want errFormatChanged for a missing FORMAT, the read error otherwise", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "log", "runs.jsonl")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the run log exists (%v)", err)
+			}
+		})
+	}
+}
+
+// A command that removes FORMAT does not cost its run the line: the run's release section,
+// which comes before the append, writes the missing FORMAT again (format 1), and the re-read then
+// understands it.
+func TestRunLogAfterTheCommandRemovesFormat(t *testing.T) {
+	dir := stateDir(t, "")
+	env := append(baseEnv(dir), "S="+dir)
+	r := cli(t, env, "run", "--label", "removed", "--", "sh", "-c", `rm "$S/FORMAT"`)
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 1\n" {
+		t.Errorf("FORMAT after the run: %q, %v; want format 1 written again", b, err)
+	}
+	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["label"] != "removed" {
+		t.Errorf("run log %v: want the run's line", lines)
+	}
+	if strings.Contains(r.stderr, "the run log was not written") {
+		t.Errorf("stderr %q: want no notice", r.stderr)
 	}
 }
 

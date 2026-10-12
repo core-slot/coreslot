@@ -15,7 +15,9 @@ on macOS and Linux.
 ## 1. Conventions
 
 The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, MAY and
-OPTIONAL are to be interpreted as described in RFC 2119.
+OPTIONAL are to be interpreted as described in RFC 2119. Passages marked **Implementation note**
+are informative: they say what a particular implementation or test does, and impose no
+requirement on a client.
 
 - **Client:** any process that reads or changes the state directory: the `coreslot` CLI, a program
   embedding a library, an independent implementation.
@@ -546,7 +548,12 @@ first saw the ticket). A ticket is **STALLED**, for that observer, when no chang
 for 10 s. A refresh that is observed makes the ticket WAITING again. Only time the observer spent
 watching the ticket counts: when an election leaves a ticket unexamined (section 10.3), the time
 until the observer next examines it is not counted towards the 10 s, though a value that changed
-meanwhile still counts as a change.
+meanwhile still counts as a change. Nor is the observer's own absence counted: when more than 3 s
+pass between its last examination and its next election (it was stopped, suspended or starved),
+that interval is not counted towards the 10 s for any ticket it observes. The 3 s are 1.5 times
+the longest a conforming waiter leaves between elections, the head's 2 s maximum backoff (section
+10.3; the Go library likewise asks for a Poll at least every 2 s), so that a waiter electing at that
+interval, with scheduling jitter on top, still watches.
 
 When a waiter's own refresh gap exceeded 10 s on either its monotonic or its wall clock (it was
 suspended), it bumps `gen` in the section after refreshing. The bump never delays a refresh: a
@@ -582,8 +589,9 @@ whose own ticket's name disappears while it still holds the ticket's descriptor 
 the budget stays safe: it is counted from token locks, not tickets, so I3 and I7 still hold. The
 waiter does lose its place, though. No other client sees the ticket any more, so waiters behind it
 may be elected and admitted first, `status` does not show it, and it cannot be cancelled by label;
-a cancel request naming its exact id still reaches it, but only from a canceller that publishes
-without checking `queue/` first (section 13.1). When it later removes its ticket
+a cancel request naming its exact id may still reach it, but only from a canceller that publishes
+without checking `queue/` first (section 13.1), and only until a reconciliation removes the request,
+whose ticket name is gone (section 10.4, step 2). When it later removes its ticket
 (admission, cancellation, withdrawal), `ENOENT` counts as success.
 
 A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2
@@ -957,9 +965,11 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 
 Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` with a single
 `O_APPEND` write (outside the section), into a directory whose `FORMAT` it has read and understood
-during the run (section 14). A pass-through (section 18), valid or unbudgeted, appends too: it
-reads `FORMAT` outside the section (it never writes a missing one, and then writes no line), marks
-its line `"nested": true`, and never rotates the log. A token-only run writes no log. A line that
+during the run (section 14). `FORMAT` may change while the command runs, so the writer reads it
+again, outside the section, immediately before the write, and writes no line when it is absent,
+malformed or names a format the writer does not implement. A pass-through (section 18), valid or
+unbudgeted, appends too: that read is its only one (it never writes a missing `FORMAT`, and then
+writes no line), it marks its line `"nested": true`, and it never rotates the log. A token-only run writes no log. A line that
 would exceed 4 KiB MAY be fitted by shortening an informative string; a writer that cannot fit it
 writes no line. The object carries:
 
@@ -1265,6 +1275,7 @@ A pass-through does not enter the section or lock anything. After `make` exits i
 | STALLED | 10 s without an observed mtime change, on the observer's monotonic clock |
 | `gen` read and election | every 1 s |
 | front window | the first 4 tickets of the queue, watched in every election |
+| observer pass gap | more than 3 s between an observer's last examination and its next election is not watched |
 | head admission retry | backoff from 0.25 s up to 2 s |
 | section entry retry | `LOCK_NB`, backoff from 10 ms up to 250 ms |
 | reconciliation | at most once per 30 s machine-wide; temporary files older than 30 s |

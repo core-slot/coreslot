@@ -3,8 +3,8 @@
 All notable changes to this project are recorded here. The format follows
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as the
-[compatibility policy](docs/compatibility.md) applies it: the module stays at `v0` until on-disk
-format 1 is frozen.
+[compatibility policy](docs/compatibility.md) applies it: the module stays at `v0` until the
+on-disk format is frozen, and `v1.0.0` freezes the format then current.
 
 ## [Unreleased]
 
@@ -25,7 +25,7 @@ format 1 is frozen.
   `Snapshot`, `Grant`), with its exported API pinned in `api/v0.txt`.
 - Conformance suite with deterministic queue traces, and an independent Python client written from
   `PROTOCOL.md` alone.
-- Release archives with checksums and build-provenance attestations, and a Homebrew formula
-  template that builds from source.
+- Release archives with checksums, build-provenance attestations for releases of the public
+  repository, and a Homebrew formula template that builds from source.
 
 [Unreleased]: https://github.com/Nezhinskiy/coreslot/commits/HEAD

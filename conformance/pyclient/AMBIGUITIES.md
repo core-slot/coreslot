@@ -269,7 +269,7 @@ Should the run strip the inherited `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`,
 grant descriptors close-on-exec, so they do not reach its command at stray numbers?
 *Choice:* both. Otherwise a grandchild would pass through to a grant that is not its parent's.
 
-**Status — resolved: PROTOCOL §17. Every run that is not a pass-through strips the inherited grant variables and closes exactly the descriptors they name. Client changed: this now applies to every non-pass-through run, not only `--independent`.**
+**Status — resolved: PROTOCOL §17. Every run that is not a pass-through strips the inherited grant variables and closes the descriptors they name that are regular files at fd 3 or above; a named standard stream or non-regular descriptor is left open. Client changed: this now applies to every non-pass-through run, not only `--independent`.**
 
 **E5. §18: limits and failures of validation.**
 There is no bound on the number of descriptors a `CORESLOT_TOKEN_FDS` range may list (`4-99999999`).

@@ -4,9 +4,9 @@ One core budget for every test suite, build and agent on your machine: parallel 
 turn instead of melting the laptop.
 
 **Status:** release candidate; product acceptance
-([verification](PROTOCOL.md#10-verification)) pending. The on-disk
-format 1 is not frozen until the conformance suite passes on macOS and Linux, and the module stays
-at `v0` until it is ([compatibility policy](docs/compatibility.md)).
+([verification](PROTOCOL.md#10-verification)) pending. The module
+stays at `v0` until the on-disk format is frozen, once the conformance suite passes on macOS and
+Linux; `v1.0.0` freezes the format then current ([compatibility policy](docs/compatibility.md)).
 
 Several coding-agent sessions, each in its own worktree, each running its own `pytest -n <cores>`
 or `make -j<cores>`, oversubscribe a machine several times over: timing-sensitive tests fail
@@ -33,7 +33,8 @@ brew install Nezhinskiy/tap/coreslot
 
 Or download a release archive (macOS and Linux, amd64 and arm64) from the
 [releases page](https://github.com/Nezhinskiy/coreslot/releases). Each release carries
-`checksums.txt` and a build-provenance attestation for every archive:
+`checksums.txt`; releases of the public repository also carry a build-provenance attestation for
+every archive:
 
 ```sh
 shasum -a 256 -c checksums.txt --ignore-missing

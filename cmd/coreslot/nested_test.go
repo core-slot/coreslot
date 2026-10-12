@@ -258,6 +258,9 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 		if names := entries(t, dir, ""); len(names) != 0 {
 			t.Errorf("an unbudgeted pass-through wrote %q", names)
 		}
+		if strings.Contains(r.stderr, "the run log was not written") {
+			t.Errorf("stderr %q: a missing FORMAT is reported, want silence", r.stderr)
+		}
 	})
 
 	t.Run("format understood", func(t *testing.T) {
@@ -281,6 +284,53 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 			t.Errorf("nested run-log lines %v", lines)
 		}
 	})
+
+	// A pass-through re-reads FORMAT immediately before its line too (PROTOCOL.md section 20):
+	// under a FORMAT it does not understand it writes none, and says so. Only a FORMAT that does
+	// not exist is silent.
+	for name, replace := range map[string]func(t *testing.T, path string){
+		"format 2": func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"FORMAT a directory": func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"FORMAT a symlink": func(t *testing.T, path string) {
+			target := filepath.Join(t.TempDir(), "FORMAT")
+			if err := os.Rename(path, target); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+				t.Fatalf("setup run: %d %q", r.code, r.stderr)
+			}
+			replace(t, filepath.Join(dir, "FORMAT"))
+			env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason")
+			r := cli(t, env, "run", "--need", "cpu=3", "--label", "nested-format", "--", "true")
+			if r.code != 0 {
+				t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+			}
+			if lines := nestedLines(t, dir); len(lines) != 0 {
+				t.Errorf("a pass-through wrote a run-log line: %v", lines)
+			}
+			if !strings.Contains(r.stderr, "the run log was not written") {
+				t.Errorf("stderr %q: want a notice that the run log was not written", r.stderr)
+			}
+		})
+	}
 }
 
 func TestValidateInherited(t *testing.T) {

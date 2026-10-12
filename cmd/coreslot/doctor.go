@@ -89,10 +89,16 @@ func doctorAct(doReset bool, io IO) int {
 			return err
 		})
 		var live *engine.LiveError
+		var incomplete *store.ResetIncompleteError
 		switch {
 		case errors.As(err, &live):
 			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset refused: %s\n", text(strings.Join(live.Reasons, "; ")))
 			return exitRefusal
+		case errors.As(err, &incomplete):
+			// The removal is best effort: everything else was removed. Say how much, and what not.
+			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: removed %d entries; %d could not be removed: %s\n",
+				removed, incomplete.Left, text(incomplete.Err.Error()))
+			return exitInternal
 		case err != nil:
 			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: %s\n", text(err.Error()))
 			return exitInternal
