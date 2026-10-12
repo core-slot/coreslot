@@ -448,9 +448,19 @@ func (st *storm) holding(c *stormClient) bool {
 	return ok
 }
 
-// firstWaveArrived reports whether every first-wave client has been seen queued or with its
-// command running (a token-only run, which has no ticket, once its command began); seen keeps
-// the clients already seen, so a cancelled or killed one stays arrived.
+// firstFourHold reports whether first-wave clients 1 to 4 hold.
+func (st *storm) firstFourHold() bool {
+	for id := 1; id <= 4; id++ {
+		if !st.holding(st.plan(id)) {
+			return false
+		}
+	}
+	return true
+}
+
+// firstWaveArrived reports whether the first wave has arrived: clients 1 to 4 hold (the
+// state the first shrink waits for), and clients 5 to firstWave have been seen queued, holding
+// or begun. seen keeps the clients already seen, so a cancelled or killed one stays arrived.
 func (st *storm) firstWaveArrived(seen map[int]bool) bool {
 	all := true
 	for id := 1; id <= firstWave; id++ {
@@ -460,7 +470,7 @@ func (st *storm) firstWaveArrived(seen map[int]bool) bool {
 		c := st.plan(id)
 		_, queued := st.ticketID(c)
 		_, begun := os.Stat(begunPath(st.e.MarkDir, c.name))
-		if queued || st.holding(c) || begun == nil {
+		if st.holding(c) || (id > 4 && (queued || begun == nil)) {
 			seen[id] = true
 			continue
 		}
@@ -803,29 +813,46 @@ func TestKillStorm(t *testing.T) {
 	st.started = time.Now()
 	var wg sync.WaitGroup
 	wg.Go(func() { st.sizer(ctx) })
-	// The first wave arrives before every other client: the slots after it start once each
-	// first-wave client is queued or holding (or after 5 s), so that a slow start under load
-	// cannot put a first-wave waiter behind a random request that blocks the queue.
-	arrived := make(chan struct{})
+	// The first wave arrives before every other client, in two steps, so that a slow start
+	// under load cannot put a first-wave client behind another request: clients 5 to firstWave
+	// start once clients 1 to 4 hold (the state the first shrink waits for), and every later
+	// client once clients 5 to firstWave are queued, holding or begun too. Each step gives up
+	// waiting after 5 s.
+	fourHold, arrived := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(arrived)
 		seen := map[int]bool{}
-		for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && ctx.Err() == nil; time.Sleep(pollStep) {
-			if st.firstWaveArrived(seen) {
+		four := false
+		for end := time.Now().Add(5 * time.Second); ctx.Err() == nil; time.Sleep(pollStep) {
+			if !four && (st.firstFourHold() || time.Now().After(end)) {
+				four = true
+				close(fourHold)
+				end = time.Now().Add(5 * time.Second)
+			}
+			if four && (st.firstWaveArrived(seen) || time.Now().After(end)) {
 				return
 			}
+		}
+		if !four {
+			close(fourHold)
 		}
 	}()
 	for slot := range clients {
 		wg.Go(func() {
 			delay := time.Duration(slot) * 40 * time.Millisecond // stagger the first arrivals
-			if slot >= firstWave {
+			var gate chan struct{}
+			switch {
+			case slot >= firstWave:
+				gate, delay = arrived, time.Duration(slot-firstWave)*40*time.Millisecond
+			case slot >= 4:
+				gate, delay = fourHold, time.Duration(slot-4)*40*time.Millisecond
+			}
+			if gate != nil {
 				select {
 				case <-ctx.Done():
 					return
-				case <-arrived:
+				case <-gate:
 				}
-				delay = time.Duration(slot-firstWave) * 40 * time.Millisecond
 			}
 			select {
 			case <-ctx.Done():
@@ -913,18 +940,28 @@ func TestKillStorm(t *testing.T) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	latency, reportedRuns := st.tok.reportLatency()
+	reportAge := st.s.TokenOnlyReportAge()
 	summary := fmt.Sprintf("kill-storm seed %d: %d clients in %v, %d samples (%d missed), %d violations; "+
-		"token-only start-to-report latency max %v over %d runs (bound %v); events %v; endings %v; load after: %s",
+		"token-only marker-to-report latency max %v over %d runs, unlisted-to-report age max %v (bound %v); "+
+		"events %v; endings %v; load after: %s",
 		seed, len(st.results), time.Since(st.started).Round(time.Second), samples, missed, len(violations),
-		latency, reportedRuns, st.s.TokenOnlyBound, st.counts, codes, uptime())
+		latency, reportedRuns, reportAge, st.s.TokenOnlyBound, st.counts, codes, uptime())
 	t.Log(summary)
 	fmt.Fprintln(os.Stderr, summary)
 
-	// The sampler's token-only bound must cover every start-to-report latency the run saw;
-	// one that does not is its own failure here, not a false I2 above.
+	// The sampler's token-only bound must cover each run's lock-to-report latency: from the
+	// token lock inside the admission section, through the section's end, the CLI's start of
+	// its command and the shell, to the report. The sampler measures it from the first sample
+	// that saw the token unlisted to the one that saw it reported (a confirmed I2 for such a
+	// token is relabelled as this failure above); the marker-to-report part is measured from
+	// the files. Either reaching the bound fails here by name, not as an I2 of the client.
+	if reportAge >= st.s.TokenOnlyBound {
+		t.Errorf("%s: a token-only token was unlisted for %v before its report (bound %v)",
+			tokenOnlyLate, reportAge, st.s.TokenOnlyBound)
+	}
 	if latency >= st.s.TokenOnlyBound {
-		t.Errorf("a token-only command took %v from its start marker to its report: the sampler's bound %v is too tight",
-			latency, st.s.TokenOnlyBound)
+		t.Errorf("%s: a token-only command took %v from its start marker to its report (bound %v)",
+			tokenOnlyLate, latency, st.s.TokenOnlyBound)
 	}
 
 	// The run exercised what it is for: floors on what happened, scaled for -short. The first
