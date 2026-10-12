@@ -510,6 +510,100 @@ class LivenessTests(Base):
         g.close(remove_hold=False)
 
 
+    def test_front_window_watches_a_stopped_head_behind_a_live_ticket(self):
+        """§10.3: a stopped head hidden behind a live ticket is still watched (the front window),
+        so it is passed over at once when the live ticket goes, not 10 s later."""
+        self.config("[resources]\ncpu = 1\n")
+        q = os.path.join(self.S, "queue")
+        head = os.path.join(q, "00000000000000000001-0000000001-000001")
+        live = os.path.join(q, "00000000000000000002-0000000001-000001")
+        self.write(head, body(), lock=True)  # stopped: never refreshed
+        live_fd = os.open(live, os.O_RDWR | os.O_CREAT, 0o600)
+        os.write(live_fd, body())
+        fcntl.flock(live_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        clock = FakeClock()
+        b = self.client(observer_clock=clock).enqueue("b", 0, {"cpu": 1})
+        for s in range(11):  # one election a second; the live ticket refreshed each time
+            os.utime(live, ns=(s + 1, s + 1))
+            self.assertEqual(b.step(), ("waiting", 3), f"at {s} s")
+            clock.t += 1.0
+        os.close(live_fd)  # the live ticket goes (dead): the head has been watched for 11 s
+        kind, g = b.step()
+        self.assertEqual(kind, "admitted")
+        g.close(remove_hold=False)
+
+    def test_position_counts_only_well_formed_tickets(self):
+        """§10.3: position is 1 plus the tickets ahead not passed over, malformed ones excluded."""
+        self.config("[resources]\ncpu = 1\n")
+        q = os.path.join(self.S, "queue")
+        for i in range(1, 5):  # the front window: four well-formed live tickets
+            self.write(os.path.join(q, f"0000000000000000000{i}-0000000001-000001"), body(), lock=True)
+        # Beyond the window and the scan: a malformed one, then the nearest, which ends the scan.
+        self.write(os.path.join(q, "00000000000000000005-0000000001-000001"), b"not json", lock=True)
+        self.write(os.path.join(q, "00000000000000000006-0000000001-000001"), body(), lock=True)
+        b = self.client(observer_clock=FakeClock()).enqueue("b", 0, {"cpu": 1})
+        self.assertEqual(b.step(), ("waiting", 6))  # five well-formed live tickets ahead
+        b.withdraw()
+
+    def test_gone_window_ticket_is_forgotten(self):
+        """A front-window ticket found gone is dropped from the observer's records."""
+        self.config("[resources]\ncpu = 1\n")
+        q = os.path.join(self.S, "queue")
+        front = os.path.join(q, "00000000000000000001-0000000001-000001")
+        self.write(front, body(), lock=True)
+        self.write(os.path.join(q, "00000000000000000002-0000000001-000001"), body(), lock=True)
+        b = self.client(observer_clock=FakeClock()).enqueue("b", 0, {"cpu": 1})
+        b.step()
+        self.assertIn(os.path.basename(front), b._obs)  # watched through the front window
+        os.unlink(front)
+        b.step()
+        self.assertNotIn(os.path.basename(front), b._obs)
+        b.withdraw()
+
+    def test_reelection_watches_a_ticket_published_without_bump(self):
+        """§12.1 step 5: a live ticket first seen in the section makes the next election rescan
+        (it was published without a gen bump), so it is watched and passed over once STALLED."""
+        self.config("[resources]\ncpu = 1\n")
+        clock = FakeClock()
+        h = self.client(observer_clock=clock).enqueue("h", 0, {"cpu": 1})
+        real_elect = h._elect
+        ahead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+
+        def elect_then_publish():
+            position = real_elect()
+            if not os.path.exists(ahead):
+                self.write(ahead, body(), lock=True)  # no gen bump
+            return position
+
+        h._elect = elect_then_publish
+        self.assertEqual(h.step(), ("waiting", 1))  # kept out by the re-election
+        h._elect = real_elect
+        for s in range(1, 13):
+            clock.t += 1.0
+            kind, value = h.step()
+            if kind == "admitted":
+                self.assertGreaterEqual(s, 10)
+                value.close(remove_hold=False)
+                return
+        self.fail("never admitted: the ticket published without a bump kept the head out")
+
+    def test_unwatched_interval_does_not_count(self):
+        """§10.2: only watched time counts towards a stall; a changed value still restarts it."""
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+        for s in range(5):  # watched 0..4 s
+            t._pass += 1
+            self.assertFalse(t._observe("x", 7, 1000.0 + s))
+        t._pass += 20  # 20 elections that stopped before x
+        self.assertFalse(t._observe("x", 7, 1030.0))  # 4 s watched, the 26 s gap does not count
+        for s in range(31, 36):
+            t._pass += 1
+            self.assertFalse(t._observe("x", 7, 1000.0 + s), f"at {s} s")
+        t._pass += 1
+        self.assertTrue(t._observe("x", 7, 1036.0))  # 10 s watched
+        t._pass += 5
+        self.assertFalse(t._observe("x", 8, 1100.0))  # changed during the gap: restarted
+        t.withdraw()
+
     def test_dead_ticket_ahead_is_skipped_at_once(self):
         """§21.5: a withdrawn (unlocked) ticket ahead is skipped without waiting 10 s."""
         self.config("[resources]\ncpu = 1\n")
@@ -522,6 +616,30 @@ class LivenessTests(Base):
 
 
 class AdmissionTests(Base):
+    def test_reelection_inside_the_section(self):
+        """§12.1 step 5: a ticket published ahead after the head's election, before its admitting
+        section, is first seen there and counts as live: the head does not take the free token."""
+        self.config("[resources]\ncpu = 1\n")
+        clock = FakeClock()
+        h = self.client(observer_clock=clock).enqueue("h", 0, {"cpu": 1})
+        ahead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+        real_elect = h._elect
+
+        def elect_then_publish():
+            position = real_elect()  # h wins the election ...
+            self.write(ahead, body(), lock=True)  # ... and a live ticket appears ahead of it
+            g = self.gen()  # published as a writer does: with a gen bump
+            self.write(os.path.join(self.S, "gen"), json.dumps(dict(g, gen=g["gen"] + 1)).encode())
+            return position
+
+        h._elect = elect_then_publish
+        self.assertEqual(h.step(), ("waiting", 1))
+        self.assertEqual(self.ls("holds"), [])
+        h._elect = real_elect
+        clock.t += 1.0
+        self.assertEqual(h.step(), ("waiting", 2))
+        h.withdraw()
+
     def test_admission_with_clamp(self):
         """§21.3: cpu size 10 with 14 token files, cpu=16..16 and pg-local=1."""
         self.config('[resources]\ncpu = 10\npg-local = 2\n')

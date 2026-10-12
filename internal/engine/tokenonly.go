@@ -23,7 +23,7 @@ func (t *Ticket) toTokenOnly() {
 	t.mu.Unlock()
 	t.mode = modeTokenOnly
 	t.ahead, t.obs, t.haveGen, t.needBump = nil, state.Observer{}, false, false
-	t.holds, t.last = nil, Waiting{}
+	t.last = Waiting{}
 	t.nextElection, t.backoff = 0, 0
 }
 

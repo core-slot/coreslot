@@ -705,12 +705,20 @@ func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 
 // ---------------------------------------------------------------- the waiting line
 
-type fakeStepper struct{ calls int }
+type fakeStepper struct{ calls, holderCalls int }
+
+// due is a non-head waiter's: its next election is a second away.
+func (s *fakeStepper) due() time.Duration { return time.Second }
 
 func (s *fakeStepper) step(context.Context) (engine.StepResult, error) {
 	s.calls++
-	return engine.Waiting{Position: 2, Holders: []engine.HolderInfo{{Label: "gate", PID: 4711,
-		Grant: map[string]int{"cpu": 12}, StartNS: time.Now().Add(-192 * time.Second).UnixNano()}}}, nil
+	return engine.Waiting{Position: 2}, nil
+}
+
+func (s *fakeStepper) holders() ([]engine.HolderInfo, error) {
+	s.holderCalls++
+	return []engine.HolderInfo{{Label: "gate", PID: 4711, Grant: map[string]int{"cpu": 12},
+		StartNS: time.Now().Add(-192 * time.Second).UnixNano()}}, nil
 }
 
 // fakeClock advances only when the loop sleeps; it ends the context once limit has passed.
@@ -758,8 +766,11 @@ func TestWaitingLineEvery30s(t *testing.T) {
 			t.Errorf("line %d = %q", i, lines[i])
 		}
 	}
-	if s.calls < 95*4-1 {
-		t.Errorf("%d steps in 95 s, want one every 250 ms", s.calls)
+	if s.holderCalls != 3 {
+		t.Errorf("holders listed %d times in 95 s, want 3: only for the waiting lines", s.holderCalls)
+	}
+	if s.calls != 96 {
+		t.Errorf("%d steps in 95 s, want 96: one at the start and one each time the next is due (1 s)", s.calls)
 	}
 }
 
@@ -951,5 +962,32 @@ func TestWindowsConfigUnderOverride(t *testing.T) {
 	t.Setenv("CORESLOT_STATE_DIR", stateDir(t, ""))
 	if got := windowsNotice(windowsConfig()); got == "" {
 		t.Error("without a configuration the warning is printed")
+	}
+}
+
+// A waiting run limits its own Go runtime to one P while it waits and restores the setting
+// afterwards; nothing is exported to the command's environment.
+func TestWaitRunsOnOneP(t *testing.T) {
+	before := runtime.GOMAXPROCS(0)
+	if before == 1 {
+		t.Skip("GOMAXPROCS is already 1 here")
+	}
+	var during int
+	_, _ = waitOneP(func() (*engine.Grant, error) {
+		during = runtime.GOMAXPROCS(0)
+		return nil, nil
+	})
+	if during != 1 || runtime.GOMAXPROCS(0) != before {
+		t.Fatalf("GOMAXPROCS %d while waiting and %d after, want 1 and %d", during, runtime.GOMAXPROCS(0), before)
+	}
+	env := []string{}
+	for _, kv := range baseEnv(stateDir(t, "")) {
+		if !strings.HasPrefix(kv, "GOMAXPROCS=") {
+			env = append(env, kv)
+		}
+	}
+	r := cli(t, env, "run", "--", "sh", "-c", "echo GOMAXPROCS=${GOMAXPROCS-unset}")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "GOMAXPROCS=unset" {
+		t.Fatalf("exit %d, stdout %q (stderr %q): want GOMAXPROCS unset in the command", r.code, r.stdout, r.stderr)
 	}
 }
