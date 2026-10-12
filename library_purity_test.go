@@ -81,7 +81,7 @@ func imported(f *ast.File) map[string]string {
 var processWide = map[string][]string{
 	"os":                    {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir"},
 	"syscall":               {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask", "Setrlimit", "Kill"},
-	"golang.org/x/sys/unix": {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask", "Setrlimit", "Kill"},
+	"golang.org/x/sys/unix": {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask", "Setrlimit", "Prlimit", "Kill"},
 	"runtime":               {"GOMAXPROCS"},
 }
 
@@ -180,6 +180,7 @@ func bad(w io.Writer) {
 	println("i")
 	syscall.Setrlimit(syscall.RLIMIT_NOFILE, nil)
 	unix.Setrlimit(unix.RLIMIT_NOFILE, nil)
+	unix.Prlimit(0, unix.RLIMIT_NOFILE, nil, nil)
 	syscall.Kill(1, syscall.SIGTERM)
 	unix.Kill(1, unix.SIGTERM)
 	p, _ := os.FindProcess(1)
@@ -213,7 +214,7 @@ func good(w io.Writer) error {
 		"sig.Notify", "sig.Ignore", "sig.Reset", "sig.Stop",
 		"os.Setenv", "os.Unsetenv", "os.Clearenv", "os.Chdir", "syscall.Umask", "unix.Umask",
 		"runtime.GOMAXPROCS", "builtin print", "builtin println",
-		"syscall.Setrlimit", "unix.Setrlimit", "syscall.Kill", "unix.Kill", "p.Kill", "cmd.Process.Kill", "start().Process.Kill"}
+		"syscall.Setrlimit", "unix.Setrlimit", "unix.Prlimit", "syscall.Kill", "unix.Kill", "p.Kill", "cmd.Process.Kill", "start().Process.Kill"}
 	if !slices.Equal(got, want) {
 		t.Errorf("findings:\n got %v\nwant %v", got, want)
 	}
