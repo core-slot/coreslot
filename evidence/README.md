@@ -2,11 +2,13 @@
 
 ## Waiter benchmark (the release gate)
 
-The original gate is that a thousand waiters, under bursts of arrivals, admissions, cancellations
-and stall recoveries, cost under 2 % of one core in aggregate. That is 20 us per waiter per second.
-It cannot be met. The maintainers are re-scoping it to "100 waiters under the stated bursts ≤ X % of one
-core", with X at most 10 %. The proposed X and its margin are under
-[Proposed threshold](#proposed-threshold); X is not yet in the design.
+**The gate (set 2026-10-12):** 100 waiters under the stated bursts ≤ 10 %
+of one core, median of five 120 s runs, on the macOS reference host; the Linux figure (Docker
+Desktop VM on the same host) is published, not gated. It is the default of `bench/waiters`; any
+other size, such as the published 1000-waiter run, is a measurement with no pass or fail.
+
+It replaces the original gate, a thousand waiters under 2 % of one core (20 us per waiter per
+second), which cannot be met: a Go process that only wakes once a second costs more than that.
 
 All figures below are aggregate waiter CPU (user + system) as a percentage of one core over the
 measured window. Microseconds are per waiter-second.
@@ -24,7 +26,7 @@ The rounds are measured on this host, each in its own session:
 | Platform | Waiters | Before | Round 1 | Round 2 |
 |---|---|---|---|---|
 | macOS | 50 | 9.7 (2.0 ms; a 30 s trial) | 4.40 (892 us) | **3.54** (753 us) |
-| macOS | 100, 5 runs: min / median / max | 25.01 / 25.80 / 28.99 | 9.62 / 11.04 / 11.87 | **6.38 / 6.59 / 6.92** (650 to 709 us) |
+| macOS | 100, 5 runs: min / median / max | 25.01 / 25.80 / 28.99 | 9.62 / 11.04 / 11.87 | 6.38 / 6.59 / 6.92 (650 to 709 us); after the stop fix, the gate run: **5.10 / 5.70 / 6.24** |
 | macOS | 200 | 99.8 (60 s, profiled) | 30.77; 22.54 profiled | **12.45**; 15.58 profiled (629 / 786 us) |
 | Linux (Docker VM) | 100 | not run | 13.67 | **15.99** (1631 us) |
 | Linux (Docker VM) | 1000 | 889.7 | not run | **361.4** (3618 us); measured once, for publication |
@@ -56,8 +58,9 @@ most once a second. `gen` changed in 59 to 73 of the 120 seconds.
 Before round 2 the harness's re-adoption added far more, but those runs did not record `gen`. It
 retried a short adoption every 20 ms, and each retry published and removed a hold, two bumps.
 
-The Linux 1000-waiter run warmed up in 19 s and drove the VM's load to 151. It ran in the Docker
-Desktop VM because 1000 waiters are not run on the shared macOS host.
+The Linux 1000-waiter run ran inside the Docker Desktop VM, whose 14 CPUs are the shared macOS
+host's own: it competed with the host's other work and drove the VM's load to 151 (warm-up 19 s).
+It is not run on the macOS host itself, where 1000 waiters are not run on a shared machine.
 
 ### Where a waiter's CPU goes (round 2)
 
@@ -131,21 +134,48 @@ Applying the Linux growth to the macOS median at 100 gives about 1490 us per wai
 **about 150 % of one core for a thousand waiters on macOS**. A flat per-waiter cost gives a lower
 bound of about 67 %. Both are extrapolations.
 
-### Proposed threshold
+### The gate run (2026-10-12, a56c198)
 
-**X = 10 % of one core for 100 waiters under the stated bursts, on the macOS host, median of five
-120 s runs.** The round-2 median is 6.59 % and the worst run 6.92 %, so the margin is 1.52 times the
-median and 1.45 times the worst run.
+The gate, re-run after the fixes of round 2, on the macOS reference host:
 
-**Caveats on that margin:**
+```sh
+waiters -coreslot coreslot -dir work    # the default: -n 100 -runs 5 -duration 120s
+```
 
-- The floor measurements show the per-process cost moving by a factor of 2 to 3 with host load,
-  and it was highest on a quiet host. These runs were at load 11 to 27.
-- The Linux VM measured 15.99 % at 100 waiters. Its tick-sampled rusage reads 2 to 4 times the
-  macOS figures even for the sleep loop.
+**PASS: min 5.10 / median 5.70 / max 6.24 % of one core.** Against 10 %, the margin is 1.75 times
+the median and 1.60 times the worst run.
 
-So 10 % holds on this macOS host at these loads, but not on Linux in Docker Desktop. A run on a
-quiet macOS host should confirm it before the number is written into the design.
+The earlier round-2 runs, 6.38 to 6.92 %, came before one fix. The burst stopped the queue head
+only once per run: with stall-for 12 s longer than burst-every 10 s, the previous head was still
+stopped, so the other two of the three stops went to random waiters. The burst now stops the first
+waiter in queue order it may act on, and records its position.
+
+| Run | % of one core | us per waiter-second | Arrivals | Admitted | gen, start to end | Seconds with a gen change | Load, start to end |
+|---|---|---|---|---|---|---|---|
+| 1 | 6.110 | 615 | 132 | 13 | 108 to 459 | 68 | 9.13 8.85 9.41 to 23.89 12.80 10.78 |
+| 2 | 6.239 | 627 | 130 | 11 | 108 to 462 | 65 | 23.89 12.80 10.78 to 22.40 16.58 12.59 |
+| 3 | 5.696 | 574 | 133 | 14 | 108 to 462 | 65 | 22.40 16.58 12.59 to 29.32 20.85 14.78 |
+| 4 | 5.098 | 514 | 134 | 15 | 108 to 469 | 65 | 29.32 20.85 14.78 to 12.34 17.52 14.30 |
+| 5 | 5.552 | 560 | 135 | 16 | 108 to 463 | 64 | 12.34 17.52 14.30 to 7.38 14.08 13.38 |
+
+**Stops per burst.** Each run had 12 bursts and 36 stops. The table gives the queue position of the
+first waiter each burst stopped.
+
+| Position | Bursts | What it means |
+|---|---|---|
+| 1 | 5 of 60 (the first burst of each run) | The queue head itself. |
+| 2 | 54 of 60 | The waiter right behind the previous head, which was still stopped and occupied position 1: the head of the queue that is not stopped. |
+| 3 | 1 of 60 | Run 2, last burst. |
+
+Admissions are fewer than in the earlier round-2 runs (11 to 16 against 30 to 41). Each burst now
+stops the waiter that would be admitted next, so the following ones wait the 10 s stall first.
+
+**Caveats on the margin:**
+
+- The floor measurements show the per-process cost moving by a factor of 2 to 3 with host load, and
+  it was highest on a quiet host. These runs were at load 7 to 29.
+- The Linux VM figure is published, not gated. It measured 15.99 % at 100 waiters in round 2; its
+  tick-sampled rusage reads 2 to 4 times the macOS figures even for the sleep loop.
 
 ### Before the fix: the profile that found the quadratic scan
 
