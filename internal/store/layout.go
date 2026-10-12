@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
@@ -63,7 +64,22 @@ func (s *Store) path(elem ...string) string {
 // whose format it does not understand, so queue/, holds/, cancel/ and log/ are created by the
 // operation that first needs them. admit.lock and res/ are fixed for every format. Every failure
 // is a *StateError.
-func Open(dir string) (*Store, error) {
+func Open(dir string) (*Store, error) { return openDir(dir, true) }
+
+// OpenReadOnly opens the state directory for a reader that must leave the machine as it found
+// it (status, doctor): it applies the same checks as Open to every entry that exists, and
+// creates nothing, not even the state directory, which may be missing (a machine where nothing
+// has run yet; Exists reports it). Operations that write still work on the Store it returns,
+// and create what they need as they do after Open.
+func OpenReadOnly(dir string) (*Store, error) { return openDir(dir, false) }
+
+// Exists reports whether the state directory is there.
+func (s *Store) Exists() bool {
+	_, err := os.Lstat(s.dir)
+	return err == nil
+}
+
+func openDir(dir string, create bool) (*Store, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, stateErrorf("state directory %q is not an absolute path", dir)
 	}
@@ -71,7 +87,12 @@ func Open(dir string) (*Store, error) {
 	if err := checkFilesystem(nearestExisting(dir)); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, dirMode); err != nil {
+	s := &Store{dir: dir}
+	if !create {
+		if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+			return s, nil
+		}
+	} else if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, stateErrorf("cannot create the state directory: %v", err)
 	}
 	if err := CheckEntry(dir, true); err != nil {
@@ -80,21 +101,24 @@ func Open(dir string) (*Store, error) {
 	if err := checkFilesystem(dir); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir}
-	if err := ensureDir(s.path(ResDir)); err != nil {
-		return nil, asStateError(err)
+	if create {
+		if err := ensureDir(s.path(ResDir)); err != nil {
+			return nil, asStateError(err)
+		}
 	}
-	for _, d := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+	for _, d := range []string{ResDir, QueueDir, HoldsDir, CancelDir, LogDir} {
 		if err := CheckEntry(s.path(d), true); err != nil {
 			return nil, err
 		}
 	}
-	f, err := OpenFile(s.path(AdmitLock), os.O_RDWR|os.O_CREATE)
-	if err != nil {
-		return nil, asStateError(err)
+	if create {
+		f, err := OpenFile(s.path(AdmitLock), os.O_RDWR|os.O_CREATE)
+		if err != nil {
+			return nil, asStateError(err)
+		}
+		f.Close()
 	}
-	f.Close()
-	for _, name := range []string{FormatFile, GenFile, DegradedFile, ConfigFile,
+	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, ConfigFile,
 		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld)} {
 		if err := CheckEntry(s.path(name), false); err != nil {
 			return nil, err
@@ -104,6 +128,23 @@ func Open(dir string) (*Store, error) {
 		return nil, asStateError(err)
 	}
 	return s, nil
+}
+
+// Resources lists the resource directories under res/ (names that are valid resource names), in
+// name order, whether or not the configuration declares them. A missing res/ is empty.
+func (s *Store) Resources() ([]string, error) {
+	names, err := readNamesIfExist(s.path(ResDir))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, n := range names {
+		if spec.ValidateName(n) == nil {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // checkFilesystem is CheckFilesystem; tests replace it to observe what Open checks and when.
@@ -126,7 +167,7 @@ func nearestExisting(dir string) string {
 // checkTokens checks every res/<name>/ directory and every token file in it. Entries whose
 // names are not resource names or token indices are not part of the layout and are left alone.
 func (s *Store) checkTokens() error {
-	names, err := readNames(s.path(ResDir))
+	names, err := readNamesIfExist(s.path(ResDir))
 	if err != nil {
 		return err
 	}

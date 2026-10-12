@@ -810,3 +810,19 @@ func TestLargestFixtureMatchesEncode(t *testing.T) {
 		t.Errorf("fixture is not the largest hold: %d tokens, %d resources, %d label bytes", tot, res, len(h.Label))
 	}
 }
+
+func TestNameDisplay(t *testing.T) {
+	id := ID{OrderKey: 5, PID: 7, Seq: 9}
+	for name, want := range map[string]string{
+		TicketName(id, ""):           "",
+		TicketName(id, "gate:unit"):  "gate_unit",
+		HoldName(5, 7, 9, "ci job"):  "ci_job",
+		id.String() + "-bad/display": "", // not a name
+		".tmp-0000000007-000009":     "",
+		"gate":                       "",
+	} {
+		if got := NameDisplay(name); got != want {
+			t.Errorf("NameDisplay(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
