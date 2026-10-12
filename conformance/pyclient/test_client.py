@@ -531,6 +531,61 @@ class LivenessTests(Base):
         self.assertEqual(kind, "admitted")
         g.close(remove_hold=False)
 
+    def test_position_counts_only_well_formed_tickets(self):
+        """§10.3: position is 1 plus the tickets ahead not passed over, malformed ones excluded."""
+        self.config("[resources]\ncpu = 1\n")
+        q = os.path.join(self.S, "queue")
+        for i in range(1, 5):  # the front window: four well-formed live tickets
+            self.write(os.path.join(q, f"0000000000000000000{i}-0000000001-000001"), body(), lock=True)
+        # Beyond the window and the scan: a malformed one, then the nearest, which ends the scan.
+        self.write(os.path.join(q, "00000000000000000005-0000000001-000001"), b"not json", lock=True)
+        self.write(os.path.join(q, "00000000000000000006-0000000001-000001"), body(), lock=True)
+        b = self.client(observer_clock=FakeClock()).enqueue("b", 0, {"cpu": 1})
+        self.assertEqual(b.step(), ("waiting", 6))  # five well-formed live tickets ahead
+        b.withdraw()
+
+    def test_gone_window_ticket_is_forgotten(self):
+        """A front-window ticket found gone is dropped from the observer's records."""
+        self.config("[resources]\ncpu = 1\n")
+        q = os.path.join(self.S, "queue")
+        front = os.path.join(q, "00000000000000000001-0000000001-000001")
+        self.write(front, body(), lock=True)
+        self.write(os.path.join(q, "00000000000000000002-0000000001-000001"), body(), lock=True)
+        b = self.client(observer_clock=FakeClock()).enqueue("b", 0, {"cpu": 1})
+        b.step()
+        self.assertIn(os.path.basename(front), b._obs)  # watched through the front window
+        os.unlink(front)
+        b.step()
+        self.assertNotIn(os.path.basename(front), b._obs)
+        b.withdraw()
+
+    def test_reelection_watches_a_ticket_published_without_bump(self):
+        """§12.1 step 5: a live ticket first seen in the section makes the next election rescan
+        (it was published without a gen bump), so it is watched and passed over once STALLED."""
+        self.config("[resources]\ncpu = 1\n")
+        clock = FakeClock()
+        h = self.client(observer_clock=clock).enqueue("h", 0, {"cpu": 1})
+        real_elect = h._elect
+        ahead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+
+        def elect_then_publish():
+            position = real_elect()
+            if not os.path.exists(ahead):
+                self.write(ahead, body(), lock=True)  # no gen bump
+            return position
+
+        h._elect = elect_then_publish
+        self.assertEqual(h.step(), ("waiting", 1))  # kept out by the re-election
+        h._elect = real_elect
+        for s in range(1, 13):
+            clock.t += 1.0
+            kind, value = h.step()
+            if kind == "admitted":
+                self.assertGreaterEqual(s, 10)
+                value.close(remove_hold=False)
+                return
+        self.fail("never admitted: the ticket published without a bump kept the head out")
+
     def test_unwatched_interval_does_not_count(self):
         """§10.2: only watched time counts towards a stall; a changed value still restarts it."""
         t = self.client().enqueue("t", 0, {"cpu": 1})

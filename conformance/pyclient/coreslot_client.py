@@ -1670,6 +1670,8 @@ class Ticket:
             verdict = self._examine(n, now) if seen else self._probe_only(n)
             if verdict in ("gone", "ignored", "dead", "stalled"):
                 continue
+            if not seen:
+                self._gen_seen = None  # rescan at the next election, so that it is watched
             return False  # live, or first seen here
         return True
 
@@ -1720,11 +1722,24 @@ class Ticket:
         self.client.ignored_entries = self._nonmatching + ignored
         if gone:
             self._queue = [n for n in self._queue if n not in gone]
+            for n in gone:
+                self._obs.pop(n, None)
         if head:
             return 1
-        unexamined = [n for n in ahead if n not in examined and n not in gone and self._valid.get(n) is not False]
-        live_examined = 1  # the ticket that ended the scan
-        return 1 + live_examined + len(unexamined)
+        unexamined = 0  # well-formed tickets beyond the end of the scan, as Go counts them
+        for n in ahead:
+            if n in examined or n in gone:
+                continue
+            if n not in self._valid:
+                self._open_valid_and_close(n)
+            if self._valid.get(n):
+                unexamined += 1
+        return 1 + 1 + unexamined  # the ticket that ended the scan, and those beyond it
+
+    def _open_valid_and_close(self, name: str) -> None:
+        fd = self._open_valid(name)
+        if isinstance(fd, int):
+            os.close(fd)
 
     # ---- the poll
 

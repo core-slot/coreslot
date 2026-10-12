@@ -1,10 +1,15 @@
 //go:build unix
 
-// Command waiters is the waiter benchmark, the release gate: a thousand
-// waiters, each its own process on the public library, wait against a held budget while the
-// harness drives bursts of arrivals, admissions, cancellations and stall recoveries. It reports
-// the waiters' aggregate CPU per second of wall time, as a percentage of one core, for each run
-// and the spread over the runs, and exits 1 when the median exceeds the gate.
+// Command waiters is the waiter benchmark, the release gate: waiters,
+// each its own process on the public library, wait against a held budget while the harness
+// drives bursts of arrivals, admissions, cancellations and stall recoveries. It reports the
+// waiters' aggregate CPU per second of wall time, as a percentage of one core, for each run and
+// the spread over the runs.
+//
+// The gate is its default: 100 waiters, five 120 s runs, median at most 10 % of one core, on the
+// macOS reference host (evidence/README.md); it exits 1 when the median
+// exceeds it. Any other -n, -runs or -duration is a measurement with no verdict (exit 0), for
+// example the published 1000-waiter figure.
 //
 // CPU accounting: each waiter's CPU comes from the kernel's rusage of that child (wait4(2):
 // ru_utime + ru_stime), minus, for a waiter that already existed when the measured window
@@ -34,7 +39,13 @@ import (
 	"time"
 )
 
-const gatePercent = 2.0 // of one core
+// The benchmark gate.
+const (
+	gateWaiters  = 100
+	gateRuns     = 5
+	gateDuration = 120 * time.Second
+	gatePercent  = 10.0 // of one core, the median of the runs
+)
 
 func main() {
 	if len(os.Args) > 1 {
@@ -51,9 +62,9 @@ func main() {
 func benchMain(args []string) int {
 	var p params
 	fs := flag.NewFlagSet("waiters", flag.ContinueOnError)
-	fs.IntVar(&p.N, "n", 1000, "waiters kept queued")
-	fs.DurationVar(&p.Duration, "duration", 120*time.Second, "measured window per run")
-	fs.IntVar(&p.Runs, "runs", 5, "runs")
+	fs.IntVar(&p.N, "n", gateWaiters, "waiters kept queued")
+	fs.DurationVar(&p.Duration, "duration", gateDuration, "measured window per run")
+	fs.IntVar(&p.Runs, "runs", gateRuns, "runs")
 	fs.DurationVar(&p.BurstEvery, "burst-every", 10*time.Second, "interval between bursts")
 	fs.IntVar(&p.Size, "size", 8, "cpu budget size; the harness holds all of it between bursts")
 	fs.IntVar(&p.Release, "release", 4, "tokens the harness releases at each burst (admissions)")
@@ -119,12 +130,16 @@ func benchMain(args []string) int {
 	if len(pcts)%2 == 0 {
 		median = (pcts[len(pcts)/2-1] + pcts[len(pcts)/2]) / 2
 	}
-	verdict := "PASS"
-	if median > gatePercent {
-		verdict = "FAIL"
+	gated := p.N == gateWaiters && p.Runs == gateRuns && p.Duration == gateDuration
+	verdict := "MEASUREMENT (no gate: the gate is -n 100 -runs 5 -duration 120s)"
+	if gated {
+		verdict = "PASS"
+		if median > gatePercent {
+			verdict = "FAIL"
+		}
 	}
-	fmt.Printf("summary: %d runs; %% of one core: min %.3f, median %.3f, max %.3f; gate median <= %.1f %%: %s\n",
-		len(pcts), pcts[0], median, pcts[len(pcts)-1], gatePercent, verdict)
+	fmt.Printf("summary: %d runs; %% of one core: min %.3f, median %.3f, max %.3f; gate median <= %.1f %% at %d waiters: %s\n",
+		len(pcts), pcts[0], median, pcts[len(pcts)-1], gatePercent, gateWaiters, verdict)
 	if *jsonOut != "" {
 		out := struct {
 			Host    hostInfo `json:"host"`

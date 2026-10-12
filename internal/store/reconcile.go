@@ -37,23 +37,9 @@ type Entry struct {
 // section 4.2). The directory itself failing the checks, or more than
 // MaxEntries entries, is a *StateError.
 func (s *Store) List(dir string) ([]Entry, int, error) {
-	if !slices.Contains(noReplaceDirs, dir) {
-		return nil, 0, fmt.Errorf("store: List of %q: not a directory of tickets, holds or cancel requests", dir)
-	}
-	d := s.path(dir)
-	if err := CheckEntry(d, true); err != nil {
+	d, names, parse, err := s.readDir("List", dir)
+	if err != nil || names == nil {
 		return nil, 0, err
-	}
-	names, err := readNames(d)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, 0, nil
-	}
-	if err != nil {
-		return nil, 0, err
-	}
-	parse := wire.ParseName
-	if dir == CancelDir {
-		parse = wire.ParseID
 	}
 	var entries []Entry
 	ignored := 0
@@ -92,29 +78,42 @@ func (s *Store) List(dir string) ([]Entry, int, error) {
 	return entries, ignored, nil
 }
 
+// readDir is what List and ListNames share: the checked directory's path, its names (nil when
+// it does not exist) and the name grammar of dir. op names the caller in errors.
+func (s *Store) readDir(op, dir string) (path string, names []string, parse func(string) (wire.ID, bool), err error) {
+	if !slices.Contains(noReplaceDirs, dir) {
+		return "", nil, nil, fmt.Errorf("store: %s of %q: not a directory of tickets, holds or cancel requests", op, dir)
+	}
+	path = s.path(dir)
+	if err := CheckEntry(path, true); err != nil {
+		return "", nil, nil, err
+	}
+	names, err = readNames(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil, nil, nil
+	}
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if names == nil {
+		names = []string{}
+	}
+	parse = wire.ParseName
+	if dir == CancelDir {
+		parse = wire.ParseID
+	}
+	return path, names, parse, nil
+}
+
 // ListNames lists the names of dir (QueueDir, HoldsDir or CancelDir) that match its grammar, in
 // name order, from the directory listing alone: unlike List it reads no entry's metadata, so an
 // entry that fails the section 4.2 checks is listed too and is found out when it is opened or
 // probed (an error for which a caller's stray check holds). MtimeNS is 0. The directory itself
 // failing the checks, or more than MaxEntries entries, is a *StateError.
 func (s *Store) ListNames(dir string) ([]Entry, error) {
-	if !slices.Contains(noReplaceDirs, dir) {
-		return nil, fmt.Errorf("store: ListNames of %q: not a directory of tickets, holds or cancel requests", dir)
-	}
-	d := s.path(dir)
-	if err := CheckEntry(d, true); err != nil {
+	_, names, parse, err := s.readDir("ListNames", dir)
+	if err != nil || names == nil {
 		return nil, err
-	}
-	names, err := readNames(d)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	parse := wire.ParseName
-	if dir == CancelDir {
-		parse = wire.ParseID
 	}
 	entries := make([]Entry, 0, len(names))
 	for _, name := range names {
