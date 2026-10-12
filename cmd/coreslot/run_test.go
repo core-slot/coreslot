@@ -777,7 +777,8 @@ func TestWaitingLineEvery30s(t *testing.T) {
 var _ io.Writer = (*bytes.Buffer)(nil)
 
 // A --timeout that expires while another process holds the section ends the run in time, with
-// no ticket left behind.
+// no ticket left behind, and says why: the enqueue deadline's refusal prints the same notice as
+// a timeout that expires in the queue.
 func TestTimeoutWhileSectionHeld(t *testing.T) {
 	dir := stateDir(t, "")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
@@ -796,8 +797,8 @@ func TestTimeoutWhileSectionHeld(t *testing.T) {
 	if took := time.Since(start); took > 3*time.Second {
 		t.Errorf("refused after %v, want soon after the 1 s timeout (load: %s)", took, uptime())
 	}
-	if r.code != 75 {
-		t.Errorf("exit %d (stderr %q), want 75", r.code, r.stderr)
+	if r.code != 75 || !strings.Contains(r.stderr, "not admitted within 1s (--timeout); refusing") {
+		t.Errorf("exit %d (stderr %q), want 75 and the timeout refusal notice", r.code, r.stderr)
 	}
 	if q := entries(t, dir, "queue"); len(q) != 0 {
 		t.Errorf("tickets left behind: %q", q)
