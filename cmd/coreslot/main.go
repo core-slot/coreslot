@@ -15,7 +15,10 @@ import (
 )
 
 // version is the CLI's version; release builds set it with -ldflags "-X main.version=...".
-var version = "0.0.0-dev"
+// Without that, cliVersion falls back to the build information (version.go).
+var version = devVersion
+
+const devVersion = "0.0.0-dev"
 
 // IO is the standard streams of one invocation. The command a run starts inherits them as they
 // are, so Stdin is also what terminal mode is decided from.

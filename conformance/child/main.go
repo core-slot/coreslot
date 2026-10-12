@@ -11,6 +11,9 @@
 //	child cancel STATEDIR TICKET-ID  publish a cancel request for TICKET-ID
 //	child reconcile STATEDIR OFFSET  reconcile now, as a clock OFFSET (a Go duration) ahead would
 //	child section STATEDIR MARKER    enter the admission section, create MARKER, stay until MARKER.release exists
+//	child signals MARKDIR NAME       as hold, also logging every SIGINT, SIGQUIT, SIGTERM and SIGHUP to
+//	                                 MARKDIR/NAME.signals and a tick to MARKDIR/NAME.ticks every 50 ms; one
+//	                                 second after the first signal it dies of that signal
 package main
 
 import (
@@ -19,9 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -50,7 +55,7 @@ func main() {
 	// lands among them.
 	fds := openFDs()
 	if len(os.Args) < 2 {
-		fail("usage: child hold|cancel|reconcile|section ...")
+		fail("usage: child hold|cancel|reconcile|section|signals ...")
 	}
 	args := os.Args[2:]
 	switch os.Args[1] {
@@ -66,6 +71,9 @@ func main() {
 	case "section":
 		need(args, 2)
 		section(args[0], args[1])
+	case "signals":
+		need(args, 2)
+		signals(args[0], args[1], fds)
 	default:
 		fail("unknown mode " + os.Args[1])
 	}
@@ -212,4 +220,68 @@ func section(dir, marker string) {
 	}
 	writeAtomic(marker, []byte(strconv.Itoa(os.Getpid())))
 	waitFor(marker + ".release")
+}
+
+// signals is hold that also records the signals a run delivers: each SIGINT, SIGQUIT, SIGTERM
+// and SIGHUP is appended, by name, as one line of MARKDIR/NAME.signals, and a byte is appended to
+// MARKDIR/NAME.ticks every 50 ms, so that a test sees whether the process runs or is stopped.
+// One second after the first signal, during which later ones are still recorded, it dies of
+// that signal (SIGQUIT, which the Go runtime would turn into a traceback, makes it exit 131
+// instead), so that its status is the one a command killed by the signal has.
+func signals(markDir, name string, fds map[int][2]uint64) {
+	ch := make(chan os.Signal, 16)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
+	log, err := os.OpenFile(filepath.Join(markDir, name+".signals"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		fail(err.Error())
+	}
+	ticks, err := os.OpenFile(filepath.Join(markDir, name+".ticks"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		fail(err.Error())
+	}
+	r := Report{PID: os.Getpid(), Env: map[string]string{}, FDs: fds, Args: os.Args}
+	data, err := json.Marshal(r)
+	if err != nil {
+		fail(err.Error())
+	}
+	writeAtomic(filepath.Join(markDir, name+".started"), data)
+
+	release := filepath.Join(markDir, name+".release")
+	ppid := os.Getppid()
+	end := time.Now().Add(deadline)
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	var first os.Signal
+	var dieAt <-chan time.Time
+	for {
+		select {
+		case s := <-ch:
+			if _, err := log.WriteString(unix.SignalName(s.(syscall.Signal)) + "\n"); err != nil {
+				fail(err.Error())
+			}
+			if first == nil {
+				first, dieAt = s, time.After(time.Second)
+			}
+		case <-dieAt:
+			if first == syscall.SIGQUIT {
+				os.Exit(128 + int(syscall.SIGQUIT))
+			}
+			signal.Reset(first)
+			_ = unix.Kill(os.Getpid(), first.(syscall.Signal))
+			time.Sleep(5 * time.Second)
+			os.Exit(3)
+		case <-tick.C:
+			_, _ = ticks.WriteString("t")
+			if _, err := os.Stat(release); err == nil {
+				os.Exit(0)
+			}
+			if os.Getppid() != ppid {
+				os.Exit(4)
+			}
+			if time.Now().After(end) {
+				fmt.Fprintln(os.Stderr, "child: deadline passed waiting for", release)
+				os.Exit(3)
+			}
+		}
+	}
 }

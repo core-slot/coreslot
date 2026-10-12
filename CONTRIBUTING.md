@@ -60,8 +60,9 @@ The pinned versions of `staticcheck` and `govulncheck` are in
 - **Conformance.** `./conformance/` builds the CLI and a helper client with the test-hook tag and
   drives real processes through the queue traces, against temporary state directories whose paths
   contain a space.
-- **Fuzzing.** The targets live in `internal/wire`; `go test -run '^$' -fuzz '^FuzzDecodeTicket$'
-  -fuzztime 30s ./internal/wire/` runs one. CI fuzzes every target for 30 s on Linux.
+- **Fuzzing.** CI discovers every `Fuzz` function in every package (`go test -list '^Fuzz'`) and
+  fuzzes each for 30 s on Linux, so a new target needs no workflow change. One target runs with
+  `go test -run '^$' -fuzz '^FuzzName$' -fuzztime 30s ./path/to/package/`.
 - **The exported API.** `api/v0.txt` pins the root package's API. After a deliberate API change,
   `CORESLOT_UPDATE_API=1 go test -run TestExportedAPIGolden .` rewrites it; review the diff.
 - **The Python client.** [`conformance/pyclient`](conformance/pyclient) is an independent client
@@ -86,7 +87,8 @@ Never point a test at your real budget. `CORESLOT_STATE_DIR` (an absolute path) 
 budget and moves the configuration to `$CORESLOT_STATE_DIR/config.toml` with it:
 
 ```sh
-CORESLOT_STATE_DIR="$(mktemp -d)/state" ./coreslot run --need cpu=2 -- sh -c 'echo $CORESLOT_GRANTED_CPU'
+CORESLOT_STATE_DIR="$(mktemp -d)/state" \
+  ./coreslot run --need cpu=2 -- sh -c 'echo $CORESLOT_GRANTED_CPU'
 ```
 
 ## Pull requests
@@ -97,7 +99,9 @@ mutation that reddens each new invariant test. Add an entry under **Unreleased**
 
 ## Releases
 
-Releases are cut by the maintainer by pushing a `v*` tag. The release workflow reruns CI on the
-tagged commit, builds the archives with GoReleaser (`.goreleaser.yaml`) and attests their build
-provenance. `goreleaser release --snapshot --clean` builds the same archives locally into `dist/`
+Releases are cut by the maintainer by pushing a `v*` tag on a commit of `main`. The release
+workflow refuses a tag whose commit is not on `main`, reruns CI on it, builds the archives with
+GoReleaser (`.goreleaser.yaml`, version pinned in `.github/goreleaser-version` for CI and release
+alike), attests their build provenance in a job of its own, and only then publishes the GitHub
+release. `goreleaser release --snapshot --clean` builds the same archives locally into `dist/`
 without publishing anything.
