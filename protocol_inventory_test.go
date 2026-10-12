@@ -44,6 +44,10 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"pass-through", "Nested runs: pass-through", "pass-through"},
 }
 
+// examplesTitle is the title of PROTOCOL.md's worked examples, whose subsections illustrate the
+// items and define none of them.
+const examplesTitle = "Worked examples"
+
 // protocolSection is one heading of PROTOCOL.md: its title without the section number, whether
 // it lies inside the worked examples, and its text up to the next heading of the same or a higher
 // level, subsections included.
@@ -92,7 +96,7 @@ func protocolSections(doc string) map[string]protocolSection {
 		}
 		level := len(m[1])
 		if level == 2 {
-			inExamples = strings.HasPrefix(m[2], "21. ")
+			inExamples = number.ReplaceAllString(m[2], "") == examplesTitle
 		}
 		marks = append(marks, mark{i, level, githubSlug(m[2]), number.ReplaceAllString(m[2], ""),
 			inExamples && level > 2})
@@ -126,6 +130,16 @@ func TestProtocolCarriesTheContractInventory(t *testing.T) {
 	inventory, ok := sections["2-contract-inventory"]
 	if !ok {
 		t.Fatal(`PROTOCOL.md has no "## 2. Contract inventory" heading`)
+	}
+	examples := 0
+	for _, s := range sections {
+		if s.level == 2 && s.title == examplesTitle {
+			examples++
+		}
+	}
+	if examples != 1 {
+		// Without it no section counts as an example, and a row linking only its example passes.
+		t.Fatalf("PROTOCOL.md has %d %q sections, want 1", examples, examplesTitle)
 	}
 
 	link := regexp.MustCompile(`\]\(#([^)]+)\)`)
