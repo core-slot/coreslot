@@ -12,12 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
@@ -362,16 +362,11 @@ func (s *Store) ReadFormat() (n int, present bool, err error) {
 func parseFormat(body []byte) (int, error) {
 	line := bytes.TrimSuffix(body, []byte("\n"))
 	digits, ok := bytes.CutPrefix(line, []byte(formatPrefix))
-	if !ok || len(digits) == 0 || len(digits) > 9 {
+	if !ok {
 		return 0, stateErrorf("malformed FORMAT %q", body)
 	}
-	for _, c := range digits {
-		if c < '0' || c > '9' {
-			return 0, stateErrorf("malformed FORMAT %q", body)
-		}
-	}
-	n, err := strconv.Atoi(string(digits))
-	if err != nil {
+	n, ok := spec.ParseDigits(string(digits))
+	if !ok {
 		return 0, stateErrorf("malformed FORMAT %q", body)
 	}
 	return n, nil

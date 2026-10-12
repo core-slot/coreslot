@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -72,14 +71,14 @@ func ParseSize(v any) (SizeExpr, error) {
 		return ParseSize(int64(x))
 	case string:
 		if pct, ok := strings.CutSuffix(x, "%"); ok {
-			n, ok := digits(pct)
+			n, ok := spec.ParseDigits(pct)
 			if !ok || n < 1 || n > 100 {
 				return SizeExpr{}, fmt.Errorf(`size %q: want "N%%" with N in 1..100`, x)
 			}
 			return SizeExpr{kind: sizePercent, n: n}, nil
 		}
 		if k, ok := strings.CutPrefix(x, "-"); ok {
-			n, ok := digits(k)
+			n, ok := spec.ParseDigits(k)
 			if !ok {
 				return SizeExpr{}, fmt.Errorf(`size %q: want "-K" with K a non-negative integer`, x)
 			}
@@ -89,15 +88,6 @@ func ParseSize(v any) (SizeExpr, error) {
 	default:
 		return SizeExpr{}, fmt.Errorf(`size %v (%T): want an integer, "N%%" or "-K"`, v, v)
 	}
-}
-
-// digits parses a non-empty string of at most 9 ASCII digits.
-func digits(s string) (int, bool) {
-	if s == "" || len(s) > 9 || strings.TrimLeft(s, "0123456789") != "" {
-		return 0, false
-	}
-	n, err := strconv.Atoi(s)
-	return n, err == nil
 }
 
 func defaults() Config {
@@ -222,10 +212,10 @@ func parseOnline(s string) (int, error) {
 	total := 0
 	for _, item := range strings.Split(list, ",") {
 		lo, hi, isRange := strings.Cut(item, "-")
-		a, ok := digits(lo)
+		a, ok := spec.ParseDigits(lo)
 		b := a
 		if ok && isRange {
-			b, ok = digits(hi)
+			b, ok = spec.ParseDigits(hi)
 		}
 		if !ok || b < a {
 			return 0, fmt.Errorf("malformed CPU list %q", s)
