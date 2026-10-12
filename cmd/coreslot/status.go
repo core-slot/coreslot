@@ -24,11 +24,6 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-const statusUsage = `usage: coreslot status [--json] [--observe DURATION]
-
---observe watches the queue for DURATION to find STALLED tickets; a ticket is
-STALLED after 10s without a refresh, so use 10s or more.`
-
 // statusSchema is the version of the --json document, carried as its "schema" member.
 const statusSchema = 1
 
@@ -39,10 +34,7 @@ const observeEvery = time.Second
 // writing. It exits 3 while runs fail open (PROTOCOL.md sections 14 and 19): degraded mode is
 // recorded, or the state directory, FORMAT or the configuration cannot be used.
 func statusCommand(args []string, io IO) int {
-	fs := flag.NewFlagSet("coreslot status", flag.ContinueOnError)
-	fs.SetOutput(&bytes.Buffer{})
-	asJSON := fs.Bool("json", false, "print the JSON document (schema 1)")
-	observe := fs.Duration("observe", 0, "watch the queue this long, to find STALLED tickets")
+	fs, asJSON, observe := statusFlags()
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(io.Stdout, statusUsage)

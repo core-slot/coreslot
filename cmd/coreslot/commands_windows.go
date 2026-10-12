@@ -2,15 +2,20 @@
 
 package main
 
-import "fmt"
+// Windows has no budget (PROTOCOL.md section 16): there is nothing to inspect, cancel or repair,
+// so these commands only answer a request for help (noBudget).
 
-// Windows has no budget (PROTOCOL.md section 16): there is nothing to inspect, cancel or repair.
+func statusCommand(args []string, io IO) int {
+	fs, _, _ := statusFlags()
+	return noBudget("status", statusUsage, fs, args, io)
+}
 
-func statusCommand(args []string, io IO) int { return noBudget("status", io) }
-func cancelCommand(args []string, io IO) int { return noBudget("cancel", io) }
-func doctorCommand(args []string, io IO) int { return noBudget("doctor", io) }
+func cancelCommand(args []string, io IO) int {
+	fs, _ := cancelFlags()
+	return noBudget("cancel", cancelUsage, fs, args, io)
+}
 
-func noBudget(name string, io IO) int {
-	fmt.Fprintf(io.Stderr, "coreslot: %s: Windows has no coreslot budget\n", name)
-	return exitInternal
+func doctorCommand(args []string, io IO) int {
+	fs, _, _ := doctorFlags()
+	return noBudget("doctor", doctorUsage, fs, args, io)
 }

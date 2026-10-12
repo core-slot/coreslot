@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -17,9 +16,6 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-const cancelUsage = `usage: coreslot cancel <ticket-id>
-       coreslot cancel --label LABEL`
-
 // cancelWait is how long cancel waits to enter the admission section before it refuses: a client
 // stopped inside the section would otherwise keep it waiting for as long as it stays stopped.
 const cancelWait = time.Second
@@ -31,9 +27,7 @@ const cancelWait = time.Second
 // (exit 75, not --refusal-code, which belongs to `run`). The request is a file the ticket's owner
 // finds on its next poll; nothing is signalled and a grant is never revoked.
 func cancelCommand(args []string, io IO) int {
-	fs := flag.NewFlagSet("coreslot cancel", flag.ContinueOnError)
-	fs.SetOutput(&bytes.Buffer{})
-	label := fs.String("label", "", "cancel the one waiting ticket with this label")
+	fs, label := cancelFlags()
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(io.Stdout, cancelUsage)
