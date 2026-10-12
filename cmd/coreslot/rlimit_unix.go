@@ -86,10 +86,12 @@ func startNofileProbe(shield []int) *nofileProbe {
 // the Go runtime set at start-up rather than the one this process was started with. The runtime
 // (syscall/rlimit.go) raises only when hard > 0 and the original is below hard-1, and then to
 // hard-1, which on macOS it lowers to kern.maxfilesperproc (syscall/rlimit_darwin.go), the
-// fileCap here. Its setrlimit may also fail, as Linux's does above fs.nr_open when the hard limit
-// is unlimited, which leaves the original. So a soft limit that is neither hard-1 nor the cap is
-// the original one, and needs no probe. One that is may still be the original, which the probe
-// then reports.
+// fileCap here. Its setrlimit may also fail, which leaves the original: Linux checks the hard limit
+// a call passes against fs.nr_open on every call, so it refuses to set any limit once fs.nr_open
+// was lowered below a hard limit inherited from before, and a sandbox may refuse the call. (A
+// Linux hard limit is never unlimited: setrlimit refuses one above fs.nr_open.) So a soft limit
+// that is neither hard-1 nor the cap is the original one, and needs no probe. One that is may
+// still be the original, which the probe then reports.
 func runtimeMayHaveRaised(cur, hard uint64) bool {
 	if hard == 0 {
 		return false
