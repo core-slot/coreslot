@@ -205,8 +205,12 @@ func TestResetReportsWhatItCannotRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 	setOtherLengthHolder(t, dir)
-	if _, _, err := sec.Reset([]int{1}); err == nil {
+	_, removed, err := sec.Reset([]int{1})
+	if err == nil {
 		t.Fatal("Reset left a non-empty directory behind without an error")
+	}
+	if removed != 9 {
+		t.Errorf("removed %d entries alongside the error, want 9 (everything but the stuck entry)", removed)
 	}
 	if body, err := os.ReadFile(filepath.Join(dir, AdmitLock)); err != nil || recordedPID(body) != os.Getpid() {
 		t.Errorf("admit.lock = %q, %v; a reset that removed things must have marked itself first", body, err)
