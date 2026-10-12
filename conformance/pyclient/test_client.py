@@ -1150,6 +1150,71 @@ class LauncherTests(Base):
         self.assertEqual(cc.validate_passthrough(self.client(), str(fd)), {"cpu": 1})
 
 
+class ReleaseIdentityTests(Base):
+    """I1 at release: a holder whose state directory was deleted and recreated under it reports a
+    state error and touches nothing in the new directory (AMBIGUITIES.md E8)."""
+
+    def tree(self) -> dict:
+        out = {}
+        for root, dirs, files in os.walk(self.S):
+            for n in dirs + files:
+                p = os.path.join(root, n)
+                st = os.lstat(p)
+                data = None
+                if os.path.isfile(p):
+                    with open(p, "rb") as fh:
+                        data = fh.read()
+                out[os.path.relpath(p, self.S)] = (st.st_ino, st.st_mtime_ns, data)
+        return out
+
+    def test_grant_release_after_the_directory_was_recreated(self):
+        self.config("[resources]\ncpu = 2\n")
+        kind, g = self.client().enqueue("h", 0, {"cpu": 1}).step()
+        self.assertEqual(kind, "admitted")
+        shutil.rmtree(self.S)
+        # The new directory, as another client left it: FORMAT, gen, and a dead hold that happens
+        # to bear the old hold's name. Releasing must neither enter its section nor remove that hold.
+        self.config("[resources]\ncpu = 2\n")
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 1\n")
+        self.write(os.path.join(self.S, "gen"), b'{"gen": 1, "reconciled_ns": 0}')
+        self.write(os.path.join(self.S, "holds", g.hold_name), b"{}")
+        before = self.tree()
+        with self.assertRaises(cc.StateError) as cm:
+            g.close()
+        self.assertEqual(cm.exception.reason, "inode")
+        self.assertTrue(g.closed)
+        self.assertIsNone(g.hold_fd)
+        self.assertEqual(self.tree(), before)
+        g.close()  # a second close is a no-op
+
+    def test_token_only_grant_checks_identity_at_release(self):
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 2\n")
+        kind, g = self.client().enqueue("t", 0, {"cpu": 1}).step()
+        self.assertEqual((kind, g.token_only), ("admitted", True))
+        token = os.path.join(self.S, "res", "cpu", "0")
+        os.unlink(token)
+        self.write(token, b"")  # replaced: a different inode at the token's path
+        with self.assertRaises(cc.StateError):
+            g.close()
+
+    def test_cli_release_after_the_directory_was_recreated(self):
+        self.config("[resources]\ncpu = 2\n")
+        script = 'rm -rf "$CORESLOT_STATE_DIR" && mkdir -m 700 "$CORESLOT_STATE_DIR"'
+        p = self.cli("run", "--need", "cpu=1", "--", "sh", "-c", script, stderr=subprocess.PIPE)
+        _, err = p.communicate(timeout=20)
+        self.assertEqual(p.returncode, 0, err)  # the command's own status
+        self.assertIn(b"state error (inode", err)
+        self.assertEqual(os.listdir(self.S), [])  # no admit.lock, FORMAT, gen, degraded or log
+        # A fail-open run's unbudgeted hold is released the same way.
+        self.config("[resources]\ncpu = 0\n")
+        p = self.cli("run", "--need", "cpu=1", "--", "sh", "-c", script, stderr=subprocess.PIPE)
+        _, err = p.communicate(timeout=20)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertIn(b"state error (config", err)
+        self.assertIn(b"state error (inode", err)
+        self.assertEqual(os.listdir(self.S), [])
+
+
 class AlignmentTests(Base):
     """Behaviour the resolved PROTOCOL.md requires, including the stray rule of §4.2/§10.4 (B1/D6)."""
 

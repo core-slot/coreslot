@@ -506,6 +506,17 @@ def _probe_path(path: str) -> bool | None:
         os.close(fd)
 
 
+def _changed_under(fd: int, path: str) -> bool:
+    """I1: True when the file held through `fd` is unlinked (`st_nlink == 0`) or `path` no longer
+    names it (missing, unreachable, or another `(st_dev, st_ino)`)."""
+    held = os.fstat(fd)
+    try:
+        now = os.lstat(path)
+    except OSError:  # ENOENT, or ENOTDIR/EACCES when a directory above it was replaced
+        return True
+    return held.st_nlink == 0 or (now.st_dev, now.st_ino) != (held.st_dev, held.st_ino)
+
+
 class _Counter:
     """Per-process seq counter (§7.1): 000001 upward, wrapping from 999999 to 000000."""
 
@@ -1208,12 +1219,7 @@ class Client:
         except BlockingIOError:
             os.close(fd)
             return None
-        held = os.fstat(fd)
-        try:
-            now = os.lstat(path)
-        except FileNotFoundError:
-            now = None
-        if held.st_nlink == 0 or now is None or (now.st_dev, now.st_ino) != (held.st_dev, held.st_ino):
+        if _changed_under(fd, path):
             os.close(fd)
             raise StateError("inode", f"{path} changed under its holder (I1)")
         return fd
@@ -1970,16 +1976,35 @@ class Grant:
     def __exit__(self, *exc) -> None:
         self.close()
 
+    def changed_paths(self) -> list[str]:
+        """I1 at release: the hold and token paths that no longer name the held files."""
+        if self.client is None:
+            return []
+        S = self.client.state_dir()
+        held = [(fd, os.path.join(S, "res", r, str(i))) for r in sorted(self._tokens)
+                for i, fd in self._tokens[r]]
+        if self.hold_fd is not None and self.hold_name:
+            held.insert(0, (self.hold_fd, os.path.join(S, "holds", self.hold_name)))
+        return [path for fd, path in held if _changed_under(fd, path)]
+
     def close(self, remove_hold: bool = True) -> None:
+        """Release the grant (§12.3). Raises StateError ("inode") when the hold or a token was
+        deleted or replaced under the holder (I1), for example because the state directory was
+        deleted and recreated: every descriptor is still closed, but nothing in the directory now
+        at that path is touched, so the hold is not removed and no degraded record is written."""
         if self.closed:
             return
         self.closed = True
+        changed = self.changed_paths()  # before any descriptor is closed
         # §12.3: the hold before any token, so that a live hold never lists a token nobody locks.
         if self.hold_fd is not None:
             os.close(self.hold_fd)
             self.hold_fd = None
         for fd in self.token_fds():
             os.close(fd)
+        if changed:
+            raise StateError("inode", f"{changed[0]} changed under its holder (I1); the state "
+                             "directory now at that path was not touched")
         if remove_hold and self.hold_name and self.client is not None:
             self.client.remove_hold(self.hold_name)
 
@@ -2285,7 +2310,13 @@ def _fail_open(client: Client, opts, needs, env, err: StateError, t0: int) -> in
     started = time.monotonic()
     status = _run_unbudgeted(opts, needs, env, err.reason, hold)
     if hold:
+        hold_path = os.path.join(client.state_dir(), "holds", hold[1])
+        changed = _changed_under(hold[0], hold_path)
         os.close(hold[0])
+        if changed:  # I1 at release, as for a grant: nothing is written into the new directory
+            _diag(f"coreslot: state error (inode: {hold_path} changed under its holder (I1)); "
+                  "degraded mode, not recorded")
+            return status
         client.remove_hold(hold[1])
     if not client.append_log(_log_record(opts, needs, {r: lo for r, (lo, _) in needs.items()}, [],
                                          sorted(needs), 0.0, time.monotonic() - started, status, t0,
@@ -2377,7 +2408,11 @@ def cli_run(args: list[str]) -> int:
     status = spawn_and_wait(argv, child_env, grant.hold_fd, grant.token_fds())
     ran = time.monotonic() - started
     granted = grant.granted
-    grant.close()
+    try:
+        grant.close()
+    except StateError as err:  # I1 at release: report it, and write nothing into the new directory
+        _diag(f"coreslot: state error ({err}); degraded mode, not recorded")
+        return status
     if not grant.token_only:
         client.append_log(_log_record(opts, needs, granted, sorted(grant.clamped),
                                       grant.unbudgeted_resources, waited, ran, status, t0))
