@@ -39,8 +39,10 @@ The full rules are in
 
 - The directory is `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`
   elsewhere, where `~` comes from the password database (`getpwuid(getuid())`), never from `$HOME`
-  or `XDG_*`. `CORESLOT_STATE_DIR` (an absolute path) overrides it for tests and moves the
-  configuration with it. Never point `CORESLOT_STATE_DIR` below a directory another user can write to:
+  or `XDG_*`. A cgo-free build (the release archives) whose uid has no entry in `/etc/passwd` asks
+  NSS by running `getent` from a fixed system path, never one found through `$PATH`.
+  `CORESLOT_STATE_DIR` (an absolute path) overrides it for tests and moves the configuration with
+  it. Never point `CORESLOT_STATE_DIR` below a directory another user can write to:
   coreslot follows the ancestors of the state directory without checking them, so that user could
   replace one of them.
 - Every directory coreslot creates is mode `0700`, every file `0600`, created with `O_NOFOLLOW`.
