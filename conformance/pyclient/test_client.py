@@ -569,6 +569,69 @@ class LivenessTests(Base):
         self.assertEqual(kind, "admitted")
         g.close(remove_hold=False)
 
+    def test_front_window_is_four_tickets_wide(self):
+        """§10.3, I5: four stopped tickets, then a live W1, then W2. W2's elections end at W1, but
+        its front window watches all four stopped tickets, so once W1 is admitted W2 is admitted in
+        the same second. A window of three leaves the fourth unwatched until W1 goes."""
+        self.config("[resources]\ncpu = 2\n")
+        q = os.path.join(self.S, "queue")
+        for i in range(1, 5):
+            self.write(os.path.join(q, f"0000000000000000000{i}-0000000001-000001"), body(), lock=True)
+        clock = FakeClock()
+        w1 = self.client(observer_clock=clock).enqueue("w1", 0, {"cpu": 1})
+        w2 = self.client(observer_clock=clock).enqueue("w2", 0, {"cpu": 1})
+        w1_path = os.path.join(q, w1.name)
+        g1 = None
+        for s in range(15):
+            os.utime(w1_path, ns=(s + 1, s + 1))  # W1 refreshes every second, as a live waiter does
+            kind, value = w1.step()
+            if kind == "admitted":
+                g1 = value
+            kind2, value2 = w2.step()
+            if g1 is None:
+                self.assertEqual(kind2, "waiting", f"W2 admitted before W1, at {s} s")
+            else:
+                self.assertEqual(kind2, "admitted", f"W2 not admitted in the second W1 was, at {s} s")
+                self.assertGreaterEqual(s, 10)
+                self.assertEqual((g1.tokens, value2.tokens), ({"cpu": [0]}, {"cpu": [1]}))
+                value2.close(remove_hold=False)
+                g1.close(remove_hold=False)
+                return
+            clock.t += 1.0
+        self.fail("W1 was never admitted")
+
+    def test_head_backoff_starts_at_a_quarter_second(self):
+        """§10.3, §22: the head retries admission after 0.25 s, then doubles up to 2 s; a waiter
+        that is not the head polls every second and starts over at 0.25 s when it is head again.
+        A token-only waiter (§15.2) retries with the same backoff."""
+        self.config("[resources]\ncpu = 1\n")
+        self.lock(os.path.join(self.S, "res", "cpu", "0"))  # nothing is free
+        clock = FakeClock()
+        h = self.client(observer_clock=clock).enqueue("h", 0, {"cpu": 1})
+        delays = []
+        for _ in range(6):
+            self.assertEqual(h.step(), ("waiting", 1))
+            delays.append(h.poll_delay())
+        self.assertEqual(delays, [0.25, 0.5, 1.0, 2.0, 2.0, 2.0])
+        ahead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+        self.write(ahead, body(), lock=True)
+        g = self.gen()
+        self.write(os.path.join(self.S, "gen"), json.dumps(dict(g, gen=g["gen"] + 1)).encode())
+        self.assertEqual(h.step(), ("waiting", 2))
+        self.assertEqual(h.poll_delay(), 1.0)
+        os.unlink(ahead)
+        self.assertEqual(h.step(), ("waiting", 1))
+        self.assertEqual(h.poll_delay(), 0.25)
+        h.withdraw()
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 2\n")
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+        self.assertTrue(t.token_only)
+        delays = []
+        for _ in range(3):
+            self.assertEqual(t.step(), ("waiting", 0))
+            delays.append(t.poll_delay())
+        self.assertEqual(delays, [0.25, 0.5, 1.0])
+
     def test_position_counts_only_well_formed_tickets(self):
         """§10.3: position is 1 plus the tickets ahead not passed over, malformed ones excluded."""
         self.config("[resources]\ncpu = 1\n")
@@ -714,6 +777,36 @@ class AdmissionTests(Base):
         clock.t += 1.0
         self.assertEqual(h.step(), ("waiting", 2))
         h.withdraw()
+
+    def test_minimum_pass_shortfall_leaves_without_publishing(self):
+        """§12.1 step 6.1, I7: a probe locks a token momentarily after the head counted it free and
+        before the minimum pass. The pass ends below the minimum, so the head closes what it took,
+        publishes nothing and waits; once the probe is gone it is admitted with its minimum."""
+        self.config("[resources]\ncpu = 2\n")
+        h = self.client(observer_clock=FakeClock()).enqueue("h", 0, {"cpu": 2})
+        token0 = os.path.join(self.S, "res", "cpu", "0")
+        os.makedirs(os.path.dirname(token0), 0o700)
+        real_reelect = h._reelect
+        probe: list[int] = []
+
+        def reelect_then_probe():
+            ok = real_reelect()  # counted free and re-elected: the plan is made ...
+            fd = os.open(token0, os.O_RDONLY | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # ... and a probe takes token 0
+            probe.append(fd)
+            return ok
+
+        h._reelect = reelect_then_probe
+        self.assertEqual(h.step(), ("waiting", 1))
+        self.assertEqual(self.ls("holds"), [])
+        self.assertIs(cc._probe_path(os.path.join(self.S, "res", "cpu", "1")), True,
+                      "token 1, taken in the minimum pass, was not closed")
+        h._reelect = real_reelect
+        os.close(probe.pop())  # the probe is over
+        kind, g = h.step()
+        self.assertEqual(kind, "admitted")
+        self.assertEqual(g.tokens, {"cpu": [0, 1]})
+        g.close(remove_hold=False)
 
     def test_admission_with_clamp(self):
         """§21.3: cpu size 10 with 14 token files, cpu=16..16 and pg-local=1."""
@@ -910,6 +1003,25 @@ class ReconciliationTests(Base):
         self.assertEqual(g["gen"], 72)
         self.assertLess(abs(g["reconciled_ns"] - time.time_ns()), 5 * 10**9)
 
+    def test_reconciliation_runs_at_most_once_per_30_s(self):
+        """§10.4: an entry reconciles only when `reconciled_ns` is more than 30 s old, or more than
+        30 s in the future. Within 30 s either way a dead ticket stays and only the enqueue bumps."""
+        c = self.client()
+        for offset_s, due in ((-25, False), (25, False), (-35, True), (35, True)):
+            dead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
+            self.write(dead, body())
+            r = time.time_ns() + offset_s * 10**9
+            self.write(os.path.join(self.S, "gen"), json.dumps({"gen": 5, "reconciled_ns": r}).encode())
+            t = c.enqueue("x", 0, {"cpu": 1})
+            g = self.gen()
+            self.assertEqual(not os.path.exists(dead), due, f"reconciled_ns {offset_s:+d} s")
+            if due:
+                self.assertEqual(g["gen"], 7, f"reconciled_ns {offset_s:+d} s")
+                self.assertLess(abs(g["reconciled_ns"] - time.time_ns()), 5 * 10**9)
+            else:
+                self.assertEqual(g, {"gen": 6, "reconciled_ns": r}, f"reconciled_ns {offset_s:+d} s")
+            t.withdraw()
+
     def test_a_stray_never_protects_a_cancel_request(self):
         """§10.3/§10.4 step 2: a queue/ entry ignored as a stray is no entry; its cancel request goes."""
         self.write(os.path.join(self.S, "gen"), b'{"gen": 3, "reconciled_ns": 0}')  # reconciliation due
@@ -1023,6 +1135,110 @@ class LauncherTests(Base):
         p = self.cli("run", "--", "true", env=env, stderr=subprocess.DEVNULL)
         self.assertEqual(p.wait(timeout=20), 75)
         self.assertEqual(self.ls("queue"), [])
+
+
+    def test_json_output_escapes_c1_line_and_bidi_controls(self):
+        """The run log, tickets and holds escape C1 controls, the line and paragraph separators and
+        the bidirectional controls in a label as \\uXXXX, so no line carries them raw; the decoded
+        label is unchanged."""
+        controls = ["\u0080", "\u0085", "\u009f", "؜", "‎", "‏", " ", " ",
+                    *map(chr, range(0x202A, 0x202F)), *map(chr, range(0x2066, 0x206A))]
+        label = "a" + "".join(controls) + "é"
+        self.config("[resources]\ncpu = 2\n")
+        p = self.cli("run", "--label", label, "--", "true")
+        self.assertEqual(p.wait(timeout=20), 0)
+        t = self.client().enqueue(label, 0, {"cpu": 1})
+        kind, g = t.step()
+        self.assertEqual(kind, "admitted")
+        blobs = [self.read("log", "runs.jsonl"), self.read("holds", g.hold_name)]
+        t2 = self.client().enqueue(label, 0, {"cpu": 2})
+        blobs.append(self.read("queue", t2.name))
+        for raw in blobs:
+            text = raw.decode("utf-8")
+            for ch in controls:
+                self.assertNotIn(ch, text, f"U+{ord(ch):04X} written raw")
+                self.assertIn(f"\\u{ord(ch):04x}", text)
+            self.assertIn("é", text)  # printable non-ASCII stays as it is
+            self.assertEqual(json.loads(text.splitlines()[0])["label"], label)
+        t2.withdraw()
+        g.close(remove_hold=False)
+
+    def test_pass_through_needs_a_fresh_probe_to_fail(self):
+        """§18 rule 2: a descriptor on a token file validates only while a fresh probe of the
+        token's path fails. An unlocked one (the parent run is gone) is an invalid context."""
+        token = os.path.join(self.S, "res", "cpu", "0")
+        self.write(token, b"")
+        fd = os.open(token, os.O_RDONLY)
+        self.fds.append(fd)
+        with self.assertRaisesRegex(cc.InvalidContext, "is not held"):
+            cc.validate_passthrough(self.client(), str(fd))
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # now the grant holds it
+        self.assertEqual(cc.validate_passthrough(self.client(), str(fd)), {"cpu": 1})
+
+
+class ReleaseIdentityTests(Base):
+    """I1 at release: a holder whose state directory was deleted and recreated under it reports a
+    state error and touches nothing in the new directory (AMBIGUITIES.md E8)."""
+
+    def tree(self) -> dict:
+        out = {}
+        for root, dirs, files in os.walk(self.S):
+            for n in dirs + files:
+                p = os.path.join(root, n)
+                st = os.lstat(p)
+                data = None
+                if os.path.isfile(p):
+                    with open(p, "rb") as fh:
+                        data = fh.read()
+                out[os.path.relpath(p, self.S)] = (st.st_ino, st.st_mtime_ns, data)
+        return out
+
+    def test_grant_release_after_the_directory_was_recreated(self):
+        self.config("[resources]\ncpu = 2\n")
+        kind, g = self.client().enqueue("h", 0, {"cpu": 1}).step()
+        self.assertEqual(kind, "admitted")
+        shutil.rmtree(self.S)
+        # The new directory, as another client left it: FORMAT, gen, and a dead hold that happens
+        # to bear the old hold's name. Releasing must neither enter its section nor remove that hold.
+        self.config("[resources]\ncpu = 2\n")
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 1\n")
+        self.write(os.path.join(self.S, "gen"), b'{"gen": 1, "reconciled_ns": 0}')
+        self.write(os.path.join(self.S, "holds", g.hold_name), b"{}")
+        before = self.tree()
+        with self.assertRaises(cc.StateError) as cm:
+            g.close()
+        self.assertEqual(cm.exception.reason, "inode")
+        self.assertTrue(g.closed)
+        self.assertIsNone(g.hold_fd)
+        self.assertEqual(self.tree(), before)
+        g.close()  # a second close is a no-op
+
+    def test_token_only_grant_checks_identity_at_release(self):
+        self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol 2\n")
+        kind, g = self.client().enqueue("t", 0, {"cpu": 1}).step()
+        self.assertEqual((kind, g.token_only), ("admitted", True))
+        token = os.path.join(self.S, "res", "cpu", "0")
+        os.unlink(token)
+        self.write(token, b"")  # replaced: a different inode at the token's path
+        with self.assertRaises(cc.StateError):
+            g.close()
+
+    def test_cli_release_after_the_directory_was_recreated(self):
+        self.config("[resources]\ncpu = 2\n")
+        script = 'rm -rf "$CORESLOT_STATE_DIR" && mkdir -m 700 "$CORESLOT_STATE_DIR"'
+        p = self.cli("run", "--need", "cpu=1", "--", "sh", "-c", script, stderr=subprocess.PIPE)
+        _, err = p.communicate(timeout=20)
+        self.assertEqual(p.returncode, 0, err)  # the command's own status
+        self.assertIn(b"state error (inode", err)
+        self.assertEqual(os.listdir(self.S), [])  # no admit.lock, FORMAT, gen, degraded or log
+        # A fail-open run's unbudgeted hold is released the same way.
+        self.config("[resources]\ncpu = 0\n")
+        p = self.cli("run", "--need", "cpu=1", "--", "sh", "-c", script, stderr=subprocess.PIPE)
+        _, err = p.communicate(timeout=20)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertIn(b"state error (config", err)
+        self.assertIn(b"state error (inode", err)
+        self.assertEqual(os.listdir(self.S), [])
 
 
 class AlignmentTests(Base):
