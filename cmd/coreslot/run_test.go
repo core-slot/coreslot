@@ -86,6 +86,33 @@ func runHelper(name string, args []string) int {
 			fmt.Printf("hold %s unbudgeted=%v\n", h.Label, h.Unbudgeted)
 		}
 		return 0
+	case "inherit-fds":
+		// Open args[0] descriptors on the null device, not close-on-exec, and exec args[1:] with
+		// them inherited and without this variable, so that a coreslot it starts is coreslot.
+		n, err := strconv.Atoi(args[0])
+		if err != nil || len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "inherit-fds: want a count and a command")
+			return 2
+		}
+		for range n {
+			if _, err := unix.Open(os.DevNull, unix.O_RDONLY, 0); err != nil {
+				fmt.Fprintln(os.Stderr, "inherit-fds:", err)
+				return 1
+			}
+		}
+		path, err := exec.LookPath(args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "inherit-fds:", err)
+			return 1
+		}
+		var env []string
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, helperEnv+"=") {
+				env = append(env, kv)
+			}
+		}
+		fmt.Fprintln(os.Stderr, "inherit-fds:", unix.Exec(path, args[1:], env))
+		return 1
 	case "close-and-wait":
 		// Close every descriptor from 3, report it in args[0], keep working until args[1] exists.
 		for fd := 3; fd < 1024; fd++ {
@@ -686,6 +713,134 @@ func TestChildRlimitRaised(t *testing.T) {
 			t.Errorf("started with a soft limit of %d, %s: the command's soft limit is %s, want %d",
 				tc.soft, tc.script, got, tc.want)
 		}
+	}
+}
+
+// bigGrantConfig is a budget on which `--need cpu=150 --need io=150` is a grant of 300 tokens and
+// a hold: 301 descriptors.
+const bigGrantConfig = "[resources]\ncpu = 150\nio = 150\n"
+
+// wantRlimitAtLeast runs cmd, a run whose command prints its soft descriptor limit, and fails the
+// test unless the run succeeded without a word on its standard error and gave the command at
+// least floor. It skips when the hard limit or the cap leaves no room for twice floor.
+func wantRlimitAtLeast(t *testing.T, cmd *exec.Cmd, floor uint64) {
+	t.Helper()
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Fatal(err)
+	}
+	if uint64(lim.Max) < 2*floor || (fileCap() > 0 && fileCap() < 2*floor) {
+		t.Skipf("the hard limit %d or the cap %d leaves no room above %d", lim.Max, fileCap(), floor)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%v (stderr %q)", err, stderr.String())
+	}
+	if stderr.Len() > 0 {
+		t.Errorf("stderr %q, want nothing", stderr.String())
+	}
+	got, err := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		t.Fatalf("the command printed %q, not its soft limit", out)
+	}
+	if got < floor {
+		t.Errorf("the command's soft limit is %d, want at least %d", got, floor)
+	}
+}
+
+// The soft descriptor limit a run sets for its command is its own too, until the command has
+// started and the run has appended its run-log line, so it is never below the run's highest open
+// descriptor plus 256. Started under a soft limit of 256 with 250 inherited descriptors at fds 3
+// to 252, a run holds its 301-descriptor grant at fd 253 and above, and its command gets at least
+// 554 + 256. Mutations in raiseChildNofile: base := original (512), or a floor of
+// 3+len(ExtraFiles) without the descriptor scan (560), and the run cannot start its command
+// (exit 70).
+func TestRunRlimitCoversInheritedDescriptors(t *testing.T) {
+	dir := stateDir(t, bigGrantConfig)
+	cmd := shCmd(t, baseEnv(dir), `exec env `+helperEnv+`=inherit-fds "$0" 250 sh -c 'ulimit -S -n 256 && `+
+		`exec "$0" run --need cpu=150 --need io=150 -- sh -c "ulimit -S -n"' "$0"`, cliBinary(t))
+	wantRlimitAtLeast(t, cmd, 253+301+256)
+}
+
+// A pass-through passes its grant on by inheritance, not in ExtraFiles, and still never sets its
+// own soft limit below its highest open descriptor plus 256. Its caller lowered the soft limit to
+// 16 under a 301-descriptor grant at fds 3 to 303, so its command gets at least 304 + 256. Only
+// Linux starts a program with descriptors above its soft limit, and only a statically linked one,
+// as a release build is: macOS's dyld aborts it, and the dynamic loader cannot open libc. So the
+// test builds a cgo-free coreslot rather than run the test binary, which may be dynamically
+// linked. Mutations in raiseChildNofile: base := original, or a floor of 3+len(ExtraFiles)
+// without the descriptor scan (both 272), and the pass-through cannot start its command (exit
+// 70).
+func TestPassThroughRlimitCoversItsGrant(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("only Linux starts a program with descriptors above its soft limit")
+	}
+	bin := filepath.Join(t.TempDir(), "coreslot")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	dir := stateDir(t, bigGrantConfig)
+	cmd := shCmd(t, baseEnv(dir), `exec "$0" run --need cpu=150 --need io=150 -- sh -c 'ulimit -S -n 16 && `+
+		`exec "$0" run --need cpu=150 --need io=150 -- sh -c "ulimit -S -n"' "$0"`, bin)
+	wantRlimitAtLeast(t, cmd, 304+256)
+}
+
+// childNofile adds 256 to the highest of the original limit, the highest open descriptor plus 1
+// and the descriptors placed from 0, within the hard limit; descriptors that cannot be listed
+// leave the observed limit in place. Mutations: base := original (every case but the first goes
+// red); a floor of 3+len(ExtraFiles) alone, without the listed branch and its fallback (the open,
+// unlisted and hard cases go red).
+func TestChildNofile(t *testing.T) {
+	if c := fileCap(); c > 0 && c < 1<<16 {
+		t.Skipf("the cap %d is below the limits the cases expect", c)
+	}
+	const big = 1 << 20
+	for _, tc := range []struct {
+		name               string
+		original           uint64
+		inherited, highest int
+		listed             bool
+		current, hard      uint64
+		want               uint64
+	}{
+		{"original", 1024, 0, 20, true, big, big, 1280},
+		{"inherited", 256, 304, 20, true, big, big, 560},
+		{"open", 256, 0, 400, true, big, big, 657},
+		{"unlisted", 256, 0, 0, false, 10000, big, 10256},
+		{"hard", 256, 0, 400, true, big, 600, 600},
+	} {
+		if got := childNofile(tc.original, tc.inherited, tc.highest, tc.listed, tc.current, tc.hard); got != tc.want {
+			t.Errorf("%s: childNofile = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// highestOpenFD sees a descriptor opened above every other, and no longer once it is closed.
+// Mutation: return the number of entries instead of the highest (the dup above them goes
+// unseen).
+func TestHighestOpenFD(t *testing.T) {
+	if fdDir == "" {
+		t.Skip("no descriptor listing is known on this platform")
+	}
+	before, ok := highestOpenFD()
+	if !ok {
+		t.Fatalf("%s could not be listed", fdDir)
+	}
+	high := before + 100
+	if err := unix.Dup2(0, high); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := highestOpenFD()
+	unix.Close(high)
+	if !ok || got != high {
+		t.Errorf("with fd %d open: highestOpenFD = %d, %v", high, got, ok)
+	}
+	if got, ok := highestOpenFD(); !ok || got >= high {
+		t.Errorf("with fd %d closed: highestOpenFD = %d, %v", high, got, ok)
 	}
 }
 

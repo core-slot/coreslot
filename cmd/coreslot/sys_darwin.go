@@ -33,6 +33,9 @@ func fileCap() uint64 {
 	return uint64(n)
 }
 
+// fdDir is the directory that lists this process's open descriptors by number.
+const fdDir = "/dev/fd"
+
 // stopSelf stops the process with SIGSTOP; a signal a process sends itself is delivered before
 // kill returns.
 func stopSelf() { _ = unix.Kill(unix.Getpid(), unix.SIGSTOP) }

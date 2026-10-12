@@ -337,7 +337,11 @@ to at least the inherited count plus 256 when the hard limit allows.
 
 > **Implementation note.** The Go runtime raises its own soft limit at start-up, so the Go CLI
 > learns the soft limit it inherited from a `/bin/sh -c 'ulimit -S -n'` it starts before it sets
-> any limit, which the runtime gives that original limit.
+> any limit, which the runtime gives that original limit. The limit it sets is its own as well,
+> and it still opens descriptors under it to start the command and to write the run log, so it
+> adds 256 to the highest of that original limit, its own highest open descriptor plus one, and
+> the count of descriptors it places from fd 0; a pass-through's inherited grant is among its open
+> descriptors.
 
 The **locked count** of a resource is the number of its existing token files, at every index that
 exists, whose probe fails with `EWOULDBLOCK`. Probing a token is permitted inside and outside the
