@@ -49,6 +49,7 @@ import tomllib
 FORMAT_VERSION = 1
 REFRESH_S = 2.0
 STALL_S = 10.0
+MAX_PASS_GAP_S = 2.0  # §10.2: a longer interval between an observer's own passes is not watched
 POLL_S = 1.0
 HEAD_BACKOFF_MIN, HEAD_BACKOFF_MAX = 0.25, 2.0
 FRONT_WINDOW = 4  # §10.3: tickets at the front of the queue every election also watches
@@ -1524,9 +1525,11 @@ class Ticket:
         self._gen_seen = None
         self._queue: list[str] = []
         # name -> (mtime, since, at, pass): the unchanged time counts from `since`; `at` and
-        # `pass` are the observer time and election of the last examination (§10.2).
+        # `pass` are the watched time and election of the last examination (§10.2).
         self._obs: dict[str, tuple[int, float, float, int]] = {}
         self._pass = 0
+        self._last_seen_at: float | None = None  # observer time of the latest pass or examination
+        self._unwatched = 0.0  # the observer's own absences: watched time is observer time minus this
         self._valid: dict[str, bool] = {}
         self._last_refresh_m = time.monotonic()
         self._last_refresh_w = time.time_ns()
@@ -1593,22 +1596,34 @@ class Ticket:
         self._nonmatching = ignored
         self.client.ignored_entries = ignored
 
+    def _begin_pass(self, now: float) -> None:
+        """Start an election at observer time `now` (§10.2): more than MAX_PASS_GAP_S since the
+        observer's previous examination means it was stopped, suspended or starved, and that
+        interval adds no watched time to any ticket."""
+        last = self._last_seen_at
+        if last is not None and self._pass > 0 and now - last > MAX_PASS_GAP_S:
+            self._unwatched += now - last  # the observer's own absence is not watched
+        self._pass += 1
+        self._last_seen_at = now if last is None else max(last, now)
+
     def _observe(self, name: str, mtime: int, now: float) -> bool:
         """Record an mtime read at observer time `now`; True when the ticket is STALLED (§10.2).
 
         Only watched time counts: a ticket left unexamined by the previous election gets no
-        credit for the interval since it was last examined, though a changed value still restarts
-        its timer.
+        credit for the interval since it was last examined, nor does any ticket for the
+        observer's own absence (see _begin_pass), though a changed value still restarts its timer.
         """
+        self._last_seen_at = now if self._last_seen_at is None else max(self._last_seen_at, now)
+        w = now - self._unwatched
         seen = self._obs.get(name)
         if seen is None or seen[0] != mtime:
-            self._obs[name] = (mtime, now, now, self._pass)
+            self._obs[name] = (mtime, w, w, self._pass)
             return False
         _, since, at, last_pass = seen
         if self._pass > last_pass + 1:
-            since += now - at  # the unwatched interval does not count
-        self._obs[name] = (mtime, since, now, self._pass)
-        return now - since >= STALL_S
+            since += w - at  # the unwatched interval does not count
+        self._obs[name] = (mtime, since, w, self._pass)
+        return w - since >= STALL_S
 
     def _open_valid(self, name: str):
         """Open a queue entry: an fd, or 'gone' or 'ignored' (§4.2, §7.2)."""
@@ -1694,7 +1709,7 @@ class Ticket:
         non-stalled one, and watch the front window. Returns the position: 1 is the head, else
         1 plus the tickets ahead not passed over (those beyond the end of the scan count)."""
         now = self.client.observer_clock()
-        self._pass += 1
+        self._begin_pass(now)
         ahead = [n for n in self._queue if n[:ID_LEN] < self.id]
         examined: set[str] = set()
         gone: set[str] = set()
