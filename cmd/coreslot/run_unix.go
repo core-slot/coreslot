@@ -55,7 +55,7 @@ type run struct {
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
 func runCommand(args []string, io IO) int {
-	o, err := parseRun(args, io.Stderr)
+	o, err := parseRun(args, io)
 	if errors.Is(err, errHelp) {
 		return 0
 	}
