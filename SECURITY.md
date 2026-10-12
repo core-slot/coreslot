@@ -66,4 +66,7 @@ requires write access to the user's state directory or configuration, and a comm
 its grant. Reports about them are welcome as ordinary issues when coreslot could detect or report
 the situation better.
 
-coreslot sends no telemetry and opens no network connection.
+coreslot sends no telemetry and opens no network connection itself. Looking up the user's home
+directory (`getpwuid`, or the `getent` fallback of a cgo-free build) goes through the system's
+name services (NSS on Linux, Open Directory on macOS), which may contact a directory service such
+as LDAP, as any program that looks up the user does.

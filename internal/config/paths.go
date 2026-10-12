@@ -155,20 +155,8 @@ func StateDir() (dir string, override bool, err error) {
 // override comes from getenv; the default comes from the password database, never the
 // environment.
 func StateDirFrom(getenv func(string) string) (dir string, override bool, err error) {
-	if v := getenv(StateDirEnv); v != "" {
-		if !filepath.IsAbs(v) {
-			return "", true, fmt.Errorf("%s=%q is not an absolute path", StateDirEnv, v)
-		}
-		return filepath.Clean(v), true, nil
-	}
-	home, err := Home()
-	if err != nil {
-		return "", false, err
-	}
-	if runtime.GOOS == "darwin" {
-		return filepath.Join(home, "Library", "Application Support", "coreslot"), false, nil
-	}
-	return filepath.Join(home, ".local", "state", "coreslot"), false, nil
+	dir, override, _, err = locate(getenv, Home)
+	return dir, override, err
 }
 
 // Path returns the configuration file: <statedir>/config.toml under the state-directory
@@ -183,16 +171,29 @@ func Path() (string, error) {
 // of the budget uses: CORESLOT_STATE_DIR with <statedir>/config.toml, or the defaults of
 // PROTOCOL.md section 4.1 with <home>/.config/coreslot/config.toml.
 func Locate() (dir, cfgPath string, err error) {
-	dir, override, err := StateDir()
+	dir, _, cfgPath, err = locate(os.Getenv, Home)
+	return dir, cfgPath, err
+}
+
+// locate is the rule of PROTOCOL.md section 4.1 behind StateDirFrom and Locate: the state
+// directory, whether it is the override, and its configuration file. It calls home at most once,
+// since a lookup can start getent (Home) and the default state directory and configuration file
+// both derive from the one home directory.
+func locate(getenv func(string) string, home func() (string, error)) (dir string, override bool, cfgPath string, err error) {
+	if v := getenv(StateDirEnv); v != "" {
+		if !filepath.IsAbs(v) {
+			return "", true, "", fmt.Errorf("%s=%q is not an absolute path", StateDirEnv, v)
+		}
+		dir = filepath.Clean(v)
+		return dir, true, filepath.Join(dir, "config.toml"), nil
+	}
+	h, err := home()
 	if err != nil {
-		return "", "", err
+		return "", false, "", err
 	}
-	if override {
-		return dir, filepath.Join(dir, "config.toml"), nil
+	dir = filepath.Join(h, ".local", "state", "coreslot")
+	if runtime.GOOS == "darwin" {
+		dir = filepath.Join(h, "Library", "Application Support", "coreslot")
 	}
-	home, err := Home()
-	if err != nil {
-		return "", "", err
-	}
-	return dir, filepath.Join(home, ".config", "coreslot", "config.toml"), nil
+	return dir, false, filepath.Join(h, ".config", "coreslot", "config.toml"), nil
 }
