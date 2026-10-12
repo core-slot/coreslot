@@ -1,2 +1,5 @@
 # GoReleaser output (goreleaser release --snapshot --clean)
 /dist/
+
+# A `go build ./cmd/coreslot` at the root
+/coreslot
