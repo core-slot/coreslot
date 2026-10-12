@@ -86,6 +86,8 @@ func EncodeDegraded(d Degraded) ([]byte, error) {
 	return encodeCompact(degradedJSON(d))
 }
 
+// encodeCompact writes v as compact JSON without HTML escaping and without the trailing newline,
+// as every body is written; a body over MaxBodyBytes is refused with ErrMalformed.
 func encodeCompact(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

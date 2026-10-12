@@ -1,8 +1,6 @@
 package wire
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -109,17 +107,7 @@ func Encode(v any) ([]byte, error) {
 	if err := validate(v); err != nil {
 		return nil, err
 	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(out); err != nil {
-		return nil, malformed("%v", err)
-	}
-	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
-	if len(b) > MaxBodyBytes {
-		return nil, malformed("body is %d bytes, at most %d", len(b), MaxBodyBytes)
-	}
-	return b, nil
+	return encodeCompact(out)
 }
 
 func validate(v any) error {
