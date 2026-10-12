@@ -700,11 +700,15 @@ func TestDoctorReportsLimits(t *testing.T) {
 		t.Errorf("doctor under ulimit -n 300: exit %d, %v:\n%s", code, err, out)
 	}
 
-	// An invalid configuration is a problem, reported with its reason.
+	// An invalid configuration is a problem, reported with its reason, which already names the
+	// file: the word "configuration" is printed once. Mutation: put the "configuration: " label
+	// back in front of a reason that begins with it.
 	bad := stateDir(t, "[resources]\ncpu = \"lots\"\n")
 	r = cli(t, baseEnv(bad), "doctor")
-	if r.code != 1 || !strings.Contains(r.stdout, "PROBLEM: configuration:") {
-		t.Errorf("doctor with an invalid configuration: exit %d:\n%s", r.code, r.stdout)
+	want := "\nPROBLEM: configuration " + filepath.Join(bad, "config.toml") +
+		`: [resources] cpu: size "lots": want an integer, "N%" or "-K"` + "\n"
+	if r.code != 1 || !strings.Contains(r.stdout, want) {
+		t.Errorf("doctor with an invalid configuration: exit %d, want the line %q in:\n%s", r.code, want, r.stdout)
 	}
 }
 
