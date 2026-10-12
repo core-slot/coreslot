@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Nezhinskiy/coreslot"
+	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
 type kind int
@@ -77,6 +78,9 @@ type result struct {
 	AllChildrenS   float64 `json:"all_children_wait4_cpu_s"`
 	RusageChildren float64 `json:"rusage_children_delta_s"`
 	WarmupS        float64 `json:"warmup_s"`
+	GenStart       uint64  `json:"gen_start"`
+	GenEnd         uint64  `json:"gen_end"`
+	GenSeconds     int     `json:"seconds_with_gen_change"`
 	LoadStart      string  `json:"load_start"`
 	LoadEnd        string  `json:"load_end"`
 }
@@ -85,10 +89,10 @@ func (r result) line() string {
 	return fmt.Sprintf("run %d: %.3f %% of one core (waiters %.3f s CPU over %.1f s; mean %.0f waiters, "+
 		"%.1f us CPU per waiter-second); arrivals %d, admitted %d, cancelled %d, withdrawn %d, stopped %d, "+
 		"errors %d; control %.3f s; whole run: wait4 sum %.3f s, RUSAGE_CHILDREN %.3f s; warm-up %.0f s; "+
-		"load %s -> %s",
+		"gen %d -> %d, changed in %d of the window's seconds; load %s -> %s",
 		r.Run, r.Percent, r.WaiterCPUS, r.WindowS, r.MeanWaiters, r.MicrosPerWS, r.Arrivals, r.Admitted,
 		r.Cancelled, r.Withdrawn, r.Stopped, r.Errors, r.ControlCPUS, r.AllChildrenS, r.RusageChildren,
-		r.WarmupS, r.LoadStart, r.LoadEnd)
+		r.WarmupS, r.GenStart, r.GenEnd, r.GenSeconds, r.LoadStart, r.LoadEnd)
 }
 
 // group is the live process group, killed by the harness's own signal handler.
@@ -131,6 +135,8 @@ type bench struct {
 	t0      time.Time
 	inWin   bool
 	res     result
+	lastGen uint64
+	st      *store.Store
 }
 
 type action struct {
@@ -140,6 +146,12 @@ type action struct {
 
 func runOnce(p params, run int) (result, error) {
 	dir := filepath.Join(p.dir, fmt.Sprintf("run-%d-%d", run, time.Now().UnixNano()))
+	failed := true
+	defer func() {
+		if !failed {
+			_ = os.RemoveAll(dir) // the run's state directory and children's stderr; kept on failure
+		}
+	}()
 	b := &bench{p: p, run: run, state: filepath.Join(dir, "state"), byPID: map[int]*proc{},
 		lines: make(chan lineEvent, 1<<16), exits: make(chan exitEvent, 1<<14),
 		rng: rand.New(rand.NewPCG(uint64(run), 18))}
@@ -216,18 +228,24 @@ func runOnce(p params, run int) (result, error) {
 	}
 	b.res.WarmupS = time.Since(start).Seconds()
 
-	// The window opens: every waiter reports its own CPU so far.
-	b.t0 = time.Now()
-	b.inWin = true
+	// The window opens once every waiter has reported its own CPU so far; the CPU between a
+	// waiter's report and the opening is counted, its wall time is not (a slight overestimate).
 	for _, w := range b.procs {
 		if w.kind == kindWaiter && !w.exited {
 			w.preWindow, w.baseline = true, -1
 			_ = syscall.Kill(w.pid, syscall.SIGUSR1)
 		}
 	}
-	if err := b.pump(b.t0.Add(time.Minute), b.baselinesIn); err != nil {
+	if err := b.pump(time.Now().Add(time.Minute), b.baselinesIn); err != nil {
 		return result{}, fmt.Errorf("baselines: %w", err)
 	}
+	b.t0 = time.Now()
+	b.inWin = true
+	if b.lastGen, err = b.gen(); err != nil {
+		return result{}, err
+	}
+	b.res.GenStart = b.lastGen
+	b.at(b.t0.Add(time.Second), b.sampleGen)
 	for k := 0; ; k++ {
 		at := b.t0.Add(p.BurstEvery/2 + time.Duration(k)*p.BurstEvery)
 		if at.After(b.t0.Add(p.Duration)) {
@@ -241,6 +259,9 @@ func runOnce(p params, run int) (result, error) {
 	}
 
 	// The window closes: the whole group dies at once and every child is reaped.
+	if b.res.GenEnd, err = b.gen(); err != nil {
+		return result{}, err
+	}
 	t1 = time.Now()
 	b.inWin = false
 	_ = syscall.Kill(-b.pgid, syscall.SIGKILL)
@@ -290,7 +311,41 @@ func runOnce(p params, run int) (result, error) {
 	b.res.ControlCPUS = float64(control) / 1e9
 	b.res.AllChildrenS = float64(all) / 1e9
 	b.res.RusageChildren = float64(rusageCPU(&ru1)-rusageCPU(&ru0)) / 1e9
+	failed = false
 	return b.res, nil
+}
+
+// gen reads the state directory's gen counter (one small file read, no listing or probe).
+func (b *bench) gen() (uint64, error) {
+	if b.st == nil {
+		st, err := store.Open(b.state)
+		if err != nil {
+			return 0, err
+		}
+		b.st = st
+	}
+	g, err := b.st.ReadGen()
+	return g.N, err
+}
+
+// sampleGen reads gen once a second during the window and counts the seconds in which it
+// changed: each such second makes every waiter rescan queue/ once.
+func (b *bench) sampleGen() error {
+	if !b.inWin {
+		return nil
+	}
+	g, err := b.gen()
+	if err != nil {
+		return err
+	}
+	if g != b.lastGen {
+		b.res.GenSeconds++
+		b.lastGen = g
+	}
+	if next := time.Now().Add(time.Second); next.Before(b.t0.Add(b.p.Duration)) {
+		b.at(next, b.sampleGen)
+	}
+	return nil
 }
 
 func rusageCPU(ru *syscall.Rusage) int64 { return ru.Utime.Nano() + ru.Stime.Nano() }
@@ -563,6 +618,19 @@ func (b *bench) readopt() error {
 func (b *bench) adoptAll(within time.Duration) error {
 	deadline := time.Now().Add(within)
 	for len(b.grants) < b.p.Size && time.Now().Before(deadline) {
+		// Adopt only a token that is free: an adoption that comes up short publishes and removes
+		// a hold, two gen bumps that make every waiter rescan, so it is not retried blindly.
+		free, err := b.client.Free("cpu")
+		if err != nil {
+			return err
+		}
+		if free == 0 {
+			if b.inWin {
+				break // readopt tries again in a second
+			}
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
 		g, short, err := b.client.Adopt(coreslot.Request{Label: "bench-harness",
 			Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
 		if err != nil {
@@ -581,20 +649,28 @@ func (b *bench) adoptAll(within time.Duration) error {
 	return nil
 }
 
-// stallSome stops the queue head (the earliest enqueued live waiter) and Stall-1 others, and
-// continues them after stall-for.
+// stallSome stops the queue head (the first live ticket of a snapshot, when its waiter may be
+// stopped) and Stall-1 others, and continues them after stall-for.
 func (b *bench) stallSome() error {
 	cands := b.candidates()
 	if len(cands) == 0 || b.p.Stall == 0 {
 		return nil
 	}
-	head := 0
-	for i, w := range cands {
-		if w.enqSeq < cands[head].enqSeq {
-			head = i
-		}
+	rep, err := b.client.Snapshot()
+	if err != nil {
+		return err
 	}
-	cands[0], cands[head] = cands[head], cands[0]
+	for _, tk := range rep.Tickets { // in queue order
+		if tk.Dead {
+			continue
+		}
+		for i, w := range cands {
+			if w.pid == tk.PID {
+				cands[0], cands[i] = cands[i], cands[0]
+			}
+		}
+		break
+	}
 	for _, w := range cands[:min(b.p.Stall, len(cands))] {
 		if err := syscall.Kill(w.pid, syscall.SIGSTOP); err != nil {
 			continue

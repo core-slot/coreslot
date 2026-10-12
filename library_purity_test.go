@@ -24,8 +24,11 @@ func TestLibraryPurity(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
+			if path == "cmd" || path == "bench" { // the programs at the top level, not any such name
+				return filepath.SkipDir
+			}
 			switch d.Name() {
-			case "cmd", "bench", "testdata", ".git", "evidence", "docs":
+			case "testdata", ".git", "evidence", "docs":
 				if path != "." {
 					return filepath.SkipDir
 				}

@@ -67,9 +67,13 @@ median us per process-second; the loop has the shape of `Wait`'s, a timer reset 
 
 - On macOS the runtime alone is 54 us per waiter-second, 2.7 times the budget: a thousand idle
   Go processes that wake once per second cost 5.4 % of one core.
-- The 18 system calls themselves add about 160 us. Going through the engine adds about 530 us more,
-  and almost all of it is the scheduler cost of a 14-P runtime around those calls: with
-  GOMAXPROCS=1 the same waiter costs 300 us instead of 743.
+- **Correction (2026-10-12):** the 743 us and the 213 us of the syscall twin above were
+  measured an hour apart under different host load, and the difference is not the engine's. In
+  one session at a 1-minute load of 6 to 9, the twin cost 643 us and the waiter 688 us, and their
+  profiles give the Go scheduler (`runtime.schedule`) the same share, 68 % and 60 % of the samples:
+  the scheduler cost belongs to a 14-P Go runtime making those system calls, whoever makes them.
+  The engine's own work beyond the twin is about 45 us per waiter-second. Absolute figures swing
+  by a factor of 2 to 3 with host load, so only figures from one session compare.
 - The Linux figures come from a Docker Desktop VM whose rusage is tick-sampled; their spread is
   wide (the sleep loop: 142 to 801 us), so read them as an order of magnitude only.
 
@@ -149,10 +153,9 @@ in a677509.
 
 ### Reproduce
 
-These commands run from the repository root. Wrap each run in the host's heavy-work lock, for
-example `until mkdir /tmp/coreslot-heavy.lock 2>/dev/null; do sleep 5; done;
-<command>; rmdir /tmp/coreslot-heavy.lock`. Do not run above 200 waiters on a
-shared host: 1000 waiters saturated it before the fix.
+These commands run from the repository root. On a shared host, serialize heavy runs with
+whatever lock the host uses, and do not run above 200 waiters there: 1000 waiters saturated it
+before the fix.
 
 ```sh
 B=$(mktemp -d)
