@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -132,6 +133,15 @@ func killAll() {
 
 func TestMain(m *testing.M) {
 	flag.Parse()
+	// A run passes every inherited descriptor its grant variables do not name on to the command
+	// (PROTOCOL.md section 17), so a descriptor this binary inherited without close-on-exec (a CI
+	// runner hands its job steps some) would reach every command a trace starts and read there
+	// as one the run leaked. Marking them close-on-exec keeps them out of every process the
+	// harness starts; a descriptor the run itself leaks still reaches the command.
+	if err := closeInheritedOnExec(); err != nil {
+		fmt.Fprintln(os.Stderr, "conformance: cannot mark the inherited descriptors close-on-exec:", err)
+		os.Exit(1)
+	}
 	dir, err := os.MkdirTemp("", "coreslot-conformance-bin-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -153,6 +163,21 @@ func TestMain(m *testing.M) {
 	killAll()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// closeInheritedOnExec marks every open descriptor from 3 on close-on-exec. /dev/fd lists the
+// process's open descriptors on macOS and, through /proc/self/fd, on Linux.
+func closeInheritedOnExec() error {
+	ents, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		return err
+	}
+	for _, ent := range ents {
+		if fd, err := strconv.Atoi(ent.Name()); err == nil && fd >= 3 {
+			unix.CloseOnExec(fd)
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- environment
