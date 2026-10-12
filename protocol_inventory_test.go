@@ -7,12 +7,14 @@ import (
 	"testing"
 )
 
-// contractInventory is every item the contract inventory names, plus
-// the two PROTOCOL.md adds for the state-directory override:
-// `config.toml` and `CORESLOT_STATE_DIR`. title is the heading of the section that defines the
-// item, without its number; a row must link to that heading, outside the worked examples. A word
-// in the body is not enough: `gen`, `hold` or `res/` appear in many sections that do not define
-// them. mention is what the defining section's text must contain.
+// contractInventory is every shared file, field, environment variable and transition of format 1,
+// the items PROTOCOL.md's contract inventory (its section 2) must list, including the two the
+// state-directory override adds (section 4.1): `config.toml` and `CORESLOT_STATE_DIR`. The list is
+// kept here, apart from the document, so that an item added to, dropped from or renamed in only one
+// of the two fails the test. title is the heading of the section that defines the item, without its
+// number; a row must link to that heading, outside the worked examples. A word in the body is not
+// enough: `gen`, `hold` or `res/` appear in many sections that do not define them. mention is what
+// the defining section's text must contain.
 var contractInventory = []struct{ item, title, mention string }{
 	{"FORMAT", "FORMAT", "coreslot-protocol"},
 	{"admit.lock", "admit.lock", "admit.lock"},
@@ -148,7 +150,7 @@ func TestProtocolCarriesTheContractInventory(t *testing.T) {
 	count := map[string]int{}
 	for _, l := range strings.Split(inventory.text, "\n") {
 		cells := strings.Split(l, "|")
-		if !strings.HasPrefix(l, "| ") || len(cells) != 6 {
+		if !strings.HasPrefix(l, "| ") || len(cells) != 5 { // | Item | Kind | Defined in |
 			continue
 		}
 		item := strings.TrimSpace(parenthetical.ReplaceAllString(strings.TrimSpace(cells[1]), ""))

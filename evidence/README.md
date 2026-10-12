@@ -13,9 +13,10 @@ Index of the evidence scripts:
 
 ## Waiter benchmark (the release gate)
 
-**The gate (set 2026-10-12):** 100 waiters under the stated bursts ≤ 10 %
-of one core, median of five 120 s runs, on the macOS reference host; the Linux figure (Docker
-Desktop VM on the same host) is published, not gated. It is the default of `bench/waiters`; any
+**The gate (set 2026-10-12):** 100 waiters under the bursts of arrivals, admissions, cancellations
+and stall recoveries that `bench/waiters` drives ≤ 10 % of one core in aggregate, median of five
+120 s runs, on the macOS reference host; failing it blocks a release candidate; the Linux figure
+(Docker Desktop VM on the same host) is published, not gated. It is the default of `bench/waiters`; any
 other size, such as the published 1000-waiter run, is a measurement with no pass or fail.
 
 It replaces the original gate, a thousand waiters under 2 % of one core (20 us per waiter per
@@ -202,9 +203,10 @@ tickets ahead of it, for 50 s:
 | 75 % | `store.Probe`; `open(2)` alone is 72 % |
 | 13 % | `lstat(2)` |
 
-The election then read the mtime and probed the lock of every ticket ahead each second, so a
-waiter at position k made O(k) system calls per second. `Wait` stepped every 250 ms, and each Step
-read the cancel file. Both were deviations from PROTOCOL.md section 10.3.
+The election then read the mtime and probed the lock of every ticket ahead each second, so a waiter
+at position k made O(k) system calls per second. `Wait` stepped every 250 ms, and each Step read the
+cancel file. Both were deviations from PROTOCOL.md section 10.3, under which a waiter examines the
+tickets ahead once per second and stops at the first live, non-STALLED one.
 
 ### Setup
 
@@ -299,7 +301,9 @@ up, because most of each one's cost is waking a cold process and runtime.
 
 ### Other evidence
 
-`probe-docker-flock.sh` checks whether a container sees the host's flock.
+`probe-docker-flock.sh` checks whether a container sees the host's flock, which decides whether
+containers can take part in the host's budget directly or only through a client on the host
+(PROTOCOL.md section 4.3).
 
 ## Docker Desktop and host locks: `probe-docker-flock.sh`
 

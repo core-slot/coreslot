@@ -17,12 +17,11 @@ import (
 const cancelUsage = `usage: coreslot cancel <ticket-id>
        coreslot cancel --label LABEL`
 
-// cancelCommand is `coreslot cancel`: it publishes a cancel
-// request for a waiting ticket, named by the id `status` shows or by its label. A label that
-// matches several tickets, no waiting ticket, or a state directory format this client does not
-// implement is a refusal (exit 75, not --refusal-code, which belongs to `run`). The request is
-// a file the ticket's owner finds on its next poll; nothing is signalled and a grant is never
-// revoked.
+// cancelCommand is `coreslot cancel`: it publishes a cancel request (PROTOCOL.md section 13.1) for
+// a waiting ticket, named by the id `status` shows or by its label. A label that matches several
+// tickets, no waiting ticket, or a state directory format this client does not implement is a
+// refusal (exit 75, not --refusal-code, which belongs to `run`). The request is a file the ticket's
+// owner finds on its next poll; nothing is signalled and a grant is never revoked.
 func cancelCommand(args []string, io IO) int {
 	fs := flag.NewFlagSet("coreslot cancel", flag.ContinueOnError)
 	fs.SetOutput(&bytes.Buffer{})

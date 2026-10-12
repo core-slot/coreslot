@@ -29,7 +29,7 @@ const statusUsage = `usage: coreslot status [--json] [--observe DURATION]
 --observe watches the queue for DURATION to find STALLED tickets; a ticket is
 STALLED after 10s without a refresh, so use 10s or more.`
 
-// statusSchema is the version of the --json document.
+// statusSchema is the version of the --json document, carried as its "schema" member.
 const statusSchema = 1
 
 // observeEvery is how often `status --observe` reads the queue again.
@@ -236,7 +236,8 @@ func (v statusView) sectionFor() time.Duration {
 
 // ---------------------------------------------------------------- human output
 
-// text escapes user text so that an entry stays on one line.
+// text escapes user text so that an entry stays on one line: labels are user text, so human
+// output escapes their control characters and newlines (JSON output encodes them).
 func text(s string) string { return wire.EscapeHuman(s) }
 
 func labelText(label string) string {

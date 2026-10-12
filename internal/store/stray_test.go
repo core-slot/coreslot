@@ -11,9 +11,9 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-// strayEntries places, in the directory dir of the layout, one entry per way section 5.1 can
-// fail under a name that matches the directory's grammar (and one under a temporary name):
-// a symlink, a directory, a group-writable file. It returns their paths.
+// strayEntries places, in the directory dir of the layout, one entry per way the PROTOCOL.md
+// section 4.2 checks can fail under a name that matches the directory's grammar (and one under a
+// temporary name): a symlink, a directory, a group-writable file. It returns their paths.
 func strayEntries(t *testing.T, dir, dirName string) []string {
 	t.Helper()
 	var name func(seq int) string
@@ -50,9 +50,9 @@ func strayEntries(t *testing.T, dir, dirName string) []string {
 	return []string{link, sub, gw, tmpLink}
 }
 
-// Stray rule: an entry of queue/, holds/ or cancel/ whose name matches the grammar but
-// whose type, owner or mode fails section 5.1 is ignored and counted like a malformed body, and
-// reconciliation skips it and still writes gen.
+// A stray (PROTOCOL.md section 4.2): an entry of queue/, holds/ or cancel/ whose name matches the
+// grammar but whose type, owner or mode fails the section 4.2 checks is ignored and counted like a
+// malformed body, and reconciliation skips it and still writes gen.
 func TestStrayEntriesAreIgnoredCountedAndSurviveReconciliation(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
