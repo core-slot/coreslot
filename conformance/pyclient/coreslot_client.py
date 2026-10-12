@@ -86,7 +86,6 @@ FORMAT_RE = re.compile(rb"coreslot-protocol ([0-9]{1,9})\n?")
 ID_LEN = 38  # 20 + 1 + 10 + 1 + 6
 
 O_FILE = os.O_NOFOLLOW | os.O_CLOEXEC
-_ENV_PREFIX = "CORESLOT_"
 _CONTEXT_VARS = ("CORESLOT_HELD_FD", "CORESLOT_TOKEN_FDS", "CORESLOT_UNBUDGETED")
 
 
