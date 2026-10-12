@@ -381,7 +381,7 @@ func TestObserverDoesNotCountItsOwnAbsence(t *testing.T) {
 	for s := 0; s <= 4; s++ { // 1 s passes: 4 s watched
 		pass(s, 1)
 	}
-	pass(6, 1) // a gap of exactly MaxPassGap is watched: 6 s
+	pass(6, 1) // a 2 s gap is watched: 6 s
 	// The observer is away for 15 s; meanwhile changed refreshes once more and stops.
 	pass(21, 2)
 	if obs.Stalled(same, sec(21)) {
@@ -420,5 +420,28 @@ func TestObserverDoesNotCountItsOwnAbsence(t *testing.T) {
 	}
 	if edge.Stalled(same, at) {
 		t.Errorf("STALLED after nine gaps of %v, none of them watched", MaxPassGap+time.Nanosecond)
+	}
+}
+
+// An observer that passes at the library's poll contract (at least every 2 s), with scheduling
+// jitter on top, keeps watching: gaps of 2.0 to 2.4 s all count, so a stopped ticket goes STALLED
+// once 10 s of them have passed, and not before.
+func TestObserverWatchesAtThePollContract(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	obs := &Observer{}
+	key := k(1, 1, 1)
+	obs.Pass(0)
+	obs.Observe(key, 42, 0)
+	now := time.Duration(0)
+	for i, gap := range []time.Duration{ms(2200), ms(2400), ms(2000), ms(2300), ms(2100), ms(2200)} {
+		now += gap
+		obs.Pass(now)
+		obs.Observe(key, 42, now)
+		if want := now >= StallAfter; obs.Stalled(key, now) != want {
+			t.Fatalf("pass %d at %v (gap %v): STALLED %v, want %v", i+1, now, gap, !want, want)
+		}
+	}
+	if !obs.Stalled(key, now) {
+		t.Fatalf("not STALLED after %v of passes 2.0-2.4 s apart", now)
 	}
 }

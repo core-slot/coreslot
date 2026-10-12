@@ -7,10 +7,11 @@ import "time"
 const StallAfter = 10 * time.Second
 
 // MaxPassGap is the longest interval between two consecutive examination passes of one observer
-// that counts as watched (PROTOCOL.md section 10.2): a waiter examines the queue at least every
-// 2 s, so a longer interval means the observer itself was stopped, suspended or starved, and it
-// observed nothing meanwhile.
-const MaxPassGap = 2 * time.Second
+// that counts as watched (PROTOCOL.md section 10.2): 1.5 times the 2 s at which a waiter must
+// poll at the least, so that polling at that interval with scheduling jitter on top is still
+// watched, while a longer interval means the observer itself was stopped, suspended or starved,
+// and it observed nothing meanwhile.
+const MaxPassGap = 3 * time.Second
 
 // sighting is what an observer remembers of one ticket: the last mtime value it read, the
 // watched time from which the ticket's unchanged time is counted, and when (in watched time) and

@@ -548,9 +548,11 @@ first saw the ticket). A ticket is **STALLED**, for that observer, when no chang
 for 10 s. A refresh that is observed makes the ticket WAITING again. Only time the observer spent
 watching the ticket counts: when an election leaves a ticket unexamined (section 10.3), the time
 until the observer next examines it is not counted towards the 10 s, though a value that changed
-meanwhile still counts as a change. Nor is the observer's own absence counted: when more than 2 s
+meanwhile still counts as a change. Nor is the observer's own absence counted: when more than 3 s
 pass between its last examination and its next election (it was stopped, suspended or starved),
-that interval is not counted towards the 10 s for any ticket it observes.
+that interval is not counted towards the 10 s for any ticket it observes. The 3 s are 1.5 times the
+2 s refresh interval, so that a waiter polling at that interval, with scheduling jitter on top,
+still watches.
 
 When a waiter's own refresh gap exceeded 10 s on either its monotonic or its wall clock (it was
 suspended), it bumps `gen` in the section after refreshing. The bump never delays a refresh: a
