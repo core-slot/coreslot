@@ -1032,6 +1032,52 @@ class AlignmentTests(Base):
             with self.assertRaises(ValueError, msg=raw):
                 cc.parse_token_fds(raw)
 
+    def test_token_fds_naming_a_descriptor_twice_do_not_validate(self):
+        """§17/§18 rule 2: one descriptor listed twice, directly, through overlapping ranges, or as
+        two descriptors of one token file (a launcher duplicated it), does not validate."""
+        self.config("[resources]\ncpu = 2\n")
+        fd = self.lock(os.path.join(self.S, "res", "cpu", "0"))
+        for text in ("4,4", "4-6,5", "4-6,6-8"):
+            with self.assertRaises(ValueError, msg=text):
+                cc.parse_token_fds(text)
+        c = self.client()
+        self.assertEqual(cc.validate_passthrough(c, str(fd)), {"cpu": 1})  # the control validates
+        dup = os.dup(fd)
+        self.fds.append(dup)
+        for text in (f"{fd},{fd}", f"{fd}-{fd},{fd}", f"{min(fd, dup)}-{max(fd, dup)},{dup}",
+                     f"{fd},{dup}"):
+            with self.assertRaises(cc.InvalidContext, msg=text):
+                cc.validate_passthrough(c, text)
+
+    def test_stripping_the_context_leaves_streams_and_non_regular_descriptors(self):
+        """§17: only regular files at fd 3 and above named by the inherited variables stop being
+        passed on; a named standard stream or pipe (its number reused) stays inheritable."""
+        probe = textwrap.dedent("""
+            import json, os, sys
+            sys.path.insert(0, sys.argv[1])
+            import coreslot_client as cc
+            reg = os.open(sys.argv[2], os.O_RDONLY | os.O_CREAT, 0o600)
+            r, w = os.pipe()
+            other = os.open(sys.argv[2], os.O_RDONLY)
+            for fd in (0, 1, 2, reg, r, w, other):
+                os.set_inheritable(fd, True)
+            cc._close_inherited_context({"CORESLOT_TOKEN_FDS": f"0-2,{reg},{r}",
+                                         "CORESLOT_HELD_FD": str(w)})
+            print(json.dumps({name: os.get_inheritable(fd) for name, fd in
+                              (("0", 0), ("1", 1), ("2", 2), ("reg", reg), ("pipe-r", r),
+                               ("pipe-w", w), ("unnamed", other))}))
+        """)
+        # Standard input and error are regular files, so only the stream rule keeps them open.
+        stdin_path, stderr_path = os.path.join(self.root, "stdin"), os.path.join(self.root, "stderr")
+        open(stdin_path, "w").close()
+        with open(stdin_path, "rb") as fin, open(stderr_path, "wb") as ferr:
+            out = subprocess.run([sys.executable, "-c", probe, HERE, os.path.join(self.root, "regular")],
+                                 stdin=fin, stdout=subprocess.PIPE, stderr=ferr, text=True, timeout=10)
+        with open(stderr_path) as fh:
+            self.assertEqual(out.returncode, 0, fh.read())
+        self.assertEqual(json.loads(out.stdout), {"0": True, "1": True, "2": True, "reg": False,
+                                                  "pipe-r": True, "pipe-w": True, "unnamed": True})
+
     def _log(self) -> list[dict]:
         try:
             return [json.loads(line) for line in self.read("log", "runs.jsonl").splitlines()]
