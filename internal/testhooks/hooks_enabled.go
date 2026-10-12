@@ -16,6 +16,8 @@
 //     home directory's NSS fallback.
 //   - CORESLOT_TESTHOOK_PROBE_SHELL: the program the CLI runs as `<it> -c 'ulimit -S -n'` to
 //     learn the descriptor limit it was started with, so that a test can make that probe fail.
+//   - CORESLOT_TESTHOOK_PROBE_TIMEOUT: a Go duration that replaces the CLI's bound on that probe,
+//     so that a test's probe may run a program slower than the bound allows.
 package testhooks
 
 import (
@@ -140,4 +142,17 @@ func ProbeShell() string {
 		return v
 	}
 	return "/bin/sh"
+}
+
+// ProbeTimeout returns CORESLOT_TESTHOOK_PROBE_TIMEOUT, or d when it is unset.
+func ProbeTimeout(d time.Duration) time.Duration {
+	v := os.Getenv("CORESLOT_TESTHOOK_PROBE_TIMEOUT")
+	if v == "" {
+		return d
+	}
+	t, err := time.ParseDuration(v)
+	if err != nil {
+		panic(fmt.Sprintf("testhooks: CORESLOT_TESTHOOK_PROBE_TIMEOUT: %v", err))
+	}
+	return t
 }

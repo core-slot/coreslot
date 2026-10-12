@@ -179,9 +179,11 @@ func probeFallback(t *testing.T) uint64 {
 
 // A probe that fails never fails a run: the command runs with 256 above the limit the Go runtime
 // raised the run's own to, as before the probe. A probe that does not end is killed at its bound,
-// and one still running when the run refuses is killed with the run; neither outlives it.
+// and one still running when the run refuses is killed with the run; neither outlives it. The
+// sleeping probe ends on its own after 30 s, so a run that waited for it instead takes 30 s.
 // Mutations: make runChild return 70 when the probe failed (every case goes red); drop the
-// deferred stop in runCommand (the refusing run leaves its probe sleeping).
+// deferred stop in runCommand (the refusing run leaves its probe sleeping); start the probe
+// with context.WithCancel instead of context.WithTimeout (no end takes 30 s).
 func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 	want := probeFallback(t)
 	dir := stateDir(t, "[resources]\ncpu = 1\n")
@@ -216,7 +218,9 @@ func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 			cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run -- sh -c 'ulimit -S -n'`, cliBinary(t))
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
+			start := time.Now()
 			out, err := cmd.Output()
+			elapsed := time.Since(start)
 			if err != nil {
 				t.Fatalf("%v (stderr %q)", err, stderr.String())
 			}
@@ -224,6 +228,9 @@ func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 				t.Errorf("the command's soft limit is %s, want the fallback %d", got, want)
 			}
 			if tc.name == "no end" {
+				if elapsed > 10*time.Second {
+					t.Errorf("the run took %v; want about the probe's 1 s bound, not the probe's 30 s", elapsed)
+				}
 				gone(t, "timeout")
 			}
 		})
@@ -243,9 +250,19 @@ func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 
 // The probe never inherits a grant's descriptors. A pass-through shields its inherited grant with
 // close-on-exec while its probe starts and clears that again, so its command still inherits the
-// grant. Mutations: start the pass-through's probe with startNofileProbe(nil) in decide, and the
-// nested probe reports the parent's hold and token; skip the restoring loop in nofileProbe.wait,
-// and the nested command inherits neither.
+// grant.
+//
+// Each probe reports through the test binary, which is slower than the probe's 1 s bound allows
+// in a race-enabled build: the race runtime sleeps 1 s before the program exits. So the test
+// lifts the bound through CORESLOT_TESTHOOK_PROBE_TIMEOUT, and each report ends with a line the
+// probe writes only once the helper has exited; a probe killed at its bound would leave an
+// unfinished report, and on Linux the pass-through would not probe at all, since the fallback
+// starts it at its hard limit, which the runtime does not raise.
+//
+// Mutations: start the pass-through's probe with startNofileProbe(nil) in decide, and the nested
+// probe reports the parent's hold and token; skip the restoring loop in nofileProbe.wait, and the
+// nested command inherits neither; drop CORESLOT_TESTHOOK_PROBE_TIMEOUT from the test, and a
+// race-enabled run goes red.
 func TestNofileProbeInheritsNoGrant(t *testing.T) {
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
@@ -256,8 +273,9 @@ func TestNofileProbeInheritsNoGrant(t *testing.T) {
 	}
 	dir := stateDir(t, "[resources]\ncpu = 1\n")
 	reports := t.TempDir()
-	probe := probeScript(t, fmt.Sprintf("%s=fds %q > %q/probe.$$\nulimit -S -n\n", helperEnv, cliBinary(t), reports))
-	env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+probe)
+	probe := probeScript(t, fmt.Sprintf("%s=fds %q > %q/probe.$$ && echo reported >> %q/probe.$$\nulimit -S -n\n",
+		helperEnv, cliBinary(t), reports, reports))
+	env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+probe, "CORESLOT_TESTHOOK_PROBE_TIMEOUT=2m")
 	cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run -- "$0" run -- env `+helperEnv+`=fds "$0"`, cliBinary(t))
 	out, err := cmd.Output()
 	if err != nil {
@@ -292,6 +310,9 @@ func TestNofileProbeInheritsNoGrant(t *testing.T) {
 		b, err := os.ReadFile(filepath.Join(reports, de.Name()))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !strings.HasSuffix(string(b), "reported\n") {
+			t.Errorf("a probe ended before its report was complete:\n%s", b)
 		}
 		for _, id := range files(string(b)) {
 			if slices.Contains(grant, id) {

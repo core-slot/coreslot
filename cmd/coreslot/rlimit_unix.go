@@ -73,7 +73,7 @@ func startNofileProbe(shield []int) *nofileProbe {
 		return p
 	}
 	p.shielded = setCloseOnExec(shield)
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), testhooks.ProbeTimeout(probeTimeout))
 	p.cancel = cancel
 	go func() {
 		defer close(p.done)
