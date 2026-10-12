@@ -71,7 +71,7 @@ func benchMain(args []string) int {
 	fs.DurationVar(&p.AdmitWindow, "admit-window", 3*time.Second, "how long released tokens stay free")
 	fs.IntVar(&p.Cancel, "cancel", 5, "cancel requests (`coreslot cancel <id>`) per burst")
 	fs.IntVar(&p.Withdraw, "withdraw", 5, "withdrawals (SIGTERM, the waiter's Wait context ends) per burst")
-	fs.IntVar(&p.Stall, "stall", 3, "waiters stopped (SIGSTOP) per burst, the queue head first")
+	fs.IntVar(&p.Stall, "stall", 3, "waiters stopped (SIGSTOP) per burst: the first waiter in queue order that is not already stopped (the head at the first burst; later usually position 2, behind the previous burst's still-stopped head), then random waiters")
 	fs.DurationVar(&p.StallFor, "stall-for", 12*time.Second, "how long a stopped waiter stays stopped")
 	fs.DurationVar(&p.Settle, "settle", 5*time.Second, "wait after the last enqueue before the window opens")
 	fs.StringVar(&p.coreslot, "coreslot", "", "path to the coreslot binary (publishes cancel requests)")
@@ -106,7 +106,7 @@ func benchMain(args []string) int {
 		h.Model, h.CPUs, h.OS, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	fmt.Printf("setup: %d waiters (cpu=1 each), budget cpu=%d held by the harness, window %s per run, "+
 		"a burst every %s: refill arrivals, %d tokens released for %s, %d cancel requests, %d withdrawals, "+
-		"%d stopped for %s (head first)\n",
+		"%d stopped for %s (the first waiter in queue order not already stopped, then random)\n",
 		p.N, p.Size, p.Duration, p.BurstEvery, p.Release, p.AdmitWindow, p.Cancel, p.Withdraw, p.Stall, p.StallFor)
 	fmt.Println("cpu accounting: per-waiter wait4 rusage (user+sys) minus each pre-window waiter's own " +
 		"getrusage(RUSAGE_SELF) at the window's start; cross-check: harness getrusage(RUSAGE_CHILDREN)")
