@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ func TestIdentityCheckAfterTakingTokens(t *testing.T) {
 			return err
 		},
 		"adoption": func(t *testing.T, e *Engine, dir string) error {
-			_, _, err := e.Adopt(need("cpu=2"))
+			_, _, err := e.AdoptContext(context.Background(), need("cpu=2"))
 			return err
 		},
 		"token-only admission": func(t *testing.T, e *Engine, dir string) error {

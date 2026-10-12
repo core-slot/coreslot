@@ -539,9 +539,9 @@ func TestInSectionDefersStop(t *testing.T) {
 // sectionMethods are the engine and store calls that may enter the admission section. The run
 // must make each of them inside inSection, so that it never stops itself while holding the
 // section: its self-stop is deferred only there.
-var sectionMethods = map[string]bool{"Enqueue": true, "EnqueueContext": true, "Step": true,
+var sectionMethods = map[string]bool{"EnqueueContext": true, "Step": true,
 	"Poll": true, "Withdraw": true, "FailOpen": true, "UnbudgetedHold": true, "Snapshot": true,
-	"Enter": true, "TryEnter": true, "Adopt": true, "Cancel": true, "CancelContext": true, "Reset": true, "ClearDegraded": true}
+	"Enter": true, "TryEnter": true, "AdoptContext": true, "CancelContext": true, "Reset": true, "ClearDegraded": true}
 
 // TestSectionCallsAreInSection checks the CLI's sources: every call (or method value) of a
 // method in sectionMethods, and every Close of a grant (named g), sits inside an argument of

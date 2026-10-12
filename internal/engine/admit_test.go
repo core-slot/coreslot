@@ -213,7 +213,7 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	}()
 	defer func() { point = defaultPoint }()
 	<-reached
-	if err := newEngine(t, dir, nil).Cancel(head.ID()); err != nil { // its own completed section
+	if err := newEngine(t, dir, nil).CancelContext(context.Background(), head.ID()); err != nil { // its own completed section
 		t.Fatalf("Cancel: %v", err)
 	}
 	close(release)
@@ -237,7 +237,7 @@ func TestAdoptReportsShortfall(t *testing.T) {
 	e := newEngine(t, dir, newFakeClock())
 	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
 	enqueue(t, e, need("cpu=1")) // a waiter: adoption does not queue behind it
-	g, short, err := e.Adopt(need("cpu=3"))
+	g, short, err := e.AdoptContext(context.Background(), need("cpu=3"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestAdoptCountsLocksAboveSize(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 10\n")
 	e := newEngine(t, dir, newFakeClock())
 	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 4)+"\n"+tokenPaths(dir, "cpu", 10, 13))
-	g, short, err := e.Adopt(need("cpu=3..5"))
+	g, short, err := e.AdoptContext(context.Background(), need("cpu=3..5"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestTokenOnlyUnderUnknownFormat(t *testing.T) {
 	writeFormat(t, dir, "coreslot-protocol 2\n")
 	before := listing(t, dir)
 
-	tk, err := e.Enqueue(need("cpu=2..6"))
+	tk, err := e.EnqueueContext(context.Background(), need("cpu=2..6"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestTokenOnlyEnqueuesWhenFormatIsUnderstood(t *testing.T) {
 	e := newEngine(t, dir, clk)
 	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
 	writeFormat(t, dir, "coreslot-protocol 2\n")
-	tk, err := e.Enqueue(need("cpu=1"))
+	tk, err := e.EnqueueContext(context.Background(), need("cpu=1"))
 	if err != nil {
 		t.Fatal(err)
 	}

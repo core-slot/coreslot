@@ -13,22 +13,16 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-// Cancel publishes a cancel request for the ticket id inside the section (PROTOCOL.md section
-// 13.1); the ticket's owner finds it on its next poll or at admission step 1 and stops.
+// CancelContext publishes a cancel request for the ticket id inside the section (PROTOCOL.md
+// section 13.1); the ticket's owner finds it on its next poll or at admission step 1 and stops.
 // Cancelling never signals and never revokes a grant: when no ticket with that id is in the
-// queue (admitted, withdrawn, removed) nothing is published and Cancel returns ErrNoTicket. A
+// queue (admitted, withdrawn, removed) nothing is published and it returns ErrNoTicket. A
 // request already published means the cancellation is already requested: not an error. In a
-// state directory whose format this client does not implement nothing is written and Cancel
-// returns an error matching ErrRefused. Cancel waits for the section as long as it takes;
-// CancelContext bounds that wait.
-func (e *Engine) Cancel(id wire.ID) error {
-	return e.CancelContext(context.Background(), id)
-}
-
-// CancelContext is Cancel whose wait for the section ends with ctx, as EnqueueContext's does:
-// it then publishes nothing and returns a *SectionBusyError naming the pid admit.lock records
-// and matching ctx.Err() (context.DeadlineExceeded for a deadline), or ctx.Err() itself when ctx
-// had already ended.
+// state directory whose format this client does not implement nothing is written and it
+// returns an error matching ErrRefused. Its wait for the section ends with ctx, as
+// EnqueueContext's does: it then publishes nothing and returns a *SectionBusyError naming the
+// pid admit.lock records and matching ctx.Err() (context.DeadlineExceeded for a deadline), or
+// ctx.Err() itself when ctx had already ended.
 func (e *Engine) CancelContext(ctx context.Context, id wire.ID) error {
 	sec, err := e.enterUntil(ctx)
 	if err != nil {

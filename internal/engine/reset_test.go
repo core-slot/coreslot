@@ -71,7 +71,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 	}{
 		{"ticket", func(t *testing.T, e *Engine, dir string) { startHelper(t, "enqueue", dir, "cpu=1") }, "1 live ticket (pid"},
 		{"hold", func(t *testing.T, e *Engine, dir string) {
-			g, _, err := e.Adopt(needLabel("cpu=2", "gate"))
+			g, _, err := e.AdoptContext(context.Background(), needLabel("cpu=2", "gate"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -84,7 +84,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := newStateDir(t, "[resources]\ncpu = 4\n")
 			e := newEngine(t, dir, nil)
-			g, _, err := e.Adopt(need("cpu=1")) // FORMAT, gen and a hold exist
+			g, _, err := e.AdoptContext(context.Background(), need("cpu=1")) // FORMAT, gen and a hold exist
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,7 +114,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 func TestResetRefusalNamesLabels(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 4\n")
 	e := newEngine(t, dir, nil)
-	g, _, err := e.Adopt(needLabel("cpu=1", "hold:three"))
+	g, _, err := e.AdoptContext(context.Background(), needLabel("cpu=1", "hold:three"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestResetRefusalNamesLabels(t *testing.T) {
 func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 4\n")
 	e := newEngine(t, dir, nil)
-	g, _, err := e.Adopt(need("cpu=1"))
+	g, _, err := e.AdoptContext(context.Background(), need("cpu=1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 func TestResetThenUse(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 4\n")
 	e := newEngine(t, dir, nil)
-	g, _, err := e.Adopt(need("cpu=2"))
+	g, _, err := e.AdoptContext(context.Background(), need("cpu=2"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestResetThenUse(t *testing.T) {
 func TestResetRefusesForeignFormat(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 4\n")
 	e := newEngine(t, dir, nil)
-	g, _, err := e.Adopt(need("cpu=1"))
+	g, _, err := e.AdoptContext(context.Background(), need("cpu=1"))
 	if err != nil {
 		t.Fatal(err)
 	}
