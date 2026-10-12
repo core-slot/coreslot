@@ -48,8 +48,9 @@ func countWaitWork(t *testing.T) *waitWork {
 }
 
 // The election examines the tickets ahead from the nearest and stops at the first live,
-// non-STALLED one (PROTOCOL.md section 10.3): a waiter with a live ticket directly ahead reads
-// one mtime and makes one lock probe per election, wherever it is in the queue.
+// non-STALLED one (PROTOCOL.md section 10.3): a waiter with a live ticket directly ahead makes
+// one lock probe per election wherever it is in the queue, and reads one mtime for it plus one
+// for each ticket of the front window.
 func TestElectionStopsAtFirstLiveTicket(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -70,18 +71,16 @@ func TestElectionStopsAtFirstLiveTicket(t *testing.T) {
 		if p := position(t, step(t, last)); p != k {
 			t.Fatalf("pass %d: position %d with %d live tickets ahead, want %d", pass, p, k-1, k)
 		}
-		if work.lstats != 1 || work.probes != 1 {
-			t.Fatalf("pass %d: %d mtime reads and %d probes behind %d live tickets, want 1 and 1",
-				pass, work.lstats, work.probes, k-1)
+		if work.lstats != 1+FrontWindow || work.probes != 1 {
+			t.Fatalf("pass %d: %d mtime reads and %d probes behind %d live tickets, want %d and 1",
+				pass, work.lstats, work.probes, k-1, 1+FrontWindow)
 		}
 		clk.advance(time.Second)
 	}
 }
 
-// A head stopped behind another stopped ticket: the waiter passes over the nearer one after
-// 10 s of watching it, and only then starts watching the one beyond, which it passes over
-// 10 s later (each stopped ticket stops blocking within the I5 bound of becoming the nearest
-// one not passed over).
+// Two consecutive stopped tickets at the front of the queue: both are in the front window, so
+// the waiter behind them watches both from the start and passes both within the I5 bound.
 func TestConsecutiveStoppedTickets(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -92,59 +91,88 @@ func TestConsecutiveStoppedTickets(t *testing.T) {
 	if p := position(t, step(t, s)); p != 3 {
 		t.Fatalf("position %d behind two fresh tickets, want 3", p)
 	}
-	for sec := 1; sec <= 20; sec++ {
+	for sec := 1; sec <= 10; sec++ {
 		clk.advance(time.Second)
 		r := step(t, s)
-		switch {
-		case sec < 10:
+		if sec < 10 {
 			if p := position(t, r); p != 3 {
 				t.Fatalf("%d s: position %d, want 3", sec, p)
 			}
-		case sec < 20:
-			if p := position(t, r); p != 2 {
-				t.Fatalf("%d s: position %d, want 2 (the nearer one passed over)", sec, p)
-			}
-		default:
-			if !isAdmitted(r) {
-				t.Fatalf("%d s: want admitted past both stopped tickets, got %#v", sec, r)
-			}
+		} else if !isAdmitted(r) {
+			t.Fatalf("%d s: want admitted past both stopped tickets, got %#v", sec, r)
 		}
 	}
 }
 
-// A ticket the election stopped short of is not watched, and the unwatched time does not count
-// towards its stall: the 4 s watched before the gap count, the 10 s gap does not.
+// A stopped head with three waiters behind it: every waiter watches the head through the front
+// window, so all three are admitted in the same second, 10 s after it stopped, not 10 s apart
+// as each one's turn comes to be nearest to it (I5).
+func TestStoppedHeadPassedByEverySuccessor(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	startHelper(t, "enqueue", dir, "cpu=1") // the head, stopped
+	ws := []*Ticket{enqueue(t, e, need("cpu=1")), enqueue(t, e, need("cpu=1")), enqueue(t, e, need("cpu=1"))}
+	admitted := map[int]int{} // waiter -> second
+	for sec := 0; sec <= 11 && len(admitted) < len(ws); sec++ {
+		for i, w := range ws {
+			if _, done := admitted[i]; !done && isAdmitted(step(t, w)) {
+				admitted[i] = sec
+			}
+		}
+		clk.advance(time.Second)
+	}
+	for i := range ws {
+		if sec, ok := admitted[i]; !ok || sec != 10 {
+			t.Fatalf("admitted at %v (waiter -> second), want all three at 10 s", admitted)
+		}
+	}
+}
+
+// A ticket the election stopped short of, outside the front window, is not watched, and the
+// unwatched time does not count towards its stall: the 4 s watched before the gap count, the
+// 10 s gap does not.
 func TestUnwatchedIntervalIsNotAStall(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "cpu=1")      // x: stopped
+	var front []*helper
+	for i := 0; i < FrontWindow; i++ { // the front window, kept fresh
+		front = append(front, startHelper(t, "enqueue", dir, "cpu=1"))
+	}
+	startHelper(t, "enqueue", dir, "cpu=1")      // x: stopped, beyond the front window
 	y := startHelper(t, "enqueue", dir, "cpu=1") // y: between x and s, refreshed on command
 	s := enqueue(t, e, need("cpu=1"))
-	at := func(sec int) StepResult {
+	at := func(sec, want int) {
 		t.Helper()
-		r := step(t, s)
-		if isAdmitted(r) {
-			t.Fatalf("%d s: admitted while x has been watched for less than 10 s", sec)
+		for _, f := range front {
+			f.command(t, "refresh")
 		}
-		return r
+		if p := position(t, step(t, s)); p != want {
+			t.Fatalf("%d s: position %d, want %d", sec, p, want)
+		}
 	}
-	at(0)
+	all := FrontWindow + 3 // the front window, x and y ahead
+	at(0, all)
 	for sec := 1; sec <= 14; sec++ { // y stalls at 10 s; x is watched from 10 s to 14 s
 		clk.advance(time.Second)
-		at(sec)
+		if sec < 10 {
+			at(sec, all)
+		} else {
+			at(sec, all-1)
+		}
 	}
 	y.command(t, "refresh")
 	for sec := 15; sec <= 30; sec++ { // y is live from 15 s to 24 s: x unwatched, then 25..30 s
 		clk.advance(time.Second)
-		if p := position(t, at(sec)); sec >= 25 && p != 2 {
-			t.Fatalf("%d s: position %d, want 2 (y passed over, x watched for %d s)", sec, p, 4+sec-25)
+		if sec < 25 {
+			at(sec, all)
+		} else {
+			at(sec, all-1) // y passed over, x watched for 4+sec-25 s
 		}
 	}
-	clk.advance(time.Second) // 31 s: x watched for 10 s
-	if r := step(t, s); !isAdmitted(r) {
-		t.Fatalf("x watched 10 s without a change: want admitted, got %#v", r)
-	}
+	clk.advance(time.Second) // 31 s: x watched for 10 s and passed over; the front window ends the scan
+	at(31, all-2)
 }
 
 // drive Steps tk whenever its next work is due, as Wait does, for d of the injected clock,
