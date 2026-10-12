@@ -3,13 +3,15 @@
 One core budget for every test suite, build and agent on your machine: parallel gates wait their
 turn instead of melting the laptop.
 
-**Status:** release candidate; product acceptance pending. Acceptance is declared in advance: on a
-developer machine that is never quiet, three parallel test gates plus one CI job run with and
-without coreslot as at least three alternating pairs; with coreslot, the median time until the last
-job finishes is at most 1.05 × the median without it, and no gate fails falsely. All pairs and
-their load readings will be published. The module stays at `v0` until
-the on-disk format is frozen, once the conformance suite passes on macOS and Linux; `v1.0.0`
-freezes the format then current ([compatibility policy](docs/compatibility.md)).
+**Status:** release candidate; product acceptance pending. Its criterion is declared in advance: on
+a developer machine that is never quiet, three parallel test gates plus one CI job run with and
+without coreslot as alternating pairs in the same window, at least three pairs; with coreslot, the
+median time until the last job finishes is at most 1.05 × the median without it, and no gate fails
+falsely. All pairs and their load readings will be published. A release candidate that passed the
+deterministic traces, the kill-storm, the conformance suite and the benchmark gate is not evidence
+that acceptance passed. The module stays at `v0` until the on-disk format is frozen, once the
+conformance suite passes on macOS and Linux; `v1.0.0` freezes the format then current
+([compatibility policy](docs/compatibility.md)).
 
 Several coding-agent sessions, each in its own worktree, each running its own `pytest -n <cores>`
 or `make -j<cores>`, oversubscribe a machine several times over: timing-sensitive tests fail

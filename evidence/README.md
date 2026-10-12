@@ -13,7 +13,7 @@ Index of the evidence scripts:
 
 ## Waiter benchmark (the release gate)
 
-**The gate (ruled 2026-10-12):** 100 waiters under the bursts of arrivals, admissions, cancellations
+**The gate (set 2026-10-12):** 100 waiters under the bursts of arrivals, admissions, cancellations
 and stall recoveries that `bench/waiters` drives ≤ 10 % of one core in aggregate, median of five
 120 s runs, on the macOS reference host; failing it blocks a release candidate; the Linux figure
 (Docker Desktop VM on the same host) is published, not gated. It is the default of `bench/waiters`; any
@@ -205,8 +205,9 @@ tickets ahead of it, for 50 s:
 
 The election then read the mtime and probed the lock of every ticket ahead each second, so a waiter
 at position k made O(k) system calls per second. `Wait` stepped every 250 ms, and each Step read the
-cancel file. Both were deviations from PROTOCOL.md section 10.3, under which a waiter examines the
-tickets ahead once per second and stops at the first live, non-STALLED one.
+cancel file. The per-ticket scan and the 250 ms cadence were deviations from PROTOCOL.md section
+10.3, under which a waiter examines the tickets ahead once per second and stops at the first live,
+non-STALLED one; reading the cancel file on each poll is what section 10.3 asks for.
 
 ### Setup
 
