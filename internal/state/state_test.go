@@ -451,7 +451,7 @@ func TestObserverPassGapBoundary(t *testing.T) {
 			obs.Observe(key, 42, now)
 		}
 		if got := obs.Stalled(key, now); got != c.watched {
-			t.Errorf("four gaps of %v (%v in all): STALLED %v, want %v (gaps watched: %v)", c.gap, now, got, c.watched, c.watched)
+			t.Errorf("four gaps of %v (%v in all): STALLED %v, want %v", c.gap, now, got, c.watched)
 		}
 	}
 }
