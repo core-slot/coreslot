@@ -12,9 +12,11 @@ name: release
 # against its attestation.
 #
 # Artifact attestations need a public repository: for a private one they need GitHub Enterprise
-# Cloud, which a personal account cannot have. In a repository that is not public the attest job
-# and the attestation check are skipped, the publish job says so in a notice, and the release
-# carries checksums.txt alone.
+# Cloud, which a personal account cannot have. When the event says the repository is private
+# (`github.event.repository.private == true`) the attest job and the attestation check are
+# skipped, the publish job says so in a notice, and the release carries checksums.txt alone. Any
+# other value, a missing field included, attests: the check fails closed.
+
 on:
   push:
     tags:
@@ -85,10 +87,10 @@ jobs:
           if-no-files-found: error
 
   # The one job that signs. It runs no build and nothing from the checkout. Skipped in a
-  # repository that is not public (see above).
+  # private repository (see above).
   attest:
     needs: build
-    if: github.event.repository.visibility == 'public'
+    if: github.event.repository.private != true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -109,13 +111,13 @@ jobs:
           subject-checksums: ${{ runner.temp }}/dist/checksums.txt
 
   # The one job that writes, and only after the archives were attested: attest must have
-  # succeeded, or have been skipped because the repository is not public.
+  # succeeded, or have been skipped because the repository is private.
   publish:
     needs: [build, attest]
     if: >-
       !cancelled() && needs.build.result == 'success' &&
       (needs.attest.result == 'success' ||
-      (needs.attest.result == 'skipped' && github.event.repository.visibility != 'public'))
+      (needs.attest.result == 'skipped' && github.event.repository.private == true))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -132,7 +134,7 @@ jobs:
       # Each archive must carry a provenance attestation signed by this workflow in this
       # repository: what is published is what the attest job attested.
       - name: The archives' attestations verify
-        if: github.event.repository.visibility == 'public'
+        if: github.event.repository.private != true
         working-directory: ${{ runner.temp }}/dist
         env:
           GH_TOKEN: ${{ github.token }}
@@ -142,23 +144,21 @@ jobs:
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
               --source-ref "$GITHUB_REF"
           done
-      - name: No attestations in a repository that is not public
-        if: github.event.repository.visibility != 'public'
-        env:
-          VISIBILITY: ${{ github.event.repository.visibility }}
+      - name: No attestations in a private repository
+        if: github.event.repository.private == true
         run: |
-          echo "::notice title=No attestations::the repository is $VISIBILITY: artifact attestations need a public repository (or GitHub Enterprise Cloud), so the archives were not attested and the release carries checksums.txt alone"
+          echo "::notice title=No attestations::the repository is private: artifact attestations need a public repository (or GitHub Enterprise Cloud), so the archives were not attested and the release carries checksums.txt alone"
       - name: Publish the GitHub release
         working-directory: ${{ runner.temp }}/dist
         env:
           GH_TOKEN: ${{ github.token }}
-          VISIBILITY: ${{ github.event.repository.visibility }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
           # A tag with a pre-release part (v0.2.0-rc.1) is a pre-release, as SemVer has it.
           prerelease=()
           case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
           notes="Changes: see CHANGELOG.md. Verify an archive with \`shasum -a 256 -c checksums.txt --ignore-missing\`"
-          if [ "$VISIBILITY" = public ]; then
+          if [ "$PRIVATE" != true ]; then
             notes="$notes and its provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\`"
           fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
