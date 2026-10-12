@@ -16,7 +16,7 @@ import (
 // command runs at once with min of each resource, after one warning unless the configuration
 // silences it; --strict refuses instead.
 func runCommand(args []string, io IO) int {
-	o, err := parseRun(args, io.Stderr)
+	o, err := parseRun(args, io)
 	if errors.Is(err, errHelp) {
 		return 0
 	}
