@@ -1,8 +1,9 @@
 //go:build !coreslot_testhooks
 
-// Package testhooks provides pause points, a wall-clock offset, a format list and a getent
-// substitute for the deterministic trace tests and the password-database fallback test. They act only in binaries built with the coreslot_testhooks tag;
-// in every other build they are inert and ignore the environment.
+// Package testhooks provides pause points, a wall-clock offset, a format list, a getent substitute
+// and the CLI's descriptor-limit probe for the deterministic trace tests and the fallback tests.
+// They act only in binaries built with the coreslot_testhooks tag; in every other build they are
+// inert and ignore the environment.
 package testhooks
 
 import "time"
@@ -20,3 +21,7 @@ func Formats() []int { return []int{1} }
 // tag, so that no environment of a release build can choose the program the home directory comes
 // from.
 func Getent() string { return "" }
+
+// ProbeShell is the shell the CLI runs to learn the descriptor limit it was started with; always
+// /bin/sh without the coreslot_testhooks tag.
+func ProbeShell() string { return "/bin/sh" }

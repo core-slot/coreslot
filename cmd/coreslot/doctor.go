@@ -245,12 +245,14 @@ func doctorReport(io IO) int {
 	if gerr := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); gerr != nil {
 		problem("descriptor limits: %v", gerr)
 	} else {
-		soft, hard := uint64(lim.Cur), uint64(lim.Max)
+		// The soft limit doctor was started with, the one a run started here would add 256 to;
+		// getrlimit reports the limit the Go runtime raised it to (rlimit_unix.go).
+		soft, hard := startNofileProbe(contextFDs(environ())).originalNofile(), uint64(lim.Max)
 		line("descriptor limit: soft %s, hard %s; a grant of 512 tokens needs about %d", limitText(soft), limitText(hard), wantDescriptors)
 		if hard < wantDescriptors {
 			problem("the hard descriptor limit %s is below %d: a large grant cannot be held", limitText(hard), wantDescriptors)
 		} else if soft < wantDescriptors {
-			line("note: the soft limit is below %d; coreslot run raises its own, within the hard limit", wantDescriptors)
+			line("note: the soft limit is below %d; coreslot run gives its command %d more, within the hard limit", wantDescriptors, extraNofile)
 		}
 	}
 

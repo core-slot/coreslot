@@ -335,6 +335,10 @@ section 14); admission (section 12.1) and adoption (section 12.4) never take mor
 total. A run SHOULD raise the soft `RLIMIT_NOFILE` it passes to the command
 to at least the inherited count plus 256 when the hard limit allows.
 
+> **Implementation note.** The Go runtime raises its own soft limit at start-up, so the Go CLI
+> learns the soft limit it inherited from a `/bin/sh -c 'ulimit -S -n'` it starts before it sets
+> any limit, which the runtime gives that original limit.
+
 The **locked count** of a resource is the number of its existing token files, at every index that
 exists, whose probe fails with `EWOULDBLOCK`. Probing a token is permitted inside and outside the
 section; a probe's momentary lock can only make another client see a token as locked, never as

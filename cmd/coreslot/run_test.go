@@ -654,25 +654,38 @@ func TestClampNotice(t *testing.T) {
 	}
 }
 
+// A run's command gets the soft descriptor limit the run was started with plus 256, not 256 above
+// the limit the Go runtime raised the run's own to at start-up; a pass-through started by that
+// command gets 256 more again. Mutation: pass currentNofile() instead of the probed original to
+// raiseChildNofile in runChild, and the command gets the hard limit or kern.maxfilesperproc.
 func TestChildRlimitRaised(t *testing.T) {
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
 		t.Fatal(err)
 	}
-	if uint64(lim.Max) < 256+256 {
-		t.Skipf("the hard limit %d does not allow 256 + 256", lim.Max)
-	}
 	dir := stateDir(t, "")
-	cmd := shCmd(t, baseEnv(dir), `ulimit -S -n 256 && exec "$0" run -- sh -c 'ulimit -n'`, cliBinary(t))
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	got := strings.TrimSpace(string(out))
-	if n, err := strconv.Atoi(got); err == nil && n < 256+256 {
-		t.Errorf("the command's soft limit is %d, want at least 512", n)
-	} else if err != nil && got != "unlimited" {
-		t.Errorf("ulimit -n printed %q", got)
+	for _, tc := range []struct {
+		soft   uint64
+		script string
+		want   uint64
+	}{
+		{256, `exec "$0" run -- sh -c 'ulimit -S -n'`, 512},
+		{1024, `exec "$0" run -- sh -c 'ulimit -S -n'`, 1280},
+		{256, `exec "$0" run -- "$0" run -- sh -c 'ulimit -S -n'`, 768},
+	} {
+		if uint64(lim.Max) < tc.want || (fileCap() > 0 && fileCap() < tc.want) {
+			t.Logf("the hard limit %d or the cap %d does not allow %d; skipped", lim.Max, fileCap(), tc.want)
+			continue
+		}
+		cmd := shCmd(t, baseEnv(dir), fmt.Sprintf("ulimit -S -n %d && %s", tc.soft, tc.script), cliBinary(t))
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", tc.script, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != strconv.FormatUint(tc.want, 10) {
+			t.Errorf("started with a soft limit of %d, %s: the command's soft limit is %s, want %d",
+				tc.soft, tc.script, got, tc.want)
+		}
 	}
 }
 
