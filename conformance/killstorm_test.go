@@ -4,6 +4,7 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -32,7 +33,9 @@ import (
 // through the configuration. A sampler checks I1, I2, I3 and I7 throughout. Every run prints its
 // seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
 // and delays, and the size changes; the interleaving is the scheduler's). The schedule also
-// depends on -short.
+// depends on -short. The first clients and the first two size changes are fixed, so that every
+// run exercises each kind of client, a kill of a holder, a stop, a cancellation, a shrink below
+// the locked count and a growth; the test asserts that it did.
 
 const (
 	stormFull, stormShort     = 60 * time.Second, 10 * time.Second
@@ -127,22 +130,92 @@ func pyClient(t *testing.T) (py, client string, err error) {
 	return py, filepath.Join(root, "conformance", "pyclient", "coreslot_client.py"), nil
 }
 
+// ---------------------------------------------------------------- token-only runs
+
+// readReport reads the report of the command named name, without failing the test: it is
+// called off the test goroutine.
+func readReport(markDir, name string) (ChildReport, bool) {
+	data, err := os.ReadFile(filepath.Join(markDir, name+".started"))
+	if err != nil {
+		return ChildReport{}, false
+	}
+	var r ChildReport
+	if json.Unmarshal(data, &r) != nil {
+		return ChildReport{}, false
+	}
+	return r, true
+}
+
+// tokenOnlyRun is a token-only run the test started: it publishes nothing, and its command
+// reports the descriptors it inherited.
+type tokenOnlyRun struct {
+	name  string
+	need  map[string]spec.Range
+	alive func(rep ChildReport, reported bool) bool // the run, or its reported command, lives
+}
+
+// tokenOnlyRuns are the token-only runs of one state directory, for the sampler's TokenOnly.
+type tokenOnlyRuns struct {
+	markDir string
+
+	mu   sync.Mutex
+	runs []*tokenOnlyRun
+}
+
+func (r *tokenOnlyRuns) add(name string, need map[string]spec.Range, alive func(ChildReport, bool) bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.runs = append(r.runs, &tokenOnlyRun{name: name, need: need, alive: alive})
+}
+
+// grants is the sampler's TokenOnly: the inodes the live runs' commands reported, and, per
+// resource, the minimums (clamped to the size) of the live runs that have not reported.
+func (r *tokenOnlyRuns) grants(sizes map[string]int) TokenOnly {
+	r.mu.Lock()
+	runs := slices.Clone(r.runs)
+	r.mu.Unlock()
+	out := TokenOnly{Inodes: map[[2]uint64]bool{}, Pending: map[string]int{}}
+	for _, run := range runs {
+		rep, reported := readReport(r.markDir, run.name)
+		if !run.alive(rep, reported) {
+			continue
+		}
+		if reported {
+			for fd, id := range rep.FDs {
+				if fd >= 3 {
+					out.Inodes[id] = true
+				}
+			}
+			continue
+		}
+		for res, rg := range run.need {
+			n := rg.Min
+			if size, ok := sizes[res]; ok {
+				n = min(n, size)
+			}
+			out.Pending[res] += n
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------- the storm
 
 type stormClient struct {
-	id       int
-	kind     string // cli, py, lib, tok; nested runs are "<outer>-<inner>", like cli-py
-	outer    string // cli, py, lib or tok
-	inner    string // "", go or py: the nested run's client
-	name     string // the label, and the marker name of its command
-	need     map[string]spec.Range
-	priority int
-	timeout  time.Duration
-	fate     string // release, kill, stop or cancel
-	at       time.Duration
-	stopFor  time.Duration
-	hold     time.Duration
-	cancelPy bool
+	id          int
+	kind        string // cli, py, lib, tok; nested runs are "<outer>-<inner>", like cli-py
+	outer       string // cli, py, lib or tok
+	inner       string // "", go or py: the nested run's client
+	name        string // the label, and the marker name of its command
+	need        map[string]spec.Range
+	priority    int
+	timeout     time.Duration
+	fate        string // release, kill (at a time), killheld (once it holds), stop or cancel
+	at          time.Duration
+	stopFor     time.Duration
+	hold        time.Duration
+	cancelPy    bool
+	afterShrink bool // a first-wave client: holds until the first shrink
 
 	proc    *Proc
 	killed  bool // the storm sent it SIGKILL
@@ -150,9 +223,10 @@ type stormClient struct {
 }
 
 type stormResult struct {
-	c      *stormClient
-	code   int
-	stderr string
+	c        *stormClient
+	code     int
+	stderr   string
+	admitted bool
 }
 
 type storm struct {
@@ -165,12 +239,14 @@ type storm struct {
 	pyc     string
 	libBin  string
 	started time.Time
+	tok     *tokenOnlyRuns
+	shrunk  chan struct{} // closed after the first shrink, or when the storm ends without it
 
 	mu      sync.Mutex
 	nextID  int
-	tokens  []*stormClient // every token-only client, for the sampler's exemption
 	labels  map[string]map[string]spec.Range
 	results []stormResult
+	helpers []*Proc // cancel commands
 	counts  map[string]int
 }
 
@@ -180,8 +256,14 @@ func (st *storm) count(what string) {
 	st.mu.Unlock()
 }
 
+// firstWave is the number of fixed clients at the start of every run.
+const firstWave = 7
+
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
-// not depend on the order in which the slots ask for theirs.
+// not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
+// one admission of each kind (CLI, Python, a library run with a nested Go run, token-only), each
+// holding one cpu token until the first shrink, then a CLI killed once it holds, a library
+// waiter cancelled and a Python waiter stopped and continued.
 func (st *storm) plan(id int) *stormClient {
 	r := rand.New(rand.NewPCG(st.seed, uint64(id)))
 	c := &stormClient{id: id, need: map[string]spec.Range{}}
@@ -195,14 +277,10 @@ func (st *storm) plan(id int) *stormClient {
 	if c.outer != "tok" && r.IntN(6) == 0 {
 		c.inner = inners[r.IntN(len(inners))]
 	}
-	c.kind = c.outer
-	if c.inner != "" {
-		c.kind += "-" + c.inner
-	}
 	switch {
 	case c.outer == "tok":
 		c.need["cpu"] = spec.Range{Min: 1, Max: 1 + r.IntN(2)}
-	case r.IntN(12) == 0:
+	case r.IntN(20) == 0:
 		c.need["cpu"] = spec.Range{Min: 9, Max: 9} // above every size the storm sets: clamped
 	default:
 		lo := 1 + r.IntN(3)
@@ -219,10 +297,12 @@ func (st *storm) plan(id int) *stormClient {
 		c.timeout = time.Second + time.Duration(r.IntN(5000))*time.Millisecond
 	}
 	switch x := r.IntN(100); {
-	case x < 50:
+	case x < 45:
 		c.fate = "release"
-	case x < 65:
+	case x < 57:
 		c.fate = "kill"
+	case x < 65:
+		c.fate = "killheld"
 	case x < 82:
 		c.fate = "stop"
 	default:
@@ -233,11 +313,39 @@ func (st *storm) plan(id int) *stormClient {
 	}
 	c.at = time.Duration(r.IntN(4000)) * time.Millisecond
 	c.stopFor = 100*time.Millisecond + time.Duration(r.IntN(2900))*time.Millisecond
-	if !st.short && r.IntN(6) == 0 {
+	if !st.short && r.IntN(12) == 0 {
 		c.stopFor = 10500*time.Millisecond + time.Duration(r.IntN(2500))*time.Millisecond // STALLED
 	}
 	c.hold = 50*time.Millisecond + time.Duration(r.IntN(1950))*time.Millisecond
 	c.cancelPy = st.py != "" && r.IntN(2) == 0
+
+	if id <= firstWave {
+		py := "py"
+		if st.py == "" {
+			py = "cli"
+		}
+		c.outer = []string{"cli", py, "lib", "tok", "cli", "lib", py}[id-1]
+		c.inner = ""
+		c.need = map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
+		c.priority, c.timeout, c.fate = 0, 0, "release"
+		switch id {
+		case 1, 2, 3, 4:
+			c.afterShrink = true
+			if id == 3 {
+				c.inner = "go"
+			}
+		case 5:
+			c.fate, c.at = "killheld", 200*time.Millisecond
+		case 6:
+			c.fate, c.at, c.cancelPy = "cancel", 500*time.Millisecond, false
+		case 7:
+			c.fate, c.at, c.stopFor = "stop", 500*time.Millisecond, 1500*time.Millisecond
+		}
+	}
+	c.kind = c.outer
+	if c.inner != "" {
+		c.kind += "-" + c.inner
+	}
 	c.name = stormLabel(id, c.kind, c.need)
 	return c
 }
@@ -312,6 +420,32 @@ func (st *storm) release(c *stormClient) {
 	_ = os.WriteFile(filepath.Join(st.e.MarkDir, c.name+".release"), nil, 0o600)
 }
 
+func (st *storm) holding(c *stormClient) bool {
+	_, ok := readReport(st.e.MarkDir, c.name)
+	return ok
+}
+
+// waitHolding waits until c's command runs: false when the storm ended or the process exited.
+func (st *storm) waitHolding(ctx context.Context, c *stormClient) bool {
+	for !st.holding(c) {
+		if !st.after(ctx, c, pollStep) {
+			return false
+		}
+	}
+	return true
+}
+
+func (st *storm) kill(c *stormClient) {
+	held := st.holding(c)
+	if c.proc.kill(-c.proc.pid, syscall.SIGKILL) {
+		c.killed = true
+		st.count("SIGKILL")
+		if held {
+			st.count("SIGKILL of a holder")
+		}
+	}
+}
+
 // life runs one client through its fate. However it ends, the client is continued, released
 // and killed with its process group, and reaped, before life returns.
 func (st *storm) life(ctx context.Context, c *stormClient) {
@@ -321,18 +455,22 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 	c.proc = st.e.StartCommand(st.argv(c)...)
 	c.proc.name = c.name
 	if c.outer == "tok" {
-		st.mu.Lock()
-		st.tokens = append(st.tokens, c)
-		st.mu.Unlock()
+		st.tok.add(c.name, c.need, func(rep ChildReport, reported bool) bool {
+			return !c.proc.Exited() || (reported && pidAlive(rep.PID))
+		})
 	}
 	st.count("client " + c.kind)
 	defer st.finish(c)
 
 	switch c.fate {
 	case "kill":
-		if st.after(ctx, c, c.at) && c.proc.kill(-c.proc.pid, syscall.SIGKILL) {
-			c.killed = true
-			st.count("SIGKILL")
+		if st.after(ctx, c, c.at) {
+			st.kill(c)
+		}
+		return
+	case "killheld":
+		if st.waitHolding(ctx, c) && st.after(ctx, c, c.at) {
+			st.kill(c)
 		}
 		return
 	case "stop":
@@ -357,15 +495,18 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 		st.cancel(ctx, c)
 	}
 	// Hold for a while once the command runs, then let it go.
-	for {
-		if _, ok := st.e.Started(c.name); ok {
-			break
-		}
-		if !st.after(ctx, c, pollStep) {
+	if !st.waitHolding(ctx, c) {
+		return
+	}
+	if c.afterShrink {
+		select {
+		case <-ctx.Done():
 			return
+		case <-c.proc.done:
+			return
+		case <-st.shrunk:
 		}
 	}
-	st.count("admitted")
 	if !st.after(ctx, c, c.hold) {
 		return
 	}
@@ -376,33 +517,49 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 	}
 }
 
-// cancel publishes a cancel request for c's ticket, through the Go CLI by label or through the
-// Python client by id. A ticket already admitted or gone makes it a no-op.
-func (st *storm) cancel(ctx context.Context, c *stormClient) {
-	var p *Proc
-	if c.cancelPy {
-		id := ""
-		entries, _ := os.ReadDir(filepath.Join(st.e.Dir, store.QueueDir))
-		for _, en := range entries {
-			if strings.HasSuffix(en.Name(), "-"+c.name) && len(en.Name()) > 38 {
-				id = en.Name()[:38]
-			}
+// ticketID returns the id of c's ticket while it is queued.
+func (st *storm) ticketID(c *stormClient) (string, bool) {
+	entries, _ := os.ReadDir(filepath.Join(st.e.Dir, store.QueueDir))
+	for _, en := range entries {
+		if n := en.Name(); strings.HasSuffix(n, "-"+c.name) && len(n) > 38 {
+			return n[:38], true
 		}
-		if id == "" {
+	}
+	return "", false
+}
+
+// cancel waits up to 2 s for c's ticket, then publishes a cancel request for it, through the
+// Go CLI by label or through the Python client by id. A ticket admitted meanwhile, or gone,
+// makes it a no-op. The cancel command is killed if it has not exited within exitWait, and is
+// reaped before the storm ends.
+func (st *storm) cancel(ctx context.Context, c *stormClient) {
+	id, queued := st.ticketID(c)
+	for end := time.Now().Add(2 * time.Second); !queued && time.Now().Before(end); id, queued = st.ticketID(c) {
+		if st.holding(c) || !st.after(ctx, c, pollStep) {
 			return
 		}
+	}
+	if !queued {
+		return
+	}
+	var p *Proc
+	if c.cancelPy {
 		p = st.e.StartCommand(st.py, st.pyc, "cancel", id)
 	} else {
 		p = st.e.Start("cancel", "--label", c.name)
 	}
+	st.mu.Lock()
+	st.helpers = append(st.helpers, p)
+	st.mu.Unlock()
 	st.count("cancel")
 	select {
 	case <-p.done:
 		if p.code == 0 {
 			st.count("cancel published")
 		}
-	case <-ctx.Done():
 	case <-time.After(exitWait):
+		p.kill(-p.pid, syscall.SIGKILL)
+		st.t.Errorf("cancel of %s did not exit within %v; killed", c.name, exitWait)
 	}
 }
 
@@ -421,39 +578,87 @@ func (st *storm) finish(c *stormClient) {
 		st.t.Errorf("%s (pid %d) was not reaped within %v after SIGKILL", c.name, c.proc.pid, windDown)
 		return
 	}
-	res := stormResult{c: c, code: c.proc.code, stderr: c.proc.Stderr()}
+	res := stormResult{c: c, code: c.proc.code, stderr: c.proc.Stderr(), admitted: st.holding(c)}
 	c.proc.stdout.Close()
 	c.proc.stderr.Close()
+	if res.admitted {
+		st.count("admitted " + c.outer)
+		if c.inner != "" {
+			st.count("admitted nested")
+		}
+	}
 	st.mu.Lock()
 	st.results = append(st.results, res)
 	st.mu.Unlock()
 }
 
-// exempt is the sampler's exemption for token-only grants: a locked token whose inode a live
-// token-only command reported among its descriptors, or, for at most tokenOnlyReportBound, any
-// unlisted token while a token-only run that may have been admitted has not reported yet.
-func (st *storm) exempt(k Token, inode [2]uint64, unlisted time.Duration) bool {
-	st.mu.Lock()
-	toks := slices.Clone(st.tokens)
-	st.mu.Unlock()
-	for _, c := range toks {
-		rep, ok := st.e.Started(c.name)
-		if !ok {
-			if !c.proc.Exited() && unlisted < tokenOnlyReportBound {
-				return true
+// resize changes the sizes and counts the change: shrinks, growths, and shrinks that leave more
+// tokens locked than the new size.
+func (st *storm) resize(ctx context.Context, next map[string]int) bool {
+	old := st.s.Sizes()
+	locked, err := st.s.Resize(ctx, next)
+	if err != nil {
+		return false
+	}
+	for _, res := range slices.Sorted(maps.Keys(next)) {
+		n := next[res]
+		switch {
+		case n < old[res]:
+			st.count("shrink")
+			if locked[res] > n {
+				st.count("shrink below the locked count")
 			}
-			continue
-		}
-		if c.proc.Exited() && !pidAlive(rep.PID) {
-			continue
-		}
-		for fd, id := range rep.FDs {
-			if fd >= 3 && id == inode {
-				return true
-			}
+		case n > old[res]:
+			st.count("growth")
 		}
 	}
-	return false
+	return true
+}
+
+// sizer changes the configuration: first a shrink of cpu from 4 to 2 once the first wave holds
+// (or 5 s passed), then a growth to 6, then random sizes every 1.5 to 4 s.
+func (st *storm) sizer(ctx context.Context) {
+	shrunk := false
+	defer func() {
+		if !shrunk {
+			close(st.shrunk)
+		}
+	}()
+	sleep := func(d time.Duration) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(d):
+			return true
+		}
+	}
+	end := time.Now().Add(5 * time.Second)
+	for time.Now().Before(end) {
+		all := true
+		for id := 1; id <= 4; id++ {
+			if _, ok := readReport(st.e.MarkDir, st.plan(id).name); !ok {
+				all = false
+			}
+		}
+		if all || !sleep(pollStep) {
+			break
+		}
+	}
+	if ctx.Err() != nil || !st.resize(ctx, map[string]int{"cpu": 2, "io": 2}) {
+		return
+	}
+	shrunk = true
+	close(st.shrunk)
+	r := rand.New(rand.NewPCG(st.seed, 0))
+	if !sleep(time.Second+time.Duration(r.IntN(1500))*time.Millisecond) ||
+		!st.resize(ctx, map[string]int{"cpu": 6, "io": 3}) {
+		return
+	}
+	for sleep(1500*time.Millisecond + time.Duration(r.IntN(2500))*time.Millisecond) {
+		if !st.resize(ctx, map[string]int{"cpu": 2 + r.IntN(7), "io": 1 + r.IntN(3)}) {
+			return
+		}
+	}
 }
 
 func pidAlive(pid int) bool {
@@ -518,6 +723,7 @@ func TestKillStorm(t *testing.T) {
 	}
 	e := State(t)
 	st := &storm{t: t, e: e, seed: seed, short: testing.Short(), libBin: buildLibClient(t),
+		tok: &tokenOnlyRuns{markDir: e.MarkDir}, shrunk: make(chan struct{}),
 		labels: map[string]map[string]spec.Range{}, counts: map[string]int{}}
 	py, pyc, err := pyClient(t)
 	if err != nil {
@@ -538,7 +744,7 @@ func TestKillStorm(t *testing.T) {
 	sizes := map[string]int{"cpu": 4, "io": 2}
 	st.s = NewSampler(t, e, sizes)
 	st.s.Request = st.request
-	st.s.Exempt = st.exempt
+	st.s.TokenOnly = st.tok.grants
 
 	sctx, stopSampler := context.WithCancel(context.Background())
 	sampled := make(chan struct{})
@@ -552,29 +758,7 @@ func TestKillStorm(t *testing.T) {
 	defer cancel()
 	st.started = time.Now()
 	var wg sync.WaitGroup
-	wg.Go(func() { // the configuration: shrinks and growths
-		r := rand.New(rand.NewPCG(seed, 0))
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(1500*time.Millisecond + time.Duration(r.IntN(2500))*time.Millisecond):
-			}
-			old := st.s.Sizes()
-			next := map[string]int{"cpu": 2 + r.IntN(7), "io": 1 + r.IntN(3)}
-			if err := st.s.Resize(ctx, next); err != nil {
-				return
-			}
-			for res, n := range next {
-				switch {
-				case n < old[res]:
-					st.count("shrink")
-				case n > old[res]:
-					st.count("growth")
-				}
-			}
-		}
-	})
+	wg.Go(func() { st.sizer(ctx) })
 	for slot := range clients {
 		wg.Go(func() {
 			select { // stagger the first arrivals
@@ -602,6 +786,14 @@ func TestKillStorm(t *testing.T) {
 	}
 	stopSampler()
 	<-sampled
+	for _, p := range st.helpers {
+		select {
+		case <-p.done:
+		case <-time.After(exitWait):
+			p.kill(-p.pid, syscall.SIGKILL)
+			t.Errorf("cancel command pid %d still runs after the storm; killed", p.pid)
+		}
+	}
 
 	// Process hygiene: nothing the storm started, directly or through a run, survives it.
 	deadline := time.Now().Add(5 * time.Second) // a reparented command exits within 20 ms
@@ -636,7 +828,8 @@ func TestKillStorm(t *testing.T) {
 			key = r.c.outer + " killed"
 		}
 		codes[key]++
-		if !r.c.killed && r.code != 0 && r.code != exitRefusal {
+		refusalExpected := r.c.fate == "cancel" || r.c.timeout > 0
+		if !r.c.killed && r.code != 0 && (r.code != exitRefusal || !refusalExpected) {
 			t.Errorf("%s (pid %d, fate %s) exited %d; stderr:\n%s", r.c.name, r.c.proc.pid, r.c.fate, r.code, r.stderr)
 			continue
 		}
@@ -658,7 +851,32 @@ func TestKillStorm(t *testing.T) {
 		st.counts, codes, uptime())
 	t.Log(summary)
 	fmt.Fprintln(os.Stderr, summary)
-	if samples < 10 {
-		t.Errorf("only %d samples were taken", samples)
+
+	// The run exercised what it is for: floors on what happened, scaled for -short.
+	admitted := 0
+	for k, n := range st.counts {
+		if strings.HasPrefix(k, "admitted ") && k != "admitted nested" {
+			admitted += n
+		}
+	}
+	minAdmitted := 25
+	if testing.Short() {
+		minAdmitted = 6
+	}
+	if admitted < minAdmitted {
+		t.Errorf("%d admissions, want at least %d", admitted, minAdmitted)
+	}
+	floors := []string{"admitted cli", "admitted lib", "admitted tok", "admitted nested", "SIGKILL of a holder",
+		"SIGSTOP", "cancel published", "shrink below the locked count", "growth"}
+	if st.py != "" {
+		floors = append(floors, "admitted py")
+	}
+	for _, what := range floors {
+		if st.counts[what] < 1 {
+			t.Errorf("the storm never exercised %q", what)
+		}
+	}
+	if minSamples := int(3 * dur.Seconds()); samples < minSamples || missed > 3 {
+		t.Errorf("%d samples (%d missed), want at least %d and at most 3 missed", samples, missed, minSamples)
 	}
 }
