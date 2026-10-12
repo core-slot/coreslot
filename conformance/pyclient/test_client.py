@@ -509,6 +509,45 @@ class LivenessTests(Base):
         g.close(remove_hold=False)
 
 
+    def test_front_window_watches_a_stopped_head_behind_a_live_ticket(self):
+        """§10.3: a stopped head hidden behind a live ticket is still watched (the front window),
+        so it is passed over at once when the live ticket goes, not 10 s later."""
+        self.config("[resources]\ncpu = 1\n")
+        q = os.path.join(self.S, "queue")
+        head = os.path.join(q, "00000000000000000001-0000000001-000001")
+        live = os.path.join(q, "00000000000000000002-0000000001-000001")
+        self.write(head, body(), lock=True)  # stopped: never refreshed
+        live_fd = os.open(live, os.O_RDWR | os.O_CREAT, 0o600)
+        os.write(live_fd, body())
+        fcntl.flock(live_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        clock = FakeClock()
+        b = self.client(observer_clock=clock).enqueue("b", 0, {"cpu": 1})
+        for s in range(11):  # one election a second; the live ticket refreshed each time
+            os.utime(live, ns=(s + 1, s + 1))
+            self.assertEqual(b.step(), ("waiting", 3), f"at {s} s")
+            clock.t += 1.0
+        os.close(live_fd)  # the live ticket goes (dead): the head has been watched for 11 s
+        kind, g = b.step()
+        self.assertEqual(kind, "admitted")
+        g.close(remove_hold=False)
+
+    def test_unwatched_interval_does_not_count(self):
+        """§10.2: only watched time counts towards a stall; a changed value still restarts it."""
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+        for s in range(5):  # watched 0..4 s
+            t._pass += 1
+            self.assertFalse(t._observe("x", 7, 1000.0 + s))
+        t._pass += 20  # 20 elections that stopped before x
+        self.assertFalse(t._observe("x", 7, 1030.0))  # 4 s watched, the 26 s gap does not count
+        for s in range(31, 36):
+            t._pass += 1
+            self.assertFalse(t._observe("x", 7, 1000.0 + s), f"at {s} s")
+        t._pass += 1
+        self.assertTrue(t._observe("x", 7, 1036.0))  # 10 s watched
+        t._pass += 5
+        self.assertFalse(t._observe("x", 8, 1100.0))  # changed during the gap: restarted
+        t.withdraw()
+
     def test_dead_ticket_ahead_is_skipped_at_once(self):
         """§21.5: a withdrawn (unlocked) ticket ahead is skipped without waiting 10 s."""
         self.config("[resources]\ncpu = 1\n")

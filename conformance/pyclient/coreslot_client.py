@@ -51,6 +51,7 @@ REFRESH_S = 2.0
 STALL_S = 10.0
 POLL_S = 1.0
 HEAD_BACKOFF_MIN, HEAD_BACKOFF_MAX = 0.25, 2.0
+FRONT_WINDOW = 4  # §10.3: tickets at the front of the queue every election also watches
 ENTRY_BACKOFF_MIN, ENTRY_BACKOFF_MAX = 0.01, 0.25
 RECONCILE_NS = 30 * 10**9
 TMP_AGE_NS = 30 * 10**9
@@ -1520,7 +1521,10 @@ class Ticket:
         self._done = False
         self._gen_seen = None
         self._queue: list[str] = []
-        self._obs: dict[str, tuple[int, float]] = {}
+        # name -> (mtime, since, at, pass): the unchanged time counts from `since`; `at` and
+        # `pass` are the observer time and election of the last examination (§10.2).
+        self._obs: dict[str, tuple[int, float, float, int]] = {}
+        self._pass = 0
         self._valid: dict[str, bool] = {}
         self._last_refresh_m = time.monotonic()
         self._last_refresh_w = time.time_ns()
@@ -1587,57 +1591,107 @@ class Ticket:
         self._nonmatching = ignored
         self.client.ignored_entries = ignored
 
-    def _examine(self, name: str, now: float) -> str:
-        """One ticket ahead: 'gone', 'ignored', 'dead', 'stalled' or 'live' (§10.3)."""
+    def _observe(self, name: str, mtime: int, now: float) -> bool:
+        """Record an mtime read at observer time `now`; True when the ticket is STALLED (§10.2).
+
+        Only watched time counts: a ticket left unexamined by the previous election gets no
+        credit for the interval since it was last examined, though a changed value still restarts
+        its timer.
+        """
+        seen = self._obs.get(name)
+        if seen is None or seen[0] != mtime:
+            self._obs[name] = (mtime, now, now, self._pass)
+            return False
+        _, since, at, last_pass = seen
+        if self._pass > last_pass + 1:
+            since += now - at  # the unwatched interval does not count
+        self._obs[name] = (mtime, since, now, self._pass)
+        return now - since >= STALL_S
+
+    def _open_valid(self, name: str):
+        """Open a queue entry: an fd, or 'gone' or 'ignored' (§4.2, §7.2)."""
         path = os.path.join(self.client.state_dir(), "queue", name)
         fd = _open_entry(path)
         if not isinstance(fd, int):
             return fd  # "gone", or "ignored" without opening it (§4.2, B1/D6)
+        ok = self._valid.get(name)
+        if ok is None:
+            try:
+                validate_ticket(parse_body(_read_upto(fd, MAX_BODY + 1)))
+                ok = True
+            except Malformed:
+                ok = False
+            self._valid[name] = ok
+        if not ok:
+            os.close(fd)
+            return "ignored"
+        return fd
+
+    def _examine(self, name: str, now: float) -> str:
+        """One ticket ahead: 'gone', 'ignored', 'dead', 'stalled' or 'live' (§10.3)."""
+        fd = self._open_valid(name)
+        if not isinstance(fd, int):
+            return fd
         try:
             st = os.fstat(fd)
-            ok = self._valid.get(name)
-            if ok is None:
-                try:
-                    validate_ticket(parse_body(_read_upto(fd, MAX_BODY + 1)))
-                    ok = True
-                except Malformed:
-                    ok = False
-                self._valid[name] = ok
-            if not ok:
-                return "ignored"
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return "dead"
             except BlockingIOError:
                 pass
-            mtime = st.st_mtime_ns
-            seen = self._obs.get(name)
-            if seen is None or seen[0] != mtime:
-                self._obs[name] = (mtime, now)
-                return "live"
-            return "stalled" if now - seen[1] >= STALL_S else "live"
+            return "stalled" if self._observe(name, st.st_mtime_ns, now) else "live"
+        finally:
+            os.close(fd)
+
+    def _watch(self, name: str, now: float) -> str:
+        """Watch a front-window ticket: observe its mtime only; 'gone', 'ignored' or 'watched'."""
+        fd = self._open_valid(name)
+        if not isinstance(fd, int):
+            return fd
+        try:
+            self._observe(name, os.fstat(fd).st_mtime_ns, now)
+            return "watched"
         finally:
             os.close(fd)
 
     def _elect(self) -> int:
-        """Examine every ticket ahead, nearest first; position 1 means this is the head."""
+        """The election (§10.3): examine the tickets ahead from the nearest up to the first live,
+        non-stalled one, and watch the front window. Returns the position: 1 is the head, else
+        1 plus the tickets ahead not passed over (those beyond the end of the scan count)."""
         now = self.client.observer_clock()
+        self._pass += 1
         ahead = [n for n in self._queue if n[:ID_LEN] < self.id]
-        live = 0
+        examined: set[str] = set()
+        gone: set[str] = set()
         ignored = 0
-        gone = []
+        head = True
         for n in reversed(ahead):
+            examined.add(n)
             verdict = self._examine(n, now)
-            if verdict == "live":
-                live += 1
-            elif verdict == "gone":
-                gone.append(n)
+            if verdict == "gone":
+                gone.add(n)
             elif verdict == "ignored":
                 ignored += 1  # malformed, or a bad type/owner/mode: never trusted (§7.2, B1/D6)
+            elif verdict not in ("dead", "stalled"):  # dead and STALLED tickets are passed over
+                head = False
+                break
+        watched = 0
+        for n in ahead:  # the front window: the first FRONT_WINDOW tickets that are not gone
+            if watched >= FRONT_WINDOW or n in examined:
+                break
+            verdict = self._watch(n, now)
+            if verdict == "gone":
+                gone.add(n)
+            elif verdict == "watched":
+                watched += 1
         self.client.ignored_entries = self._nonmatching + ignored
         if gone:
             self._queue = [n for n in self._queue if n not in gone]
-        return live + 1
+        if head:
+            return 1
+        unexamined = [n for n in ahead if n not in examined and n not in gone and self._valid.get(n) is not False]
+        live_examined = 1  # the ticket that ended the scan
+        return 1 + live_examined + len(unexamined)
 
     # ---- the poll
 

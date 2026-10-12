@@ -333,8 +333,9 @@ func (t *Ticket) resumeBump() error {
 // when gen changed (probing the listed holds for Waiting.Holders), and examines the tickets
 // ahead from the nearest, observing each one's mtime on the monotonic clock and probing its
 // lock: a gone, dead or STALLED one is passed over and the first live, non-STALLED one ends the
-// examination, so the tickets beyond it are not examined in this pass (state.Observer counts a
-// stall only across consecutive examinations). It reports whether no live, non-STALLED ticket
+// examination. The tickets beyond it are not examined in this pass (state.Observer counts a stall
+// only across consecutive examinations), except that the first FrontWindow tickets of the queue
+// are always watched (watchFront). It reports whether no live, non-STALLED ticket
 // is ahead and updates t.last.
 func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 	g, err := genRead(t.e.st)
@@ -354,7 +355,9 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 	t.obs.Pass()
 	head = true
 	passed := 0 // tickets examined and passed over, still listed
+	stop := 0   // the scan examined t.ahead[stop:]
 	for i := len(t.ahead) - 1; i >= 0; i-- {
+		stop = i
 		a := t.ahead[i]
 		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, a.name))
 		if gone(err) {
@@ -385,12 +388,45 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 		head = false
 		break
 	}
+	if err := t.watchFront(stop, now); err != nil {
+		return false, err
+	}
 	position := 1
 	if !head {
 		position += len(t.ahead) - passed
 	}
 	t.last = Waiting{Position: position, Holders: holders}
 	return head, nil
+}
+
+// FrontWindow is how many tickets at the front of the queue every waiter watches in each
+// election besides those its scan examines (PROTOCOL.md section 10.3). Watching them keeps every
+// waiter's timer on a stopped head running while a live ticket nearer to it ends its scan, so
+// up to FrontWindow consecutive stopped tickets at the front stop blocking the whole queue
+// within the I5 bound, not one successor after another.
+const FrontWindow = 4
+
+// watchFront observes the mtime of the first FrontWindow tickets ahead that are not gone,
+// except those the scan examined in this pass (t.ahead[stop:]). It only observes: the election
+// still decides from the scan alone.
+func (t *Ticket) watchFront(stop int, now time.Duration) error {
+	for j, watched := 0, 0; j < stop && watched < FrontWindow; {
+		a := t.ahead[j]
+		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, a.name))
+		if gone(err) {
+			t.obs.Forget(a.key)
+			t.ahead = slices.Delete(t.ahead, j, j+1)
+			stop--
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		t.obs.Observe(a.key, fi.ModTime().UnixNano(), now)
+		watched++
+		j++
+	}
+	return nil
 }
 
 // rescan lists queue/ and holds/. Tickets ahead of this one whose bodies are well-formed are
