@@ -171,7 +171,7 @@ func cancel(dir, idText string) {
 		fail("not a ticket id: " + idText)
 	}
 	e, _ := open(dir)
-	err := e.Cancel(id)
+	err := e.CancelContext(context.Background(), id)
 	switch {
 	case err == nil:
 		fmt.Println("cancel requested")

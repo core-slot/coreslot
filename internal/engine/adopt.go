@@ -10,21 +10,15 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/state"
 )
 
-// Adopt admits already-running work without queueing (PROTOCOL.md section 12.4): inside the
-// section it recomputes sizes, counts locked tokens at every index, and takes what is free
+// AdoptContext admits already-running work without queueing (PROTOCOL.md section 12.4): inside
+// the section it recomputes sizes, counts locked tokens at every index, and takes what is free
 // under I3 in the two passes of section 12.1 step 6 (first up to min(min, size) of each
 // requested declared resource, as many as are free, then more up to max while the grant holds
 // fewer than 512 tokens), and publishes a hold with "adopted": true listing exactly what it
 // took. It has no minimum: shortfall maps every requested declared resource to
-// max(0, min - granted). Adopt waits for the section as long as it takes (AdoptContext bounds
-// that wait); in a state directory whose format this client does not implement it writes
-// nothing and returns an error matching ErrRefused.
-func (e *Engine) Adopt(req spec.Request) (g *Grant, shortfall map[string]int, err error) {
-	return e.AdoptContext(context.Background(), req)
-}
-
-// AdoptContext is Adopt whose wait for the section ends with ctx, as EnqueueContext's does:
-// nothing is taken or published then.
+// max(0, min - granted). In a state directory whose format this client does not implement it
+// writes nothing and returns an error matching ErrRefused. Its wait for the section ends with
+// ctx, as EnqueueContext's does: nothing is taken or published then.
 func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, shortfall map[string]int, err error) {
 	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {

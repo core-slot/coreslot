@@ -168,17 +168,11 @@ func (e *Engine) enterUntil(ctx context.Context) (*store.Section, error) {
 	return sec, err
 }
 
-// Enqueue enters the section, reads FORMAT, reconciles if due, publishes a ticket for req
-// (PROTOCOL.md section 10.1) keeping its lock-carrying descriptor, bumps gen and leaves. When
+// EnqueueContext enters the section, reads FORMAT, reconciles if due, publishes a ticket for
+// req (PROTOCOL.md section 10.1) keeping its lock-carrying descriptor, bumps gen and leaves. When
 // the format is not one this client implements, nothing is written and the returned ticket is
 // in token-only mode (section 15.2): its Step tries token-only admission. An invalid request
-// is a *spec.UsageError. Enqueue waits for the section as long as it takes; EnqueueContext
-// bounds that wait.
-func (e *Engine) Enqueue(req spec.Request) (*Ticket, error) {
-	return e.EnqueueContext(context.Background(), req)
-}
-
-// EnqueueContext is Enqueue whose wait for the section ends with ctx: it then returns a
+// is a *spec.UsageError. Its wait for the section ends with ctx: it then returns a
 // *SectionBusyError matching ctx.Err() (or ctx.Err() itself when ctx had already ended) having
 // published nothing. Once inside the section it completes.
 func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket, error) {
