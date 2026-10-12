@@ -1,7 +1,7 @@
 # PROTOCOL.md ambiguities found by the independent Python client
 
-Of the 42 entries, 41 are resolved: 39 by the revised `PROTOCOL.md`, and B1/D6 by the stray rule
-that PROTOCOL §4.2/§10.4 now state. E8 is open. Each entry ends with its status.
+Of the 42 entries, all are resolved: 40 by the revised `PROTOCOL.md`, and B1/D6 by the stray rule
+that PROTOCOL §4.2/§10.4 now state. Each entry ends with its status.
 
 Each entry is a place where `PROTOCOL.md` (format 1) is silent, ambiguous or self-contradictory
 for someone implementing from it alone. Each one gives the section, the readings, and the choice
@@ -308,7 +308,8 @@ The library's `Grant.close()` raises the state error (`inode`); the CLI prints i
 command's status. A fail-open run's unbudgeted hold is released the same way. The protocol should
 say whether degraded mode is recorded here, and in which directory.
 
-**Status — open.**
+**Status — resolved:** PROTOCOL I1 and §12.3 now state this choice: the check runs at admission
+and at release, and on a mismatch at release the holder writes nothing into the state directory.
 
 ## F. CLI surface used by the examples but not specified
 
