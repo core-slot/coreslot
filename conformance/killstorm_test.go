@@ -41,10 +41,6 @@ const (
 	stormFull, stormShort     = 60 * time.Second, 10 * time.Second
 	clientsFull, clientsShort = 50, 20
 	stormSeedEnv              = "CORESLOT_STORM_SEED"
-	// tokenOnlyReportBound is how long a locked token listed by no hold may be put down to a
-	// token-only run whose command has not reported its descriptors yet. Past it the token
-	// counts against I2 like any other.
-	tokenOnlyReportBound = 10 * time.Second
 	// windDown bounds the end of the storm: every client killed and reaped.
 	windDown = 60 * time.Second
 )
