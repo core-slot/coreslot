@@ -109,6 +109,35 @@ func TestResetRefusesLiveState(t *testing.T) {
 	}
 }
 
+// A refusal names each live hold and ticket by its label, escaped for a terminal, not by the
+// display slug of its file name.
+func TestResetRefusalNamesLabels(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	e := newEngine(t, dir, nil)
+	g, _, err := e.Adopt(needLabel("cpu=1", "hold:three"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { g.Close() })
+	enqueue(t, e, needLabel("cpu=1", "ci:o-r\x1b[2J"))
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err = e.Reset(ctx)
+	var le *LiveError
+	if !errors.As(err, &le) {
+		t.Fatalf("Reset = %v, want a *LiveError", err)
+	}
+	pid := os.Getpid()
+	for _, want := range []string{
+		fmt.Sprintf("1 live hold (pid %d, hold:three)", pid),
+		fmt.Sprintf("1 live ticket (pid %d, ci:o-r\\x1b[2J)", pid),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not say %q", err, want)
+		}
+	}
+}
+
 // While an accepted reset works it is the section's recorded holder: status reads admit.lock's
 // body, outside the section, and must name this process (not a stale record, whatever length
 // its pid had) with a fresh entry time. The section is kept after Reset returns, as it is while
