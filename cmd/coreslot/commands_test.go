@@ -107,6 +107,46 @@ func tree(t *testing.T, dir string) string {
 	return strings.Join(out, "\n")
 }
 
+// treeContent is every path under dir with its mode, size and inode, and the bytes of every
+// regular file and the target of every symlink: equal strings, equal trees. A refused reset must
+// not rewrite admit.lock, and a size comparison alone passes or fails by the digit count of a
+// pid (macOS wraps them at 99999).
+func treeContent(t *testing.T, dir string) string {
+	t.Helper()
+	var out strings.Builder
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		fmt.Fprintf(&out, "%s %v size=%d ino=%d", rel, fi.Mode(), fi.Size(), fi.Sys().(*syscall.Stat_t).Ino)
+		switch {
+		case fi.Mode().IsRegular():
+			body, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&out, " body=%q", body)
+		case fi.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&out, " -> %s", target)
+		}
+		out.WriteByte('\n')
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
 // ---------------------------------------------------------------- status
 
 func TestStatusJSONSchema(t *testing.T) {
@@ -643,12 +683,18 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 			}
 			g.Close()
 			tc.live(t, dir, c)
-			before := tree(t, dir)
+			// A stale record of a pid with one digit: whatever pid the refusing process has, a
+			// reset that marked itself as holder would change the file's length as well as its
+			// bytes, so the comparison below cannot pass by the luck of equal pid lengths.
+			if err := os.WriteFile(filepath.Join(dir, "admit.lock"), []byte(`{"pid":7,"entered_ns":1}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before := treeContent(t, dir)
 			r := cli(t, baseEnv(dir), "doctor", "--reset")
 			if r.code != 75 || !strings.Contains(r.stderr, "doctor --reset refused") || !strings.Contains(r.stderr, tc.want) {
 				t.Errorf("doctor --reset: exit %d, want 75 naming %q (stderr %q)", r.code, tc.want, r.stderr)
 			}
-			if after := tree(t, dir); after != before {
+			if after := treeContent(t, dir); after != before {
 				t.Errorf("a refused reset changed the directory:\nbefore:\n%s\nafter:\n%s", before, after)
 			}
 		})
