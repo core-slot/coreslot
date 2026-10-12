@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -207,16 +206,19 @@ func (e *Engine) sectionInfo() (SectionInfo, error) {
 		return info, err
 	}
 	info.Held = held
-	body, err := e.readBody("", store.AdmitLock)
-	if err != nil {
-		return info, nil
-	}
-	var b struct {
-		PID       int   `json:"pid"`
-		EnteredNS int64 `json:"entered_ns"`
-	}
-	if json.Unmarshal(body, &b) == nil {
-		info.PID, info.EnteredNS = b.PID, b.EnteredNS
+	if a, ok := e.sectionHolder(); ok {
+		info.PID, info.EnteredNS = a.PID, a.EnteredNS
 	}
 	return info, nil
+}
+
+// sectionHolder reads admit.lock's informational body (PROTOCOL.md section 7.7); ok is false when
+// it is missing, unreadable or malformed. It is for display only.
+func (e *Engine) sectionHolder() (wire.AdmitLock, bool) {
+	body, err := e.readBody("", store.AdmitLock)
+	if err != nil {
+		return wire.AdmitLock{}, false
+	}
+	a, err := wire.DecodeAdmitLock(body)
+	return a, err == nil
 }

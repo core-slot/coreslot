@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -141,7 +140,7 @@ func ValidateInherited(env map[string]string) (held map[string][]*os.File, err e
 		if !ok {
 			return nil, fmt.Errorf("descriptor %d of %s is not a token file of %s: %s, or the parent run used another state directory", fd, EnvTokenFDs, dir, reusedCause)
 		}
-		locked, err := probeLocked(tok.path)
+		locked, err := store.ProbeLocked(tok.path)
 		if err != nil {
 			return nil, fmt.Errorf("the inherited grant cannot be checked: %v", err)
 		}
@@ -171,24 +170,4 @@ func findTokens(dir string, want map[devIno]int) (map[int]tokenFile, error) {
 		}
 	}
 	return found, nil
-}
-
-// probeLocked opens path afresh and reports whether another open file description holds its
-// lock; a lock the probe obtains is released at once by closing.
-func probeLocked(path string) (bool, error) {
-	f, err := store.OpenFile(path, os.O_RDONLY)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	for {
-		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if !errors.Is(err, unix.EINTR) {
-			break
-		}
-	}
-	if errors.Is(err, unix.EWOULDBLOCK) {
-		return true, nil
-	}
-	return false, err
 }

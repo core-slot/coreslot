@@ -37,38 +37,9 @@ type Ticket struct {
 	Dead bool
 }
 
-// Ahead is the election (PROTOCOL.md section 10.3). It scans the tickets ahead of me from the
-// nearest, skipping dead and STALLED ones; the first live, non-stalled ticket ends the scan and
-// me is not the head. It reports whether me would be the head. The caller feeds obs with the
-// tickets' mtimes beforehand and passes the observer's monotonic time as now.
-func Ahead(tickets []Ticket, me Key, obs *Observer, now time.Duration) (wouldBeHead bool) {
-	ahead := make([]Ticket, 0, len(tickets))
-	for _, t := range tickets {
-		if t.Key.Less(me) {
-			ahead = append(ahead, t)
-		}
-	}
-	slices.SortFunc(ahead, func(a, b Ticket) int {
-		switch {
-		case a.Key.Less(b.Key):
-			return -1
-		case b.Key.Less(a.Key):
-			return 1
-		}
-		return 0
-	})
-	// Nearest first: the ticket just ahead of me is the last in ascending order.
-	for i := len(ahead) - 1; i >= 0; i-- {
-		if PassedOver(ahead[i], obs, now) {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-// PassedOver reports whether the election skips t: it is dead or, for obs at now, STALLED. The
-// first ticket ahead, from the nearest, that is not passed over ends the election.
+// PassedOver reports whether the election (PROTOCOL.md section 10.3) skips t: it is dead or, for
+// obs at now, STALLED. The election scans the tickets ahead from the nearest, and the first one
+// that is not passed over ends it.
 func PassedOver(t Ticket, obs *Observer, now time.Duration) bool {
 	return t.Dead || obs.Stalled(t.Key, now)
 }

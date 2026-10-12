@@ -753,7 +753,7 @@ func TestPublishSkipsAnExistingTemporaryName(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A young leftover of an earlier process with this pid holds the next temporary name.
-	next := int((seq.Load() + 1) % wire.SeqModulus)
+	next := wire.NextSeq(int(seq.Load()))
 	leftover := filepath.Join(q, tmpName(os.Getpid(), next))
 	if err := os.WriteFile(leftover, []byte("leftover"), 0o600); err != nil {
 		t.Fatal(err)

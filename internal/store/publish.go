@@ -22,13 +22,19 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-// seq is this process's publication counter (PROTOCOL.md section 7.1), shared by every Store
-// in the process so that two publications of one process never share a name.
-var seq atomic.Uint64
+// seq is the last seq of this process's publication counter (PROTOCOL.md section 7.1), shared
+// by every Store in the process so that two publications of one process never share a name.
+var seq atomic.Int64
 
-// NextSeq returns this process's next seq: 1, 2, ... 999999, 0, 1, ...
+// NextSeq returns this process's next seq, as wire.NextSeq orders them: 1, 2, ... 999999, 0, 1, ...
 func NextSeq() int {
-	return int(seq.Add(1) % wire.SeqModulus)
+	for {
+		last := seq.Load()
+		next := wire.NextSeq(int(last))
+		if seq.CompareAndSwap(last, int64(next)) {
+			return next
+		}
+	}
 }
 
 // tmpName is a temporary file's name, ".tmp-" pid "-" seq (section 7.1).
