@@ -11,10 +11,11 @@ import (
 	"testing"
 )
 
-// TestLibraryPurity parses every non-test Go file outside cmd/, except the files of a command
-// (package main, such as the conformance suite's helper), and fails on output, process exit and
-// signal handling: the library never prints (see violations), never chooses an exit
-// code (os.Exit) and never installs signal handlers (signal.Notify, signal.Ignore).
+// TestLibraryPurity parses every non-test Go file outside the programs (cmd/ and bench/), except
+// the files of a command (package main, such as the conformance suite's helper), and fails on
+// output, process exit and signal handling: the library never prints (see violations), never
+// chooses an exit code (os.Exit) and never installs signal handlers (signal.Notify,
+// signal.Ignore).
 func TestLibraryPurity(t *testing.T) {
 	fset := token.NewFileSet()
 	checked := 0
@@ -23,8 +24,11 @@ func TestLibraryPurity(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
+			if path == "cmd" || path == "bench" { // the programs at the top level, not any such name
+				return filepath.SkipDir
+			}
 			switch d.Name() {
-			case "cmd", "testdata", ".git", "evidence", "docs":
+			case "testdata", ".git", "evidence", "docs":
 				if path != "." {
 					return filepath.SkipDir
 				}

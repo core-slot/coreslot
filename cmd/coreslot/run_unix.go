@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,10 +29,9 @@ import (
 
 // Timing of a waiting run (PROTOCOL.md section 22).
 const (
-	pollEvery     = 250 * time.Millisecond // a Step at least this often, well inside the 2 s refresh
-	waitLineEvery = 30 * time.Second       // the waiting line
-	noWaitFor     = time.Second            // --no-wait: how long the section is tried
-	logRotateWait = 2 * time.Second        // entering the section to rotate the run log
+	waitLineEvery = 30 * time.Second // the waiting line
+	noWaitFor     = time.Second      // --no-wait: how long the section is tried
+	logRotateWait = 2 * time.Second  // entering the section to rotate the run log
 )
 
 // runSignals receives the signals a run handles from its start: while it waits they interrupt
@@ -178,7 +178,9 @@ func (r *run) ordinary() int {
 		if r.o.noWait {
 			g, err = r.tryOnce(ctx, t)
 		} else {
-			g, err = waitLoop(ctx, sectionStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
+			g, err = waitOneP(func() (*engine.Grant, error) {
+				return waitLoop(ctx, sectionStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
+			})
 		}
 		if err != nil {
 			_ = inSection(t.Withdraw)
@@ -243,9 +245,12 @@ func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (t *engine
 	return t, asState(err)
 }
 
-// stepper is the part of a ticket the wait loop drives.
+// stepper is the part of a ticket the wait loop drives: a Step, how long until the next one
+// has work due, and the live holds for the waiting line.
 type stepper interface {
 	step(ctx context.Context) (engine.StepResult, error)
+	due() time.Duration
+	holders() ([]engine.HolderInfo, error)
 }
 
 // sectionStepper steps a ticket inside inSection: a Step may hold the admission section.
@@ -257,6 +262,20 @@ func (s sectionStepper) step(ctx context.Context) (res engine.StepResult, err er
 		return err
 	})
 	return res, err
+}
+
+func (s sectionStepper) due() time.Duration { return s.t.Due() }
+
+func (s sectionStepper) holders() ([]engine.HolderInfo, error) { return s.t.Holders() }
+
+// waitOneP runs wait with the Go runtime limited to one P (runtime.GOMAXPROCS(1)) and restores
+// the previous setting afterwards. A waiting process sleeps almost all the time, and with one P
+// its wake-ups do not wake idle threads of the other Ps: a CLI waiter in a quiet queue measured
+// 268 us of CPU per second against 453 us before, in one session (evidence/README.md, engine
+// round 2). Only this process changes: GOMAXPROCS is not exported to the command.
+func waitOneP(wait func() (*engine.Grant, error)) (*engine.Grant, error) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	return wait()
 }
 
 // waitClock is the wait loop's clock: monotonic time and a sleep that ends with ctx.
@@ -282,8 +301,9 @@ func (c realClock) Sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// waitLoop steps the ticket every 250 ms until it is admitted, ctx ends or the budget fails,
-// and writes a waiting line to w every 30 s of waiting.
+// waitLoop steps the ticket whenever it next has work due (once per second while it is not the
+// head, on the admission backoff while it is) until it is admitted, ctx ends or the budget
+// fails, and writes a waiting line to w every 30 s of waiting.
 func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, time.Duration) string) (*engine.Grant, error) {
 	start := clk.Now()
 	next := start + waitLineEvery
@@ -300,11 +320,14 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 			return v.Grant, nil
 		case engine.Waiting:
 			if now := clk.Now(); now >= next {
+				if v.Holders, err = s.holders(); err != nil { // informative: a failure leaves them out
+					v.Holders = nil
+				}
 				fmt.Fprintln(w, line(v, now-start))
 				next = now + waitLineEvery
 			}
 		}
-		if err := clk.Sleep(ctx, pollEvery); err != nil {
+		if err := clk.Sleep(ctx, s.due()); err != nil {
 			return nil, err
 		}
 	}

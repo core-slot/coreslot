@@ -30,15 +30,15 @@ const (
 	// RefreshEvery is the longest a waiter goes between two refreshes of its ticket (PROTOCOL.md
 	// section 10.2). A Step refreshes when RefreshEvery/2 has passed since the last refresh, and
 	// again just before a section entry that may wait once RefreshEvery/4 has passed; such an
-	// entry waits at most sectionWait = RefreshEvery/4. A caller that starts each Step within
-	// RefreshEvery/8 of the previous one returning (Wait polls every 250 ms) therefore refreshes
-	// at most RefreshEvery/4 + RefreshEvery/4 + RefreshEvery/8 = 1.25 s apart, plus the
-	// filesystem work of one Step: a Step that starts just under RefreshEvery/4 after a refresh
-	// does not refresh before its entry, the entry waits sectionWait, and the next Step starts
-	// RefreshEvery/8 after that. (Without the mid-step refresh the worst case would be
-	// RefreshEvery/2 + RefreshEvery/4 + RefreshEvery/8 = 1.75 s.) A Poll refreshes whenever
-	// RefreshEvery/2 has passed, so its refresh gaps are its caller's poll interval (spec §9: at
-	// most 2 s).
+	// entry waits at most sectionWait = RefreshEvery/4. Ticket.Due is never later than the next
+	// RefreshEvery/2 after a refresh, so a caller that Steps when Due says (Wait and the CLI do)
+	// refreshes at most RefreshEvery/2 apart, plus its own wake-up latency and the filesystem work
+	// of one Step: a Step that starts just under RefreshEvery/4 after a refresh does not refresh
+	// before its entry, the entry waits sectionWait and the next Step, due RefreshEvery/2 after
+	// the refresh, refreshes. A caller that instead starts each Step within RefreshEvery/8 of the
+	// previous one returning refreshes at most RefreshEvery/4 + RefreshEvery/4 + RefreshEvery/8
+	// = 1.25 s apart. A Poll refreshes whenever RefreshEvery/2 has passed, so its refresh gaps
+	// are its caller's poll interval (spec §9: at most 2 s).
 	RefreshEvery = 2 * time.Second
 	// ElectEvery is how often a waiter reads gen and repeats the election.
 	ElectEvery = time.Second
