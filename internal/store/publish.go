@@ -137,9 +137,15 @@ func nameMatches(dir, name string) bool {
 
 // writeTmp creates a fresh temporary file in d, locks it when lockCarrying, and writes body,
 // passing the publish.after-create, publish.after-lock and publish.after-write points.
+//
+// The body is written through the read-write description that created the file. A lock-carrying
+// file's lock is taken on a second, read-only description of it, which is the one returned and
+// kept: the descriptor a hold's command inherits as fd 3 (PROTOCOL.md section 17) carries the
+// same lock but cannot write, so a command writing to fd 3 cannot corrupt the body. The
+// read-write description is closed before the file is published.
 func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File, string, error) {
 	pid := os.Getpid()
-	var f *os.File
+	var w *os.File
 	var tmp string
 	for attempt := 0; ; attempt++ {
 		if attempt == maxTmpAttempts {
@@ -147,7 +153,7 @@ func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File
 		}
 		tmp = filepath.Join(d, tmpName(pid, NextSeq()))
 		var err error
-		f, err = OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL)
+		w, err = OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL)
 		if errors.Is(err, fs.ErrExist) {
 			continue // a young leftover of an earlier process with this pid
 		}
@@ -156,13 +162,20 @@ func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File
 		}
 		break
 	}
+	f := w // the description returned: w itself unless the file is lock-carrying
 	fail := func(err error) (*os.File, string, error) {
 		os.Remove(tmp)
+		w.Close()
 		f.Close()
 		return nil, "", err
 	}
 	point("publish.after-create")
 	if lockCarrying {
+		ro, err := OpenFile(tmp, os.O_RDONLY)
+		if err != nil {
+			return fail(err)
+		}
+		f = ro
 		ok, err := flockNB(f)
 		if err != nil {
 			return fail(err)
@@ -172,8 +185,13 @@ func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File
 		}
 	}
 	point("publish.after-lock")
-	if _, err := f.Write(body); err != nil {
+	if _, err := w.Write(body); err != nil {
 		return fail(err)
+	}
+	if lockCarrying {
+		if err := w.Close(); err != nil {
+			return fail(err)
+		}
 	}
 	point("publish.after-write")
 	return f, tmp, nil
