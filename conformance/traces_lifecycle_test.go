@@ -542,8 +542,8 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 
 // ---------------------------------------------------------------- unknown format
 
-// layout reads every file of the state directory except the token files: relative path ->
-// content. The run log is read apart.
+// layout reads every file of the state directory except the token files, the run log
+// included: relative path -> content.
 func layout(t *testing.T, e Env) map[string]string {
 	t.Helper()
 	files := map[string]string{}
@@ -556,9 +556,6 @@ func layout(t *testing.T, e Env) map[string]string {
 			if rel == store.ResDir {
 				return filepath.SkipDir
 			}
-			return nil
-		}
-		if rel == filepath.Join(store.LogDir, store.RunLog) {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -580,10 +577,14 @@ func layout(t *testing.T, e Env) map[string]string {
 // that arrives afterwards never queues. Locked tokens never exceed the size, and the token-only
 // clients write nothing: no ticket, hold, gen bump, admit.lock body, degraded record or run-log
 // line. The format-1 holder's release, whose section finds FORMAT 2, leaves its hold in place
-// rather than removing it under a format it does not implement.
+// rather than removing it under a format it does not implement, and the holder writes no
+// run-log line either: it re-reads FORMAT just before the append (PROTOCOL.md section 20). The
+// run log never comes to exist.
 //
 // Mutation: a token-only run appends its run-log line (runChild given the store's log for a
 // token-only grant): lines for W1, W2 and N appear.
+// Mutation: skip the re-read of FORMAT before the append (appendRunLog appends after the
+// rotation check alone): H's line appears.
 // Mutation: token-only admission is not bounded by the size (tokenOnlyAttempt skips the free
 // check and takes at indices up to the size plus 4): W1 takes indices 3 and 4 while H and W2
 // hold the other three, and the sampler sees 5 locked under a size of 3.
@@ -682,11 +683,9 @@ func TestUnknownFormatTokenOnly(t *testing.T) {
 		t.Errorf("gen went from %d to %d under FORMAT 2", gen, got)
 	}
 	if _, err := os.Stat(filepath.Join(e.Dir, store.LogDir, store.RunLog)); err == nil {
-		for _, l := range runLog(t, e) {
-			if l["label"] != "H" {
-				t.Errorf("a run-log line was written under FORMAT 2: %v", l)
-			}
-		}
+		t.Errorf("a run-log line was written under FORMAT 2: %v", runLog(t, e))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Error(err)
 	}
 }
 

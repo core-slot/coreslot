@@ -884,6 +884,32 @@ func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
 	}
 }
 
+// FORMAT is re-read immediately before the run-log line is appended (PROTOCOL.md section 20):
+// a run whose command replaces FORMAT with one this client does not implement, or with a
+// malformed one, writes no line and says so on stderr, though FORMAT was understood when it was
+// admitted.
+func TestRunLogSkippedWhenFormatChangesDuringRun(t *testing.T) {
+	for name, format := range map[string]string{
+		"unknown":   "coreslot-protocol 2\n",
+		"malformed": "coreslot-protocol x\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			env := append(baseEnv(dir), "S="+dir, "F="+format)
+			r := cli(t, env, "run", "--label", "changed", "--", "sh", "-c", `printf %s "$F" > "$S/FORMAT"`)
+			if r.code != 0 {
+				t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+			}
+			if lines := runLog(t, dir); len(lines) != 0 {
+				t.Errorf("a run-log line was written after FORMAT became %q: %v", format, lines)
+			}
+			if !strings.Contains(r.stderr, "the run log was not written") {
+				t.Errorf("stderr %q: want a notice that the run log was not written", r.stderr)
+			}
+		})
+	}
+}
+
 // Any other rotation failure costs the rotation, never the line: one notice, then the append.
 func TestRunLogAppendedWhenRotationFails(t *testing.T) {
 	st, dir := bigRunLog(t, "coreslot-protocol 1\n")

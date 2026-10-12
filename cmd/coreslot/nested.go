@@ -179,13 +179,20 @@ func (r *run) passThroughUnbudgeted(reason string) int {
 }
 
 // appendNestedLog appends a pass-through's run-log line (PROTOCOL.md section 20): only when
-// FORMAT, read outside the section, names a format this client implements, and without opening
-// the state directory as a Store, so nothing but log/ and its file is ever created. No line is
-// not an error.
+// FORMAT, read outside the section just before the append, names a format this client
+// implements, and without opening the state directory as a Store, so nothing but log/ and its
+// file is ever created. With no FORMAT (no state directory yet) it writes no line and that is
+// not an error; a FORMAT that is not understood, or a malformed one, is reported.
 func appendNestedLog(rec store.RunRecord) error {
 	dir, _, err := config.StateDir()
-	if err != nil || !engine.FormatUnderstood(dir) {
+	if err != nil {
 		return nil
+	}
+	if present, err := formatStillUnderstood(dir); err != nil {
+		if !present {
+			return nil
+		}
+		return err
 	}
 	return store.AppendRunAt(dir, rec)
 }

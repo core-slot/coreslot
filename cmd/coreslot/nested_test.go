@@ -281,6 +281,29 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 			t.Errorf("nested run-log lines %v", lines)
 		}
 	})
+
+	// A pass-through re-reads FORMAT immediately before its line too (PROTOCOL.md section 20):
+	// under a FORMAT it does not implement it writes none, and says so.
+	t.Run("format not understood", func(t *testing.T) {
+		dir := stateDir(t, "")
+		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+			t.Fatalf("setup run: %d %q", r.code, r.stderr)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason")
+		r := cli(t, env, "run", "--need", "cpu=3", "--label", "nested-format-2", "--", "true")
+		if r.code != 0 {
+			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+		}
+		if lines := nestedLines(t, dir); len(lines) != 0 {
+			t.Errorf("a pass-through wrote a run-log line under FORMAT 2: %v", lines)
+		}
+		if !strings.Contains(r.stderr, "the run log was not written") {
+			t.Errorf("stderr %q: want a notice that the run log was not written", r.stderr)
+		}
+	})
 }
 
 func TestValidateInherited(t *testing.T) {
