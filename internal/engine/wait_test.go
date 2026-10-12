@@ -198,8 +198,7 @@ func drive(t *testing.T, clk *fakeClock, tk *Ticket, d time.Duration, before fun
 
 // A waiter that is not the head, Stepped when its work is due (as Wait does), does all of its
 // work once per second: one Step, one refresh, one cancel check, one gen read and one election
-// examining one ticket. It probes the holds only when gen changed (here once, at its first
-// election), not each second.
+// examining one ticket. It never probes the holds: they are listed only on request.
 func TestNonHeadWorksOncePerSecond(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -227,8 +226,8 @@ func TestNonHeadWorksOncePerSecond(t *testing.T) {
 	refreshes -= len(at) // ahead's
 	// The first Step comes right after the enqueue, which refreshed: it does not refresh again.
 	if len(at) != secs || refreshes != secs-1 || work.cancelChecks != secs || work.genReads != secs ||
-		work.probes != secs || work.lstats != secs || work.holdProbes != 1 {
-		t.Fatalf("in %d s: %d Steps, %d refreshes, %d cancel checks, %d gen reads, %d mtime reads, %d probes, %d hold probes; want %d of each (refreshes one fewer, hold probes 1)",
+		work.probes != secs || work.lstats != secs || work.holdProbes != 0 {
+		t.Fatalf("in %d s: %d Steps, %d refreshes, %d cancel checks, %d gen reads, %d mtime reads, %d probes, %d hold probes; want %d of each (refreshes one fewer, hold probes 0)",
 			secs, len(at), refreshes, work.cancelChecks, work.genReads, work.lstats, work.probes, work.holdProbes, secs)
 	}
 	for i := 1; i < len(at); i++ {
@@ -298,5 +297,40 @@ func TestRefreshCadenceWhenDue(t *testing.T) {
 	}
 	if tk.backoff != HeadMaxBackoff {
 		t.Fatalf("backoff %v after 60 s of failed entries, want %v", tk.backoff, HeadMaxBackoff)
+	}
+}
+
+// Holds are listed and probed only when asked for (Ticket.Holders, the CLI's waiting line), not
+// on the elections that follow a change of gen.
+func TestHoldersOnlyOnRequest(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	if !isAdmitted(step(t, enqueue(t, e, need("cpu=1")))) { // a live hold
+		t.Fatal("not admitted on a free budget")
+	}
+	ahead := enqueue(t, e, need("cpu=1"))
+	w := enqueue(t, e, need("cpu=1"))
+	work := countWaitWork(t)
+	for i := 0; i < 5; i++ {
+		before := readGen(t, e)
+		if err := enqueue(t, e, need("cpu=1")).Withdraw(); err != nil { // gen changes
+			t.Fatal(err)
+		}
+		if readGen(t, e) == before {
+			t.Fatal("gen did not change")
+		}
+		if err := ahead.refresh(clk.clock().Monotonic()); err != nil {
+			t.Fatal(err)
+		}
+		step(t, w)
+		clk.advance(time.Second)
+	}
+	if work.holdProbes != 0 {
+		t.Fatalf("%d hold probes over 5 elections after gen changes, want 0", work.holdProbes)
+	}
+	hs, err := w.Holders()
+	if err != nil || len(hs) != 1 || work.holdProbes != 1 {
+		t.Fatalf("Holders: %v, %v after %d probes; want the one live hold, one probe", hs, err, work.holdProbes)
 	}
 }

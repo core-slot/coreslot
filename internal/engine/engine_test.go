@@ -962,7 +962,12 @@ func TestHoldStartMismatchIsIgnored(t *testing.T) {
 	// The ticket is head and admitted; a second ticket behind it reports the holders.
 	step(t, tk)
 	behind := enqueue(t, e, need("cpu=8"))
-	w := step(t, behind).(Waiting)
+	step(t, behind)
+	holders, err := behind.Holders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := Waiting{Holders: holders}
 	labels := map[string]bool{}
 	for _, h := range w.Holders {
 		labels[h.Label] = true

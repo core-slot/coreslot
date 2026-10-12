@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Nezhinskiy/coreslot/internal/wire"
@@ -89,6 +90,40 @@ func (s *Store) List(dir string) ([]Entry, int, error) {
 		return 0
 	})
 	return entries, ignored, nil
+}
+
+// ListNames lists the names of dir (QueueDir, HoldsDir or CancelDir) that match its grammar, in
+// name order, from the directory listing alone: unlike List it reads no entry's metadata, so an
+// entry that fails the section 4.2 checks is listed too and is found out when it is opened or
+// probed (an error for which a caller's stray check holds). MtimeNS is 0. The directory itself
+// failing the checks, or more than MaxEntries entries, is a *StateError.
+func (s *Store) ListNames(dir string) ([]Entry, error) {
+	if !slices.Contains(noReplaceDirs, dir) {
+		return nil, fmt.Errorf("store: ListNames of %q: not a directory of tickets, holds or cancel requests", dir)
+	}
+	d := s.path(dir)
+	if err := CheckEntry(d, true); err != nil {
+		return nil, err
+	}
+	names, err := readNames(d)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	parse := wire.ParseName
+	if dir == CancelDir {
+		parse = wire.ParseID
+	}
+	entries := make([]Entry, 0, len(names))
+	for _, name := range names {
+		if id, ok := parse(name); ok {
+			entries = append(entries, Entry{Name: name, ID: id})
+		}
+	}
+	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Name, b.Name) })
+	return entries, nil
 }
 
 // Probe probes dir/name: it opens the file, tries LOCK_EX|LOCK_NB and closes it again at once.

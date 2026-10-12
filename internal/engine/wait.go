@@ -23,8 +23,8 @@ type StepResult interface{ stepResult() }
 // head, otherwise 1 plus the number of tickets ahead of it that the election did not pass over:
 // the election stops at the first live, non-STALLED ticket, so the tickets beyond it are
 // counted unexamined and Position is an upper bound. It is 0 in token-only mode, which has no
-// place in the queue. Holders are the holds listed at the last rescan (the last change of gen)
-// that were live then (none in token-only mode).
+// place in the queue. Holders is empty in a Step's result: Ticket.Holders lists the live holds
+// when a caller needs them (the CLI's waiting line, every 30 s).
 type Waiting struct {
 	Position int
 	Holders  []HolderInfo
@@ -69,12 +69,6 @@ var (
 	checkCancel = (*Ticket).cancelRequested
 )
 
-// holdEntry is a well-formed hold from the last rescan.
-type holdEntry struct {
-	name string
-	info HolderInfo
-}
-
 // Ticket is one request waiting in the queue (or, in token-only mode, waiting for tokens). Its
 // methods are safe for concurrent use: Steps are serialized, and Withdraw never waits for one.
 type Ticket struct {
@@ -103,9 +97,8 @@ type Ticket struct {
 	obs        state.Observer
 	gen        store.Gen
 	haveGen    bool
-	ahead      []aheadEntry    // ascending: the nearest ticket ahead is the last
-	ticketOK   map[string]bool // ticket name -> body well-formed (bodies never change)
-	holds      []holdEntry
+	ahead      []aheadEntry           // ascending: the nearest ticket ahead is the last
+	ticketOK   map[string]bool        // ticket name -> body well-formed (bodies never change)
 	holdBodies map[string]*HolderInfo // hold name -> parsed body, nil when malformed
 
 	nextElection time.Duration
@@ -329,8 +322,8 @@ func (t *Ticket) resumeBump() error {
 	return nil
 }
 
-// elect is the election (PROTOCOL.md section 10.3): it reads gen, rescans queue/ and holds/
-// when gen changed (probing the listed holds for Waiting.Holders), and examines the tickets
+// elect is the election (PROTOCOL.md section 10.3): it reads gen, rescans queue/ when gen
+// changed, and examines the tickets
 // ahead from the nearest, observing each one's mtime on the monotonic clock and probing its
 // lock: a gone, dead or STALLED one is passed over and the first live, non-STALLED one ends the
 // examination. The tickets beyond it are not examined in this pass (state.Observer counts a stall
@@ -342,15 +335,11 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	holders := t.last.Holders
 	if !t.haveGen || g.N != t.gen.N {
 		if err := t.rescan(); err != nil {
 			return false, err
 		}
 		t.gen, t.haveGen = g, true
-		if holders, err = t.liveHolders(); err != nil {
-			return false, err
-		}
 	}
 	t.obs.Pass()
 	head = true
@@ -395,7 +384,7 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 	if !head {
 		position += len(t.ahead) - passed
 	}
-	t.last = Waiting{Position: position, Holders: holders}
+	t.last = Waiting{Position: position}
 	return head, nil
 }
 
@@ -429,11 +418,13 @@ func (t *Ticket) watchFront(stop int, now time.Duration) error {
 	return nil
 }
 
-// rescan lists queue/ and holds/. Tickets ahead of this one whose bodies are well-formed are
-// kept for observation; malformed ones take no place in the queue (PROTOCOL.md section 7.2).
-// Bodies never change once published, so each is read once.
+// rescan re-lists the names in queue/ (the listing alone: no entry's metadata is read, so its
+// cost is the directory read). Tickets ahead of this one whose bodies are well-formed are kept
+// for the election; malformed ones take no place in the queue (PROTOCOL.md section 7.2), and a
+// stray entry is found out when the election examines it. Bodies never change once published,
+// so each is read once, when its name is first seen.
 func (t *Ticket) rescan() error {
-	entries, _, err := t.e.st.List(store.QueueDir)
+	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
 		return err
 	}
@@ -455,7 +446,7 @@ func (t *Ticket) rescan() error {
 				return err
 			}
 			_, derr := wire.DecodeTicket(body)
-			ok = derr == nil
+			ok = err == nil && derr == nil
 			t.ticketOK[en.Name] = ok
 		}
 		if ok {
@@ -482,15 +473,26 @@ func (t *Ticket) rescan() error {
 		return 0
 	})
 	t.ahead = ahead
+	return nil
+}
 
+// Holders lists holds/ and returns the live holds (a lock probe each); malformed holds are
+// left out (PROTOCOL.md section 7.4). It is informative and not part of waiting: the CLI calls
+// it for its waiting line every 30 s. Hold bodies are read once per name.
+func (t *Ticket) Holders() ([]HolderInfo, error) {
+	t.stepMu.Lock()
+	defer t.stepMu.Unlock()
+	if t.mode == modeTokenOnly {
+		return nil, nil
+	}
 	holds, _, err := t.e.st.List(store.HoldsDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	presentHold := make(map[string]bool, len(holds))
-	t.holds = t.holds[:0]
+	present := make(map[string]bool, len(holds))
+	var live []HolderInfo
 	for _, en := range holds {
-		presentHold[en.Name] = true
+		present[en.Name] = true
 		info, known := t.holdBodies[en.Name]
 		if !known {
 			body, err := t.e.readBody(store.HoldsDir, en.Name)
@@ -498,23 +500,33 @@ func (t *Ticket) rescan() error {
 				continue
 			}
 			if err != nil && !stray(err) {
-				return err
+				return nil, err
 			}
 			if err == nil {
 				info = holderInfo(en, body)
 			}
 			t.holdBodies[en.Name] = info
 		}
-		if info != nil {
-			t.holds = append(t.holds, holdEntry{name: en.Name, info: *info})
+		if info == nil {
+			continue
+		}
+		dead, err := probe(t.e.st, store.HoldsDir, en.Name)
+		if gone(err) || stray(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !dead {
+			live = append(live, *info)
 		}
 	}
 	for name := range t.holdBodies {
-		if !presentHold[name] {
+		if !present[name] {
 			delete(t.holdBodies, name)
 		}
 	}
-	return nil
+	return live, nil
 }
 
 // holderInfo decodes a hold body; nil when it is malformed, including a start_ns that is not
@@ -532,24 +544,4 @@ func holderInfo(en store.Entry, body []byte) *HolderInfo {
 	return &HolderInfo{Name: en.Name, Label: h.Label, PID: en.ID.PID, StartNS: int64(en.ID.OrderKey),
 		Grant: grant, Unbudgeted: h.Unbudgeted, UnbudgetedResources: h.UnbudgetedResources,
 		Clamped: h.Clamped, Adopted: h.Adopted}
-}
-
-// liveHolders probes the holds of the last rescan and returns the live ones. The election calls
-// it only after a rescan: probing every hold each second is not part of waiting (PROTOCOL.md
-// section 10.3), and Holders is informative.
-func (t *Ticket) liveHolders() ([]HolderInfo, error) {
-	var live []HolderInfo
-	for _, h := range t.holds {
-		dead, err := probe(t.e.st, store.HoldsDir, h.name)
-		if gone(err) || stray(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if !dead {
-			live = append(live, h.info)
-		}
-	}
-	return live, nil
 }
