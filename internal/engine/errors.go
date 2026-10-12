@@ -1,6 +1,9 @@
 package engine
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // The engine's sentinel errors. They live in a file without a build constraint so that the root
 // package can re-export them on every platform.
@@ -18,3 +21,22 @@ var (
 	// never existed); a cancel request is not published.
 	ErrNoTicket = errors.New("coreslot: no such ticket in the queue")
 )
+
+// SectionBusyError is the end of a caller's context while another client held the admission
+// section. PID is the pid admit.lock's informational body records (PROTOCOL.md section 7.7), 0
+// when it records none: a process stopped inside the section blocks every client until it is
+// continued or killed. It matches the context's error (errors.Is with context.DeadlineExceeded
+// or context.Canceled).
+type SectionBusyError struct {
+	PID int
+	Err error
+}
+
+func (e *SectionBusyError) Error() string {
+	if e.PID > 0 {
+		return fmt.Sprintf("the admission section is held by pid %d: %v", e.PID, e.Err)
+	}
+	return fmt.Sprintf("the admission section is held: %v", e.Err)
+}
+
+func (e *SectionBusyError) Unwrap() error { return e.Err }

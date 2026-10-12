@@ -153,23 +153,44 @@ func (e *Engine) enter(ctx context.Context, single bool) (sec *store.Section, en
 	return nil, false, err
 }
 
+// enterUntil enters the section for an operation that waits as long as its caller lets it
+// (enqueue, adoption, cancellation): Enter's backoff from 10 ms up to 250 ms until ctx ends
+// (PROTOCOL.md section 8). A ctx that ends while another client holds the section is a
+// *SectionBusyError naming the pid admit.lock records; one that had ended before is ctx.Err().
+func (e *Engine) enterUntil(ctx context.Context) (*store.Section, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sec, err := enterSection(e.st, ctx)
+	if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		busy := &SectionBusyError{Err: err}
+		if a, ok := e.sectionHolder(); ok {
+			busy.PID = a.PID
+		}
+		return nil, busy
+	}
+	return sec, err
+}
+
 // Enqueue enters the section, reads FORMAT, reconciles if due, publishes a ticket for req
 // (PROTOCOL.md section 10.1) keeping its lock-carrying descriptor, bumps gen and leaves. When
 // the format is not one this client implements, nothing is written and the returned ticket is
 // in token-only mode (section 15.2): its Step tries token-only admission. An invalid request
-// is a *spec.UsageError. Enqueue waits for the section as long as it takes.
+// is a *spec.UsageError. Enqueue waits for the section as long as it takes; EnqueueContext
+// bounds that wait.
 func (e *Engine) Enqueue(req spec.Request) (*Ticket, error) {
 	return e.EnqueueContext(context.Background(), req)
 }
 
-// EnqueueContext is Enqueue whose wait for the section ends with ctx: it then returns ctx.Err()
-// having published nothing. Once inside the section it completes.
+// EnqueueContext is Enqueue whose wait for the section ends with ctx: it then returns a
+// *SectionBusyError matching ctx.Err() (or ctx.Err() itself when ctx had already ended) having
+// published nothing. Once inside the section it completes.
 func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket, error) {
 	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	sec, err := enterSection(e.st, ctx)
+	sec, err := e.enterUntil(ctx)
 	if err != nil {
 		return nil, err
 	}

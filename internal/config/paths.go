@@ -55,16 +55,24 @@ func StateDir() (dir string, override bool, err error) {
 // override, so a test budget never pairs with the user's real configuration; otherwise
 // <home>/.config/coreslot/config.toml.
 func Path() (string, error) {
+	_, path, err := Locate()
+	return path, err
+}
+
+// Locate returns the state directory and its configuration file together, the pair every opener
+// of the budget uses: CORESLOT_STATE_DIR with <statedir>/config.toml, or the defaults of
+// PROTOCOL.md section 4.1 with <home>/.config/coreslot/config.toml.
+func Locate() (dir, cfgPath string, err error) {
 	dir, override, err := StateDir()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if override {
-		return filepath.Join(dir, "config.toml"), nil
+		return dir, filepath.Join(dir, "config.toml"), nil
 	}
 	home, err := Home()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return filepath.Join(home, ".config", "coreslot", "config.toml"), nil
+	return dir, filepath.Join(home, ".config", "coreslot", "config.toml"), nil
 }

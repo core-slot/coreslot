@@ -33,6 +33,9 @@ func TestHomeIgnoresHOME(t *testing.T) {
 	if err != nil || path != filepath.Join(home, ".config", "coreslot", "config.toml") {
 		t.Errorf("Path() = %q, %v; want %q", path, err, filepath.Join(home, ".config", "coreslot", "config.toml"))
 	}
+	if d, p, err := Locate(); err != nil || d != want || p != path {
+		t.Errorf("Locate() = %q, %q, %v; want %q, %q", d, p, err, want, path)
+	}
 }
 
 func TestStateDirOverride(t *testing.T) {
@@ -48,7 +51,14 @@ func TestStateDirOverride(t *testing.T) {
 		t.Errorf("Path() under the override = %q, %v; want %q", path, err, filepath.Join(base, "config.toml"))
 	}
 
+	if d, p, err := Locate(); err != nil || d != base || p != path {
+		t.Errorf("Locate() under the override = %q, %q, %v; want %q, %q", d, p, err, base, path)
+	}
+
 	t.Setenv("CORESLOT_STATE_DIR", "relative/dir")
+	if _, _, err := Locate(); err == nil {
+		t.Error("Locate() accepted a relative override")
+	}
 	if _, _, err := StateDir(); err == nil {
 		t.Error("StateDir() accepted a relative override")
 	}

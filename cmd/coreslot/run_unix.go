@@ -83,15 +83,9 @@ func (r *run) refuse(format string, args ...any) int {
 // openEngine opens the state directory as the library's Open does: CORESLOT_STATE_DIR (with
 // its configuration at <statedir>/config.toml) or the default of PROTOCOL.md section 4.1.
 func openEngine() (*engine.Engine, string, error) {
-	dir, override, err := config.StateDir()
+	dir, cfgPath, err := config.Locate()
 	if err != nil {
 		return nil, "", &stateError{Reason: err.Error()}
-	}
-	cfgPath := filepath.Join(dir, store.ConfigFile)
-	if !override {
-		if cfgPath, err = config.Path(); err != nil {
-			return nil, "", &stateError{Reason: err.Error()}
-		}
 	}
 	st, err := store.Open(dir)
 	if err != nil {
@@ -100,24 +94,19 @@ func openEngine() (*engine.Engine, string, error) {
 	return engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{}), cfgPath, nil
 }
 
-// asState turns an error from the budget into a state error, keeping the classes the run acts
-// on: usage, cancellation and context ends. Whatever else stops the budget from working makes
-// the run fail open (PROTOCOL.md section 14).
+// asState applies the error contract the library applies (engine.StateReason): the classes the
+// run acts on (usage, cancellation, context ends, the engine's refusals) stay as they are, and
+// whatever else stops the budget from working becomes a state error, on which the run fails open
+// (PROTOCOL.md section 14).
 func asState(err error) error {
-	var usage *spec.UsageError
-	if err == nil || errors.As(err, &usage) || errors.Is(err, engine.ErrCancelled) ||
-		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
-	var se *store.StateError
-	if errors.As(err, &se) {
-		return &stateError{Reason: se.Reason}
-	}
 	var own *stateError
 	if errors.As(err, &own) {
 		return err
 	}
-	return &stateError{Reason: err.Error()}
+	if reason, ok := engine.StateReason(err); ok {
+		return &stateError{Reason: reason}
+	}
+	return err
 }
 
 func isStoreStateError(err error) bool {
