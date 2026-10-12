@@ -22,7 +22,8 @@ import (
 // errNotAtOnce is the outcome of a --no-wait attempt that was not admitted.
 var errNotAtOnce = errors.New("not admitted at once")
 
-// tryOnce is --no-wait's single attempt: one Step, whose section entry waits at most 1 s.
+// tryOnce is --no-wait's single attempt: one Step, each of whose section entries waits at most
+// RefreshEvery/4 = 0.5 s (the engine's sectionWait). The 1 s of noWaitFor bounds only enqueue.
 func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, error) {
 	res, err := sectionStepper{t}.step(ctx)
 	if err != nil {
@@ -133,7 +134,8 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 }
 
 // waitingLine is the line a waiting run prints every 30 s, for example `coreslot: waiting for
-// cpu 4..12: position 2; holders: gate pid 4711 cpu12 (3m12s)`.
+// cpu 4..12: position 2 (1m00s); holders: gate pid 4711 cpu12 (3m12s)`, where 1m00s is how long
+// the run has waited.
 func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 	if w.Position == 0 {
 		return fmt.Sprintf("coreslot: waiting for %s: token-only mode, the state directory's format is not implemented here (%s)",
