@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-
-	"github.com/Nezhinskiy/coreslot/internal/spec"
 )
 
 // TokenFile is one token file of a state directory, with the identity a descriptor of it
@@ -41,37 +39,23 @@ func TokenFiles(dir string) ([]TokenFile, error) {
 		return nil, err
 	}
 	var out []TokenFile
-	for _, name := range names {
-		if spec.ValidateName(name) != nil {
-			continue
+	err = walkTokens(res, names, func(name string, n int, p string) error {
+		fi, err := os.Lstat(p)
+		if os.IsNotExist(err) {
+			return nil
 		}
-		rd := filepath.Join(res, name)
-		if err := CheckEntry(rd, true); err != nil {
-			return nil, err
-		}
-		idx, err := readNames(rd)
 		if err != nil {
-			return nil, err
+			return asStateError(err)
 		}
-		for _, i := range idx {
-			n, ok := parseIndex(i)
-			if !ok {
-				continue
-			}
-			p := filepath.Join(rd, i)
-			fi, err := os.Lstat(p)
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil {
-				return nil, asStateError(err)
-			}
-			if err := checkInfo(p, fi, false); err != nil {
-				return nil, err
-			}
-			st := fi.Sys().(*syscall.Stat_t)
-			out = append(out, TokenFile{Resource: name, Index: n, Path: p, Dev: uint64(st.Dev), Ino: uint64(st.Ino)})
+		if err := checkInfo(p, fi, false); err != nil {
+			return err
 		}
+		st := fi.Sys().(*syscall.Stat_t)
+		out = append(out, TokenFile{Resource: name, Index: n, Path: p, Dev: uint64(st.Dev), Ino: uint64(st.Ino)})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

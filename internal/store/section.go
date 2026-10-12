@@ -88,16 +88,11 @@ func (s *Store) TryEnter() (*Section, bool, error) {
 // flock, released at once by closing. A missing admit.lock means nothing has ever entered, so
 // the section is free. It is for readers (status) that must not write into the state directory.
 func (s *Store) SectionHeld() (bool, error) {
-	f, err := OpenFile(s.path(AdmitLock), os.O_RDONLY)
+	held, err := ProbeLocked(s.path(AdmitLock))
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	ok, err := flockNB(f)
-	return !ok, err
+	return held, err
 }
 
 // Leave leaves the section by closing the admit.lock descriptor. It is idempotent.

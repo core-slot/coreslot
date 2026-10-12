@@ -171,11 +171,22 @@ func (s *Store) checkTokens() error {
 	if err != nil {
 		return err
 	}
+	return walkTokens(s.path(ResDir), names, func(_ string, _ int, path string) error {
+		return CheckEntry(path, false)
+	})
+}
+
+// walkTokens walks the token files under res, the res/ directory whose listing is names: every
+// res/<name>/ whose name is a resource name must pass the section 4.2 policy, and visit is called
+// for every entry in it whose name is a token index, with that index and the entry's path.
+// Entries whose names are not resource names or token indices are not part of the layout and are
+// skipped.
+func walkTokens(res string, names []string, visit func(resource string, index int, path string) error) error {
 	for _, name := range names {
 		if spec.ValidateName(name) != nil {
 			continue
 		}
-		rd := s.path(ResDir, name)
+		rd := filepath.Join(res, name)
 		if err := CheckEntry(rd, true); err != nil {
 			return err
 		}
@@ -184,10 +195,11 @@ func (s *Store) checkTokens() error {
 			return err
 		}
 		for _, i := range idx {
-			if _, ok := parseIndex(i); !ok {
+			n, ok := parseIndex(i)
+			if !ok {
 				continue
 			}
-			if err := CheckEntry(filepath.Join(rd, i), false); err != nil {
+			if err := visit(name, n, filepath.Join(rd, i)); err != nil {
 				return err
 			}
 		}
