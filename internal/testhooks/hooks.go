@@ -25,3 +25,7 @@ func Getent() string { return "" }
 // ProbeShell is the shell the CLI runs to learn the descriptor limit it was started with; always
 // /bin/sh without the coreslot_testhooks tag.
 func ProbeShell() string { return "/bin/sh" }
+
+// ProbeTimeout is how long the CLI lets that probe run; always d, the CLI's own bound, without the
+// coreslot_testhooks tag.
+func ProbeTimeout(d time.Duration) time.Duration { return d }

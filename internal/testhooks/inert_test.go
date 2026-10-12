@@ -19,6 +19,7 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_FORMATS", "1,2")
 	t.Setenv("CORESLOT_TESTHOOK_GETENT", "/tmp/fake-getent")
 	t.Setenv("CORESLOT_TESTHOOK_PROBE_SHELL", "/nonexistent")
+	t.Setenv("CORESLOT_TESTHOOK_PROBE_TIMEOUT", "1m")
 	if err := os.WriteFile(filepath.Join(dir, "realtime-offset"), []byte("1h"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -51,5 +52,8 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	}
 	if got := ProbeShell(); got != "/bin/sh" {
 		t.Errorf("ProbeShell() = %q, want /bin/sh", got)
+	}
+	if got := ProbeTimeout(time.Second); got != time.Second {
+		t.Errorf("ProbeTimeout(1s) = %v, want 1s", got)
 	}
 }
