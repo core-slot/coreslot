@@ -9,44 +9,53 @@ import (
 
 // contractInventory is every item the design's contract inventory (spec section 5.14) names, plus
 // the two PROTOCOL.md adds for the state-directory override (spec section 5.1, section 7):
-// `config.toml` and `CORESLOT_STATE_DIR`. needle is what the section a row links to must mention,
-// so a row cannot point at a section that does not define its item.
-var contractInventory = []struct{ item, needle string }{
-	{"FORMAT", "FORMAT"},
-	{"admit.lock", "admit.lock"},
-	{"gen", "gen"},
-	{"res/", "res/"},
-	{"queue/", "queue/"},
-	{"holds/", "holds/"},
-	{"cancel/", "cancel/"},
-	{"degraded", "degraded"},
-	{"log/", "log/"},
-	{"config.toml", "config.toml"},
-	{"ticket body", "ticket"},
-	{"hold body", "hold"},
-	{"cancel body", "cancel"},
-	{"CORESLOT_GRANTED_*", "CORESLOT_GRANTED_"},
-	{"CORESLOT_HELD_FD", "CORESLOT_HELD_FD"},
-	{"CORESLOT_TOKEN_FDS", "CORESLOT_TOKEN_FDS"},
-	{"CORESLOT_UNBUDGETED", "CORESLOT_UNBUDGETED"},
-	{"CORESLOT_STATE_DIR", "CORESLOT_STATE_DIR"},
-	{"enqueue", "enqueue"},
-	{"refresh", "refresh"},
-	{"admission", "admission"},
-	{"clamp", "clamp"},
-	{"cancellation", "cancellation"},
-	{"withdrawal", "withdraw"},
-	{"reconciliation", "reconciliation"},
-	{"adoption", "adopt"},
-	{"token-only admission", "token-only"},
-	{"pass-through", "pass-through"},
+// `config.toml` and `CORESLOT_STATE_DIR`. title is the heading of the section that defines the
+// item, without its number; a row must link to that heading, outside the worked examples. A word
+// in the body is not enough: `gen`, `hold` or `res/` appear in many sections that do not define
+// them. mention is what the defining section's text must contain.
+var contractInventory = []struct{ item, title, mention string }{
+	{"FORMAT", "FORMAT", "coreslot-protocol"},
+	{"admit.lock", "admit.lock", "admit.lock"},
+	{"gen", "gen", "reconciled_ns"},
+	{"res/", "Tokens and descriptor ownership", "res/"},
+	{"queue/", "Ticket", "queue/"},
+	{"holds/", "Hold", "holds/"},
+	{"cancel/", "Cancel request", "cancel/"},
+	{"degraded", "degraded", "degraded"},
+	{"log/", "log/ (run log)", "log/runs.jsonl"},
+	{"config.toml", "Configuration file", "config.toml"},
+	{"ticket body", "Ticket", "created_ns"},
+	{"hold body", "Hold", "start_ns"},
+	{"cancel body", "Cancel request", "requester_pid"},
+	{"CORESLOT_GRANTED_*", "Descriptor and environment contract", "CORESLOT_GRANTED_"},
+	{"CORESLOT_HELD_FD", "Descriptor and environment contract", "CORESLOT_HELD_FD"},
+	{"CORESLOT_TOKEN_FDS", "Descriptor and environment contract", "CORESLOT_TOKEN_FDS"},
+	{"CORESLOT_UNBUDGETED", "Errors, fail-open and degraded mode", "CORESLOT_UNBUDGETED"},
+	{"CORESLOT_STATE_DIR", "Location", "CORESLOT_STATE_DIR"},
+	{"enqueue", "Enqueue", "order key"},
+	{"refresh", "Refresh and STALLED", "futimens"},
+	{"admission", "Admission", "minimum pass"},
+	{"clamp", "Effective request and clamp", "clamped"},
+	{"cancellation", "Cancellation", "cancel/<ticket-id>"},
+	{"withdrawal", "Withdrawal", "withdraws"},
+	{"reconciliation", "Reconciliation", "reconciled_ns"},
+	{"adoption", "Adoption", "\"adopted\": true"},
+	{"token-only admission", "Token-only mode", "CORESLOT_UNBUDGETED=format"},
+	{"pass-through", "Nested runs: pass-through", "pass-through"},
 }
 
-// protocolSection is one heading of PROTOCOL.md with the text up to the next heading of the same
-// or a higher level, subsections included.
+// examplesTitle is the title of PROTOCOL.md's worked examples, whose subsections illustrate the
+// items and define none of them.
+const examplesTitle = "Worked examples"
+
+// protocolSection is one heading of PROTOCOL.md: its title without the section number, whether
+// it lies inside the worked examples, and its text up to the next heading of the same or a higher
+// level, subsections included.
 type protocolSection struct {
-	level int
-	text  string
+	title   string
+	example bool
+	level   int
+	text    string
 }
 
 // githubSlug is the anchor GitHub gives a Markdown heading: lower case, every character other than
@@ -68,20 +77,29 @@ func githubSlug(heading string) string {
 func protocolSections(doc string) map[string]protocolSection {
 	lines := strings.Split(doc, "\n")
 	heading := regexp.MustCompile(`^(#{1,6}) (.+)$`)
+	number := regexp.MustCompile(`^[0-9]+(\.[0-9]+)*\.? `)
 	type mark struct {
 		line, level int
-		slug        string
+		slug, title string
+		example     bool
 	}
 	var marks []mark
-	fenced := false
+	fenced, inExamples := false, false
 	for i, l := range lines {
 		if strings.HasPrefix(l, "```") {
 			fenced = !fenced
 			continue
 		}
-		if m := heading.FindStringSubmatch(l); m != nil && !fenced {
-			marks = append(marks, mark{i, len(m[1]), githubSlug(m[2])})
+		m := heading.FindStringSubmatch(l)
+		if m == nil || fenced {
+			continue
 		}
+		level := len(m[1])
+		if level == 2 {
+			inExamples = number.ReplaceAllString(m[2], "") == examplesTitle
+		}
+		marks = append(marks, mark{i, level, githubSlug(m[2]), number.ReplaceAllString(m[2], ""),
+			inExamples && level > 2})
 	}
 	out := map[string]protocolSection{}
 	for i, m := range marks {
@@ -92,25 +110,36 @@ func protocolSections(doc string) map[string]protocolSection {
 				break
 			}
 		}
-		out[m.slug] = protocolSection{m.level, strings.Join(lines[m.line:end], "\n")}
+		out[m.slug] = protocolSection{m.title, m.example, m.level, strings.Join(lines[m.line:end], "\n")}
 	}
 	return out
 }
 
 // TestProtocolCarriesTheContractInventory greps PROTOCOL.md's contract inventory (its section 2)
-// for every item of spec section 5.14: each has exactly one row, each row links only to headings
-// that exist, and at least one linked section mentions the item. The table has no row the
-// inventory does not name, so an item renamed in one place and not the other fails here.
+// for every item of spec section 5.14: each has exactly one row; every link of the row resolves to
+// a heading; one of them is the heading that defines the item (not a worked example, and not a
+// section that merely mentions the item), and that section's text carries the item. The table
+// has no row the inventory does not name, so an item renamed in one place and not the other
+// fails here.
 func TestProtocolCarriesTheContractInventory(t *testing.T) {
 	b, err := os.ReadFile("PROTOCOL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := string(b)
-	sections := protocolSections(doc)
+	sections := protocolSections(string(b))
 	inventory, ok := sections["2-contract-inventory"]
 	if !ok {
 		t.Fatal(`PROTOCOL.md has no "## 2. Contract inventory" heading`)
+	}
+	examples := 0
+	for _, s := range sections {
+		if s.level == 2 && s.title == examplesTitle {
+			examples++
+		}
+	}
+	if examples != 1 {
+		// Without it no section counts as an example, and a row linking only its example passes.
+		t.Fatalf("PROTOCOL.md has %d %q sections, want 1", examples, examplesTitle)
 	}
 
 	link := regexp.MustCompile(`\]\(#([^)]+)\)`)
@@ -136,31 +165,31 @@ func TestProtocolCarriesTheContractInventory(t *testing.T) {
 	known := map[string]bool{}
 	for _, want := range contractInventory {
 		known[want.item] = true
-		anchors, present := rows[want.item]
-		if !present && count[want.item] == 0 {
+		switch count[want.item] {
+		case 0:
 			t.Errorf("contract inventory has no row for %q", want.item)
 			continue
-		}
-		if count[want.item] > 1 {
+		case 1:
+		default:
 			t.Errorf("contract inventory has %d rows for %q, want one", count[want.item], want.item)
 		}
-		if len(anchors) == 0 {
-			t.Errorf("row %q links to no section", want.item)
-			continue
-		}
-		mentioned := false
-		for _, a := range anchors {
+		var defining *protocolSection
+		for _, a := range rows[want.item] {
 			s, ok := sections[a]
 			if !ok {
 				t.Errorf("row %q links to #%s, which is no heading of PROTOCOL.md", want.item, a)
 				continue
 			}
-			if strings.Contains(strings.ToLower(s.text), strings.ToLower(want.needle)) {
-				mentioned = true
+			if s.title == want.title && !s.example {
+				defining = &s
 			}
 		}
-		if !mentioned {
-			t.Errorf("row %q: no linked section (%v) mentions %q", want.item, anchors, want.needle)
+		if defining == nil {
+			t.Errorf("row %q links to %v, none of them the defining section %q", want.item, rows[want.item], want.title)
+			continue
+		}
+		if !strings.Contains(defining.text, want.mention) {
+			t.Errorf("row %q: section %q does not mention %q", want.item, want.title, want.mention)
 		}
 	}
 	for item := range count {
