@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -110,15 +109,9 @@ func statusFailed(err error, io IO) int {
 // directory, res/ or admit.lock (status and doctor leave a machine where nothing has run as
 // they found it). The returned engine's Snapshot reports a missing directory as empty.
 func openEngineReadOnly() (*engine.Engine, string, error) {
-	dir, override, err := config.StateDir()
+	dir, cfgPath, err := config.Locate()
 	if err != nil {
 		return nil, "", &stateError{Reason: err.Error()}
-	}
-	cfgPath := filepath.Join(dir, store.ConfigFile)
-	if !override {
-		if cfgPath, err = config.Path(); err != nil {
-			return nil, "", &stateError{Reason: err.Error()}
-		}
 	}
 	st, err := store.OpenReadOnly(dir)
 	if err != nil {
@@ -385,7 +378,7 @@ func (v statusView) human() string {
 		case "stalled":
 			line += "  STALLED"
 		case "dead":
-			line += "  dead (the owner is gone)"
+			line += "  dead (withdrawn, or its owner exited)"
 		}
 		p("%s  id %s", line, t.info.ID)
 	}

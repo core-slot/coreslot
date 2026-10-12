@@ -19,7 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
@@ -1229,9 +1228,6 @@ func TestCancelRefusalHasOnePrefix(t *testing.T) {
 // A client stopped inside the admission section does not keep cancel waiting: it refuses within
 // a bound, naming the holder admit.lock records.
 func TestCancelRefusesWhileSectionHeld(t *testing.T) {
-	if _, ok := any(&engine.Engine{}).(contextCanceller); !ok {
-		t.Skip("the engine has no CancelContext, so cancel cannot bound its wait for the section")
-	}
 	dir := stateDir(t, "")
 	st, err := store.Open(dir)
 	if err != nil {
@@ -1270,7 +1266,6 @@ func TestDoctorResetRefusalNamesLabels(t *testing.T) {
 	if r.code != 75 {
 		t.Fatalf("doctor --reset: exit %d, want 75 (stderr %q)", r.code, r.stderr)
 	}
-	t.Skip("the engine's reset refusal names holds and tickets by their file names' display, not their labels: " + r.stderr)
 	for _, want := range []string{"hold:three", "ticket:one"} {
 		if !strings.Contains(r.stderr, want) {
 			t.Errorf("doctor --reset refusal lacks the label %q: %q", want, r.stderr)
