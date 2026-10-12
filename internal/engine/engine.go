@@ -38,7 +38,7 @@ const (
 	// the refresh, refreshes. A caller that instead starts each Step within RefreshEvery/8 of the
 	// previous one returning refreshes at most RefreshEvery/4 + RefreshEvery/4 + RefreshEvery/8
 	// = 1.25 s apart. A Poll refreshes whenever RefreshEvery/2 has passed, so its refresh gaps
-	// are its caller's poll interval (spec §9: at most 2 s).
+	// are its caller's poll interval, at most 2 s (PROTOCOL.md section 10.2).
 	RefreshEvery = 2 * time.Second
 	// ElectEvery is how often a waiter reads gen and repeats the election.
 	ElectEvery = time.Second

@@ -29,13 +29,12 @@ type Entry struct {
 }
 
 // List lists QueueDir, HoldsDir or CancelDir: the entries whose names match the directory's
-// grammar, in name order (which is (order key or start, pid, seq) order), and the number of
-// other entries, which are ignored. Temporary files are neither listed nor counted, unless one
-// fails the section 4.2 checks. An entry whose name matches but whose type, owner or mode fails
-// those checks (a symlink, a directory, another user's or a group- or world-writable file) is
-// ignored and counted like a malformed body: never trusted and never removed (PROTOCOL.md
-// section 4.2, an decision). The directory itself failing the checks, or more than
-// MaxEntries entries, is a *StateError.
+// grammar, in name order (which is (order key or start, pid, seq) order), and the number of other
+// entries, which are ignored. Temporary files are neither listed nor counted, unless one fails the
+// section 4.2 checks. An entry whose name matches but whose type, owner or mode fails those checks
+// (a symlink, a directory, another user's or a group- or world-writable file) is ignored and
+// counted like a malformed body: never trusted and never removed (PROTOCOL.md section 4.2). The
+// directory itself failing the checks, or more than MaxEntries entries, is a *StateError.
 func (s *Store) List(dir string) ([]Entry, int, error) {
 	d, names, parse, err := s.readDir("List", dir)
 	if err != nil || names == nil {

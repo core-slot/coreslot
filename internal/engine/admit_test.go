@@ -104,7 +104,8 @@ func TestAdmitElasticGrant(t *testing.T) {
 	}
 }
 
-// D11: a request above the size waits for the whole resource, runs alone, and records it.
+// PROTOCOL.md section 12.2: a request above the size waits for the whole resource, runs alone, and
+// records it.
 func TestOversizeIsClampedAndRunsAlone(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 10\n")
 	clk := newFakeClock()
@@ -128,7 +129,8 @@ func TestOversizeIsClampedAndRunsAlone(t *testing.T) {
 	}
 }
 
-// D12: an undeclared resource is not budgeted, listed in the hold, and is not degraded mode.
+// PROTOCOL.md section 12.1: an undeclared resource is not budgeted, listed in the hold, and is not
+// degraded mode.
 func TestUndeclaredResourceIsUnbudgeted(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
@@ -345,8 +347,8 @@ func TestTokenOnlyUnderUnknownFormat(t *testing.T) {
 	}
 }
 
-// D8: a token-only client that finds a format it implements enqueues instead of bypassing the
-// queue.
+// PROTOCOL.md section 15.2: a token-only client that finds a format it implements enqueues instead
+// of bypassing the queue.
 func TestTokenOnlyEnqueuesWhenFormatIsUnderstood(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()

@@ -79,9 +79,9 @@ func cpuLocked(e Env) int {
 	return n
 }
 
-// stableLocked is the locked cpu count once it persists across two samples 100 ms apart. A
-// client's probe locks a free token for an instant (PROTOCOL.md section 6), so one sample
-// taken while a waiter counts tokens may read high; a real lock persists (spec section 10.2).
+// stableLocked is the locked cpu count once it persists across two samples 100 ms apart. A client's
+// probe locks a free token for an instant (PROTOCOL.md section 6), so one sample taken while a
+// waiter counts tokens may read high; a real lock persists.
 func stableLocked(e Env) int {
 	e.t.Helper()
 	prev := cpuLocked(e)
@@ -120,8 +120,8 @@ func span(from, to int) []int {
 
 // lockedSampler samples the locked cpu count and the size every 100 ms through the library's
 // Snapshot, until stop is called. A count above the size is a violation only when it persists
-// across two consecutive samples (spec section 10.2): a client's probe locks a free token for
-// an instant. It records how many samples it took and every Snapshot error.
+// across two consecutive samples: a client's probe locks a free token for an instant. It records
+// how many samples it took and every Snapshot error.
 type lockedSampler struct {
 	stop       func()
 	mu         sync.Mutex

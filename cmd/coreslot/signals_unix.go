@@ -117,7 +117,7 @@ func childDone(terminal bool) {
 }
 
 // superviseChild waits for the started command and returns its status (128 + the signal when a
-// signal killed it), relaying the signals the run receives meanwhile (spec section 6.1):
+// signal killed it), relaying the signals the run receives meanwhile:
 //
 //   - terminal mode: the command shares coreslot's group, so SIGINT and SIGQUIT from the
 //     terminal reach it directly and coreslot drops its own copies (one addressed to coreslot's

@@ -1057,7 +1057,7 @@ func TestFailOpenNotice(t *testing.T) {
 	}
 }
 
-// Under CORESLOT_STATE_DIR a Windows run reads <statedir>/config.toml (R-C1).
+// Under CORESLOT_STATE_DIR a Windows run reads <statedir>/config.toml (PROTOCOL.md section 5.3).
 func TestWindowsConfigUnderOverride(t *testing.T) {
 	dir := stateDir(t, "[platform]\nwindows_warning = false\n")
 	t.Setenv("CORESLOT_STATE_DIR", dir)

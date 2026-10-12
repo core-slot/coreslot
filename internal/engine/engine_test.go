@@ -340,7 +340,7 @@ func tokenPaths(dir, res string, from, to int) string {
 	return strings.Join(ps, "\n")
 }
 
-// ---------------------------------------------------------------- Task 8 tests
+// ---------------------------------------------------------------- ordering, cancel, reconcile
 
 func TestFIFOAtEqualPriority(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 1\n")

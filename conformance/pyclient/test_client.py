@@ -1006,7 +1006,7 @@ class LauncherTests(Base):
 
 
 class AlignmentTests(Base):
-    """Behaviour the resolved PROTOCOL.md (merge 5c00392) and the owner's B1/D6 decision require."""
+    """Behaviour the resolved PROTOCOL.md requires, including the stray rule of §4.2/§10.4 (B1/D6)."""
 
     def _real_config_client(self, home: str):
         """A client with no override whose password-database home is `home`."""
@@ -1186,7 +1186,7 @@ class AlignmentTests(Base):
         self.assertEqual(os.listdir(self.S), [])  # no FORMAT written, no log/
 
     def test_bad_entries_are_ignored_counted_and_kept_by_reconciliation(self):
-        """B1/D6 (decision): matching names with a bad type/owner/mode are never trusted or removed."""
+        """B1/D6 (§4.2 strays): matching names with a bad type/owner/mode are never trusted or removed."""
         now = time.time_ns()
         self.write(os.path.join(self.S, "gen"), json.dumps({"gen": 5, "reconciled_ns": 0}).encode())
         q, h, c = (os.path.join(self.S, d) for d in ("queue", "holds", "cancel"))
@@ -1223,7 +1223,7 @@ class AlignmentTests(Base):
         grant.close(remove_hold=False)
 
     def test_stray_temporary_in_the_state_directory_is_a_state_error(self):
-        """§4.2 (resolution): the stray rule covers queue/, holds/, cancel/ only, not $S."""
+        """§4.2: the stray rule covers queue/, holds/, cancel/ only, not $S."""
         for make, reason in ((lambda p: os.symlink(os.path.join(self.root, "elsewhere"), p), "state-type"),
                              (lambda p: os.mkdir(p, 0o700), "state-type"),
                              (lambda p: (self.write(p, b""), os.chmod(p, 0o620)), "state-mode")):
