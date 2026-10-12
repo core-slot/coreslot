@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -27,15 +28,16 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
-// The kill-storm of spec section 10.2: randomized CLI, library and independent Python clients,
+// The kill-storm: randomized CLI, library and independent Python clients,
 // some of them nested runs and some token-only, queue for two resources while the storm kills
 // them with SIGKILL, stops and continues them, cancels them, and shrinks and grows the sizes
 // through the configuration. A sampler checks I1, I2, I3 and I7 throughout. Every run prints its
 // seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
 // and delays, and the size changes; the interleaving is the scheduler's). The schedule also
-// depends on -short. The first clients and the first two size changes are fixed, so that every
-// run exercises each kind of client, a kill of a holder, a stop, a cancellation, a shrink below
-// the locked count and a growth; the test asserts that it did.
+// depends on -short. The first clients and the first two size changes are fixed, and one
+// client is cancelled while it is seen queued, so that every run exercises each kind of
+// client, a kill of a holder, a stop, a cancellation, a shrink below the locked count and a
+// growth; the test asserts that it did.
 
 const (
 	stormFull, stormShort     = 60 * time.Second, 10 * time.Second
@@ -148,6 +150,7 @@ func readReport(markDir, name string) (ChildReport, bool) {
 type tokenOnlyRun struct {
 	name  string
 	need  map[string]spec.Range
+	start time.Time                                 // taken before the run's process started
 	alive func(rep ChildReport, reported bool) bool // the run, or its reported command, lives
 }
 
@@ -159,10 +162,11 @@ type tokenOnlyRuns struct {
 	runs []*tokenOnlyRun
 }
 
-func (r *tokenOnlyRuns) add(name string, need map[string]spec.Range, alive func(ChildReport, bool) bool) {
+func (r *tokenOnlyRuns) add(name string, need map[string]spec.Range, start time.Time,
+	alive func(ChildReport, bool) bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.runs = append(r.runs, &tokenOnlyRun{name: name, need: need, alive: alive})
+	r.runs = append(r.runs, &tokenOnlyRun{name: name, need: need, start: start, alive: alive})
 }
 
 // begunPath is the start marker of the token-only command named name.
@@ -175,7 +179,7 @@ func (r *tokenOnlyRuns) grants() TokenOnly {
 	r.mu.Lock()
 	runs := slices.Clone(r.runs)
 	r.mu.Unlock()
-	out := TokenOnly{Inodes: map[[2]uint64]bool{}}
+	out := TokenOnly{Inodes: map[[2]uint64]time.Time{}}
 	for _, run := range runs {
 		rep, reported := readReport(r.markDir, run.name)
 		if !run.alive(rep, reported) {
@@ -184,7 +188,7 @@ func (r *tokenOnlyRuns) grants() TokenOnly {
 		if reported {
 			for fd, id := range rep.FDs {
 				if fd >= 3 {
-					out.Inodes[id] = true
+					out.Inodes[id] = run.start
 				}
 			}
 			continue
@@ -229,16 +233,17 @@ type stormClient struct {
 	need        map[string]spec.Range
 	priority    int
 	timeout     time.Duration
-	fate        string // release, kill (at a time), killheld (once it holds), stop or cancel
+	fate        string // release, kill (at a time), killheld (once it holds), killheld-after-shrink, stop or cancel
 	at          time.Duration
 	stopFor     time.Duration
 	hold        time.Duration
 	cancelPy    bool
 	afterShrink bool // a first-wave client: holds until the first shrink
 
-	proc    *Proc
-	killed  bool // the storm sent it SIGKILL
-	stopped bool
+	proc      *Proc
+	killed    bool // the storm sent it SIGKILL
+	stopped   atomic.Bool
+	cancelled atomic.Bool // the canceller published a cancel request for it
 }
 
 type stormResult struct {
@@ -266,6 +271,8 @@ type storm struct {
 	labels  map[string]map[string]spec.Range
 	results []stormResult
 	helpers []*Proc // cancel commands
+	live    map[*stormClient]bool
+	victim  string // the kind of the first-wave client killed while it holds
 	counts  map[string]int
 }
 
@@ -276,13 +283,22 @@ func (st *storm) count(what string) {
 }
 
 // firstWave is the number of fixed clients at the start of every run.
-const firstWave = 7
+const firstWave = 4
+
+// victimStream is the stream of the seed that picks the first-wave client killed while it
+// holds; client ids and the sizer (stream 0) use the others.
+const victimStream = 1<<64 - 1
+
+// victimID is the first-wave client this run kills while it holds, chosen by the seed.
+func (st *storm) victimID() int {
+	return 1 + rand.New(rand.NewPCG(st.seed, victimStream)).IntN(firstWave)
+}
 
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
 // not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
 // one admission of each kind (CLI, Python, a library run with a nested Go run, token-only), each
-// holding one cpu token until the first shrink, then a CLI killed once it holds, a library
-// waiter cancelled and a Python waiter stopped and continued.
+// holding one cpu token until the first shrink. Then each lets go, except the one victimID
+// picks, which is killed while it holds. Client firstWave+1 is stopped and continued.
 func (st *storm) plan(id int) *stormClient {
 	r := rand.New(rand.NewPCG(st.seed, uint64(id)))
 	c := &stormClient{id: id, need: map[string]spec.Range{}}
@@ -343,28 +359,19 @@ func (st *storm) plan(id int) *stormClient {
 		if st.py == "" {
 			py = "cli"
 		}
-		c.outer = []string{"cli", py, "lib", "tok", "cli", "lib", py}[id-1]
+		c.outer = []string{"cli", py, "lib", "tok"}[id-1]
 		c.inner = ""
+		if id == 3 {
+			c.inner = "go"
+		}
 		c.need = map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
-		c.priority, c.timeout, c.fate = 0, 0, "release"
-		if id > 4 {
-			// The highest priority a random client draws, so that one arriving later with it
-			// cannot overtake the first wave (equal order keys fall back to arrival).
-			c.priority = 2
+		c.priority, c.timeout, c.fate, c.afterShrink = 0, 0, "release", true
+		if id == st.victimID() {
+			c.fate = "killheld-after-shrink"
 		}
-		switch id {
-		case 1, 2, 3, 4:
-			c.afterShrink = true
-			if id == 3 {
-				c.inner = "go"
-			}
-		case 5:
-			c.fate, c.at = "killheld", 200*time.Millisecond
-		case 6:
-			c.fate, c.at, c.cancelPy = "cancel", 500*time.Millisecond, false
-		case 7:
-			c.fate, c.at, c.stopFor = "stop", 500*time.Millisecond, 1500*time.Millisecond
-		}
+	}
+	if id == firstWave+1 {
+		c.fate, c.at, c.stopFor = "stop", 500*time.Millisecond, 1500*time.Millisecond
 	}
 	c.kind = c.outer
 	if c.inner != "" {
@@ -453,35 +460,14 @@ func (st *storm) holding(c *stormClient) bool {
 	return ok
 }
 
-// firstFourHold reports whether first-wave clients 1 to 4 hold.
-func (st *storm) firstFourHold() bool {
-	for id := 1; id <= 4; id++ {
+// firstWaveHolds reports whether every first-wave client holds.
+func (st *storm) firstWaveHolds() bool {
+	for id := 1; id <= firstWave; id++ {
 		if !st.holding(st.plan(id)) {
 			return false
 		}
 	}
 	return true
-}
-
-// firstWaveArrived reports whether the first wave has arrived: clients 1 to 4 hold (the
-// state the first shrink waits for), and clients 5 to firstWave have been seen queued, holding
-// or begun. seen keeps the clients already seen, so a cancelled or killed one stays arrived.
-func (st *storm) firstWaveArrived(seen map[int]bool) bool {
-	all := true
-	for id := 1; id <= firstWave; id++ {
-		if seen[id] {
-			continue
-		}
-		c := st.plan(id)
-		_, queued := st.ticketID(c)
-		_, begun := os.Stat(begunPath(st.e.MarkDir, c.name))
-		if st.holding(c) || (id > 4 && (queued || begun == nil)) {
-			seen[id] = true
-			continue
-		}
-		all = false
-	}
-	return all
 }
 
 // waitHolding waits until c's command runs: false when the storm ended or the process exited.
@@ -511,10 +497,14 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 	st.mu.Lock()
 	st.labels[c.name] = maps.Clone(c.need)
 	st.mu.Unlock()
+	start := time.Now()
 	c.proc = st.e.StartCommand(st.argv(c)...)
 	c.proc.name = c.name
+	st.mu.Lock()
+	st.live[c] = true
+	st.mu.Unlock()
 	if c.outer == "tok" {
-		st.tok.add(c.name, c.need, func(rep ChildReport, reported bool) bool {
+		st.tok.add(c.name, c.need, start, func(rep ChildReport, reported bool) bool {
 			return !c.proc.Exited() || (reported && pidAlive(rep.PID))
 		})
 	}
@@ -536,14 +526,14 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 		if !st.after(ctx, c, c.at) || !c.proc.kill(c.proc.pid, syscall.SIGSTOP) {
 			return
 		}
-		c.stopped = true
+		c.stopped.Store(true)
 		st.count("SIGSTOP")
 		if c.stopFor > 10*time.Second {
 			st.count("SIGSTOP past the STALLED bound")
 		}
 		ok := st.after(ctx, c, c.stopFor)
 		c.proc.kill(c.proc.pid, syscall.SIGCONT)
-		c.stopped = false
+		c.stopped.Store(false)
 		if !ok {
 			return
 		}
@@ -567,6 +557,13 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 		}
 	}
 	if !st.after(ctx, c, c.hold) {
+		return
+	}
+	if c.fate == "killheld-after-shrink" {
+		st.mu.Lock()
+		st.victim = c.kind
+		st.mu.Unlock()
+		st.kill(c)
 		return
 	}
 	st.release(c)
@@ -622,9 +619,79 @@ func (st *storm) cancel(ctx context.Context, c *stormClient) {
 	}
 }
 
+// canceller cancels one client while it is seen queued: it picks a live client with a ticket
+// whose command does not run, publishes a cancel request for it by label, and checks that the
+// client then exits with the refusal code. A request that loses the race (the client was
+// admitted first) is retried with another queued client, at most cancelTries times and only
+// while the storm runs; none found or none taking effect leaves the floor to fail by name.
+func (st *storm) canceller(ctx context.Context) {
+	const cancelTries = 10
+	select {
+	case <-ctx.Done():
+		return
+	case <-st.shrunk: // the queue fills once the first shrink holds admissions back
+	}
+	r := rand.New(rand.NewPCG(st.seed, victimStream-1))
+	for tries := 0; tries < cancelTries && ctx.Err() == nil; {
+		var queued []*stormClient
+		st.mu.Lock()
+		for c := range st.live {
+			if c.outer == "tok" || c.stopped.Load() || c.cancelled.Load() || c.proc.Exited() || st.holding(c) {
+				continue
+			}
+			if _, ok := st.ticketID(c); ok {
+				queued = append(queued, c)
+			}
+		}
+		st.mu.Unlock()
+		if len(queued) == 0 {
+			st.count("canceller found no queued client")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
+			continue
+		}
+		slices.SortFunc(queued, func(a, b *stormClient) int { return a.id - b.id })
+		c := queued[r.IntN(len(queued))]
+		tries++
+		c.cancelled.Store(true)
+		p := st.e.Start("cancel", "--label", c.name)
+		st.mu.Lock()
+		st.helpers = append(st.helpers, p)
+		st.mu.Unlock()
+		select {
+		case <-p.done:
+		case <-time.After(exitWait):
+			p.kill(-p.pid, syscall.SIGKILL)
+			st.t.Errorf("cancel of %s did not exit within %v; killed", c.name, exitWait)
+			continue
+		}
+		if p.code != 0 {
+			c.cancelled.Store(false) // admitted or gone before the request, nothing published
+			continue
+		}
+		st.count("cancel published")
+		select {
+		case <-c.proc.done:
+			if c.proc.code == exitRefusal {
+				st.count("cancel took effect")
+				return
+			}
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // finish continues, releases, kills and reaps c, and records how it ended.
 func (st *storm) finish(c *stormClient) {
-	if c.stopped {
+	st.mu.Lock()
+	delete(st.live, c)
+	st.mu.Unlock()
+	if c.stopped.Load() {
 		c.proc.kill(c.proc.pid, syscall.SIGCONT)
 	}
 	st.release(c) // a nested chain orphaned by a kill lets go of its grant too
@@ -783,7 +850,7 @@ func TestKillStorm(t *testing.T) {
 	e := State(t)
 	st := &storm{t: t, e: e, seed: seed, short: testing.Short(), libBin: buildLibClient(t),
 		tok: &tokenOnlyRuns{markDir: e.MarkDir}, shrunk: make(chan struct{}),
-		labels: map[string]map[string]spec.Range{}, counts: map[string]int{}}
+		labels: map[string]map[string]spec.Range{}, live: map[*stormClient]bool{}, counts: map[string]int{}}
 	py, pyc, err := pyClient(t)
 	if err != nil {
 		t.Logf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
@@ -818,46 +885,30 @@ func TestKillStorm(t *testing.T) {
 	st.started = time.Now()
 	var wg sync.WaitGroup
 	wg.Go(func() { st.sizer(ctx) })
-	// The first wave arrives before every other client, in two steps, so that a slow start
-	// under load cannot put a first-wave client behind another request: clients 5 to firstWave
-	// start once clients 1 to 4 hold (the state the first shrink waits for), and every later
-	// client once clients 5 to firstWave are queued, holding or begun too. Each step gives up
-	// waiting after 5 s.
-	fourHold, arrived := make(chan struct{}), make(chan struct{})
+	// Every client after the first wave starts once the first wave holds (or after 5 s). Two
+	// floors need that: the first shrink must find the first wave's tokens locked to land
+	// below the locked count, and the victim must be admitted, which a later request that
+	// blocks the queue could otherwise delay past a -short run.
+	waveHolds := make(chan struct{})
 	go func() {
-		defer close(arrived)
-		seen := map[int]bool{}
-		four := false
-		for end := time.Now().Add(5 * time.Second); ctx.Err() == nil; time.Sleep(pollStep) {
-			if !four && (st.firstFourHold() || time.Now().After(end)) {
-				four = true
-				close(fourHold)
-				end = time.Now().Add(5 * time.Second)
-			}
-			if four && (st.firstWaveArrived(seen) || time.Now().After(end)) {
+		defer close(waveHolds)
+		for end := time.Now().Add(5 * time.Second); ctx.Err() == nil && time.Now().Before(end); time.Sleep(pollStep) {
+			if st.firstWaveHolds() {
 				return
 			}
 		}
-		if !four {
-			close(fourHold)
-		}
 	}()
+	wg.Go(func() { st.canceller(ctx) })
 	for slot := range clients {
 		wg.Go(func() {
 			delay := time.Duration(slot) * 40 * time.Millisecond // stagger the first arrivals
-			var gate chan struct{}
-			switch {
-			case slot >= firstWave:
-				gate, delay = arrived, time.Duration(slot-firstWave)*40*time.Millisecond
-			case slot >= 4:
-				gate, delay = fourHold, time.Duration(slot-4)*40*time.Millisecond
-			}
-			if gate != nil {
+			if slot >= firstWave {
 				select {
 				case <-ctx.Done():
 					return
-				case <-gate:
+				case <-waveHolds:
 				}
+				delay = time.Duration(slot-firstWave) * 40 * time.Millisecond
 			}
 			select {
 			case <-ctx.Done():
@@ -926,7 +977,7 @@ func TestKillStorm(t *testing.T) {
 			key = r.c.outer + " killed"
 		}
 		codes[key]++
-		refusalExpected := r.c.fate == "cancel" || r.c.timeout > 0
+		refusalExpected := r.c.fate == "cancel" || r.c.timeout > 0 || r.c.cancelled.Load()
 		if !r.c.killed && r.code != 0 && (r.code != exitRefusal || !refusalExpected) {
 			t.Errorf("%s (pid %d, fate %s) exited %d; stderr:\n%s", r.c.name, r.c.proc.pid, r.c.fate, r.code, r.stderr)
 			continue
@@ -948,9 +999,9 @@ func TestKillStorm(t *testing.T) {
 	reportAge := st.s.TokenOnlyReportAge()
 	summary := fmt.Sprintf("kill-storm seed %d: %d clients in %v, %d samples (%d missed), %d violations; "+
 		"token-only marker-to-report latency max %v over %d runs, unlisted-to-report age max %v (bound %v); "+
-		"events %v; endings %v; load after: %s",
+		"holder killed: %s; events %v; endings %v; load after: %s",
 		seed, len(st.results), time.Since(st.started).Round(time.Second), samples, missed, len(violations),
-		latency, reportedRuns, reportAge, st.s.TokenOnlyBound, st.counts, codes, uptime())
+		latency, reportedRuns, reportAge, st.s.TokenOnlyBound, st.victim, st.counts, codes, uptime())
 	t.Log(summary)
 	fmt.Fprintln(os.Stderr, summary)
 
@@ -986,7 +1037,7 @@ func TestKillStorm(t *testing.T) {
 		t.Errorf("%d admissions, want at least %d", admitted, minAdmitted)
 	}
 	floors := []string{"admitted cli", "admitted lib", "admitted tok", "admitted nested", "SIGKILL of a holder",
-		"SIGSTOP", "cancel published", "shrink below the locked count", "growth"}
+		"SIGSTOP", "cancel took effect", "shrink below the locked count", "growth"}
 	if st.py != "" {
 		floors = append(floors, "admitted py")
 	}
@@ -995,6 +1046,10 @@ func TestKillStorm(t *testing.T) {
 		if st.counts[what] < 1 {
 			floorFailed = true
 			t.Errorf("the storm never exercised %q", what)
+			if what == "cancel took effect" {
+				t.Logf("canceller: %d requests published, %d looks found no queued client",
+					st.counts["cancel published"], st.counts["canceller found no queued client"])
+			}
 		}
 	}
 	if floorFailed {
