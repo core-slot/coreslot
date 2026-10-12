@@ -68,10 +68,10 @@ contract and may change in any release; parse `status --json` instead.
 The document carries `"schema": 1`. Within schema 1, fields may be added but are never removed,
 renamed or given another meaning; a consumer MUST ignore fields it does not know. Removing or
 changing a field raises the schema number, and that release prints the new number. Schema 1's
-top-level fields are `schema`, `state_dir`, `state_dir_exists`, `format`, `format_understood`,
-`format_error`, `gen`, `reconciled_ns`, `config_error`, `degraded`, `section`, `resources`,
-`undeclared_locked`, `holds`, `tickets`, `dead_holds`, `cancel_requests`, `ignored` and
-`observed_s`. A ticket's `stalled` is `null` unless `--observe` ran. Labels are carried exactly,
+top-level fields are `schema`, `state_dir`, `state_dir_exists`, `format`, `format_present`,
+`format_understood`, `format_error`, `gen`, `reconciled_ns`, `config_error`, `degraded`, `section`,
+`resources`, `undeclared_locked`, `holds`, `tickets`, `dead_holds`, `cancel_requests`, `ignored`
+and `observed_s`. A ticket's `stalled` is `null` unless `--observe` ran. Labels are carried exactly,
 JSON-encoded.
 
 ## Go library

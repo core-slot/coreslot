@@ -293,10 +293,10 @@ func (v statusView) human() string {
 	switch {
 	case r.FormatError != "":
 		p("format: MALFORMED (%s)", text(r.FormatError))
-	case r.Format == 0:
-		p("format: not written yet (the first client writes 1)")
-	case !r.FormatUnderstood:
+	case !r.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
 		p("format: %d, which this client does not implement (token-only mode)", r.Format)
+	case !r.FormatPresent:
+		p("format: not written yet (the first client writes 1)")
 	default:
 		p("format: %d", r.Format)
 	}
@@ -459,6 +459,7 @@ type jsonStatus struct {
 	StateDir         string                  `json:"state_dir"`
 	StateDirExists   bool                    `json:"state_dir_exists"`
 	Format           int                     `json:"format"`
+	FormatPresent    bool                    `json:"format_present"`
 	FormatUnderstood bool                    `json:"format_understood"`
 	FormatError      string                  `json:"format_error"`
 	Gen              int64                   `json:"gen"`
@@ -539,8 +540,8 @@ type jsonTicket struct {
 func (v statusView) document() jsonStatus {
 	r := v.rep
 	d := jsonStatus{
-		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatUnderstood: r.FormatUnderstood,
-		FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError,
+		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatPresent: r.FormatPresent,
+		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError,
 		Section:   jsonSection{Held: r.Section.Held},
 		Resources: map[string]jsonResource{}, UndeclaredLocked: maps.Clone(r.UndeclaredLocked), Holds: []jsonHold{}, Tickets: []jsonTicket{},
 		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
