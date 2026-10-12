@@ -55,7 +55,7 @@ func TestBoundedEntriesNameTheSectionHolder(t *testing.T) {
 	}{
 		{"EnqueueContext", func(ctx context.Context) error { _, err := e.EnqueueContext(ctx, need("cpu=1")); return err }},
 		{"AdoptContext", func(ctx context.Context) error { _, _, err := e.AdoptContext(ctx, need("cpu=1")); return err }},
-		{"Cancel", func(ctx context.Context) error { return e.Cancel(ctx, tk.ID()) }},
+		{"CancelContext", func(ctx context.Context) error { return e.CancelContext(ctx, tk.ID()) }},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		start := time.Now()

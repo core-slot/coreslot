@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -88,7 +87,7 @@ func cancelCommand(args []string, io IO) int {
 		}
 	}
 
-	switch err := inSection(func() error { return e.Cancel(context.Background(), id) }); {
+	switch err := inSection(func() error { return e.Cancel(id) }); {
 	case err == nil:
 		fmt.Fprintf(io.Stdout, "coreslot: cancel requested for ticket %s\n", id)
 		return 0

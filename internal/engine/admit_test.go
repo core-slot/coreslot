@@ -213,7 +213,7 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	}()
 	defer func() { point = defaultPoint }()
 	<-reached
-	if err := newEngine(t, dir, nil).Cancel(context.Background(), head.ID()); err != nil { // its own completed section
+	if err := newEngine(t, dir, nil).Cancel(head.ID()); err != nil { // its own completed section
 		t.Fatalf("Cancel: %v", err)
 	}
 	close(release)
