@@ -92,28 +92,16 @@ func (t *Ticket) tokenOnlyAttempt(ctx context.Context, single bool) (*Grant, err
 		return nil, err
 	}
 	eff, clamped, undeclared := state.Effective(t.req.Need, sizes)
-	locked := make(map[string]int, len(eff))
-	for name := range eff {
-		if locked[name], err = sec.CountLocked(name); err != nil {
-			return nil, err
-		}
+	locked, err := countLocked(sec, eff)
+	if err != nil {
+		return nil, err
 	}
 	if _, ok := state.Plan(eff, sizes, locked); !ok {
 		return nil, nil
 	}
-	mins := make(map[string]int, len(eff))
-	for name, r := range eff {
-		mins[name] = r.Min
-	}
-	ts, got, err := sec.TakeTokens(mins, sizes)
-	if err != nil {
+	ts, ok, err := takeMins(sec, eff, sizes)
+	if err != nil || !ok {
 		return nil, err
-	}
-	for name, n := range mins {
-		if got[name] < n {
-			ts.Close()
-			return nil, nil
-		}
 	}
 	point("tokens.taken")
 	if err := ts.CheckIdentity(); err != nil {

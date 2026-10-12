@@ -432,22 +432,13 @@ func (t *Ticket) rescan() error {
 	var ahead []aheadEntry
 	for _, en := range entries {
 		present[en.Name] = true
-		k := state.Key{OrderKey: en.ID.OrderKey, PID: en.ID.PID, Seq: en.ID.Seq}
+		k := state.Key(en.ID)
 		if !k.Less(t.key) {
 			continue
 		}
-		ok, known := t.ticketOK[en.Name]
-		if !known {
-			body, err := t.e.readBody(store.QueueDir, en.Name)
-			if gone(err) {
-				continue
-			}
-			if err != nil && !stray(err) {
-				return err
-			}
-			_, derr := wire.DecodeTicket(body)
-			ok = err == nil && derr == nil
-			t.ticketOK[en.Name] = ok
+		ok, err := t.wellFormed(en.Name)
+		if err != nil {
+			return err
 		}
 		if ok {
 			ahead = append(ahead, aheadEntry{name: en.Name, key: k})
@@ -474,6 +465,28 @@ func (t *Ticket) rescan() error {
 	})
 	t.ahead = ahead
 	return nil
+}
+
+// wellFormed reports whether the body of the ticket name in queue/ is well-formed, reading it
+// only when the name is first seen: bodies never change once published, so the answer is kept in
+// ticketOK. A stray entry under the name counts as malformed and is never trusted (PROTOCOL.md
+// section 4.2). A ticket gone before its body was read is not well-formed, and that answer is not
+// kept.
+func (t *Ticket) wellFormed(name string) (bool, error) {
+	if ok, known := t.ticketOK[name]; known {
+		return ok, nil
+	}
+	body, err := t.e.readBody(store.QueueDir, name)
+	if gone(err) {
+		return false, nil
+	}
+	if err != nil && !stray(err) {
+		return false, err
+	}
+	_, derr := wire.DecodeTicket(body)
+	ok := err == nil && derr == nil
+	t.ticketOK[name] = ok
+	return ok, nil
 }
 
 // Holders lists holds/ and returns the live holds (a lock probe each); malformed holds are

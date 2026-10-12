@@ -50,11 +50,9 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, 
 		return nil, nil, err
 	}
 	eff, clamped, undeclared := state.Effective(req.Need, sizes)
-	locked := make(map[string]int, len(eff))
-	for name := range eff {
-		if locked[name], err = sec.CountLocked(name); err != nil {
-			return nil, nil, err
-		}
+	locked, err := countLocked(sec, eff)
+	if err != nil {
+		return nil, nil, err
 	}
 	take := state.AdoptPlan(eff, sizes, locked)
 	mins := make(map[string]int, len(eff))

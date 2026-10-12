@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
@@ -57,11 +59,9 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	eff, clamped, undeclared := state.Effective(t.req.Need, sizes)
-	locked := make(map[string]int, len(eff))
-	for name := range eff {
-		if locked[name], err = sec.CountLocked(name); err != nil {
-			return nil, err
-		}
+	locked, err := countLocked(sec, eff)
+	if err != nil {
+		return nil, err
 	}
 	take, ok := state.Plan(eff, sizes, locked)
 	if !ok {
@@ -117,22 +117,13 @@ func (t *Ticket) reelect() (ok bool, err error) {
 	}
 	now := t.e.clock.Monotonic()
 	for _, en := range entries {
-		k := state.Key{OrderKey: en.ID.OrderKey, PID: en.ID.PID, Seq: en.ID.Seq}
+		k := state.Key(en.ID)
 		if !k.Less(t.key) {
 			continue
 		}
-		well, known := t.ticketOK[en.Name]
-		if !known {
-			body, err := t.e.readBody(store.QueueDir, en.Name)
-			if gone(err) {
-				continue
-			}
-			if err != nil && !stray(err) {
-				return false, err
-			}
-			_, derr := wire.DecodeTicket(body)
-			well = err == nil && derr == nil
-			t.ticketOK[en.Name] = well
+		well, err := t.wellFormed(en.Name)
+		if err != nil {
+			return false, err
 		}
 		if !well {
 			continue
@@ -163,26 +154,52 @@ func (t *Ticket) reelect() (ok bool, err error) {
 	return true, nil
 }
 
-// takeTwoPasses takes tokens in the two passes of PROTOCOL.md section 12.1 step 6: the
-// minimum pass takes every effective min, and if any resource ends below it (a non-queued
-// taker won a race) everything taken this round is closed and ok is false; the extra pass then
-// takes take[r] - min more of each resource, as many as it finds free.
-func takeTwoPasses(sec *store.Section, eff map[string]spec.Range, take, sizes map[string]int) (*store.TokenSet, bool, error) {
+// countLocked counts the locked tokens of every resource of eff at every index (PROTOCOL.md
+// section 12.1 step 4, I3), as admission, token-only admission and adoption all size from it.
+func countLocked(sec *store.Section, eff map[string]spec.Range) (map[string]int, error) {
+	locked := make(map[string]int, len(eff))
+	for name := range eff {
+		n, err := sec.CountLocked(name)
+		if err != nil {
+			return nil, err
+		}
+		locked[name] = n
+	}
+	return locked, nil
+}
+
+// takeMins is the minimum pass of PROTOCOL.md section 12.1 step 6: it takes every effective min,
+// and if any resource ends below it (a non-queued taker won a race) it closes everything it took
+// and ok is false. Token-only admission takes this pass alone (section 15.2).
+func takeMins(sec *store.Section, eff map[string]spec.Range, sizes map[string]int) (*store.TokenSet, bool, error) {
 	mins := make(map[string]int, len(eff))
-	extra := make(map[string]int, len(eff))
 	for name, r := range eff {
 		mins[name] = r.Min
-		extra[name] = take[name] - r.Min
 	}
-	first, got, err := sec.TakeTokens(mins, sizes)
+	ts, got, err := sec.TakeTokens(mins, sizes)
 	if err != nil {
 		return nil, false, err
 	}
 	for name, n := range mins {
 		if got[name] < n {
-			first.Close()
+			ts.Close()
 			return nil, false, nil
 		}
+	}
+	return ts, true, nil
+}
+
+// takeTwoPasses takes tokens in the two passes of PROTOCOL.md section 12.1 step 6: the minimum
+// pass (takeMins), then the extra pass, which takes take[r] - min more of each resource, as many
+// as it finds free.
+func takeTwoPasses(sec *store.Section, eff map[string]spec.Range, take, sizes map[string]int) (*store.TokenSet, bool, error) {
+	first, ok, err := takeMins(sec, eff, sizes)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	extra := make(map[string]int, len(eff))
+	for name, r := range eff {
+		extra[name] = take[name] - r.Min
 	}
 	second, _, err := sec.TakeTokens(extra, sizes)
 	if err != nil {
@@ -211,13 +228,7 @@ func mergeTokens(sets ...*store.TokenSet) *store.TokenSet {
 		}
 	}
 	slices.SortFunc(all, func(a, b tok) int {
-		if a.name != b.name {
-			if a.name < b.name {
-				return -1
-			}
-			return 1
-		}
-		return a.idx - b.idx
+		return cmp.Or(strings.Compare(a.name, b.name), cmp.Compare(a.idx, b.idx))
 	})
 	out := &store.TokenSet{Indices: map[string][]int{}}
 	for _, x := range all {
@@ -411,10 +422,4 @@ func (g *Grant) removeHold() {
 	if removed, err := sec.ProbeAndRemoveHold(g.holdName); err == nil && removed {
 		_ = sec.BumpGen() // removing one's own hold bumps gen once (PROTOCOL.md section 7.8)
 	}
-}
-
-func sortedCopy(s []string) []string {
-	out := slices.Clone(s)
-	slices.Sort(out)
-	return out
 }

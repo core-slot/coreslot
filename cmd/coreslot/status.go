@@ -143,7 +143,7 @@ type stallWatcher struct {
 
 func ticketKey(t coreslot.TicketInfo) (state.Key, bool) {
 	id, ok := wire.ParseID(t.ID)
-	return state.Key{OrderKey: id.OrderKey, PID: id.PID, Seq: id.Seq}, ok
+	return state.Key(id), ok
 }
 
 func (w *stallWatcher) see(rep coreslot.Report, now time.Duration) {

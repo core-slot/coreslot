@@ -5,6 +5,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/store"
@@ -39,12 +41,8 @@ func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) 
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	var all []string
-	for name := range req.Need {
-		all = append(all, name)
-	}
 	g := &Grant{e: e, tokens: &store.TokenSet{Indices: map[string][]int{}}, need: req.Need,
-		clamped: map[string]int{}, unbudgeted: sortedCopy(all), failOpen: reason}
+		clamped: map[string]int{}, unbudgeted: slices.Sorted(maps.Keys(req.Need)), failOpen: reason}
 	ctx, cancel := context.WithTimeout(context.Background(), releaseWait)
 	defer cancel()
 	sec, err := enterSection(e.st, ctx)
