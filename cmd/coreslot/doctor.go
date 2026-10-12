@@ -68,10 +68,13 @@ func doctorCommand(args []string, io IO) int {
 
 // doctorAct performs --reset (which removes the degraded record too) or --clear.
 func doctorAct(doReset bool, io IO) int {
+	what := "doctor --clear"
+	if doReset {
+		what = "doctor --reset"
+	}
 	e, _, err := openEngineReadOnly()
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: doctor: %s\n", text(err.Error()))
-		return exitInternal
+		return doctorFailed(what, err, io)
 	}
 	if !e.Store().Exists() { // nothing has run: there is nothing to clear or reset, and nothing to create
 		if doReset {
@@ -101,8 +104,7 @@ func doctorAct(doReset bool, io IO) int {
 				removed, incomplete.Left, text(incomplete.Err.Error()))
 			return exitInternal
 		case err != nil:
-			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: %s\n", text(err.Error()))
-			return exitInternal
+			return doctorFailed(what, err, io)
 		}
 		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock, res/ and config.toml\n", removed)
 		return 0
@@ -113,19 +115,28 @@ func doctorAct(doReset bool, io IO) int {
 	}
 	rec, err := e.Store().Degraded()
 	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: doctor --clear: %s\n", text(err.Error()))
-		return exitInternal
+		return doctorFailed(what, err, io)
 	}
 	if rec == nil {
 		fmt.Fprintln(io.Stdout, "clear: no degraded record")
 		return 0
 	}
 	if err := inSection(e.Store().ClearDegraded); err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: doctor --clear: %s\n", text(err.Error()))
-		return exitInternal
+		return doctorFailed(what, err, io)
 	}
 	fmt.Fprintln(io.Stdout, "clear: removed the degraded record")
 	return 0
+}
+
+// doctorFailed reports an error that kept --clear or --reset from acting. A state error
+// (PROTOCOL.md section 14) is a problem doctor found, exit 1; anything else is an internal
+// error, exit 70.
+func doctorFailed(what string, err error, io IO) int {
+	fmt.Fprintf(io.Stderr, "coreslot: %s: %s\n", what, text(err.Error()))
+	if _, stateErr := classify(err); stateErr {
+		return exitProblems
+	}
+	return exitInternal
 }
 
 // formatRefusal says why a write into the directory is refused for its FORMAT, or "": a
@@ -248,7 +259,7 @@ func doctorReport(io IO) int {
 			line("degraded: no")
 		}
 		if rep.Section.Held {
-			line("admission section: held right now")
+			line("admission section: %s", sectionHolder(rep.Section, store.NowNS()))
 		}
 		if n := len(rep.DeadHolds); n > 0 {
 			line("note: %d dead %s awaiting reconciliation", n, plural(int64(n), "hold"))

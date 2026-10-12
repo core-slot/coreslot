@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot"
+	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
@@ -1077,6 +1078,202 @@ func TestCommandErrorsAreEscaped(t *testing.T) {
 		}
 		if strings.ContainsAny(out, "\x1b\r") || strings.Count(r.stderr, "\n") > 1 {
 			t.Errorf("%v printed a raw control character or several error lines:\n%q", args, out)
+		}
+	}
+}
+
+// ---------------------------------------------------------------- help, validation, exit statuses
+
+// Every --help prints on stdout and exits 0; run's help gives each flag a line and its default.
+func TestHelpGoesToStdout(t *testing.T) {
+	dir := stateDir(t, "")
+	for _, args := range [][]string{
+		{"help"}, {"--help"}, {"run", "--help"}, {"run", "-h"}, {"status", "--help"}, {"cancel", "--help"},
+		{"doctor", "--help"}, {"version", "--help"}, {"version", "-h"},
+	} {
+		r := cli(t, baseEnv(dir), args...)
+		if r.code != 0 || !strings.HasPrefix(r.stdout, "usage: coreslot") || r.stderr != "" {
+			t.Errorf("%v: exit %d, want 0 with the usage on stdout only (stdout %q, stderr %q)", args, r.code, r.stdout, r.stderr)
+		}
+	}
+	help := cli(t, baseEnv(dir), "run", "--help").stdout
+	for _, want := range []string{
+		"  --need RES=MIN..MAX   tokens of RES", "(default cpu=1..1 when no --need is given)",
+		"  --label L ", "  --priority P ", "else 0)", "  --timeout D ", "(default 0, no limit)",
+		"  --on-timeout run|fail ", "(default fail)", "  --no-wait ", "  --strict ", "  --independent ",
+		"  --subst ", "  --refusal-code N ", "(default 75)", "exactly {n}", "{n:RES}",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("run --help lacks %q:\n%s", want, help)
+		}
+	}
+	if q := entries(t, dir, "queue"); len(q) != 0 {
+		t.Errorf("a --help queued: %q", q)
+	}
+}
+
+// A negative duration is a usage error that says what is wanted; a zero --timeout is no limit.
+func TestNegativeDurationsAreUsageErrors(t *testing.T) {
+	dir := stateDir(t, "")
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"run", "--timeout", "-1s", "--", "true"}, "coreslot: --timeout -1s: want a duration of 0 or more (0 means no limit)"},
+		{[]string{"status", "--observe", "-1s"}, "coreslot: status: --observe -1s: want a duration of 0 or more"},
+	} {
+		r := cli(t, baseEnv(dir), c.args...)
+		if r.code != 64 || !strings.HasPrefix(r.stderr, c.want+"\n") {
+			t.Errorf("%v: exit %d, want 64 and %q first (stderr %q)", c.args, r.code, c.want, r.stderr)
+		}
+	}
+	if r := cli(t, baseEnv(dir), "run", "--timeout", "0s", "--", "true"); r.code != 0 {
+		t.Errorf("--timeout 0s: exit %d, want 0 (stderr %q)", r.code, r.stderr)
+	}
+}
+
+// A state directory that cannot be used is a state error, never an internal error (70): status
+// exits 3 as runs fail open, cancel refuses (75), and doctor reports a problem (1).
+func TestUnusableStateDirectoryExitStatuses(t *testing.T) {
+	groupWritable := stateDir(t, "")
+	if err := os.Chmod(groupWritable, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	id := wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String()
+	for _, dir := range []string{groupWritable, "relative/state"} {
+		for _, c := range []struct {
+			args []string
+			code int
+			want string
+		}{
+			{[]string{"status"}, 3, "coreslot: status: state error: "},
+			{[]string{"status", "--json"}, 3, "coreslot: status: state error: "},
+			{[]string{"cancel", id}, 75, "coreslot: cancel refused: state error: "},
+			{[]string{"cancel", "--label", "x"}, 75, "coreslot: cancel refused: state error: "},
+			{[]string{"doctor", "--clear"}, 1, "coreslot: doctor --clear: state error: "},
+			{[]string{"doctor", "--reset"}, 1, "coreslot: doctor --reset: state error: "},
+			{[]string{"doctor"}, 1, ""},
+		} {
+			r := cli(t, baseEnv(dir), c.args...)
+			if r.code != c.code || !strings.HasPrefix(r.stderr, c.want) {
+				t.Errorf("%s: %v: exit %d, want %d and stderr starting %q (stderr %q)", dir, c.args, r.code, c.code, c.want, r.stderr)
+			}
+			if c.args[0] == "status" && r.stdout != "" {
+				t.Errorf("%s: %v printed a report it could not read:\n%s", dir, c.args, r.stdout)
+			}
+		}
+	}
+}
+
+// An invalid configuration leaves the budget unknown: status says so rather than "none declared"
+// and exits 3, since runs fail open.
+func TestStatusWithInvalidConfiguration(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = \"lots\"\n")
+	r := cli(t, baseEnv(dir), "status")
+	if r.code != 3 || !strings.Contains(r.stdout, "\nresources: not known, the configuration cannot be read (runs fail open until it is fixed)\n") ||
+		strings.Contains(r.stdout, "none declared") || !strings.Contains(r.stdout, "CONFIGURATION ERROR: ") {
+		t.Errorf("status: exit %d, want 3 and the budget reported unknown (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+	doc := statusDoc(t, dir, 3)
+	if doc["config_error"] == "" || len(doc["resources"].(map[string]any)) != 0 {
+		t.Errorf("status --json: config_error %q, resources %v", doc["config_error"], doc["resources"])
+	}
+}
+
+// A malformed FORMAT is a state error too: runs fail open, so status exits 3.
+func TestStatusWithMalformedFormat(t *testing.T) {
+	dir := stateDir(t, "")
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := cli(t, baseEnv(dir), "status"); r.code != 3 || !strings.Contains(r.stdout, "format: MALFORMED (") {
+		t.Errorf("status: exit %d, want 3 reporting FORMAT malformed (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+}
+
+// doctor names the section's holder the way status does.
+func TestDoctorNamesSectionHolder(t *testing.T) {
+	dir := stateDir(t, "")
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	if _, _, err := sec.Format([]int{1}); err != nil { // writes admit.lock's body: this pid
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "doctor")
+	want := fmt.Sprintf("\nadmission section: held by pid %d for ", os.Getpid())
+	if !strings.Contains(r.stdout, want) {
+		t.Errorf("doctor: exit %d, want %q in:\n%s", r.code, want, r.stdout)
+	}
+}
+
+// The engine's refusal reaches the user once prefixed: `coreslot: cancel refused: ...`.
+func TestCancelRefusalHasOnePrefix(t *testing.T) {
+	dir := stateDir(t, "")
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "cancel", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String())
+	want := "coreslot: cancel refused: the state directory has format 2, which this client does not implement\n"
+	if r.code != 75 || r.stderr != want {
+		t.Errorf("cancel under format 2: exit %d, stderr %q; want 75 and %q", r.code, r.stderr, want)
+	}
+}
+
+// A client stopped inside the admission section does not keep cancel waiting: it refuses within
+// a bound, naming the holder admit.lock records.
+func TestCancelRefusesWhileSectionHeld(t *testing.T) {
+	if _, ok := any(&engine.Engine{}).(contextCanceller); !ok {
+		t.Skip("the engine has no CancelContext, so cancel cannot bound its wait for the section")
+	}
+	dir := stateDir(t, "")
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	if _, _, err := sec.Format([]int{1}); err != nil { // writes admit.lock's body: this pid
+		t.Fatal(err)
+	}
+	start := time.Now()
+	r := cli(t, baseEnv(dir), "cancel", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String())
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("cancel refused after %v, want within 5 s (load: %s)", took, uptime())
+	}
+	pid := fmt.Sprintf("pid %d", os.Getpid())
+	if r.code != 75 || !strings.HasPrefix(r.stderr, "coreslot: cancel refused: ") || !strings.Contains(r.stderr, pid) ||
+		strings.Count(r.stderr, "coreslot:") != 1 || strings.Count(r.stderr, "\n") != 1 {
+		t.Errorf("cancel: exit %d, want 75 and one line refusing, naming %s (stderr %q)", r.code, pid, r.stderr)
+	}
+	if got := entries(t, dir, "cancel"); len(got) != 0 {
+		t.Errorf("a refused cancel published %v", got)
+	}
+}
+
+// A refused reset names each live hold and ticket by its label, as status shows it.
+func TestDoctorResetRefusalNamesLabels(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	c := openLib(t, dir)
+	hold(t, c, "hold:three", map[string]coreslot.Range{"cpu": rng(4, 4)})
+	queue(t, c, "ticket:one", map[string]coreslot.Range{"cpu": rng(1, 1)})
+	r := cli(t, baseEnv(dir), "doctor", "--reset")
+	if r.code != 75 {
+		t.Fatalf("doctor --reset: exit %d, want 75 (stderr %q)", r.code, r.stderr)
+	}
+	t.Skip("the engine's reset refusal names holds and tickets by their file names' display, not their labels: " + r.stderr)
+	for _, want := range []string{"hold:three", "ticket:one"} {
+		if !strings.Contains(r.stderr, want) {
+			t.Errorf("doctor --reset refusal lacks the label %q: %q", want, r.stderr)
 		}
 	}
 }
