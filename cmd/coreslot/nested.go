@@ -34,10 +34,16 @@ func environ() map[string]string {
 // inherited CORESLOT_TOKEN_FDS passes through on the parent's grant or refuses when it does not
 // validate, and anything else, or --independent, is an ordinary request that drops the
 // inherited context first.
+//
+// Each path that may start a command starts the descriptor-limit probe first, so that the probe
+// runs while the request queues. A pass-through keeps the inherited grant open for its command,
+// so the probe is shielded from it; an ordinary run starts the probe once that grant is closed
+// and before it has a grant of its own.
 func (r *run) decide() int {
 	env := environ()
 	if !r.o.independent {
 		if reason := env[engine.EnvUnbudgeted]; reason != "" {
+			r.nofile = startNofileProbe(contextFDs(env))
 			return r.passThroughUnbudgeted(reason)
 		}
 		if env[engine.EnvTokenFDs] != "" {
@@ -46,11 +52,30 @@ func (r *run) decide() int {
 				return r.refuse("the inherited grant does not validate: %v; refusing rather than queueing "+
 					"behind a parent that may hold the whole budget (use --independent to queue anyway)", err)
 			}
+			r.nofile = startNofileProbe(contextFDs(env))
 			return r.passThrough(held)
 		}
 	}
 	r.env = dropInherited(env)
+	r.nofile = startNofileProbe(nil)
 	return r.ordinary()
+}
+
+// contextFDs is the descriptors CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS name, as far as they
+// parse.
+func contextFDs(env map[string]string) []int {
+	var fds []int
+	if v := env[engine.EnvHeldFD]; v != "" {
+		if fd, ok := engine.ParseFD(v); ok {
+			fds = append(fds, fd)
+		}
+	}
+	if v := env[engine.EnvTokenFDs]; v != "" {
+		if list, err := engine.ParseTokenFDs(v); err == nil {
+			fds = append(fds, list...)
+		}
+	}
+	return fds
 }
 
 // isContext reports whether an environment variable is grant context: CORESLOT_GRANTED_*,
@@ -68,18 +93,7 @@ func isContext(key string) bool {
 // that names anything else (a standard stream, a pipe, the runtime's own descriptors, which
 // take the numbers a launcher closed) is not a grant's.
 func dropInherited(env map[string]string) []string {
-	var fds []int
-	if v := env[engine.EnvHeldFD]; v != "" {
-		if fd, ok := engine.ParseFD(v); ok {
-			fds = append(fds, fd)
-		}
-	}
-	if v := env[engine.EnvTokenFDs]; v != "" {
-		if list, err := engine.ParseTokenFDs(v); err == nil {
-			fds = append(fds, list...)
-		}
-	}
-	for _, fd := range fds {
+	for _, fd := range contextFDs(env) {
 		var st unix.Stat_t
 		if fd >= 3 && unix.Fstat(fd, &st) == nil && st.Mode&unix.S_IFMT == unix.S_IFREG {
 			_ = unix.Close(fd)

@@ -1,7 +1,8 @@
 //go:build coreslot_testhooks
 
-// Package testhooks provides pause points, a wall-clock offset, a format list and a getent
-// substitute for the deterministic trace tests and the password-database fallback test. This file is the enabled build (tag coreslot_testhooks); the
+// Package testhooks provides pause points, a wall-clock offset, a format list, a getent substitute
+// and the CLI's descriptor-limit probe for the deterministic trace tests and the fallback tests.
+// This file is the enabled build (tag coreslot_testhooks); the
 // variables it reads are ignored by every other build.
 //
 //   - CORESLOT_TESTHOOK_DIR: directory for the pause handshake files.
@@ -13,6 +14,8 @@
 //   - CORESLOT_TESTHOOK_FORMATS: comma-separated formats the client implements.
 //   - CORESLOT_TESTHOOK_GETENT: the absolute path of a getent that replaces the system's in the
 //     home directory's NSS fallback.
+//   - CORESLOT_TESTHOOK_PROBE_SHELL: the program the CLI runs as `<it> -c 'ulimit -S -n'` to
+//     learn the descriptor limit it was started with, so that a test can make that probe fail.
 package testhooks
 
 import (
@@ -130,3 +133,11 @@ func Formats() []int {
 
 // Getent returns CORESLOT_TESTHOOK_GETENT, or "" (the system's getent) when it is unset.
 func Getent() string { return os.Getenv("CORESLOT_TESTHOOK_GETENT") }
+
+// ProbeShell returns CORESLOT_TESTHOOK_PROBE_SHELL, or /bin/sh when it is unset.
+func ProbeShell() string {
+	if v := os.Getenv("CORESLOT_TESTHOOK_PROBE_SHELL"); v != "" {
+		return v
+	}
+	return "/bin/sh"
+}

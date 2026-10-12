@@ -79,7 +79,11 @@ func (r *run) runChild(c child) int {
 	if slices.ContainsFunc(c.files, func(f *os.File) bool { return f != nil }) {
 		cmd.ExtraFiles = c.files
 	}
-	_, _ = raiseChildNofile(currentNofile())
+	inherited := 0
+	if cmd.ExtraFiles != nil {
+		inherited = 3 + len(cmd.ExtraFiles)
+	}
+	_, _ = raiseChildNofile(r.nofile.originalNofile(), inherited)
 	if sig := pendingSignal(); sig != 0 {
 		// Interrupted between the admission and the start: the command never runs.
 		_ = c.release()

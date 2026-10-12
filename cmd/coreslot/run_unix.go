@@ -31,7 +31,8 @@ type run struct {
 	start   time.Time
 	load    float64
 	waited  time.Duration
-	env     []string // the command's environment before its grant: the inherited context dropped
+	env     []string     // the command's environment before its grant: the inherited context dropped
+	nofile  *nofileProbe // learns the descriptor limit the run was started with (rlimit_unix.go)
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -48,6 +49,7 @@ func runCommand(args []string, io IO) int {
 	defer signal.Stop(runSignals)
 	installStops()
 	r := &run{o: o, io: io, startNS: time.Now().UnixNano(), start: time.Now(), load: load1()}
+	defer func() { r.nofile.stop() }()
 	return r.decide()
 }
 

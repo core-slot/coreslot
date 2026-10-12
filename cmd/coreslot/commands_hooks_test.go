@@ -4,10 +4,13 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -133,5 +136,167 @@ func TestCancelStateErrorAfterTimelyEntry(t *testing.T) {
 	if code := exitStatus(cmd.ProcessState); code != 75 || strings.Contains(stderr.String(), "stayed held") ||
 		!strings.HasPrefix(stderr.String(), "coreslot: cancel refused: open ") || !strings.Contains(stderr.String(), "permission denied") {
 		t.Errorf("cancel: exit %d, want 75 refusing with the I/O error, not a busy section (stderr %q)", code, stderr.String())
+	}
+}
+
+// probeScript writes an executable script for CORESLOT_TESTHOOK_PROBE_SHELL, which the run starts
+// with no environment, and returns its path.
+func probeScript(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// probeFallback is the soft limit a run started with a soft limit of 256 gives its command when
+// its probe fails: 256 above the limit the Go runtime raised the run's own to, within the hard
+// limit and kern.maxfilesperproc.
+func probeFallback(t *testing.T) uint64 {
+	t.Helper()
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Fatal(err)
+	}
+	hard := uint64(lim.Max)
+	if hard < 1024 {
+		t.Skipf("the hard limit %d leaves no room above 256 + 256", hard)
+	}
+	if fileCap() == 0 && hard >= 1<<62 {
+		t.Skip("Linux refuses a soft limit just below an unlimited hard limit, so the runtime raises nothing")
+	}
+	raised := hard - 1
+	if c := fileCap(); c > 0 {
+		raised = min(raised, c)
+	}
+	want := min(raised+extraNofile, hard)
+	if c := fileCap(); c > 0 {
+		want = min(want, c)
+	}
+	return want
+}
+
+// A probe that fails never fails a run: the command runs with 256 above the limit the Go runtime
+// raised the run's own to, as before the probe. A probe that does not end is killed at its bound,
+// and one still running when the run refuses is killed with the run; neither outlives it.
+// Mutations: make runChild return 70 when the probe failed (every case goes red); drop the
+// deferred stop in runCommand (the refusing run leaves its probe sleeping).
+func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
+	want := probeFallback(t)
+	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	pids := t.TempDir()
+	sleeper := func(name string) string {
+		return probeScript(t, fmt.Sprintf("echo $$ > %q\nexec /bin/sleep 30\n", filepath.Join(pids, name)))
+	}
+	// gone fails the test when the probe that wrote pids/name is still alive.
+	gone := func(t *testing.T, name string) {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(pids, name))
+		if err != nil {
+			t.Fatalf("the probe never ran: %v", err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := unix.Kill(pid, 0); !errors.Is(err, unix.ESRCH) {
+			_ = unix.Kill(pid, unix.SIGKILL)
+			t.Errorf("the probe %d outlived the run (kill 0: %v)", pid, err)
+		}
+	}
+
+	for _, tc := range []struct{ name, shell string }{
+		{"missing", filepath.Join(t.TempDir(), "missing")},
+		{"unparsable", probeScript(t, "echo many\n")},
+		{"no end", sleeper("timeout")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+tc.shell)
+			cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run -- sh -c 'ulimit -S -n'`, cliBinary(t))
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("%v (stderr %q)", err, stderr.String())
+			}
+			if got := strings.TrimSpace(string(out)); got != strconv.FormatUint(want, 10) {
+				t.Errorf("the command's soft limit is %s, want the fallback %d", got, want)
+			}
+			if tc.name == "no end" {
+				gone(t, "timeout")
+			}
+		})
+	}
+
+	t.Run("refused", func(t *testing.T) {
+		holdToken(t, dir, "cpu", 0)
+		env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+sleeper("refused"))
+		cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run --timeout 500ms -- true`, cliBinary(t))
+		out, _ := cmd.CombinedOutput()
+		if code := exitStatus(cmd.ProcessState); code != 75 {
+			t.Fatalf("exit %d, want 75 (--timeout):\n%s", code, out)
+		}
+		gone(t, "refused")
+	})
+}
+
+// The probe never inherits a grant's descriptors. A pass-through shields its inherited grant with
+// close-on-exec while its probe starts and clears that again, so its command still inherits the
+// grant. Mutations: start the pass-through's probe with startNofileProbe(nil) in decide, and the
+// nested probe reports the parent's hold and token; skip the restoring loop in nofileProbe.wait,
+// and the nested command inherits neither.
+func TestNofileProbeInheritsNoGrant(t *testing.T) {
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Fatal(err)
+	}
+	if uint64(lim.Max) < 1024 {
+		t.Skipf("the hard limit %d leaves no room above 256 + 256", lim.Max)
+	}
+	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	reports := t.TempDir()
+	probe := probeScript(t, fmt.Sprintf("%s=fds %q > %q/probe.$$\nulimit -S -n\n", helperEnv, cliBinary(t), reports))
+	env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+probe)
+	cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run -- "$0" run -- env `+helperEnv+`=fds "$0"`, cliBinary(t))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	// files is the (device, inode) of each descriptor an fds report lists, or of those at the
+	// numbers in only when it names any. A report also lists the reporting helper's own runtime
+	// descriptors, such as its poller.
+	files := func(report string, only ...string) []string {
+		var ids []string
+		for _, l := range strings.Split(report, "\n") {
+			if f := strings.Fields(l); len(f) == 4 && f[0] == "fd" && (len(only) == 0 || slices.Contains(only, f[1])) {
+				ids = append(ids, f[2]+" "+f[3])
+			}
+		}
+		return ids
+	}
+	// The grant of cpu = 1 is the hold at fd 3 and the token at fd 4.
+	grant := files(string(out), "3", "4")
+	if !strings.Contains(string(out), "env CORESLOT_HELD_FD=3\n") || !strings.Contains(string(out), "env CORESLOT_TOKEN_FDS=4\n") ||
+		len(grant) != 2 {
+		t.Fatalf("the nested command did not inherit the hold at fd 3 and the token at fd 4:\n%s", out)
+	}
+	des, err := os.ReadDir(reports)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(des) != 2 {
+		t.Fatalf("%d probe reports, want the outer run's and the pass-through's", len(des))
+	}
+	for _, de := range des {
+		b, err := os.ReadFile(filepath.Join(reports, de.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range files(string(b)) {
+			if slices.Contains(grant, id) {
+				t.Errorf("a probe inherited a grant descriptor (%s):\n%s", id, b)
+			}
+		}
 	}
 }

@@ -668,12 +668,28 @@ func TestDoctorReportsLimits(t *testing.T) {
 		"permissions: every entry of the layout is the user's",
 		"resource cpu: size 4, locked 0, free 4",
 		"resource pg-local: size 2, locked 0, free 2",
-		fmt.Sprintf("descriptor limit: soft %s, hard %s;", limitName(uint64(lim.Cur)), limitName(uint64(lim.Max))),
+		fmt.Sprintf(", hard %s; a grant of 512 tokens needs about 600", limitName(uint64(lim.Max))),
 		"degraded: no",
 		"no problems found",
 	} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("doctor lacks %q:\n%s", want, r.stdout)
+		}
+	}
+
+	// doctor reports the soft limit it was started with, not the one the Go runtime raised its
+	// own to, so a low one is noted. Mutation: report syscall.Getrlimit's soft limit in
+	// doctorCommand, and it reports the hard limit or kern.maxfilesperproc without the note.
+	if uint64(lim.Max) >= wantDescriptors {
+		cmd := shCmd(t, baseEnv(dir), `ulimit -S -n 256 && exec "$0" doctor`, cliBinary(t))
+		out, err := cmd.Output()
+		for _, want := range []string{
+			fmt.Sprintf("descriptor limit: soft 256, hard %s;", limitName(uint64(lim.Max))),
+			"note: the soft limit is below 600; coreslot run gives its command 256 more, within the hard limit",
+		} {
+			if !strings.Contains(string(out), want) {
+				t.Errorf("doctor under ulimit -S -n 256 (%v) lacks %q:\n%s", err, want, out)
+			}
 		}
 	}
 
