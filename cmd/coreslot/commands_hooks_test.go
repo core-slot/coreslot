@@ -27,7 +27,7 @@ func formatsOfThisBuild() string {
 func TestVersionListsEveryImplementedFormat(t *testing.T) {
 	env := append(baseEnv(stateDir(t, "")), "CORESLOT_TESTHOOK_FORMATS=1,2")
 	r := cli(t, env, "version")
-	if r.code != 0 || r.stdout != "coreslot "+version+" (protocol formats: 1, 2)\n" {
+	if r.code != 0 || r.stdout != "coreslot "+cliVersion()+" (protocol formats: 1, 2)\n" {
 		t.Errorf("version: exit %d, stdout %q", r.code, r.stdout)
 	}
 }
