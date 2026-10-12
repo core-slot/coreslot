@@ -370,8 +370,16 @@ def order_key(arrival_ns: int, priority: int) -> int:
     return min(max(0, arrival_ns - priority * PRIORITY_NS), ORDER_KEY_MAX)
 
 
+# Characters that act on a terminal or on the line they sit in: C1 controls, the line and
+# paragraph separators, and the bidirectional marks, embeddings, overrides and isolates. JSON this
+# client writes carries them as \uXXXX (C0 controls are escaped by json.dumps already), so that a
+# label never reaches a reader's line raw; every other non-ASCII character is written as UTF-8.
+_JSON_UNSAFE = re.compile("[\u0080-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+
+
 def _dump(obj) -> bytes:
-    return json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    text = json.dumps(obj, ensure_ascii=False)  # these characters occur only inside strings
+    return _JSON_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text).encode("utf-8")
 
 
 # --------------------------------------------------------------------------------------

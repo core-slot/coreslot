@@ -1137,6 +1137,32 @@ class LauncherTests(Base):
         self.assertEqual(self.ls("queue"), [])
 
 
+    def test_json_output_escapes_c1_line_and_bidi_controls(self):
+        """The run log, tickets and holds escape C1 controls, the line and paragraph separators and
+        the bidirectional controls in a label as \\uXXXX, so no line carries them raw; the decoded
+        label is unchanged."""
+        controls = ["\u0080", "\u0085", "\u009f", "؜", "‎", "‏", " ", " ",
+                    *map(chr, range(0x202A, 0x202F)), *map(chr, range(0x2066, 0x206A))]
+        label = "a" + "".join(controls) + "é"
+        self.config("[resources]\ncpu = 2\n")
+        p = self.cli("run", "--label", label, "--", "true")
+        self.assertEqual(p.wait(timeout=20), 0)
+        t = self.client().enqueue(label, 0, {"cpu": 1})
+        kind, g = t.step()
+        self.assertEqual(kind, "admitted")
+        blobs = [self.read("log", "runs.jsonl"), self.read("holds", g.hold_name)]
+        t2 = self.client().enqueue(label, 0, {"cpu": 2})
+        blobs.append(self.read("queue", t2.name))
+        for raw in blobs:
+            text = raw.decode("utf-8")
+            for ch in controls:
+                self.assertNotIn(ch, text, f"U+{ord(ch):04X} written raw")
+                self.assertIn(f"\\u{ord(ch):04x}", text)
+            self.assertIn("é", text)  # printable non-ASCII stays as it is
+            self.assertEqual(json.loads(text.splitlines()[0])["label"], label)
+        t2.withdraw()
+        g.close(remove_hold=False)
+
     def test_pass_through_needs_a_fresh_probe_to_fail(self):
         """§18 rule 2: a descriptor on a token file validates only while a fresh probe of the
         token's path fails. An unlocked one (the parent run is gone) is an invalid context."""
