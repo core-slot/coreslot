@@ -21,6 +21,7 @@ import (
 	"github.com/Nezhinskiy/coreslot"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
@@ -38,6 +39,28 @@ func openLib(t *testing.T, dir string) *coreslot.Client {
 }
 
 func rng(min, max int) coreslot.Range { return coreslot.Range{Min: min, Max: max} }
+
+// recordDegraded writes a degraded record into st as a fail-open run does: inside the section,
+// after FORMAT and a due reconciliation.
+func recordDegraded(t *testing.T, st *store.Store, reason string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sec, err := st.Enter(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	if _, understood, err := sec.Format(testhooks.Formats()); err != nil || !understood {
+		t.Fatalf("FORMAT before the degraded record: understood %v, %v", understood, err)
+	}
+	if _, err := sec.ReconcileIfDue(store.NowNS()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sec.RecordDegraded(reason); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // hold adopts a grant for the label and keeps it until the test ends.
 func hold(t *testing.T, c *coreslot.Client, label string, need map[string]coreslot.Range) *coreslot.Grant {
@@ -420,9 +443,7 @@ func TestStatusExits3WhenDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RecordDegraded("the budget broke\nbadly"); err != nil {
-		t.Fatal(err)
-	}
+	recordDegraded(t, st, "the budget broke\nbadly")
 	r := cli(t, baseEnv(dir), "status")
 	if r.code != 3 {
 		t.Errorf("status exited %d, want 3 (stderr %q)", r.code, r.stderr)
@@ -631,9 +652,7 @@ func TestDoctorClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RecordDegraded("fail-open: test"); err != nil {
-		t.Fatal(err)
-	}
+	recordDegraded(t, st, "fail-open: test")
 	r := cli(t, baseEnv(dir), "doctor")
 	if r.code != 3 || !strings.Contains(r.stdout, "degraded: fail-open: test (1 fail-open run since") {
 		t.Fatalf("doctor of a degraded directory: exit %d, want 3 and the record:\n%s", r.code, r.stdout)
@@ -783,9 +802,7 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RecordDegraded("test"); err != nil {
-		t.Fatal(err)
-	}
+	recordDegraded(t, st, "test")
 	if r := cli(t, baseEnv(dir), "run", "--need", "cpu=1", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -1027,9 +1044,7 @@ func TestDoctorFormatRefusals(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.RecordDegraded("test"); err != nil {
-			t.Fatal(err)
-		}
+		recordDegraded(t, st, "test")
 		for _, d := range []string{"queue"} {
 			if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 				t.Fatal(err)
@@ -1221,9 +1236,7 @@ func TestUnreadableStateEntryExitStatuses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := st.RecordDegraded("fail-open: test"); err != nil {
-			t.Fatal(err)
-		}
+		recordDegraded(t, st, "fail-open: test")
 		p := filepath.Join(dir, c.entry)
 		if err := os.Chmod(p, 0); err != nil {
 			t.Fatal(err)

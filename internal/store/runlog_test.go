@@ -163,6 +163,12 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 	}
 }
 
+// recordDegraded records reason from outside the section through inSideSection, the path
+// ClearDegraded takes, so that its format refusal and its bounded wait are covered as well.
+func recordDegraded(s *Store, reason string) error {
+	return s.inSideSection(func(sec *Section) error { return sec.RecordDegraded(reason) })
+}
+
 func TestDegradedRecordCountsAndClears(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
@@ -170,7 +176,7 @@ func TestDegradedRecordCountsAndClears(t *testing.T) {
 		t.Fatalf("Degraded with no record = %+v, %v", d, err)
 	}
 	before := NowNS()
-	if err := s.RecordDegraded("state: refused filesystem"); err != nil {
+	if err := recordDegraded(s, "state: refused filesystem"); err != nil {
 		t.Fatal(err)
 	}
 	d, err := s.Degraded()
@@ -181,7 +187,7 @@ func TestDegradedRecordCountsAndClears(t *testing.T) {
 		t.Errorf("first record %+v", d)
 	}
 	first := d.FirstNS
-	if err := s.RecordDegraded("state: inode mismatch"); err != nil {
+	if err := recordDegraded(s, "state: inode mismatch"); err != nil {
 		t.Fatal(err)
 	}
 	d, _ = s.Degraded()
@@ -191,7 +197,7 @@ func TestDegradedRecordCountsAndClears(t *testing.T) {
 	if fi, _ := os.Lstat(filepath.Join(dir, DegradedFile)); fi.Mode() != 0o600 {
 		t.Errorf("degraded mode %v", fi.Mode())
 	}
-	if err := s.RecordDegraded(strings.Repeat("\x01", 9000)); err != nil {
+	if err := recordDegraded(s, strings.Repeat("\x01", 9000)); err != nil {
 		t.Fatal(err)
 	}
 	if d, err := s.Degraded(); err != nil || d.Malformed || d.Count != 3 || !strings.HasPrefix(strings.Repeat("\x01", 9000), d.Reason) {
@@ -215,7 +221,7 @@ func TestDegradedRecordCountsAndClears(t *testing.T) {
 	if err != nil || d == nil || !d.Malformed {
 		t.Fatalf("Degraded over a malformed record = %+v, %v; want Malformed", d, err)
 	}
-	if err := s.RecordDegraded("again"); err != nil {
+	if err := recordDegraded(s, "again"); err != nil {
 		t.Fatal(err)
 	}
 	if d, _ = s.Degraded(); d.Count != 1 || d.Reason != "again" || d.Malformed {
@@ -227,7 +233,7 @@ func TestDegradedRecordCountsAndClears(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap := snapshot(t, dir)
-	if err := s.RecordDegraded("format"); err == nil {
+	if err := recordDegraded(s, "format"); err == nil {
 		t.Error("RecordDegraded wrote under an unknown format")
 	}
 	if err := s.ClearDegraded(); err == nil {
@@ -243,7 +249,7 @@ func TestRecordDegradedGivesUpOnABusySection(t *testing.T) {
 	s := open(t, dir)
 	startHelper(t, "section", dir, "", nil)
 	start := time.Now()
-	err := s.RecordDegraded("busy")
+	err := recordDegraded(s, "busy")
 	if err == nil {
 		t.Fatal("RecordDegraded succeeded while another process holds the section")
 	}

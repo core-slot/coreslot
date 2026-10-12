@@ -16,8 +16,8 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
-// sideSectionWait bounds how long a Store-level write that needs the section (the degraded
-// record) waits to enter it: the same 2 s a run waits to remove its hold after its command
+// sideSectionWait bounds how long a Store-level write that needs the section (clearing the
+// degraded record) waits to enter it: the same 2 s a run waits to remove its hold after its command
 // exits (PROTOCOL.md section 12.3).
 const sideSectionWait = 2 * time.Second
 
@@ -103,15 +103,10 @@ func encodeDegraded(r DegradedRecord) ([]byte, error) {
 	}
 }
 
-// RecordDegraded records a fail-open run for a caller that is not inside the section: it
-// enters the section (giving up after 2 s), reads FORMAT, refuses to write when the format is
-// not understood, reconciles if due, and records. It must not be called while this process
-// holds the section: entering again would fail.
-func (s *Store) RecordDegraded(reason string) error {
-	return s.inSideSection(func(sec *Section) error { return sec.RecordDegraded(reason) })
-}
-
-// ClearDegraded removes the degraded record (doctor --clear) as RecordDegraded writes it.
+// ClearDegraded removes the degraded record (doctor --clear) for a caller that is not inside the
+// section: it enters the section (giving up after 2 s), reads FORMAT, refuses to write when the
+// format is not understood, reconciles if due, and removes the record. It must not be called
+// while this process holds the section: entering again would fail.
 func (s *Store) ClearDegraded() error {
 	return s.inSideSection(func(sec *Section) error { return sec.ClearDegraded() })
 }
