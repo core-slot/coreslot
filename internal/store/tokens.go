@@ -98,7 +98,7 @@ func (s *Store) countLocked(resource string) (locked int, err error) {
 		if _, ok := parseIndex(name); !ok {
 			continue
 		}
-		l, err := probe(d + "/" + name)
+		l, err := ProbeLocked(d + "/" + name)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}

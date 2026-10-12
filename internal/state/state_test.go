@@ -30,12 +30,11 @@ func TestKeyLessOrdersByKeyThenPIDThenSeq(t *testing.T) {
 	}
 }
 
-func TestAheadSkipsDeadAndStalled(t *testing.T) {
-	me := k(100, 10, 1)
+// The election's verdict on one ticket; the scan itself is the engine's (its election tests).
+func TestPassedOverSkipsDeadAndStalled(t *testing.T) {
 	dead := Ticket{Key: k(10, 1, 1), Dead: true}
 	stalled := Ticket{Key: k(20, 2, 1)}
 	live := Ticket{Key: k(30, 3, 1)}
-	behind := Ticket{Key: k(200, 4, 1)}
 
 	obs := &Observer{}
 	obs.Observe(stalled.Key, 7, 0)
@@ -43,48 +42,17 @@ func TestAheadSkipsDeadAndStalled(t *testing.T) {
 	now := 10 * time.Second
 	obs.Observe(live.Key, 8, now) // live changed; stalled did not
 
-	// Dead and stalled are skipped: with only those ahead, me is head.
-	if !Ahead([]Ticket{dead, stalled, {Key: me}, behind}, me, obs, now) {
-		t.Error("only dead and stalled tickets ahead: want head")
+	if !PassedOver(dead, obs, now) {
+		t.Error("dead ticket: want passed over")
 	}
-	// The first live, non-stalled ticket ends the scan: not head.
-	if Ahead([]Ticket{dead, stalled, live, {Key: me}, behind}, me, obs, now) {
-		t.Error("a live ticket ahead: want not head")
+	if !PassedOver(stalled, obs, now) {
+		t.Error("10 s without an observed change: want passed over")
 	}
-	// Input order must not matter: the scan is in ticket order.
-	if Ahead([]Ticket{behind, {Key: me}, live, stalled, dead}, me, obs, now) {
-		t.Error("unsorted input with a live ticket ahead: want not head")
+	if PassedOver(live, obs, now) {
+		t.Error("a change observed: want not passed over")
 	}
-	// A live ticket behind me never blocks me.
-	if !Ahead([]Ticket{{Key: me}, behind}, me, obs, now) {
-		t.Error("only tickets behind: want head")
-	}
-	// Alone.
-	if !Ahead(nil, me, obs, now) {
-		t.Error("empty queue: want head")
-	}
-	// Ties by pid then seq: same order key, smaller pid is ahead.
-	tie := Ticket{Key: k(100, 5, 9)}
-	obs.Observe(tie.Key, 1, now)
-	if Ahead([]Ticket{tie, {Key: me}}, me, obs, now) {
-		t.Error("equal order key, smaller pid ahead and live: want not head")
-	}
-}
-
-func TestAheadStalledBecomesLiveAgainWhenObservedToChange(t *testing.T) {
-	me := k(100, 10, 1)
-	other := Ticket{Key: k(10, 1, 1)}
-	obs := &Observer{}
-	obs.Observe(other.Key, 5, 0)
-	if Ahead([]Ticket{other, {Key: me}}, me, obs, 5*time.Second) {
-		t.Error("fresh ticket ahead: want not head")
-	}
-	if !Ahead([]Ticket{other, {Key: me}}, me, obs, 10*time.Second) {
-		t.Error("10 s without change: want head")
-	}
-	obs.Observe(other.Key, 6, 11*time.Second)
-	if Ahead([]Ticket{other, {Key: me}}, me, obs, 12*time.Second) {
-		t.Error("refresh observed: want not head again")
+	if PassedOver(stalled, obs, now-time.Nanosecond) {
+		t.Error("just under 10 s without a change: want not passed over")
 	}
 }
 

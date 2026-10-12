@@ -5,12 +5,13 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
 // Section entry backoff (PROTOCOL.md section 8): LOCK_NB, retried from 10 ms up to 250 ms.
@@ -115,13 +116,16 @@ func (sec *Section) live() error {
 }
 
 // markHolder rewrites admit.lock's informational body in place, through the locked descriptor,
-// as {"pid": <pid>, "entered_ns": <wall clock>} (PROTOCOL.md section 7.7).
+// as wire.EncodeAdmitLock writes it (PROTOCOL.md section 7.7).
 func (sec *Section) markHolder() error {
-	body := fmt.Appendf(nil, `{"pid":%d,"entered_ns":%d}`, os.Getpid(), NowNS())
+	body, err := wire.EncodeAdmitLock(wire.AdmitLock{PID: os.Getpid(), EnteredNS: max(NowNS(), 0)})
+	if err != nil {
+		return err
+	}
 	if err := sec.f.Truncate(0); err != nil {
 		return err
 	}
-	_, err := sec.f.WriteAt(body, 0)
+	_, err = sec.f.WriteAt(body, 0)
 	return err
 }
 

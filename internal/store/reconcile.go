@@ -131,12 +131,14 @@ func (s *Store) Probe(dir, name string) (dead bool, err error) {
 	if name == "" || name != filepath.Base(name) {
 		return false, fmt.Errorf("store: Probe of %q: not an entry name", name)
 	}
-	locked, err := probe(s.path(dir, name))
+	locked, err := ProbeLocked(s.path(dir, name))
 	return !locked, err
 }
 
-// probe reports whether path is locked by another open file description.
-func probe(path string) (locked bool, err error) {
+// ProbeLocked opens path afresh, through the filesystem policy, and reports whether another open
+// file description holds its lock; a lock the probe obtains is released at once by closing
+// (PROTOCOL.md section 6). It creates nothing.
+func ProbeLocked(path string) (locked bool, err error) {
 	f, err := OpenFile(path, os.O_RDONLY)
 	if err != nil {
 		return false, err

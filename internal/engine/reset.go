@@ -4,7 +4,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -57,14 +56,8 @@ func (e *Engine) Reset(ctx context.Context) (removed int, err error) {
 // sectionHolderReason names the client inside the section from admit.lock's informational
 // body, which may be stale or unreadable.
 func (e *Engine) sectionHolderReason() string {
-	body, err := e.readBody("", store.AdmitLock)
-	if err == nil {
-		var b struct {
-			PID int `json:"pid"`
-		}
-		if json.Unmarshal(body, &b) == nil && b.PID > 0 {
-			return fmt.Sprintf("another client is inside the admission section (admit.lock records pid %d)", b.PID)
-		}
+	if a, ok := e.sectionHolder(); ok {
+		return fmt.Sprintf("another client is inside the admission section (admit.lock records pid %d)", a.PID)
 	}
 	return "another client is inside the admission section"
 }
