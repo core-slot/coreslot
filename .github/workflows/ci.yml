@@ -7,6 +7,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # release.yml runs these checks on the tagged commit before it builds.
+  workflow_call:
 
 permissions: {}
 
@@ -24,6 +26,8 @@ env:
   # once one newer than v0.8.1 exists.
   STATICCHECK_VERSION: 452d5bb86b45416c35891262f6a11dbd6a970117 # honnef.co/go/tools
   GOVULNCHECK_VERSION: v1.8.0 # golang.org/x/vuln, released 2026-09-08
+  GO_LICENSES_VERSION: v2.0.1 # github.com/google/go-licenses/v2, released 2025-09-08
+  GORELEASER_VERSION: v2.18.2 # github.com/goreleaser/goreleaser/v2, released 2026-09-17
 
 jobs:
   test:
@@ -134,3 +138,62 @@ jobs:
       - name: Home directory comes from the passwd database, not $HOME (cgo off)
         if: runner.os == 'macOS'
         run: CGO_ENABLED=0 go test ./internal/config/ -run TestHomeIgnoresHOME
+
+  # The release archives build, and the macOS binary from them runs: the same GoReleaser
+  # configuration the release workflow uses, without publishing anything.
+  snapshot:
+    name: release snapshot (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --snapshot --clean
+      - name: The darwin/arm64 snapshot binary runs
+        env:
+          # A separate budget whose path contains a space, like the default macOS one.
+          CORESLOT_STATE_DIR: ${{ runner.temp }}/coreslot state
+        run: |
+          [ "$(uname -m)" = arm64 ] || { echo "::error::runner is $(uname -m), not arm64"; exit 1; }
+          bin=$(ls dist/coreslot_darwin_arm64*/coreslot)
+          "$bin" version
+          "$bin" doctor
+          "$bin" run -- true
+          "$bin" doctor
+
+  # THIRD_PARTY_LICENSES.md's inventory is what go-licenses reports for both release systems.
+  licenses:
+    name: license inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - name: Install go-licenses
+        run: go install "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}"
+      - name: THIRD_PARTY_LICENSES.md matches go-licenses report
+        run: |
+          for os in darwin linux; do
+            GOOS=$os go-licenses report --ignore github.com/Nezhinskiy/coreslot ./... \
+              > "$RUNNER_TEMP/licenses-$os.csv"
+          done
+          sort -u "$RUNNER_TEMP"/licenses-*.csv > "$RUNNER_TEMP/licenses.csv"
+          awk '/^```csv$/ { f = 1; next } /^```$/ { f = 0 } f' THIRD_PARTY_LICENSES.md \
+            | diff -u - "$RUNNER_TEMP/licenses.csv"

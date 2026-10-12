@@ -45,8 +45,10 @@ func (l LiveState) Empty() bool {
 // FORMAT does not stop it; a reset is what repairs a malformed one. It does not read the
 // configuration.
 //
-// Once the format is cleared it records itself in admit.lock's body, as every entry that
-// understands the directory does, so that status names it while it works.
+// A reset that refuses, or that fails before it removes anything, writes nothing: it reads
+// FORMAT, probes liveness and applies the foreign-format gate first, and only when every check
+// has passed, immediately before the first removal, records itself in admit.lock's body, as
+// every entry that understands the directory does, so that status names it while it works.
 func (sec *Section) Reset(implemented []int) (live LiveState, removed int, err error) {
 	if err := sec.live(); err != nil {
 		return live, 0, err
@@ -55,9 +57,6 @@ func (sec *Section) Reset(implemented []int) (live LiveState, removed int, err e
 	if n, present, ferr := s.ReadFormat(); ferr == nil && present && !slices.Contains(implemented, n) {
 		live.ForeignFormat = &n
 		return live, 0, nil
-	}
-	if err := sec.markHolder(); err != nil {
-		return live, 0, err
 	}
 	resources, err := readNamesIfExist(s.path(ResDir))
 	if err != nil {
@@ -114,6 +113,12 @@ func (sec *Section) Reset(implemented []int) (live LiveState, removed int, err e
 	}
 	if !live.Empty() {
 		return live, 0, nil
+	}
+	// Every check has passed and the next step removes: only now does the reset write, and its
+	// first write is this mark. A reset that refuses, or fails before this point, has written
+	// nothing at all, not even admit.lock's informational body.
+	if err := sec.markHolder(); err != nil {
+		return live, 0, err
 	}
 	var failed []error
 	remove := func(path string) {

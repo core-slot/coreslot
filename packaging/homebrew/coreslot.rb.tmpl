@@ -1,0 +1,36 @@
+# Homebrew formula template for the coreslot tap. It builds from the tagged source archive, so
+# the installed binary is never quarantined and needs no signing.
+#
+# Render it for a release tag vX.Y.Z (the maintainer's step; nothing renders it automatically):
+#
+#   version=X.Y.Z
+#   sha=$(curl -fsSL "https://github.com/Nezhinskiy/coreslot/archive/refs/tags/v$version.tar.gz" \
+#     | shasum -a 256 | cut -d' ' -f1)
+#   sed -e "s/@VERSION@/$version/g" -e "s/@SHA256@/$sha/g" \
+#     packaging/homebrew/coreslot.rb.tmpl > Formula/coreslot.rb
+#
+# and commit Formula/coreslot.rb to the tap repository (Nezhinskiy/homebrew-tap).
+class Coreslot < Formula
+  desc "One core budget for every test suite, build and agent on your machine"
+  homepage "https://github.com/Nezhinskiy/coreslot"
+  url "https://github.com/Nezhinskiy/coreslot/archive/refs/tags/v@VERSION@.tar.gz"
+  sha256 "@SHA256@"
+  license "MIT"
+  head "https://github.com/Nezhinskiy/coreslot.git", branch: "main"
+
+  depends_on "go" => :build
+
+  def install
+    # The same build as the release archives: cgo-free; std_go_args adds -trimpath and -s -w.
+    ENV["CGO_ENABLED"] = "0"
+    system "go", "build", *std_go_args(ldflags: "-X main.version=#{version}"), "./cmd/coreslot"
+  end
+
+  test do
+    assert_match "coreslot #{version} (protocol formats: 1)", shell_output("#{bin}/coreslot version")
+    # A separate budget under the test's own directory, never the user's.
+    ENV["CORESLOT_STATE_DIR"] = (testpath/"state").to_s
+    system bin/"coreslot", "run", "--", "true"
+    system bin/"coreslot", "doctor"
+  end
+end

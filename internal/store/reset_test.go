@@ -3,6 +3,7 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -163,6 +164,7 @@ func TestResetRefusesWhatIsAlive(t *testing.T) {
 			dir := newDir(t)
 			_, sec := resetFixture(t, dir)
 			c.alive(t, dir, sec)
+			setOtherLengthHolder(t, dir)
 			before := snapshotTree(t, dir)
 			live, removed, err := sec.Reset([]int{1})
 			if err != nil || live.Empty() || removed != 0 {
@@ -202,18 +204,25 @@ func TestResetReportsWhatItCannotRemove(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stuck, "x"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	setOtherLengthHolder(t, dir)
 	if _, _, err := sec.Reset([]int{1}); err == nil {
 		t.Fatal("Reset left a non-empty directory behind without an error")
+	}
+	if body, err := os.ReadFile(filepath.Join(dir, AdmitLock)); err != nil || recordedPID(body) != os.Getpid() {
+		t.Errorf("admit.lock = %q, %v; a reset that removed things must have marked itself first", body, err)
 	}
 	if !exists(stuck) || exists(filepath.Join(dir, GenFile)) {
 		t.Error("want the stuck entry kept and the other removals done")
 	}
 }
 
-// snapshotTree is every path under dir with its size and mode: equal strings, equal trees.
+// snapshotTree is every path under dir with its mode, size and inode, and the bytes of every
+// regular file (the target of every symlink): equal strings, equal trees. A size alone would
+// pass a rewrite that happens to keep the length, so content is compared, and the inode catches
+// a file replaced by an identical copy.
 func snapshotTree(t *testing.T, dir string) string {
 	t.Helper()
-	var out string
+	var out strings.Builder
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -222,13 +231,53 @@ func snapshotTree(t *testing.T, dir string) string {
 		if err != nil {
 			return err
 		}
-		out += p + " " + fi.Mode().String() + " " + fmt.Sprint(fi.Size()) + "\n"
+		fmt.Fprintf(&out, "%s %s size=%d ino=%d", p, fi.Mode(), fi.Size(), fi.Sys().(*syscall.Stat_t).Ino)
+		switch {
+		case fi.Mode().IsRegular():
+			body, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&out, " body=%q", body)
+		case fi.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&out, " -> %s", target)
+		}
+		out.WriteByte('\n')
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return out
+	return out.String()
+}
+
+// recordedPID is the pid in admit.lock's informational body, 0 when it holds none.
+func recordedPID(body []byte) int {
+	var b struct {
+		PID int `json:"pid"`
+	}
+	if json.Unmarshal(body, &b) != nil {
+		return 0
+	}
+	return b.PID
+}
+
+// setOtherLengthHolder rewrites admit.lock's body, in place, as a record of a pid whose decimal
+// form has a different number of digits than this process's, so that a reset which marks itself
+// as holder changes the file's size as well as its content. On a platform whose pids wrap (macOS
+// at 99999) this is the case a size comparison passes or fails by luck.
+func setOtherLengthHolder(t *testing.T, dir string) {
+	t.Helper()
+	digits := len(fmt.Sprint(os.Getpid())) + 1
+	pid := strings.Repeat("9", digits)
+	body := fmt.Sprintf(`{"pid":%s,"entered_ns":1}`, pid)
+	if err := os.WriteFile(filepath.Join(dir, AdmitLock), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A well-formed FORMAT this client does not implement is a newer client's directory: its
@@ -246,6 +295,7 @@ func TestResetRefusesForeignFormat(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, QueueDir, "v2-ticket.json"), []byte("{}"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			setOtherLengthHolder(t, dir)
 			before := snapshotTree(t, dir)
 			live, removed, err := sec.Reset([]int{1})
 			if err != nil || removed != 0 || live.ForeignFormat == nil || live.Empty() {
@@ -262,18 +312,41 @@ func TestResetRefusesForeignFormat(t *testing.T) {
 	}
 }
 
+// A reset that fails before it removes anything (here a queue/ that is a symlink, which no
+// client may follow) writes nothing either: the error path is a refusal too.
+func TestResetErrorBeforeRemovalWritesNothing(t *testing.T) {
+	dir := newDir(t)
+	_, sec := resetFixture(t, dir)
+	other := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, QueueDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(dir, QueueDir)); err != nil {
+		t.Fatal(err)
+	}
+	setOtherLengthHolder(t, dir)
+	before := snapshotTree(t, dir)
+	if live, removed, err := sec.Reset([]int{1}); err == nil || removed != 0 || !live.Empty() {
+		t.Fatalf("Reset = %+v, %d, %v; want an error and nothing removed", live, removed, err)
+	}
+	if after := snapshotTree(t, dir); after != before {
+		t.Errorf("the failed reset changed the tree:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
 // A reset that goes ahead records itself in admit.lock's body, so status names it meanwhile.
 func TestResetMarksItselfHolder(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, AdmitLock), []byte(`{"pid":1,"entered_ns":1}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	setOtherLengthHolder(t, dir)
 	if _, _, err := sec.Reset([]int{1}); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, AdmitLock))
-	if err != nil || !strings.Contains(string(body), fmt.Sprintf(`"pid":%d`, os.Getpid())) {
+	if err != nil || recordedPID(body) != os.Getpid() {
 		t.Errorf("admit.lock = %q, %v; want this process as holder", body, err)
 	}
 }
