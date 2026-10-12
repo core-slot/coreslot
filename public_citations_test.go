@@ -432,7 +432,7 @@ const minTextFiles = 200
 
 // listFiles lists the repository's files relative to the module root: tracked and
 // untracked-but-not-ignored files when git can list them (git true), otherwise every file under
-// the root outside .git and dist.
+// the root outside .git and the build outputs .gitignore ignores (dist, Python bytecode).
 func listFiles(t *testing.T) (files []string, git bool) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err == nil {
@@ -449,8 +449,10 @@ func listFiles(t *testing.T) (files []string, git bool) {
 	return walkFiles(t, nil), false
 }
 
-// walkFiles lists every regular file under the module root outside .git and dist whose name keep
-// accepts (every file when keep is nil).
+// walkFiles lists every regular file under the module root outside .git, dist and Python bytecode
+// (__pycache__ directories, *.pyc files: a default `python3 -m unittest` writes them, embedding
+// the checkout's path, and .gitignore ignores them) whose name keep accepts (every file when keep
+// is nil).
 func walkFiles(t *testing.T, keep func(string) bool) []string {
 	t.Helper()
 	var files []string
@@ -462,12 +464,12 @@ func walkFiles(t *testing.T, keep func(string) bool) []string {
 			return nil // a worktree's .git file, which points at the repository
 		}
 		if d.IsDir() {
-			if p == ".git" || p == "dist" {
+			if p == ".git" || p == "dist" || d.Name() == "__pycache__" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if d.Type().IsRegular() && (keep == nil || keep(p)) {
+		if d.Type().IsRegular() && !strings.HasSuffix(p, ".pyc") && (keep == nil || keep(p)) {
 			files = append(files, filepath.ToSlash(p))
 		}
 		return nil
