@@ -20,7 +20,6 @@ const (
 	exitRefusal       = 75  // a refusal; --refusal-code changes it
 	exitNotExecutable = 126 // the command is not executable
 	exitNotFound      = 127 // the command is not found
-	exitInterrupted   = 130 // interrupted while waiting (Ctrl-C)
 )
 
 // refusalError is a refusal (PROTOCOL.md section 14): nothing runs and the run exits with Code,

@@ -33,7 +33,6 @@ func (k Key) Less(o Key) bool {
 // Ticket is one queue entry as the caller read it. Dead means its lock probe succeeded.
 type Ticket struct {
 	Key  Key
-	Need map[string]spec.Range
 	Dead bool
 }
 

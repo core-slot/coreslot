@@ -23,11 +23,10 @@ type StepResult interface{ stepResult() }
 // head, otherwise 1 plus the number of tickets ahead of it that the election did not pass over:
 // the election stops at the first live, non-STALLED ticket, so the tickets beyond it are
 // counted unexamined and Position is an upper bound. It is 0 in token-only mode, which has no
-// place in the queue. Holders is empty in a Step's result: Ticket.Holders lists the live holds
-// when a caller needs them (the CLI's waiting line, every 30 s).
+// place in the queue. A Step lists no holds: Ticket.Holders lists the live holds when a caller
+// needs them (the CLI's waiting line, every 30 s).
 type Waiting struct {
 	Position int
-	Holders  []HolderInfo
 }
 
 // Admitted carries the grant of an admitted ticket.
@@ -130,9 +129,6 @@ func (t *Ticket) TokenOnly() bool {
 	defer t.stepMu.Unlock()
 	return t.mode == modeTokenOnly
 }
-
-// Request is the normalized request.
-func (t *Ticket) Request() spec.Request { return t.req }
 
 // Step is one iteration of waiting (PROTOCOL.md section 10): refresh the ticket when due (and
 // bump gen in the section after a refresh gap above 10 s on either clock), check cancel/ for
