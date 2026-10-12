@@ -115,6 +115,7 @@ func (t *Ticket) tokenOnlyAttempt(ctx context.Context, single bool) (*Grant, err
 			return nil, nil
 		}
 	}
+	point("tokens.taken")
 	if err := ts.CheckIdentity(); err != nil {
 		ts.Close()
 		return nil, err

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,9 +14,9 @@ import (
 
 // TestLibraryPurity parses every non-test Go file outside the programs (cmd/ and bench/), except
 // the files of a command (package main, such as the conformance suite's helper), and fails on
-// output, process exit and signal handling: the library never prints (see violations), never
-// chooses an exit code (os.Exit) and never installs signal handlers (signal.Notify,
-// signal.Ignore).
+// what only a program may do (see violations): the library never prints or touches the standard
+// streams, never chooses an exit code, never handles signals, and never changes process-wide
+// state its caller owns (the environment, the working directory, the umask, GOMAXPROCS).
 func TestLibraryPurity(t *testing.T) {
 	fset := token.NewFileSet()
 	checked := 0
@@ -73,37 +74,27 @@ func imported(f *ast.File) map[string]string {
 	return names
 }
 
-// violations finds, in f: fmt.Print*; fmt.Fprint* whose writer is os.Stdout or os.Stderr; any
-// use of log or log/slog (whatever their local names); os.Exit; os.Stdout and os.Stderr
-// Write* calls; signal.Notify and signal.Ignore; and the builtins print and println.
+// processWide maps an import path to the functions of it that change process-wide state or end
+// the process.
+var processWide = map[string][]string{
+	"os":                    {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir"},
+	"syscall":               {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask"},
+	"golang.org/x/sys/unix": {"Exit", "Setenv", "Unsetenv", "Clearenv", "Chdir", "Fchdir", "Umask"},
+	"runtime":               {"GOMAXPROCS"},
+}
+
+// violations finds, in f: any reference to os.Stdin, os.Stdout or os.Stderr, called or used as a
+// value; fmt.Print*; any use of log, log/slog or os/signal (whatever their local names); the
+// functions of processWide; and the builtins print and println.
 func violations(f *ast.File) []violation {
 	names := imported(f)
-	isStd := func(e ast.Expr) bool {
-		sel, ok := e.(*ast.SelectorExpr)
-		if !ok {
-			return false
-		}
-		x, ok := sel.X.(*ast.Ident)
-		return ok && names[x.Name] == "os" && (sel.Sel.Name == "Stdout" || sel.Sel.Name == "Stderr")
-	}
 	var out []violation
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CallExpr:
-			switch fun := n.Fun.(type) {
-			case *ast.Ident:
-				// A builtin is unresolved by the parser; a local func of that name is not.
-				if (fun.Name == "print" || fun.Name == "println") && fun.Obj == nil {
-					out = append(out, violation{fun.Pos(), "builtin " + fun.Name})
-				}
-			case *ast.SelectorExpr:
-				if x, ok := fun.X.(*ast.Ident); ok && names[x.Name] == "fmt" &&
-					strings.HasPrefix(fun.Sel.Name, "Fprint") && len(n.Args) > 0 && isStd(n.Args[0]) {
-					out = append(out, violation{fun.Pos(), "fmt." + fun.Sel.Name + " to os.Stdout/os.Stderr"})
-				}
-				if isStd(fun.X) && strings.HasPrefix(fun.Sel.Name, "Write") {
-					out = append(out, violation{fun.Pos(), "os.Stdout/os.Stderr." + fun.Sel.Name})
-				}
+			// A builtin is unresolved by the parser; a local func of that name is not.
+			if fun, ok := n.Fun.(*ast.Ident); ok && (fun.Name == "print" || fun.Name == "println") && fun.Obj == nil {
+				out = append(out, violation{fun.Pos(), "builtin " + fun.Name})
 			}
 		case *ast.SelectorExpr:
 			x, ok := n.X.(*ast.Ident)
@@ -111,21 +102,17 @@ func violations(f *ast.File) []violation {
 				return true
 			}
 			what := x.Name + "." + n.Sel.Name
-			switch names[x.Name] {
-			case "fmt":
+			switch path := names[x.Name]; {
+			case path == "fmt":
 				if strings.HasPrefix(n.Sel.Name, "Print") {
 					out = append(out, violation{n.Pos(), what})
 				}
-			case "log", "log/slog":
+			case path == "log", path == "log/slog", path == "os/signal":
 				out = append(out, violation{n.Pos(), what})
-			case "os":
-				if n.Sel.Name == "Exit" {
-					out = append(out, violation{n.Pos(), what})
-				}
-			case "os/signal":
-				if n.Sel.Name == "Notify" || n.Sel.Name == "Ignore" {
-					out = append(out, violation{n.Pos(), what})
-				}
+			case path == "os" && (n.Sel.Name == "Stdin" || n.Sel.Name == "Stdout" || n.Sel.Name == "Stderr"):
+				out = append(out, violation{n.Pos(), what})
+			case slices.Contains(processWide[path], n.Sel.Name):
+				out = append(out, violation{n.Pos(), what})
 			}
 		}
 		return true
@@ -150,6 +137,10 @@ import (
 	sl "log/slog"
 	"os"
 	sig "os/signal"
+	"runtime"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func bad(w io.Writer) {
@@ -157,20 +148,37 @@ func bad(w io.Writer) {
 	fmt.Fprintln(os.Stderr, "b")
 	fmt.Fprintf(os.Stdout, "c")
 	os.Stdout.Write(nil)
-	os.Stderr.WriteString("d")
-	lg.Print("e")
-	sl.Info("f")
+	io.WriteString(os.Stderr, "d")
+	e := os.Stderr
+	fmt.Fprintln(e, "e")
+	_ = os.Stdin
+	lg.Print("f")
+	sl.Info("g")
 	os.Exit(1)
+	syscall.Exit(1)
+	unix.Exit(1)
 	sig.Notify(nil)
 	sig.Ignore()
-	print("g")
-	println("h")
+	sig.Reset()
+	sig.Stop(nil)
+	os.Setenv("k", "v")
+	os.Unsetenv("k")
+	os.Clearenv()
+	os.Chdir("/")
+	syscall.Umask(0)
+	unix.Umask(0)
+	runtime.GOMAXPROCS(1)
+	print("h")
+	println("i")
 }
 
 func good(w io.Writer) error {
 	_, err := fmt.Fprintf(w, "ok")
 	_ = fmt.Sprintf("ok")
 	_ = fmt.Errorf("ok")
+	_ = os.Getenv("k")
+	_ = runtime.NumGoroutine()
+	_ = unix.Getpid()
 	return err
 }
 `
@@ -182,19 +190,12 @@ func good(w io.Writer) error {
 	for _, v := range violations(f) {
 		got = append(got, v.what)
 	}
-	want := []string{"fmt.Println", "fmt.Fprintln to os.Stdout/os.Stderr", "fmt.Fprintf to os.Stdout/os.Stderr",
-		"os.Stdout/os.Stderr.Write", "os.Stdout/os.Stderr.WriteString", "lg.Print", "sl.Info", "os.Exit",
-		"sig.Notify", "sig.Ignore", "builtin print", "builtin println"}
-	for _, w := range want {
-		found := false
-		for _, g := range got {
-			found = found || g == w
-		}
-		if !found {
-			t.Errorf("not detected: %s (got %v)", w, got)
-		}
-	}
-	if len(got) != len(want) {
-		t.Errorf("got %d findings %v, want exactly %d (the good function has none)", len(got), got, len(want))
+	want := []string{"fmt.Println", "os.Stderr", "os.Stdout", "os.Stdout", "os.Stderr", "os.Stderr", "os.Stdin",
+		"lg.Print", "sl.Info", "os.Exit", "syscall.Exit", "unix.Exit",
+		"sig.Notify", "sig.Ignore", "sig.Reset", "sig.Stop",
+		"os.Setenv", "os.Unsetenv", "os.Clearenv", "os.Chdir", "syscall.Umask", "unix.Umask",
+		"runtime.GOMAXPROCS", "builtin print", "builtin println"}
+	if !slices.Equal(got, want) {
+		t.Errorf("findings:\n got %v\nwant %v", got, want)
 	}
 }

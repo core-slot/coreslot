@@ -85,6 +85,17 @@ func checkChild(dir string) error {
 		if err := sameFile(3, holds[0]); err != nil {
 			return err
 		}
+		// The hold's descriptor is read-only: the command cannot write into the hold's body.
+		fl, err := unix.FcntlInt(3, unix.F_GETFL, 0)
+		if err != nil {
+			return fmt.Errorf("fd 3: F_GETFL: %v", err)
+		}
+		if fl&unix.O_ACCMODE != unix.O_RDONLY {
+			return fmt.Errorf("fd 3 is open with access mode %#o, want O_RDONLY", fl&unix.O_ACCMODE)
+		}
+		if _, err := unix.Write(3, []byte("x")); err == nil {
+			return fmt.Errorf("fd 3: a write succeeded")
+		}
 	} else if err := unix.Fstat(3, &st); err == nil {
 		// fd 3 was closed at exec; the child's runtime may have reused it since (the race
 		// runtime does on Linux), so require only that it is no hold and no token.

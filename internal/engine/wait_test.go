@@ -334,3 +334,73 @@ func TestHoldersOnlyOnRequest(t *testing.T) {
 		t.Fatalf("Holders: %v, %v after %d probes; want the one live hold, one probe", hs, err, work.holdProbes)
 	}
 }
+
+// The election scans from the nearest ticket ahead (PROTOCOL.md section 10.3): a dead ticket and
+// a STALLED one are passed over, and the first live, non-STALLED ticket beyond them ends the
+// scan, whatever lies behind it; a waiter behind the waiter never blocks it.
+func TestElectionPassesDeadAndStalledUpToTheFirstLive(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	live := startHelper(t, "enqueue", dir, "cpu=1") // farthest ahead, refreshed on command
+	dead := startHelper(t, "enqueue", dir, "cpu=1") // killed: dead at once
+	startHelper(t, "enqueue", dir, "cpu=1")         // nearest ahead, stopped: STALLED after 10 s
+	s := enqueue(t, e, need("cpu=1"))
+	behind := enqueue(t, e, need("cpu=1")) // a live waiter behind s
+	dead.kill(t)
+	if p := position(t, step(t, s)); p != 4 {
+		t.Fatalf("0 s: position %d, want 4 (the fresh nearest ticket ends the scan)", p)
+	}
+	for sec := 1; sec <= 10; sec++ {
+		clk.advance(time.Second)
+		live.command(t, "refresh")
+		step(t, behind)
+		r := step(t, s)
+		if isAdmitted(r) || s.attempts != 0 {
+			t.Fatalf("%d s: admitted past a live ticket ahead (%#v, %d attempts)", sec, r, s.attempts)
+		}
+		want := 4
+		if sec == 10 {
+			want = 2 // the stalled and the dead ticket passed over; the live one ends the scan
+		}
+		if p := position(t, r); p != want {
+			t.Fatalf("%d s: position %d, want %d", sec, p, want)
+		}
+	}
+	live.kill(t)
+	clk.advance(time.Second)
+	if r := step(t, s); !isAdmitted(r) {
+		t.Fatalf("only dead and STALLED tickets ahead: want admitted, got %#v", r)
+	}
+}
+
+// Four stopped tickets at the front, then the live waiters W1 and W2: W2's front window watches
+// all four from the start, so once W1 is admitted past them W2 is admitted in the same second,
+// not a stall later (PROTOCOL.md I5: up to 4 consecutive stopped tickets).
+func TestFrontWindowCoversFourStoppedTickets(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	for i := 0; i < 4; i++ {
+		startHelper(t, "enqueue", dir, "cpu=1") // stopped
+	}
+	w1 := enqueue(t, e, need("cpu=1"))
+	w2 := enqueue(t, e, need("cpu=1"))
+	at := map[string]int{}
+	for sec := 0; sec <= 25 && len(at) < 2; sec++ {
+		for name, w := range map[string]*Ticket{"W1": w1, "W2": w2} {
+			if _, done := at[name]; !done && isAdmitted(step(t, w)) {
+				at[name] = sec
+			}
+		}
+		if _, ok := at["W1"]; ok { // W2 steps after W1 in the same second
+			if _, done := at["W2"]; !done && isAdmitted(step(t, w2)) {
+				at["W2"] = sec
+			}
+		}
+		clk.advance(time.Second)
+	}
+	if at["W1"] != 10 || at["W2"] != at["W1"] {
+		t.Fatalf("admitted at %v (waiter -> second), want W1 at 10 s and W2 in the same second", at)
+	}
+}

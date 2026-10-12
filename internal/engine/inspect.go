@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -17,7 +16,7 @@ import (
 // never below 0. It counts by probing every existing token file outside the section
 // (store.CountLockedProbe), which the protocol permits, so it never waits for the section and
 // works under any format. A
-// resource the configuration does not declare is an error.
+// resource the configuration does not declare is an error matching ErrRefused.
 func (e *Engine) Free(resource string) (int, error) {
 	if err := spec.ValidateName(resource); err != nil {
 		return 0, err
@@ -28,7 +27,7 @@ func (e *Engine) Free(resource string) (int, error) {
 	}
 	size, ok := sizes[resource]
 	if !ok {
-		return 0, fmt.Errorf("engine: resource %q is not declared in the configuration", resource)
+		return 0, fmt.Errorf("%w: resource %q is not declared in the configuration", ErrRefused, resource)
 	}
 	locked, err := e.st.CountLockedProbe(resource)
 	if err != nil {
@@ -63,7 +62,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.Gen, r.ReconciledNS = g.N, g.ReconciledNS
 
 	if sizes, err := e.sizes(); err != nil {
-		r.ConfigError = err.Error()
+		r.ConfigError = reasonOf(err)
 	} else {
 		for _, name := range slices.Sorted(maps.Keys(sizes)) {
 			locked, err := e.st.CountLockedProbe(name)
@@ -125,12 +124,8 @@ func (e *Engine) Snapshot() (Report, error) {
 		if err != nil {
 			return Report{}, err
 		}
-		need := make(map[string][2]int, len(tk.Need))
-		for name, rg := range tk.Need {
-			need[name] = [2]int{rg.Min, rg.Max}
-		}
 		r.Tickets = append(r.Tickets, TicketInfo{Name: en.Name, ID: en.ID.String(), Label: tk.Label,
-			Priority: tk.Priority, PID: en.ID.PID, Need: need, CreatedNS: tk.CreatedNS,
+			Priority: tk.Priority, PID: en.ID.PID, Need: maps.Clone(tk.Need), CreatedNS: tk.CreatedNS,
 			MtimeNS: en.MtimeNS, Dead: dead})
 	}
 
@@ -207,16 +202,19 @@ func (e *Engine) sectionInfo() (SectionInfo, error) {
 		return info, err
 	}
 	info.Held = held
-	body, err := e.readBody("", store.AdmitLock)
-	if err != nil {
-		return info, nil
-	}
-	var b struct {
-		PID       int   `json:"pid"`
-		EnteredNS int64 `json:"entered_ns"`
-	}
-	if json.Unmarshal(body, &b) == nil {
-		info.PID, info.EnteredNS = b.PID, b.EnteredNS
+	if a, ok := e.sectionHolder(); ok {
+		info.PID, info.EnteredNS = a.PID, a.EnteredNS
 	}
 	return info, nil
+}
+
+// sectionHolder reads admit.lock's informational body (PROTOCOL.md section 7.7); ok is false when
+// it is missing, unreadable or malformed. It is for display only.
+func (e *Engine) sectionHolder() (wire.AdmitLock, bool) {
+	body, err := e.readBody("", store.AdmitLock)
+	if err != nil {
+		return wire.AdmitLock{}, false
+	}
+	a, err := wire.DecodeAdmitLock(body)
+	return a, err == nil
 }

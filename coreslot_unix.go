@@ -24,18 +24,11 @@ type Client struct {
 // <StateDir>/config.toml), otherwise the CORESLOT_STATE_DIR override or the default of
 // PROTOCOL.md section 4.1. An unusable directory is a *StateError.
 func Open(o Options) (*Client, error) {
-	dir := o.StateDir
-	var cfgPath string
+	dir, cfgPath := o.StateDir, ""
 	if dir == "" {
-		d, override, err := config.StateDir()
-		if err != nil {
-			return nil, &StateError{Reason: err.Error()}
-		}
-		dir = d
-		if override {
-			cfgPath = filepath.Join(dir, store.ConfigFile)
-		} else if cfgPath, err = config.Path(); err != nil {
-			return nil, &StateError{Reason: err.Error()}
+		var err error
+		if dir, cfgPath, err = config.Locate(); err != nil {
+			return nil, &StateError{Reason: err.Error(), err: err}
 		}
 	} else {
 		if !filepath.IsAbs(dir) {
@@ -52,11 +45,11 @@ func Open(o Options) (*Client, error) {
 	return &Client{e: e}, nil
 }
 
-// wrap turns the store's state errors into *StateError and leaves every other error alone.
+// wrap applies the error contract (engine.StateReason): every error but the classes a caller acts
+// on becomes a *StateError wrapping it.
 func wrap(err error) error {
-	var se *store.StateError
-	if errors.As(err, &se) {
-		return &StateError{Reason: se.Reason}
+	if reason, ok := engine.StateReason(err); ok {
+		return &StateError{Reason: reason, err: err}
 	}
 	return err
 }
@@ -65,8 +58,19 @@ func wrap(err error) error {
 // must then Poll at least every 2 s, or Wait: a Waiter not polled for 10 s becomes STALLED for
 // the other clients and stops blocking them. Under a state directory format this client does
 // not implement, the waiter waits in token-only mode and its grant is TokenOnly.
+//
+// Enqueue waits for the admission section as long as it takes; a process stopped inside the
+// section blocks it until that process is continued or killed. EnqueueContext bounds the wait.
 func (c *Client) Enqueue(req Request) (*Waiter, error) {
-	t, err := c.e.Enqueue(req)
+	return c.EnqueueContext(context.Background(), req)
+}
+
+// EnqueueContext is Enqueue whose wait for the admission section ends with ctx (PROTOCOL.md
+// section 8: retried from 10 ms up to 250 ms). When ctx ends first nothing is published and the
+// error matches ctx.Err(); if another client held the section, its text names the pid
+// admit.lock records for it. Once inside the section the enqueue completes.
+func (c *Client) EnqueueContext(ctx context.Context, req Request) (*Waiter, error) {
+	t, err := c.e.EnqueueContext(ctx, req)
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -75,16 +79,24 @@ func (c *Client) Enqueue(req Request) (*Waiter, error) {
 
 // Adopt admits already-running work without queueing (PROTOCOL.md section 12.4), taking what
 // is free up to each resource's Max. shortfall maps every requested declared resource to
-// max(0, Min - granted): what the work runs without budget.
+// max(0, Min - granted): what the work runs without budget. Adopt waits for the admission
+// section as long as it takes; AdoptContext bounds the wait.
 func (c *Client) Adopt(req Request) (*Grant, map[string]int, error) {
-	g, short, err := c.e.Adopt(req)
+	return c.AdoptContext(context.Background(), req)
+}
+
+// AdoptContext is Adopt whose wait for the admission section ends with ctx, as EnqueueContext's
+// does: nothing is taken or published then.
+func (c *Client) AdoptContext(ctx context.Context, req Request) (*Grant, map[string]int, error) {
+	g, short, err := c.e.AdoptContext(ctx, req)
 	if err != nil {
 		return nil, nil, wrap(err)
 	}
 	return &Grant{g: g}, short, nil
 }
 
-// Free returns resource's size minus its locked tokens now; it never waits for the section.
+// Free returns resource's size minus its locked tokens now; it never waits for the section. A
+// resource the configuration does not declare matches ErrRefused.
 func (c *Client) Free(resource string) (int, error) {
 	n, err := c.e.Free(resource)
 	return n, wrap(err)
@@ -197,7 +209,7 @@ func (w *Waiter) abandon(ctx context.Context) (*Grant, error) {
 // Cancel withdraws the request by closing its ticket descriptor; it never waits for the
 // section. It is idempotent before admission and returns ErrAlreadyAdmitted after it.
 func (w *Waiter) Cancel() error {
-	return w.t.Withdraw()
+	return wrap(w.t.Withdraw())
 }
 
 // Grant is what an admission holds. Its methods are safe for concurrent use.
@@ -232,5 +244,7 @@ func (g *Grant) Env() []string { return g.g.Env() }
 
 // Close closes this process's copies of the descriptors (never unlocking, so a child keeps the
 // grant until it exits) and removes the hold when no child holds it, waiting at most 2 s for
-// the section. It is idempotent.
-func (g *Grant) Close() error { return g.g.Close() }
+// the section. It is idempotent. When the hold or a token is no longer the file at its path (the
+// state directory was removed, or removed and recreated, while the grant was held) it closes the
+// descriptors, writes nothing into the directory as it now exists, and returns a *StateError.
+func (g *Grant) Close() error { return wrap(g.g.Close()) }
