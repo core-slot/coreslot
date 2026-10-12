@@ -1,7 +1,7 @@
 # PROTOCOL.md ambiguities found by the independent Python client
 
-All 41 entries are resolved: 39 by the revised `PROTOCOL.md`, and B1/D6 by the stray rule that
-PROTOCOL §4.2/§10.4 now state. Each entry ends with its status.
+Of the 42 entries, 41 are resolved: 39 by the revised `PROTOCOL.md`, and B1/D6 by the stray rule
+that PROTOCOL §4.2/§10.4 now state. E8 is open. Each entry ends with its status.
 
 Each entry is a place where `PROTOCOL.md` (format 1) is silent, ambiguous or self-contradictory
 for someone implementing from it alone. Each one gives the section, the readings, and the choice
@@ -289,6 +289,26 @@ append". Only token-only is excluded explicitly. *Choice:* they do not log, beca
 *Choice:* the unbudgeted hold is removed the same way.
 
 **Status — resolved: PROTOCOL §12.3. It applies to the unbudgeted hold too. Matches.**
+
+**E8. I1, §7.9, §14: what a holder that finds an I1 mismatch at release writes, and where.**
+I1 says a holder that finds `st_nlink == 0` or a different inode at its token's path "reports
+degraded mode (section 14)". §12.1 step 6 places that check at admission, where the head has
+published nothing and fails open. At release the command has already run on a real grant. When
+the state directory was deleted and recreated under the run, the path now names a new directory,
+and nothing says whether the holder records degraded mode in it. §14 forbids writing into a
+directory whose `FORMAT` the run has not read and understood "during the run", but the run read
+the old directory's, and the new one's `FORMAT` may be missing (entering its section would then
+write one). §7.9 counts "fail-open runs", and this run was not one. The §12.3 hold removal would
+probe and unlink a same-named entry of the new directory.
+*Choice:* the holder checks I1 for its hold and every token before closing them (the hold path,
+then each token path: still linked, and `(st_dev, st_ino)` of the path is the held file's). On a
+mismatch it closes every descriptor as usual and then writes nothing at that path: no hold removal,
+no section entry (so no `admit.lock`, `FORMAT` or `gen`), no `degraded` record and no run-log line.
+The library's `Grant.close()` raises the state error (`inode`); the CLI prints it and exits with the
+command's status. A fail-open run's unbudgeted hold is released the same way. The protocol should
+say whether degraded mode is recorded here, and in which directory.
+
+**Status — open.**
 
 ## F. CLI surface used by the examples but not specified
 
