@@ -707,6 +707,9 @@ func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 
 type fakeStepper struct{ calls int }
 
+// due is a non-head waiter's: its next election is a second away.
+func (s *fakeStepper) due() time.Duration { return time.Second }
+
 func (s *fakeStepper) step(context.Context) (engine.StepResult, error) {
 	s.calls++
 	return engine.Waiting{Position: 2, Holders: []engine.HolderInfo{{Label: "gate", PID: 4711,
@@ -758,8 +761,8 @@ func TestWaitingLineEvery30s(t *testing.T) {
 			t.Errorf("line %d = %q", i, lines[i])
 		}
 	}
-	if s.calls < 95*4-1 {
-		t.Errorf("%d steps in 95 s, want one every 250 ms", s.calls)
+	if s.calls != 96 {
+		t.Errorf("%d steps in 95 s, want 96: one at the start and one each time the next is due (1 s)", s.calls)
 	}
 }
 

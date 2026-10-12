@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -19,9 +20,11 @@ import (
 type StepResult interface{ stepResult() }
 
 // Waiting reports a ticket still waiting. Position is 1 when the last election made it the
-// head, otherwise 1 plus the number of live, non-STALLED tickets ahead of it; it is 0 in
-// token-only mode, which has no place in the queue. Holders are the live holds at the last
-// election (none in token-only mode).
+// head, otherwise 1 plus the number of tickets ahead of it that the election did not pass over:
+// the election stops at the first live, non-STALLED ticket, so the tickets beyond it are
+// counted unexamined and Position is an upper bound. It is 0 in token-only mode, which has no
+// place in the queue. Holders are the holds listed at the last rescan (the last change of gen)
+// that were live then (none in token-only mode).
 type Waiting struct {
 	Position int
 	Holders  []HolderInfo
@@ -55,8 +58,16 @@ const (
 type aheadEntry struct {
 	name string
 	key  state.Key
-	dead bool
 }
+
+// Seams the tests replace to count a waiter's filesystem work: the election's mtime read and
+// lock probe of a ticket ahead, the gen read and the cancel check.
+var (
+	lstat       = os.Lstat
+	probe       = (*store.Store).Probe
+	genRead     = (*store.Store).ReadGen
+	checkCancel = (*Ticket).cancelRequested
+)
 
 // holdEntry is a well-formed hold from the last rescan.
 type holdEntry struct {
@@ -92,7 +103,7 @@ type Ticket struct {
 	obs        state.Observer
 	gen        store.Gen
 	haveGen    bool
-	ahead      []aheadEntry
+	ahead      []aheadEntry    // ascending: the nearest ticket ahead is the last
 	ticketOK   map[string]bool // ticket name -> body well-formed (bodies never change)
 	holds      []holdEntry
 	holdBodies map[string]*HolderInfo // hold name -> parsed body, nil when malformed
@@ -132,12 +143,15 @@ func (t *Ticket) Request() spec.Request { return t.req }
 
 // Step is one iteration of waiting (PROTOCOL.md section 10): refresh the ticket when due (and
 // bump gen in the section after a refresh gap above 10 s on either clock), check cancel/ for
-// this ticket, and, once per second, read gen (rescanning queue/ when it changed), observe the
-// tickets ahead and hold the election; the head tries admission with backoff from 0.25 s up to
-// 2 s, repeating the election before each attempt. It returns Waiting or Admitted, or
-// ErrCancelled once a cancel request was found or the ticket was withdrawn. Section entries
-// wait at most RefreshEvery/4, so a caller that calls Step in a loop keeps refreshing at least
-// every RefreshEvery (see RefreshEvery). ctx bounds the section entries.
+// this ticket, and, once per second, read gen (rescanning queue/ when it changed) and hold the
+// election, which examines the tickets ahead from the nearest up to the first live, non-STALLED
+// one; the head tries admission with backoff from 0.25 s up to 2 s, repeating the election
+// before each attempt. It returns Waiting or Admitted, or ErrCancelled once a cancel request
+// was found or the ticket was withdrawn. Section entries wait at most RefreshEvery/4, so a
+// caller that calls Step in a loop keeps refreshing at least every RefreshEvery (see
+// RefreshEvery). A caller that calls Step again after Due has no more work per Step than the
+// protocol's: a waiter that is not the head Steps once per second. ctx bounds the section
+// entries.
 func (t *Ticket) Step(ctx context.Context) (StepResult, error) {
 	return t.step(ctx, false)
 }
@@ -147,6 +161,24 @@ func (t *Ticket) Step(ctx context.Context) (StepResult, error) {
 // zero Waiting.
 func (t *Ticket) Poll() (StepResult, error) {
 	return t.step(context.Background(), true)
+}
+
+// Due is how long from now until the ticket next has work due: the next election or head
+// attempt (token-only: the next attempt) or the next refresh, whichever is first; 0 when it is
+// due now or the ticket is settled. A caller that Steps after Due checks cancel/ on each of
+// those Steps, so a waiter that is not the head does all of its work once per second: refresh,
+// cancel check, gen read and election.
+func (t *Ticket) Due() time.Duration {
+	t.stepMu.Lock()
+	defer t.stepMu.Unlock()
+	if _, _, done := t.settled(); done {
+		return 0
+	}
+	next := t.nextElection
+	if t.mode == modeQueued {
+		next = min(next, t.lastRefreshMono+RefreshEvery/2)
+	}
+	return max(0, next-t.e.clock.Monotonic())
 }
 
 func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
@@ -183,7 +215,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 			}
 		}
 	}
-	cancelled, err := t.cancelRequested()
+	cancelled, err := checkCancel(t)
 	if err != nil {
 		return t.settledOr(err)
 	}
@@ -298,59 +330,64 @@ func (t *Ticket) resumeBump() error {
 }
 
 // elect is the election (PROTOCOL.md section 10.3): it reads gen, rescans queue/ and holds/
-// when gen changed, observes every ticket ahead (mtime and lock probe) on the monotonic clock,
-// and reports whether no live, non-STALLED ticket is ahead. It updates t.last.
+// when gen changed (probing the listed holds for Waiting.Holders), and examines the tickets
+// ahead from the nearest, observing each one's mtime on the monotonic clock and probing its
+// lock: a gone, dead or STALLED one is passed over and the first live, non-STALLED one ends the
+// examination, so the tickets beyond it are not examined in this pass (state.Observer counts a
+// stall only across consecutive examinations). It reports whether no live, non-STALLED ticket
+// is ahead and updates t.last.
 func (t *Ticket) elect(now time.Duration) (head bool, err error) {
-	g, err := t.e.st.ReadGen()
+	g, err := genRead(t.e.st)
 	if err != nil {
 		return false, err
 	}
+	holders := t.last.Holders
 	if !t.haveGen || g.N != t.gen.N {
 		if err := t.rescan(); err != nil {
 			return false, err
 		}
 		t.gen, t.haveGen = g, true
+		if holders, err = t.liveHolders(); err != nil {
+			return false, err
+		}
 	}
-	tickets := make([]state.Ticket, 0, len(t.ahead))
-	kept := t.ahead[:0]
-	for _, a := range t.ahead {
-		p := filepath.Join(t.e.st.Dir(), store.QueueDir, a.name)
-		fi, err := os.Lstat(p)
+	t.obs.Pass()
+	head = true
+	passed := 0 // tickets examined and passed over, still listed
+	for i := len(t.ahead) - 1; i >= 0; i-- {
+		a := t.ahead[i]
+		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, a.name))
 		if gone(err) {
 			t.obs.Forget(a.key)
+			t.ahead = slices.Delete(t.ahead, i, i+1) // only nearer entries, already examined, shift
 			continue
 		}
 		if err != nil {
 			return false, err
 		}
-		dead, err := t.e.st.Probe(store.QueueDir, a.name)
+		dead, err := probe(t.e.st, store.QueueDir, a.name)
 		if gone(err) || stray(err) {
 			// Gone, or replaced by a stray entry: either way it takes no place in the queue.
 			t.obs.Forget(a.key)
+			t.ahead = slices.Delete(t.ahead, i, i+1)
 			continue
 		}
 		if err != nil {
 			return false, err
 		}
-		t.obs.Observe(a.key, fi.ModTime().UnixNano(), now)
-		a.dead = dead
-		kept = append(kept, a)
-		tickets = append(tickets, state.Ticket{Key: a.key, Dead: dead})
+		if !dead {
+			t.obs.Observe(a.key, fi.ModTime().UnixNano(), now)
+		}
+		if state.PassedOver(state.Ticket{Key: a.key, Dead: dead}, &t.obs, now) {
+			passed++
+			continue
+		}
+		head = false
+		break
 	}
-	t.ahead = kept
-	head = state.Ahead(tickets, t.key, &t.obs, now)
-
 	position := 1
 	if !head {
-		for _, a := range t.ahead {
-			if !a.dead && !t.obs.Stalled(a.key, now) {
-				position++
-			}
-		}
-	}
-	holders, err := t.liveHolders()
-	if err != nil {
-		return false, err
+		position += len(t.ahead) - passed
 	}
 	t.last = Waiting{Position: position, Holders: holders}
 	return head, nil
@@ -399,6 +436,15 @@ func (t *Ticket) rescan() error {
 			t.obs.Forget(a.key)
 		}
 	}
+	slices.SortFunc(ahead, func(a, b aheadEntry) int {
+		switch {
+		case a.key.Less(b.key):
+			return -1
+		case b.key.Less(a.key):
+			return 1
+		}
+		return 0
+	})
 	t.ahead = ahead
 
 	holds, _, err := t.e.st.List(store.HoldsDir)
@@ -452,11 +498,13 @@ func holderInfo(en store.Entry, body []byte) *HolderInfo {
 		Clamped: h.Clamped, Adopted: h.Adopted}
 }
 
-// liveHolders probes the holds of the last rescan and returns the live ones.
+// liveHolders probes the holds of the last rescan and returns the live ones. The election calls
+// it only after a rescan: probing every hold each second is not part of waiting (PROTOCOL.md
+// section 10.3), and Holders is informative.
 func (t *Ticket) liveHolders() ([]HolderInfo, error) {
 	var live []HolderInfo
 	for _, h := range t.holds {
-		dead, err := t.e.st.Probe(store.HoldsDir, h.name)
+		dead, err := probe(t.e.st, store.HoldsDir, h.name)
 		if gone(err) || stray(err) {
 			continue
 		}
