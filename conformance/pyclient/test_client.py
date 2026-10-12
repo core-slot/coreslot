@@ -458,14 +458,17 @@ class LivenessTests(Base):
         clock = FakeClock()
         b = self.client(observer_clock=clock).enqueue("b", 0, {"cpu": 1})
         self.assertEqual(b.step(), ("waiting", 2))
-        clock.t += 9.5
-        self.assertEqual(b.step(), ("waiting", 2))
+
+        def poll_for(seconds: float):  # polls every 0.5 s: an absence would not be watched
+            for _ in range(int(seconds / 0.5)):
+                clock.t += 0.5
+                self.assertEqual(b.step(), ("waiting", 2), f"at {clock.t}")
+
+        poll_for(9.5)
         # An observed refresh makes it WAITING again.
         os.utime(os.path.join(self.S, "queue", stalled_name))
-        clock.t += 5.0
-        self.assertEqual(b.step(), ("waiting", 2))
-        clock.t += 9.5
-        self.assertEqual(b.step(), ("waiting", 2))
+        poll_for(0.5)  # the refresh is observed here
+        poll_for(9.5)
         clock.t += 0.5  # exactly 10 s since the last observed change
         kind, g = b.step()
         self.assertEqual(kind, "admitted")
@@ -601,6 +604,28 @@ class LivenessTests(Base):
         self.assertTrue(t._observe("x", 7, 1036.0))  # 10 s watched
         t._pass += 5
         self.assertFalse(t._observe("x", 8, 1100.0))  # changed during the gap: restarted
+        t.withdraw()
+
+    def test_observer_absence_is_not_watched(self):
+        """§10.2: an interval above 2 s between two of the observer's own passes (it was stopped,
+        suspended or starved) adds no watched time; a ticket that stopped meanwhile is STALLED only
+        after 10 s of watched time once the observer is back."""
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+
+        def elect(s: float, changed: int):
+            t._begin_pass(1000.0 + s)
+            return t._observe("same", 7, 1000.0 + s), t._observe("changed", changed, 1000.0 + s)
+
+        for s in range(5):  # 1 s passes: 4 s watched
+            self.assertEqual(elect(s, 1), (False, False))
+        self.assertEqual(elect(6, 1), (False, False))  # a gap of exactly 2 s is watched: 6 s
+        self.assertEqual(elect(21, 2), (False, False), "the 15 s absence counted as watched")
+        for s in range(22, 25):  # 7..9 s watched
+            self.assertEqual(elect(s, 2), (False, False), f"at {s} s")
+        self.assertEqual(elect(25, 2), (True, False))  # 10 s watched: 6 before, 4 after
+        for s in range(26, 31):
+            self.assertEqual(elect(s, 2)[1], False, f"changed at {s} s")
+        self.assertEqual(elect(31, 2)[1], True)  # 10 s watched after its change
         t.withdraw()
 
     def test_dead_ticket_ahead_is_skipped_at_once(self):
