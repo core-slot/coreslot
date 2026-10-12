@@ -314,3 +314,53 @@ func TestAdoptPlanHasNoMinimum(t *testing.T) {
 		t.Errorf("take = %v, want %v", take, want)
 	}
 }
+
+// With passes, only time between examinations in consecutive passes counts: a ticket left out
+// of some passes is not judged STALLED on the unwatched interval, and the watched time before
+// the gap still counts.
+func TestObserverCountsOnlyConsecutiveExaminations(t *testing.T) {
+	obs := &Observer{}
+	key := k(1, 1, 1)
+	sec := func(s int) time.Duration { return time.Duration(s) * time.Second }
+	for s := 0; s <= 4; s++ { // watched 0..4 s
+		obs.Pass()
+		obs.Observe(key, 42, sec(s))
+	}
+	for s := 5; s < 30; s++ { // passes that stop before key
+		obs.Pass()
+	}
+	obs.Pass()
+	obs.Observe(key, 42, sec(30))
+	if obs.Stalled(key, sec(30)) {
+		t.Fatal("stalled on 4 s of watching and a 26 s gap nobody watched")
+	}
+	for s := 31; s <= 35; s++ {
+		obs.Pass()
+		obs.Observe(key, 42, sec(s))
+		if obs.Stalled(key, sec(s)) {
+			t.Fatalf("stalled at %d s after %d s of watching", s, 4+s-30)
+		}
+	}
+	obs.Pass()
+	obs.Observe(key, 42, sec(36))
+	if !obs.Stalled(key, sec(36)) {
+		t.Error("10 s of watching without a change across the gap: want stalled")
+	}
+
+	// A value that changed during the gap restarts the timer.
+	other := k(2, 2, 2)
+	obs.Pass()
+	obs.Observe(other, 1, sec(100))
+	for s := 101; s < 140; s++ {
+		obs.Pass()
+	}
+	obs.Pass()
+	obs.Observe(other, 2, sec(140))
+	for s := 141; s <= 149; s++ {
+		obs.Pass()
+		obs.Observe(other, 2, sec(s))
+	}
+	if obs.Stalled(other, sec(149)) {
+		t.Error("stalled 9 s after an observed change")
+	}
+}
