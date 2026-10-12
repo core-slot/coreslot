@@ -658,21 +658,24 @@ func pendingSignal() syscall.Signal {
 // errFormatChanged is the outcome of a run-log append that found a FORMAT this client does not
 // understand, in the rotation section or when re-reading it just before the append: the line is
 // not appended (PROTOCOL.md sections 14 and 20).
-var errFormatChanged = errors.New("the state directory's FORMAT is no longer one this client implements")
+var errFormatChanged = errors.New("the state directory's FORMAT is missing or names a format this client does not implement")
 
 // formatStillUnderstood re-reads FORMAT outside the section immediately before a run-log line is
 // appended, since it may have changed while the command ran (PROTOCOL.md section 20). It returns
-// errFormatChanged when FORMAT is absent or names a format this client does not implement, and
-// the state error of a malformed one; present reports whether FORMAT exists.
-func formatStillUnderstood(dir string) (present bool, err error) {
+// errFormatChanged when FORMAT does not exist or names a format this client does not implement,
+// and the error of a FORMAT that cannot be read (not a regular file, unreadable) or is malformed.
+// missing is true only when FORMAT does not exist (ENOENT), which a pass-through does not report.
+func formatStillUnderstood(dir string) (missing bool, err error) {
 	n, present, err := store.ReadFormatAt(dir)
 	switch {
 	case err != nil:
-		return present, err
-	case !present || !slices.Contains(testhooks.Formats(), n):
-		return present, errFormatChanged
+		return false, err
+	case !present:
+		return true, errFormatChanged
+	case !slices.Contains(testhooks.Formats(), n):
+		return false, errFormatChanged
 	}
-	return true, nil
+	return false, nil
 }
 
 // appendRunLog appends rec to the run log outside the section (PROTOCOL.md section 20). When the
