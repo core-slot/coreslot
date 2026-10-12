@@ -200,9 +200,10 @@ func (s *lockedSampler) check(t *testing.T, minSamples int) {
 // also a refresh gap above 10 s on every waiter's wall clock: each bumps gen once (the resume
 // bump's wall-clock arm); a backward step bumps nothing.
 //
-// Mutation: judge STALLED by the observer's wall clock (wall clock minus mtime above 10 s) in
-// elect instead of observing changes. Forward reddens at once (B passes the live, silent A);
-// backward reddens at the bound (A's mtime lies in B's future, so A never stalls).
+// Mutation: judge STALLED by the observer's wall clock (wall clock minus the last mtime read
+// above 10 s) in Observer.Stalled instead of observing changes. Forward reddens at once (B passes
+// the live, silent A); backward reddens at the bound (A's mtime lies in B's future, so A never
+// stalls).
 // Mutation: drop the wall-clock arm of the resume bump (refresh checks the monotonic gap only):
 // the forward step bumps nothing.
 //
@@ -311,20 +312,32 @@ func TestClockStepThenHeadStops(t *testing.T) {
 // waiter then refreshes and the queue resumes in order: once every waiter's refresh is
 // observable, a token that the head cannot use but a later waiter could is not given to the
 // later waiter (no backfill behind a live head), and the head is admitted first when its
-// minimum frees up. Then, with capacity freed while every waiter is stopped, both remaining
-// waiters (each fits) are admitted within the I5 bound of the resumption.
+// minimum frees up.
 //
-// Which waiter is admitted first in the second phase is not asserted: right after a common
-// resumption each waiter has observed no change of the others for 15 s, so until it observes
-// their refreshes they are STALLED for it, and I4 lets it pass over them.
+// Then the order holds from the resumption itself, before any refresh is observable. The head
+// W3 needs two tokens and W4, behind it, needs one; both stop and one token frees up meanwhile.
+// W3 stops first and W4 2 s later, so W4 last saw W3's final mtime before its own stop. W4 is
+// continued first and W3 about 3 s later: W4 has watched W3 unchanged for at most about 7 s (W3's
+// last refresh may precede its stop by up to 2 s, W4 watches 2 s more before its own stop, and
+// 3 s after its continuation), leaving about 3 s below the 10 s of a stall, since the 15 s in
+// which W4 itself made no pass were not watched (PROTOCOL.md section 10.2). So W3 is not STALLED
+// for it and W4 must not take the token. Once the rest frees up, W3 is admitted
+// before W4.
+//
+// Last, with capacity freed while every waiter is stopped, both remaining waiters (each fits)
+// are admitted within the I5 bound of the resumption; which goes first is not asserted, as they
+// are continued together.
 //
 // Mutation: a STALLED verdict sticks (Observer.Observe ignores a changed mtime once the ticket
 // is stalled): after the resumption W2 keeps passing over the live head W1 and takes the token.
+// Mutation: count the observer's own absence as watched (Observer.Pass never adds a gap above
+// MaxPassGap to the unwatched time): W4 finds W3 STALLED as soon as it is continued and takes
+// the free token in the second phase.
 // Mutation: a resumed waiter waits too long before its next election (refresh, on a refresh gap
-// above 10 s, also defers the next election by 25 s): in the second phase the waiter that was
+// above 10 s, also defers the next election by 25 s): in the third phase the waiter that was
 // not caught mid-attempt is admitted only after the bound.
 //
-// -short skips the second phase.
+// -short skips the third phase.
 func TestSuspendAllWaiters(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(cpuConfig(3))
@@ -337,7 +350,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	e.WaitTicket("W1")
 	w2 := e.Run("W2", "--need", "cpu=1")
 	e.WaitTicket("W2")
-	w3, autoW3 := startStoppableHead(e, "W3", "--need", "cpu=1")
+	w3, autoW3 := startStoppableHead(e, "W3", "--need", "cpu=2")
 	e.WaitTicket("W3")
 	w4 := e.Run("W4", "--need", "cpu=1")
 	e.WaitTicket("W4")
@@ -367,7 +380,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	defer func() { autoW3() }()
 
 	// Phase 1: no capacity was freed. Once every refresh can have been observed, one token frees
-	// up: W2-W4 could use it, the head W1 cannot, and nobody may take it.
+	// up: W2 and W4 could use it (W3 needs two), the head W1 cannot, and nobody may take it.
 	for name, mtime := range before {
 		waitRefreshed(e, name, mtime)
 	}
@@ -387,35 +400,74 @@ func TestSuspendAllWaiters(t *testing.T) {
 	}
 	noHold(t, e, "W3", "W3 was admitted with no token free")
 
-	if testing.Short() {
-		t.Log("-short: the second phase (capacity freed during a common suspension) is not run")
-		for _, name := range []string{"W1", "W2", "W3", "W4"} {
-			e.ReleaseChild(name)
-		}
-		for _, p := range []*Proc{w1, w2, w3, w4} {
-			p.ExitCode(0)
-		}
-		return
-	}
-
-	// Phase 2: W3 is the head and W4 waits behind it. Both stop; meanwhile W1 and W2 finish,
-	// freeing every token.
+	// Phase 2: the head W3 needs two tokens, W4 behind it one. W3 stops first, and W4 once its
+	// elections (one per second) can have observed W3's last refresh, so that W3's mtime does not
+	// change between W4's last pass before the suspension and its first pass after it. Meanwhile
+	// W2 finishes, freeing one token. W4 is continued first and W3 resumptionGap later.
+	const resumptionGap = 3 * time.Second
+	stoppedAt, mtimeW3 := stopOutsideSection(e, w3, autoW3)
+	autoW3 = w3.AutoRelease("admit.before-enter")
+	time.Sleep(2 * time.Second)
 	e.SectionLeft()
 	w4.Stop()
 	sectionFreeOf(t, e, w4.PID())
-	stoppedAt, _ = stopOutsideSection(e, w3, autoW3)
-	autoW3 = w3.AutoRelease("admit.before-enter")
-	e.ReleaseChild("W1")
+	if tk, ok := e.Ticket("W3"); !ok || tk.MtimeNS != mtimeW3 {
+		t.Fatalf("the stopped W3's ticket changed or went away while W4 watched it (%v)", ok)
+	}
 	e.ReleaseChild("W2")
-	w1.ExitCode(0)
 	w2.ExitCode(0)
 	time.Sleep(time.Until(stoppedAt.Add(suspendFor)))
 	w4.Cont()
+	continuedW4 := time.Now()
+	for time.Since(continuedW4) < resumptionGap {
+		noHold(t, e, "W4", "W4 took the free token from the stopped head W3 right after its own resumption")
+		time.Sleep(pollStep)
+	}
 	w3.Cont()
+	t.Logf("W3 continued %v after W4", time.Since(continuedW4))
+	waitRefreshed(e, "W3", mtimeW3)
+	time.Sleep(observeWait)
+	noHold(t, e, "W4", "W4 was admitted past the live head W3, which needs two tokens with one free")
+	noHold(t, e, "W3", "W3 was admitted with one token free")
+	e.ReleaseChild("W1")
+	w1.ExitCode(0)
+	h3 := e.WaitHold("W3", startWait)
+	h4 := e.WaitHold("W4", startWait)
+	if !admittedAt(h3).Before(admittedAt(h4)) {
+		t.Errorf("W4 (admitted %v) went before W3 (admitted %v)", admittedAt(h4), admittedAt(h3))
+	}
+
+	if testing.Short() {
+		t.Log("-short: the third phase (capacity freed during a common suspension) is not run")
+		e.ReleaseChild("W3")
+		e.ReleaseChild("W4")
+		w3.ExitCode(0)
+		w4.ExitCode(0)
+		return
+	}
+
+	// Phase 3: W3 and W4 hold every token. W5 is the head and W6 waits behind it; both stop and
+	// meanwhile W3 and W4 finish, freeing every token.
+	w5, autoW5 := startStoppableHead(e, "W5", "--need", "cpu=1")
+	e.WaitTicket("W5")
+	w6 := e.Run("W6", "--need", "cpu=1")
+	e.WaitTicket("W6")
+	e.SectionLeft()
+	w6.Stop()
+	sectionFreeOf(t, e, w6.PID())
+	stoppedAt, _ = stopOutsideSection(e, w5, autoW5)
+	defer w5.AutoRelease("admit.before-enter")()
+	e.ReleaseChild("W3")
+	e.ReleaseChild("W4")
+	w3.ExitCode(0)
+	w4.ExitCode(0)
+	time.Sleep(time.Until(stoppedAt.Add(suspendFor)))
+	w6.Cont()
+	w5.Cont()
 	resumedAt := time.Now()
 	var first coreslot.HolderInfo
 	e.Eventually(stalledHeadBound+startWait, "a waiter is admitted after the resumption", func() bool {
-		for _, name := range []string{"W3", "W4"} {
+		for _, name := range []string{"W5", "W6"} {
 			if h, ok := e.Hold(name); ok {
 				first = h
 				return true
@@ -430,18 +482,18 @@ func TestSuspendAllWaiters(t *testing.T) {
 	}
 	// Both fit: whichever goes first, the other is then the head with its minimum free (I5), so
 	// both are admitted within the bound of the resumption.
-	h3 := e.WaitHold("W3", stalledHeadBound+startWait)
-	h4 := e.WaitHold("W4", stalledHeadBound+startWait)
-	for _, h := range []coreslot.HolderInfo{h3, h4} {
+	h5 := e.WaitHold("W5", stalledHeadBound+startWait)
+	h6 := e.WaitHold("W6", stalledHeadBound+startWait)
+	for _, h := range []coreslot.HolderInfo{h5, h6} {
 		if d := admittedAt(h).Sub(resumedAt); d > stalledHeadBound {
 			t.Errorf("%s was admitted %v after the resumption, bound %v (load: %s)", h.Label, d, stalledHeadBound, uptime())
 		}
 	}
-	t.Logf("W3 admitted %v after the resumption, W4 %v", admittedAt(h3).Sub(resumedAt), admittedAt(h4).Sub(resumedAt))
-	e.ReleaseChild("W3")
-	e.ReleaseChild("W4")
-	w3.ExitCode(0)
-	w4.ExitCode(0)
+	t.Logf("W5 admitted %v after the resumption, W6 %v", admittedAt(h5).Sub(resumedAt), admittedAt(h6).Sub(resumedAt))
+	e.ReleaseChild("W5")
+	e.ReleaseChild("W6")
+	w5.ExitCode(0)
+	w6.ExitCode(0)
 }
 
 // ---------------------------------------------------------------- shrink
@@ -541,8 +593,8 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 
 // ---------------------------------------------------------------- unknown format
 
-// layout reads every file of the state directory except the token files: relative path ->
-// content. The run log is read apart.
+// layout reads every file of the state directory except the token files, the run log
+// included: relative path -> content.
 func layout(t *testing.T, e Env) map[string]string {
 	t.Helper()
 	files := map[string]string{}
@@ -555,9 +607,6 @@ func layout(t *testing.T, e Env) map[string]string {
 			if rel == store.ResDir {
 				return filepath.SkipDir
 			}
-			return nil
-		}
-		if rel == filepath.Join(store.LogDir, store.RunLog) {
 			return nil
 		}
 		data, err := os.ReadFile(path)
@@ -579,10 +628,14 @@ func layout(t *testing.T, e Env) map[string]string {
 // that arrives afterwards never queues. Locked tokens never exceed the size, and the token-only
 // clients write nothing: no ticket, hold, gen bump, admit.lock body, degraded record or run-log
 // line. The format-1 holder's release, whose section finds FORMAT 2, leaves its hold in place
-// rather than removing it under a format it does not implement.
+// rather than removing it under a format it does not implement, and the holder writes no
+// run-log line either: it re-reads FORMAT just before the append (PROTOCOL.md section 20). The
+// run log never comes to exist.
 //
 // Mutation: a token-only run appends its run-log line (runChild given the store's log for a
 // token-only grant): lines for W1, W2 and N appear.
+// Mutation: skip the re-read of FORMAT before the append (appendRunLog appends after the
+// rotation check alone): H's line appears.
 // Mutation: token-only admission is not bounded by the size (tokenOnlyAttempt skips the free
 // check and takes at indices up to the size plus 4): W1 takes indices 3 and 4 while H and W2
 // hold the other three, and the sampler sees 5 locked under a size of 3.
@@ -681,11 +734,9 @@ func TestUnknownFormatTokenOnly(t *testing.T) {
 		t.Errorf("gen went from %d to %d under FORMAT 2", gen, got)
 	}
 	if _, err := os.Stat(filepath.Join(e.Dir, store.LogDir, store.RunLog)); err == nil {
-		for _, l := range runLog(t, e) {
-			if l["label"] != "H" {
-				t.Errorf("a run-log line was written under FORMAT 2: %v", l)
-			}
-		}
+		t.Errorf("a run-log line was written under FORMAT 2: %v", runLog(t, e))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Error(err)
 	}
 }
 

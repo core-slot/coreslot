@@ -441,9 +441,11 @@ func TestStoppedHeadIsPassedOver(t *testing.T) {
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d behind a fresh ticket, want 2", p)
 	}
-	clk.advance(9 * time.Second)
-	if p := position(t, step(t, s)); p != 2 || s.attempts != 0 {
-		t.Fatalf("9 s without a change: position %d, %d attempts; want 2 and none", p, s.attempts)
+	for sec := 1; sec <= 9; sec++ { // one election per second: an absence would not be watched
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 || s.attempts != 0 {
+			t.Fatalf("%d s without a change: position %d, %d attempts; want 2 and none", sec, p, s.attempts)
+		}
 	}
 	clk.advance(time.Second) // the next election, once per second
 	if r := step(t, s); !isAdmitted(r) {
@@ -451,6 +453,35 @@ func TestStoppedHeadIsPassedOver(t *testing.T) {
 	}
 	if dead, err := e.st.Probe(store.QueueDir, h.detail); err != nil || dead {
 		t.Fatalf("the stopped head's ticket: dead %v, %v; want live (only passed over)", dead, err)
+	}
+}
+
+// A waiter that was itself away for 15 s (stopped, suspended) does not count that time as
+// watched (PROTOCOL.md section 10.2): the stopped head is passed over only after 10 s of
+// elections once the waiter is back, not at its first election.
+func TestWaiterAbsenceIsNotWatched(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	startHelper(t, "enqueue", dir, "cpu=1") // enqueues and never refreshes
+	s := enqueue(t, e, need("cpu=1"))
+
+	if p := position(t, step(t, s)); p != 2 {
+		t.Fatalf("position %d behind a fresh ticket, want 2", p)
+	}
+	clk.advance(15 * time.Second) // the waiter itself made no election for 15 s
+	if r := step(t, s); isAdmitted(r) || position(t, r) != 2 || s.attempts != 0 {
+		t.Fatalf("first election after the waiter's 15 s absence: %#v, %d attempts; want position 2 (the absence is not watched)", r, s.attempts)
+	}
+	for sec := 1; sec <= 9; sec++ {
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 || s.attempts != 0 {
+			t.Fatalf("%d s after the return: position %d, %d attempts; want 2 and none", sec, p, s.attempts)
+		}
+	}
+	clk.advance(time.Second) // 10 s of elections after the return
+	if r := step(t, s); !isAdmitted(r) {
+		t.Fatalf("10 s of watching after the return: want admitted, got %#v", r)
 	}
 }
 
@@ -465,7 +496,13 @@ func TestStalledTicketResumesItsPlace(t *testing.T) {
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d, want 2", p)
 	}
-	clk.advance(10 * time.Second)
+	for sec := 1; sec <= 9; sec++ { // one election per second: an absence would not be watched
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 {
+			t.Fatalf("%d s without a change: position %d, want 2", sec, p)
+		}
+	}
+	clk.advance(time.Second)
 	if p := position(t, step(t, s)); p != 1 || s.attempts != 1 {
 		t.Fatalf("stalled ticket ahead: position %d, %d attempts; want head with one attempt", p, s.attempts)
 	}
@@ -474,9 +511,11 @@ func TestStalledTicketResumesItsPlace(t *testing.T) {
 	if p := position(t, step(t, s)); p != 2 || s.attempts != 1 {
 		t.Fatalf("after the refresh: position %d, %d attempts; want 2 and no new attempt", p, s.attempts)
 	}
-	clk.advance(9 * time.Second)
-	if p := position(t, step(t, s)); p != 2 {
-		t.Fatalf("9 s after the observed refresh: position %d, want 2", p)
+	for sec := 1; sec <= 9; sec++ {
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 {
+			t.Fatalf("%d s after the observed refresh: position %d, want 2", sec, p)
+		}
 	}
 	clk.advance(time.Second)
 	if p := position(t, step(t, s)); p != 1 {

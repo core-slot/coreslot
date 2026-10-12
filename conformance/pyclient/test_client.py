@@ -458,19 +458,56 @@ class LivenessTests(Base):
         clock = FakeClock()
         b = self.client(observer_clock=clock).enqueue("b", 0, {"cpu": 1})
         self.assertEqual(b.step(), ("waiting", 2))
-        clock.t += 9.5
-        self.assertEqual(b.step(), ("waiting", 2))
+
+        def poll_for(seconds: float):  # polls every 0.5 s: an absence would not be watched
+            for _ in range(int(seconds / 0.5)):
+                clock.t += 0.5
+                self.assertEqual(b.step(), ("waiting", 2), f"at {clock.t}")
+
+        poll_for(9.5)
         # An observed refresh makes it WAITING again.
         os.utime(os.path.join(self.S, "queue", stalled_name))
-        clock.t += 5.0
-        self.assertEqual(b.step(), ("waiting", 2))
-        clock.t += 9.5
-        self.assertEqual(b.step(), ("waiting", 2))
+        poll_for(0.5)  # the refresh is observed here
+        poll_for(9.5)
         clock.t += 0.5  # exactly 10 s since the last observed change
         kind, g = b.step()
         self.assertEqual(kind, "admitted")
         self.assertEqual(g.tokens, {"cpu": [0]})
         self.assertIn(stalled_name, self.ls("queue"))  # passed over, not removed
+        g.close()
+
+    def test_observer_pass_gap_boundary(self):
+        """§10.2, in literals: gaps of 2.9 s and of exactly 3 s between elections are watched, a gap
+        of 3 s + 1 ms is not."""
+        for gap, watched in ((2.9, True), (3.0, True), (3.001, False)):
+            t = self.client().enqueue("t", 0, {"cpu": 1})
+            now = 1000.0
+            t._begin_pass(now)
+            t._observe("x", 7, now)
+            stalled = False
+            for _ in range(4):  # 11.6 s, 12 s or 12.004 s in all
+                now += gap
+                t._begin_pass(now)
+                stalled = t._observe("x", 7, now)
+            self.assertEqual(stalled, watched, f"four gaps of {gap} s")
+            t.withdraw()
+
+    def test_waiter_absence_is_not_watched_through_step(self):
+        """§10.2 through the poll: a waiter that was itself away for 15 s does not count that time,
+        so a stopped ticket ahead is passed over only after 10 s of elections once it is back."""
+        self.config("[resources]\ncpu = 2\n")
+        self.participant({"cpu": [1, 1]}, "stalled", "stall")
+        clock = FakeClock()
+        b = self.client(observer_clock=clock).enqueue("b", 0, {"cpu": 1})
+        self.assertEqual(b.step(), ("waiting", 2))
+        clock.t += 15.0  # b itself was away: no election for 15 s
+        self.assertEqual(b.step(), ("waiting", 2), "the waiter's own 15 s absence was counted")
+        for s in range(1, 10):
+            clock.t += 1.0
+            self.assertEqual(b.step(), ("waiting", 2), f"{s} s after the return")
+        clock.t += 1.0  # 10 s of elections after the return
+        kind, g = b.step()
+        self.assertEqual(kind, "admitted")
         g.close()
 
     def test_killed_holders_tokens_are_freed(self):
@@ -601,6 +638,44 @@ class LivenessTests(Base):
         self.assertTrue(t._observe("x", 7, 1036.0))  # 10 s watched
         t._pass += 5
         self.assertFalse(t._observe("x", 8, 1100.0))  # changed during the gap: restarted
+        t.withdraw()
+
+    def test_observer_absence_is_not_watched(self):
+        """§10.2: an interval above 3 s between two of the observer's own passes (it was stopped,
+        suspended or starved) adds no watched time; a ticket that stopped meanwhile is STALLED only
+        after 10 s of watched time once the observer is back."""
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+
+        def elect(s: float, changed: int):
+            t._begin_pass(1000.0 + s)
+            return t._observe("same", 7, 1000.0 + s), t._observe("changed", changed, 1000.0 + s)
+
+        for s in range(5):  # 1 s passes: 4 s watched
+            self.assertEqual(elect(s, 1), (False, False))
+        self.assertEqual(elect(6, 1), (False, False))  # a gap of exactly 2 s is watched: 6 s
+        self.assertEqual(elect(21, 2), (False, False), "the 15 s absence counted as watched")
+        for s in range(22, 25):  # 7..9 s watched
+            self.assertEqual(elect(s, 2), (False, False), f"at {s} s")
+        self.assertEqual(elect(25, 2), (True, False))  # 10 s watched: 6 before, 4 after
+        for s in range(26, 31):
+            self.assertEqual(elect(s, 2)[1], False, f"changed at {s} s")
+        self.assertEqual(elect(31, 2)[1], True)  # 10 s watched after its change
+        t.withdraw()
+
+    def test_observer_watches_at_the_poll_contract(self):
+        """§10.2: elections 2.0-2.4 s apart (the 2 s poll contract plus jitter) are all watched, so a
+        stopped ticket is STALLED once 10 s of them have passed, and not before."""
+        t = self.client().enqueue("t", 0, {"cpu": 1})
+        now = 1000.0
+        t._begin_pass(now)
+        self.assertFalse(t._observe("x", 7, now))
+        elapsed = 0.0
+        for gap in (2.2, 2.4, 2.0, 2.3, 2.1, 2.2):
+            now += gap
+            elapsed += gap
+            t._begin_pass(now)
+            self.assertEqual(t._observe("x", 7, now), elapsed >= 10.0, f"after {elapsed:.1f} s")
+        self.assertGreaterEqual(elapsed, 10.0)
         t.withdraw()
 
     def test_dead_ticket_ahead_is_skipped_at_once(self):
@@ -1031,6 +1106,52 @@ class AlignmentTests(Base):
         for raw in ("4-516", "4-259,300-556", "0-99999999999999"):
             with self.assertRaises(ValueError, msg=raw):
                 cc.parse_token_fds(raw)
+
+    def test_token_fds_naming_a_descriptor_twice_do_not_validate(self):
+        """§17/§18 rule 2: one descriptor listed twice, directly, through overlapping ranges, or as
+        two descriptors of one token file (a launcher duplicated it), does not validate."""
+        self.config("[resources]\ncpu = 2\n")
+        fd = self.lock(os.path.join(self.S, "res", "cpu", "0"))
+        for text in ("4,4", "4-6,5", "4-6,6-8"):
+            with self.assertRaises(ValueError, msg=text):
+                cc.parse_token_fds(text)
+        c = self.client()
+        self.assertEqual(cc.validate_passthrough(c, str(fd)), {"cpu": 1})  # the control validates
+        dup = os.dup(fd)
+        self.fds.append(dup)
+        for text in (f"{fd},{fd}", f"{fd}-{fd},{fd}", f"{min(fd, dup)}-{max(fd, dup)},{dup}",
+                     f"{fd},{dup}"):
+            with self.assertRaises(cc.InvalidContext, msg=text):
+                cc.validate_passthrough(c, text)
+
+    def test_stripping_the_context_leaves_streams_and_non_regular_descriptors(self):
+        """§17: only regular files at fd 3 and above named by the inherited variables stop being
+        passed on; a named standard stream or pipe (its number reused) stays inheritable."""
+        probe = textwrap.dedent("""
+            import json, os, sys
+            sys.path.insert(0, sys.argv[1])
+            import coreslot_client as cc
+            reg = os.open(sys.argv[2], os.O_RDONLY | os.O_CREAT, 0o600)
+            r, w = os.pipe()
+            other = os.open(sys.argv[2], os.O_RDONLY)
+            for fd in (0, 1, 2, reg, r, w, other):
+                os.set_inheritable(fd, True)
+            cc._close_inherited_context({"CORESLOT_TOKEN_FDS": f"0-2,{reg},{r}",
+                                         "CORESLOT_HELD_FD": str(w)})
+            print(json.dumps({name: os.get_inheritable(fd) for name, fd in
+                              (("0", 0), ("1", 1), ("2", 2), ("reg", reg), ("pipe-r", r),
+                               ("pipe-w", w), ("unnamed", other))}))
+        """)
+        # Standard input and error are regular files, so only the stream rule keeps them open.
+        stdin_path, stderr_path = os.path.join(self.root, "stdin"), os.path.join(self.root, "stderr")
+        open(stdin_path, "w").close()
+        with open(stdin_path, "rb") as fin, open(stderr_path, "wb") as ferr:
+            out = subprocess.run([sys.executable, "-c", probe, HERE, os.path.join(self.root, "regular")],
+                                 stdin=fin, stdout=subprocess.PIPE, stderr=ferr, text=True, timeout=10)
+        with open(stderr_path) as fh:
+            self.assertEqual(out.returncode, 0, fh.read())
+        self.assertEqual(json.loads(out.stdout), {"0": True, "1": True, "2": True, "reg": False,
+                                                  "pipe-r": True, "pipe-w": True, "unnamed": True})
 
     def _log(self) -> list[dict]:
         try:

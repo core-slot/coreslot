@@ -139,10 +139,23 @@ func (sec *Section) Reset(implemented []int) (live LiveState, removed int, err e
 		remove(s.path(name))
 	}
 	if len(failed) > 0 {
-		return live, removed, fmt.Errorf("store: reset left %d entries behind: %w", len(failed), errors.Join(failed...))
+		return live, removed, &ResetIncompleteError{Left: len(failed), Err: errors.Join(failed...)}
 	}
 	return live, removed, nil
 }
+
+// ResetIncompleteError is a reset that removed what it could and left Left entries behind: the
+// removal is best effort, so every other entry was still removed.
+type ResetIncompleteError struct {
+	Left int
+	Err  error // the removal errors, joined
+}
+
+func (e *ResetIncompleteError) Error() string {
+	return fmt.Sprintf("store: reset left %d entries behind: %v", e.Left, e.Err)
+}
+
+func (e *ResetIncompleteError) Unwrap() error { return e.Err }
 
 // readNamesIfExist lists a directory like readNames; a missing one is empty.
 func readNamesIfExist(dir string) ([]string, error) {
