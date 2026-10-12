@@ -341,7 +341,7 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 		}
 		t.gen, t.haveGen = g, true
 	}
-	t.obs.Pass()
+	t.obs.Pass(now)
 	head = true
 	passed := 0 // tickets examined and passed over, still listed
 	stop := 0   // the scan examined t.ahead[stop:]
