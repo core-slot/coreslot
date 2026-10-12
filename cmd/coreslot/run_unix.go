@@ -682,9 +682,12 @@ func formatStillUnderstood(dir string) (missing bool, err error) {
 // log is at or above 10 MiB it first rotates it inside the section, if it can enter within 2 s,
 // reconciling first when reconciliation is due (section 10.4). Then it re-reads FORMAT and
 // appends only when it is still one this client implements.
-// Only a FORMAT that is not understood, or a malformed one, in the rotation section or at that
-// re-read, stops the append, which would otherwise write into a directory of an unknown format
-// (section 14). Any other rotation failure costs the rotation, not the line: notice reports it
+// Only a FORMAT that is not understood, or a malformed one, in the rotation section, or at that
+// re-read a FORMAT that is missing, unreadable (not a regular file, no permission), malformed or
+// of another format, stops the append, which would otherwise write into a directory whose format
+// it does not understand (section 14). A run's release section, which comes first, writes a
+// FORMAT the command removed, so at the re-read FORMAT is missing only if it was removed after
+// that. Any other rotation failure costs the rotation, not the line: notice reports it
 // and the line is appended. A busy section only skips the rotation. A pass-through never rotates
 // (appendNestedLog).
 func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format string, args ...any)) error {

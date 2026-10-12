@@ -912,6 +912,57 @@ func TestRunLogSkippedWhenFormatChangesDuringRun(t *testing.T) {
 	}
 }
 
+// At the re-read just before the append, a FORMAT that is missing or cannot be read stops the
+// append too (PROTOCOL.md section 20): appendRunLog returns the error and writes nothing.
+func TestRunLogSkippedWhenFormatMissingOrUnreadable(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, dir string){
+		"missing": func(t *testing.T, dir string) {},
+		"a directory": func(t *testing.T, dir string) {
+			if err := os.Mkdir(filepath.Join(dir, "FORMAT"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			st, err := store.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setup(t, dir)
+			notice := func(f string, args ...any) { t.Errorf("notice: "+f, args...) }
+			err = appendRunLog(st, store.RunRecord{Label: "x"}, notice)
+			if err == nil || (name == "missing") != errors.Is(err, errFormatChanged) {
+				t.Errorf("appendRunLog: %v; want errFormatChanged for a missing FORMAT, the read error otherwise", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "log", "runs.jsonl")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the run log exists (%v)", err)
+			}
+		})
+	}
+}
+
+// A command that removes FORMAT does not cost its run the line: the run's release section,
+// which comes before the append, writes the missing FORMAT again (format 1), and the re-read then
+// understands it.
+func TestRunLogAfterTheCommandRemovesFormat(t *testing.T) {
+	dir := stateDir(t, "")
+	env := append(baseEnv(dir), "S="+dir)
+	r := cli(t, env, "run", "--label", "removed", "--", "sh", "-c", `rm "$S/FORMAT"`)
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 1\n" {
+		t.Errorf("FORMAT after the run: %q, %v; want format 1 written again", b, err)
+	}
+	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["label"] != "removed" {
+		t.Errorf("run log %v: want the run's line", lines)
+	}
+	if strings.Contains(r.stderr, "the run log was not written") {
+		t.Errorf("stderr %q: want no notice", r.stderr)
+	}
+}
+
 // Any other rotation failure costs the rotation, never the line: one notice, then the append.
 func TestRunLogAppendedWhenRotationFails(t *testing.T) {
 	st, dir := bigRunLog(t, "coreslot-protocol 1\n")

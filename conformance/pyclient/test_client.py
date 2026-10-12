@@ -476,6 +476,40 @@ class LivenessTests(Base):
         self.assertIn(stalled_name, self.ls("queue"))  # passed over, not removed
         g.close()
 
+    def test_observer_pass_gap_boundary(self):
+        """§10.2, in literals: gaps of 2.9 s and of exactly 3 s between elections are watched, a gap
+        of 3 s + 1 ms is not."""
+        for gap, watched in ((2.9, True), (3.0, True), (3.001, False)):
+            t = self.client().enqueue("t", 0, {"cpu": 1})
+            now = 1000.0
+            t._begin_pass(now)
+            t._observe("x", 7, now)
+            stalled = False
+            for _ in range(4):  # 11.6 s, 12 s or 12.004 s in all
+                now += gap
+                t._begin_pass(now)
+                stalled = t._observe("x", 7, now)
+            self.assertEqual(stalled, watched, f"four gaps of {gap} s")
+            t.withdraw()
+
+    def test_waiter_absence_is_not_watched_through_step(self):
+        """§10.2 through the poll: a waiter that was itself away for 15 s does not count that time,
+        so a stopped ticket ahead is passed over only after 10 s of elections once it is back."""
+        self.config("[resources]\ncpu = 2\n")
+        self.participant({"cpu": [1, 1]}, "stalled", "stall")
+        clock = FakeClock()
+        b = self.client(observer_clock=clock).enqueue("b", 0, {"cpu": 1})
+        self.assertEqual(b.step(), ("waiting", 2))
+        clock.t += 15.0  # b itself was away: no election for 15 s
+        self.assertEqual(b.step(), ("waiting", 2), "the waiter's own 15 s absence was counted")
+        for s in range(1, 10):
+            clock.t += 1.0
+            self.assertEqual(b.step(), ("waiting", 2), f"{s} s after the return")
+        clock.t += 1.0  # 10 s of elections after the return
+        kind, g = b.step()
+        self.assertEqual(kind, "admitted")
+        g.close()
+
     def test_killed_holders_tokens_are_freed(self):
         self.config("[resources]\ncpu = 2\n")
         holder, _ = self.participant({"cpu": [2, 2]}, "holder", "hold")
@@ -607,7 +641,7 @@ class LivenessTests(Base):
         t.withdraw()
 
     def test_observer_absence_is_not_watched(self):
-        """§10.2: an interval above 2 s between two of the observer's own passes (it was stopped,
+        """§10.2: an interval above 3 s between two of the observer's own passes (it was stopped,
         suspended or starved) adds no watched time; a ticket that stopped meanwhile is STALLED only
         after 10 s of watched time once the observer is back."""
         t = self.client().enqueue("t", 0, {"cpu": 1})
