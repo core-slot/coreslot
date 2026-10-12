@@ -61,7 +61,7 @@ contract and may change in any release; parse `status --json` instead.
 | configuration | `<home>/.config/coreslot/config.toml`: `[resources]`, `[priorities]`, `[platform] windows_warning` |
 | environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs) |
 | descriptors | the hold at fd 3, tokens from fd 4 in ascending resource name and index |
-| exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1 (README, "Exit status") |
+| exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
 
 ### `status --json`, schema 1
 
@@ -103,9 +103,10 @@ From `v1.0.0`: deprecated surfaces keep working until the next major version.
 
 ## Platforms
 
-macOS and Linux on amd64 and arm64, built and tested with the two Go releases the Go project
-supports (`go.mod` names the older one; 1.26 and 1.27 as of 2026-10). Windows builds, but runs
-commands without a budget.
+macOS and Linux on amd64 and arm64, built with the two Go releases the Go project supports
+(`go.mod` names the older one; 1.26 and 1.27 as of 2026-10). CI runs the tests on Linux amd64 and
+Linux arm64 with both releases and on macOS arm64 with the newer one; macOS amd64 is built for the
+release archives but not tested in CI. Windows builds, but runs commands without a budget.
 
 The Python client in [`conformance/pyclient`](../conformance/pyclient) is a conformance artifact:
 it proves `PROTOCOL.md` is sufficient for an independent implementation and is not a supported
