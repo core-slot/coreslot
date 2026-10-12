@@ -456,6 +456,35 @@ func TestStoppedHeadIsPassedOver(t *testing.T) {
 	}
 }
 
+// A waiter that was itself away for 15 s (stopped, suspended) does not count that time as
+// watched (PROTOCOL.md section 10.2): the stopped head is passed over only after 10 s of
+// elections once the waiter is back, not at its first election.
+func TestWaiterAbsenceIsNotWatched(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	startHelper(t, "enqueue", dir, "cpu=1") // enqueues and never refreshes
+	s := enqueue(t, e, need("cpu=1"))
+
+	if p := position(t, step(t, s)); p != 2 {
+		t.Fatalf("position %d behind a fresh ticket, want 2", p)
+	}
+	clk.advance(15 * time.Second) // the waiter itself made no election for 15 s
+	if r := step(t, s); isAdmitted(r) || position(t, r) != 2 || s.attempts != 0 {
+		t.Fatalf("first election after the waiter's 15 s absence: %#v, %d attempts; want position 2 (the absence is not watched)", r, s.attempts)
+	}
+	for sec := 1; sec <= 9; sec++ {
+		clk.advance(time.Second)
+		if p := position(t, step(t, s)); p != 2 || s.attempts != 0 {
+			t.Fatalf("%d s after the return: position %d, %d attempts; want 2 and none", sec, p, s.attempts)
+		}
+	}
+	clk.advance(time.Second) // 10 s of elections after the return
+	if r := step(t, s); !isAdmitted(r) {
+		t.Fatalf("10 s of watching after the return: want admitted, got %#v", r)
+	}
+}
+
 func TestStalledTicketResumesItsPlace(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()

@@ -550,9 +550,10 @@ watching the ticket counts: when an election leaves a ticket unexamined (section
 until the observer next examines it is not counted towards the 10 s, though a value that changed
 meanwhile still counts as a change. Nor is the observer's own absence counted: when more than 3 s
 pass between its last examination and its next election (it was stopped, suspended or starved),
-that interval is not counted towards the 10 s for any ticket it observes. The 3 s are 1.5 times the
-2 s refresh interval, so that a waiter polling at that interval, with scheduling jitter on top,
-still watches.
+that interval is not counted towards the 10 s for any ticket it observes. The 3 s are 1.5 times
+the longest a conforming waiter leaves between elections, the head's 2 s maximum backoff (section
+10.3; the Go library likewise asks for a Poll at least every 2 s), so that a waiter electing at that
+interval, with scheduling jitter on top, still watches.
 
 When a waiter's own refresh gap exceeded 10 s on either its monotonic or its wall clock (it was
 suspended), it bumps `gen` in the section after refreshing. The bump never delays a refresh: a
@@ -1274,6 +1275,7 @@ A pass-through does not enter the section or lock anything. After `make` exits i
 | STALLED | 10 s without an observed mtime change, on the observer's monotonic clock |
 | `gen` read and election | every 1 s |
 | front window | the first 4 tickets of the queue, watched in every election |
+| observer pass gap | more than 3 s between an observer's last examination and its next election is not watched |
 | head admission retry | backoff from 0.25 s up to 2 s |
 | section entry retry | `LOCK_NB`, backoff from 10 ms up to 250 ms |
 | reconciliation | at most once per 30 s machine-wide; temporary files older than 30 s |

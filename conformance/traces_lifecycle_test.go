@@ -317,9 +317,11 @@ func TestClockStepThenHeadStops(t *testing.T) {
 // Then the order holds from the resumption itself, before any refresh is observable. The head
 // W3 needs two tokens and W4, behind it, needs one; both stop and one token frees up meanwhile.
 // W3 stops first and W4 2 s later, so W4 last saw W3's final mtime before its own stop. W4 is
-// continued first and W3 about 3 s later: W4 has watched W3 unchanged for about 5 s only, since
-// the 15 s in which W4 itself made no pass were not watched (PROTOCOL.md section 10.2), so W3
-// is not STALLED for it and W4 must not take the token. Once the rest frees up, W3 is admitted
+// continued first and W3 about 3 s later: W4 has watched W3 unchanged for at most about 7 s (W3's
+// last refresh may precede its stop by up to 2 s, W4 watches 2 s more before its own stop, and
+// 3 s after its continuation), leaving about 3 s below the 10 s of a stall, since the 15 s in
+// which W4 itself made no pass were not watched (PROTOCOL.md section 10.2). So W3 is not STALLED
+// for it and W4 must not take the token. Once the rest frees up, W3 is admitted
 // before W4.
 //
 // Last, with capacity freed while every waiter is stopped, both remaining waiters (each fits)
@@ -378,7 +380,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	defer func() { autoW3() }()
 
 	// Phase 1: no capacity was freed. Once every refresh can have been observed, one token frees
-	// up: W2-W4 could use it, the head W1 cannot, and nobody may take it.
+	// up: W2 and W4 could use it (W3 needs two), the head W1 cannot, and nobody may take it.
 	for name, mtime := range before {
 		waitRefreshed(e, name, mtime)
 	}

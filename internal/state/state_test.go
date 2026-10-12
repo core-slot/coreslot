@@ -407,20 +407,6 @@ func TestObserverDoesNotCountItsOwnAbsence(t *testing.T) {
 	if !obs.Stalled(changed, sec(31)) {
 		t.Error("changed unchanged for 10 s of watching after the absence: want STALLED")
 	}
-
-	// The boundary: a gap just above MaxPassGap adds nothing.
-	edge := &Observer{}
-	edge.Pass(0)
-	edge.Observe(same, 42, 0)
-	at := time.Duration(0)
-	for range 9 {
-		at += MaxPassGap + time.Nanosecond
-		edge.Pass(at)
-		edge.Observe(same, 42, at)
-	}
-	if edge.Stalled(same, at) {
-		t.Errorf("STALLED after nine gaps of %v, none of them watched", MaxPassGap+time.Nanosecond)
-	}
 }
 
 // An observer that passes at the library's poll contract (at least every 2 s), with scheduling
@@ -443,5 +429,29 @@ func TestObserverWatchesAtThePollContract(t *testing.T) {
 	}
 	if !obs.Stalled(key, now) {
 		t.Fatalf("not STALLED after %v of passes 2.0-2.4 s apart", now)
+	}
+}
+
+// The watched-gap boundary, in literals so that a change to MaxPassGap reddens it: gaps of 2.9 s
+// and of exactly 3 s between passes are watched, a gap of 3 s + 1 ms is not.
+func TestObserverPassGapBoundary(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	for _, c := range []struct {
+		gap     time.Duration
+		watched bool
+	}{{ms(2900), true}, {ms(3000), true}, {ms(3001), false}} {
+		obs := &Observer{}
+		key := k(1, 1, 1)
+		obs.Pass(0)
+		obs.Observe(key, 42, 0)
+		now := time.Duration(0)
+		for range 4 { // 11.6 s, 12 s or 12.004 s in all
+			now += c.gap
+			obs.Pass(now)
+			obs.Observe(key, 42, now)
+		}
+		if got := obs.Stalled(key, now); got != c.watched {
+			t.Errorf("four gaps of %v (%v in all): STALLED %v, want %v (gaps watched: %v)", c.gap, now, got, c.watched, c.watched)
+		}
 	}
 }
