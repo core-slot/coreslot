@@ -19,6 +19,7 @@ import (
 	"github.com/Nezhinskiy/coreslot"
 	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/engine"
+	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
@@ -417,10 +418,10 @@ func holdTokens(grant map[string]int) string {
 }
 
 // needText is a ticket's request as `cpu 4..12, gpu 1..1`.
-func needText(need map[string][2]int) string {
+func needText(need map[string]spec.Range) string {
 	var parts []string
 	for _, name := range slices.Sorted(maps.Keys(need)) {
-		parts = append(parts, fmt.Sprintf("%s %d..%d", name, need[name][0], need[name][1]))
+		parts = append(parts, fmt.Sprintf("%s %d..%d", name, need[name].Min, need[name].Max))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -434,7 +435,7 @@ type jsonStatus struct {
 	Format           int                     `json:"format"`
 	FormatUnderstood bool                    `json:"format_understood"`
 	FormatError      string                  `json:"format_error"`
-	Gen              uint64                  `json:"gen"`
+	Gen              int64                   `json:"gen"`
 	ReconciledNS     int64                   `json:"reconciled_ns"`
 	ConfigError      string                  `json:"config_error"`
 	Degraded         *jsonDegraded           `json:"degraded"`
@@ -548,7 +549,7 @@ func (v statusView) document() jsonStatus {
 	for _, t := range v.tickets {
 		need := make(map[string]jsonRange, len(t.info.Need))
 		for name, mm := range t.info.Need {
-			need[name] = jsonRange{Min: mm[0], Max: mm[1]}
+			need[name] = jsonRange{Min: mm.Min, Max: mm.Max}
 		}
 		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
 			Priority: t.info.Priority, Need: need, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),

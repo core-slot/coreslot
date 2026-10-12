@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/Nezhinskiy/coreslot/internal/spec"
+
 // The inspection types live in a file without a build constraint so that the root package can
 // alias them on every platform.
 
@@ -23,10 +25,14 @@ type TicketInfo struct {
 	Label     string // unescaped: escape it before printing
 	Priority  int
 	PID       int
-	Need      map[string][2]int // resource -> [min, max]
+	Need      map[string]spec.Range
 	CreatedNS int64
 	MtimeNS   int64 // the last refresh, as a value; never compare it with a clock
-	Dead      bool  // its lock probe succeeded: the owner is gone
+	// Dead: the ticket's lock probe succeeded, so nobody holds its descriptor: its owner exited,
+	// withdrew, or switched to token-only mode under a format it does not implement, in which
+	// case it still runs but writes nothing, not even the removal of this file (PROTOCOL.md
+	// section 15.2). Dead says nothing about the owner process.
+	Dead bool
 }
 
 // ResourceInfo is one declared resource in a snapshot.
@@ -60,7 +66,7 @@ type Report struct {
 	Format           int    // 0 when FORMAT is absent
 	FormatUnderstood bool   // this client implements Format (an absent FORMAT counts as 1)
 	FormatError      string // set when FORMAT is malformed
-	Gen              uint64
+	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)
 	ReconciledNS     int64
 	Resources        map[string]ResourceInfo // declared resources
 	ConfigError      string                  // set when sizes could not be computed

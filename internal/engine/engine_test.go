@@ -204,10 +204,15 @@ func TestHelperProcess(t *testing.T) {
 			fail(err)
 		}
 		detail = tk.Name()
-	case "section": // hold the admission section
+	case "section", "section-marked": // hold the admission section; marked: admit.lock names this pid
 		sec, err := st.Enter(context.Background())
 		if err != nil {
 			fail(err)
+		}
+		if mode == "section-marked" {
+			if _, _, err := sec.Format(formats()); err != nil {
+				fail(err)
+			}
 		}
 		keep = append(keep, sec)
 	case "lock": // lock each token path listed, one per line
@@ -556,7 +561,7 @@ func blocked(t *testing.T, cfg string) (dir string, e *Engine, clk *fakeClock, t
 func TestCancelThroughFile(t *testing.T) {
 	dir, _, clk, tk := blocked(t, "[resources]\ncpu = 1\n")
 	other := newEngine(t, dir, nil) // another client
-	if err := other.Cancel(tk.ID()); err != nil {
+	if err := other.Cancel(context.Background(), tk.ID()); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	cancelPath := filepath.Join(dir, store.CancelDir, tk.ID().String())
@@ -573,7 +578,7 @@ func TestCancelThroughFile(t *testing.T) {
 	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCancelled) {
 		t.Errorf("a second Step: %v, want ErrCancelled", err)
 	}
-	if err := other.Cancel(tk.ID()); !errors.Is(err, ErrNoTicket) {
+	if err := other.Cancel(context.Background(), tk.ID()); !errors.Is(err, ErrNoTicket) {
 		t.Errorf("cancelling a gone ticket: %v, want ErrNoTicket", err)
 	}
 }
@@ -589,7 +594,7 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 		t.Fatal("not admitted")
 	}
 	other := newEngine(t, dir, nil)
-	if err := other.Cancel(id); !errors.Is(err, ErrNoTicket) {
+	if err := other.Cancel(context.Background(), id); !errors.Is(err, ErrNoTicket) {
 		t.Fatalf("Cancel after admission: %v, want ErrNoTicket", err)
 	}
 	if exists(filepath.Join(dir, store.CancelDir, id.String())) {
@@ -726,7 +731,7 @@ func TestSeqWraps(t *testing.T) {
 
 // ---------------------------------------------------------------- protocol clarifications
 
-func readGen(t *testing.T, e *Engine) uint64 {
+func readGen(t *testing.T, e *Engine) int64 {
 	t.Helper()
 	g, err := e.st.ReadGen()
 	if err != nil {
@@ -756,7 +761,7 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 	c := enqueue(t, e, need("cpu=1"))
 	step(t, c)
 	before = readGen(t, e)
-	if err := newEngine(t, dir, nil).Cancel(c.ID()); err != nil {
+	if err := newEngine(t, dir, nil).Cancel(context.Background(), c.ID()); err != nil {
 		t.Fatal(err)
 	}
 	if got := readGen(t, e); got != before {
@@ -784,7 +789,7 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 func TestCancelAlreadyRequestedIsNotAnError(t *testing.T) {
 	_, e, _, tk := blocked(t, "[resources]\ncpu = 1\n")
 	for i := 0; i < 2; i++ {
-		if err := e.Cancel(tk.ID()); err != nil {
+		if err := e.Cancel(context.Background(), tk.ID()); err != nil {
 			t.Fatalf("Cancel #%d: %v", i+1, err)
 		}
 	}
