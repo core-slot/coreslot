@@ -16,20 +16,22 @@ import (
 	"testing"
 )
 
-// Contract: this repository never names a document it does not contain, nor that document's ids.
-// PROTOCOL.md is the only normative text; a comment, test or document states a rule itself or
-// cites the PROTOCOL.md section that states it.
+// Contract: this repository never cites a document that is not part of this repository, by name,
+// by section or by an id such a document assigns. PROTOCOL.md is the only normative text; a
+// comment, test or document states a rule itself or cites the PROTOCOL.md section that states it.
 //
 // The guarantee covers a closed set of forms, and only those:
 //
 //   - a Markdown file name or path (any token ending in ".md" or ".markdown", in any case, in
-//     prose, code, links or backticks) that does not resolve to a file of the repository, plus the directory and name
-//     prefixes of documents kept elsewhere, which name no file and so carry no ".md" to resolve;
+//     prose, code, links or backticks) that does not resolve to a file of the repository, plus
+//     two directory and name prefixes of documents that are not part of this repository, which
+//     name no file and so carry no ".md" to resolve;
 //   - a section marker (a § sign or "section N") within three words of the word spec,
 //     specification or design, in either order, the word and the marker separated by spaces,
 //     brackets, a colon, comma, slash or dash;
-//   - closed id families: D followed by one to twelve, "R-" followed by a letter and a number, an
-//     O followed by a number next to "decision(s)", "owner('s)" or "decided", and the phrases "owner" followed by
+//   - closed families of ids and phrases that refer to records outside this repository: D
+//     followed by one to twelve, "R-" followed by a letter and a number, an O followed by a
+//     number next to "decision(s)", "owner('s)" or "decided", and the phrases "owner" followed by
 //     decision, ruling, rule or decided, and "controller" or "maintainer" followed by ruling.
 //
 // Free prose about a specification or design ("as the design intends", "the spec says") is out
@@ -42,27 +44,28 @@ var forbiddenForms = []struct {
 	why string
 	re  *regexp.Regexp
 }{
-	{"a directory of documents kept elsewhere", regexp.MustCompile(`docs/(specs|plans)/`)},
-	{"the name of a document kept elsewhere", regexp.MustCompile(`coreslot-(design)\b`)},
+	{"a directory that is not part of this repository", regexp.MustCompile(`docs/(specs|plans)/`)},
+	{"a document that is not part of this repository", regexp.MustCompile(`coreslot-(design)\b`)},
 	{"a section of a specification or design", regexp.MustCompile(
 		`(?i)\b(spec|specification|design)s?('s|’s)?[,:]?(\s+[^\s§]+){0,3}?[\s(:,/—–-]*(§|\bsections?\s+\d)`)},
 	{"a section of a specification or design", regexp.MustCompile(
 		`(?i)(§\s*\d|\bsections?\s+\d)[\d.]*(\s+\S+){0,3}?\s+(spec|specification|design)s?\b`)},
-	{"a review item id", regexp.MustCompile(`\bR-[A-Z]\d+\b`)},
-	{"a decision id", regexp.MustCompile(`\b(?i:decisions?|owner('s|’s)?)\s+O[1-9]\d?\b|\bO[1-9]\d?\s+(?i:decision|ruling|decided)\b`)},
-	{"process language", regexp.MustCompile(
+	{"an id assigned outside this repository", regexp.MustCompile(`\bR-[A-Z]\d+\b`)},
+	{"an id assigned outside this repository", regexp.MustCompile(`\b(?i:decisions?|owner('s|’s)?)\s+O[1-9]\d?\b|\bO[1-9]\d?\s+(?i:decision|ruling|decided)\b`)},
+	{"a record outside this repository", regexp.MustCompile(
 		`(?i)\b(owner('s|’s)?\s+(decision|ruling|rule)s?|owner\s+decided|(controller|maintainer)\s+ruling)\b`)},
 }
 
-// decisionID is a capital D followed by a number from one to twelve, as a word of its own. The word
-// boundaries keep it off hex digits, "3D", colour codes, identifiers and longer ids.
-// conformance/pyclient/AMBIGUITIES.md numbers its own entries by section letter and number, and the
-// Python client and its tests cite them; its section D stops at nine, so under conformance/pyclient/
-// only ten to twelve match, through pyclientDecisionID. A product name like d3.js written with a
-// capital D would need an entry in citationAllowlist.
+// outsideID is a capital D followed by a number from one to twelve, as a word of its own: an id
+// that a document outside this repository assigns. The word boundaries keep it off hex digits,
+// "3D", colour codes, identifiers and longer ids. conformance/pyclient/AMBIGUITIES.md numbers its
+// own entries by section letter and number, and the Python client and its tests cite them; its
+// section D stops at nine, so under conformance/pyclient/ only ten to twelve match, through
+// pyclientOutsideID. A product name like d3.js written with a capital D would need an entry in
+// citationAllowlist.
 var (
-	decisionID         = regexp.MustCompile(`\bD(1[0-2]|[1-9])\b`)
-	pyclientDecisionID = regexp.MustCompile(`\bD1[0-2]\b`)
+	outsideID         = regexp.MustCompile(`\bD(1[0-2]|[1-9])\b`)
+	pyclientOutsideID = regexp.MustCompile(`\bD1[0-2]\b`)
 )
 
 // citationAllowlist exempts, per file, the lines that contain one of the given substrings.
@@ -102,12 +105,12 @@ func citationFindings(file, line string, files, bases map[string]bool) []string 
 			add(f.why + " (" + m + ")")
 		}
 	}
-	ids := decisionID
+	ids := outsideID
 	if strings.HasPrefix(file, "conformance/pyclient/") {
-		ids = pyclientDecisionID
+		ids = pyclientOutsideID
 	}
 	if m := ids.FindString(line); m != "" {
-		add("a decision id (" + m + ")")
+		add("an id assigned outside this repository (" + m + ")")
 	}
 	for _, ref := range mdName.FindAllString(urlRE.ReplaceAllString(line, ""), -1) {
 		if !resolves(ref, file, files, bases) {
@@ -127,9 +130,9 @@ func TestCitationMatcher(t *testing.T) {
 		"see docs/pla|ns/",
 		"coreslot-des|ign",
 		"see desi|gn.m|d",
-		"the 2026-10-11-coreslot-des|ign.m|d file",
+		"the x-coreslot-des|ign.m|d file",
 		"see the core-des|ign.m|d notes",
-		"the coreslot-v|1.m|d plan",
+		"the coreslot-v|1.m|d notes",
 		"[notes](NOTE|S.m|d)",
 		"`docs/arch|itecture.m|d`",
 		"spe|c §5.7",
@@ -152,15 +155,15 @@ func TestCitationMatcher(t *testing.T) {
 		"spe|c sections 5.10 and 6.2",
 		"§5.7 of the desi|gn",
 		"section 10.4 of the spe|c",
-		"D|11: clamped",
-		"decision D|7",
+		"see D|11",
+		"entry D|7",
 		"R-|C1",
 		"decision O|3",
 		"owner O|3",
 		"O|3 ruling",
 		"owner deci|sion",
 		"the owner's deci|sion",
-		"the owner ru|le B1",
+		"the owner ru|le",
 		"as the owner deci|ded",
 		"controller rul|ing",
 		"maintainer rul|ing",
@@ -200,7 +203,7 @@ func TestCitationMatcher(t *testing.T) {
 		t.Errorf("an AMBIGUITIES entry id is caught: %v", f)
 	}
 	if f := citationFindings("conformance/pyclient/test.py", strings.ReplaceAll("D|12", "|", ""), files, bases); len(f) == 0 {
-		t.Error("a decision id above nine under conformance/pyclient is not caught")
+		t.Error("a D id above nine under conformance/pyclient is not caught")
 	}
 	if f := citationFindings("x.go", strings.ReplaceAll("spe|c §1, D|11, R-|C1", "|", ""), files, bases); len(f) != 3 {
 		t.Errorf("three forms on one line give %d findings, want 3: %v", len(f), f)
@@ -216,8 +219,9 @@ func TestCitationMatcher(t *testing.T) {
 //   - a Windows home directory, <drive>:\Users\<name>\;
 //   - a macOS temporary or per-user directory: /private/tmp, /private/var or /var/folders, each
 //     followed by a slash;
-//   - a per-user temporary directory name, claude-<uid>, a work directory named by an internal
-//     task number, task<N> or task-<N>, and a path flattened into a name, -Users-<name>-;
+//   - a per-user temporary directory name, <tool>-<uid> for the one tool the pattern names, a
+//     numbered work directory name, task<N> or task-<N>, and a path flattened into a name,
+//     -Users-<name>-;
 //   - in a gzip stream or a binary file only, /tmp/ and a source tree under /opt, /usr or /nix (a
 //     path with a /src/ in it) too: a profile built with -trimpath names its binary by its base
 //     name and its sources by import path (runtime/proc.go,
@@ -235,7 +239,7 @@ var localPathForms = []struct {
 	{"a macOS temporary or per-user directory", regexp.MustCompile(`/privat[e]/(tmp|var)/|/var/folder[s]/`)},
 	{"a per-user temporary directory name", regexp.MustCompile(`\bclaud[e]-\d+\b`)},
 	{"a path flattened into a name", regexp.MustCompile(`-User[s]-[A-Za-z0-9_.]+-`)},
-	{"an internal task number", regexp.MustCompile(`\bta[s]k-?\d+\b`)},
+	{"a numbered work directory name", regexp.MustCompile(`\bta[s]k-?\d+\b`)},
 }
 
 var (
@@ -376,7 +380,7 @@ func TestLocalPathMatcher(t *testing.T) {
 		"golang.org/x/sys@v0.49.0/unix/syscall_bsd.go",
 		"runtime/proc.go",
 		"macOS keeps home directories under /Use|rs/.",
-		"the claude-code CLI",
+		"clau|de-dev, with no number",
 		"a task 2 s later; multitask3",
 		"/opt/homebrew/Cellar/go/1.27.2/libexec/src/runtime/slice.go",
 	}

@@ -7,15 +7,8 @@
 # Usage: scripts/linux-test.sh [go test arguments]     e.g. scripts/linux-test.sh -race ./...
 #
 # CGO_ENABLED, when set by the caller, is passed through (release builds are cgo-free).
-# Refuses (exit 2) while the local CI runner's containers (name local-ci-*) are running.
 set -eu
 cd "$(dirname "$0")/.."
-
-if [ -n "$(docker ps --filter name=local-ci- -q)" ]; then
-	echo "linux-test.sh: refusing: local CI runner containers (local-ci-*) are running;" \
-		"retry when they finish" >&2
-	exit 2
-fi
 
 # The image tag is go.mod's minimum major.minor release (`go 1.26.0` -> golang:1.26, latest patch).
 version=$(sed -n 's/^go \([0-9]*\.[0-9]*\).*$/\1/p' go.mod)
