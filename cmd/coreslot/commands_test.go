@@ -358,6 +358,59 @@ func TestStatusEscapesLabels(t *testing.T) {
 	}
 }
 
+// rawTerminalControls lists the characters in b that act on a terminal when printed raw: C0
+// controls other than newline, DEL, C1 controls, and characters that separate lines or reorder
+// text.
+func rawTerminalControls(b []byte) []rune {
+	var bad []rune
+	for _, r := range string(b) {
+		switch {
+		case r == '\n':
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == 0x061c, r == 0x200e, r == 0x200f,
+			r == 0x2028, r == 0x2029, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+			bad = append(bad, r)
+		}
+	}
+	return bad
+}
+
+// A label that would act on a terminal (an OSC title sequence, BEL, a C1 CSI, a bidi override)
+// leaves status --json and the run log only as JSON escapes, and decodes to the same label.
+func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
+	const label = "x\x1b]0;pwn\a\u009b2J\u202ey"
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	if r := cli(t, baseEnv(dir), "run", "--label", label, "--", "true"); r.code != 0 {
+		t.Fatalf("run: exit %d (stderr %q)", r.code, r.stderr)
+	}
+	logBytes, err := os.ReadFile(filepath.Join(dir, "log", "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("runs.jsonl: % x", logBytes)
+	if bad := rawTerminalControls(logBytes); len(bad) > 0 {
+		t.Errorf("runs.jsonl carries raw %U:\n%q", bad, logBytes)
+	}
+	if got := runLog(t, dir)[0]["label"]; got != label {
+		t.Errorf("runs.jsonl label decodes to %q, want %q", got, label)
+	}
+
+	c := openLib(t, dir)
+	hold(t, c, label, map[string]coreslot.Range{"cpu": rng(1, 1)})
+	r := cli(t, baseEnv(dir), "status", "--json")
+	if r.code != 0 {
+		t.Fatalf("status --json: exit %d (stderr %q)", r.code, r.stderr)
+	}
+	i := strings.Index(r.stdout, `"label"`)
+	t.Logf("status --json, from the label: % x", r.stdout[i:i+64])
+	if bad := rawTerminalControls([]byte(r.stdout)); len(bad) > 0 {
+		t.Errorf("status --json carries raw %U:\n%q", bad, r.stdout)
+	}
+	holds := statusDoc(t, dir, 0)["holds"].([]any)
+	if len(holds) != 1 || holds[0].(map[string]any)["label"] != label {
+		t.Errorf("status --json holds = %v, want one with the label %q", holds, label)
+	}
+}
+
 func TestStatusExits3WhenDegraded(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 4\n")
 	if r := cli(t, baseEnv(dir), "status"); r.code != 0 {

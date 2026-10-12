@@ -576,11 +576,17 @@ func nonNilMap(m map[string]int) map[string]int {
 	return m
 }
 
-// writeJSON writes the document with labels exactly as stored: encoding/json escapes control
-// characters and keeps every valid UTF-8 label decodable to the same string.
+// writeJSON writes the document with labels exactly as stored: encoding/json escapes the C0
+// controls, wire.EscapeJSON the other characters that act on a terminal (C1 controls, bidi
+// controls), and every valid UTF-8 label decodes to the same string.
 func (v statusView) writeJSON(w interface{ Write([]byte) (int, error) }) error {
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	return enc.Encode(v.document())
+	if err := enc.Encode(v.document()); err != nil {
+		return err
+	}
+	_, err := w.Write(wire.EscapeJSON(buf.Bytes()))
+	return err
 }
