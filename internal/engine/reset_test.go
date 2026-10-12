@@ -5,9 +5,11 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -15,22 +17,48 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
-// treeNames lists every path under dir, relative, for comparing before and after.
-func treeNames(t *testing.T, dir string) string {
+// treeContent is every path under dir, relative, with its mode, size and inode, and the bytes
+// of every regular file, for comparing before and after. Names alone would not see a refused
+// reset rewrite admit.lock, and a size alone would pass or fail with the length of a pid.
+func treeContent(t *testing.T, dir string) string {
 	t.Helper()
-	var out []string
+	var out strings.Builder
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
 		rel, _ := filepath.Rel(dir, p)
-		out = append(out, rel)
+		fmt.Fprintf(&out, "%s %s size=%d ino=%d", rel, fi.Mode(), fi.Size(), fi.Sys().(*syscall.Stat_t).Ino)
+		if fi.Mode().IsRegular() {
+			body, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&out, " body=%q", body)
+		}
+		out.WriteByte('\n')
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.Join(out, "\n")
+	return out.String()
+}
+
+// setOtherLengthHolder rewrites admit.lock's body, in place, as a record of a pid with a
+// different number of digits than this process's: a reset that marks itself as holder then
+// changes the file's size as well as its content, whatever pid this run drew.
+func setOtherLengthHolder(t *testing.T, dir string) {
+	t.Helper()
+	pid := strings.Repeat("9", len(fmt.Sprint(os.Getpid()))+1)
+	body := fmt.Sprintf(`{"pid":%s,"entered_ns":1}`, pid)
+	if err := os.WriteFile(filepath.Join(dir, store.AdmitLock), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A reset with a live ticket, a live hold, a locked token or another client inside the section
@@ -62,7 +90,8 @@ func TestResetRefusesLiveState(t *testing.T) {
 			}
 			g.Close()
 			c.live(t, e, dir)
-			before := treeNames(t, dir)
+			setOtherLengthHolder(t, dir)
+			before := treeContent(t, dir)
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			removed, err := e.Reset(ctx)
@@ -73,10 +102,40 @@ func TestResetRefusesLiveState(t *testing.T) {
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("error %q does not say %q", err, c.want)
 			}
-			if after := treeNames(t, dir); after != before {
+			if after := treeContent(t, dir); after != before {
 				t.Errorf("the refused reset changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
 			}
 		})
+	}
+}
+
+// While an accepted reset works it is the section's recorded holder: status reads admit.lock's
+// body, outside the section, and must name this process (not a stale record, whatever length
+// its pid had) with a fresh entry time. The section is kept after Reset returns, as it is while
+// the removals run.
+func TestAcceptedResetNamesItselfHolder(t *testing.T) {
+	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	e := newEngine(t, dir, nil)
+	g, _, err := e.Adopt(need("cpu=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	setOtherLengthHolder(t, dir)
+	sec, err := e.st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	if live, _, err := sec.Reset(formats()); err != nil || !live.Empty() {
+		t.Fatalf("Reset = %+v, %v", live, err)
+	}
+	rep, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Section.Held || rep.Section.PID != os.Getpid() || rep.Section.EnteredNS <= 1 {
+		t.Errorf("status sees section %+v; want held by pid %d with a fresh entry time", rep.Section, os.Getpid())
 	}
 }
 
@@ -122,14 +181,15 @@ func TestResetRefusesForeignFormat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, store.QueueDir, "v2-ticket"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before := treeNames(t, dir)
+	setOtherLengthHolder(t, dir)
+	before := treeContent(t, dir)
 	_, err = e.Reset(context.Background())
 	var le *LiveError
 	if !errors.As(err, &le) || !errors.Is(err, ErrRefused) ||
 		!strings.Contains(err.Error(), "format 2 is not implemented by this client; use a coreslot that implements it") {
 		t.Fatalf("Reset = %v; want a refusal naming format 2", err)
 	}
-	if after := treeNames(t, dir); after != before {
+	if after := treeContent(t, dir); after != before {
 		t.Errorf("the refused reset changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
@@ -145,7 +205,7 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 	}
 	for name, dir := range map[string]string{"missing": missing, "empty": empty} {
 		t.Run(name, func(t *testing.T) {
-			before := treeNames(t, root)
+			before := treeContent(t, root)
 			st, err := store.OpenReadOnly(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -162,7 +222,7 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 			if rep.Resources["cpu"].Size != testCPUs {
 				t.Errorf("resources %v, want the default cpu budget", rep.Resources)
 			}
-			if after := treeNames(t, root); after != before {
+			if after := treeContent(t, root); after != before {
 				t.Errorf("Snapshot created entries:\nbefore:\n%s\nafter:\n%s", before, after)
 			}
 		})
