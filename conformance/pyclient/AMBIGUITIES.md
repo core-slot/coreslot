@@ -313,7 +313,7 @@ implemented), and the default need is `cpu=1..1`.
 
 **Status — resolved: PROTOCOL §17. `4` and `4-4` both conform. Matches.**
 
-## Skipped (optional for this seat)
+## Skipped (optional for this client)
 
 - **Adoption (§12.4, §21.7):** not implemented. It has no CLI or library surface in this client's scope.
   Validators accept `"adopted": true` holds, and admission counts their tokens like any other locked
