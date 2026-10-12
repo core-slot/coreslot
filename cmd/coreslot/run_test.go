@@ -911,6 +911,32 @@ func TestRunLogAppendedWhenRotationFails(t *testing.T) {
 	}
 }
 
+// A section entered only to rotate the run log reconciles first when reconciliation is due
+// (PROTOCOL.md section 10.4): a dead ticket is removed and gen records the reconciliation.
+func TestRunLogRotationReconcilesWhenDue(t *testing.T) {
+	st, dir := bigRunLog(t, "coreslot-protocol 1\n")
+	if err := os.Mkdir(filepath.Join(dir, "queue"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dead := filepath.Join(dir, "queue", "00000000000000000001-0000000001-000001")
+	if err := os.WriteFile(dead, []byte("{}"), 0o600); err != nil { // no lock: dead
+		t.Fatal(err)
+	}
+	notice := func(f string, args ...any) { t.Errorf("notice: "+f, args...) }
+	if err := appendRunLog(st, store.RunRecord{Label: "x"}, notice); err != nil {
+		t.Fatalf("appendRunLog: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "log", "runs.1.jsonl")); err != nil {
+		t.Errorf("the run log was not rotated: %v", err)
+	}
+	if _, err := os.Stat(dead); err == nil {
+		t.Error("the dead ticket survived: the rotation section did not reconcile")
+	}
+	if g, err := st.ReadGen(); err != nil || g.ReconciledNS == 0 {
+		t.Errorf("gen %+v (%v): reconciled_ns was not written", g, err)
+	}
+}
+
 func TestTimeoutLogGate(t *testing.T) {
 	cases := []struct {
 		name                      string
