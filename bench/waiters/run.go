@@ -553,8 +553,9 @@ func (b *bench) candidates() []*proc {
 }
 
 // burst is one burst: cancel requests and withdrawals, refill arrivals, released tokens for the
-// admission window, then the first waiter in queue order that is not already stopped (the head at the first burst; later usually position 2, behind the previous burst's still-stopped head) and Stall-1 random waiters stopped for
-// stall-for.
+// admission window, then the first waiter in queue order that is not already stopped (the head
+// at the first burst; later usually position 2, behind the previous burst's still-stopped head)
+// and Stall-1 random waiters stopped for stall-for.
 func (b *bench) burst() error {
 	rep, err := b.client.Snapshot()
 	if err != nil {
