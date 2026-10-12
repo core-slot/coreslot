@@ -293,7 +293,10 @@ windows_warning = false   # default true (section 16)
   without an explicit priority takes the value of the longest prefix of its label; with no matching
   prefix its priority is 0. This applies where a request can leave its priority unset (the CLI
   without `--priority`); a library whose request always carries a priority MAY use that value as
-  given (the Go library does, and does not read `[priorities]`).
+  given.
+
+  > **Implementation note.** The Go library uses `Request.Priority` as given and does not read
+  > `[priorities]`; the Go CLI applies it when `--priority` is absent.
 - `[platform]`: `windows_warning`, a boolean.
 - `resources`, `priorities` and `platform`, when present, MUST be tables; any other value of one of
   them is invalid. Other tables and keys are ignored.
@@ -414,7 +417,7 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns, and a body whose `start_ns` differs is malformed |
 | `unbudgeted` | boolean | `true` for a run outside the budget: a fail-open run, or a run whose wait timed out and that runs anyway (section 14) |
-| `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a fail-open run could not budget (section 14); writers list distinct names in ascending order, readers check neither |
+| `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a run outside the budget could not budget (section 14); writers list distinct names in ascending order, readers check neither |
 | `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
 
@@ -566,18 +569,21 @@ A waiter:
   even when the examination ended before reaching them. The front window only keeps every
   waiter's timers on the front of the queue running; the election's rule is unchanged. A dead
   ticket that is not yet removed still takes a slot of the window until reconciliation removes it
-  (section 10.4). The conformance traces' 22 s bound cannot tell a waiter that watches the window
-  from one that does not; the Go and Python unit tests enforce it;
+  (section 10.4);
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 2 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.
+
+> **Implementation note.** The conformance traces' 22 s bound cannot tell a waiter that watches the
+> front window from one that does not; the Go and Python unit tests enforce it.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting, and
 the budget stays safe: it is counted from token locks, not tickets, so I3 and I7 still hold. The
 waiter does lose its place, though. No other client sees the ticket any more, so waiters behind it
 may be elected and admitted first, `status` does not show it, and it cannot be cancelled by label;
-a cancel request naming its exact id still reaches it. When it later removes its ticket
+a cancel request naming its exact id still reaches it, but only from a canceller that publishes
+without checking `queue/` first (section 13.1). When it later removes its ticket
 (admission, cancellation, withdrawal), `ENOENT` counts as success.
 
 A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2
@@ -591,12 +597,11 @@ without being examined.
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
 client that enters the section for any purpose other than admission and token-only admission
 (enqueue, cancellation publication, removal of its own ticket or hold, a resume bump, adoption,
-publication of an unbudgeted hold, a `degraded` write or removal) and finds `reconciled_ns` in `gen`
-older than 30 s on its wall clock (or in the future by more than 30 s) MUST reconcile before its own
-change. A section entered only to rotate the run log MAY reconcile (the Go CLI does not; the
-independent Python client in `conformance/pyclient` does). Writing a missing `FORMAT` (section 8) is
-part of whichever entry finds it missing and does not by itself make that entry reconcile. Admission
-and token-only admission never reconcile, and neither does a reset (section 4.4). Reconciliation:
+publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
+`reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
+reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
+finds it missing and does not by itself make that entry reconcile. Admission and token-only
+admission never reconcile, and neither does a reset (section 4.4). Reconciliation:
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
@@ -731,15 +736,18 @@ unbudgeted.
 
 Cancelling never signals across processes. A canceller publishes `$S/cancel/<ticket-id>` inside the
 section. It MAY first check, in that section, that `queue/` holds a ticket with that id and publish
-nothing when it does not (the Go CLI does, and refuses with a diagnostic that no such ticket is
-waiting); a request whose ticket is gone is removed by reconciliation either way (section 10.4, step
-2). The owner checks `cancel/` for its id on every poll and again at admission step 1, so a cancel
-published before the owner's admitting section wins; one published later finds no ticket and has no
-effect: cancellation never revokes a grant. A canceller that finds the request already published
-(section 11) treats the cancellation as already requested; that is not an error. On finding it, the
-owner closes its ticket descriptor (the ticket is dead at once), removes the ticket and the cancel
-request in its next section if it can enter one (bumping `gen`, section 7.8), and stops: the CLI
-exits with the refusal code, a library returns its cancellation error.
+nothing when it does not; a request whose ticket is gone is removed by reconciliation either way
+(section 10.4, step 2). The owner checks `cancel/` for its id on every poll and again at admission
+step 1, so a cancel published before the owner's admitting section wins; one published later finds
+no ticket and has no effect: cancellation never revokes a grant. A canceller that finds the request
+already published (section 11) treats the cancellation as already requested; that is not an error.
+On finding it, the owner closes its ticket descriptor (the ticket is dead at once), removes the
+ticket and the cancel request in its next section if it can enter one (bumping `gen`, section 7.8),
+and stops: the CLI exits with the refusal code, a library returns its cancellation error.
+
+> **Implementation note.** The Go CLI and library check `queue/` first and refuse, with a
+> diagnostic that no such ticket is waiting, when there is none; the independent Python client in
+> `conformance/pyclient` publishes without checking.
 
 ### 13.2 Withdrawal
 
@@ -779,9 +787,11 @@ text conforms, except that a fail-open run MUST NOT use `format`, which marks a 
 
 A run whose wait timed out and that runs anyway (the CLI's `--on-timeout run`) withdraws its ticket
 (section 13.2) and runs with `min` of each named resource outside the budget. It is not a state
-error: it publishes the same unbudgeted hold, exports `CORESLOT_UNBUDGETED=<reason>` (the Go CLI
-writes `timeout`) and records the reason in its run-log line's `fail_open`, but it writes no
-`degraded` record. The same `FORMAT` rule applies.
+error: it publishes the same unbudgeted hold, exports `CORESLOT_UNBUDGETED=<reason>` and records
+the reason in its run-log line's `fail_open`, but it writes no `degraded` record. The same `FORMAT`
+rule applies.
+
+> **Implementation note.** The Go CLI's reason for such a run is `timeout`.
 
 `status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record.
 
@@ -828,9 +838,11 @@ does not implement, so the file is left to a client of that format.
 
 Every other operation that would write follows the same rule. Under a format it does not implement,
 a client publishes no cancel request, adoption hold or unbudgeted hold, records and clears no
-`degraded`, and does not remove its own hold after a run; the Go CLI and library refuse
-cancellation, adoption, `doctor --clear` and `doctor --reset` there, and a fail-open run still runs
-its command but writes nothing.
+`degraded`, and does not remove its own hold after a run. A fail-open run still runs its command
+but writes nothing.
+
+> **Implementation note.** The Go CLI and library refuse cancellation, adoption, `doctor --clear`
+> and `doctor --reset` under a format they do not implement.
 
 ## 16. Windows
 
@@ -882,9 +894,12 @@ inherited descriptors those inherited variables name: the `CORESLOT_HELD_FD` des
 descriptor `CORESLOT_TOKEN_FDS` lists. Otherwise a grandchild would pass through to a grant that is
 not its parent's. A named descriptor that is a standard stream (0, 1 or 2) or not a regular file
 cannot be a grant's (its number was reused after a launcher closed the original), and a client
-SHOULD leave it open; the Go CLI closes only regular files at 3 and above. Every other inherited
-descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the user's redirections) is passed through
-untouched, and `CORESLOT_STATE_DIR` is not grant context and is passed on.
+SHOULD leave it open. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
+user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not grant context and
+is passed on.
+
+> **Implementation note.** The Go CLI closes only the named descriptors that are regular files at
+> fd 3 or above.
 
 **Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
 `cpu` (or of `RES`); `{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with
@@ -905,8 +920,7 @@ empty variable is absent), in this order:
    context is valid when no descriptor is listed twice, every descriptor listed is open, its
    `(st_dev, st_ino)` equals that of some `$S/res/<name>/<i>`, and a fresh probe of that path fails.
    Two listed descriptors with the same `(st_dev, st_ino)` (a launcher duplicated one) hold one
-   token, not two: such a context SHOULD NOT validate, and a client that accepts it MUST count that
-   token once. The Go CLI refuses it.
+   token, not two: such a context does not validate.
    A valid pass-through does not queue, enter the section or lock anything. Per resource it names,
    it runs with `min(max, held)`, where `held` is the number of valid token descriptors of that
    resource, counted from the descriptors and not from the environment; a resource it names that the
@@ -946,9 +960,8 @@ Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` wit
 during the run (section 14). A pass-through (section 18), valid or unbudgeted, appends too: it
 reads `FORMAT` outside the section (it never writes a missing one, and then writes no line), marks
 its line `"nested": true`, and never rotates the log. A token-only run writes no log. A line that
-would exceed 4 KiB MAY be fitted by shortening an informative string (the Go CLI shortens
-`fail_open`; the Python client shortens `label`); a writer that cannot fit it writes no line. The
-object carries:
+would exceed 4 KiB MAY be fitted by shortening an informative string; a writer that cannot fit it
+writes no line. The object carries:
 
 | Key | Type | Content |
 |---|---|---|
@@ -970,6 +983,9 @@ secrets. The log's `clamped` is an array of resource names, unlike the hold body
 (section 7.4). A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
 inside the section: re-checks the size, then renames it to `runs.1.jsonl` (replacing the previous
 generation). One generation is kept. A token-only client writes no log.
+
+> **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open` and the
+> independent Python client shortens `label`.
 
 ## 21. Worked examples
 

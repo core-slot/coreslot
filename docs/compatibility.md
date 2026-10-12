@@ -7,11 +7,13 @@ changed incompatibly appears there under **Removed** or **Changed** first, and u
 
 ## Versions
 
-coreslot is at **`v0`** and stays there until on-disk format 1 is frozen, which happens when the
+coreslot is at **`v0`** and stays there until the on-disk format is frozen, which happens when the
 conformance suite, including its adversarial interleavings, passes on macOS and Linux. Until then a
-minor release (`0.x`) may change anything below, within the deprecation window. `v1.0.0` freezes
-format 1, the CLI surface and the library API listed here; after it, an incompatible change to any
-of them needs a new major version.
+minor release (`0.x`) may change the CLI surface and the library API within the deprecation window,
+and may introduce a new format number (below); it never changes what a number a release has already
+shipped means. `v1.0.0` freezes the format then current (format 1, unless a `v0` release introduced
+a newer one), the CLI surface and the library API listed here; after it, an incompatible change to
+any of them needs a new major version.
 
 ## On-disk formats
 
@@ -25,9 +27,9 @@ of them needs a new major version.
 A format number versions the metadata: the names, bodies and layout of the state directory other
 than `admit.lock` and `res/`. A release that changes the metadata in any way bumps the number it
 writes to `FORMAT` (`coreslot-protocol <n>`); the meaning of a number that a release has shipped
-never changes. The bump is what tells older clients apart: a client compares the number in `FORMAT`
-with the formats it implements, and an unknown number is what puts it in token-only mode (below).
-Two things never change with a format, so a format change never
+never changes, before `v1.0.0` as after it. The bump is what tells older clients apart: a client
+compares the number in `FORMAT` with the formats it implements, and an unknown number is what puts
+it in token-only mode (below). Two things never change with a format, so a format change never
 creates a second budget (design decision D8):
 
 - `admit.lock`, an exclusive `flock` held briefly by whoever changes admission state;
@@ -92,8 +94,8 @@ While at `v0`:
 - The deprecation window does not apply to the on-disk format, because an older client is never
   cut off: a release that changes the metadata bumps the `FORMAT` number (above), is announced in
   `CHANGELOG.md` and `PROTOCOL.md`, and from then on older clients on the same machine run in
-  token-only mode, degraded but still counted in the one budget. Before format 1 is frozen this may
-  happen in any minor release; from `v1.0.0` it needs a new major version.
+  token-only mode, degraded but still counted in the one budget. Before `v1.0.0` this may happen
+  in any minor release; from `v1.0.0` it needs a new major version.
 - `status --json` changes follow the schema rule above.
 
 From `v1.0.0`: deprecated surfaces keep working until the next major version.
