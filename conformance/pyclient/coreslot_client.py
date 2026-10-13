@@ -2124,8 +2124,11 @@ _CHILD_DEFAULT_SIGNALS = tuple(
 
 
 def spawn_and_wait(argv: list[str], env: dict[str, str], hold_fd: int | None, token_fds: list[int],
-                   remap: bool = True) -> int:
-    """Start argv with fd 3 = hold and fds 4.. = tokens (§17); return the exit status (§19)."""
+                   remap: bool = True, usage: dict | None = None) -> int:
+    """Start argv with fd 3 = hold and fds 4.. = tokens (§17); return the exit status (§19).
+
+    When the command ran, `usage` (if given) receives its §20 usage keys from the wait4 rusage.
+    """
     n = len(token_fds)
     raise_nofile(4 + n + 256)
     dups: list[int] = []
@@ -2172,10 +2175,12 @@ def spawn_and_wait(argv: list[str], env: dict[str, str], hold_fd: int | None, to
                 dups = []
             while True:
                 try:
-                    _, status = os.waitpid(pid, 0)
+                    _, status, rusage = os.wait4(pid, 0)
                     break
                 except InterruptedError:
                     continue
+            if usage is not None:
+                usage.update(_usage_keys(rusage))
         finally:
             signal.signal(signal.SIGINT, old_int)
             signal.signal(signal.SIGQUIT, old_quit)
@@ -2184,6 +2189,20 @@ def spawn_and_wait(argv: list[str], env: dict[str, str], hold_fd: int | None, to
             os.close(d)
     code = os.waitstatus_to_exitcode(status)
     return 128 - code if code < 0 else code
+
+
+def _usage_keys(rusage) -> dict:
+    """§20: the command's CPU seconds and peak resident set size in KiB, from its wait4 rusage.
+
+    ru_maxrss is in bytes on macOS and in KiB on Linux and the BSDs; elsewhere its unit is not
+    known here, so max_rss_kib is left out rather than guessed.
+    """
+    keys = {"cpu_user_s": round(rusage.ru_utime, 3), "cpu_sys_s": round(rusage.ru_stime, 3)}
+    if sys.platform == "darwin":
+        keys["max_rss_kib"] = rusage.ru_maxrss // 1024
+    elif sys.platform.startswith(("linux", "freebsd", "netbsd", "openbsd", "dragonfly")):
+        keys["max_rss_kib"] = rusage.ru_maxrss
+    return keys
 
 
 # --------------------------------------------------------------------------------------
@@ -2292,7 +2311,8 @@ def _notices(grant: Grant, sizes_hint: dict | None = None) -> None:
                   f"{grant.need[r][0]}")
 
 
-def _run_unbudgeted(opts, needs, env, reason: str, hold=None, strip: bool = True) -> int:
+def _run_unbudgeted(opts, needs, env, reason: str, hold=None, strip: bool = True,
+                    usage: dict | None = None) -> int:
     child_env = _strip_context(env) if strip else dict(env)
     for r, (lo, _) in needs.items():
         child_env["CORESLOT_GRANTED_" + _env_form(r)] = str(lo)
@@ -2303,7 +2323,7 @@ def _run_unbudgeted(opts, needs, env, reason: str, hold=None, strip: bool = True
     argv = substitute(opts.command, {r: lo for r, (lo, _) in needs.items()}, opts.subst)
     # A fail-open run builds §17 from its own hold; an inherited-unbudgeted run (§18 rule 1)
     # passes what it inherited on untouched.
-    return spawn_and_wait(argv, child_env, hold_fd, [], remap=strip)
+    return spawn_and_wait(argv, child_env, hold_fd, [], remap=strip, usage=usage)
 
 
 def _fail_open(client: Client, opts, needs, env, err: StateError, t0: int) -> int:
@@ -2315,7 +2335,8 @@ def _fail_open(client: Client, opts, needs, env, err: StateError, t0: int) -> in
     if not client.record_degraded(err.reason):
         _diag("coreslot: could not record degraded mode in the state directory")
     started = time.monotonic()
-    status = _run_unbudgeted(opts, needs, env, err.reason, hold)
+    usage: dict = {}
+    status = _run_unbudgeted(opts, needs, env, err.reason, hold, usage=usage)
     if hold:
         hold_path = os.path.join(client.state_dir(), "holds", hold[1])
         changed = _changed_under(hold[0], hold_path)
@@ -2327,12 +2348,13 @@ def _fail_open(client: Client, opts, needs, env, err: StateError, t0: int) -> in
         client.remove_hold(hold[1])
     if not client.append_log(_log_record(opts, needs, {r: lo for r, (lo, _) in needs.items()}, [],
                                          sorted(needs), 0.0, time.monotonic() - started, status, t0,
-                                         err.reason)):
+                                         err.reason, usage)):
         _diag("coreslot: could not append to the run log")
     return status
 
 
-def _log_record(opts, needs, granted, clamped, unbudgeted, waited, ran, status, t0, fail_open=""):
+def _log_record(opts, needs, granted, clamped, unbudgeted, waited, ran, status, t0, fail_open="",
+                usage: dict | None = None):
     try:
         load1 = os.getloadavg()[0]
     except OSError:
@@ -2340,7 +2362,7 @@ def _log_record(opts, needs, granted, clamped, unbudgeted, waited, ran, status, 
     return {"time_ns": t0, "label": opts.label,
             "need": {r: [lo, hi] for r, (lo, hi) in needs.items()},
             "grant": granted, "clamped": clamped, "unbudgeted_resources": unbudgeted,
-            "waited_s": round(waited, 3), "ran_s": round(ran, 3), "exit": status,
+            "waited_s": round(waited, 3), "ran_s": round(ran, 3), **(usage or {}), "exit": status,
             "load1": load1, "fail_open": fail_open}
 
 
@@ -2356,9 +2378,10 @@ def cli_run(args: list[str]) -> int:
         _diag(f"coreslot: inside an unbudgeted run ({env['CORESLOT_UNBUDGETED']}); running "
               "unbudgeted with the minimum of each resource")
         started = time.monotonic()
-        status = _run_unbudgeted(opts, needs, env, env["CORESLOT_UNBUDGETED"], strip=False)
+        usage: dict = {}
+        status = _run_unbudgeted(opts, needs, env, env["CORESLOT_UNBUDGETED"], strip=False, usage=usage)
         _nested_log(opts, needs, {r: lo for r, (lo, _) in needs.items()}, [], sorted(needs),
-                    time.monotonic() - started, status, t0, env["CORESLOT_UNBUDGETED"])
+                    time.monotonic() - started, status, t0, env["CORESLOT_UNBUDGETED"], usage)
         return status
     if not opts.independent and env.get("CORESLOT_TOKEN_FDS"):  # §18 rule 2
         return _cli_passthrough(opts, needs, env, t0)
@@ -2412,7 +2435,8 @@ def cli_run(args: list[str]) -> int:
     child_env.update(grant.environment())
     argv = substitute(opts.command, grant.granted, opts.subst)
     started = time.monotonic()
-    status = spawn_and_wait(argv, child_env, grant.hold_fd, grant.token_fds())
+    usage = {}
+    status = spawn_and_wait(argv, child_env, grant.hold_fd, grant.token_fds(), usage=usage)
     ran = time.monotonic() - started
     granted = grant.granted
     try:
@@ -2422,7 +2446,8 @@ def cli_run(args: list[str]) -> int:
         return status
     if not grant.token_only:
         client.append_log(_log_record(opts, needs, granted, sorted(grant.clamped),
-                                      grant.unbudgeted_resources, waited, ran, status, t0))
+                                      grant.unbudgeted_resources, waited, ran, status, t0,
+                                      usage=usage))
     return status
 
 
@@ -2448,11 +2473,12 @@ def _close_inherited_context(env: dict[str, str]) -> None:
                 os.set_inheritable(fd, False)
 
 
-def _nested_log(opts, needs, granted, clamped, unbudgeted, ran, status, t0, fail_open="") -> None:
+def _nested_log(opts, needs, granted, clamped, unbudgeted, ran, status, t0, fail_open="",
+                usage: dict | None = None) -> None:
     """E6/§20: a pass-through appends a `"nested": true` line, outside the section, never rotating."""
     client = Client(cli=True)
     if not client.append_log(_log_record(opts, needs, granted, clamped, unbudgeted, 0.0, ran, status,
-                                         t0, fail_open), nested=True):
+                                         t0, fail_open, usage), nested=True):
         _diag("coreslot: no run-log line (state directory missing, not understood, or not writable)")
 
 
@@ -2476,10 +2502,11 @@ def _cli_passthrough(opts, needs, env, t0) -> int:
         child_env["CORESLOT_GRANTED_" + _env_form(r)] = str(granted[r])
     argv = substitute(opts.command, granted, opts.subst)
     started = time.monotonic()
-    status = spawn_and_wait(argv, child_env, None, [], remap=False)
+    usage: dict = {}
+    status = spawn_and_wait(argv, child_env, None, [], remap=False, usage=usage)
     clamped = sorted(r for r, (lo, _) in needs.items() if r in held and lo > held[r])
     _nested_log(opts, needs, granted, clamped, sorted(r for r in needs if r not in held),
-                time.monotonic() - started, status, t0)
+                time.monotonic() - started, status, t0, usage=usage)
     return status
 
 

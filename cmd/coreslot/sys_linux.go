@@ -42,3 +42,7 @@ func stopSelf() {
 	defer runtime.UnlockOSThread()
 	_ = unix.Tgkill(unix.Getpid(), unix.Gettid(), unix.SIGSTOP)
 }
+
+// maxRSSKiB converts a wait4 ru_maxrss to KiB: Linux reports it in kilobytes of 1024 bytes
+// already (getrusage(2)).
+func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss, true }

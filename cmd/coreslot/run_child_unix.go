@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Nezhinskiy/coreslot/internal/engine"
@@ -116,6 +117,7 @@ func (r *run) runChild(c child) int {
 			RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
 			Nested: c.nested,
 		}
+		recordUsage(&rec, cmd.ProcessState) // nil when the command never started
 		var err error
 		if c.nested {
 			err = appendNestedLog(rec) // reads FORMAT outside the section only now, after the command
@@ -127,6 +129,27 @@ func (r *run) runChild(c child) int {
 		}
 	}
 	return status
+}
+
+// recordUsage copies the command's CPU time and peak resident set size from its wait4 rusage
+// into rec (PROTOCOL.md section 20). The rusage covers the command and the descendants it waited
+// for, not the ones it left running. A command that never started has no ProcessState and gets
+// none of the keys, as does a platform whose wait reports no rusage: an unknown value is left out
+// rather than written as zero. The seconds are not rounded, like ran_s and waited_s.
+func recordUsage(rec *store.RunRecord, ps *os.ProcessState) {
+	if ps == nil {
+		return
+	}
+	ru, ok := ps.SysUsage().(*syscall.Rusage)
+	if !ok || ru == nil {
+		return
+	}
+	user := time.Duration(ru.Utime.Nano()).Seconds()
+	sys := time.Duration(ru.Stime.Nano()).Seconds()
+	rec.CPUUserS, rec.CPUSysS = &user, &sys
+	if kib, known := maxRSSKiB(int64(ru.Maxrss)); known {
+		rec.MaxRSSKiB = &kib
+	}
 }
 
 // releaseFailed reports a release that returned err and says whether the run must stop writing.

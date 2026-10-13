@@ -131,6 +131,25 @@ func runHelper(name string, args []string) int {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	case "burn":
+		// Touch every page of burnBytes, so that they are resident, then spin until this process
+		// has used burnCPU of CPU time by its own rusage.
+		b := make([]byte, burnBytes)
+		for i := 0; i < len(b); i += 4096 {
+			b[i] = 1
+		}
+		for {
+			var ru unix.Rusage
+			if err := unix.Getrusage(unix.RUSAGE_SELF, &ru); err != nil {
+				fmt.Fprintln(os.Stderr, "burn:", err)
+				return 1
+			}
+			if time.Duration(ru.Utime.Nano()+ru.Stime.Nano()) >= burnCPU {
+				break
+			}
+		}
+		runtime.KeepAlive(b)
+		return 0
 	}
 	if code, ok := signalHelper(name, args); ok {
 		return code
@@ -663,6 +682,126 @@ func TestRunAppendsOneLogLine(t *testing.T) {
 	}
 	if _, nested := line["nested"]; nested {
 		t.Errorf("an ordinary run's line is marked nested: %v", line)
+	}
+}
+
+// What the burn helper makes resident and how much CPU time it uses.
+const (
+	burnBytes = 64 << 20
+	burnCPU   = 50 * time.Millisecond
+)
+
+// checkUsage asserts that a run-log line carries the burn helper's usage (PROTOCOL.md section
+// 20): CPU seconds at least burnCPU, and a peak resident set size in KiB of at least half of
+// burnBytes and below 10 GiB. The upper bound catches ru_maxrss written in bytes, which is
+// macOS's unit: 64 MiB in bytes is more than 10 GiB in KiB.
+func checkUsage(t *testing.T, what string, line map[string]any) {
+	t.Helper()
+	user, uok := line["cpu_user_s"].(float64)
+	sys, sok := line["cpu_sys_s"].(float64)
+	if !uok || !sok || user < 0 || sys < 0 || user+sys < burnCPU.Seconds() {
+		t.Errorf("%s: cpu_user_s %v, cpu_sys_s %v; want numbers adding up to at least %v",
+			what, line["cpu_user_s"], line["cpu_sys_s"], burnCPU.Seconds())
+	}
+	rss, ok := line["max_rss_kib"].(float64)
+	if !ok || rss != float64(int64(rss)) || rss < burnBytes/2/1024 || rss >= 10<<20 {
+		t.Errorf("%s: max_rss_kib %v; want an integer from %d KiB to below 10 GiB",
+			what, line["max_rss_kib"], burnBytes/2/1024)
+	}
+}
+
+// Every run that started its command records the command's CPU time and peak resident set size
+// from its wait4 rusage, which also covers the descendants the command waited for: an ordinary
+// run, a fail-open run, and a pass-through, whose parent's line covers it too.
+//
+// Mutation: drop the recordUsage call in runChild (the keys are absent), or return ru_maxrss
+// unconverted in sys_darwin.go's maxRSSKiB (bytes, above 10 GiB in KiB).
+func TestRunLogRecordsUsage(t *testing.T) {
+	burn := helper(t, "burn")
+	t.Run("command", func(t *testing.T) {
+		dir := stateDir(t, "[resources]\ncpu = 4\n")
+		r := cli(t, baseEnv(dir), append([]string{"run", "--need", "cpu=1", "--"}, burn...)...)
+		if r.code != 0 {
+			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+		}
+		lines := runLog(t, dir)
+		if len(lines) != 1 {
+			t.Fatalf("run log %v: want one line", lines)
+		}
+		checkUsage(t, "the command", lines[0])
+	})
+	t.Run("waited-for descendant", func(t *testing.T) {
+		dir := stateDir(t, "[resources]\ncpu = 4\n")
+		args := append([]string{"run", "--need", "cpu=1", "--", "sh", "-c", `"$@"; :`, "sh"}, burn...)
+		r := cli(t, baseEnv(dir), args...)
+		if r.code != 0 {
+			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+		}
+		lines := runLog(t, dir)
+		if len(lines) != 1 {
+			t.Fatalf("run log %v: want one line", lines)
+		}
+		checkUsage(t, "the shell that waited for it", lines[0])
+	})
+	t.Run("fail-open", func(t *testing.T) {
+		dir := stateDir(t, "[resources]\ncpu = \"bogus\"\n")
+		r := cli(t, baseEnv(dir), append([]string{"run", "--need", "cpu=1", "--"}, burn...)...)
+		if r.code != 0 {
+			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+		}
+		lines := runLog(t, dir)
+		if len(lines) != 1 || lines[0]["fail_open"] == "" {
+			t.Fatalf("run log %v: want one fail-open line", lines)
+		}
+		checkUsage(t, "the fail-open run", lines[0])
+	})
+	t.Run("pass-through", func(t *testing.T) {
+		dir := stateDir(t, "[resources]\ncpu = 4\n")
+		args := append([]string{"run", "--need", "cpu=2", "--label", "outer", "--", cliBinary(t),
+			"run", "--need", "cpu=1", "--label", "inner", "--"}, burn...)
+		r := cli(t, baseEnv(dir), args...)
+		if r.code != 0 {
+			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+		}
+		lines := runLog(t, dir)
+		if len(lines) != 2 || lines[0]["label"] != "inner" || lines[0]["nested"] != true ||
+			lines[1]["label"] != "outer" {
+			t.Fatalf("run log %v: want the nested line, then the outer one", lines)
+		}
+		checkUsage(t, "the pass-through", lines[0])
+		checkUsage(t, "the run around the pass-through", lines[1])
+	})
+}
+
+// A command that could not start has no rusage: its run still writes a line, without the usage
+// keys rather than with zeros.
+//
+// Mutation: in recordUsage, record zeros when ps is nil.
+func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	notExec := filepath.Join(dir, "not-executable")
+	if err := os.WriteFile(notExec, []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		label, cmd string
+		code       int
+	}{{"not-found", "coreslot-no-such-command", 127}, {"not-executable", notExec, 126}} {
+		r := cli(t, baseEnv(dir), "run", "--need", "cpu=1", "--label", c.label, "--", c.cmd)
+		if r.code != c.code {
+			t.Errorf("%s: exit %d, want %d (stderr %q)", c.cmd, r.code, c.code, r.stderr)
+		}
+	}
+	lines := runLog(t, dir)
+	if len(lines) != 2 {
+		t.Fatalf("run log %v: want a line for each run", lines)
+	}
+	for _, line := range lines {
+		for _, key := range []string{"cpu_user_s", "cpu_sys_s", "max_rss_kib"} {
+			if v, ok := line[key]; ok {
+				t.Errorf("%v (exit %v): %s is %v; want it absent", line["label"], line["exit"], key, v)
+			}
+		}
 	}
 }
 
