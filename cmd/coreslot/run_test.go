@@ -181,6 +181,9 @@ func runHelper(name string, args []string) int {
 	if code, ok := signalHelper(name, args); ok {
 		return code
 	}
+	if code, ok := libraryHelper(name, args); ok {
+		return code
+	}
 	fmt.Fprintln(os.Stderr, "unknown helper", name)
 	return 2
 }

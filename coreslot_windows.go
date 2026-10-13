@@ -38,6 +38,7 @@ func (g *Grant) Grant() map[string]int                 { return nil }
 func (g *Grant) Clamped() map[string]int               { return nil }
 func (g *Grant) Unbudgeted() []string                  { return nil }
 func (g *Grant) TokenOnly() bool                       { return false }
+func (g *Grant) PassThrough() bool                     { return false }
 func (g *Grant) Files() []*os.File                     { return nil }
 func (g *Grant) Env() []string                         { return nil }
 func (g *Grant) Close() error                          { return nil }

@@ -62,4 +62,8 @@ type Options struct {
 	// configuration is then read from <StateDir>/config.toml. Empty means the default (or the
 	// CORESLOT_STATE_DIR override).
 	StateDir string
+	// Independent makes Enqueue an ordinary request even inside another run's grant, as the
+	// CLI's --independent does: it queues in the budget like an unrelated request, behind a
+	// parent that may hold the whole budget, instead of passing through (see EnqueueContext).
+	Independent bool
 }
