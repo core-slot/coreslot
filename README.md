@@ -91,7 +91,7 @@ default 0) places a request as if it had arrived `P` minutes earlier.
 queue: it runs on its parent's tokens, with `min(max, held)`. Nested runs are not budgeted against
 each other: two siblings started together under an 8-core grant both run with 8. A parent that
 wants concurrent children partitions its grant itself. `--independent` queues as an unrelated
-request instead.
+request instead. The Go library applies the same rule ([below](#go-library)).
 
 The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource), the
 hold's descriptor at fd 3 and the token descriptors from fd 4. The tokens stay held until the
@@ -186,9 +186,14 @@ cmd.ExtraFiles, cmd.Env = g.Files(), append(env, g.Env()...)
 g.Close()
 ```
 
-The library never prints, never installs signal handlers and never decides to run unbudgeted: a
-`*StateError` tells the caller the budget is unusable. The package documentation has the full
-example; [`api/v0.txt`](api/v0.txt) is the exported API.
+Like a nested `coreslot run`, a library request made inside another run's grant passes through: a
+test suite run under `coreslot run --need cpu=8` that asks the library for cores gets them from
+its parent at once instead of queueing behind it. `Options.Independent` queues anyway, like
+`--independent`.
+
+The library never prints, never installs signal handlers and never decides on its own to run
+unbudgeted: a `*StateError` tells the caller the budget is unusable. The package documentation has
+the full example; [`api/v0.txt`](api/v0.txt) is the exported API.
 
 ## Protocol
 

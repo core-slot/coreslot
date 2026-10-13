@@ -7,7 +7,7 @@
 //		Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 3}}})
 //	g, err := w.Wait(ctx)          // or Poll at least every 2 s
 //	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
-//		// Inherited grant context belongs to another grant (PROTOCOL.md section 17).
+//		// Inherited grant context is replaced by g.Env (PROTOCOL.md section 17).
 //		return strings.HasPrefix(kv, "CORESLOT_GRANTED_") ||
 //			strings.HasPrefix(kv, "CORESLOT_HELD_FD=") ||
 //			strings.HasPrefix(kv, "CORESLOT_TOKEN_FDS=") ||
@@ -17,8 +17,26 @@
 //	... run the command ...
 //	g.Close()
 //
+// The example is the same for an ordinary grant and for a pass-through. Inside another run's
+// grant, Enqueue does not queue behind its own parent: it passes through as a nested
+// `coreslot run` does (PROTOCOL.md section 18, see Client.EnqueueContext), and the grant's Files
+// are the descriptors this process inherited, which Env names at the numbers ExtraFiles gives
+// them; Close leaves them open. An ordinary grant is therefore one made outside any grant, where
+// nothing was inherited, unless Options.Independent asks for one inside it (or the Client is
+// opened on another state directory). Then the descriptors the inherited CORESLOT_HELD_FD and
+// CORESLOT_TOKEN_FDS name are not the grant's, and section 17 asks a client to close them before
+// it starts its command; the library leaves that to the caller, since it does not own them and
+// a pass-through of the same process may still need them.
+//
 // The library never prints, never installs signal handlers, never chooses exit codes and never
-// decides to run unbudgeted: a *StateError tells the caller that the budget is unusable, and
-// the caller decides. On Windows, Open returns ErrUnsupported and nothing else is reachable.
-// The module stays at v0 until format 1 is frozen.
+// decides on its own to run unbudgeted: a *StateError tells the caller that the budget is
+// unusable, and the caller decides. A pass-through under a parent that runs unbudgeted is the
+// parent's decision, passed on as the CLI passes it. On Windows, Open returns ErrUnsupported and
+// nothing else is reachable. The module stays at v0 until format 1 is frozen.
+//
+// A ticket's lock is carried by a close-on-exec descriptor. If the caller's own goroutines fork
+// (os/exec, for example) while the library holds a ticket, the child shares that lock until it
+// execs, and an admission or a withdrawal in that window leaves the ticket in queue/, dead once
+// the child has exec'd, until the next reconciliation removes it; no live entry is ever removed,
+// and the library cannot close this window.
 package coreslot
