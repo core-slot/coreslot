@@ -50,15 +50,12 @@ func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) 
 		return g, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format(formats())
+	n, understood, err := sec.Prepare(formats(), e.clock.Realtime())
 	if err != nil {
 		return g, err
 	}
 	if !understood {
-		return g, fmt.Errorf("%w: the state directory has format %d, which this client does not implement; nothing written", ErrRefused, n)
-	}
-	if _, err := sec.ReconcileIfDue(e.clock.Realtime()); err != nil {
-		return g, err
+		return g, refuseFormat(n, "; nothing written")
 	}
 	if err := g.publishHold(sec, req.Label, false); err != nil {
 		return g, err

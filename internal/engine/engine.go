@@ -10,6 +10,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -125,6 +126,13 @@ func (e *Engine) sizes() (map[string]int, error) {
 		return nil, &store.StateError{Reason: "machine-wide CPU count: " + err.Error()}
 	}
 	return c.Sizes(n), nil
+}
+
+// refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,
+// which this client does not implement: it matches ErrRefused and is a *store.FormatError, and
+// suffix ends its message.
+func refuseFormat(n int, suffix string) error {
+	return fmt.Errorf("%w: %w", ErrRefused, &store.FormatError{N: n, Suffix: suffix})
 }
 
 // enter enters the section for one Step: a single TryEnter when single, otherwise Enter

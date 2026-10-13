@@ -413,10 +413,7 @@ func (g *Grant) removeHold() {
 		return
 	}
 	defer sec.Leave()
-	if _, understood, err := sec.Format(formats()); err != nil || !understood {
-		return
-	}
-	if _, err := sec.ReconcileIfDue(g.e.clock.Realtime()); err != nil {
+	if _, understood, err := sec.Prepare(formats(), g.e.clock.Realtime()); err != nil || !understood {
 		return
 	}
 	if removed, err := sec.ProbeAndRemoveHold(g.holdName); err == nil && removed {

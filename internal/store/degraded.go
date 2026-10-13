@@ -119,15 +119,12 @@ func (s *Store) inSideSection(change func(*Section) error) error {
 		return fmt.Errorf("store: cannot enter the admission section: %w", err)
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format(testhooks.Formats())
+	n, understood, err := sec.Prepare(testhooks.Formats(), NowNS())
 	if err != nil {
 		return err
 	}
 	if !understood {
-		return fmt.Errorf("store: the state directory has format %d, which this client does not implement; not writing", n)
-	}
-	if _, err := sec.ReconcileIfDue(NowNS()); err != nil {
-		return err
+		return fmt.Errorf("store: %w", &FormatError{N: n, Suffix: "; not writing"})
 	}
 	return change(sec)
 }

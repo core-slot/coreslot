@@ -342,6 +342,34 @@ func (sec *Section) Format(implemented []int) (n int, understood bool, err error
 	return n, true, nil
 }
 
+// Prepare is what every entry that changes state does before its change (PROTOCOL.md sections 8
+// and 10.4): it reads FORMAT as Format does, and when the format is understood it reconciles if
+// that is due at nowNS. n, understood and a FORMAT that cannot be read, written or parsed are
+// Format's; when the format is not understood nothing is reconciled or written, and the caller
+// refuses (a *FormatError) or turns token-only. An understood format with an error is a failure
+// of the admit.lock body or of reconciliation. Admission and token-only admission never
+// reconcile and call Format alone.
+func (sec *Section) Prepare(implemented []int, nowNS int64) (n int, understood bool, err error) {
+	n, understood, err = sec.Format(implemented)
+	if err != nil || !understood {
+		return n, understood, err
+	}
+	_, err = sec.ReconcileIfDue(nowNS)
+	return n, true, err
+}
+
+// FormatError refuses a write into a state directory whose FORMAT names format N, which this
+// client does not implement (PROTOCOL.md section 15.2). Suffix ends the message, for a caller
+// that says what it did not do.
+type FormatError struct {
+	N      int
+	Suffix string
+}
+
+func (e *FormatError) Error() string {
+	return fmt.Sprintf("the state directory has format %d, which this client does not implement%s", e.N, e.Suffix)
+}
+
 // ReadFormat reads FORMAT outside the section, for a reader that writes nothing (status): n is
 // the format and present false when FORMAT is absent. A malformed FORMAT is a *StateError.
 func (s *Store) ReadFormat() (n int, present bool, err error) {
