@@ -19,6 +19,11 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
   (`--clear`, `--reset`) and `version`, for macOS and Linux on amd64 and arm64. On Windows commands
   run without a budget, with a warning. `coreslot version` reports the module version of a
   `go install` build when no version was set at link time.
+- One-sided ranges in `run --need`: `RES=MIN..` means `MIN..max(MIN, 16)` and `RES=..MAX` means
+  `1..MAX`, beside `RES=MIN..MAX` and `RES=N`.
+- A `run` without `--need` asks for `cpu=1..16` when its command has a cpu placeholder (`{n}` or
+  `{n:cpu}`, inside an argument with `--subst`), and for `cpu=1..1` otherwise, so a command that
+  can use its grant gets a range and one that cannot holds no token it would leave idle.
 - Configuration in `~/.config/coreslot/config.toml` (`[resources]`, `[priorities]`, `[platform]`),
   moved into the state directory together with the state under `CORESLOT_STATE_DIR`.
 - Go library in the root package (`Open`, `Enqueue`, `Poll`, `Wait`, `Cancel`, `Adopt`, `Free`,

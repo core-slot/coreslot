@@ -19,6 +19,12 @@ const (
 	MinPriority    = -1000
 	MaxPriority    = 1000
 	MaxLabelBytes  = 128
+
+	// DefaultMax is the max the CLI fills in where a request leaves it open: `RES=MIN..` means
+	// MIN..max(MIN, DefaultMax), and a run without --need whose command takes a cpu placeholder
+	// asks for cpu=1..DefaultMax. Admission caps a max at the resource's size anyway, so it
+	// only has to be large enough not to leave a typical machine's cores idle.
+	DefaultMax = 16
 )
 
 // Range is a request for one resource: start once Min is free, take up to Max.
@@ -59,26 +65,37 @@ func EnvName(name string) string {
 	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 }
 
-// ParseNeed parses one need argument, `RES=MIN..MAX` or `RES=N` (meaning N..N).
+// ParseNeed parses one need argument: `RES=MIN..MAX`, `RES=N` (meaning N..N), `RES=MIN..`
+// (meaning MIN..max(MIN, DefaultMax)) or `RES=..MAX` (meaning 1..MAX). A range names at least
+// one end, so `RES=..` is malformed.
 func ParseNeed(arg string) (string, Range, error) {
 	name, spec, ok := strings.Cut(arg, "=")
 	if !ok {
-		return "", Range{}, usagef("invalid need %q: want RES=MIN..MAX or RES=N", arg)
+		return "", Range{}, usagef("invalid need %q: want RES=MIN..MAX, RES=MIN.., RES=..MAX or RES=N", arg)
 	}
 	if err := ValidateName(name); err != nil {
 		return "", Range{}, usagef("invalid need %q: %v", arg, err)
 	}
 	lo, hi, isRange := strings.Cut(spec, "..")
-	if !isRange {
+	switch {
+	case !isRange:
 		hi = lo
+	case lo == "" && hi == "":
+		return "", Range{}, usagef("invalid need %q: a range names its min, its max or both", arg)
 	}
-	low, err := parseCount(lo)
-	if err != nil {
-		return "", Range{}, usagef("invalid need %q: %v", arg, err)
+	low := 1 // `RES=..MAX`: any number of tokens from one up
+	if !isRange || lo != "" {
+		var err error
+		if low, err = parseCount(lo); err != nil {
+			return "", Range{}, usagef("invalid need %q: %v", arg, err)
+		}
 	}
-	high, err := parseCount(hi)
-	if err != nil {
-		return "", Range{}, usagef("invalid need %q: %v", arg, err)
+	high := max(low, DefaultMax) // `RES=MIN..`: as many as admission allows, up to DefaultMax
+	if hi != "" || !isRange {
+		var err error
+		if high, err = parseCount(hi); err != nil {
+			return "", Range{}, usagef("invalid need %q: %v", arg, err)
+		}
 	}
 	r := Range{Min: low, Max: high}
 	if err := r.validate(name); err != nil {

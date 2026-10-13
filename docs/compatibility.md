@@ -53,7 +53,7 @@ contract and may change in any release; parse `status --json` instead.
 
 | Surface | Supported |
 |---|---|
-| `run` | `--need RES=MIN..MAX` (or `RES=N`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--subst`, `--refusal-code`; placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` |
+| `run` | `--need RES=MIN..MAX` (or `RES=N`, `RES=MIN..`, `RES=..MAX`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--subst`, `--refusal-code`; placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` |
 | `status` | `--json`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
 | `doctor` | `--clear`, `--reset` |
