@@ -25,10 +25,10 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	}
 	if r.o.strict {
 		code, _ := classify(strictRefusal(err, r.o.refusalCode))
-		r.notice("state error: %s; refusing (--strict)", reason)
+		r.notice("state error: %s; refusing (--strict)", text(reason))
 		return code
 	}
-	r.notice("state error: %s; running unbudgeted with %s (fail-open)", reason,
+	r.notice("state error: %s; running unbudgeted with %s (fail-open)", text(reason),
 		grantText(r.o.minGrant(), r.o.sortedNeed()))
 	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: reason, release: func() error { return nil }}
 	var g *engine.Grant
@@ -64,9 +64,9 @@ func failOpenNotice(opened, held bool, err error) string {
 	case !opened:
 		return "nothing was written (hold, degraded record, run log): the state directory cannot be used"
 	case !held:
-		return fmt.Sprintf("the unbudgeted hold, the degraded record and the run log were not written: %v", err)
+		return fmt.Sprintf("the unbudgeted hold, the degraded record and the run log were not written: %s", text(fmt.Sprint(err)))
 	case err != nil:
-		return fmt.Sprintf("the degraded record was not written: %v", err)
+		return fmt.Sprintf("the degraded record was not written: %s", text(err.Error()))
 	}
 	return ""
 }
@@ -105,7 +105,7 @@ func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 		c.log = e.Store()
 	}
 	if herr != nil {
-		r.notice("the unbudgeted hold was not published: %v", herr)
+		r.notice("the unbudgeted hold was not published: %s", text(herr.Error()))
 	}
 	return r.runChild(c)
 }

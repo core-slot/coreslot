@@ -100,7 +100,7 @@ func (r *run) runChild(c child) int {
 		childDone(terminal)
 		released = c.release()
 		code, _ := classify(&execError{Err: err})
-		r.notice("cannot run %s: %v", argv[0], err)
+		r.notice("cannot run %s: %s", text(argv[0]), text(err.Error()))
 		status = code
 	} else {
 		status = superviseChild(cmd, terminal)
@@ -125,7 +125,7 @@ func (r *run) runChild(c child) int {
 			err = appendRunLog(c.log, rec, r.notice)
 		}
 		if err != nil {
-			r.notice("the run log was not written: %v", err)
+			r.notice("the run log was not written: %s", text(err.Error()))
 		}
 	}
 	return status
@@ -166,10 +166,10 @@ func (r *run) releaseFailed(err error) (stop bool) {
 		if !ok {
 			reason = mismatch.Error()
 		}
-		r.notice("state error at release: %s; nothing more was written into the state directory, not even the run log", reason)
+		r.notice("state error at release: %s; nothing more was written into the state directory, not even the run log", text(reason))
 		return true
 	}
-	r.notice("the grant's descriptors did not all close: %v", err)
+	r.notice("the grant's descriptors did not all close: %s", text(err.Error()))
 	return false
 }
 
@@ -216,7 +216,7 @@ func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format strin
 			return skip
 		}
 		if rotateErr != nil {
-			notice("the run log was not rotated: %v", rotateErr)
+			notice("the run log was not rotated: %s", text(rotateErr.Error()))
 		}
 	}
 	if _, err := formatStillUnderstood(st.Dir()); err != nil {

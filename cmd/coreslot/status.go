@@ -256,10 +256,6 @@ func sectionHolder(s coreslot.SectionInfo, nowNS int64) string {
 
 // ---------------------------------------------------------------- human output
 
-// text escapes user text so that an entry stays on one line: labels are user text, so human
-// output escapes their control characters and newlines (JSON output encodes them).
-func text(s string) string { return wire.EscapeHuman(s) }
-
 func labelText(label string) string {
 	if label == "" {
 		return "(no label)"
