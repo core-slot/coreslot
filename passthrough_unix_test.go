@@ -215,6 +215,89 @@ func TestPassThroughRefusesAnInvalidContext(t *testing.T) {
 	}
 }
 
+// An invalid request is a *UsageError under an inherited context too, as it is outside one: the
+// request is validated before the pass-through is decided, so a Need whose Min is above its Max,
+// a resource name the protocol does not allow, or a label longer than 128 bytes is refused rather
+// than granted. Mutation: skipping EnqueueContext's validation reddens every case (a grant at
+// once instead of the error).
+func TestPassThroughValidatesTheRequest(t *testing.T) {
+	clearContext(t)
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	t.Setenv("CORESLOT_STATE_DIR", dir)
+	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
+	c := open(t, dir)
+	for _, tc := range []struct {
+		what string
+		req  Request
+	}{
+		{"min above max", Request{Need: map[string]Range{"cpu": {Min: 3, Max: 2}}}},
+		{"bad resource name", Request{Need: map[string]Range{"Bad Name": {Min: 1, Max: 1}}}},
+		{"over-long label", Request{Label: strings.Repeat("x", 129)}},
+	} {
+		w, err := c.Enqueue(tc.req)
+		var ue *UsageError
+		if w != nil || !errors.As(err, &ue) {
+			t.Errorf("%s: Enqueue = %v, %v; want a *UsageError", tc.what, w, err)
+		}
+	}
+}
+
+// A Client opened on the state directory the environment names, through another path to it (a
+// symlinked ancestor), is that budget: its request passes through rather than queueing as one
+// of another budget would. Mutation: dropping the same-directory comparison of namesBudget
+// (`&& false` on its os.SameFile branch) reddens it: an ordinary grant.
+func TestPassThroughOnTheSameDirectoryThroughAnotherPath(t *testing.T) {
+	clearContext(t)
+	base := t.TempDir()
+	target := filepath.Join(base, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(target, "state dir")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CORESLOT_STATE_DIR", dir)
+	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
+	g := waitGrant(t, open(t, filepath.Join(base, "link", "state dir")), Request{Need: map[string]Range{"cpu": {Min: 2, Max: 3}}})
+	if !g.PassThrough() || !maps.Equal(g.Grant(), map[string]int{"cpu": 2}) {
+		t.Errorf("a Client on %s through a symlink: pass-through %v, grant %v; want a pass-through of cpu 2", dir, g.PassThrough(), g.Grant())
+	}
+}
+
+// Rule 2 where CORESLOT_HELD_FD names a regular file that is no hold: a launcher closed the
+// parent's hold and the number was reused (PROTOCOL.md section 17). The test starts the child
+// with an unrelated file at fd 6 and the parent's tokens at fds 9 and 10; the child
+// (passThroughReused) checks that the pass-through places no hold at fd 3 and that its Env names
+// none. Mutations: inheritedHold accepting any regular file reddens both checks (the unrelated
+// file at fd 3, and CORESLOT_HELD_FD=3); dropping the replaced[EnvHeldFD] of PassThrough passes
+// the inherited CORESLOT_HELD_FD=6 on.
+func TestPassThroughSkipsAReusedHoldNumber(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	g := waitGrant(t, open(t, dir), Request{Label: "parent", Need: map[string]Range{"cpu": {Min: 2, Max: 2}}})
+	f := g.Files() // hold, cpu/0, cpu/1
+	unrelated, err := os.Create(filepath.Join(t.TempDir(), "unrelated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unrelated.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.ExtraFiles = []*os.File{nil, nil, nil, unrelated, nil, nil, f[1], f[2]}
+	cmd.Env = append(withoutCoreslot(), nestedEnv+"=reused", "CORESLOT_STATE_DIR="+dir,
+		"CORESLOT_HELD_FD=6", "CORESLOT_TOKEN_FDS=9-10", "CORESLOT_GRANTED_CPU=2")
+	out, err := cmd.CombinedOutput()
+	t.Logf("child:\n%s", out)
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+}
+
 // Rule 2 with a real inherited grant: the test takes a grant of cpu 0-2 and pg-local 0 and starts
 // the child with the hold at fd 6 and the tokens at fds 9 to 12 in another order (pg-local/0,
 // cpu/2, cpu/0, cpu/1), so that every number the child's command sees was renumbered. The child
@@ -252,6 +335,8 @@ func passThroughHelper(mode string) int {
 		err = passThroughChild()
 	case "grandchild":
 		err = passThroughGrandchild()
+	case "reused":
+		err = passThroughReused()
 	default:
 		if h := moreHelpers[mode]; h != nil {
 			err = h()
@@ -408,6 +493,39 @@ func passThroughGrandchild() error {
 		return fmt.Errorf("the grandchild's pass-through: %v, want cpu 3, every token the child passed on", g.Grant())
 	}
 	fmt.Println("grandchild: ok")
+	return nil
+}
+
+// passThroughReused is the process of TestPassThroughSkipsAReusedHoldNumber: its
+// CORESLOT_HELD_FD names fd 6, a regular file that is no hold, and its tokens are at fds 9 and
+// 10.
+func passThroughReused() error {
+	c, err := Open(Options{})
+	if err != nil {
+		return err
+	}
+	w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
+	if err != nil {
+		return err
+	}
+	g, ok, err := w.Poll()
+	if !ok || err != nil {
+		return fmt.Errorf("Poll = %v, %v, %v; want the grant at once", g, ok, err)
+	}
+	if !g.PassThrough() || g.Grant()["cpu"] != 2 {
+		return fmt.Errorf("pass-through %v, grant %v; want a pass-through of cpu 2", g.PassThrough(), g.Grant())
+	}
+	files := g.Files()
+	if len(files) != 3 || files[0] != nil {
+		return fmt.Errorf("Files %v: want no hold at fd 3, then the two tokens", files)
+	}
+	if fds := []uintptr{files[1].Fd(), files[2].Fd()}; !slices.Equal(fds, []uintptr{9, 10}) {
+		return fmt.Errorf("the tokens are fds %v, want [9 10]", fds)
+	}
+	if env, want := strings.Join(g.Env(), " "), "CORESLOT_GRANTED_CPU=2 CORESLOT_TOKEN_FDS=4-5"; env != want {
+		return fmt.Errorf("env %q, want %q: no CORESLOT_HELD_FD without a hold", env, want)
+	}
+	fmt.Println("reused: ok")
 	return nil
 }
 
