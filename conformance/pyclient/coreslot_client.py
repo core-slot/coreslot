@@ -64,6 +64,9 @@ MAX_ENTRIES = 65536
 MAX_BODY = 8192
 MAX_PER_RESOURCE = 256
 MAX_TOTAL = 512
+# §21: the max the CLI fills in where a request leaves it open (RES=MIN.., and the default
+# request of a command that takes a cpu placeholder).
+DEFAULT_MAX = 16
 MAX_SIZE = 4096
 MAX_INDEX = 4095
 PRIORITY_NS = 60 * 10**9
@@ -822,12 +825,19 @@ def normalize_need(need) -> dict[str, tuple[int, int]]:
     return out
 
 
+_NEED_ARG = re.compile(r"([^=]+)=(?:(0|[1-9][0-9]*)|(0|[1-9][0-9]*)?\.\.(0|[1-9][0-9]*)?)")
+
+
 def parse_need_arg(text: str) -> tuple[str, tuple[int, int]]:
-    m = re.fullmatch(r"([^=]+)=(0|[1-9][0-9]*)(?:\.\.(0|[1-9][0-9]*))?", text)
-    if not m:
-        raise UsageError(f"malformed need {text!r} (want RES=MIN..MAX or RES=N)")
-    lo = int(m.group(2))
-    hi = int(m.group(3)) if m.group(3) is not None else lo
+    """§21: RES=N is N..N, RES=MIN.. is MIN..max(MIN, 16), RES=..MAX is 1..MAX; RES=.. is malformed."""
+    m = _NEED_ARG.fullmatch(text)
+    if not m or all(g is None for g in m.group(2, 3, 4)):
+        raise UsageError(f"malformed need {text!r} (want RES=MIN..MAX, RES=MIN.., RES=..MAX or RES=N)")
+    if m.group(2) is not None:
+        lo = hi = int(m.group(2))
+    else:
+        lo = int(m.group(3)) if m.group(3) is not None else 1
+        hi = int(m.group(4)) if m.group(4) is not None else max(lo, DEFAULT_MAX)
     return m.group(1), (lo, hi)
 
 
@@ -2279,8 +2289,11 @@ def _parse_run(args: list[str]) -> _RunOptions:
 
 
 def _needs_from(opts: _RunOptions) -> dict[str, tuple[int, int]]:
+    if not opts.needs:  # §21: a command that cannot use n would leave every token but one idle
+        wide = "cpu" in placeholder_resources(opts.command, opts.subst)
+        return {"cpu": (1, DEFAULT_MAX if wide else 1)}
     raw: dict[str, tuple[int, int]] = {}
-    for text in opts.needs or ["cpu=1..1"]:
+    for text in opts.needs:
         name, pair = parse_need_arg(text)
         if name in raw:
             raise UsageError(f"duplicate resource {name}")

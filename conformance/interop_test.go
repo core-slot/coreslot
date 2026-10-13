@@ -5,6 +5,7 @@ package conformance
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -93,6 +94,58 @@ func TestInteropPythonAndGo(t *testing.T) {
 		}
 	})
 
+	// The CLI conventions of PROTOCOL.md section 21 are not protocol, but both clients follow
+	// them: on an 8-token budget each run of the same arguments gets the same grant and exit
+	// status from either client, and logs the same normalized request.
+	t.Run("need forms and the default request agree", func(t *testing.T) {
+		e := State(t)
+		e.WriteConfig(cpuConfig(8))
+		report := []string{"--", "sh", "-c", `echo "$CORESLOT_GRANTED_CPU $1"`, "sh"}
+		cases := []struct {
+			flags  []string
+			arg    string
+			out    string
+			code   int
+			logged string
+		}{
+			{nil, "x", "1 x", 0, "map[cpu:[1 1]]"},
+			{nil, "{n}", "8 8", 0, "map[cpu:[1 16]]"},
+			{nil, "{n:cpu}", "8 8", 0, "map[cpu:[1 16]]"},
+			{nil, "{{n}}", "1 {n}", 0, "map[cpu:[1 1]]"},
+			{nil, "-j{n}", "1 -j{n}", 0, "map[cpu:[1 1]]"},
+			{[]string{"--subst"}, "-j{n}", "8 -j8", 0, "map[cpu:[1 16]]"},
+			{[]string{"--need", "cpu=4.."}, "x", "8 x", 0, "map[cpu:[4 16]]"},
+			{[]string{"--need", "cpu=20.."}, "x", "8 x", 0, "map[cpu:[20 20]]"},
+			{[]string{"--need", "cpu=..2"}, "x", "2 x", 0, "map[cpu:[1 2]]"},
+			{[]string{"--need", "cpu=.."}, "x", "", 64, ""},
+			{[]string{"--need", "cpu=..."}, "x", "", 64, ""},
+			{[]string{"--need", "cpu=-1.."}, "x", "", 64, ""},
+			{[]string{"--need", "cpu=..0"}, "x", "", 64, ""},
+			{[]string{"--need", "cpu=257.."}, "x", "", 64, ""},
+		}
+		for _, c := range cases {
+			args := append(append(append([]string{"run"}, c.flags...), report...), c.arg)
+			for _, client := range []struct {
+				name string
+				argv []string
+			}{{"go", []string{bins.coreslot}}, {"python", []string{py, pyc}}} {
+				before := len(runLogNeeds(t, e))
+				p := e.StartCommand(append(slices.Clone(client.argv), args...)...)
+				p.ExitCode(c.code)
+				if got := strings.TrimSpace(p.Stdout()); got != c.out {
+					t.Errorf("%s %q: printed %q, want %q", client.name, args, got, c.out)
+				}
+				needs := runLogNeeds(t, e)
+				switch {
+				case c.logged == "" && len(needs) != before:
+					t.Errorf("%s %q: a refused run appended to the run log", client.name, args)
+				case c.logged != "" && (len(needs) != before+1 || needs[len(needs)-1] != c.logged):
+					t.Errorf("%s %q: run log needs %v, want %s appended", client.name, args, needs[before:], c.logged)
+				}
+			}
+		}
+	})
+
 	t.Run("fixture decoders agree", func(t *testing.T) {
 		root, err := moduleRoot()
 		if err != nil {
@@ -129,6 +182,29 @@ func TestInteropPythonAndGo(t *testing.T) {
 			t.Logf("%d fixtures: Go and Python agree", len(goVerdicts))
 		}
 	})
+}
+
+// runLogNeeds is the need of every run-log line, formatted as fmt prints a decoded map.
+func runLogNeeds(t *testing.T, e Env) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(e.Dir, "log", "runs.jsonl"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var rec struct {
+			Need map[string][]int `json:"need"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("run log line %q: %v", line, err)
+		}
+		out = append(out, fmt.Sprint(rec.Need))
+	}
+	return out
 }
 
 type statusDoc struct {

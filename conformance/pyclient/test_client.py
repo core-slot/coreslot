@@ -292,6 +292,43 @@ class BodyTests(unittest.TestCase):
                 cc.normalize_need(need)
 
 
+class NeedGrammarTests(unittest.TestCase):
+    """The CLI conventions of PROTOCOL §21: the --need forms and the default request."""
+
+    def needs(self, *args: str) -> dict:
+        return cc._needs_from(cc._parse_run(list(args)))
+
+    def test_one_sided_ranges(self):
+        for text, want in (("cpu=4..12", (4, 12)), ("cpu=8", (8, 8)), ("cpu=4..", (4, 16)),
+                           ("cpu=1..", (1, 16)), ("cpu=16..", (16, 16)), ("cpu=20..", (20, 20)),
+                           ("cpu=256..", (256, 256)), ("cpu=..2", (1, 2)), ("cpu=..1", (1, 1)),
+                           ("cpu=..256", (1, 256)), ("pg-local=..3", (1, 3))):
+            name = text.split("=", 1)[0]
+            self.assertEqual(self.needs("--need", text, "--", "true"), {name: want}, text)
+
+    def test_malformed_needs_are_usage_errors(self):
+        for text in ("cpu=..", "cpu=...", "cpu=...4", "cpu=4...", "cpu=..4..", "cpu=-1..", "cpu=..-1",
+                     "cpu=0..", "cpu=..0", "cpu=257..", "cpu=..257", "cpu= 4..", "cpu=4.. ", "cpu=.. 4",
+                     "cpu=+4..", "cpu=..+4", "cpu=x..", "cpu=..x", "cpu=", "cpu", "cpu=1..2..3"):
+            with self.assertRaises(cc.UsageError, msg=text):
+                self.needs("--need", text, "--", "true")
+
+    def test_default_depends_on_a_cpu_placeholder(self):
+        one, wide = {"cpu": (1, 1)}, {"cpu": (1, 16)}
+        for args, want in ((["--", "sh", "-c", "echo $CORESLOT_GRANTED_CPU"], one),
+                           (["--", "pytest", "-n", "{n}"], wide),
+                           (["--", "pytest", "-n", "{n:cpu}"], wide),
+                           (["--", "echo", "{{n}}"], one),
+                           (["--", "echo", "{{n:cpu}}"], one),
+                           (["--", "make", "-j{n}"], one),
+                           (["--subst", "--", "make", "-j{n}"], wide),
+                           (["--subst", "--", "make", "-j{n:cpu}"], wide),
+                           (["--subst", "--", "echo", "-j{{n}}"], one),
+                           (["--", "echo", "{n:gpu}"], one),
+                           (["--need", "cpu=2", "--", "pytest", "-n", "{n}"], {"cpu": (2, 2)})):
+            self.assertEqual(self.needs(*args), want, args)
+
+
 class StateDirTests(Base):
     def test_relative_override_is_state_error(self):
         with self.assertRaises(cc.StateError):
@@ -1116,6 +1153,24 @@ class LauncherTests(Base):
             p = self.cli("run", *bad, *(["--", "true"] if bad else []), stderr=subprocess.DEVNULL)
             self.assertEqual(p.wait(timeout=20), 64, bad)
         self.assertEqual(self.ls("queue"), [])
+
+    def test_need_forms_grant_and_log(self):
+        self.config("[resources]\ncpu = 8\n")
+        report = ["sh", "-c", 'echo "$CORESLOT_GRANTED_CPU $1"', "sh"]
+        for args, out, logged in ((["--", *report, "x"], "1 x", [1, 1]),
+                                  (["--", *report, "{n}"], "8 8", [1, 16]),
+                                  (["--", *report, "{{n}}"], "1 {n}", [1, 1]),
+                                  (["--subst", "--", *report, "-j{n}"], "8 -j8", [1, 16]),
+                                  (["--need", "cpu=4..", "--", *report, "x"], "8 x", [4, 16]),
+                                  (["--need", "cpu=..2", "--", *report, "x"], "2 x", [1, 2])):
+            p = self.cli("run", *args, stdout=subprocess.PIPE)
+            stdout, _ = p.communicate(timeout=20)
+            self.assertEqual((p.returncode, stdout.decode().strip()), (0, out), args)
+            log = [json.loads(line) for line in self.read("log", "runs.jsonl").splitlines()]
+            self.assertEqual(log[-1]["need"], {"cpu": logged}, args)
+        for bad in ("cpu=..", "cpu=257.."):
+            p = self.cli("run", "--need", bad, "--", "true", stderr=subprocess.DEVNULL)
+            self.assertEqual(p.wait(timeout=20), 64, bad)
 
     def test_pass_through(self):
         self.config("[resources]\ncpu = 4\npg-local = 2\n")
