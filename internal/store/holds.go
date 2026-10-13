@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
@@ -77,13 +78,33 @@ func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
 	if _, ok := wire.ParseName(name); !ok {
 		return false, fmt.Errorf("store: %q is not a ticket name", name)
 	}
-	removed, _, err = removeIfDead(sec.s.path(QueueDir, name))
+	path := sec.s.path(QueueDir, name)
+	for try := 1; ; try++ {
+		var gone bool
+		removed, gone, err = removeIfDead(path)
+		if removed || gone || err != nil || try == ownRemovalTries {
+			break
+		}
+		time.Sleep(ownRemovalPause)
+	}
 	var se *StateError
 	if errors.As(err, &se) {
 		return false, nil
 	}
 	return removed, err
 }
+
+// RemoveOwnTicket's probe finds its ticket locked although the owner has closed its descriptor
+// when another client's momentary probe (a status snapshot, an election) holds the lock at that
+// instant; the ticket would then stay dead in queue/ until a reconciliation, though PROTOCOL.md
+// section 12.1 step 7 has its owner unlink it. Such a probe lets go within microseconds, so the
+// owner tries again, at most ownRemovalTries times with ownRemovalPause between tries: about a
+// millisecond in the section at worst, when a description that outlives the owner's (a child
+// forked before it exec'd) really keeps the ticket locked and it is left to reconciliation.
+const (
+	ownRemovalTries = 8
+	ownRemovalPause = 200 * time.Microsecond
+)
 
 // RemoveCancel removes the cancel request for the ticket id inside the section, once its owner
 // found it (PROTOCOL.md section 13.1). A missing request is not an error, and a stray entry
