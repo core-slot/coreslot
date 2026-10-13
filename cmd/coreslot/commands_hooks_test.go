@@ -319,3 +319,64 @@ func TestNofileProbeInheritsNoGrant(t *testing.T) {
 		}
 	}
 }
+
+// A run's descriptor-limit probe has exec'd before the run publishes anything. Until the forked
+// child execs it shares every descriptor of the run, close-on-exec ones included, so a probe
+// forked while the run held its ticket kept that ticket locked after the run closed it, and the
+// run's own probe at admission then left the dead ticket in queue/ for a reconciliation instead
+// of unlinking it (PROTOCOL.md section 12.1 step 7). The run pauses just before it starts the
+// probe, and it must publish nothing while it is paused.
+// Mutation: start the probe inside startNofileProbe's goroutine again (pause point included), and
+// the paused run publishes its hold.
+func TestNofileProbeExecsBeforeThePublication(t *testing.T) {
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Fatal(err)
+	}
+	if uint64(lim.Max) < 1024 {
+		t.Skipf("the hard limit %d leaves no room above 256 + 256", lim.Max)
+	}
+	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	hooks := t.TempDir()
+	env := append(baseEnv(dir), "CORESLOT_TESTHOOK_DIR="+hooks, "CORESLOT_TESTHOOK_PAUSE=probe.before-start")
+	cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run --no-wait -- true`, cliBinary(t))
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	reached := filepath.Join(hooks, fmt.Sprintf("%d.probe.before-start.reached", cmd.Process.Pid))
+	waitFor(t, 30*time.Second, "the run's pause before its probe starts", func() bool {
+		_, err := os.Stat(reached)
+		return err == nil
+	})
+	published := func() []string {
+		var names []string
+		for _, d := range []string{"queue", "holds"} {
+			des, _ := os.ReadDir(filepath.Join(dir, d))
+			for _, de := range des {
+				names = append(names, d+"/"+de.Name())
+			}
+		}
+		return names
+	}
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if names := published(); len(names) != 0 {
+			t.Fatalf("the run published %v before its probe started", names)
+		}
+	}
+	if err := os.WriteFile(strings.TrimSuffix(reached, ".reached")+".go", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the run: %v", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatalf("the released run did not finish within 60 s (load: %s)", uptime())
+	}
+	if names := published(); len(names) != 0 {
+		t.Errorf("the run left %v behind", names)
+	}
+}

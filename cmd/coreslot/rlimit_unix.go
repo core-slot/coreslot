@@ -75,9 +75,22 @@ func startNofileProbe(shield []int) *nofileProbe {
 	p.shielded = setCloseOnExec(shield)
 	ctx, cancel := context.WithTimeout(context.Background(), testhooks.ProbeTimeout(probeTimeout))
 	p.cancel = cancel
+	// The shell is started here, not in the goroutine: Start returns only once the forked child
+	// has exec'd, which closed its copies of this process's close-on-exec descriptors. Forked
+	// concurrently, the child could still share the description of the ticket the run publishes
+	// next, and the run's own probe of that ticket, once admitted, would find it locked and leave
+	// it in queue/ for a reconciliation instead of unlinking it (PROTOCOL.md section 12.1 step 7).
+	// Only the shell's run overlaps with admission.
+	cmd, out := probeCommand(ctx)
+	// A test pauses here to check that the run publishes nothing before the probe has exec'd.
+	testhooks.Point("probe.before-start")
+	if err := cmd.Start(); err != nil {
+		close(p.done)
+		return p
+	}
 	go func() {
 		defer close(p.done)
-		p.soft, p.ok = probeSoftNofile(ctx)
+		p.soft, p.ok = parseProbe(cmd.Wait(), out)
 	}()
 	return p
 }
@@ -100,16 +113,21 @@ func runtimeMayHaveRaised(cur, hard uint64) bool {
 	return cur == hard-1 || (c > 0 && cur == c)
 }
 
-// probeSoftNofile runs the probe until ctx ends and parses what it printed: a decimal number or
-// "unlimited". The probe gets no environment, so no startup file runs, and its standard input
-// and error are the null device.
-func probeSoftNofile(ctx context.Context) (uint64, bool) {
+// probeCommand is the probe: `sh -c 'ulimit -S -n'`, killed when ctx ends. It gets no
+// environment, so no startup file runs, and its standard input and error are the null device;
+// what it prints goes to out.
+func probeCommand(ctx context.Context) (*exec.Cmd, *bytes.Buffer) {
 	cmd := exec.CommandContext(ctx, testhooks.ProbeShell(), "-c", "ulimit -S -n")
 	cmd.Env = []string{}
 	cmd.WaitDelay = probeWaitDelay
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+	out := &bytes.Buffer{}
+	cmd.Stdout = out
+	return cmd, out
+}
+
+// parseProbe parses what a probe that ended with err printed: a decimal number or "unlimited".
+func parseProbe(err error, out *bytes.Buffer) (uint64, bool) {
+	if err != nil {
 		return 0, false
 	}
 	s := strings.TrimSpace(out.String())
