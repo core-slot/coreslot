@@ -10,6 +10,8 @@ Index of the evidence scripts:
   benchmark, in "Waiter benchmark (the release gate)" below.
 - `probe-docker-flock.sh`: whether a container sees the host's flock, in "Docker Desktop and
   host locks" below.
+- `acceptance.py`: three test gates and a CI job with and without coreslot, in "Product
+  acceptance" below.
 
 ## Waiter benchmark (the release gate)
 
@@ -328,3 +330,128 @@ $ echo $?
 Started 2026-10-12T01:49:44Z. The same result as the run of 2026-10-11: on
 Docker Desktop for macOS, a container that bind-mounts the state directory does not see the host's
 token locks, so containers must take part through a client on the host.
+
+## Product acceptance: `acceptance.py`
+
+**The criterion (README, Status), declared before the first run:** on a developer machine that is
+never quiet, three parallel test gates plus one CI job run with and without coreslot as
+alternating pairs in the same window, at least three pairs; with coreslot, the median time until
+the last job finishes is at most 1.05 × the median without it, and no gate fails falsely.
+
+`acceptance.py run GATES.json OUTDIR FIRST LAST` starts every job of a set at the same instant,
+alternates a set without coreslot and a set with it, samples the load average and the memory
+pressure level every 5 s, and keeps each set's run-log lines; `acceptance.py summary OUTDIR`
+prints the table, the medians and the ratio of each pair. Run 1 used an earlier copy of the same
+runner; `summary` over its records prints the numbers below.
+
+### Setup
+
+- **Host:** the reference host (Apple M4 Pro, 14 logical CPUs, 48 GiB, macOS 27.0.1), budget
+  `cpu = 14` in a state directory of its own, coreslot built from `a18bbbe`. Never quiet: other
+  coding-agent sessions and another project's Docker Desktop VM (about 3.7 cores and 32 GiB when
+  sampled) ran throughout, and no new heavy work was started during a run.
+- **Jobs**, each in a copy of its working tree:
+  - the *service suite*: a Python service's unit tests on pytest-xdist with 12 workers;
+  - the *CLI suite*: a Python command-line tool's tests on pytest-xdist, `-n auto` without
+    coreslot;
+  - the *Go suite*: `go test -race -count=1 ./internal/...` of this repository;
+  - the *CI job*: `ruff check` and `mypy` over the CLI suite's tree.
+- **Cores used**, from the run log: (`cpu_user_s` + `cpu_sys_s`) ÷ `ran_s`. It counts each command
+  and the descendants it waited for.
+
+### Run 1 (2026-10-13): one token per worker, failed
+
+With coreslot each gate asked for a range and ran one worker per granted token:
+`--need cpu=4..12 -- pytest -n {n}` (service), `--need cpu=2.. -- pytest -n {n}` (CLI),
+`--need cpu=2..8 --subst -- env GOMAXPROCS={n} go test -p {n} …` (Go), `--need cpu=1` (CI).
+
+| Set | Service suite | CLI suite | Go suite | CI job | Last job ends | Peak 1-min load |
+|---|---|---|---|---|---|---|
+| S1-without | 575.0 | 222.1 | 59.5 | 0.3 | **575.0** | 75 |
+| S2-with | 457.2 | 540.9 | 515.1 | 0.5 | **540.9** | 58 |
+| S3-without | 487.8 | 222.1 | 59.8 | 0.5 | **487.9** | 91 |
+| S4-with | 562.7 | 596.1 | 622.4 | 0.4 | **622.4** | 48 |
+| S5-without | 452.0 | 161.0 | 59.3 | 0.4 | **452.0** | 73 |
+| S6-with | 378.3 | 542.2 | 58.7 | 380.6 | **542.2** | 21 |
+| S7-without | 479.4 | 201.8 | 60.0 | 0.2 | **479.4** | 86 |
+| S8-with | 467.7 | 564.0 | 59.7 | 468.7 | **564.0** | 31 |
+
+Times in seconds; the CI job's time includes its wait. No job failed.
+
+```text
+median with = 553.1 s, median without = 483.6 s, ratio = 1.144
+per pair (with / the preceding without): 0.941, 1.276, 1.199, 1.177
+```
+
+**Why it failed.** The service suite arrived first and took 12 of the 14 tokens, but its 12
+workers kept only 3.0 to 4.3 cores busy: they mostly wait. The CLI suite got 2 tokens, ran 2
+workers and took 540 to 596 s instead of 160 to 222 s; the Go suite (0.06 cores) or the CI job
+waited up to 563 s behind a head whose minimum did not fit. A grant is fixed for the run, so
+nothing could move. The tokens stood for workers, while the machine has cores.
+
+### Run 2 (2026-10-13): tokens for the cores each gate uses, passed
+
+Each gate asked for the cores it used in run 1, times 1.2, rounded up, and ran its workers
+independently of the grant where they mostly wait: `--need cpu=6 -- pytest -n 12` (service),
+`--need cpu=4..6 -- pytest -n {n}` (CLI), `--need cpu=1 -- go test -race -count=1 ./internal/...`
+(Go), `--need cpu=1` (CI). The maxima sum to 14, so all four start at once. Six pairs were
+declared first; six more were declared, before they ran, to be pooled with them for the verdict.
+
+| Set | Service suite | CLI suite | Go suite | CI job | Last job ends | Peak 1-min load | Pressure ≥ 2 |
+|---|---|---|---|---|---|---|---|
+| S1-without | 721.9 | 227.4 | 61.1 | 0.7 | **721.9** | 113 | 16 % |
+| S2-with | 564.5 | 387.4 | 60.8 | 0.4 | **564.5** | 145 | 0 % |
+| S3-without | 578.9 | 238.8 | 60.7 | 0.4 | **578.9** | 200 | 0 % |
+| S4-with | 536.5 | 299.6 | 58.6 | 0.5 | **536.5** | 65 | 70 % |
+| S5-without | 722.1 | 242.6 | 60.4 | 0.5 | **722.1** | 177 | 66 % |
+| S6-with | 533.9 | 335.1 | 59.9 | 0.4 | **533.9** | 101 | 0 % |
+| S7-without | 436.5 | 204.2 | 59.8 | 0.4 | **436.5** | 82 | 0 % |
+| S8-with | 553.4 | 362.5 | 59.5 | 0.4 | **553.4** | 106 | 0 % |
+| S9-without | 626.4 | 213.4 | 60.3 | 0.4 | **626.4** | 113 | 0 % |
+| S10-with | 642.2 | 358.6 | 59.7 | 0.4 | **642.2** | 194 | 24 % |
+| S11-without | 589.4 | 230.2 | 61.7 | 0.5 | **589.4** | 139 | 0 % |
+| S12-with | 694.3 | 300.0 | 61.7 | 3.5 | **694.3** | 171 | 81 % |
+| S13-without | 555.8 | 197.3 | 60.7 | 0.4 | **555.8** | 71 | 0 % |
+| S14-with | 511.4 | 283.1 | 59.8 | 0.5 | **511.4** | 71 | 0 % |
+| S15-without | 515.6 | 182.8 | 60.4 | 0.4 | **515.6** | 118 | 0 % |
+| S16-with | 542.1 | 324.0 | 59.5 | 0.5 | **542.1** | 86 | 0 % |
+| S17-without | 493.1 | 197.3 | 59.7 | 0.4 | **493.1** | 71 | 0 % |
+| S18-with | 542.0 | 283.8 | 59.5 | 0.5 | **542.0** | 65 | 0 % |
+| S19-without | 514.4 | 244.4 | 60.0 | 0.4 | **514.4** | 76 | 0 % |
+| S20-with | 497.4 | 262.7 | 59.7 | 0.5 | **497.4** | 62 | 0 % |
+| S21-without | 496.7 | 304.3 | 60.2 | 0.5 | **496.7** | 83 | 0 % |
+| S22-with | 409.8 | 279.1 | 59.8 | 0.4 | **409.8** | 74 | 0 % |
+| S23-without | 393.2 | 180.4 | 60.0 | 0.4 | **393.2** | 73 | 0 % |
+| S24-with | 396.0 | 268.7 | 60.5 | 1.4 | **396.0** | 57 | 0 % |
+
+"Pressure ≥ 2" is the share of 5 s samples at memory pressure level 2 (urgent) or above
+(`kern.memorystatus_vm_pressure_level`); the rest were at level 1 (warning). No job failed, and
+no request waited more than 3 s. With coreslot the service suite kept 2.4 to 3.9 cores busy on
+its 6 tokens and the CLI suite 2.3 to 3.3 on 6.
+
+```text
+median with = 539.2 s, median without = 535.7 s, ratio = 1.007
+per pair (with / the preceding without): 0.782, 0.927, 0.739, 1.268, 1.025, 1.178, 0.920, 1.051, 1.099, 0.967, 0.825, 1.007
+pairs favouring coreslot: 6 of 12
+```
+
+**What it shows.** Charging the cores a gate uses, not one token per worker, removed run 1's
+loss: the ratio went from 1.144 to 1.007, inside the 1.05 bound, and no job waited. It is a tie,
+not a speed-up: six pairs favour each arm, and the run was also declared against a stricter
+target, a ratio below 1.00, which it does not meet. On this mix the gates themselves need about 6
+to 9 of the 14 cores; the slowdown of the service suite against its 389 s alone came from the
+host's other work, which coreslot does not govern.
+
+**What it does not show.** Whether coreslot is faster than free oversubscription on a mix that
+the gates themselves overload (several suites each asking for every core), which is the case
+coreslot is for; the cores each gate used without coreslot (not recorded); any other host.
+
+### Reproduce
+
+```sh
+python3 evidence/acceptance.py run gates.json out 1 6
+python3 evidence/acceptance.py summary out
+```
+
+`gates.json` follows the shape in the script's docstring; give it a state directory of its own,
+so the run is a separate budget and its run log holds only these jobs.
