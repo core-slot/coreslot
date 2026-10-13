@@ -94,7 +94,7 @@ func (r *run) runChild(c child) int {
 	started := time.Now()
 	status := 0
 	var released error
-	if err := cmd.Start(); err != nil {
+	if err := exposeInherited(cmd.Start); err != nil {
 		childDone(terminal)
 		released = c.release()
 		code, _ := classify(&execError{Err: err})

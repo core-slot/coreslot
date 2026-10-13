@@ -246,9 +246,9 @@ func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 	})
 }
 
-// The probe never inherits a grant's descriptors. A pass-through shields its inherited grant with
-// close-on-exec while its probe starts and clears that again, so its command still inherits the
-// grant.
+// The probe never inherits a grant's descriptors. A pass-through's inherited grant is
+// close-on-exec from the start of the process until its command starts, so its command still
+// inherits the grant and its probe does not.
 //
 // Each probe reports through the test binary, which is slower than the probe's 1 s bound allows
 // in a race-enabled build: the race runtime sleeps 1 s before the program exits. So the test
@@ -257,10 +257,10 @@ func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 // unfinished report, and on Linux the pass-through would not probe at all, since the fallback
 // starts it at its hard limit, which the runtime does not raise.
 //
-// Mutations: start the pass-through's probe with startNofileProbe(nil) in decide, and the nested
-// probe reports the parent's hold and token; skip the restoring loop in nofileProbe.wait, and the
-// nested command inherits neither; drop CORESLOT_TESTHOOK_PROBE_TIMEOUT from the test, and a
-// race-enabled run goes red.
+// Mutations: drop the shieldInherited call from main, and the nested probe reports the parent's
+// hold and token; skip the restoring loop before start in exposeInherited, and the nested command
+// inherits neither; drop CORESLOT_TESTHOOK_PROBE_TIMEOUT from the test, and a race-enabled run
+// goes red.
 func TestNofileProbeInheritsNoGrant(t *testing.T) {
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
