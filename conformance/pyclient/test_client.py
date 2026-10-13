@@ -1415,6 +1415,44 @@ class AlignmentTests(Base):
                          ("unb", True, "parent-reason", {"cpu": 2}))
         self.assertNotIn("degraded", os.listdir(self.S))  # rule 1 writes no degraded record
 
+    def test_run_log_records_usage(self):
+        """§20: a run whose command ran logs its CPU seconds and peak RSS in KiB; one that never started, none.
+
+        Mutation: drop the `usage.update` in spawn_and_wait (the keys are absent), or take
+        ru_maxrss as KiB on macOS too (bytes: far above the 10 GiB bound).
+        """
+        burn = [sys.executable, "-c",
+                "import resource\n"
+                "b = b'x' * (64 << 20)\n"
+                "while sum(resource.getrusage(resource.RUSAGE_SELF)[:2]) < 0.05:\n"
+                "    pass\n"]
+        self.config("[resources]\ncpu = 4\n")
+        inner = [sys.executable, CLIENT, "run", "--label", "inner", "--need", "cpu=1", "--", *burn]
+        self.assertEqual(self.cli("run", "--label", "outer", "--need", "cpu=2", "--", *inner).wait(timeout=60), 0)
+        env = dict(self.env, CORESLOT_UNBUDGETED="parent-reason")
+        p = self.cli("run", "--label", "unb", "--", *burn, env=env, stderr=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=60), 0)
+        noexec = os.path.join(self.root, "noexec")
+        open(noexec, "w").close()
+        for label, cmd, code in (("not-found", "/nonexistent/command", 127), ("not-executable", noexec, 126)):
+            p = self.cli("run", "--label", label, "--", cmd, stderr=subprocess.DEVNULL)
+            self.assertEqual(p.wait(timeout=20), code, label)
+        self.config("[resources]\ncpu = 0\n")  # a state error: the run fails open
+        p = self.cli("run", "--label", "fail-open", "--", *burn, stderr=subprocess.DEVNULL)
+        self.assertEqual(p.wait(timeout=60), 0)
+        log = {r["label"]: r for r in self._log()}
+        self.assertEqual(sorted(log), ["fail-open", "inner", "not-executable", "not-found", "outer", "unb"])
+        self.assertNotEqual(log["fail-open"]["fail_open"], "")
+        for label in ("inner", "outer", "unb", "fail-open"):
+            r = log[label]
+            self.assertGreaterEqual(r["cpu_user_s"] + r["cpu_sys_s"], 0.04, label)
+            self.assertIsInstance(r["max_rss_kib"], int, label)
+            self.assertGreaterEqual(r["max_rss_kib"], (64 << 20) // 2 // 1024, label)
+            self.assertLess(r["max_rss_kib"], 10 << 20, label)
+        for label in ("not-found", "not-executable"):
+            for key in ("cpu_user_s", "cpu_sys_s", "max_rss_kib"):
+                self.assertNotIn(key, log[label], label)
+
     def test_nested_run_writes_nothing_without_an_understood_format(self):
         os.makedirs(self.S, 0o700)
         env = dict(self.env, CORESLOT_UNBUDGETED="x")

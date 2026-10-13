@@ -23,6 +23,11 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
   moved into the state directory together with the state under `CORESLOT_STATE_DIR`.
 - Go library in the root package (`Open`, `Enqueue`, `Poll`, `Wait`, `Cancel`, `Adopt`, `Free`,
   `Snapshot`, `Grant`), with its exported API pinned in `api/v0.txt`.
+- The run log records what each command used: `cpu_user_s` and `cpu_sys_s` (CPU seconds) and
+  `max_rss_kib` (peak resident set size in KiB), optional keys of `PROTOCOL.md` section 20 taken
+  from the command's `wait4` rusage, so they cover the descendants it waited for. A run whose
+  command never started leaves them out, as does a platform that does not report one. Format 1 is
+  unchanged: a reader of the run log ignores keys it does not know.
 - Conformance suite with deterministic queue traces, and an independent Python client written from
   `PROTOCOL.md` alone.
 - Release archives with checksums, build-provenance attestations for releases of the public

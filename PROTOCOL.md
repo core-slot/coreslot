@@ -1023,10 +1023,24 @@ writes no line. The object carries:
 | `unbudgeted_resources` | array of resource names | unbudgeted resources |
 | `waited_s` | number | seconds spent waiting |
 | `ran_s` | number | seconds the command ran |
+| `cpu_user_s` | number | optional; user CPU seconds of the command (below) |
+| `cpu_sys_s` | number | optional; system CPU seconds of the command (below) |
+| `max_rss_kib` | integer | optional; peak resident set size of the command, in KiB (below) |
 | `exit` | integer | the run's exit status |
 | `load1` | number | one-minute load average at start |
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
+
+The usage keys `cpu_user_s`, `cpu_sys_s` and `max_rss_kib` are OPTIONAL: a writer MAY include each,
+and leaves out one whose value it does not know rather than write a zero: a run whose command could
+not be started (section 19) has none, and neither has a value the platform does not report. A reader
+treats an absent key as unknown, never as zero. The values are the command's resource usage as the
+wait that reaped it reports (`wait4(2)`'s `struct rusage`, or the same from `waitid`): they cover
+the command and every descendant it waited for, but not a descendant it left running when it exited.
+`max_rss_kib` is the peak of the largest single process among those, not a sum. `ru_maxrss` is in
+KiB on Linux and the BSDs but in bytes on macOS; a writer converts it to KiB (1 024 bytes), and
+omits the key on a platform whose unit it does not know. As in a body (section 7.2), a reader
+ignores a key it does not know: lines only gain optional keys within a format.
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. The log's `clamped` is an array of resource names, unlike the hold body's `clamped` object
@@ -1035,7 +1049,9 @@ inside the section: re-checks the size, then renames it to `runs.1.jsonl` (repla
 generation). One generation is kept. A token-only client writes no log.
 
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open` and the
-> independent Python client shortens `label`.
+> independent Python client shortens `label`. Both write the usage keys on Linux, macOS and the
+> BSDs, and only `cpu_user_s` and `cpu_sys_s` elsewhere; the Go CLI writes the seconds unrounded
+> and the Python client rounds them to milliseconds, as each does `waited_s` and `ran_s`.
 
 ## 21. Worked examples
 

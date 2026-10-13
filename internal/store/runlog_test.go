@@ -336,6 +336,47 @@ func TestRunLogNestedMarkerIsEncodedOnlyWhenTrue(t *testing.T) {
 	}
 }
 
+// PROTOCOL.md section 20: cpu_user_s, cpu_sys_s and max_rss_kib are encoded exactly when they
+// are known, a measured zero included, and a line shortened to fit 4 KiB keeps them.
+//
+// Mutation: encode the three fields without omitempty (an unknown value is written as null), or
+// as plain numbers with omitempty (a measured zero disappears).
+func TestRunLogUsageKeys(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	user, sys, rss := 1.25, 0.0, int64(65536)
+	r := RunRecord{TimeNS: 1791720000000000000, Label: "usage",
+		Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, Grant: map[string]int{"cpu": 1}}
+	measured := r
+	measured.CPUUserS, measured.CPUSysS, measured.MaxRSSKiB = &user, &sys, &rss
+	long := measured
+	long.FailOpen = strings.Repeat("x", 5000)
+	for _, rec := range []RunRecord{r, measured, long} {
+		if err := s.AppendRun(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
+	if len(lines) != 3 {
+		t.Fatalf("%d lines, want 3: %q", len(lines), lines)
+	}
+	for _, key := range []string{"cpu_user_s", "cpu_sys_s", "max_rss_kib"} {
+		if strings.Contains(lines[0], `"`+key+`"`) {
+			t.Errorf("a line without usage has %s: %s", key, lines[0])
+		}
+	}
+	const want = `"ran_s":0,"cpu_user_s":1.25,"cpu_sys_s":0,"max_rss_kib":65536,"exit":0`
+	for i, line := range lines[1:] {
+		if !strings.Contains(line, want) {
+			t.Errorf("line %d = %s; want it to contain %s", i+1, line, want)
+		}
+	}
+	if len(lines[2])+1 != MaxRunLine || !strings.Contains(lines[2], `"fail_open":"xxx`) {
+		t.Errorf("the long line is %d bytes with its LF; want exactly %d, fail_open shortened",
+			len(lines[2])+1, MaxRunLine)
+	}
+}
+
 // A pass-through appends outside the section and never rotates: AppendRun leaves a log at or
 // above 10 MiB where it is, and only Section.RotateLogIfNeeded renames it.
 func TestAppendRunNeverRotates(t *testing.T) {

@@ -38,6 +38,13 @@ type RunRecord struct {
 	Load1               float64
 	FailOpen            string
 	Nested              bool // a pass-through run (PROTOCOL.md section 18); encoded only when true
+	// CPUUserS, CPUSysS and MaxRSSKiB are the command's user and system CPU seconds and its peak
+	// resident set size in KiB, from its wait4 rusage (PROTOCOL.md section 20). Each is nil when
+	// it is not known (the command never started, or the platform does not report it) and is
+	// then not encoded, so that an unknown value is never written as a measured zero.
+	CPUUserS  *float64
+	CPUSysS   *float64
+	MaxRSSKiB *int64
 }
 
 type runJSON struct {
@@ -49,6 +56,9 @@ type runJSON struct {
 	UnbudgetedResources []string          `json:"unbudgeted_resources"`
 	WaitedS             float64           `json:"waited_s"`
 	RanS                float64           `json:"ran_s"`
+	CPUUserS            *float64          `json:"cpu_user_s,omitempty"`
+	CPUSysS             *float64          `json:"cpu_sys_s,omitempty"`
+	MaxRSSKiB           *int64            `json:"max_rss_kib,omitempty"`
 	Exit                int               `json:"exit"`
 	Load1               float64           `json:"load1"`
 	FailOpen            string            `json:"fail_open"`
@@ -62,7 +72,8 @@ func (r RunRecord) wire() runJSON {
 	}
 	j := runJSON{TimeNS: r.TimeNS, Label: r.Label, Need: need, Grant: r.Grant,
 		Clamped: r.Clamped, UnbudgetedResources: r.UnbudgetedResources, WaitedS: r.WaitedS,
-		RanS: r.RanS, Exit: r.Exit, Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
+		RanS: r.RanS, CPUUserS: r.CPUUserS, CPUSysS: r.CPUSysS, MaxRSSKiB: r.MaxRSSKiB, Exit: r.Exit,
+		Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
 	if j.Grant == nil {
 		j.Grant = map[string]int{}
 	}
