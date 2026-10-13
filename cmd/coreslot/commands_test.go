@@ -21,7 +21,6 @@ import (
 	"github.com/Nezhinskiy/coreslot"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
@@ -51,7 +50,7 @@ func recordDegraded(t *testing.T, st *store.Store, reason string) {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	if _, understood, err := sec.Format(testhooks.Formats()); err != nil || !understood {
+	if _, understood, err := sec.Format(); err != nil || !understood {
 		t.Fatalf("FORMAT before the degraded record: understood %v, %v", understood, err)
 	}
 	if _, err := sec.ReconcileIfDue(store.NowNS()); err != nil {
@@ -484,7 +483,7 @@ func TestStatusNamesSectionHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	if _, _, err := sec.Format([]int{1}); err != nil { // writes admit.lock's body: this pid
+	if _, _, err := sec.Format(); err != nil { // writes admit.lock's body: this pid
 		t.Fatal(err)
 	}
 	time.Sleep(1100 * time.Millisecond)
@@ -1347,7 +1346,7 @@ func TestDoctorNamesSectionHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	if _, _, err := sec.Format([]int{1}); err != nil { // writes admit.lock's body: this pid
+	if _, _, err := sec.Format(); err != nil { // writes admit.lock's body: this pid
 		t.Fatal(err)
 	}
 	r := cli(t, baseEnv(dir), "doctor")
@@ -1383,7 +1382,7 @@ func TestCancelRefusesWhileSectionHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	if _, _, err := sec.Format([]int{1}); err != nil { // writes admit.lock's body: this pid
+	if _, _, err := sec.Format(); err != nil { // writes admit.lock's body: this pid
 		t.Fatal(err)
 	}
 	start := time.Now()

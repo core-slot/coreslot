@@ -156,7 +156,7 @@ func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	if live, _, err := sec.Reset(formats()); err != nil || !live.Empty() {
+	if live, _, err := sec.Reset(); err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %v", live, err)
 	}
 	rep, err := e.Snapshot()

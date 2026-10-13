@@ -16,7 +16,6 @@ import (
 
 	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 )
 
 // admitted runs the command on an admitted grant.
@@ -190,7 +189,7 @@ func formatStillUnderstood(dir string) (missing bool, err error) {
 		return false, err
 	case !present:
 		return true, errFormatChanged
-	case !slices.Contains(testhooks.Formats(), n):
+	case !store.Understood(n):
 		return false, errFormatChanged
 	}
 	return false, nil
@@ -238,7 +237,7 @@ func rotateRunLog(st *store.Store) (rotateErr, skip error) {
 	defer sec.Leave()
 	// A section entered to rotate reconciles first when it is due, like every entry other than
 	// admission (PROTOCOL.md section 10.4).
-	_, understood, err := sec.Prepare(testhooks.Formats(), store.NowNS())
+	_, understood, err := sec.Prepare(store.NowNS())
 	if !understood {
 		if err != nil {
 			return nil, err // malformed FORMAT

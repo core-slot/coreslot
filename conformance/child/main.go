@@ -34,7 +34,6 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
@@ -196,7 +195,7 @@ func reconcile(dir, offsetText string) {
 		fail(err.Error())
 	}
 	defer sec.Leave()
-	if _, understood, err := sec.Format(testhooks.Formats()); err != nil || !understood {
+	if _, understood, err := sec.Format(); err != nil || !understood {
 		fail(fmt.Sprintf("FORMAT not understood (%v)", err))
 	}
 	removed, err := sec.ReconcileIfDue(store.NowNS() + int64(offset))
@@ -215,7 +214,7 @@ func section(dir, marker string) {
 		fail(err.Error())
 	}
 	defer sec.Leave()
-	if _, _, err := sec.Format(testhooks.Formats()); err != nil {
+	if _, _, err := sec.Format(); err != nil {
 		fail(err.Error())
 	}
 	writeAtomic(marker, []byte(strconv.Itoa(os.Getpid())))

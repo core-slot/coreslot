@@ -28,7 +28,7 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, 
 		return nil, nil, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Prepare(formats(), e.clock.Realtime())
+	n, understood, err := sec.Prepare(e.clock.Realtime())
 	if err != nil {
 		return nil, nil, err
 	}

@@ -56,7 +56,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case !present:
 		r.FormatUnderstood = true // the first entry writes format 1
 	default:
-		r.Format, r.FormatUnderstood = n, slices.Contains(formats(), n)
+		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}
 	g, err := e.st.ReadGen()
 	if err != nil {

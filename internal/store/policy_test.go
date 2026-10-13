@@ -106,7 +106,7 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	before := snapshot(t, dir)
 	s := open(t, dir)
 	sec := enter(t, s)
-	if n, understood, err := sec.Format([]int{1}); n != 2 || understood || err != nil {
+	if n, understood, err := sec.Format(); n != 2 || understood || err != nil {
 		t.Fatalf("Format = %d, %v, %v", n, understood, err)
 	}
 	// What a token-only client reads must work without the directories it may not create.

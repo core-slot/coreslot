@@ -43,7 +43,7 @@ func (e *Engine) Reset(ctx context.Context) (removed int, err error) {
 		return 0, err
 	}
 	defer sec.Leave()
-	live, removed, err := sec.Reset(formats())
+	live, removed, err := sec.Reset()
 	if err != nil {
 		return removed, err
 	}

@@ -23,7 +23,7 @@ func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	t.Helper()
 	s := open(t, dir)
 	sec := enter(t, s)
-	if _, _, err := sec.Format([]int{1}); err != nil {
+	if _, _, err := sec.Format(); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []struct {
@@ -89,7 +89,7 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	}
 	lockBefore, tokenBefore := inode(filepath.Join(dir, AdmitLock)), inode(tokenPath(dir, "cpu", 0))
 
-	live, removed, err := sec.Reset([]int{1})
+	live, removed, err := sec.Reset()
 	if err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %d, %v; want nothing alive and no error", live, removed, err)
 	}
@@ -167,7 +167,7 @@ func TestResetRefusesWhatIsAlive(t *testing.T) {
 			c.alive(t, dir, sec)
 			setOtherLengthHolder(t, dir)
 			before := snapshotTree(t, dir)
-			live, removed, err := sec.Reset([]int{1})
+			live, removed, err := sec.Reset()
 			if err != nil || live.Empty() || removed != 0 {
 				t.Fatalf("Reset = %+v, %d, %v; want what is alive, nothing removed", live, removed, err)
 			}
@@ -186,7 +186,7 @@ func TestResetRepairsMalformedFormat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol x\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if live, _, err := sec.Reset([]int{1}); err != nil || !live.Empty() {
+	if live, _, err := sec.Reset(); err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %v", live, err)
 	}
 	if exists(filepath.Join(dir, FormatFile)) {
@@ -206,7 +206,7 @@ func TestResetReportsWhatItCannotRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 	setOtherLengthHolder(t, dir)
-	_, removed, err := sec.Reset([]int{1})
+	_, removed, err := sec.Reset()
 	if err == nil {
 		t.Fatal("Reset left a non-empty directory behind without an error")
 	}
@@ -306,7 +306,7 @@ func TestResetRefusesForeignFormat(t *testing.T) {
 			}
 			setOtherLengthHolder(t, dir)
 			before := snapshotTree(t, dir)
-			live, removed, err := sec.Reset([]int{1})
+			live, removed, err := sec.Reset()
 			if err != nil || removed != 0 || live.ForeignFormat == nil || live.Empty() {
 				t.Fatalf("Reset = %+v, %d, %v; want a refusal naming the foreign format", live, removed, err)
 			}
@@ -314,7 +314,8 @@ func TestResetRefusesForeignFormat(t *testing.T) {
 				t.Errorf("the refused reset changed the tree:\nbefore %s\nafter  %s", before, after)
 			}
 			// The same directory is reset when this client implements that format.
-			if live, _, err := sec.Reset([]int{1, *live.ForeignFormat}); err != nil || !live.Empty() {
+			foreign := *live.ForeignFormat
+			if live, _, err := sec.reset(func(n int) bool { return n == 1 || n == foreign }); err != nil || !live.Empty() {
 				t.Errorf("Reset with the format implemented = %+v, %v", live, err)
 			}
 		})
@@ -338,7 +339,7 @@ func TestResetErrorBeforeRemovalWritesNothing(t *testing.T) {
 	}
 	setOtherLengthHolder(t, dir)
 	before := snapshotTree(t, dir)
-	if live, removed, err := sec.Reset([]int{1}); err == nil || removed != 0 || !live.Empty() {
+	if live, removed, err := sec.Reset(); err == nil || removed != 0 || !live.Empty() {
 		t.Fatalf("Reset = %+v, %d, %v; want an error and nothing removed", live, removed, err)
 	}
 	if after := snapshotTree(t, dir); after != before {
@@ -351,7 +352,7 @@ func TestResetMarksItselfHolder(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
 	setOtherLengthHolder(t, dir)
-	if _, _, err := sec.Reset([]int{1}); err != nil {
+	if _, _, err := sec.Reset(); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, AdmitLock))

@@ -29,7 +29,7 @@ func (e *Engine) CancelContext(ctx context.Context, id wire.ID) error {
 	}
 	defer sec.Leave()
 	now := e.clock.Realtime() // reconciliation and the cancel request read the same clock
-	n, understood, err := sec.Prepare(formats(), now)
+	n, understood, err := sec.Prepare(now)
 	if err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func (t *Ticket) removeOwn(sec *store.Section) {
 			return
 		}
 		defer s.Leave()
-		if _, understood, err := s.Prepare(formats(), t.e.clock.Realtime()); err != nil || !understood {
+		if _, understood, err := s.Prepare(t.e.clock.Realtime()); err != nil || !understood {
 			return
 		}
 		sec = s
