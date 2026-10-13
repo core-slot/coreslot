@@ -99,7 +99,7 @@ func runHelper(name string, args []string) int {
 		return 0
 	case "snapshot":
 		// Print the live holds of the state directory, one `hold <label> unbudgeted=<bool>` each.
-		e, _, err := openEngine()
+		e, err := openEngine(locate(), false)
 		if err != nil {
 			fmt.Println("error:", err)
 			return 1
@@ -1190,7 +1190,7 @@ func TestTimeoutWhileSectionHeld(t *testing.T) {
 func TestEnqueueBoundedLeavesNothing(t *testing.T) {
 	dir := stateDir(t, "")
 	t.Setenv("CORESLOT_STATE_DIR", dir)
-	e, _, err := openEngine()
+	e, err := openEngine(locate(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

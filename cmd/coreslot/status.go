@@ -16,8 +16,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/config"
-	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
@@ -55,7 +53,7 @@ func statusCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: status: --observe %s is shorter than %s, so no ticket can be found STALLED; use %s or more\n",
 			*observe, state.StallAfter, state.StallAfter)
 	}
-	e, _, err := openEngineReadOnly()
+	e, err := openEngine(locate(), true)
 	if err != nil {
 		return statusFailed(err, io)
 	}
@@ -88,42 +86,6 @@ func statusFailed(err error, io IO) int {
 	}
 	fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
 	return exitInternal
-}
-
-// openEngineReadOnly opens the state directory like openEngine, but creates nothing: not the
-// directory, res/ or admit.lock (status and doctor leave a machine where nothing has run as
-// they found it). The returned engine's Snapshot reports a missing directory as empty.
-func openEngineReadOnly() (*engine.Engine, string, error) {
-	dir, cfgPath, err := config.Locate()
-	e, err := openReadOnlyAt(dir, cfgPath, err)
-	if err != nil {
-		return nil, "", err
-	}
-	return e, cfgPath, nil
-}
-
-// openReadOnlyAt is openEngineReadOnly at what config.Locate returned, its error included, for a
-// caller that needs the paths too: Locate looks the home directory up, which may start getent,
-// so a command locates once.
-func openReadOnlyAt(dir, cfgPath string, locateErr error) (*engine.Engine, error) {
-	if locateErr != nil {
-		return nil, &stateError{Reason: locateErr.Error()}
-	}
-	st, err := store.OpenReadOnly(dir)
-	if err != nil {
-		return nil, asState(err)
-	}
-	return engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{}), nil
-}
-
-// asState gives openEngineReadOnly's failure the CLI's own form, "state error: <reason>" with one
-// prefix, for the messages status, cancel and doctor print. Classification needs no
-// wrapping: classify judges every error the same way (stateReason).
-func asState(err error) error {
-	if reason, ok := stateReason(err); ok {
-		return &stateError{Reason: reason}
-	}
-	return err
 }
 
 // obsClock is the clock of an observation: the observer's own monotonic time, and a sleep.

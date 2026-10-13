@@ -51,8 +51,7 @@ func doctorCommand(args []string, io IO) int {
 		return exitUsage
 	}
 
-	var loc location
-	loc.dir, loc.cfgPath, loc.err = config.Locate()
+	loc := locate()
 	if *doClear || *doReset {
 		if code := doctorAct(*doReset, loc, io); code != 0 {
 			return code
@@ -61,20 +60,13 @@ func doctorCommand(args []string, io IO) int {
 	return doctorReport(loc, io)
 }
 
-// location is what config.Locate returned. doctor locates once: each lookup of the home directory
-// may start getent.
-type location struct {
-	dir, cfgPath string
-	err          error
-}
-
 // doctorAct performs --reset (which removes the degraded record too) or --clear.
 func doctorAct(doReset bool, loc location, io IO) int {
 	what := "doctor --clear"
 	if doReset {
 		what = "doctor --reset"
 	}
-	e, err := openReadOnlyAt(loc.dir, loc.cfgPath, loc.err)
+	e, err := openEngine(loc, true)
 	if err != nil {
 		return doctorFailed(what, err, io)
 	}
@@ -189,7 +181,7 @@ func doctorReport(loc location, io IO) int {
 	}
 
 	var rep engine.Report
-	e, err := openReadOnlyAt(dir, cfgPath, nil)
+	e, err := openEngine(loc, true)
 	if err == nil {
 		rep, err = e.Snapshot()
 	}
