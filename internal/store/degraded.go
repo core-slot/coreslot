@@ -3,22 +3,15 @@
 package store
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
-
-// sideSectionWait bounds how long a Store-level write that needs the section (clearing the
-// degraded record) waits to enter it: the same 2 s a run waits to remove its hold after its command
-// exits (PROTOCOL.md section 12.3).
-const sideSectionWait = 2 * time.Second
 
 // DegradedRecord is the degraded-mode record (PROTOCOL.md section 7.9). Degraded mode is
 // recorded while the file exists, whatever its body: Malformed reports a body that could not be
@@ -108,22 +101,4 @@ func encodeDegraded(r DegradedRecord) ([]byte, error) {
 // while this process holds the section: entering again would fail.
 func (s *Store) ClearDegraded() error {
 	return s.inSideSection(func(sec *Section) error { return sec.ClearDegraded() })
-}
-
-func (s *Store) inSideSection(change func(*Section) error) error {
-	ctx, cancel := context.WithTimeout(context.Background(), sideSectionWait)
-	defer cancel()
-	sec, err := s.Enter(ctx)
-	if err != nil {
-		return fmt.Errorf("store: cannot enter the admission section: %w", err)
-	}
-	defer sec.Leave()
-	n, understood, err := sec.Prepare(NowNS())
-	if err != nil {
-		return err
-	}
-	if !understood {
-		return fmt.Errorf("store: %w", &FormatError{N: n, Suffix: "; not writing"})
-	}
-	return change(sec)
 }

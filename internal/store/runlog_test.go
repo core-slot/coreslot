@@ -123,7 +123,7 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 	if s.RunLogNeedsRotation() {
 		t.Error("RunLogNeedsRotation below 10 MiB")
 	}
-	if err := sec.RotateLogIfNeeded(); err != nil {
+	if err := sec.rotateLogIfNeeded(); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(logPath); fi == nil || fi.Size() != RotateRunLogAt-1 {
@@ -135,7 +135,7 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 	if !s.RunLogNeedsRotation() {
 		t.Error("RunLogNeedsRotation at 10 MiB = false")
 	}
-	if err := sec.RotateLogIfNeeded(); err != nil {
+	if err := sec.rotateLogIfNeeded(); err != nil {
 		t.Fatal(err)
 	}
 	if exists(logPath) {
@@ -378,7 +378,7 @@ func TestRunLogUsageKeys(t *testing.T) {
 }
 
 // A pass-through appends outside the section and never rotates: AppendRun leaves a log at or
-// above 10 MiB where it is, and only Section.RotateLogIfNeeded renames it.
+// above 10 MiB where it is, and only RotateLog renames it.
 func TestAppendRunNeverRotates(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)

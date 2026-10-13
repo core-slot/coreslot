@@ -364,17 +364,24 @@ func (sec *Section) Prepare(nowNS int64) (n int, understood bool, err error) {
 	return n, true, err
 }
 
-// FormatError refuses a write into a state directory whose FORMAT names format N, which this
-// client does not implement (PROTOCOL.md section 15.2). Suffix ends the message, for a caller
-// that says what it did not do.
+// FormatError refuses a write into a state directory whose FORMAT is not understood (PROTOCOL.md
+// sections 14 and 15.2). When Err is set FORMAT could not be read, written when missing, or
+// parsed, and the message is Err's; otherwise FORMAT names format N, which this client does not
+// implement, and Suffix ends the message, for a caller that says what it did not do.
 type FormatError struct {
 	N      int
 	Suffix string
+	Err    error
 }
 
 func (e *FormatError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
 	return fmt.Sprintf("the state directory has format %d, which this client does not implement%s", e.N, e.Suffix)
 }
+
+func (e *FormatError) Unwrap() error { return e.Err }
 
 // ReadFormat reads FORMAT outside the section, for a reader that writes nothing (status): n is
 // the format and present false when FORMAT is absent. A malformed FORMAT is a *StateError.

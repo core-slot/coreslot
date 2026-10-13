@@ -116,8 +116,8 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	if n, err := sec.CountLocked("cpu"); n != 0 || err != nil {
 		t.Errorf("CountLocked with no res/cpu = %d, %v", n, err)
 	}
-	if err := sec.RotateLogIfNeeded(); err != nil {
-		t.Errorf("RotateLogIfNeeded with no log/: %v", err)
+	if err := sec.rotateLogIfNeeded(); err != nil {
+		t.Errorf("rotateLogIfNeeded with no log/: %v", err)
 	}
 	if d, err := s.Degraded(); d != nil || err != nil {
 		t.Errorf("Degraded with no record = %v, %v", d, err)
