@@ -129,10 +129,12 @@ Every conforming client MUST preserve these invariants:
   `XDG_*` variable, so a shell, a cron job, a user service and an ssh session of the same user
   resolve the same directory.
 
-  > **Implementation note.** A cgo-free build of the Go CLI or library (the release archives)
-  > reads `/etc/passwd` alone on Linux, so when that has no entry for the uid it runs
-  > `getent passwd <uid>` from a fixed system path, never through `$PATH`, for at most 5 s and
-  > takes the home directory from its answer, which resolves through NSS as `getpwuid` does.
+  > **Implementation note.** On every Unix, when the Go CLI's or library's lookup reports no entry
+  > for the uid, or finds no `/etc/passwd`, it runs `getent passwd <uid>` from a fixed system path,
+  > never through `$PATH`, for at most 5 s and takes the home directory from its answer, which
+  > resolves through NSS as `getpwuid` does. That matters most to a cgo-free build for Linux (the
+  > release archives), which reads `/etc/passwd` alone; a cgo build has asked NSS already, and
+  > getent asks it a second time.
 - The only override is the environment variable `CORESLOT_STATE_DIR` (a library MAY offer the same
   override as an option). When it is set and non-empty, its value is the state directory; it MUST
   be an absolute path, and a relative value is a state error (section 14). The override is for
@@ -991,15 +993,20 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
 grant both run with 8. A parent that wants concurrent children partitions its grant itself.
 
-> **Implementation note.** The Go library applies these rules to every request of a process
-> started inside a grant, with `Options.Independent` as its `--independent`: rules 1 and 2 admit
-> the request at once, and a context that does not validate is a refusal (`ErrRefused`). It
-> applies them only to a client whose state directory is the one the inherited environment names
-> (`CORESLOT_STATE_DIR`, or the default); a client opened on another directory is another budget
-> and queues. A pass-through's descriptors for the command are the parent's hold at fd 3 and every
-> token the parent passed on from fd 4, renumbered by the launcher, with `CORESLOT_HELD_FD` and
-> `CORESLOT_TOKEN_FDS` naming the new numbers; the library writes no run log, for a pass-through as
-> for any other grant.
+> **Implementation note.** The Go library applies these rules to `Enqueue` and `EnqueueContext`,
+> with `Options.Independent` as its `--independent`: rules 1 and 2 admit the request at once, and a
+> context that does not validate is a refusal (`ErrRefused`). `Adopt` never passes through. The
+> rules apply only to a client whose state directory is the one the inherited environment names
+> (`CORESLOT_STATE_DIR`, or the default); a client opened on another directory
+> (`Options.StateDir`) is another budget and queues. `Open` locates and opens the state directory
+> before any request, so where the parent runs unbudgeted because the directory is unusable (a
+> relative `CORESLOT_STATE_DIR`, a refused filesystem, wrong owners or modes, a failed
+> home-directory lookup), `Open` returns a `*StateError` instead of following rule 1, and the
+> caller decides: the library never decides on its own to run unbudgeted. A caller that wants to
+> follow its parent then reads `CORESLOT_UNBUDGETED`. A pass-through's descriptors for the command
+> are the parent's hold at fd 3 and every token the parent passed on from fd 4, renumbered by the
+> launcher, with `CORESLOT_HELD_FD` and `CORESLOT_TOKEN_FDS` naming the new numbers; the library
+> writes no run log, for a pass-through as for any other grant.
 
 ## 19. Exit status
 

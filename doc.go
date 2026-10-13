@@ -21,18 +21,25 @@
 // grant, Enqueue does not queue behind its own parent: it passes through as a nested
 // `coreslot run` does (PROTOCOL.md section 18, see Client.EnqueueContext), and the grant's Files
 // are the descriptors this process inherited, which Env names at the numbers ExtraFiles gives
-// them; Close leaves them open. An ordinary grant is therefore one made outside any grant, where
-// nothing was inherited, unless Options.Independent asks for one inside it (or the Client is
-// opened on another state directory). Then the descriptors the inherited CORESLOT_HELD_FD and
-// CORESLOT_TOKEN_FDS name are not the grant's, and section 17 asks a client to close them before
-// it starts its command; the library leaves that to the caller, since it does not own them and
-// a pass-through of the same process may still need them.
+// them; Close leaves them open. Only Enqueue and EnqueueContext pass through, and only on a
+// Client whose state directory is the one the inherited environment names. An ordinary grant is
+// therefore one made outside any grant, where nothing was inherited, unless Options.Independent
+// asks for one inside it, the Client is opened with Options.StateDir on another directory, or the
+// grant is Adopt's, which never passes through. Then the descriptors the inherited
+// CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS name are not the grant's, and section 17 asks a client
+// to close them before it starts its command; the library leaves that to the caller, since it
+// does not own them and a pass-through of the same process may still need them.
 //
 // The library never prints, never installs signal handlers, never chooses exit codes and never
 // decides on its own to run unbudgeted: a *StateError tells the caller that the budget is
-// unusable, and the caller decides. A pass-through under a parent that runs unbudgeted is the
-// parent's decision, passed on as the CLI passes it. On Windows, Open returns ErrUnsupported and
-// nothing else is reachable. The module stays at v0 until format 1 is frozen.
+// unusable, and the caller decides. Open locates and opens the state directory before any
+// request, so under a parent that runs unbudgeted because that directory is unusable (a relative
+// CORESLOT_STATE_DIR, a refused filesystem, wrong owners or modes, a failed home-directory
+// lookup), Open returns a *StateError where a nested `coreslot run` would follow the parent; a
+// caller that wants to follow it reads CORESLOT_UNBUDGETED. Once Open succeeds, an Enqueue under
+// a parent that runs unbudgeted passes through unbudgeted, the parent's decision passed on as the
+// CLI passes it. On Windows, Open returns ErrUnsupported and nothing else is reachable. The
+// module stays at v0 until format 1 is frozen.
 //
 // A ticket's lock is carried by a close-on-exec descriptor. If the caller's own goroutines fork
 // (os/exec, for example) while the library holds a ticket, the child shares that lock until it

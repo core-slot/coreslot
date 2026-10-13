@@ -39,8 +39,12 @@ The full rules are in
 
 - The directory is `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`
   elsewhere, where `~` comes from the password database (`getpwuid(getuid())`), never from `$HOME`
-  or `XDG_*`. A cgo-free build (the release archives) whose uid has no entry in `/etc/passwd` asks
-  NSS by running `getent` from a fixed system path, never one found through `$PATH`.
+  or `XDG_*`. When that lookup reports no entry for the uid, or finds no `/etc/passwd`, coreslot
+  asks NSS by running `getent` from a fixed system path, never one found through `$PATH`. This
+  matters most to a cgo-free build for Linux (the release archives), which reads `/etc/passwd`
+  alone; a cgo build has asked NSS already. `getent` inherits the environment deliberately: a
+  variable that changes NSS (an `LD_PRELOAD` of nss_wrapper) changes its answer as it changes
+  `getpwuid` in the user's other clients, and whoever sets it is the same, trusted user.
   `CORESLOT_STATE_DIR` (an absolute path) overrides it for tests and moves the configuration with
   it. Never point `CORESLOT_STATE_DIR` below a directory another user can write to:
   coreslot follows the ancestors of the state directory without checking them, so that user could
@@ -67,6 +71,6 @@ its grant. Reports about them are welcome as ordinary issues when coreslot could
 the situation better.
 
 coreslot sends no telemetry and opens no network connection itself. Looking up the user's home
-directory (`getpwuid`, or the `getent` fallback of a cgo-free build) goes through the system's
-name services (NSS on Linux, Open Directory on macOS), which may contact a directory service such
-as LDAP, as any program that looks up the user does.
+directory (`getpwuid`, or the `getent` fallback) goes through the system's name services (NSS on
+Linux, Open Directory on macOS), which may contact a directory service such as LDAP, as any
+program that looks up the user does.

@@ -29,12 +29,21 @@ type Client struct {
 // <StateDir>/config.toml), otherwise the CORESLOT_STATE_DIR override or the default of
 // PROTOCOL.md section 4.1. An unusable directory is a *StateError.
 //
-// The default comes from the user's home directory in the password database. A build without cgo
-// for a Unix other than macOS reads /etc/passwd alone, and when that has no record for the user
-// (an account that only NSS knows, through LDAP, SSSD or systemd-homed), Open runs getent as a
-// short-lived child process and waits at most 5 s for each run of it. A caller that reaps every child, such as
-// a PID 1 calling wait4(-1), can take getent's exit status, and Open then fails with a
-// *StateError; such a caller names the directory in Options.StateDir or CORESLOT_STATE_DIR.
+// Open locates and opens the directory before any request, so inside another run's grant whose
+// parent runs unbudgeted because the directory is unusable, Open returns that *StateError rather
+// than follow the parent; a caller that wants to follow it reads CORESLOT_UNBUDGETED.
+//
+// The default comes from the user's home directory in the password database. When that lookup
+// reports no record for the user, or finds no /etc/passwd, Open asks NSS by running getent from a
+// fixed system path as a short-lived child process, and waits at most 5 s for each run of it.
+// That matters most to a build without cgo for Linux or another Unix but macOS, which reads
+// /etc/passwd alone and so misses an account only NSS knows (LDAP, SSSD, systemd-homed); a cgo
+// build has asked NSS already, and getent asks it a second time. EnqueueContext looks the home
+// directory up the same way inside another run's grant when CORESLOT_STATE_DIR is unset. Like
+// any child the caller's process starts, getent inherits the environment and every descriptor
+// that is not close-on-exec. A caller that sets SIGCHLD to SIG_IGN or reaps every child (a PID 1
+// calling wait4(-1)) can make the wait for getent fail, and Open then returns a *StateError; such
+// a caller names the directory in Options.StateDir or CORESLOT_STATE_DIR.
 func Open(o Options) (*Client, error) {
 	dir, cfgPath := o.StateDir, ""
 	if dir == "" {
@@ -154,6 +163,9 @@ func environ() map[string]string {
 // is free up to each resource's Max. shortfall maps every requested declared resource to
 // max(0, Min - granted): what the work runs without budget. Adopt waits for the admission
 // section as long as it takes; AdoptContext bounds the wait.
+//
+// Adopt never passes through (PROTOCOL.md section 18 applies to Enqueue): inside another run's
+// grant it takes what is free like any adoption, and the parent's tokens are not free.
 func (c *Client) Adopt(req Request) (*Grant, map[string]int, error) {
 	return c.AdoptContext(context.Background(), req)
 }
