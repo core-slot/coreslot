@@ -25,12 +25,18 @@ any of them needs a new major version.
 `coreslot 0.1.0 (protocol formats: 1)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 1.
 
 A format number versions the metadata: the names, bodies and layout of the state directory other
-than `admit.lock` and `res/`. A release that changes the metadata in any way bumps the number it
-writes to `FORMAT` (`coreslot-protocol <n>`); the meaning of a number that a release has shipped
-never changes, before `v1.0.0` as after it. The bump is what tells older clients apart: a client
-compares the number in `FORMAT` with the formats it implements, and an unknown number is what puts
-it in token-only mode (below). Two things never change with a format, so a format change never
-creates a second budget ([`PROTOCOL.md` section 15.1](../PROTOCOL.md#151-what-every-format-keeps)):
+than `admit.lock` and `res/`. A release that changes the metadata bumps the number it writes to
+`FORMAT` (`coreslot-protocol <n>`); the meaning of a number that a release has shipped never
+changes, before `v1.0.0` as after it. One change is not a metadata change in this sense: a new
+optional key in a body or a run-log line, which a writer may leave out and which every reader of
+the format ignores when it does not know it, so that a reader that ignores it reads the rest as
+before ([`PROTOCOL.md` section 7.2](../PROTOCOL.md#72-rules-for-every-body) and
+[section 20](../PROTOCOL.md#20-run-log)). A key a reader must understand, a key removed, renamed
+or given another type or meaning, and any change to names or layout bump the number. The bump is
+what tells older clients apart: a client compares the number in `FORMAT` with the formats it
+implements, and an unknown number is what puts it in token-only mode (below). Two things never
+change with a format, so a format change never creates a second budget
+([`PROTOCOL.md` section 15.1](../PROTOCOL.md#151-what-every-format-keeps)):
 
 - `admit.lock`, an exclusive `flock` held briefly by whoever changes admission state;
 - the token files `res/<name>/<i>`, held by `flock(LOCK_EX)`, released by closing, and counted by
