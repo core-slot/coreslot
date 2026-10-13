@@ -16,6 +16,18 @@ func TestParseNeed(t *testing.T) {
 		{"cpu=8", "cpu", Range{Min: 8, Max: 8}},
 		{"pg-local=1", "pg-local", Range{Min: 1, Max: 1}},
 		{"cpu=1..256", "cpu", Range{Min: 1, Max: 256}},
+		// One-sided ranges: an open max is max(MIN, DefaultMax), an open min is 1. Mutation: take
+		// an open max as MIN, and cpu=4.. and cpu=1.. redden; take it as DefaultMax, and cpu=20..
+		// and cpu=256.. do.
+		{"cpu=4..", "cpu", Range{Min: 4, Max: 16}},
+		{"cpu=1..", "cpu", Range{Min: 1, Max: 16}},
+		{"cpu=16..", "cpu", Range{Min: 16, Max: 16}},
+		{"cpu=20..", "cpu", Range{Min: 20, Max: 20}},
+		{"cpu=256..", "cpu", Range{Min: 256, Max: 256}},
+		{"cpu=..2", "cpu", Range{Min: 1, Max: 2}},
+		{"cpu=..1", "cpu", Range{Min: 1, Max: 1}},
+		{"cpu=..256", "cpu", Range{Min: 1, Max: 256}},
+		{"pg-local=..3", "pg-local", Range{Min: 1, Max: 3}},
 	}
 	for _, tc := range valid {
 		name, r, err := ParseNeed(tc.arg)
@@ -30,7 +42,11 @@ func TestParseNeed(t *testing.T) {
 
 	invalid := []string{
 		"cpu=0", "cpu=5..4", "cpu=-1", "cpu=257", "CPU=1", "cpu=1..x", "=1",
-		"cpu", "cpu=", "cpu=..4", "cpu=1..", "cpu=+1", "cpu=1..2..3",
+		"cpu", "cpu=", "cpu=+1", "cpu=1..2..3",
+		// One-sided ranges keep every bound, and a range names at least one end.
+		"cpu=..", "cpu=...", "cpu=...4", "cpu=4...", "cpu=..4..", "cpu=-1..", "cpu=..-1",
+		"cpu=0..", "cpu=..0", "cpu=257..", "cpu=..257", "cpu= 4..", "cpu=4.. ", "cpu=.. 4",
+		"cpu=+4..", "cpu=..+4", "cpu=x..", "cpu=..x",
 	}
 	for _, arg := range invalid {
 		_, _, err := ParseNeed(arg)

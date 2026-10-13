@@ -422,6 +422,8 @@ func TestRunUsageErrors(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, args := range [][]string{
 		{"run", "--need", "cpu=4..2", "--", "true"},
+		{"run", "--need", "cpu=..", "--", "true"},
+		{"run", "--need", "cpu=257..", "--", "true"},
 		{"run", "--need", "cpu=1", "--need", "cpu=2", "--", "true"},
 		{"run", "--need", "cpu=1", "--", "echo", "{n:gpu}"},
 		{"run", "--subst", "--", "make", "-j{n:gpu}"},
@@ -682,6 +684,40 @@ func TestRunAppendsOneLogLine(t *testing.T) {
 	}
 	if _, nested := line["nested"]; nested {
 		t.Errorf("an ordinary run's line is marked nested: %v", line)
+	}
+}
+
+// On an 8-token budget a run gets what its request, as normalized, allows, and its run log
+// records that normalized request: the default without a placeholder takes 1, the default with
+// {n} and a one-sided min both take the whole budget, and a one-sided max caps the grant.
+// Mutation: drop the default rule in parseRun, and the {n} case gets 1 and logs [1 1].
+func TestRunNeedFormsGrantAndLog(t *testing.T) {
+	report := []string{"sh", "-c", `echo "$CORESLOT_GRANTED_CPU $1"`, "sh"}
+	for _, c := range []struct {
+		name   string
+		args   []string
+		out    string
+		logged string
+	}{
+		{"default, no placeholder", append(append([]string{"--"}, report...), "x"), "1 x", "map[cpu:[1 1]]"},
+		{"default, {n}", append(append([]string{"--"}, report...), "{n}"), "8 8", "map[cpu:[1 16]]"},
+		{"default, {{n}}", append(append([]string{"--"}, report...), "{{n}}"), "1 {n}", "map[cpu:[1 1]]"},
+		{"default, --subst -j{n}", append(append([]string{"--subst", "--"}, report...), "-j{n}"), "8 -j8", "map[cpu:[1 16]]"},
+		{"cpu=4..", append(append([]string{"--need", "cpu=4..", "--"}, report...), "x"), "8 x", "map[cpu:[4 16]]"},
+		{"cpu=..2", append(append([]string{"--need", "cpu=..2", "--"}, report...), "x"), "2 x", "map[cpu:[1 2]]"},
+	} {
+		dir := stateDir(t, "[resources]\ncpu = 8\n")
+		r := cli(t, baseEnv(dir), append([]string{"run"}, c.args...)...)
+		if r.code != 0 {
+			t.Errorf("%s: exit %d (stderr %q)", c.name, r.code, r.stderr)
+			continue
+		}
+		if got := strings.TrimSpace(r.stdout); got != c.out {
+			t.Errorf("%s: the command printed %q, want %q", c.name, got, c.out)
+		}
+		if lines := runLog(t, dir); len(lines) != 1 || fmt.Sprint(lines[0]["need"]) != c.logged {
+			t.Errorf("%s: run log %v, want one line with need %s", c.name, lines, c.logged)
+		}
 	}
 }
 

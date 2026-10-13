@@ -1017,7 +1017,7 @@ writes no line. The object carries:
 |---|---|---|
 | `time_ns` | integer | wall clock at the run's start |
 | `label` | string | the request's label |
-| `need` | object | resource → `[min, max]` as requested |
+| `need` | object | resource → `[min, max]` as requested, a CLI's defaults and one-sided ranges completed (section 21) |
 | `grant` | object | resource → number of tokens granted (or `min` when unbudgeted) |
 | `clamped` | array of resource names | clamped resources |
 | `unbudgeted_resources` | array of resource names | unbudgeted resources |
@@ -1068,9 +1068,16 @@ any numbering conforms (section 7.1).
 The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
 [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
 [--no-wait] [--strict] [--independent] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
-`N..N`; with no `--need` the request is `cpu=1..1`; `--timeout` defaults to 0, no limit, and a
-negative one is a usage error; `--on-timeout` defaults to `fail`, so a `--timeout` that expires
-refuses; strict mode is `--strict`; `--refusal-code` defaults to 75. The other commands are
+`N..N`, `RES=MIN..` means `MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage
+error, and every form keeps the bounds of section 7.3. With no `--need` the request is `cpu=1..16`
+when COMMAND carries a `cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside
+one with `--subst`; the escape `{{n}}` is not one), and `cpu=1..1` otherwise: a command that
+cannot learn its grant would leave every token beyond its first idle. The effective request caps
+the max at the size (section 12.2), so `cpu=1..16` on a budget of 8 takes at most 8. A run log's
+`need` (section 20) and the waiting line (section 10.3) show the request as these rules complete
+it. `--timeout` defaults to 0, no limit, and a negative one is a usage error; `--on-timeout`
+defaults to `fail`, so a `--timeout` that expires refuses; strict mode is `--strict`;
+`--refusal-code` defaults to 75. The other commands are
 `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
 `coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]` and `coreslot version`.
 

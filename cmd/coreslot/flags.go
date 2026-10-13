@@ -15,7 +15,7 @@ import (
 // runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the
 // CLI is not part of the protocol).
 type runOptions struct {
-	need        map[string]spec.Range // as requested; cpu=1..1 when no --need is given
+	need        map[string]spec.Range // normalized; defaultNeed when no --need is given
 	label       string
 	priority    int
 	prioritySet bool // --priority given: it overrides the configuration's [priorities]
@@ -38,8 +38,9 @@ const runHelp = runUsage + `
 
 Runs COMMAND once the budget grants it between MIN and MAX tokens of each resource it needs.
 
-  --need RES=MIN..MAX   tokens of RES the command needs, RES=N for N..N; repeatable
-                        (default cpu=1..1 when no --need is given)
+  --need RES=MIN..MAX   tokens of RES the command needs; repeatable. RES=N means N..N,
+                        RES=MIN.. means MIN..max(MIN, 16) and RES=..MAX means 1..MAX
+                        (default cpu=1..16 when COMMAND has a cpu placeholder, else cpu=1..1)
   --label L             a name for the request, shown by status and kept in the run log, so
                         never a secret (default none)
   --priority P          -1000 to 1000: the request queues as if it arrived P minutes earlier
@@ -55,7 +56,8 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
   --refusal-code N      exit status of a refusal, 1 to 255 (default 75)
 
 An argument that is exactly {n} becomes the number of cpu tokens granted, {n:RES} the number of
-RES tokens; {{n}} and {{n:RES}} stand for the literal text.`
+RES tokens; {{n}} and {{n:RES}} stand for the literal text. A cpu placeholder is {n} or {n:cpu}
+as an argument, or inside one with --subst.`
 
 type needList []string
 
@@ -73,7 +75,7 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 	fs := flag.NewFlagSet("coreslot run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var needs needList
-	fs.Var(&needs, "need", "RES=MIN..MAX or RES=N (repeatable)")
+	fs.Var(&needs, "need", "RES=MIN..MAX, RES=MIN.., RES=..MAX or RES=N (repeatable)")
 	fs.StringVar(&o.label, "label", "", "label of the request")
 	fs.IntVar(&o.priority, "priority", 0, "priority in [-1000, 1000]")
 	fs.DurationVar(&o.timeout, "timeout", 0, "give up waiting after this long")
@@ -103,6 +105,9 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 	if err != nil {
 		return o, err
 	}
+	if len(need) == 0 {
+		need = defaultNeed(o.argv, o.subst)
+	}
 	req := spec.Normalize(spec.Request{Label: o.label, Priority: o.priority, Need: need})
 	if err := req.Validate(); err != nil {
 		return o, err
@@ -122,6 +127,18 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 		}
 	}
 	return o, nil
+}
+
+// defaultNeed is the request of a run without --need: cpu=1..spec.DefaultMax when the command
+// takes a cpu placeholder (`{n}` or `{n:cpu}`, inside an argument too with --subst), and cpu=1..1
+// otherwise. A command that cannot learn n would leave every token beyond its first idle while
+// others wait for them; one that declares it uses n can put a range to work.
+func defaultNeed(argv []string, inside bool) map[string]spec.Range {
+	hi := 1
+	if slices.Contains(placeholderResources(argv, inside), "cpu") {
+		hi = spec.DefaultMax
+	}
+	return map[string]spec.Range{"cpu": {Min: 1, Max: hi}}
 }
 
 func usagef(format string, args ...any) error {
