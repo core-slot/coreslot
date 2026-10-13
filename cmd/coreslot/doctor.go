@@ -234,7 +234,7 @@ func doctorReport(loc location, io IO) int {
 	} else {
 		// The soft limit doctor was started with, the one a run started here would add 256 to;
 		// getrlimit reports the limit the Go runtime raised it to (rlimit_unix.go).
-		soft, hard := startNofileProbe(contextFDs(environ())).originalNofile(), uint64(lim.Max)
+		soft, hard := startNofileProbe().originalNofile(), uint64(lim.Max)
 		line("descriptor limit: soft %s, hard %s; a grant of 512 tokens needs about %d", limitText(soft), limitText(hard), wantDescriptors)
 		if hard < wantDescriptors {
 			problem("the hard descriptor limit %s is below %d: a large grant cannot be held", limitText(hard), wantDescriptors)

@@ -43,7 +43,15 @@ func Home() (string, error) {
 	if p := testhooks.Getent(); p != "" {
 		getent = []string{p}
 	}
-	return homeOf(os.Getuid(), user.LookupId, getent, getentTimeout)
+	lookupID := user.LookupId
+	if testhooks.PasswdMiss() {
+		// A test reaches the NSS fallback on a host whose lookup always answers.
+		lookupID = func(uid string) (*user.User, error) {
+			n, _ := strconv.Atoi(uid)
+			return nil, user.UnknownUserIdError(n)
+		}
+	}
+	return homeOf(os.Getuid(), lookupID, getent, getentTimeout)
 }
 
 // getentPaths are the fixed places getent is looked for, in order: glibc's on merged-/usr and

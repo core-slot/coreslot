@@ -1,7 +1,8 @@
 //go:build coreslot_testhooks
 
-// Package testhooks provides pause points, a wall-clock offset, a format list, a getent substitute
-// and the CLI's descriptor-limit probe for the deterministic trace tests and the fallback tests.
+// Package testhooks provides pause points, a wall-clock offset, a format list, a getent substitute,
+// a password database that finds no record and the CLI's descriptor-limit probe for the
+// deterministic trace tests and the fallback tests.
 // This file is the enabled build (tag coreslot_testhooks); the
 // variables it reads are ignored by every other build.
 //
@@ -14,6 +15,9 @@
 //   - CORESLOT_TESTHOOK_FORMATS: comma-separated formats the client implements.
 //   - CORESLOT_TESTHOOK_GETENT: the absolute path of a getent that replaces the system's in the
 //     home directory's NSS fallback.
+//   - CORESLOT_TESTHOOK_PASSWD_MISS: when set, the home directory's password-database lookup
+//     finds no record for the uid, so that the NSS fallback runs on a host whose lookup would
+//     answer (darwin's always does, and so does any account with a passwd entry).
 //   - CORESLOT_TESTHOOK_PROBE_SHELL: the program the CLI runs as `<it> -c 'ulimit -S -n'` to
 //     learn the descriptor limit it was started with, so that a test can make that probe fail.
 //   - CORESLOT_TESTHOOK_PROBE_TIMEOUT: a Go duration that replaces the CLI's bound on that probe,
@@ -135,6 +139,9 @@ func Formats() []int {
 
 // Getent returns CORESLOT_TESTHOOK_GETENT, or "" (the system's getent) when it is unset.
 func Getent() string { return os.Getenv("CORESLOT_TESTHOOK_GETENT") }
+
+// PasswdMiss reports whether CORESLOT_TESTHOOK_PASSWD_MISS is set.
+func PasswdMiss() bool { return os.Getenv("CORESLOT_TESTHOOK_PASSWD_MISS") != "" }
 
 // ProbeShell returns CORESLOT_TESTHOOK_PROBE_SHELL, or /bin/sh when it is unset.
 func ProbeShell() string {

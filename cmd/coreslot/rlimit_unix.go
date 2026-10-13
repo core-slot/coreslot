@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 )
 
@@ -42,25 +40,18 @@ const (
 // nofileProbe is a running or finished probe of the soft RLIMIT_NOFILE this process was started
 // with. Its methods are for one goroutine; a nil *nofileProbe has learned nothing.
 type nofileProbe struct {
-	done     chan struct{}
-	cancel   context.CancelFunc // kills the probe; nil when none was started
-	soft     uint64
-	ok       bool
-	shielded []shieldedFD
+	done   chan struct{}
+	cancel context.CancelFunc // kills the probe; nil when none was started
+	soft   uint64
+	ok     bool
 }
-
-// shieldedFD is a descriptor the probe must not inherit, with its descriptor flags before
-// close-on-exec was set on it.
-type shieldedFD struct{ fd, flags int }
 
 // startNofileProbe starts learning the original soft RLIMIT_NOFILE. It must run before the
 // process calls syscall.Setrlimit for RLIMIT_NOFILE (raiseChildNofile), or the probe reports the
-// limit that call set. shield names descriptors the probe must not inherit although they are not
-// close-on-exec: a pass-through's inherited grant (PROTOCOL.md section 18), which it passes on to
-// its command at the same numbers. Close-on-exec is set on them until wait, so nothing else may
-// start a process meanwhile. Every descriptor this process opens itself, its own grant's among
-// them, is close-on-exec, so an ordinary run's probe needs no shield.
-func startNofileProbe(shield []int) *nofileProbe {
+// limit that call set. The probe inherits no grant: every descriptor this process opens itself,
+// its own grant's among them, is close-on-exec, and so is an inherited grant until the command
+// starts (shieldInherited).
+func startNofileProbe() *nofileProbe {
 	p := &nofileProbe{done: make(chan struct{})}
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
@@ -72,7 +63,6 @@ func startNofileProbe(shield []int) *nofileProbe {
 		close(p.done)
 		return p
 	}
-	p.shielded = setCloseOnExec(shield)
 	ctx, cancel := context.WithTimeout(context.Background(), testhooks.ProbeTimeout(probeTimeout))
 	p.cancel = cancel
 	// The shell is started here, not in the goroutine: Start returns only once the forked child
@@ -138,9 +128,9 @@ func parseProbe(err error, out *bytes.Buffer) (uint64, bool) {
 	return n, err == nil
 }
 
-// wait waits for the probe to end, restores the shielded descriptors' flags, and returns the
-// original soft limit; ok is false when the probe failed (it could not start, was killed after
-// probeTimeout, or printed something else), and the caller falls back to the limit it observes.
+// wait waits for the probe to end and returns the original soft limit; ok is false when the probe
+// failed (it could not start, was killed after probeTimeout, or printed something else), and the
+// caller falls back to the limit it observes.
 func (p *nofileProbe) wait() (soft uint64, ok bool) {
 	if p == nil {
 		return 0, false
@@ -149,10 +139,6 @@ func (p *nofileProbe) wait() (soft uint64, ok bool) {
 	if p.cancel != nil {
 		p.cancel()
 	}
-	for _, s := range p.shielded {
-		_, _ = unix.FcntlInt(uintptr(s.fd), unix.F_SETFD, s.flags)
-	}
-	p.shielded = nil
 	return p.soft, p.ok
 }
 
@@ -164,25 +150,6 @@ func (p *nofileProbe) stop() {
 		p.cancel()
 	}
 	_, _ = p.wait()
-}
-
-// setCloseOnExec sets close-on-exec on each open descriptor of fds from 3 that lacks it and
-// returns those it changed, with their previous flags.
-func setCloseOnExec(fds []int) []shieldedFD {
-	var changed []shieldedFD
-	for _, fd := range fds {
-		if fd < 3 {
-			continue
-		}
-		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
-		if err != nil || flags&unix.FD_CLOEXEC != 0 {
-			continue
-		}
-		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, flags|unix.FD_CLOEXEC); err == nil {
-			changed = append(changed, shieldedFD{fd, flags})
-		}
-	}
-	return changed
 }
 
 // originalNofile is the soft RLIMIT_NOFILE this process was started with, as the probe learned

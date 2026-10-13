@@ -88,6 +88,14 @@ func TestRealtimeOffsetAndFormatsEnabled(t *testing.T) {
 	if got := Getent(); got != "/tmp/fake-getent" {
 		t.Errorf("Getent() = %q, want /tmp/fake-getent", got)
 	}
+	t.Setenv("CORESLOT_TESTHOOK_PASSWD_MISS", "")
+	if PasswdMiss() {
+		t.Error("unset PasswdMiss() = true, want false")
+	}
+	t.Setenv("CORESLOT_TESTHOOK_PASSWD_MISS", "1")
+	if !PasswdMiss() {
+		t.Error("PasswdMiss() = false, want true")
+	}
 }
 
 func TestProbeShellEnabled(t *testing.T) {

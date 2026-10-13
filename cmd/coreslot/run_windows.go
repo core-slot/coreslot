@@ -16,6 +16,9 @@ import (
 // and no job-control stop to defer.
 func installLockHooks() {}
 
+// shieldInherited does nothing on Windows: there is no grant to inherit (PROTOCOL.md section 16).
+func shieldInherited() {}
+
 // runCommand runs `coreslot run` on Windows, which has no budget (PROTOCOL.md section 16): the
 // command runs at once with min of each resource, after one warning unless the configuration
 // silences it; --strict refuses instead.
