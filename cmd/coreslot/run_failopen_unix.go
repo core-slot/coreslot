@@ -27,24 +27,32 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	}
 	r.notice("state error: %s; running unbudgeted with %s (fail-open)", text(reason),
 		grantText(r.o.minGrant(), r.o.sortedNeed()))
-	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: reason, release: func() error { return nil }}
 	var g *engine.Grant
 	var ferr error
 	if e != nil {
 		g, ferr = e.FailOpen(r.o.request(0), reason)
 	}
-	if g != nil {
-		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
-		if g.HoldName() != "" {
-			c.log = e.Store() // FORMAT was understood in the section that published the hold
-		}
-	} else {
-		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.minGrant(), false, 0, reason)...)
+	c := r.unbudgetedChild(reason, g)
+	if g != nil && g.HoldName() != "" {
+		c.log = e.Store() // FORMAT was understood in the section that published the hold
 	}
 	if msg := failOpenNotice(e != nil, g != nil && g.HoldName() != "", ferr); msg != "" {
 		r.notice("%s", msg)
 	}
 	return r.runChild(c)
+}
+
+// unbudgetedChild is the child of a run outside the budget for reason, with min of each
+// resource: g's environment and descriptors when its unbudgeted hold g was published (g may be
+// nil), else the unbudgeted environment engine.ChildEnv builds. The caller decides whether it logs.
+func (r *run) unbudgetedChild(reason string, g *engine.Grant) child {
+	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: reason, release: func() error { return nil }}
+	if g != nil {
+		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
+	} else {
+		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.minGrant(), false, 0, reason)...)
+	}
+	return c
 }
 
 // strictRefusal is what --strict makes of a state error: a refusal with the run's refusal code.
@@ -78,13 +86,8 @@ const timeoutReason = "timeout"
 func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
 		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
-	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: timeoutReason, release: func() error { return nil }}
 	g, herr := e.UnbudgetedHold(r.o.request(0), timeoutReason)
-	if g != nil {
-		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
-	} else {
-		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.minGrant(), false, 0, timeoutReason)...)
-	}
+	c := r.unbudgetedChild(timeoutReason, g)
 	if timeoutLogs(g != nil && g.HoldName() != "", herr, t != nil && !t.TokenOnly()) {
 		c.log = e.Store()
 	}

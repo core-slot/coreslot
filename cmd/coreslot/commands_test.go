@@ -601,8 +601,7 @@ func TestStatusFlagsStalledTicket(t *testing.T) {
 		return coreslot.Report{Tickets: []coreslot.TicketInfo{{ID: id.String(), PID: 7, MtimeNS: mtime}}}
 	}
 	run := func(window time.Duration, mtimeAt func(call int) int64) (*stallWatcher, coreslot.Report) {
-		var now time.Duration
-		clk := obsClock{now: func() time.Duration { return now }, sleep: func(d time.Duration) { now += d }}
+		clk := &fakeClock{limit: time.Hour, cancel: func() {}}
 		calls := 0
 		rep, w, err := observeQueue(func() (coreslot.Report, error) {
 			calls++

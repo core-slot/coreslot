@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -162,11 +163,13 @@ func (o runOptions) sortedNeed() []string {
 }
 
 // needText is the request in the form of the waiting line: `cpu 4..12, pg-local 1..1`.
-func (o runOptions) needText() string {
+func (o runOptions) needText() string { return needText(o.need) }
+
+// needText is a request as the waiting line and status show it: `cpu 4..12, gpu 1..1`.
+func needText(need map[string]spec.Range) string {
 	var parts []string
-	for _, name := range o.sortedNeed() {
-		r := o.need[name]
-		parts = append(parts, fmt.Sprintf("%s %d..%d", name, r.Min, r.Max))
+	for _, name := range slices.Sorted(maps.Keys(need)) {
+		parts = append(parts, fmt.Sprintf("%s %d..%d", name, need[name].Min, need[name].Max))
 	}
 	return strings.Join(parts, ", ")
 }
