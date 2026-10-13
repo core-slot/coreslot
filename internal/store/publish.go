@@ -1,0 +1,414 @@
+//go:build unix
+
+package store
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"math"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync/atomic"
+	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/Nezhinskiy/coreslot/internal/testhooks"
+	"github.com/Nezhinskiy/coreslot/internal/wire"
+)
+
+// seq is the last seq of this process's publication counter (PROTOCOL.md section 7.1), shared
+// by every Store in the process so that two publications of one process never share a name.
+var seq atomic.Int64
+
+// NextSeq returns this process's next seq, as wire.NextSeq orders them: 1, 2, ... 999999, 0, 1, ...
+func NextSeq() int {
+	for {
+		last := seq.Load()
+		next := wire.NextSeq(int(last))
+		if seq.CompareAndSwap(last, int64(next)) {
+			return next
+		}
+	}
+}
+
+// tmpName is a temporary file's name, ".tmp-" pid "-" seq (section 7.1).
+func tmpName(pid, seq int) string {
+	return fmt.Sprintf(".tmp-%010d-%06d", pid, seq)
+}
+
+// isTmpName reports whether name matches the temporary-file grammar exactly.
+func isTmpName(name string) bool {
+	const prefix = ".tmp-"
+	const dash = len(prefix) + 10
+	if len(name) != dash+1+6 || name[:len(prefix)] != prefix || name[dash] != '-' {
+		return false
+	}
+	for i := len(prefix); i < len(name); i++ {
+		if i != dash && (name[i] < '0' || name[i] > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// NowNS is the wall clock in nanoseconds, shifted by the test hook's offset in test builds.
+func NowNS() int64 {
+	return time.Now().Add(testhooks.RealtimeOffset()).UnixNano()
+}
+
+// point is the pause-point hook; tests replace it to observe publication from inside.
+var point = testhooks.Point
+
+// renameNoReplace moves from to to, failing with EEXIST when to exists; tests replace it to
+// force the link+unlink fallback.
+var renameNoReplace = renameNoReplaceOS
+
+// maxTmpAttempts bounds the search for a free temporary name.
+const maxTmpAttempts = 1000
+
+// noReplaceDirs are the directories whose entries are published without replacement.
+var noReplaceDirs = []string{QueueDir, HoldsDir, CancelDir}
+
+// Publish publishes body as dir/name inside the section (PROTOCOL.md section 11), where dir is
+// QueueDir, HoldsDir or CancelDir and name matches that directory's grammar (a ticket or hold
+// name, or a ticket id for a cancel request): it creates dir/.tmp-<pid>-<seq> with O_EXCL (taking the next
+// seq on EEXIST), takes flock(LOCK_EX) on it when lockCarrying, writes the body, and moves it to
+// name without replacing an existing file. When name exists it removes its temporary file and
+// returns an error matching fs.ErrExist: the caller takes its next seq and retries.
+//
+// For a lock-carrying file it returns the locked descriptor, which the caller keeps open for as
+// long as the entry is live; otherwise it returns nil. A directory already holding MaxEntries
+// entries is a *StateError.
+func (sec *Section) Publish(dir, name string, body []byte, lockCarrying bool) (*os.File, error) {
+	if err := sec.live(); err != nil {
+		return nil, err
+	}
+	if !slices.Contains(noReplaceDirs, dir) {
+		return nil, fmt.Errorf("store: Publish into %q: not a directory of tickets, holds or cancel requests", dir)
+	}
+	if !nameMatches(dir, name) {
+		return nil, fmt.Errorf("store: Publish of %q into %s: the name does not match the directory's grammar", name, dir)
+	}
+	d := sec.s.path(dir)
+	if err := ensureDir(d); err != nil {
+		return nil, err
+	}
+	existing, err := readNames(d)
+	if err != nil {
+		return nil, err
+	}
+	if len(existing) >= maxEntries {
+		return nil, stateErrorf("%s is full: it holds %d entries", d, len(existing))
+	}
+	f, tmp, err := sec.writeTmp(d, body, lockCarrying)
+	if err != nil {
+		return nil, err
+	}
+	point("publish.before-rename")
+	final := filepath.Join(d, name)
+	if err := moveNoReplace(tmp, final); err != nil {
+		os.Remove(tmp)
+		f.Close()
+		return nil, err
+	}
+	if !lockCarrying {
+		f.Close()
+		return nil, nil
+	}
+	return f, nil
+}
+
+// nameMatches reports whether name matches dir's grammar: a ticket or hold name in QueueDir and
+// HoldsDir, a ticket id in CancelDir (PROTOCOL.md section 7.1).
+func nameMatches(dir, name string) bool {
+	if dir == CancelDir {
+		_, ok := wire.ParseID(name)
+		return ok
+	}
+	_, ok := wire.ParseName(name)
+	return ok
+}
+
+// writeTmp creates a fresh temporary file in d, locks it when lockCarrying, and writes body,
+// passing the publish.after-create, publish.after-lock and publish.after-write points.
+//
+// The body is written through the read-write description that created the file. A lock-carrying
+// file's lock is taken on a second, read-only description of it, which is the one returned and
+// kept: the descriptor a hold's command inherits as fd 3 (PROTOCOL.md section 17) carries the
+// same lock but cannot write, so a command writing to fd 3 cannot corrupt the body. The
+// read-write description is closed before the file is published.
+func (sec *Section) writeTmp(d string, body []byte, lockCarrying bool) (*os.File, string, error) {
+	pid := os.Getpid()
+	var w *os.File
+	var tmp string
+	for attempt := 0; ; attempt++ {
+		if attempt == maxTmpAttempts {
+			return nil, "", fmt.Errorf("store: no free temporary name in %s after %d attempts", d, attempt)
+		}
+		tmp = filepath.Join(d, tmpName(pid, NextSeq()))
+		var err error
+		w, err = OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL)
+		if errors.Is(err, fs.ErrExist) {
+			continue // a young leftover of an earlier process with this pid
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		break
+	}
+	f := w // the description returned: w itself unless the file is lock-carrying
+	fail := func(err error) (*os.File, string, error) {
+		os.Remove(tmp)
+		w.Close()
+		f.Close()
+		return nil, "", err
+	}
+	point("publish.after-create")
+	if lockCarrying {
+		ro, err := OpenFile(tmp, os.O_RDONLY)
+		if err != nil {
+			return fail(err)
+		}
+		f = ro
+		ok, err := flockNB(f)
+		if err != nil {
+			return fail(err)
+		}
+		if !ok {
+			return fail(fmt.Errorf("store: the fresh temporary file %s is locked by another description", tmp))
+		}
+	}
+	point("publish.after-lock")
+	if _, err := w.Write(body); err != nil {
+		return fail(err)
+	}
+	if lockCarrying {
+		if err := w.Close(); err != nil {
+			return fail(err)
+		}
+	}
+	point("publish.after-write")
+	return f, tmp, nil
+}
+
+// moveNoReplace moves tmp to final without replacing final: renameat2(RENAME_NOREPLACE) or
+// renamex_np(RENAME_EXCL), and where that is unavailable (EINVAL, ENOSYS, ENOTSUP), link(2) to
+// the final name followed by unlink(2) of the temporary name.
+func moveNoReplace(tmp, final string) error {
+	err := renameNoReplace(tmp, final)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ENOSYS) &&
+		!errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EOPNOTSUPP) {
+		return &os.LinkError{Op: "rename", Old: tmp, New: final, Err: err}
+	}
+	if err := unix.Link(tmp, final); err != nil {
+		return &os.LinkError{Op: "link", Old: tmp, New: final, Err: err}
+	}
+	// The entry is published once linked. A failed unlink leaves a temporary name on the same
+	// inode, which reconciliation removes; reporting failure here would orphan a live entry.
+	_ = unix.Unlink(tmp)
+	return nil
+}
+
+// replaceFile publishes body as the top-level file name (gen, FORMAT, degraded) inside the
+// section: temporary file in the state directory, then a plain rename over the old file.
+func (sec *Section) replaceFile(name string, body []byte) error {
+	if err := sec.live(); err != nil {
+		return err
+	}
+	f, tmp, err := sec.writeTmp(sec.s.dir, body, false)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	point("publish.before-rename")
+	if err := os.Rename(tmp, sec.s.path(name)); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// ReadSmall reads the regular file name of the layout, a path relative to the state directory,
+// of at most limit bytes, through the filesystem policy; a missing file returns an error matching
+// fs.ErrNotExist, a larger one returns its first limit+1 bytes.
+func (s *Store) ReadSmall(name string, limit int) ([]byte, error) {
+	f, err := OpenFile(s.path(name), os.O_RDONLY)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, int64(limit)+1))
+}
+
+// ---------------------------------------------------------------- gen
+
+// Gen is the content of gen (PROTOCOL.md section 7.8).
+type Gen struct {
+	N            int64 // in [0, 2^63-1], as wire.Gen
+	ReconciledNS int64
+}
+
+// ReadGen reads gen. A missing or malformed gen reads as the zero Gen; a gen that breaks the
+// filesystem policy is a *StateError.
+func (s *Store) ReadGen() (Gen, error) {
+	body, err := s.ReadSmall(GenFile, wire.MaxBodyBytes)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Gen{}, nil
+	}
+	if err != nil {
+		return Gen{}, err
+	}
+	w, err := wire.DecodeGen(body)
+	if err != nil {
+		return Gen{}, nil
+	}
+	return Gen{N: w.Gen, ReconciledNS: w.ReconciledNS}, nil
+}
+
+// nextGen is gen increased by one. gen is in [0, 2^63-1] (PROTOCOL.md section 7.8), so the bump
+// from the maximum wraps to 0 rather than writing a value no reader accepts.
+func nextGen(n int64) int64 {
+	if n == math.MaxInt64 {
+		return 0
+	}
+	return n + 1
+}
+
+func (sec *Section) writeGen(g Gen) error {
+	body, err := wire.EncodeGen(wire.Gen{Gen: g.N, ReconciledNS: g.ReconciledNS})
+	if err != nil {
+		return err
+	}
+	return sec.replaceFile(GenFile, body)
+}
+
+// BumpGen writes gen with gen increased by one (0 after 2^63-1) and reconciled_ns unchanged.
+func (sec *Section) BumpGen() error {
+	if err := sec.live(); err != nil {
+		return err
+	}
+	point("gen.before-bump")
+	g, err := sec.s.ReadGen()
+	if err != nil {
+		return err
+	}
+	g.N = nextGen(g.N)
+	return sec.writeGen(g)
+}
+
+// ---------------------------------------------------------------- FORMAT
+
+const formatPrefix = "coreslot-protocol "
+
+// Format reads FORMAT, which every entry does before changing anything (PROTOCOL.md section
+// 8). When FORMAT is absent it writes `coreslot-protocol 1`. It reports the format n and
+// whether this client implements it (Understood). A malformed FORMAT is a *StateError. When the
+// format is understood it also rewrites admit.lock's informational body to name this holder; when
+// it is not, it writes nothing at all (a token-only client changes nothing but token locks).
+func (sec *Section) Format() (n int, understood bool, err error) {
+	return sec.format(Understood)
+}
+
+// format is Format with the implemented formats given, so that a test can act as a client of
+// another format.
+func (sec *Section) format(implements func(int) bool) (n int, understood bool, err error) {
+	if err := sec.live(); err != nil {
+		return 0, false, err
+	}
+	body, err := sec.s.ReadSmall(FormatFile, 64)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if err := sec.replaceFile(FormatFile, []byte(formatPrefix+"1\n")); err != nil {
+			return 0, false, err
+		}
+		n = 1
+	case err != nil:
+		return 0, false, err
+	default:
+		n, err = parseFormat(body)
+		if err != nil {
+			return 0, false, err
+		}
+	}
+	if !implements(n) {
+		return n, false, nil
+	}
+	if err := sec.markHolder(); err != nil {
+		return n, true, err
+	}
+	return n, true, nil
+}
+
+// Prepare is what every entry that changes state does before its change (PROTOCOL.md sections 8
+// and 10.4): it reads FORMAT as Format does, and when the format is understood it reconciles if
+// that is due at nowNS. n, understood and a FORMAT that cannot be read, written or parsed are
+// Format's; when the format is not understood nothing is reconciled or written, and the caller
+// refuses (a *FormatError) or turns token-only. An understood format with an error is a failure
+// of the admit.lock body or of reconciliation. Admission and token-only admission never
+// reconcile and call Format alone.
+func (sec *Section) Prepare(nowNS int64) (n int, understood bool, err error) {
+	n, understood, err = sec.Format()
+	if err != nil || !understood {
+		return n, understood, err
+	}
+	_, err = sec.ReconcileIfDue(nowNS)
+	return n, true, err
+}
+
+// FormatError refuses a write into a state directory whose FORMAT is not understood (PROTOCOL.md
+// sections 14 and 15.2). When Err is set FORMAT could not be read, written when missing, or
+// parsed, and the message is Err's; otherwise FORMAT names format N, which this client does not
+// implement, and Suffix ends the message, for a caller that says what it did not do.
+type FormatError struct {
+	N      int
+	Suffix string
+	Err    error
+}
+
+func (e *FormatError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("the state directory has format %d, which this client does not implement%s", e.N, e.Suffix)
+}
+
+func (e *FormatError) Unwrap() error { return e.Err }
+
+// ReadFormat reads FORMAT outside the section, for a reader that writes nothing (status): n is
+// the format and present false when FORMAT is absent. A malformed FORMAT is a *StateError.
+func (s *Store) ReadFormat() (n int, present bool, err error) {
+	body, err := s.ReadSmall(FormatFile, 64)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	n, err = parseFormat(body)
+	if err != nil {
+		return 0, true, err
+	}
+	return n, true, nil
+}
+
+func parseFormat(body []byte) (int, error) {
+	line := bytes.TrimSuffix(body, []byte("\n"))
+	digits, ok := bytes.CutPrefix(line, []byte(formatPrefix))
+	if !ok {
+		return 0, stateErrorf("malformed FORMAT %q", body)
+	}
+	n, ok := spec.ParseDigits(string(digits))
+	if !ok {
+		return 0, stateErrorf("malformed FORMAT %q", body)
+	}
+	return n, nil
+}

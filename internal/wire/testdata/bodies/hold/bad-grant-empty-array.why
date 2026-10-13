@@ -1,0 +1,1 @@
+a resource with no token is left out of grant, never an empty array

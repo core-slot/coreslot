@@ -1,0 +1,167 @@
+name: release
+
+# A v* tag on a commit of main builds the release archives with GoReleaser, attests their build
+# provenance, and only then publishes the GitHub release. Tags are pushed by the maintainer only.
+#
+#   on-main -> ci -> build (read-only) -> attest (the only job that can sign) -> publish (the only
+#   job that writes)
+#
+# GoReleaser builds with --skip=publish: the open-source GoReleaser cannot split building from
+# publishing, so the publish job creates the release itself, from the archives the attest job
+# attested, after checking them against checksums.txt and, with `gh attestation verify`, each
+# against its attestation.
+#
+# Artifact attestations need a public repository: for a private one they need GitHub Enterprise
+# Cloud, which a personal account cannot have. When the event says the repository is private
+# (`github.event.repository.private == true`) the attest job and the attestation check are
+# skipped, the publish job says so in a notice, and the release carries checksums.txt alone. Any
+# other value, a missing field included, attests: the check fails closed.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  # A tag on a commit that is not on main (a feature branch, a fork's commit) releases nothing.
+  on-main:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # every branch's history, so origin/main exists
+          persist-credentials: false
+      - name: The tagged commit is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main; tag a commit of main"
+            exit 1
+          fi
+
+  # The release is built only from a commit that passes every check a pull request gets.
+  ci:
+    needs: on-main
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The toolchain CI tests and scans with, so the released binaries carry the standard
+          # library fixes govulncheck saw; no cache a pull request could have written.
+          go-version: stable
+          cache: false
+      - name: GoReleaser version
+        id: goreleaser
+        run: |
+          v="$(cat .github/goreleaser-version)"
+          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.github/goreleaser-version: '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: ${{ steps.goreleaser.outputs.version }}
+          args: release --clean --skip=publish
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error
+
+  # The one job that signs. It runs no build and nothing from the checkout. Skipped in a
+  # private repository (see above).
+  attest:
+    needs: build
+    if: github.event.repository.private != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # sign the provenance attestation
+      attestations: write # store it
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+      - name: The archives match checksums.txt
+        working-directory: ${{ runner.temp }}/dist
+        run: sha256sum -c checksums.txt
+      # checksums.txt names every archive with its digest: one attestation per archive.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/dist/checksums.txt
+
+  # The one job that writes, and only after the archives were attested: attest must have
+  # succeeded, or have been skipped because the repository is private.
+  publish:
+    needs: [build, attest]
+    if: >-
+      !cancelled() && needs.build.result == 'success' &&
+      (needs.attest.result == 'success' ||
+      (needs.attest.result == 'skipped' && github.event.repository.private == true))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and upload its assets
+      attestations: read # verify the archives' attestations before publishing them
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+      - name: The archives match checksums.txt
+        working-directory: ${{ runner.temp }}/dist
+        run: sha256sum -c checksums.txt
+      # Each archive must carry a provenance attestation signed by this workflow in this
+      # repository: what is published is what the attest job attested.
+      - name: The archives' attestations verify
+        if: github.event.repository.private != true
+        working-directory: ${{ runner.temp }}/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for archive in ./*.tar.gz; do
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF"
+          done
+      - name: No attestations in a private repository
+        if: github.event.repository.private == true
+        run: |
+          echo "::notice title=No attestations::the repository is private: artifact attestations need a public repository (or GitHub Enterprise Cloud), so the archives were not attested and the release carries checksums.txt alone"
+      - name: Publish the GitHub release
+        working-directory: ${{ runner.temp }}/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          # A tag with a pre-release part (v0.2.0-rc.1) is a pre-release, as SemVer has it.
+          prerelease=()
+          case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
+          notes="Changes: see CHANGELOG.md. Verify an archive with \`shasum -a 256 -c checksums.txt --ignore-missing\`"
+          if [ "$PRIVATE" != true ]; then
+            notes="$notes and its provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\`"
+          fi
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            "${prerelease[@]}" --title "coreslot ${GITHUB_REF_NAME#v}" \
+            --notes "$notes." \
+            ./*.tar.gz checksums.txt

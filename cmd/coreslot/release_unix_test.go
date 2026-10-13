@@ -1,0 +1,89 @@
+//go:build unix
+
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Nezhinskiy/coreslot/internal/engine"
+	"github.com/Nezhinskiy/coreslot/internal/store"
+)
+
+// A run whose state directory is removed and recreated while its command runs finds out when it
+// releases (I1): it prints the state error, writes nothing into the new directory (no hold
+// removal, no section entry, so no admit.lock, FORMAT or gen, and no run-log line), and exits
+// with the command's own status. A fail-open run's unbudgeted hold follows the same rule.
+func TestRunReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
+	const recreate = `rm -rf "$S" && mkdir "$S"`
+	const withFormat = recreate + ` && printf 'coreslot-protocol 1\n' > "$S/FORMAT"`
+	for _, c := range []struct{ name, cfg, script string }{
+		{"admitted", "", recreate},
+		{"admitted, new FORMAT", "", withFormat},
+		{"fail-open", "[resources]\ncpu = 0\n", recreate},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := stateDir(t, c.cfg)
+			env := append(baseEnv(dir), "S="+dir)
+			r := cli(t, env, "run", "--need", "cpu=1", "--", "sh", "-c", c.script+" && exit 7")
+			if r.code != 7 {
+				t.Fatalf("exit %d, want the command's 7; stderr:\n%s", r.code, r.stderr)
+			}
+			if !strings.Contains(r.stderr, "state error at release") {
+				t.Errorf("stderr does not report the release's state error:\n%s", r.stderr)
+			}
+			names, err := os.ReadDir(dir)
+			var got []string
+			for _, n := range names {
+				got = append(got, n.Name())
+			}
+			want := ""
+			if c.script == withFormat {
+				want = "FORMAT"
+			}
+			if err != nil || strings.Join(got, " ") != want {
+				t.Errorf("the new state directory holds %q, %v; want %q, what the command left", got, err, want)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, "log")); err == nil {
+				t.Error("a run log was written into the new state directory")
+			}
+		})
+	}
+}
+
+// Only a release identity mismatch stops the run from writing at release; a descriptor that
+// fails to close is reported, and the run log is still appended.
+func TestReleaseFailureStopsWritingOnlyOnAMismatch(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		stop bool
+		want string
+	}{
+		{"released", nil, false, ""},
+		{"identity mismatch", &engine.IdentityError{Err: &store.StateError{Reason: "holds/h: the held file is no longer linked"}}, true,
+			"coreslot: state error at release: holds/h: the held file is no longer linked; nothing more was written into the state directory, not even the run log\n"},
+		{"close error", fmt.Errorf("close res/cpu/0: %w", os.ErrInvalid), false,
+			"coreslot: the grant's descriptors did not all close: close res/cpu/0: invalid argument\n"},
+		{"state error from closing", &store.StateError{Reason: "x"}, false,
+			"coreslot: the grant's descriptors did not all close: coreslot state error: x\n"},
+	} {
+		f, err := os.CreateTemp(t.TempDir(), "stderr")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := &run{io: IO{Stderr: f}}
+		stop := r.releaseFailed(c.err)
+		got, err := os.ReadFile(f.Name())
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stop != c.stop || string(got) != c.want {
+			t.Errorf("%s: releaseFailed = %v, stderr %q; want %v, %q", c.name, stop, got, c.stop, c.want)
+		}
+	}
+}

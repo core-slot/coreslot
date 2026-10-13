@@ -9,7 +9,7 @@
 #   INCONCLUSIVE  anything else: the holder was not ready or died, the image or docker failed,
 #                 flock exited with another status
 #
-# Observed on Docker Desktop for macOS on 2026-10-11: NOT VISIBLE (design §8.1). The script
+# Observed on Docker Desktop for macOS on 2026-10-11: NOT VISIBLE. The script
 # prints the host, Docker and filesystem versions beside the result.
 set -uo pipefail
 
