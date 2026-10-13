@@ -236,17 +236,14 @@ func rotateRunLog(st *store.Store) (rotateErr, skip error) {
 		return nil, nil // busy: append without rotating
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Format(testhooks.Formats())
+	// A section entered to rotate reconciles first when it is due, like every entry other than
+	// admission (PROTOCOL.md section 10.4).
+	_, understood, err := sec.Prepare(testhooks.Formats(), store.NowNS())
 	if !understood {
 		if err != nil {
 			return nil, err // malformed FORMAT
 		}
 		return nil, errFormatChanged
-	}
-	if err == nil {
-		// A section entered to rotate reconciles first when it is due, like every entry other
-		// than admission (PROTOCOL.md section 10.4).
-		_, err = sec.ReconcileIfDue(store.NowNS())
 	}
 	if err == nil {
 		err = sec.RotateLogIfNeeded()

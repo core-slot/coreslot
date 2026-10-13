@@ -4,7 +4,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/state"
@@ -29,15 +28,12 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, 
 		return nil, nil, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format(formats())
+	n, understood, err := sec.Prepare(formats(), e.clock.Realtime())
 	if err != nil {
 		return nil, nil, err
 	}
 	if !understood {
-		return nil, nil, fmt.Errorf("%w: the state directory has format %d, which this client does not implement", ErrRefused, n)
-	}
-	if _, err := sec.ReconcileIfDue(e.clock.Realtime()); err != nil {
-		return nil, nil, err
+		return nil, nil, refuseFormat(n, "")
 	}
 	sizes, err := e.sizes()
 	if err != nil {

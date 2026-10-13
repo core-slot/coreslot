@@ -5,7 +5,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 
@@ -29,16 +28,13 @@ func (e *Engine) CancelContext(ctx context.Context, id wire.ID) error {
 		return err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format(formats())
+	now := e.clock.Realtime() // reconciliation and the cancel request read the same clock
+	n, understood, err := sec.Prepare(formats(), now)
 	if err != nil {
 		return err
 	}
 	if !understood {
-		return fmt.Errorf("%w: the state directory has format %d, which this client does not implement", ErrRefused, n)
-	}
-	now := e.clock.Realtime()
-	if _, err := sec.ReconcileIfDue(now); err != nil {
-		return err
+		return refuseFormat(n, "")
 	}
 	entries, _, err := e.st.List(store.QueueDir)
 	if err != nil {
@@ -147,10 +143,7 @@ func (t *Ticket) removeOwn(sec *store.Section) {
 			return
 		}
 		defer s.Leave()
-		if _, understood, err := s.Format(formats()); err != nil || !understood {
-			return
-		}
-		if _, err := s.ReconcileIfDue(t.e.clock.Realtime()); err != nil {
+		if _, understood, err := s.Prepare(formats(), t.e.clock.Realtime()); err != nil || !understood {
 			return
 		}
 		sec = s

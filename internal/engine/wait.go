@@ -300,16 +300,13 @@ func (t *Ticket) resumeBump() error {
 		return err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Format(formats())
+	_, understood, err := sec.Prepare(formats(), t.e.clock.Realtime())
 	if err != nil {
 		return err
 	}
 	if !understood {
 		t.toTokenOnly()
 		return nil
-	}
-	if _, err := sec.ReconcileIfDue(t.e.clock.Realtime()); err != nil {
-		return err
 	}
 	if err := sec.BumpGen(); err != nil {
 		return err
