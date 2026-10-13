@@ -14,8 +14,10 @@ issue first so the design can be settled before the code. Security problems go t
 - **No new dependencies** beyond the standard library, `golang.org/x/sys` and
   `github.com/BurntSushi/toml` (`github.com/creack/pty` in tests only) without the maintainer's
   agreement. A dependency change regenerates [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
-- **No telemetry.** coreslot opens no network connection and records nothing outside the user's
-  state directory. The run log never records argv or the environment.
+- **No telemetry.** coreslot opens no network connection itself and records nothing outside the
+  user's state directory. Looking up the user's home directory goes through the system's name
+  services, which may contact a directory service such as LDAP ([SECURITY.md](SECURITY.md)). The
+  run log never records argv or the environment.
 - **The library stays quiet.** It never prints, never installs signal handlers, never chooses exit
   codes and never decides to run unbudgeted (`library_purity_test.go` checks the first three).
 - **Windows builds.** `internal/store`, `internal/engine` and the root package's implementation are
