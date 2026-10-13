@@ -84,7 +84,7 @@ func openDir(dir string, create bool) (*Store, error) {
 		return nil, stateErrorf("state directory %q is not an absolute path", dir)
 	}
 	dir = filepath.Clean(dir)
-	if err := checkFilesystem(nearestExisting(dir)); err != nil {
+	if err := checkFilesystem(NearestExisting(dir)); err != nil {
 		return nil, err
 	}
 	s := &Store{dir: dir}
@@ -150,8 +150,9 @@ func (s *Store) Resources() ([]string, error) {
 // checkFilesystem is CheckFilesystem; tests replace it to observe what Open checks and when.
 var checkFilesystem = CheckFilesystem
 
-// nearestExisting returns dir, or its nearest ancestor that exists.
-func nearestExisting(dir string) string {
+// NearestExisting returns dir, or its nearest ancestor that exists: the directory whose
+// filesystem a missing state directory would be created on.
+func NearestExisting(dir string) string {
 	for {
 		if _, err := os.Stat(dir); err == nil {
 			return dir

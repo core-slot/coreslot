@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,7 +17,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/state"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
@@ -57,7 +57,7 @@ func statusCommand(args []string, io IO) int {
 	if err != nil {
 		return statusFailed(err, io)
 	}
-	rep, w, err := observeQueue(e.Snapshot, *observe, monotonicClock())
+	rep, w, err := observeQueue(e.Snapshot, *observe, newRealClock())
 	if err != nil {
 		return statusFailed(err, io)
 	}
@@ -86,17 +86,6 @@ func statusFailed(err error, io IO) int {
 	}
 	fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
 	return exitInternal
-}
-
-// obsClock is the clock of an observation: the observer's own monotonic time, and a sleep.
-type obsClock struct {
-	now   func() time.Duration
-	sleep func(time.Duration)
-}
-
-func monotonicClock() obsClock {
-	start := time.Now()
-	return obsClock{now: func() time.Duration { return time.Since(start) }, sleep: time.Sleep}
 }
 
 // stallWatcher judges freshness the way a waiter does (PROTOCOL.md section 10.2): it remembers
@@ -129,21 +118,22 @@ func (w *stallWatcher) stalled(t coreslot.TicketInfo) bool {
 // observeQueue takes the snapshot and, when window is positive, takes it again every second for
 // window, feeding each sighting to a stallWatcher. A ticket whose mtime stayed the same for
 // state.StallAfter of that observation is STALLED for this observer; a single reading cannot
-// tell, since a first sighting never is. It returns the last snapshot.
-func observeQueue(snap func() (coreslot.Report, error), window time.Duration, clk obsClock) (coreslot.Report, *stallWatcher, error) {
+// tell, since a first sighting never is. It returns the last snapshot. The observation runs on
+// the wait loop's clock; nothing ends its sleeps early.
+func observeQueue(snap func() (coreslot.Report, error), window time.Duration, clk waitClock) (coreslot.Report, *stallWatcher, error) {
 	w := &stallWatcher{}
 	rep, err := snap()
 	if err != nil {
 		return rep, w, err
 	}
-	start := clk.now()
+	start := clk.Now()
 	w.see(rep, start) // the window runs from the first sighting, so a ticket seen then can reach StallAfter in it
-	for clk.now()-start < window {
-		clk.sleep(min(observeEvery, window-(clk.now()-start)))
+	for clk.Now()-start < window {
+		_ = clk.Sleep(context.Background(), min(observeEvery, window-(clk.Now()-start)))
 		if rep, err = snap(); err != nil {
 			return rep, w, err
 		}
-		w.see(rep, clk.now())
+		w.see(rep, clk.Now())
 	}
 	return rep, w, nil
 }
@@ -204,8 +194,6 @@ func holderAlive(pid int) bool {
 	return err == nil || errors.Is(err, unix.EPERM)
 }
 
-func (v statusView) sectionFor() time.Duration { return sectionHeldFor(v.rep.Section, v.nowNS) }
-
 func sectionHeldFor(s coreslot.SectionInfo, nowNS int64) time.Duration {
 	if !s.Held || s.EnteredNS == 0 {
 		return 0
@@ -260,7 +248,7 @@ func (v statusView) human() string {
 			p("DEGRADED: the record is unreadable; `coreslot doctor --clear` removes it")
 		} else {
 			p("DEGRADED: %s (%d fail-open %s since %s); `coreslot doctor --clear` removes the record",
-				text(d.Reason), d.Count, plural(d.Count, "run"), time.Unix(0, d.FirstNS).UTC().Format(time.RFC3339))
+				text(d.Reason), d.Count, plural(d.Count, "run", "runs"), time.Unix(0, d.FirstNS).UTC().Format(time.RFC3339))
 		}
 	} else {
 		p("degraded: no")
@@ -280,7 +268,7 @@ func (v statusView) human() string {
 		ri := r.Resources[name]
 		line := fmt.Sprintf("  %s  size %d  locked %d  free %d", name, ri.Size, ri.Locked, ri.Free)
 		if n := v.unlisted[name]; n > 0 {
-			line += fmt.Sprintf("  (%d locked, no hold lists %s)", n, pluralWord(n, "it", "them"))
+			line += fmt.Sprintf("  (%d locked, no hold lists %s)", n, plural(int64(n), "it", "them"))
 		}
 		p("%s", line)
 	}
@@ -313,19 +301,11 @@ func (v statusView) human() string {
 	}
 
 	if len(r.UndeclaredLocked) > 0 {
-		var parts []string
-		for _, name := range slices.Sorted(maps.Keys(r.UndeclaredLocked)) {
-			parts = append(parts, fmt.Sprintf("%s %d", name, r.UndeclaredLocked[name]))
-		}
-		p("undeclared resources with locked tokens (not in the configuration): %s", strings.Join(parts, ", "))
+		p("undeclared resources with locked tokens (not in the configuration): %s", tokenList(r.UndeclaredLocked))
 	}
 
 	if len(v.unlisted) > 0 {
-		var parts []string
-		for _, name := range slices.Sorted(maps.Keys(v.unlisted)) {
-			parts = append(parts, fmt.Sprintf("%s %d", name, v.unlisted[name]))
-		}
-		p("locked tokens no hold lists: %s (token-only runs, or a hold in transition)", strings.Join(parts, ", "))
+		p("locked tokens no hold lists: %s (token-only runs, or a hold in transition)", tokenList(v.unlisted))
 	}
 
 	if len(v.tickets) == 0 {
@@ -361,26 +341,14 @@ func (v statusView) human() string {
 	if n := len(r.Cancels); n > 0 {
 		p("pending cancel requests: %d", n)
 	}
-	var ignored []string
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
-		if n := r.Ignored[dir]; n > 0 {
-			ignored = append(ignored, fmt.Sprintf("%s %d", dir, n))
-		}
-	}
-	if len(ignored) > 0 {
-		p("ignored entries (malformed or stray): %s", strings.Join(ignored, ", "))
+	if ignored := ignoredText(r.Ignored); ignored != "" {
+		p("ignored entries (malformed or stray): %s", ignored)
 	}
 	return b.String()
 }
 
-func plural(n int64, word string) string {
-	if n == 1 {
-		return word
-	}
-	return word + "s"
-}
-
-func pluralWord(n int, one, many string) string {
+// plural is one when n is 1, else many.
+func plural(n int64, one, many string) string {
 	if n == 1 {
 		return one
 	}
@@ -392,18 +360,26 @@ func holdTokens(grant map[string]int) string {
 	if len(grant) == 0 {
 		return "no tokens"
 	}
+	return tokenList(grant)
+}
+
+// tokenList is a count of tokens per resource in name order: `cpu 12, gpu 1`.
+func tokenList(tokens map[string]int) string {
 	var parts []string
-	for _, name := range slices.Sorted(maps.Keys(grant)) {
-		parts = append(parts, fmt.Sprintf("%s %d", name, grant[name]))
+	for _, name := range slices.Sorted(maps.Keys(tokens)) {
+		parts = append(parts, fmt.Sprintf("%s %d", name, tokens[name]))
 	}
 	return strings.Join(parts, ", ")
 }
 
-// needText is a ticket's request as `cpu 4..12, gpu 1..1`.
-func needText(need map[string]spec.Range) string {
+// ignoredText lists the entries ignored per directory of the layout, `queue 1, holds 2`, leaving
+// out a directory with none; "" when nothing was ignored.
+func ignoredText(ignored map[string]int) string {
 	var parts []string
-	for _, name := range slices.Sorted(maps.Keys(need)) {
-		parts = append(parts, fmt.Sprintf("%s %d..%d", name, need[name].Min, need[name].Max))
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
+		if n := ignored[dir]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", dir, n))
+		}
 	}
 	return strings.Join(parts, ", ")
 }
@@ -507,7 +483,7 @@ func (v statusView) document() jsonStatus {
 		d.UndeclaredLocked = map[string]int{}
 	}
 	if r.Section.Held {
-		h := &jsonHolder{PID: r.Section.PID, EnteredNS: r.Section.EnteredNS, HeldForS: v.sectionFor().Seconds()}
+		h := &jsonHolder{PID: r.Section.PID, EnteredNS: r.Section.EnteredNS, HeldForS: sectionHeldFor(r.Section, v.nowNS).Seconds()}
 		if r.Section.PID != 0 {
 			alive := holderAlive(r.Section.PID)
 			h.Alive = &alive

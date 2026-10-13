@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -173,7 +172,7 @@ func doctorReport(loc location, io IO) int {
 		line("no state directory yet (nothing has run)")
 	}
 
-	fsErr := store.CheckFilesystem(nearestExisting(dir))
+	fsErr := store.CheckFilesystem(store.NearestExisting(dir))
 	if fsErr != nil {
 		problem("filesystem: %s", text(fsErr.Error()))
 	} else {
@@ -250,7 +249,7 @@ func doctorReport(loc location, io IO) int {
 				line("degraded: recorded, the record is unreadable; `coreslot doctor --clear` removes it")
 			} else {
 				line("degraded: %s (%d fail-open %s since %s); `coreslot doctor --clear` removes the record",
-					text(d.Reason), d.Count, plural(d.Count, "run"), time.Unix(0, d.FirstNS).UTC().Format(time.RFC3339))
+					text(d.Reason), d.Count, plural(d.Count, "run", "runs"), time.Unix(0, d.FirstNS).UTC().Format(time.RFC3339))
 			}
 		} else {
 			line("degraded: no")
@@ -259,22 +258,16 @@ func doctorReport(loc location, io IO) int {
 			line("admission section: %s", sectionHolder(rep.Section, store.NowNS()))
 		}
 		if n := len(rep.DeadHolds); n > 0 {
-			line("note: %d dead %s awaiting reconciliation", n, plural(int64(n), "hold"))
+			line("note: %d dead %s awaiting reconciliation", n, plural(int64(n), "hold", "holds"))
 		}
-		var ignored []string
-		for _, d := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
-			if n := rep.Ignored[d]; n > 0 {
-				ignored = append(ignored, fmt.Sprintf("%s %d", d, n))
-			}
-		}
-		if len(ignored) > 0 {
-			line("note: ignored entries (malformed or stray, never trusted or removed): %s", strings.Join(ignored, ", "))
+		if ignored := ignoredText(rep.Ignored); ignored != "" {
+			line("note: ignored entries (malformed or stray, never trusted or removed): %s", ignored)
 		}
 	}
 
 	switch {
 	case problems > 0:
-		line("%d %s found", problems, plural(int64(problems), "problem"))
+		line("%d %s found", problems, plural(int64(problems), "problem", "problems"))
 		return exitProblems
 	case err == nil && rep.Degraded != nil:
 		return exitDegraded
@@ -289,19 +282,4 @@ func limitText(n uint64) string {
 		return "unlimited"
 	}
 	return fmt.Sprint(n)
-}
-
-// nearestExisting is dir, or its nearest ancestor that exists: where a missing state directory
-// would be created.
-func nearestExisting(dir string) string {
-	for {
-		if _, err := os.Stat(dir); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return dir
-		}
-		dir = parent
-	}
 }
