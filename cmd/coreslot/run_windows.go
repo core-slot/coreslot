@@ -46,7 +46,7 @@ func runCommand(args []string, io IO) int {
 	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	if err := cmd.Start(); err != nil {
 		code, _ := classify(&execError{Err: err})
-		fmt.Fprintf(io.Stderr, "coreslot: cannot run %s: %v\n", argv[0], err)
+		fmt.Fprintf(io.Stderr, "coreslot: cannot run %s: %s\n", text(argv[0]), text(err.Error()))
 		return code
 	}
 	_ = cmd.Wait()

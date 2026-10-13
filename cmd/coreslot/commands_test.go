@@ -1114,6 +1114,27 @@ func TestCommandErrorsAreEscaped(t *testing.T) {
 			t.Errorf("%v printed a raw control character or several error lines:\n%q", args, out)
 		}
 	}
+	// run fails open, refuses under --strict, or cannot start a command whose name is user text
+	// too: every notice it prints is one line of its own, starting with "coreslot: ".
+	for _, args := range [][]string{{"run", "--", "true"}, {"run", "--strict", "--", "true"},
+		{"run", "--", "./no\nsuch\x1b[31m"}} {
+		r := cli(t, env, args...)
+		if !strings.Contains(r.stderr, `x\ny\x1b[31m`) {
+			t.Errorf("%q: exit %d, want a notice that quotes the directory escaped:\n%q", args, r.code, r.stderr)
+		}
+		if strings.ContainsAny(r.stderr, "\x1b\r") {
+			t.Errorf("%q printed a raw control character:\n%q", args, r.stderr)
+		}
+		for _, l := range strings.Split(strings.TrimSuffix(r.stderr, "\n"), "\n") {
+			if !strings.HasPrefix(l, "coreslot: ") {
+				t.Errorf("%q printed a line that is not a notice of its own: %q", args, l)
+			}
+		}
+	}
+	// A flag the run does not know is named escaped in the usage error.
+	if r := cli(t, env, "run", "--no\x1b[31m", "--", "true"); r.code != exitUsage || strings.ContainsAny(r.stderr, "\x1b\r") {
+		t.Errorf("run with an unknown flag: exit %d, want %d without a raw control character:\n%q", r.code, exitUsage, r.stderr)
+	}
 }
 
 // ---------------------------------------------------------------- help, validation, exit statuses

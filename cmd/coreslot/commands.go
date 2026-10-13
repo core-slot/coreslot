@@ -6,7 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"time"
+
+	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
+
+// text escapes text the program does not control so that a message stays on one line and
+// cannot drive the terminal: labels, paths (CORESLOT_STATE_DIR is the environment's), values of
+// the environment, command names, and the errors that embed any of them. Human output escapes
+// their control characters and newlines; JSON output encodes them.
+func text(s string) string { return wire.EscapeHuman(s) }
 
 // The usage and the flags of status, cancel and doctor are the same on every platform: on
 // Windows, where there is no budget (PROTOCOL.md section 16), they still decide whether an

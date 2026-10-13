@@ -49,8 +49,8 @@ func (r *run) decide() int {
 		if env[engine.EnvTokenFDs] != "" {
 			held, err := engine.ValidateInherited(env)
 			if err != nil {
-				return r.refuse("the inherited grant does not validate: %v; refusing rather than queueing "+
-					"behind a parent that may hold the whole budget (use --independent to queue anyway)", err)
+				return r.refuse("the inherited grant does not validate: %s; refusing rather than queueing "+
+					"behind a parent that may hold the whole budget (use --independent to queue anyway)", text(err.Error()))
 			}
 			r.nofile = startNofileProbe(contextFDs(env))
 			return r.passThrough(held)

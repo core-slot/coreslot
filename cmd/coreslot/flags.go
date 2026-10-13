@@ -90,7 +90,7 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 			fmt.Fprintln(streams.Stdout, runHelp)
 			return o, errHelp
 		}
-		return o, usagef("%v\n%s", err, runUsage)
+		return o, usagef("%s\n%s", text(err.Error()), runUsage) // names an unknown flag as given
 	}
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "priority" {
