@@ -1,0 +1,10 @@
+# GoReleaser output (goreleaser release --snapshot --clean)
+/dist/
+
+# A `go build ./cmd/coreslot` at the root
+/coreslot
+
+# Python bytecode: a default `python3 -m unittest` in conformance/pyclient writes it, and it
+# embeds the checkout's absolute path
+__pycache__/
+*.pyc
