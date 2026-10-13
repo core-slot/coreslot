@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/Nezhinskiy/coreslot/internal/engine"
 )
 
 // installSectionHooks does nothing on Windows: there is no admission section to hold, and no
@@ -38,10 +38,7 @@ func runCommand(args []string, io IO) int {
 	argv := substitute(o.argv, o.minGrant(), o.subst)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = io.Stdin, io.Stdout, io.Stderr
-	cmd.Env = os.Environ()
-	for name, n := range o.minGrant() {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("CORESLOT_GRANTED_%s=%d", spec.EnvName(name), n))
-	}
+	cmd.Env = append(os.Environ(), engine.ChildEnv(o.minGrant(), false, 0, "")...)
 	// The console delivers Ctrl-C to the command too; the run only waits for it.
 	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	if err := cmd.Start(); err != nil {

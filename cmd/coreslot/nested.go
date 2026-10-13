@@ -7,14 +7,12 @@ import (
 	"os"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
@@ -76,13 +74,6 @@ func contextFDs(env map[string]string) []int {
 	return fds
 }
 
-// isContext reports whether an environment variable is grant context: CORESLOT_GRANTED_*,
-// CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS or CORESLOT_UNBUDGETED. CORESLOT_STATE_DIR is not.
-func isContext(key string) bool {
-	return strings.HasPrefix(key, engine.EnvGranted) || key == engine.EnvHeldFD ||
-		key == engine.EnvTokenFDs || key == engine.EnvUnbudgeted
-}
-
 // dropInherited is what a run that does not pass through does with an inherited context
 // (PROTOCOL.md section 17): it closes exactly the descriptors CORESLOT_HELD_FD and
 // CORESLOT_TOKEN_FDS name, so that its command cannot pass through to a grant that is not its
@@ -99,7 +90,7 @@ func dropInherited(env map[string]string) []string {
 	}
 	var out []string
 	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); !isContext(k) {
+		if k, _, _ := strings.Cut(kv, "="); !engine.IsContext(k) {
 			out = append(out, kv)
 		}
 	}
@@ -109,20 +100,19 @@ func dropInherited(env map[string]string) []string {
 // withGrant is the environment with CORESLOT_GRANTED_<RES> set to grant for each resource it
 // names; every other variable, inherited context included, is passed on unchanged.
 func withGrant(grant map[string]int) []string {
-	set := make(map[string]string, len(grant))
-	for name, n := range grant {
-		set[engine.EnvGranted+spec.EnvName(name)] = strconv.Itoa(n)
+	granted := engine.ChildEnv(grant, false, 0, "")
+	set := make(map[string]bool, len(granted))
+	for _, kv := range granted {
+		k, _, _ := strings.Cut(kv, "=")
+		set[k] = true
 	}
 	var out []string
 	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); set[k] == "" {
+		if k, _, _ := strings.Cut(kv, "="); !set[k] {
 			out = append(out, kv)
 		}
 	}
-	for _, k := range slices.Sorted(maps.Keys(set)) {
-		out = append(out, k+"="+set[k])
-	}
-	return out
+	return append(out, granted...)
 }
 
 // passThrough runs the command on the parent's grant (PROTOCOL.md section 18 rule 2): no
