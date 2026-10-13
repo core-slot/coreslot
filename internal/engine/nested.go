@@ -115,37 +115,67 @@ type Nested struct {
 // Anything else, or independent, is an ordinary request (rule 3). It writes nothing and closes
 // nothing: dropping the inherited context of an ordinary request is its caller's business.
 //
-// budget is the state directory of the caller's own budget, or empty for the one env names. A
-// context is a parent's only in the budget it came from, the directory env's CORESLOT_STATE_DIR
-// (or the default) names, since a run passes CORESLOT_STATE_DIR on to its command: the CLI's
-// state directory is always that one, but a library client may open another (a test's
-// Options.StateDir), and there the inherited context belongs to another budget, whose tokens
-// this one never counts, so the request is ordinary. A context whose directory cannot be told
-// is not this budget's either.
+// budget is the state directory of the caller's own budget, or empty for the one env names, which
+// is then resolved here (the CLI's case: its state directory is always that one). A context is a
+// parent's only in the budget it came from, the directory env's CORESLOT_STATE_DIR (or the
+// default) names, since a run passes CORESLOT_STATE_DIR on to its command; a library client may
+// open another (a test's Options.StateDir), and there the inherited context belongs to another
+// budget, whose tokens this one never counts, so the request is ordinary.
+//
+// When budget is set and the directory env names cannot be resolved (CORESLOT_STATE_DIR is not
+// an absolute path, or it is unset and the home directory cannot be learned), whether the context
+// is this budget's cannot be told, and err says so: the caller refuses. Taking it for another
+// budget would queue the request, and when budget is in fact the directory env names (a caller
+// that spells out the default in Options.StateDir) it would queue behind its own parent, which
+// may hold the whole budget; a refusal cannot hang, and independent is the way to queue anyway.
+// A client whose directory is the one env names by construction calls DecideNestedNamed instead,
+// which resolves nothing.
 func DecideNested(env map[string]string, independent bool, budget string) (Nested, error) {
+	return decideNested(env, independent, budget, false)
+}
+
+// DecideNestedNamed is DecideNested for a caller whose state directory dir is the one env names
+// by construction: it resolved dir from this process's environment by the rule of PROTOCOL.md
+// section 4.1, as a library Client opened without Options.StateDir does, and env is that
+// environment. It does not resolve the directory again: a second home-directory lookup may run
+// getent again and fail where the first succeeded (a timeout), and the request must then not be
+// taken for another budget's and queue behind its own parent.
+func DecideNestedNamed(env map[string]string, independent bool, dir string) (Nested, error) {
+	return decideNested(env, independent, dir, true)
+}
+
+func decideNested(env map[string]string, independent bool, budget string, named bool) (Nested, error) {
 	if independent || (env[EnvUnbudgeted] == "" && env[EnvTokenFDs] == "") {
 		return Nested{}, nil
 	}
-	if budget != "" && !namesBudget(env, budget) {
-		return Nested{}, nil
+	dir := "" // the directory env names, when known: validateInherited resolves it otherwise
+	switch {
+	case named:
+		dir = filepath.Clean(budget)
+	case budget != "":
+		envDir, err := stateDirOf(env)
+		if err != nil {
+			return Nested{}, fmt.Errorf("the state directory the inherited context names cannot be resolved, so "+
+				"whether it is this budget's (%s) cannot be told: %v", budget, err)
+		}
+		if !sameDir(envDir, budget) {
+			return Nested{}, nil
+		}
+		dir = envDir
 	}
 	if reason := env[EnvUnbudgeted]; reason != "" {
 		return Nested{Kind: NestedUnbudgeted, Reason: reason, env: env}, nil
 	}
-	held, dir, err := validateInherited(env)
+	held, dir, err := validateInherited(env, dir)
 	if err != nil {
 		return Nested{}, err
 	}
 	return Nested{Kind: NestedPassThrough, Held: held, env: env, dir: dir}, nil
 }
 
-// namesBudget reports whether env's state directory is budget: the same path, or the same
-// directory reached through another one.
-func namesBudget(env map[string]string, budget string) bool {
-	dir, err := stateDirOf(env)
-	if err != nil {
-		return false
-	}
+// sameDir reports whether dir is budget: the same path, or the same directory reached through
+// another one.
+func sameDir(dir, budget string) bool {
 	if dir == filepath.Clean(budget) {
 		return true
 	}
@@ -196,12 +226,13 @@ func NestedGrant(req spec.Request, held map[string]int) (grant map[string]int, c
 // collected, which would close the descriptor under the grant. The caller must not close them.
 // Each error names the likely cause.
 func ValidateInherited(env map[string]string) (held map[string][]*os.File, err error) {
-	held, _, err = validateInherited(env)
+	held, _, err = validateInherited(env, "")
 	return held, err
 }
 
-// validateInherited is ValidateInherited, also returning the state directory it checked in.
-func validateInherited(env map[string]string) (held map[string][]*os.File, dir string, err error) {
+// validateInherited is ValidateInherited in dir, the state directory env names, or in the one it
+// resolves from env when dir is empty; it also returns the directory it checked in.
+func validateInherited(env map[string]string, dir string) (held map[string][]*os.File, _ string, err error) {
 	fds, err := ParseTokenFDs(env[EnvTokenFDs])
 	if err != nil {
 		return nil, "", err
@@ -221,9 +252,10 @@ func validateInherited(env map[string]string) (held map[string][]*os.File, dir s
 		}
 		want[id] = fd
 	}
-	dir, err = stateDirOf(env)
-	if err != nil {
-		return nil, "", fmt.Errorf("the inherited grant cannot be checked: %v", err)
+	if dir == "" {
+		if dir, err = stateDirOf(env); err != nil {
+			return nil, "", fmt.Errorf("the inherited grant cannot be checked: %v", err)
+		}
 	}
 	found, err := findTokens(dir, want)
 	if err != nil {

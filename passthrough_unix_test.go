@@ -132,6 +132,49 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 	})
 }
 
+// A Client opened on Options.StateDir under a context whose state directory cannot be resolved
+// (here a CORESLOT_STATE_DIR that is not an absolute path; a home-directory lookup that fails is
+// the other way) cannot tell whether the context is its budget's: it refuses, at once and without
+// writing anything, rather than queue, since Options.StateDir may spell out the very directory the
+// context names, and the request would then queue behind its own parent. Options.Independent
+// queues. Mutation: taking a context whose directory cannot be resolved for another budget's,
+// as an ordinary request, reddens it (an ordinary grant instead of the refusal).
+func TestPassThroughRefusesAContextOfUnknownDirectory(t *testing.T) {
+	clearContext(t)
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	t.Setenv("CORESLOT_STATE_DIR", "relative/state")
+	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
+	req := Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}}
+	c := open(t, dir)
+	before := tree(t, dir)
+	w, err := c.Enqueue(req)
+	var se *StateError
+	if w != nil || !errors.Is(err, ErrRefused) || errors.As(err, &se) {
+		if w != nil {
+			if g, ok, _ := w.Poll(); ok {
+				defer g.Close()
+			} else {
+				_ = w.Cancel()
+			}
+		}
+		t.Fatalf("Enqueue = %v, %v; want an error matching ErrRefused, not a *StateError", w, err)
+	}
+	if !strings.Contains(err.Error(), "cannot be resolved") || !strings.Contains(err.Error(), "relative/state") ||
+		!strings.Contains(err.Error(), "Options.Independent") {
+		t.Errorf("error %q: want the cause and the way out", err)
+	}
+	if after := tree(t, dir); after != before {
+		t.Errorf("the refusal wrote under the state directory:\n%s\n---\n%s", before, after)
+	}
+	c, err = Open(Options{StateDir: dir, Independent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := waitGrant(t, c, req); g.PassThrough() {
+		t.Error("an Independent request passed through")
+	}
+}
+
 // A context that does not validate is a refusal, at once and without writing anything: the
 // request never queues behind a parent that may hold the whole budget. Mutation: queueing an
 // ordinary request when the context does not validate reddens it (no error).
@@ -198,6 +241,9 @@ func TestPassThroughOnInheritedGrant(t *testing.T) {
 	}
 }
 
+// moreHelpers are the helper modes of nestedEnv that test files of other build tags add.
+var moreHelpers = map[string]func() error{}
+
 // passThroughHelper runs a helper mode of nestedEnv and returns its exit status.
 func passThroughHelper(mode string) int {
 	var err error
@@ -207,7 +253,11 @@ func passThroughHelper(mode string) int {
 	case "grandchild":
 		err = passThroughGrandchild()
 	default:
-		err = fmt.Errorf("unknown mode %q", mode)
+		if h := moreHelpers[mode]; h != nil {
+			err = h()
+		} else {
+			err = fmt.Errorf("unknown mode %q", mode)
+		}
 	}
 	if err != nil {
 		fmt.Println(mode+":", err)

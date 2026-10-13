@@ -22,6 +22,7 @@ import (
 type Client struct {
 	e           *engine.Engine
 	independent bool
+	named       bool // opened without Options.StateDir: on the directory the environment names
 }
 
 // Open opens the state directory: Options.StateDir when set (with its configuration at
@@ -53,7 +54,7 @@ func Open(o Options) (*Client, error) {
 		return nil, wrap(err)
 	}
 	e := engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{})
-	return &Client{e: e, independent: o.Independent}, nil
+	return &Client{e: e, independent: o.Independent, named: o.StateDir == ""}, nil
 }
 
 // wrap applies the error contract (engine.StateReason): every error but the classes a caller acts
@@ -105,12 +106,24 @@ func (c *Client) Enqueue(req Request) (*Waiter, error) {
 // section and bumps no gen: it shares its parent's grant, so pass-throughs are not budgeted
 // against each other, and a caller that starts several commands at once partitions Grant
 // itself. A Client opened on another state directory (Options.StateDir) is another budget,
-// which the inherited context is not part of: its requests are ordinary.
+// which the inherited context is not part of: its requests are ordinary. When the directory the
+// environment names cannot be resolved (CORESLOT_STATE_DIR is not an absolute path, or it is
+// unset and the home directory cannot be learned), a Client opened on Options.StateDir cannot
+// tell whether it is that directory, and the request is refused (ErrRefused) rather than queued
+// behind a parent that may hold the whole budget. A Client opened without Options.StateDir is on
+// that directory by construction and never resolves it again.
 func (c *Client) EnqueueContext(ctx context.Context, req Request) (*Waiter, error) {
 	if err := spec.Normalize(req).Validate(); err != nil {
 		return nil, err
 	}
-	nested, err := engine.DecideNested(environ(), c.independent, c.e.Store().Dir())
+	// Opened without Options.StateDir, the Client's directory is the one the environment names:
+	// Open resolved it by the same rule, from the environment the context came in, and resolving
+	// it again could run getent again and fail where Open's lookup succeeded.
+	decide := engine.DecideNested
+	if c.named {
+		decide = engine.DecideNestedNamed
+	}
+	nested, err := decide(environ(), c.independent, c.e.Store().Dir())
 	if err != nil {
 		return nil, fmt.Errorf("%w: the inherited grant does not validate: %w; refusing rather than queueing "+
 			"behind a parent that may hold the whole budget (Options.Independent queues anyway)", ErrRefused, err)
