@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
@@ -101,6 +102,53 @@ func TestRemoveOwnTicket(t *testing.T) {
 	}
 	if _, err := sec.RemoveOwnTicket(".tmp-0000000001-000001"); err == nil {
 		t.Error("a temporary name: want an error")
+	}
+}
+
+// The owner's removal of its own ticket outlasts another client's momentary probe, which holds
+// the ticket's lock at the owner's first tries: the owner tries again and unlinks it, rather than
+// leave it dead in queue/ for a reconciliation (PROTOCOL.md section 12.1 step 7). A ticket that
+// stays locked throughout is still kept, after a bounded number of tries and about a millisecond.
+// The probe's busy tries are simulated through the flock seam, so the test does not depend on
+// timing. Mutation: a single probe (ownRemovalTries = 1) leaves the first ticket in queue/.
+func TestRemoveOwnTicketOutlastsAMomentaryProbe(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	q := filepath.Join(dir, QueueDir)
+	if err := os.Mkdir(q, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	probed, kept := ticketName(1), ticketName(2)
+	for _, n := range []string{probed, kept} {
+		if err := os.WriteFile(filepath.Join(q, n), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tries := map[string]int{}
+	old := flockNB
+	t.Cleanup(func() { flockNB = old })
+	flockNB = func(f *os.File) (bool, error) {
+		name := filepath.Base(f.Name())
+		tries[name]++
+		if (name == probed && tries[name] <= 3) || name == kept {
+			return false, nil // another description holds it at this try
+		}
+		return old(f)
+	}
+
+	if removed, err := sec.RemoveOwnTicket(probed); err != nil || !removed || exists(filepath.Join(q, probed)) {
+		t.Errorf("a ticket probed by another client at the first 3 tries: removed %v, %v; want removed", removed, err)
+	}
+	if tries[probed] != 4 {
+		t.Errorf("%d tries for a ticket free at the 4th, want 4", tries[probed])
+	}
+	start := time.Now()
+	if removed, err := sec.RemoveOwnTicket(kept); err != nil || removed || !exists(filepath.Join(q, kept)) {
+		t.Errorf("a ticket locked throughout: removed %v, %v; want kept", removed, err)
+	}
+	if took := time.Since(start); tries[kept] != ownRemovalTries || took > time.Second {
+		t.Errorf("a ticket locked throughout: %d tries in %v; want %d, in about a millisecond", tries[kept], took, ownRemovalTries)
 	}
 }
 
