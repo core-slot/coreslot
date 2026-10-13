@@ -252,6 +252,10 @@ func TestDescriptorClosingLauncherRefuses(t *testing.T) {
 			sh -c 'exec 4>&-; exec "$0" run --label inner -- "$1" hold "$2" inner' "$0" "$1" "$2"
 			echo $? > "$2/code.partial"; mv "$2/code.partial" "$2/code"
 			exec "$1" hold "$2" parent`, bins.coreslot, bins.child, e.MarkDir)
+		// The parent's own ticket stays in queue/ until its admitting section, which publishes
+		// the hold before it unlinks the ticket, has left; refused fails on any ticket it sees.
+		e.WaitHold("parent", startWait)
+		e.SectionLeft()
 		refused(t, e, filepath.Join(e.MarkDir, "start"))
 		if !strings.Contains(p.Stderr(), "descriptor 4 of CORESLOT_TOKEN_FDS") || !strings.Contains(p.Stderr(), "closed") ||
 			!strings.Contains(p.Stderr(), "--independent") {
