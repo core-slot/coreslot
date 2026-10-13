@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -22,6 +23,41 @@ const (
 
 // errLeft is returned by every Section method called after Leave.
 var errLeft = errors.New("store: the admission section was left")
+
+// sectionHooks is the pair SetSectionHooks installed; nil until a program installs one.
+var sectionHooks atomic.Pointer[hookPair]
+
+type hookPair struct{ enter, leave func() }
+
+// SetSectionHooks installs enter and leave, which bracket every moment at which this process may
+// hold flock on admit.lock: enter runs just before each try to take it (each try of Enter, the
+// try of TryEnter, the probe of SectionHeld), and leave runs exactly once for each enter, right
+// after a try that did not take the lock, or right after the descriptor that took it is closed
+// (Leave, or the probe's close). So the time between them never includes Enter's sleeps between
+// tries, only the tries themselves and the time spent inside the section, and every moment the
+// lock is held, from the try that takes it on, lies between an enter and its leave.
+//
+// It is how the CLI defers its job-control stops while it holds the section (PROTOCOL.md section
+// 8) without deferring them while it only waits to enter. The pairs nest and may overlap: one
+// goroutine may probe while another holds the section, so the hooks must count rather than
+// toggle, and must be safe for concurrent use. They must not enter the section themselves. A
+// program installs them once, before it first enters; the library never does, and without them
+// nothing runs.
+func SetSectionHooks(enter, leave func()) {
+	sectionHooks.Store(&hookPair{enter: enter, leave: leave})
+}
+
+func hookEnter() {
+	if h := sectionHooks.Load(); h != nil {
+		h.enter()
+	}
+}
+
+func hookLeave() {
+	if h := sectionHooks.Load(); h != nil {
+		h.leave()
+	}
+}
 
 // Section is the admission critical section: this process holds flock(LOCK_EX) on admit.lock
 // through its own open file description until Leave closes it. A Section is not safe for
@@ -47,15 +83,24 @@ func (s *Store) Enter(ctx context.Context) (*Section, error) {
 		return nil, err
 	}
 	backoff := enterFirstBackoff
+	busy := false
 	for {
+		hookEnter()
 		ok, err := flockNB(f)
 		if err != nil {
 			f.Close()
+			hookLeave()
 			return nil, err
 		}
 		if ok {
 			point("section.entered")
 			return &Section{s: s, f: f}, nil
+		}
+		hookLeave() // the sleep before the next try is waiting, not holding
+		if !busy {
+			// Once per entry, at its first busy try, so that a test knows the entry is waiting.
+			busy = true
+			point("section.busy")
 		}
 		timer := time.NewTimer(backoff)
 		select {
@@ -75,9 +120,11 @@ func (s *Store) TryEnter() (*Section, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+	hookEnter()
 	ok, err := flockNB(f)
 	if err != nil || !ok {
 		f.Close()
+		hookLeave()
 		return nil, false, err
 	}
 	point("section.entered")
@@ -87,19 +134,30 @@ func (s *Store) TryEnter() (*Section, bool, error) {
 // SectionHeld probes admit.lock without entering and without creating it: one single-attempt
 // flock, released at once by closing. A missing admit.lock means nothing has ever entered, so
 // the section is free. It is for readers (status) that must not write into the state directory.
+// A probe that finds the section free holds it for that moment, so the section hooks bracket it
+// as they bracket an entry.
 func (s *Store) SectionHeld() (bool, error) {
-	held, err := ProbeLocked(s.path(AdmitLock))
+	f, err := OpenFile(s.path(AdmitLock), os.O_RDONLY)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
-	return held, err
+	if err != nil {
+		return false, err
+	}
+	hookEnter()
+	ok, err := flockNB(f)
+	f.Close()
+	hookLeave()
+	return !ok, err
 }
 
-// Leave leaves the section by closing the admit.lock descriptor. It is idempotent.
+// Leave leaves the section by closing the admit.lock descriptor, then runs the section hooks'
+// leave. It is idempotent. Every Section must be left: until it is, the hooks count it as held.
 func (sec *Section) Leave() {
 	if sec.f != nil {
 		sec.f.Close()
 		sec.f = nil
+		hookLeave()
 	}
 }
 
@@ -124,9 +182,13 @@ func (sec *Section) markHolder() error {
 	return err
 }
 
-// flockNB tries flock(LOCK_EX|LOCK_NB) on f: true when this description now holds the lock,
+// flockNB is tryFlock; the tests wrap it to check that the section hooks bracket every time
+// admit.lock is taken.
+var flockNB = tryFlock
+
+// tryFlock tries flock(LOCK_EX|LOCK_NB) on f: true when this description now holds the lock,
 // false when another description holds it.
-func flockNB(f *os.File) (bool, error) {
+func tryFlock(f *os.File) (bool, error) {
 	rc, err := f.SyscallConn()
 	if err != nil {
 		return false, err

@@ -60,11 +60,8 @@ func cancelCommand(args []string, io IO) int {
 		return exitRefusal
 	}
 	if byLabel {
-		var rep engine.Report
-		if err := inSection(func() (err error) { // Snapshot probes admit.lock
-			rep, err = e.Snapshot()
-			return err
-		}); err != nil {
+		rep, err := e.Snapshot()
+		if err != nil {
 			return cancelFailed(err, io)
 		}
 		var ids []string
@@ -92,7 +89,7 @@ func cancelCommand(args []string, io IO) int {
 	// CancelContext gives up entering the section when ctx ends, publishing nothing. Only that
 	// is a busy section: an error after a timely entry is reported as itself.
 	var busy *engine.SectionBusyError
-	switch err := inSection(func() error { return e.CancelContext(ctx, id) }); {
+	switch err := e.CancelContext(ctx, id); {
 	case err == nil:
 		fmt.Fprintf(io.Stdout, "coreslot: cancel requested for ticket %s\n", id)
 		return 0
@@ -111,11 +108,7 @@ func cancelCommand(args []string, io IO) int {
 // informational body, who holds it now.
 func sectionBusyText(e *engine.Engine, waited time.Duration) string {
 	s := fmt.Sprintf("the admission section stayed held for %s", duration(waited))
-	var rep engine.Report
-	if err := inSection(func() (err error) { // Snapshot probes admit.lock
-		rep, err = e.Snapshot()
-		return err
-	}); err == nil && rep.Section.Held {
+	if rep, err := e.Snapshot(); err == nil && rep.Section.Held {
 		s += "; it is " + sectionHolder(rep.Section, store.NowNS())
 	}
 	return s

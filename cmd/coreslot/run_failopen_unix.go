@@ -34,13 +34,10 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	var g *engine.Grant
 	var ferr error
 	if e != nil {
-		ferr = inSection(func() (err error) {
-			g, err = e.FailOpen(r.o.request(0), reason)
-			return err
-		})
+		g, ferr = e.FailOpen(r.o.request(0), reason)
 	}
 	if g != nil {
-		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() error { return inSection(g.Close) }
+		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
 		if g.HoldName() != "" {
 			c.log = e.Store() // FORMAT was understood in the section that published the hold
 		}
@@ -98,13 +95,9 @@ func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
 		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
 	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: timeoutReason, release: func() error { return nil }}
-	var g *engine.Grant
-	herr := inSection(func() (err error) {
-		g, err = e.UnbudgetedHold(r.o.request(0), timeoutReason)
-		return err
-	})
+	g, herr := e.UnbudgetedHold(r.o.request(0), timeoutReason)
 	if g != nil {
-		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), func() error { return inSection(g.Close) }
+		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
 	} else {
 		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), timeoutReason)...)
 	}

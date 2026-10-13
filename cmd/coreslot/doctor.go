@@ -79,13 +79,9 @@ func doctorAct(doReset bool, io IO) int {
 		return 0
 	}
 	if doReset {
-		var removed int
 		ctx, cancel := context.WithTimeout(context.Background(), resetWait)
 		defer cancel()
-		err := inSection(func() (err error) {
-			removed, err = e.Reset(ctx)
-			return err
-		})
+		removed, err := e.Reset(ctx)
 		var live *engine.LiveError
 		var incomplete *store.ResetIncompleteError
 		switch {
@@ -119,7 +115,7 @@ func doctorAct(doReset bool, io IO) int {
 		fmt.Fprintln(io.Stdout, "clear: no degraded record")
 		return 0
 	}
-	if err := inSection(e.Store().ClearDegraded); err != nil {
+	if err := e.Store().ClearDegraded(); err != nil {
 		return doctorFailed(what, err, io)
 	}
 	fmt.Fprintln(io.Stdout, "clear: removed the degraded record")
@@ -187,10 +183,7 @@ func doctorReport(io IO) int {
 	var rep engine.Report
 	e, _, err := openEngineReadOnly()
 	if err == nil {
-		err = inSection(func() (err error) { // Snapshot probes admit.lock
-			rep, err = e.Snapshot()
-			return err
-		})
+		rep, err = e.Snapshot()
 	}
 	switch {
 	case err != nil && fsErr != nil:

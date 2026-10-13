@@ -59,14 +59,7 @@ func statusCommand(args []string, io IO) int {
 	if err != nil {
 		return statusFailed(err, io)
 	}
-	snap := func() (rep coreslot.Report, err error) {
-		err = inSection(func() (err error) { // Snapshot probes admit.lock
-			rep, err = e.Snapshot()
-			return err
-		})
-		return rep, err
-	}
-	rep, w, err := observeQueue(snap, *observe, monotonicClock())
+	rep, w, err := observeQueue(e.Snapshot, *observe, monotonicClock())
 	if err != nil {
 		return statusFailed(err, io)
 	}
