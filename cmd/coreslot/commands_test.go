@@ -1274,13 +1274,16 @@ func TestUnreadableStateEntryExitStatuses(t *testing.T) {
 }
 
 // An invalid configuration leaves the budget unknown: status says so rather than "none declared"
-// and exits 3, since runs fail open.
+// and exits 3, since runs fail open. The file's error, which names it, follows the label with the
+// word "configuration" printed once. Mutation: print the reason whole after the label.
 func TestStatusWithInvalidConfiguration(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = \"lots\"\n")
 	r := cli(t, baseEnv(dir), "status")
+	want := "\nCONFIGURATION ERROR: " + filepath.Join(dir, "config.toml") +
+		`: [resources] cpu: size "lots": want an integer, "N%" or "-K"` + "\n"
 	if r.code != 3 || !strings.Contains(r.stdout, "\nresources: not known, the configuration cannot be read (runs fail open until it is fixed)\n") ||
-		strings.Contains(r.stdout, "none declared") || !strings.Contains(r.stdout, "CONFIGURATION ERROR: ") {
-		t.Errorf("status: exit %d, want 3 and the budget reported unknown (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+		strings.Contains(r.stdout, "none declared") || !strings.Contains(r.stdout, want) {
+		t.Errorf("status: exit %d, want 3, the line %q and the budget reported unknown (stderr %q):\n%s", r.code, want, r.stderr, r.stdout)
 	}
 	doc := statusDoc(t, dir, 3)
 	if doc["config_error"] == "" || len(doc["resources"].(map[string]any)) != 0 {

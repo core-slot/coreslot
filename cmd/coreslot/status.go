@@ -95,14 +95,25 @@ func statusFailed(err error, io IO) int {
 // they found it). The returned engine's Snapshot reports a missing directory as empty.
 func openEngineReadOnly() (*engine.Engine, string, error) {
 	dir, cfgPath, err := config.Locate()
+	e, err := openReadOnlyAt(dir, cfgPath, err)
 	if err != nil {
-		return nil, "", &stateError{Reason: err.Error()}
+		return nil, "", err
+	}
+	return e, cfgPath, nil
+}
+
+// openReadOnlyAt is openEngineReadOnly at what config.Locate returned, its error included, for a
+// caller that needs the paths too: Locate looks the home directory up, which may start getent,
+// so a command locates once.
+func openReadOnlyAt(dir, cfgPath string, locateErr error) (*engine.Engine, error) {
+	if locateErr != nil {
+		return nil, &stateError{Reason: locateErr.Error()}
 	}
 	st, err := store.OpenReadOnly(dir)
 	if err != nil {
-		return nil, "", asState(err)
+		return nil, asState(err)
 	}
-	return engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{}), cfgPath, nil
+	return engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{}), nil
 }
 
 // asState gives openEngineReadOnly's failure the CLI's own form, "state error: <reason>" with one
@@ -293,7 +304,9 @@ func (v statusView) human() string {
 		p("degraded: no")
 	}
 	if r.ConfigError != "" {
-		p("CONFIGURATION ERROR: %s", text(r.ConfigError))
+		// The file's own error already begins with "configuration <path>:", so under the label
+		// it goes on from the path; any other reason (the CPU count, say) is printed whole.
+		p("CONFIGURATION ERROR: %s", text(strings.TrimPrefix(r.ConfigError, "configuration ")))
 	}
 
 	if r.ConfigError != "" {
