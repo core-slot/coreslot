@@ -66,8 +66,8 @@ this machine; an argument that is exactly `{n}` becomes the number of cores gran
 coreslot run --need cpu=4..W --label gate:unit -- pytest -n {n}
 ```
 
-Run a build; `--subst` also replaces `{n}` inside an argument. Without `--need` a run asks for
-`cpu=1..1`, so give a build its range:
+Run a build; `--subst` also replaces `{n}` inside an argument ([choosing a
+range](#choosing-a-range) below says how to pick `2..16`):
 
 ```sh
 coreslot run --need cpu=2..16 --subst -- make -j{n}
@@ -97,6 +97,27 @@ The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` pe
 hold's descriptor at fd 3 and the token descriptors from fd 4. The tokens stay held until the
 command exits and coreslot closes its copies; a daemon the command leaves behind with inherited
 descriptors keeps them.
+
+### Choosing a range
+
+`min` is the least the command can usefully run with; `max` is the point past which more
+parallelism stops paying, which you find by measuring. `cpu=4..` means `4..16` and `cpu=..8` means
+`1..8`; a `max` above the budget simply takes at most the budget.
+
+Keep `min` small. A request waits until `min` tokens are free at once, and while it waits at the
+head of the queue nobody behind it is admitted
+([`PROTOCOL.md` section 12.1](PROTOCOL.md#121-steps), step 5), so tokens freed in the meantime
+stay idle until `min` of them have accumulated. On 8 tokens, a queue of five requests of fixed
+sizes 1, 8, 1, 8, 1 runs one after another, with 7 tokens idle during every 1-token run. With the
+8-token requests written `4..8`, the first starts at once with 7 beside the 1-token run, and
+nothing idles. A grant is fixed for the run's lifetime: it does not grow when tokens free up
+later.
+
+Without `--need`, a run whose command has `{n}` (or `{n:cpu}`, or one inside an argument with
+`--subst`) asks for `cpu=1..16`, and any other run for `cpu=1..1`: a command that cannot learn its
+grant would hold tokens it leaves idle. A command that parallelises itself without `{n}`, such as
+`go test ./...` or `cargo build`, should say `--need cpu=1..16` (or `cpu=1..`) so that it is
+counted honestly.
 
 ### Exit status
 
