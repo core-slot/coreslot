@@ -3,14 +3,18 @@
 One core budget for every test suite, build and agent on your machine: parallel gates wait their
 turn instead of melting the laptop.
 
-**Status:** release candidate; product acceptance pending. Its criterion is declared in advance: on
-a developer machine that is never quiet, three parallel test gates plus one CI job run with and
-without coreslot as alternating pairs in the same window, at least three pairs; with coreslot, the
-median time until the last job finishes is at most 1.05 × the median without it, and no gate fails
-falsely. All pairs and their load readings will be published. A release candidate that passed the
-deterministic traces, the kill-storm, the conformance suite and the benchmark gate is not evidence
-that acceptance passed. The module stays at `v0` until the on-disk format is frozen, once the
-conformance suite passes on macOS and Linux; `v1.0.0` freezes the format then current
+**Status:** release candidate; product acceptance passed on 2026-10-13. Its criterion was declared
+in advance: on a developer machine that is never quiet, three parallel test gates plus one CI job
+run with and without coreslot as alternating pairs in the same window, at least three pairs; with
+coreslot, the median time until the last job finishes is at most 1.05 × the median without it, and
+no gate fails falsely. The first run failed at 1.144: each gate asked for one token per worker, and
+the first to arrive held 12 of 14 tokens for workers that kept 4 cores busy. The second, with each
+gate asking for the cores it uses, passed over twelve pairs at 1.007 with no false failure. That is
+a tie, not a speed-up: on that mix the gates themselves needed about 6 to 9 of the 14 cores, and a
+mix that the gates themselves overload is not measured yet. All pairs and their load readings are
+in [evidence](evidence/README.md#product-acceptance-acceptancepy). The module stays at `v0` until
+the on-disk format is frozen, once the conformance suite passes on macOS and Linux; `v1.0.0`
+freezes the format then current
 ([compatibility policy](docs/compatibility.md)).
 
 Several coding-agent sessions, each in its own worktree, each running its own `pytest -n <cores>`
@@ -59,11 +63,19 @@ xattr -d com.apple.quarantine ./coreslot
 
 ## Quick start
 
-Run a test gate with between 4 and `W` cores, where `W` is the best worker count you measured on
-this machine; an argument that is exactly `{n}` becomes the number of cores granted:
+Run a test gate, asking for the cores it keeps busy rather than one per worker. A pytest worker
+that mostly waits on I/O uses a fraction of a core; here twelve workers keep about five busy
+([choosing a range](#choosing-a-range) says how to measure it):
 
 ```sh
-coreslot run --need cpu=4..W --label gate:unit -- pytest -n {n}
+coreslot run --need cpu=6 --label gate:unit -- pytest -n 12
+```
+
+When the workers are CPU-bound, let the grant set their number instead; an argument that is
+exactly `{n}` becomes the number of cores granted:
+
+```sh
+coreslot run --need cpu=4..12 --label gate:unit -- pytest -n {n}
 ```
 
 Run a build; `--subst` also replaces `{n}` inside an argument ([choosing a
@@ -99,6 +111,15 @@ command exits and coreslot closes its copies; a daemon the command leaves behind
 descriptors keeps them.
 
 ### Choosing a range
+
+A token is a core, not a worker. Ask for the cores a command keeps busy, measured on this machine:
+each run appends a line to the run log, `log/runs.jsonl` in the state directory, and
+(`cpu_user_s` + `cpu_sys_s`) ÷ `ran_s` in it is the cores the run used (the command and the
+descendants it waited for; not a database or daemon it talks to). Ask for that times about 1.2. In
+the product acceptance a pytest suite's 12 workers kept 2.4 to 4.3 cores busy: asking for 12
+tokens left most of the budget idle while the other gates waited, and with 6 it ran as fast as
+it did without coreslot
+([evidence](evidence/README.md#product-acceptance-acceptancepy)).
 
 `min` is the least the command can usefully run with; `max` is the point past which more
 parallelism stops paying, which you find by measuring. `cpu=4..` means `4..16` and `cpu=..8` means
