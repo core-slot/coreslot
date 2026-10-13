@@ -11,6 +11,7 @@ field HolderInfo.PID int
 field HolderInfo.StartNS int64
 field HolderInfo.Unbudgeted bool
 field HolderInfo.UnbudgetedResources []string
+field Options.Independent bool
 field Options.StateDir string
 field Range.Max int
 field Range.Min int
@@ -64,6 +65,7 @@ method (*Grant) Close() error
 method (*Grant) Env() []string
 method (*Grant) Files() []*os.File
 method (*Grant) Grant() map[string]int
+method (*Grant) PassThrough() bool
 method (*Grant) TokenOnly() bool
 method (*Grant) Unbudgeted() []string
 method (*StateError) Error() string

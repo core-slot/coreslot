@@ -373,8 +373,9 @@ func TestValidateInherited(t *testing.T) {
 		}
 		tokens = append(tokens, f)
 	}
-	// A validated descriptor is owned by the *os.File ValidateInherited returns, which closes it
-	// when collected: each call gets fresh duplicates, and only one owner ever closes them.
+	// A validated descriptor is kept open for the life of the process by the *os.File
+	// ValidateInherited returns, which nobody may close: each call gets fresh duplicates, which
+	// the test never closes either.
 	dup := func(f *os.File, owned bool) int {
 		fd, err := unix.Dup(int(f.Fd()))
 		if err != nil {
@@ -433,13 +434,9 @@ func TestValidateInherited(t *testing.T) {
 	if err != nil || len(held["cpu"]) != 2 {
 		t.Fatalf("two locked tokens: held %v, err %v", held, err)
 	}
-	for _, f := range held["cpu"] {
-		f.Close()
-	}
 	one := dup(tokens[0], true)
 	held, err = check(fmt.Sprintf("%d-%d", one, one))
 	if err != nil || len(held["cpu"]) != 1 {
 		t.Fatalf("a single descriptor written as a range: held %v, err %v", held, err)
 	}
-	held["cpu"][0].Close()
 }

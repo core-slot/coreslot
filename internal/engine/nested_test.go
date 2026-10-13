@@ -66,7 +66,7 @@ func TestDecideNested(t *testing.T) {
 		{name: "independent", env: map[string]string{EnvUnbudgeted: "why", EnvTokenFDs: bad}, independent: true, kind: NotNested},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n, err := DecideNested(tc.env, tc.independent)
+			n, err := DecideNested(tc.env, tc.independent, "")
 			if (err != nil) != tc.err || (err == nil && n.Kind != tc.kind) {
 				t.Fatalf("DecideNested(%v, %v) = %+v, %v; want kind %d, error %v", tc.env, tc.independent, n, err, tc.kind, tc.err)
 			}

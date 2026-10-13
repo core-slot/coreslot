@@ -62,6 +62,9 @@ func waitGrant(t *testing.T, c *Client, req Request) *Grant {
 const childEnv = "CORESLOT_ROOT_TEST_CHILD"
 
 func TestMain(m *testing.M) {
+	if mode := os.Getenv(nestedEnv); mode != "" {
+		os.Exit(passThroughHelper(mode))
+	}
 	if dir := os.Getenv(childEnv); dir != "" {
 		if err := checkChild(dir); err != nil {
 			fmt.Fprintln(os.Stderr, "child:", err)

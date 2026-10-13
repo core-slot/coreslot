@@ -39,7 +39,7 @@ func environ() map[string]string {
 // and before it has a grant of its own.
 func (r *run) decide() int {
 	env := environ()
-	nested, err := engine.DecideNested(env, r.o.independent)
+	nested, err := engine.DecideNested(env, r.o.independent, "")
 	if err != nil {
 		return r.refuse("the inherited grant does not validate: %s; refusing rather than queueing "+
 			"behind a parent that may hold the whole budget (use --independent to queue anyway)", text(err.Error()))
