@@ -321,7 +321,7 @@ The default need when no `--need` is given is unspecified.
 [--subst] [--refusal-code N] -- CMD`. `--timeout` refuses on expiry (`--on-timeout` is not
 implemented), and the default need is `cpu=1..1`.
 
-**Status — resolved: PROTOCOL §21 preamble (informative CLI synopsis). The default need is `cpu=1..1` and `--on-timeout` defaults to `fail`. Matches: this client's `--timeout` refuses, and it also bounds section entry during enqueue.**
+**Status — resolved: PROTOCOL §21 preamble (informative CLI synopsis). The default need is `cpu=1..1` and `--on-timeout` defaults to `fail`. Matches: this client's `--timeout` refuses, and it also bounds section entry during enqueue. The preamble has since made the default `cpu=1..16` for a command with a `cpu` placeholder and added `RES=MIN..` and `RES=..MAX`; this client follows it.**
 
 **F2. §17: placeholders naming a resource the request does not name, and `{{n:RES}}`.**
 *Choice:* a usage error (exit 64), checked before queueing. `{{n:RES}}` becomes the literal
