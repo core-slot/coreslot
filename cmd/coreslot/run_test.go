@@ -45,7 +45,34 @@ func TestMain(m *testing.M) {
 	if os.Getenv(asMainEnv) != "" {
 		main()
 	}
+	// A CI runner hands its job steps descriptors that are not close-on-exec. Every process a test
+	// starts would inherit them, and coreslot passes them on to its command (PROTOCOL.md section
+	// 17), so they would shift the descriptor numbers the tests count on: under a lowered soft
+	// limit they can even end above it, and macOS's dyld then aborts the program. Marking them
+	// close-on-exec keeps them in this process only.
+	if err := closeInheritedOnExec(); err != nil {
+		fmt.Fprintln(os.Stderr, "cannot mark the inherited descriptors close-on-exec:", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
+}
+
+// closeInheritedOnExec marks every open descriptor from 3 on close-on-exec, as listed in fdDir;
+// on a system without one it does nothing.
+func closeInheritedOnExec() error {
+	if fdDir == "" {
+		return nil
+	}
+	ents, err := os.ReadDir(fdDir)
+	if err != nil {
+		return err
+	}
+	for _, ent := range ents {
+		if fd, err := strconv.Atoi(ent.Name()); err == nil && fd >= 3 {
+			unix.CloseOnExec(fd)
+		}
+	}
+	return nil
 }
 
 // helperDeadline ends a waiting helper whose test failed before releasing it, so that it can
