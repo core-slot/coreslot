@@ -129,20 +129,28 @@ func (s *Store) Probe(dir, name string) (dead bool, err error) {
 
 // ProbeLocked opens path afresh, through the filesystem policy, and reports whether another open
 // file description holds its lock; a lock the probe obtains is released at once by closing
-// (PROTOCOL.md section 6). It creates nothing.
+// (PROTOCOL.md section 6). It creates nothing. The lock hooks bracket the probe from its try to
+// that close, so that a job-control stop never leaves the process holding another client's lock.
 func ProbeLocked(path string) (locked bool, err error) {
 	f, err := OpenFile(path, os.O_RDONLY)
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	hookEnter()
 	ok, err := flockNB(f)
+	if ok {
+		// A test pauses here, holding the lock, to stop the process in the middle of a probe.
+		point("probe.locked")
+	}
+	f.Close()
+	hookLeave()
 	return !ok, err
 }
 
 // removeIfDead probes path and, when the probe takes the lock, unlinks the file while still
 // holding the probe lock, then closes it (PROTOCOL.md section 10.4 step 1). gone reports a file
-// that no longer exists.
+// that no longer exists. The lock hooks bracket the probe from its try to that close, as they
+// bracket ProbeLocked.
 func removeIfDead(path string) (removed, gone bool, err error) {
 	f, err := OpenFile(path, os.O_RDONLY)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -151,6 +159,8 @@ func removeIfDead(path string) (removed, gone bool, err error) {
 	if err != nil {
 		return false, false, err
 	}
+	hookEnter()
+	defer hookLeave() // deferred before the close, so that it runs after it
 	defer f.Close()
 	ok, err := flockNB(f)
 	if err != nil || !ok {

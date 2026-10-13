@@ -12,9 +12,9 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/engine"
 )
 
-// installSectionHooks does nothing on Windows: there is no admission section to hold, and no
-// job-control stop to defer.
-func installSectionHooks() {}
+// installLockHooks does nothing on Windows: there is no admission section or probe lock to hold,
+// and no job-control stop to defer.
+func installLockHooks() {}
 
 // runCommand runs `coreslot run` on Windows, which has no budget (PROTOCOL.md section 16): the
 // command runs at once with min of each resource, after one warning unless the configuration

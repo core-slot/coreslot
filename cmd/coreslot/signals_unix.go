@@ -29,25 +29,28 @@ func notIgnored(sigs ...os.Signal) []os.Signal {
 
 // stops emulates the default action of the stop signals SIGTSTP, SIGTTIN and SIGTTOU. The Go
 // runtime cannot give a stop signal back its default disposition once it has been caught, so
-// the run catches them for its whole life and stops itself with SIGSTOP, except while it holds
-// the admission section (sectionEntered), where the stop is deferred until it has left. While a
+// the run catches them for its whole life and stops itself with SIGSTOP, except while it holds a
+// lock it took only momentarily (momentaryLockTaken): the admission section, or the probe lock of
+// a token, ticket or hold. There the stop is deferred until it has let go. While a
 // command runs in non-terminal mode, a SIGTSTP is first forwarded to the command's own group:
 // coreslot then stops as well, so that a shell sees its whole job stopped, and the SIGCONT that
 // continues coreslot is forwarded to the command's group.
 var stops struct {
 	once    sync.Once
 	mu      sync.Mutex
-	depth   int  // holds of admit.lock in progress, as the store's section hooks count them
-	pending bool // a stop arrived during a section
+	depth   int  // momentary locks in progress, as the store's lock hooks count them
+	pending bool // a stop arrived while one was held
 	child   int  // the command of a non-terminal run, while it runs
 }
 
-// installSectionHooks makes the store tell this process when it may hold the admission section,
-// so that a stop is deferred exactly then (PROTOCOL.md section 8): every try to take admit.lock
-// and every moment it is held, whichever command and call site takes it, but never the waits
-// between tries, during which Ctrl-Z stops the process at once. main calls it before any
-// command runs.
-func installSectionHooks() { store.SetSectionHooks(sectionEntered, sectionLeft) }
+// installLockHooks makes the store tell this process when it may hold a lock it takes only
+// momentarily, so that a stop is deferred exactly then (PROTOCOL.md section 8): every try to take
+// admit.lock and every moment it is held, and every probe of a token, ticket or hold, whichever
+// command and call site makes it, but never the waits between tries to enter the section, during
+// which Ctrl-Z stops the process at once. The locks a run owns for a lifetime (its ticket while
+// it waits, its grant while its command runs) do not defer a stop: a stopped run keeps only what
+// is its own. main calls it before any command runs.
+func installLockHooks() { store.SetLockHooks(momentaryLockTaken, momentaryLockLeft) }
 
 // installStops starts catching the stop signals; it is idempotent.
 func installStops() {
@@ -84,22 +87,24 @@ func onStop(sig syscall.Signal) {
 	}
 }
 
-// sectionEntered is the store's section hook that runs just before each try to take admit.lock:
-// from now until the matching sectionLeft, a stop signal must not stop the process, since a
-// process stopped inside the section blocks every other client (I5). SIGTSTP, SIGTTIN and
-// SIGTTOU arriving meanwhile are held back. Holds nest and may overlap across goroutines (a
-// probe while a section is held), so they are counted.
-func sectionEntered() {
+// momentaryLockTaken is the store's lock hook that runs just before each try to take a momentary
+// lock: from now until the matching momentaryLockLeft, a stop signal must not stop the process,
+// since a process stopped inside the section blocks every other client, and one stopped holding a
+// probe lock makes every other client count that token as locked (I5). SIGTSTP, SIGTTIN and
+// SIGTTOU arriving meanwhile are held back. Holds nest (a probe inside the section) and may
+// overlap across goroutines, so they are counted. It runs once per probed token, so it does no
+// more than take a mutex.
+func momentaryLockTaken() {
 	installStops()
 	stops.mu.Lock()
 	stops.depth++
 	stops.mu.Unlock()
 }
 
-// sectionLeft is the store's section hook that runs once admit.lock is no longer held (or was
-// not taken): when no other hold is in progress, a stop held back meanwhile stops the process
-// now, as it would have without the section.
-func sectionLeft() {
+// momentaryLockLeft is the store's lock hook that runs once a momentary lock is no longer held
+// (or was not taken): when no other is in progress, a stop held back meanwhile stops the process
+// now, as it would have without the lock.
+func momentaryLockLeft() {
 	stops.mu.Lock()
 	defer stops.mu.Unlock()
 	stops.depth--
