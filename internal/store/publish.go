@@ -311,10 +311,16 @@ const formatPrefix = "coreslot-protocol "
 
 // Format reads FORMAT, which every entry does before changing anything (PROTOCOL.md section
 // 8). When FORMAT is absent it writes `coreslot-protocol 1`. It reports the format n and
-// whether it is among implemented. A malformed FORMAT is a *StateError. When the format is
-// understood it also rewrites admit.lock's informational body to name this holder; when it is
-// not, it writes nothing at all (a token-only client changes nothing but token locks).
-func (sec *Section) Format(implemented []int) (n int, understood bool, err error) {
+// whether this client implements it (Understood). A malformed FORMAT is a *StateError. When the
+// format is understood it also rewrites admit.lock's informational body to name this holder; when
+// it is not, it writes nothing at all (a token-only client changes nothing but token locks).
+func (sec *Section) Format() (n int, understood bool, err error) {
+	return sec.format(Understood)
+}
+
+// format is Format with the implemented formats given, so that a test can act as a client of
+// another format.
+func (sec *Section) format(implements func(int) bool) (n int, understood bool, err error) {
 	if err := sec.live(); err != nil {
 		return 0, false, err
 	}
@@ -333,7 +339,7 @@ func (sec *Section) Format(implemented []int) (n int, understood bool, err error
 			return 0, false, err
 		}
 	}
-	if !slices.Contains(implemented, n) {
+	if !implements(n) {
 		return n, false, nil
 	}
 	if err := sec.markHolder(); err != nil {
@@ -349,8 +355,8 @@ func (sec *Section) Format(implemented []int) (n int, understood bool, err error
 // refuses (a *FormatError) or turns token-only. An understood format with an error is a failure
 // of the admit.lock body or of reconciliation. Admission and token-only admission never
 // reconcile and call Format alone.
-func (sec *Section) Prepare(implemented []int, nowNS int64) (n int, understood bool, err error) {
-	n, understood, err = sec.Format(implemented)
+func (sec *Section) Prepare(nowNS int64) (n int, understood bool, err error) {
+	n, understood, err = sec.Format()
 	if err != nil || !understood {
 		return n, understood, err
 	}

@@ -300,7 +300,7 @@ func (t *Ticket) resumeBump() error {
 		return err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Prepare(formats(), t.e.clock.Realtime())
+	_, understood, err := sec.Prepare(t.e.clock.Realtime())
 	if err != nil {
 		return err
 	}

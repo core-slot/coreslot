@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"slices"
 
 	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
@@ -40,21 +39,26 @@ func (l LiveState) Empty() bool {
 // is alive it removes nothing and returns it. An entry that is not a regular file of the user
 // (a stray) is no client's and is removed with the rest; one that cannot be removed (a
 // directory that is not empty) is an error, reported after the other removals have been tried.
-// A FORMAT that is well-formed but not among implemented belongs to a newer client whose
-// waiters this client cannot see: the reset refuses (ForeignFormat). A missing or malformed
-// FORMAT does not stop it; a reset is what repairs a malformed one. It does not read the
-// configuration.
+// A FORMAT that is well-formed but not Understood belongs to a newer client whose waiters this
+// client cannot see: the reset refuses (ForeignFormat). A missing or malformed FORMAT does not
+// stop it; a reset is what repairs a malformed one. It does not read the configuration.
 //
 // A reset that refuses, or that fails before it removes anything, writes nothing: it reads
 // FORMAT, probes liveness and applies the foreign-format gate first, and only when every check
 // has passed, immediately before the first removal, records itself in admit.lock's body, as
 // every entry that understands the directory does, so that status names it while it works.
-func (sec *Section) Reset(implemented []int) (live LiveState, removed int, err error) {
+func (sec *Section) Reset() (live LiveState, removed int, err error) {
+	return sec.reset(Understood)
+}
+
+// reset is Reset with the implemented formats given, so that a test can act as a client of
+// another format.
+func (sec *Section) reset(implements func(int) bool) (live LiveState, removed int, err error) {
 	if err := sec.live(); err != nil {
 		return live, 0, err
 	}
 	s := sec.s
-	if n, present, ferr := s.ReadFormat(); ferr == nil && present && !slices.Contains(implemented, n) {
+	if n, present, ferr := s.ReadFormat(); ferr == nil && present && !implements(n) {
 		live.ForeignFormat = &n
 		return live, 0, nil
 	}

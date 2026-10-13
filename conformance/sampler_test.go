@@ -162,7 +162,7 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	if _, ok, err := sec.Format([]int{1}); err != nil || !ok {
+	if _, ok, err := sec.Format(); err != nil || !ok {
 		t.Fatalf("FORMAT: understood %v, %v", ok, err)
 	}
 	if err := s.writeConfig(sizes); err != nil {

@@ -32,7 +32,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Format(formats())
+	_, understood, err := sec.Format()
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +413,7 @@ func (g *Grant) removeHold() {
 		return
 	}
 	defer sec.Leave()
-	if _, understood, err := sec.Prepare(formats(), g.e.clock.Realtime()); err != nil || !understood {
+	if _, understood, err := sec.Prepare(g.e.clock.Realtime()); err != nil || !understood {
 		return
 	}
 	if removed, err := sec.ProbeAndRemoveHold(g.holdName); err == nil && removed {

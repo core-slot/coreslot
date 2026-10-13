@@ -12,7 +12,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
@@ -119,7 +118,7 @@ func (s *Store) inSideSection(change func(*Section) error) error {
 		return fmt.Errorf("store: cannot enter the admission section: %w", err)
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Prepare(testhooks.Formats(), NowNS())
+	n, understood, err := sec.Prepare(NowNS())
 	if err != nil {
 		return err
 	}

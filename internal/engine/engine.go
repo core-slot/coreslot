@@ -70,11 +70,10 @@ func SystemClock() Clock {
 	}
 }
 
-// Seams the tests replace: the pause-point hook, the implemented formats, and the two ways of
-// entering the section, through which every entry of the engine goes.
+// Seams the tests replace: the pause-point hook and the two ways of entering the section,
+// through which every entry of the engine goes.
 var (
 	point           = testhooks.Point
-	formats         = testhooks.Formats
 	enterSection    = func(st *store.Store, ctx context.Context) (*store.Section, error) { return st.Enter(ctx) }
 	tryEnterSection = func(st *store.Store) (*store.Section, bool, error) { return st.TryEnter() }
 )
@@ -193,7 +192,7 @@ func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket,
 		return nil, err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Format(formats())
+	_, understood, err := sec.Format()
 	if err != nil {
 		return nil, err
 	}

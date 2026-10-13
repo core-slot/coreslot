@@ -18,7 +18,6 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/engine"
 	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
 )
 
 const (
@@ -153,7 +152,7 @@ func formatRefusal(st *store.Store) (why string, err error) {
 		return "", err
 	case err != nil:
 		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live", nil
-	case present && !slices.Contains(testhooks.Formats(), n):
+	case present && !store.Understood(n):
 		return fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", n), nil
 	}
 	return "", nil

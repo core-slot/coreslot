@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
+	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
 const versionUsage = `usage: coreslot version
@@ -24,7 +24,7 @@ func versionCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: version takes no arguments\n%s\n", versionUsage)
 		return exitUsage
 	}
-	formats := testhooks.Formats()
+	formats := store.Formats()
 	text := make([]string, len(formats))
 	for i, f := range formats {
 		text[i] = strconv.Itoa(f)

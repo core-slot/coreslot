@@ -68,7 +68,7 @@ func (t *Ticket) tokenOnlyAttempt(ctx context.Context, single bool) (*Grant, err
 		return nil, err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Format(formats())
+	_, understood, err := sec.Format()
 	if err != nil {
 		return nil, err
 	}

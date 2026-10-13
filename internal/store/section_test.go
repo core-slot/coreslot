@@ -515,7 +515,7 @@ func TestFormatUnknownIsReported(t *testing.T) {
 	}
 	before := snapshot(t, dir)
 	sec := enter(t, s)
-	n, understood, err := sec.Format([]int{1})
+	n, understood, err := sec.Format()
 	if err != nil || n != 2 || understood {
 		t.Fatalf("Format over coreslot-protocol 2 = %d, %v, %v; want 2, false, nil", n, understood, err)
 	}
@@ -523,7 +523,7 @@ func TestFormatUnknownIsReported(t *testing.T) {
 		t.Errorf("Format of an unknown format changed the directory:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 	// The same client implementing format 2 understands it.
-	if n, understood, err := sec.Format([]int{1, 2}); err != nil || n != 2 || !understood {
+	if n, understood, err := sec.format(func(n int) bool { return n == 1 || n == 2 }); err != nil || n != 2 || !understood {
 		t.Errorf("Format with 2 implemented = %d, %v, %v", n, understood, err)
 	}
 }
@@ -532,7 +532,7 @@ func TestFormatWritesOneWhenAbsentAndRejectsMalformed(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
-	n, understood, err := sec.Format([]int{1})
+	n, understood, err := sec.Format()
 	if err != nil || n != 1 || !understood {
 		t.Fatalf("Format with no FORMAT = %d, %v, %v; want 1, true, nil", n, understood, err)
 	}
@@ -558,7 +558,7 @@ func TestFormatWritesOneWhenAbsentAndRejectsMalformed(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		n, _, err := sec.Format([]int{1})
+		n, _, err := sec.Format()
 		if ok && (err != nil || n != 1) {
 			t.Errorf("FORMAT %q = %d, %v; want 1", content, n, err)
 		}

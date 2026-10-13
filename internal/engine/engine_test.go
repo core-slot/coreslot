@@ -210,7 +210,7 @@ func TestHelperProcess(t *testing.T) {
 			fail(err)
 		}
 		if mode == "section-marked" {
-			if _, _, err := sec.Format(formats()); err != nil {
+			if _, _, err := sec.Format(); err != nil {
 				fail(err)
 			}
 		}

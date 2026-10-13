@@ -50,7 +50,7 @@ func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) 
 		return g, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Prepare(formats(), e.clock.Realtime())
+	n, understood, err := sec.Prepare(e.clock.Realtime())
 	if err != nil {
 		return g, err
 	}
