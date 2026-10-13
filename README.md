@@ -186,14 +186,17 @@ cmd.ExtraFiles, cmd.Env = g.Files(), append(env, g.Env()...)
 g.Close()
 ```
 
-Like a nested `coreslot run`, a library request made inside another run's grant passes through: a
+Like a nested `coreslot run`, an `Enqueue` made inside another run's grant passes through: a
 test suite run under `coreslot run --need cpu=8` that asks the library for cores gets them from
 its parent at once instead of queueing behind it. `Options.Independent` queues anyway, like
-`--independent`.
+`--independent`; so does a client opened on another state directory, and `Adopt` never passes
+through.
 
 The library never prints, never installs signal handlers and never decides on its own to run
-unbudgeted: a `*StateError` tells the caller the budget is unusable. The package documentation has
-the full example; [`api/v0.txt`](api/v0.txt) is the exported API.
+unbudgeted: a `*StateError` tells the caller the budget is unusable. `Open` checks the state
+directory before any request, so it returns one even where the parent runs unbudgeted because
+that directory is unusable; a caller that wants to follow its parent reads `CORESLOT_UNBUDGETED`.
+The package documentation has the full example; [`api/v0.txt`](api/v0.txt) is the exported API.
 
 ## Protocol
 

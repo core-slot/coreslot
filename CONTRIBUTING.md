@@ -19,8 +19,10 @@ issue first so the design can be settled before the code. Security problems go t
   services, which may contact a directory service such as LDAP ([SECURITY.md](SECURITY.md)). The
   run log never records argv or the environment.
 - **The library stays quiet.** It never prints, never installs signal handlers, never chooses exit
-  codes and never decides on its own to run unbudgeted: under a parent that runs unbudgeted it
-  follows the parent, as a nested run does (`library_purity_test.go` checks the first three).
+  codes and never decides on its own to run unbudgeted: when the state directory is unusable,
+  `Open` returns a `*StateError` even under a parent that runs unbudgeted, and the caller decides;
+  only an `Enqueue` on a budget `Open` could open passes through to such a parent, as a nested run
+  does (`library_purity_test.go` checks the first three).
 - **Windows builds.** `internal/store`, `internal/engine` and the root package's implementation are
   `//go:build unix`; the Windows build must keep compiling.
 - **Every invariant-bearing test names the mutation that turns it red.** Run that mutation before
