@@ -72,7 +72,7 @@ func TestNestedGrant(t *testing.T) {
 		"gpu":      {Min: 3, Max: 3},
 		"pg-local": {Min: 1, Max: 1},
 	}}
-	grant, clamped, unbudgeted := nestedGrant(req, map[string]int{"cpu": 8, "gpu": 2})
+	grant, clamped, unbudgeted := engine.NestedGrant(req, map[string]int{"cpu": 8, "gpu": 2})
 	if want := map[string]int{"cpu": 8, "gpu": 2, "pg-local": 1}; !maps.Equal(grant, want) {
 		t.Errorf("grant %v, want %v", grant, want)
 	}
@@ -82,7 +82,7 @@ func TestNestedGrant(t *testing.T) {
 	if !slices.Equal(unbudgeted, []string{"pg-local"}) {
 		t.Errorf("unbudgeted %v, want [pg-local]", unbudgeted)
 	}
-	grant, _, _ = nestedGrant(spec.Request{Need: map[string]spec.Range{"cpu": {Min: 2, Max: 4}}}, map[string]int{"cpu": 10})
+	grant, _, _ = engine.NestedGrant(spec.Request{Need: map[string]spec.Range{"cpu": {Min: 2, Max: 4}}}, map[string]int{"cpu": 10})
 	if grant["cpu"] != 4 {
 		t.Errorf("min(max, held) = %d, want 4", grant["cpu"])
 	}
