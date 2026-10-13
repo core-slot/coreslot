@@ -957,16 +957,18 @@ func wantRlimitAtLeast(t *testing.T, cmd *exec.Cmd, floor uint64) {
 
 // The soft descriptor limit a run sets for its command is its own too, until the command has
 // started and the run has appended its run-log line, so it is never below the run's highest open
-// descriptor plus 256. Started under a soft limit of 256 with 250 inherited descriptors at fds 3
-// to 252, a run holds its 301-descriptor grant at fd 253 and above, and its command gets at least
-// 554 + 256. Mutations in raiseChildNofile: base := original (512), or a floor of
-// 3+len(ExtraFiles) without the descriptor scan (560), and the run cannot start its command
-// (exit 70).
+// descriptor plus 256. Started under a soft limit of 256 with 240 inherited descriptors at fds 3
+// to 242 or above (the helper's Go runtime holds a few low descriptors of its own while it opens
+// them, which shift them up, so 240 rather than 253 leaves room below the limit: macOS's dyld
+// aborts a program started with a descriptor at or above its soft limit), a run holds its
+// 301-descriptor grant at fd 243 and above, and its command gets at least 544 + 256. Mutations in
+// raiseChildNofile: base := original (512), or a floor of 3+len(ExtraFiles) without the
+// descriptor scan (560), and the run cannot start its command (exit 70).
 func TestRunRlimitCoversInheritedDescriptors(t *testing.T) {
 	dir := stateDir(t, bigGrantConfig)
-	cmd := shCmd(t, baseEnv(dir), `exec env `+helperEnv+`=inherit-fds "$0" 250 sh -c 'ulimit -S -n 256 && `+
+	cmd := shCmd(t, baseEnv(dir), `exec env `+helperEnv+`=inherit-fds "$0" 240 sh -c 'ulimit -S -n 256 && `+
 		`exec "$0" run --need cpu=150 --need io=150 -- sh -c "ulimit -S -n"' "$0"`, cliBinary(t))
-	wantRlimitAtLeast(t, cmd, 253+301+256)
+	wantRlimitAtLeast(t, cmd, 243+301+256)
 }
 
 // A pass-through passes its grant on by inheritance, not in ExtraFiles, and still never sets its
