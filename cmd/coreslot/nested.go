@@ -29,11 +29,11 @@ func environ() map[string]string {
 	return env
 }
 
-// decide decides the run's context from its inherited environment (PROTOCOL.md section 18; an
-// empty variable is unset): an inherited CORESLOT_UNBUDGETED passes through unbudgeted, an
-// inherited CORESLOT_TOKEN_FDS passes through on the parent's grant or refuses when it does not
-// validate, and anything else, or --independent, is an ordinary request that drops the
-// inherited context first.
+// decide decides the run's context from its inherited environment (PROTOCOL.md section 18, the
+// rule engine.DecideNested applies for the library too): an inherited CORESLOT_UNBUDGETED passes
+// through unbudgeted, an inherited CORESLOT_TOKEN_FDS passes through on the parent's grant or
+// refuses when it does not validate, and anything else, or --independent, is an ordinary
+// request that drops the inherited context first.
 //
 // Each path that may start a command starts the descriptor-limit probe first, so that the probe
 // runs while the request queues. A pass-through keeps the inherited grant open for its command,
@@ -41,20 +41,18 @@ func environ() map[string]string {
 // and before it has a grant of its own.
 func (r *run) decide() int {
 	env := environ()
-	if !r.o.independent {
-		if reason := env[engine.EnvUnbudgeted]; reason != "" {
-			r.nofile = startNofileProbe(contextFDs(env))
-			return r.passThroughUnbudgeted(reason)
-		}
-		if env[engine.EnvTokenFDs] != "" {
-			held, err := engine.ValidateInherited(env)
-			if err != nil {
-				return r.refuse("the inherited grant does not validate: %s; refusing rather than queueing "+
-					"behind a parent that may hold the whole budget (use --independent to queue anyway)", text(err.Error()))
-			}
-			r.nofile = startNofileProbe(contextFDs(env))
-			return r.passThrough(held)
-		}
+	nested, err := engine.DecideNested(env, r.o.independent)
+	if err != nil {
+		return r.refuse("the inherited grant does not validate: %s; refusing rather than queueing "+
+			"behind a parent that may hold the whole budget (use --independent to queue anyway)", text(err.Error()))
+	}
+	switch nested.Kind {
+	case engine.NestedUnbudgeted:
+		r.nofile = startNofileProbe(contextFDs(env))
+		return r.passThroughUnbudgeted(nested.Reason)
+	case engine.NestedPassThrough:
+		r.nofile = startNofileProbe(contextFDs(env))
+		return r.passThrough(nested.Held)
 	}
 	r.env = dropInherited(env)
 	r.nofile = startNofileProbe(nil)
@@ -127,30 +125,6 @@ func withGrant(grant map[string]int) []string {
 	return out
 }
 
-// nestedGrant is a pass-through's grant (PROTOCOL.md section 18 rule 2): per requested
-// resource min(max, held), where held counts the parent's valid token descriptors of it. A
-// resource the parent holds none of runs unbudgeted with its min; one whose min is above what
-// the parent holds is clamped to all of it, and clamped records the requested min.
-func nestedGrant(req spec.Request, held map[string]int) (grant map[string]int, clamped map[string]int, unbudgeted []string) {
-	grant = make(map[string]int, len(req.Need))
-	clamped = map[string]int{}
-	for name, r := range req.Need {
-		h := held[name]
-		switch {
-		case h == 0:
-			grant[name] = r.Min
-			unbudgeted = append(unbudgeted, name)
-		case r.Min > h:
-			grant[name] = h
-			clamped[name] = r.Min
-		default:
-			grant[name] = min(r.Max, h)
-		}
-	}
-	slices.Sort(unbudgeted)
-	return grant, clamped, unbudgeted
-}
-
 // passThrough runs the command on the parent's grant (PROTOCOL.md section 18 rule 2): no
 // queue, no section, no lock. The inherited descriptors are passed on as they are, at the same
 // numbers, and CORESLOT_GRANTED_<RES> is narrowed for each requested resource.
@@ -159,7 +133,7 @@ func (r *run) passThrough(held map[string][]*os.File) int {
 	for name, files := range held {
 		counts[name] = len(files)
 	}
-	grant, clamped, unbudgeted := nestedGrant(r.o.request(0), counts)
+	grant, clamped, unbudgeted := engine.NestedGrant(r.o.request(0), counts)
 	for _, name := range slices.Sorted(maps.Keys(clamped)) {
 		r.notice("%s: requested %d, the parent run holds %d; running with %d", name, clamped[name], grant[name], grant[name])
 	}

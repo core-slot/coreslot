@@ -45,6 +45,38 @@ func TestStateDirOf(t *testing.T) {
 	}
 }
 
+// The order of PROTOCOL.md section 18: independent first, then CORESLOT_UNBUDGETED (rule 1), then
+// CORESLOT_TOKEN_FDS (rule 2), an empty variable counting as unset. Mutation: checking
+// CORESLOT_TOKEN_FDS before CORESLOT_UNBUDGETED reddens "both set"; ignoring independent reddens
+// "independent".
+func TestDecideNested(t *testing.T) {
+	bad := "999999999" // never an open descriptor: the context does not validate
+	for _, tc := range []struct {
+		name        string
+		env         map[string]string
+		independent bool
+		kind        NestedKind
+		err         bool
+	}{
+		{name: "nothing", env: map[string]string{}, kind: NotNested},
+		{name: "empty variables", env: map[string]string{EnvUnbudgeted: "", EnvTokenFDs: ""}, kind: NotNested},
+		{name: "unbudgeted", env: map[string]string{EnvUnbudgeted: "why"}, kind: NestedUnbudgeted},
+		{name: "both set", env: map[string]string{EnvUnbudgeted: "format", EnvTokenFDs: bad}, kind: NestedUnbudgeted},
+		{name: "invalid grant", env: map[string]string{EnvTokenFDs: bad}, err: true},
+		{name: "independent", env: map[string]string{EnvUnbudgeted: "why", EnvTokenFDs: bad}, independent: true, kind: NotNested},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := DecideNested(tc.env, tc.independent)
+			if (err != nil) != tc.err || (err == nil && n.Kind != tc.kind) {
+				t.Fatalf("DecideNested(%v, %v) = %+v, %v; want kind %d, error %v", tc.env, tc.independent, n, err, tc.kind, tc.err)
+			}
+			if n.Kind == NestedUnbudgeted && n.Reason != tc.env[EnvUnbudgeted] {
+				t.Errorf("reason %q, want %q", n.Reason, tc.env[EnvUnbudgeted])
+			}
+		})
+	}
+}
+
 // The bound of CORESLOT_TOKEN_FDS (PROTOCOL.md sections 6 and 17): at most 512 descriptors, in
 // one range or several, and a list naming more is refused before any range is expanded.
 func TestTokenFDsBoundIs512(t *testing.T) {

@@ -5,6 +5,7 @@ package engine
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -84,6 +85,77 @@ type devIno struct{ dev, ino uint64 }
 // launcher closes it, the next descriptor this process opens, the Go runtime's included, takes
 // its number.
 const reusedCause = "a launcher between the parent run and this one probably closed it and the number was reused"
+
+// NestedKind is what a run, or a library request, does with the grant context it inherited
+// (PROTOCOL.md section 18).
+type NestedKind int
+
+const (
+	// NotNested is an ordinary request (rule 3): nothing was inherited, or the run is
+	// --independent.
+	NotNested NestedKind = iota
+	// NestedUnbudgeted runs unbudgeted under a parent that runs unbudgeted (rule 1).
+	NestedUnbudgeted
+	// NestedPassThrough runs on the parent's grant (rule 2).
+	NestedPassThrough
+)
+
+// Nested is the decision DecideNested makes.
+type Nested struct {
+	Kind NestedKind
+	// Reason is the inherited CORESLOT_UNBUDGETED of a NestedUnbudgeted decision.
+	Reason string
+	// Held is ValidateInherited's held of a NestedPassThrough decision.
+	Held map[string][]*os.File
+}
+
+// DecideNested decides, from the environment a run inherited, what it does with the grant
+// context in it (PROTOCOL.md section 18; an empty variable is unset), for the CLI and the library
+// alike. Unless independent: a set CORESLOT_UNBUDGETED is rule 1; otherwise a set
+// CORESLOT_TOKEN_FDS is rule 2, and when that context does not validate (ValidateInherited) err
+// says why and the caller refuses, never queueing behind a parent that may hold the whole budget.
+// Anything else, or independent, is an ordinary request (rule 3). It writes nothing and closes
+// nothing: dropping the inherited context of an ordinary request is its caller's business.
+func DecideNested(env map[string]string, independent bool) (Nested, error) {
+	if independent {
+		return Nested{}, nil
+	}
+	if reason := env[EnvUnbudgeted]; reason != "" {
+		return Nested{Kind: NestedUnbudgeted, Reason: reason}, nil
+	}
+	if env[EnvTokenFDs] == "" {
+		return Nested{}, nil
+	}
+	held, err := ValidateInherited(env)
+	if err != nil {
+		return Nested{}, err
+	}
+	return Nested{Kind: NestedPassThrough, Held: held}, nil
+}
+
+// NestedGrant is a pass-through's grant (PROTOCOL.md section 18 rule 2): per requested resource
+// min(max, held), where held counts the parent's valid token descriptors of it. A resource the
+// parent holds none of runs unbudgeted with its min; one whose min is above what the parent
+// holds is clamped to all of it, and clamped records the requested min.
+func NestedGrant(req spec.Request, held map[string]int) (grant map[string]int, clamped map[string]int, unbudgeted []string) {
+	grant = make(map[string]int, len(req.Need))
+	clamped = map[string]int{}
+	for name, r := range req.Need {
+		h := held[name]
+		switch {
+		case h == 0:
+			grant[name] = r.Min
+			unbudgeted = append(unbudgeted, name)
+		case r.Min > h:
+			grant[name] = h
+			clamped[name] = r.Min
+		default:
+			grant[name] = min(r.Max, h)
+		}
+	}
+	slices.Sort(unbudgeted)
+	return grant, clamped, unbudgeted
+}
 
 // ValidateInherited checks an inherited grant for a pass-through (PROTOCOL.md section 18 rule
 // 2): CORESLOT_TOKEN_FDS of env must parse, name no descriptor twice and at most 512 in all,
