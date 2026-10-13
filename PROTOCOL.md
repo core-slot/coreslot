@@ -998,7 +998,9 @@ grant both run with 8. A parent that wants concurrent children partitions its gr
 > context that does not validate is a refusal (`ErrRefused`). `Adopt` never passes through. The
 > rules apply only to a client whose state directory is the one the inherited environment names
 > (`CORESLOT_STATE_DIR`, or the default); a client opened on another directory
-> (`Options.StateDir`) is another budget and queues. `Open` locates and opens the state directory
+> (`Options.StateDir`) is another budget and queues, unless the directory the environment names
+> cannot be resolved: then the request is refused (`ErrRefused`), since it might be the same
+> budget and queueing could wait behind its own parent. `Open` locates and opens the state directory
 > before any request, so where the parent runs unbudgeted because the directory is unusable (a
 > relative `CORESLOT_STATE_DIR`, a refused filesystem, wrong owners or modes, a failed
 > home-directory lookup), `Open` returns a `*StateError` instead of following rule 1, and the

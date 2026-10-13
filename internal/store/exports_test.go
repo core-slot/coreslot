@@ -152,6 +152,37 @@ func TestRemoveOwnTicketOutlastsAMomentaryProbe(t *testing.T) {
 	}
 }
 
+// The owner's removal of its own hold after its command exited (PROTOCOL.md section 12.3)
+// outlasts another client's momentary probe the same way. Mutation: ProbeAndRemoveHold calls
+// removeIfDead once, and the hold probed at the first try stays in holds/.
+func TestProbeAndRemoveHoldOutlastsAMomentaryProbe(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	h := filepath.Join(dir, HoldsDir)
+	if err := os.MkdirAll(h, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	probed := ticketName(1)
+	if err := os.WriteFile(filepath.Join(h, probed), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tries := 0
+	old := flockNB
+	t.Cleanup(func() { flockNB = old })
+	flockNB = func(f *os.File) (bool, error) {
+		if filepath.Base(f.Name()) == probed {
+			if tries++; tries == 1 {
+				return false, nil // another description holds it at this try
+			}
+		}
+		return old(f)
+	}
+	if removed, err := sec.ProbeAndRemoveHold(probed); err != nil || !removed || exists(filepath.Join(h, probed)) {
+		t.Errorf("a hold probed by another client at the first try: removed %v, %v; want removed", removed, err)
+	}
+}
+
 func TestRemoveCancel(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)

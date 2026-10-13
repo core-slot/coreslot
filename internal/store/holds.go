@@ -53,6 +53,7 @@ func (sec *Section) PublishNamed(dir string, body []byte, seq int, next func() i
 // ProbeAndRemoveHold probes the hold name and unlinks it, while holding the probe lock, only
 // when the probe succeeds (PROTOCOL.md section 12.3): a hold some descendant still holds is
 // kept. It reports whether it removed the hold; a hold that no longer exists is not an error.
+// Like RemoveOwnTicket, it outlasts another client's momentary probe (removeOwnEntry).
 func (sec *Section) ProbeAndRemoveHold(name string) (bool, error) {
 	if err := sec.live(); err != nil {
 		return false, err
@@ -60,7 +61,7 @@ func (sec *Section) ProbeAndRemoveHold(name string) (bool, error) {
 	if _, ok := wire.ParseName(name); !ok {
 		return false, fmt.Errorf("store: %q is not a hold name", name)
 	}
-	removed, _, err := removeIfDead(sec.s.path(HoldsDir, name))
+	removed, _, err := removeOwnEntry(sec.s.path(HoldsDir, name))
 	return removed, err
 }
 
@@ -78,15 +79,7 @@ func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
 	if _, ok := wire.ParseName(name); !ok {
 		return false, fmt.Errorf("store: %q is not a ticket name", name)
 	}
-	path := sec.s.path(QueueDir, name)
-	for try := 1; ; try++ {
-		var gone bool
-		removed, gone, err = removeIfDead(path)
-		if removed || gone || err != nil || try == ownRemovalTries {
-			break
-		}
-		time.Sleep(ownRemovalPause)
-	}
+	removed, _, err = removeOwnEntry(sec.s.path(QueueDir, name))
 	var se *StateError
 	if errors.As(err, &se) {
 		return false, nil
@@ -94,13 +87,25 @@ func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
 	return removed, err
 }
 
-// RemoveOwnTicket's probe finds its ticket locked although the owner has closed its descriptor
-// when another client's momentary probe (a status snapshot, an election) holds the lock at that
-// instant; the ticket would then stay dead in queue/ until a reconciliation, though PROTOCOL.md
-// section 12.1 step 7 has its owner unlink it. Such a probe lets go within microseconds, so the
-// owner tries again, at most ownRemovalTries times with ownRemovalPause between tries: about a
-// millisecond in the section at worst, when a description that outlives the owner's (a child
-// forked before it exec'd) really keeps the ticket locked and it is left to reconciliation.
+// removeOwnEntry is removeIfDead for an entry its owner has just closed: its own ticket
+// (RemoveOwnTicket) or its own hold (ProbeAndRemoveHold). The probe finds the entry locked
+// although the owner has closed its descriptor when another client's momentary probe (a status
+// snapshot, an election) holds the lock at that instant; the entry would then stay dead until a
+// reconciliation, though PROTOCOL.md sections 12.1 step 7 and 12.3 have its owner unlink it. Such
+// a probe lets go within microseconds, so the owner tries again, at most ownRemovalTries times
+// with ownRemovalPause between tries: about a millisecond in the section at worst, when a
+// description that outlives the owner's (a descendant still running, or a child forked before it
+// exec'd) really keeps the entry locked and it is left in place.
+func removeOwnEntry(path string) (removed, gone bool, err error) {
+	for try := 1; ; try++ {
+		removed, gone, err = removeIfDead(path)
+		if removed || gone || err != nil || try == ownRemovalTries {
+			return removed, gone, err
+		}
+		time.Sleep(ownRemovalPause)
+	}
+}
+
 const (
 	ownRemovalTries = 8
 	ownRemovalPause = 200 * time.Microsecond
