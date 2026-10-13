@@ -15,14 +15,6 @@ import (
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
-// The environment of a run's command (PROTOCOL.md section 17).
-const (
-	EnvTokenFDs   = "CORESLOT_TOKEN_FDS"
-	EnvHeldFD     = "CORESLOT_HELD_FD"
-	EnvUnbudgeted = "CORESLOT_UNBUDGETED"
-	EnvGranted    = "CORESLOT_GRANTED_" // followed by a resource name in environment form
-)
-
 // ParseTokenFDs parses CORESLOT_TOKEN_FDS (PROTOCOL.md section 17): `item *("," item)`, each
 // item `fd` or `a-b` with a <= b, every fd one to nine decimal digits. A list naming more than
 // spec.MaxPerGrant descriptors is refused before any range is expanded, and so is a list naming

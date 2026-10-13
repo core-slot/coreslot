@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -327,27 +326,11 @@ func (g *Grant) Files() []*os.File {
 // resource, CORESLOT_HELD_FD=3 with a hold, CORESLOT_TOKEN_FDS when tokens are passed, and
 // CORESLOT_UNBUDGETED=format in token-only mode (the reason for a fail-open grant).
 func (g *Grant) Env() []string {
-	grant := g.Grant()
-	var env []string
-	for _, name := range slices.Sorted(maps.Keys(grant)) {
-		env = append(env, "CORESLOT_GRANTED_"+spec.EnvName(name)+"="+strconv.Itoa(grant[name]))
+	unbudgeted := g.failOpen
+	if g.tokenOnly {
+		unbudgeted = "format"
 	}
-	if g.hold != nil {
-		env = append(env, "CORESLOT_HELD_FD=3")
-	}
-	switch n := len(g.tokens.Files); {
-	case n == 1:
-		env = append(env, "CORESLOT_TOKEN_FDS=4")
-	case n > 1:
-		env = append(env, "CORESLOT_TOKEN_FDS=4-"+strconv.Itoa(3+n))
-	}
-	switch {
-	case g.tokenOnly:
-		env = append(env, "CORESLOT_UNBUDGETED=format")
-	case g.failOpen != "":
-		env = append(env, "CORESLOT_UNBUDGETED="+g.failOpen)
-	}
-	return env
+	return ChildEnv(g.Grant(), g.hold != nil, len(g.tokens.Files), unbudgeted)
 }
 
 // Close closes this process's copies of the grant's descriptors, the hold before the tokens; it

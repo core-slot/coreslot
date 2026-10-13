@@ -5,12 +5,9 @@ package main
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
@@ -42,7 +39,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 			c.log = e.Store() // FORMAT was understood in the section that published the hold
 		}
 	} else {
-		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), reason)...)
+		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.minGrant(), false, 0, reason)...)
 	}
 	if msg := failOpenNotice(e != nil, g != nil && g.HoldName() != "", ferr); msg != "" {
 		r.notice("%s", msg)
@@ -71,19 +68,6 @@ func failOpenNotice(opened, held bool, err error) string {
 	return ""
 }
 
-// unbudgetedEnv is the environment of a run without a grant: each resource's min, and the
-// reason when there is one.
-func unbudgetedEnv(grant map[string]int, reason string) []string {
-	var env []string
-	for _, name := range slices.Sorted(maps.Keys(grant)) {
-		env = append(env, "CORESLOT_GRANTED_"+spec.EnvName(name)+"="+strconv.Itoa(grant[name]))
-	}
-	if reason != "" {
-		env = append(env, "CORESLOT_UNBUDGETED="+reason)
-	}
-	return env
-}
-
 // timeoutReason is the reason a timeout run gives in its hold, its run-log line and
 // CORESLOT_UNBUDGETED.
 const timeoutReason = "timeout"
@@ -99,7 +83,7 @@ func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	if g != nil {
 		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
 	} else {
-		c.env = append(slices.Clone(r.env), unbudgetedEnv(r.o.minGrant(), timeoutReason)...)
+		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.minGrant(), false, 0, timeoutReason)...)
 	}
 	if timeoutLogs(g != nil && g.HoldName() != "", herr, t != nil && !t.TokenOnly()) {
 		c.log = e.Store()
