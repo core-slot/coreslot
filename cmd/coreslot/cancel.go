@@ -51,7 +51,7 @@ func cancelCommand(args []string, io IO) int {
 		}
 	}
 
-	e, _, err := openEngineReadOnly()
+	e, err := openEngine(locate(), true)
 	if err != nil {
 		return cancelFailed(err, io)
 	}

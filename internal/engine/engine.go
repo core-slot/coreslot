@@ -107,20 +107,30 @@ func New(st *store.Store, cfg *config.Watcher, cpus func() (int, error), clock C
 // Store is the engine's state directory.
 func (e *Engine) Store() *store.Store { return e.st }
 
-// sizes recomputes every declared resource's size from the configuration and the CPU count
-// (PROTOCOL.md section 5.2). An invalid configuration or an unknown CPU count is a
-// *store.StateError.
-func (e *Engine) sizes() (map[string]int, error) {
+// Config reads the configuration as every admission does, afresh. An entry that fails the
+// layout's policy or an invalid configuration is a *store.StateError.
+func (e *Engine) Config() (config.Config, error) {
 	if filepath.Dir(e.cfg.Path) == e.st.Dir() {
 		// The override moved the configuration into the state directory: it is an entry of the
 		// layout and must pass its policy (PROTOCOL.md section 5.3).
 		if err := store.CheckEntry(e.cfg.Path, false); err != nil {
-			return nil, err
+			return config.Config{}, err
 		}
 	}
 	c, err := e.cfg.Current()
 	if err != nil {
-		return nil, &store.StateError{Reason: err.Error()}
+		return config.Config{}, &store.StateError{Reason: err.Error()}
+	}
+	return c, nil
+}
+
+// sizes recomputes every declared resource's size from the configuration and the CPU count
+// (PROTOCOL.md section 5.2). An invalid configuration or an unknown CPU count is a
+// *store.StateError.
+func (e *Engine) sizes() (map[string]int, error) {
+	c, err := e.Config()
+	if err != nil {
+		return nil, err
 	}
 	n, err := e.cpus()
 	if err != nil {

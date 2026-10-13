@@ -7,13 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/config"
 	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
 // Timing of a waiting run (PROTOCOL.md section 22).
@@ -64,16 +61,11 @@ func (r *run) refuse(format string, args ...any) int {
 
 // priority is the request's priority: --priority, or else the configuration's [priorities]
 // entry of the longest prefix of the label, or 0. A configuration that cannot be read is a
-// state error.
-func (r *run) priority(cfgPath, stateDir string) (int, error) {
-	if filepath.Dir(cfgPath) == stateDir {
-		if err := store.CheckEntry(cfgPath, false); err != nil {
-			return 0, err
-		}
-	}
-	cfg, err := config.Load(cfgPath)
+// state error, under --priority too.
+func (r *run) priority(e *engine.Engine) (int, error) {
+	cfg, err := e.Config()
 	if err != nil {
-		return 0, &stateError{Reason: err.Error()}
+		return 0, err
 	}
 	if r.o.prioritySet {
 		return r.o.priority, nil
@@ -84,11 +76,11 @@ func (r *run) priority(cfgPath, stateDir string) (int, error) {
 
 // ordinary is a run that queues (PROTOCOL.md section 18 rule 3).
 func (r *run) ordinary() int {
-	e, cfgPath, err := openEngine()
+	e, err := openEngine(locate(), false)
 	if err != nil {
 		return r.failOpen(nil, err)
 	}
-	prio, err := r.priority(cfgPath, e.Store().Dir())
+	prio, err := r.priority(e)
 	if err != nil {
 		return r.failOpen(e, err)
 	}
