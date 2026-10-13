@@ -1515,6 +1515,27 @@ class AlignmentTests(Base):
         self.assertEqual(p.wait(timeout=20), 0)
         self.assertEqual(os.listdir(self.S), [])  # no FORMAT written, no log/
 
+    def test_inherited_unbudgeted_reason_is_escaped(self):
+        """§18 rule 1: the notice quotes the inherited CORESLOT_UNBUDGETED escaped, on one line.
+
+        The reason is inherited, so untrusted: an escape sequence or a newline in it must not
+        reach the terminal raw, while the command still sees it unchanged.
+        Mutation: print the reason raw in cli_run's notice (no `!r`): the escape and the newline
+        reach stderr.
+        """
+        reason = "evil\x1b[2J\nsecond line"
+        env = dict(self.env, CORESLOT_UNBUDGETED=reason)
+        p = self.cli("run", "--", sys.executable, "-c", "import os, sys; sys.stdout.write(os.environ['CORESLOT_UNBUDGETED'])",
+                     env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = p.communicate(timeout=20)
+        self.assertEqual(p.returncode, 0, err)
+        self.assertEqual(out.decode(), reason)
+        notices = err.decode()
+        self.assertNotIn("\x1b", notices)
+        for line in notices.splitlines():
+            self.assertTrue(line.startswith("coreslot: "), f"a line that is not a notice of its own: {line!r}")
+        self.assertIn(r"coreslot: inside an unbudgeted run ('evil\x1b[2J\nsecond line'); running", notices)
+
     def test_bad_entries_are_ignored_counted_and_kept_by_reconciliation(self):
         """B1/D6 (§4.2 strays): matching names with a bad type/owner/mode are never trusted or removed."""
         now = time.time_ns()

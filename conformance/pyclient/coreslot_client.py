@@ -2388,7 +2388,7 @@ def cli_run(args: list[str]) -> int:
     t0 = time.time_ns()
     env = dict(os.environ)
     if not opts.independent and env.get("CORESLOT_UNBUDGETED"):  # §18 rule 1
-        _diag(f"coreslot: inside an unbudgeted run ({env['CORESLOT_UNBUDGETED']}); running "
+        _diag(f"coreslot: inside an unbudgeted run ({env['CORESLOT_UNBUDGETED']!r}); running "
               "unbudgeted with the minimum of each resource")
         started = time.monotonic()
         usage: dict = {}
