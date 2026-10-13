@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
 // notIgnored drops the signals this process started with ignored: a run must not turn an
@@ -28,17 +30,24 @@ func notIgnored(sigs ...os.Signal) []os.Signal {
 // stops emulates the default action of the stop signals SIGTSTP, SIGTTIN and SIGTTOU. The Go
 // runtime cannot give a stop signal back its default disposition once it has been caught, so
 // the run catches them for its whole life and stops itself with SIGSTOP, except while it holds
-// the admission section (inSection), where the stop is deferred until it has left. While a
+// the admission section (sectionEntered), where the stop is deferred until it has left. While a
 // command runs in non-terminal mode, a SIGTSTP is first forwarded to the command's own group:
 // coreslot then stops as well, so that a shell sees its whole job stopped, and the SIGCONT that
 // continues coreslot is forwarded to the command's group.
 var stops struct {
 	once    sync.Once
 	mu      sync.Mutex
-	depth   int  // inSection calls in progress
+	depth   int  // holds of admit.lock in progress, as the store's section hooks count them
 	pending bool // a stop arrived during a section
 	child   int  // the command of a non-terminal run, while it runs
 }
+
+// installSectionHooks makes the store tell this process when it may hold the admission section,
+// so that a stop is deferred exactly then (PROTOCOL.md section 8): every try to take admit.lock
+// and every moment it is held, whichever command and call site takes it, but never the waits
+// between tries, during which Ctrl-Z stops the process at once. main calls it before any
+// command runs.
+func installSectionHooks() { store.SetSectionHooks(sectionEntered, sectionLeft) }
 
 // installStops starts catching the stop signals; it is idempotent.
 func installStops() {
@@ -75,16 +84,22 @@ func onStop(sig syscall.Signal) {
 	}
 }
 
-// inSection runs fn, which may hold the admission section, without letting a stop signal stop
-// the process meanwhile: a process stopped inside the section blocks every other client (I5).
-// SIGTSTP, SIGTTIN and SIGTTOU arriving during fn are held back, and the process stops once fn
-// has returned, as it would have without the section.
-func inSection(fn func() error) error {
+// sectionEntered is the store's section hook that runs just before each try to take admit.lock:
+// from now until the matching sectionLeft, a stop signal must not stop the process, since a
+// process stopped inside the section blocks every other client (I5). SIGTSTP, SIGTTIN and
+// SIGTTOU arriving meanwhile are held back. Holds nest and may overlap across goroutines (a
+// probe while a section is held), so they are counted.
+func sectionEntered() {
 	installStops()
 	stops.mu.Lock()
 	stops.depth++
 	stops.mu.Unlock()
-	err := fn()
+}
+
+// sectionLeft is the store's section hook that runs once admit.lock is no longer held (or was
+// not taken): when no other hold is in progress, a stop held back meanwhile stops the process
+// now, as it would have without the section.
+func sectionLeft() {
 	stops.mu.Lock()
 	defer stops.mu.Unlock()
 	stops.depth--
@@ -92,7 +107,6 @@ func inSection(fn func() error) error {
 		stops.pending = false
 		stopSelf()
 	}
-	return err
 }
 
 // prepareChild sets up the command's process group before it starts: in terminal mode it stays

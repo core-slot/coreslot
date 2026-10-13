@@ -1156,7 +1156,7 @@ func TestTimeoutWhileSectionHeld(t *testing.T) {
 	}
 }
 
-// enqueue is bounded by its context and leaves no goroutine behind.
+// A run's enqueue is bounded by its context and leaves no goroutine behind.
 func TestEnqueueBoundedLeavesNothing(t *testing.T) {
 	dir := stateDir(t, "")
 	t.Setenv("CORESLOT_STATE_DIR", dir)
@@ -1177,7 +1177,7 @@ func TestEnqueueBoundedLeavesNothing(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	tk, err := enqueue(ctx, e, spec.Request{Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}})
+	tk, err := e.EnqueueContext(ctx, spec.Request{Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}})
 	if !errors.Is(err, context.DeadlineExceeded) || tk != nil {
 		t.Fatalf("enqueue = %v, %v; want the deadline and no ticket", tk, err)
 	}

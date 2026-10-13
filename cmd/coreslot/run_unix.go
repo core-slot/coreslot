@@ -110,24 +110,24 @@ func (r *run) ordinary() int {
 		enqCtx, c = context.WithTimeout(ctx, noWaitFor)
 		defer c()
 	}
-	t, err := enqueue(enqCtx, e, req)
+	t, err := e.EnqueueContext(enqCtx, req)
 	var g *engine.Grant
 	if err == nil {
 		if r.o.noWait {
 			g, err = r.tryOnce(ctx, t)
 		} else {
 			g, err = waitOneP(func() (*engine.Grant, error) {
-				return waitLoop(ctx, sectionStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
+				return waitLoop(ctx, ticketStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
 			})
 		}
 		if err != nil {
-			_ = inSection(t.Withdraw)
+			_ = t.Withdraw()
 		}
 	}
 	r.waited = time.Since(r.start)
 	if sig := watch.end(); sig != nil {
 		if g != nil {
-			_ = inSection(g.Close)
+			_ = g.Close()
 		}
 		if sig == syscall.SIGINT {
 			r.notice("interrupted while waiting")

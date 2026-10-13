@@ -36,6 +36,7 @@ commands:
   version  print the version and the protocol formats implemented`
 
 func main() {
+	installSectionHooks()
 	os.Exit(dispatch(os.Args[1:], IO{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}))
 }
 

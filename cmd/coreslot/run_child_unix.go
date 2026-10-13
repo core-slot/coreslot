@@ -38,7 +38,7 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		grant:      g.Grant(),
 		clamped:    slices.Sorted(maps.Keys(g.Clamped())),
 		unbudgeted: g.Unbudgeted(),
-		release:    func() error { return inSection(g.Close) },
+		release:    g.Close,
 	}
 	if !g.TokenOnly() {
 		c.log = e.Store() // FORMAT was understood in the admitting section
@@ -211,33 +211,7 @@ func formatStillUnderstood(dir string) (missing bool, err error) {
 // (appendNestedLog).
 func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format string, args ...any)) error {
 	if st.RunLogNeedsRotation() {
-		var rotateErr error
-		skip := inSection(func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), logRotateWait)
-			defer cancel()
-			sec, err := st.Enter(ctx)
-			if err != nil {
-				return nil // busy: append without rotating
-			}
-			defer sec.Leave()
-			_, understood, err := sec.Format(testhooks.Formats())
-			if !understood {
-				if err != nil {
-					return err // malformed FORMAT
-				}
-				return errFormatChanged
-			}
-			if err == nil {
-				// A section entered to rotate reconciles first when it is due, like every entry
-				// other than admission (PROTOCOL.md section 10.4).
-				_, err = sec.ReconcileIfDue(store.NowNS())
-			}
-			if err == nil {
-				err = sec.RotateLogIfNeeded()
-			}
-			rotateErr = err
-			return nil
-		})
+		rotateErr, skip := rotateRunLog(st)
 		if skip != nil {
 			return skip
 		}
@@ -249,4 +223,33 @@ func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format strin
 		return err
 	}
 	return st.AppendRun(rec)
+}
+
+// rotateRunLog rotates the run log inside the section, if it can enter within 2 s. skip is the
+// error that stops the append (a FORMAT not understood, or a malformed one); rotateErr is any
+// other failure, which costs the rotation alone. A busy section returns neither.
+func rotateRunLog(st *store.Store) (rotateErr, skip error) {
+	ctx, cancel := context.WithTimeout(context.Background(), logRotateWait)
+	defer cancel()
+	sec, err := st.Enter(ctx)
+	if err != nil {
+		return nil, nil // busy: append without rotating
+	}
+	defer sec.Leave()
+	_, understood, err := sec.Format(testhooks.Formats())
+	if !understood {
+		if err != nil {
+			return nil, err // malformed FORMAT
+		}
+		return nil, errFormatChanged
+	}
+	if err == nil {
+		// A section entered to rotate reconciles first when it is due, like every entry other
+		// than admission (PROTOCOL.md section 10.4).
+		_, err = sec.ReconcileIfDue(store.NowNS())
+	}
+	if err == nil {
+		err = sec.RotateLogIfNeeded()
+	}
+	return err, nil
 }

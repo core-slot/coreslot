@@ -4,11 +4,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"os/exec"
@@ -24,6 +22,8 @@ import (
 
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
+
+	"github.com/Nezhinskiy/coreslot/internal/store"
 )
 
 // signalHelper runs the helpers of the signal tests; ok is false for an unknown name.
@@ -79,16 +79,26 @@ func signalHelper(name string, args []string) (code int, ok bool) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	case "section-stop":
-		// Inside inSection, send SIGTSTP to itself and write args[0]; after it, write args[1].
-		err := inSection(func() error {
-			_ = unix.Kill(os.Getpid(), unix.SIGTSTP)
-			time.Sleep(300 * time.Millisecond)
-			return os.WriteFile(args[0], nil, 0o600)
-		})
+		// With the section hooks main installs, enter the admission section of the state
+		// directory args[0], send SIGTSTP to itself there and write args[1] just before leaving;
+		// after leaving, write args[2].
+		installSectionHooks()
+		st, err := store.Open(args[0])
 		if err != nil {
 			return 1, true
 		}
-		if err := os.WriteFile(args[1], nil, 0o600); err != nil {
+		sec, err := st.Enter(context.Background())
+		if err != nil {
+			return 1, true
+		}
+		_ = unix.Kill(os.Getpid(), unix.SIGTSTP)
+		time.Sleep(300 * time.Millisecond)
+		err = os.WriteFile(args[1], nil, 0o600)
+		sec.Leave()
+		if err != nil {
+			return 1, true
+		}
+		if err := os.WriteFile(args[2], nil, 0o600); err != nil {
 			return 1, true
 		}
 		return 0, true
@@ -512,10 +522,35 @@ func signalNonTerminal(t *testing.T, sig syscall.Signal) {
 
 // ---------------------------------------------------------------- the section
 
-func TestInSectionDefersStop(t *testing.T) {
+// sectionLocked reports whether some open file description holds the lock of admit.lock.
+func sectionLocked(t *testing.T, dir string) bool {
+	t.Helper()
+	f, err := os.Open(filepath.Join(dir, "admit.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	if errors.Is(err, unix.EWOULDBLOCK) {
+		return true
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return false
+}
+
+// The section hooks main installs defer a stop while the process holds the admission section,
+// and stop it once it has left: a process stopped inside the section blocks every admission on
+// the machine (PROTOCOL.md section 8). The helper installs them, enters a real section, sends
+// itself SIGTSTP there, and writes one file just before it leaves and another after.
+// Mutations: Enter no longer calls the section hook (the helper stops inside the section and
+// never writes the first file); Leave no longer calls it (the helper never stops).
+func TestSectionHooksDeferStop(t *testing.T) {
+	dir := stateDir(t, "")
 	tmp := t.TempDir()
 	inside, after := filepath.Join(tmp, "inside"), filepath.Join(tmp, "after")
-	cmd := exec.Command(cliBinary(t), inside, after)
+	cmd := exec.Command(cliBinary(t), dir, inside, after)
 	cmd.Env = append(baseEnv(tmp), helperEnv+"=section-stop")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -530,86 +565,11 @@ func TestInSectionDefersStop(t *testing.T) {
 	if _, err := os.Stat(after); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the process went on after the section instead of stopping")
 	}
+	if sectionLocked(t, dir) {
+		t.Errorf("the process stopped before it left the admission section")
+	}
 	if err := unix.Kill(cmd.Process.Pid, unix.SIGCONT); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, "the run after continuing", exists(after))
-}
-
-// sectionMethods are the engine and store calls that may enter the admission section. The run
-// must make each of them inside inSection, so that it never stops itself while holding the
-// section: its self-stop is deferred only there.
-var sectionMethods = map[string]bool{"EnqueueContext": true, "Step": true,
-	"Poll": true, "Withdraw": true, "FailOpen": true, "UnbudgetedHold": true, "Snapshot": true,
-	"Enter": true, "TryEnter": true, "AdoptContext": true, "CancelContext": true, "Reset": true, "ClearDegraded": true}
-
-// TestSectionCallsAreInSection checks the CLI's sources: every call (or method value) of a
-// method in sectionMethods, and every Close of a grant (named g), sits inside an argument of
-// inSection.
-func TestSectionCallsAreInSection(t *testing.T) {
-	fset := token.NewFileSet()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var files []*ast.File
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		files = append(files, f)
-	}
-	checked := 0
-	for _, f := range files {
-		var stack []ast.Node
-		ast.Inspect(f, func(n ast.Node) bool {
-			if n == nil {
-				stack = stack[:len(stack)-1]
-				return true
-			}
-			stack = append(stack, n)
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			x, isIdent := sel.X.(*ast.Ident)
-			grantClose := sel.Sel.Name == "Close" && isIdent && x.Name == "g"
-			if !sectionMethods[sel.Sel.Name] && !grantClose {
-				return true
-			}
-			if isIdent && (x.Name == "signal" || x.Name == "unix") {
-				return true
-			}
-			checked++
-			for i := len(stack) - 2; i >= 0; i-- {
-				if call, ok := stack[i].(*ast.CallExpr); ok {
-					if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "inSection" && stack[i+1] != call.Fun {
-						return true
-					}
-				}
-			}
-			t.Errorf("%s: %s.%s is called outside inSection", fset.Position(sel.Pos()), exprString(sel.X), sel.Sel.Name)
-			return true
-		})
-	}
-	if checked < 8 {
-		t.Fatalf("only %d section calls found: the check no longer sees the run's code", checked)
-	}
-}
-
-func exprString(e ast.Expr) string {
-	switch x := e.(type) {
-	case *ast.Ident:
-		return x.Name
-	case *ast.SelectorExpr:
-		return exprString(x.X) + "." + x.Sel.Name
-	case *ast.CompositeLit:
-		return "composite"
-	}
-	return "expr"
 }

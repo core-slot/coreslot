@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
 	"github.com/Nezhinskiy/coreslot/internal/wire"
 )
 
@@ -25,7 +24,7 @@ var errNotAtOnce = errors.New("not admitted at once")
 // tryOnce is --no-wait's single attempt: one Step, each of whose section entries waits at most
 // RefreshEvery/4 = 0.5 s (the engine's sectionWait). The 1 s of noWaitFor bounds only enqueue.
 func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, error) {
-	res, err := sectionStepper{t}.step(ctx)
+	res, err := ticketStepper{t}.step(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -33,16 +32,6 @@ func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, err
 		return a.Grant, nil
 	}
 	return nil, errNotAtOnce
-}
-
-// enqueue publishes the request's ticket, waiting for the section only until ctx ends; it then
-// returns the context's error having published nothing.
-func enqueue(ctx context.Context, e *engine.Engine, req spec.Request) (t *engine.Ticket, err error) {
-	err = inSection(func() (err error) {
-		t, err = e.EnqueueContext(ctx, req)
-		return err
-	})
-	return t, err
 }
 
 // stepper is the part of a ticket the wait loop drives: a Step, how long until the next one
@@ -53,20 +42,14 @@ type stepper interface {
 	holders() ([]engine.HolderInfo, error)
 }
 
-// sectionStepper steps a ticket inside inSection: a Step may hold the admission section.
-type sectionStepper struct{ t *engine.Ticket }
+// ticketStepper steps a real ticket.
+type ticketStepper struct{ t *engine.Ticket }
 
-func (s sectionStepper) step(ctx context.Context) (res engine.StepResult, err error) {
-	err = inSection(func() error {
-		res, err = s.t.Step(ctx)
-		return err
-	})
-	return res, err
-}
+func (s ticketStepper) step(ctx context.Context) (engine.StepResult, error) { return s.t.Step(ctx) }
 
-func (s sectionStepper) due() time.Duration { return s.t.Due() }
+func (s ticketStepper) due() time.Duration { return s.t.Due() }
 
-func (s sectionStepper) holders() ([]engine.HolderInfo, error) { return s.t.Holders() }
+func (s ticketStepper) holders() ([]engine.HolderInfo, error) { return s.t.Holders() }
 
 // waitOneP runs wait with the Go runtime limited to one P (runtime.GOMAXPROCS(1)) and restores
 // the previous setting afterwards. A waiting process sleeps almost all the time, and with one P
@@ -148,11 +131,8 @@ func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited 
 
 // holdersText describes the live holds and the section's holder, for a --no-wait refusal.
 func (r *run) holdersText(e *engine.Engine) string {
-	var rep engine.Report
-	if err := inSection(func() (err error) { // Snapshot probes admit.lock
-		rep, err = e.Snapshot()
-		return err
-	}); err != nil {
+	rep, err := e.Snapshot()
+	if err != nil {
 		return ""
 	}
 	s := holderList(rep.Holds, time.Now().UnixNano())
