@@ -318,10 +318,12 @@ and at release, and on a mismatch at release the holder writes nothing into the 
 `--on-timeout`, `--subst`, `--refusal-code` and `--independent`. "Strict mode" has no flag name.
 The default need when no `--need` is given is unspecified.
 *Choice:* `run [--need ...] [--label] [--priority] [--timeout S] [--strict] [--independent]
-[--subst] [--refusal-code N] -- CMD`. `--timeout` refuses on expiry (`--on-timeout` is not
-implemented), and the default need is `cpu=1..1`.
+[--subst] [--refusal-code N] -- CMD`, with `RES=MIN..` and `RES=..MAX` beside `RES=MIN..MAX` and
+`RES=N`. `--timeout` refuses on expiry (`--on-timeout` is not implemented). The default need is
+`cpu=1..16` when the command carries a `cpu` placeholder and `cpu=1..1` otherwise, as §21 now
+says; this client's first choice was `cpu=1..1` for every command.
 
-**Status — resolved: PROTOCOL §21 preamble (informative CLI synopsis). The default need is `cpu=1..1` and `--on-timeout` defaults to `fail`. Matches: this client's `--timeout` refuses, and it also bounds section entry during enqueue. The preamble has since made the default `cpu=1..16` for a command with a `cpu` placeholder and added `RES=MIN..` and `RES=..MAX`; this client follows it.**
+**Status — resolved: PROTOCOL §21 preamble (informative CLI synopsis). It first made the default need `cpu=1..1`, and has since made it `cpu=1..16` for a command with a `cpu` placeholder (`cpu=1..1` otherwise) and added `RES=MIN..` and `RES=..MAX`; `--on-timeout` defaults to `fail`. Matches: this client follows the current preamble, and its `--timeout` refuses and also bounds section entry during enqueue.**
 
 **F2. §17: placeholders naming a resource the request does not name, and `{{n:RES}}`.**
 *Choice:* a usage error (exit 64), checked before queueing. `{{n:RES}}` becomes the literal
