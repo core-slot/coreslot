@@ -59,7 +59,7 @@ contract and may change in any release; parse `status --json` instead.
 | `doctor` | `--clear`, `--reset` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
 | configuration | `<home>/.config/coreslot/config.toml`: `[resources]`, `[priorities]`, `[platform] windows_warning` |
-| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs) |
+| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs and by the library) |
 | descriptors | the hold at fd 3, tokens from fd 4 in ascending resource name and index |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
 

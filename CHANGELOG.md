@@ -33,6 +33,10 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
   from the command's `wait4` rusage, so they cover the descendants it waited for. A run whose
   command never started leaves them out, as does a platform that does not report one. Format 1 is
   unchanged: a reader of the run log ignores keys it does not know.
+- A library request made inside another run's grant passes through, as a nested `coreslot run`
+  does (`PROTOCOL.md` section 18), instead of queueing behind its own parent, which waited forever
+  when the parent held the whole budget; a context that does not validate matches `ErrRefused`.
+  `Options.Independent` queues anyway, and `Grant.PassThrough` reports such a grant.
 - Conformance suite with deterministic queue traces, and an independent Python client written from
   `PROTOCOL.md` alone.
 - Release archives with checksums, build-provenance attestations for releases of the public

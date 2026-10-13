@@ -2,9 +2,11 @@
 
 // Package engine runs the protocol's transitions (PROTOCOL.md sections 10 to 15): enqueue,
 // observed-freshness waiting and election, cancellation and withdrawal, admission with clamping,
-// adoption, token-only mode and inspection. It composes the pure state machine (internal/state)
-// with the filesystem layer (internal/store). It never prints, never installs signal handlers,
-// never chooses exit codes and never decides to run unbudgeted: errors go to the caller.
+// adoption, token-only mode and inspection, and the pass-through of nested requests (section 18).
+// It composes the pure state machine (internal/state) with the filesystem layer
+// (internal/store). It never prints, never installs signal handlers, never chooses exit codes and
+// never decides on its own to run unbudgeted: errors go to the caller, and a pass-through under a
+// parent that runs unbudgeted follows the parent.
 package engine
 
 import (

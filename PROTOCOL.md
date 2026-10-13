@@ -983,6 +983,16 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
 grant both run with 8. A parent that wants concurrent children partitions its grant itself.
 
+> **Implementation note.** The Go library applies these rules to every request of a process
+> started inside a grant, with `Options.Independent` as its `--independent`: rules 1 and 2 admit
+> the request at once, and a context that does not validate is a refusal (`ErrRefused`). It
+> applies them only to a client whose state directory is the one the inherited environment names
+> (`CORESLOT_STATE_DIR`, or the default); a client opened on another directory is another budget
+> and queues. A pass-through's descriptors for the command are the parent's hold at fd 3 and every
+> token the parent passed on from fd 4, renumbered by the launcher, with `CORESLOT_HELD_FD` and
+> `CORESLOT_TOKEN_FDS` naming the new numbers; the library writes no run log, for a pass-through as
+> for any other grant.
+
 ## 19. Exit status
 
 | Status | Meaning |
