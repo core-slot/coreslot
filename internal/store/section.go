@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"sync/atomic"
@@ -159,6 +160,48 @@ func (sec *Section) Leave() {
 		sec.f = nil
 		hookLeave()
 	}
+}
+
+// sideSectionWait bounds how long a Store-level write that needs the section (clearing the
+// degraded record, rotating the run log) waits to enter it: the same 2 s a run waits to remove its
+// hold after its command exits (PROTOCOL.md section 12.3).
+const sideSectionWait = 2 * time.Second
+
+// NotEnteredError is a Store-level write that did not enter the section: another client held it
+// for longer than 2 s, or admit.lock could not be opened or locked. Err is Enter's error; the
+// write was not made.
+type NotEnteredError struct {
+	Err error
+}
+
+func (e *NotEnteredError) Error() string {
+	return "store: cannot enter the admission section: " + e.Err.Error()
+}
+
+func (e *NotEnteredError) Unwrap() error { return e.Err }
+
+// inSideSection makes change in a section it enters for that alone, after Prepare. A section it
+// cannot enter is a *NotEnteredError. A FORMAT that is not understood is a *FormatError: one that
+// could not be read, written when missing, or parsed carries that error, which its message
+// repeats; a well-formed one this client does not implement is refused. change is not called then.
+func (s *Store) inSideSection(change func(*Section) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), sideSectionWait)
+	defer cancel()
+	sec, err := s.Enter(ctx)
+	if err != nil {
+		return &NotEnteredError{Err: err}
+	}
+	defer sec.Leave()
+	n, understood, err := sec.Prepare(NowNS())
+	switch {
+	case !understood && err != nil:
+		return &FormatError{Err: err}
+	case !understood:
+		return fmt.Errorf("store: %w", &FormatError{N: n, Suffix: "; not writing"})
+	case err != nil:
+		return err
+	}
+	return change(sec)
 }
 
 func (sec *Section) live() error {

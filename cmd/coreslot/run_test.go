@@ -1254,6 +1254,12 @@ func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
 		if err := appendRunLog(st, store.RunRecord{Label: "x"}, notice); err == nil {
 			t.Errorf("FORMAT %q: appendRunLog: want an error", format)
 		}
+		// The rotation section's refusal stops the append by itself, not as a failed rotation
+		// left to the re-read before the append: a FORMAT changed back in between would not
+		// bring the line back.
+		if len(notices) != 0 {
+			t.Errorf("FORMAT %q: notices %q, want none", format, notices)
+		}
 		if fi, _ := os.Stat(filepath.Join(dir, "log", "runs.jsonl")); fi.Size() != store.RotateRunLogAt {
 			t.Errorf("FORMAT %q: the run log grew to %d bytes", format, fi.Size())
 		}

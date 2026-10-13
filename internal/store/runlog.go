@@ -124,8 +124,8 @@ func encodeJSON(v any) ([]byte, error) {
 // AppendRun appends r to log/runs.jsonl with one O_APPEND write of at most 4 KiB, outside the
 // section. It recreates log/ when a reset removed it. It never rotates, so a pass-through run
 // (a record with Nested set, PROTOCOL.md sections 18 and 20) can call it without entering the
-// section. Rotation is separate: a caller that is inside the section anyway, and finds
-// RunLogNeedsRotation, rotates first with Section.RotateLogIfNeeded.
+// section. Rotation is separate: a caller that finds RunLogNeedsRotation rotates first with
+// RotateLog.
 func (s *Store) AppendRun(r RunRecord) error {
 	line, err := r.line()
 	if err != nil {
@@ -178,9 +178,19 @@ func (s *Store) RunLogNeedsRotation() bool {
 	return err == nil && fi.Size() >= RotateRunLogAt
 }
 
-// RotateLogIfNeeded rotates the run log inside the section: when log/runs.jsonl is still at or
+// RotateLog rotates the run log (PROTOCOL.md section 20) for a caller that is not inside the
+// section: it enters the section (giving up after 2 s), reads FORMAT, refuses when the format is
+// not understood, reconciles if due (section 10.4), and renames log/runs.jsonl to runs.1.jsonl
+// when it is still at or above 10 MiB. A section it cannot enter is a *NotEnteredError, and a
+// FORMAT that is not understood, malformed or unreadable a *FormatError; it rotates nothing
+// then. It must not be called while this process holds the section: entering again would fail.
+func (s *Store) RotateLog() error {
+	return s.inSideSection(func(sec *Section) error { return sec.rotateLogIfNeeded() })
+}
+
+// rotateLogIfNeeded rotates the run log inside the section: when log/runs.jsonl is still at or
 // above 10 MiB it renames it to runs.1.jsonl, replacing the previous generation.
-func (sec *Section) RotateLogIfNeeded() error {
+func (sec *Section) rotateLogIfNeeded() error {
 	if err := sec.live(); err != nil {
 		return err
 	}

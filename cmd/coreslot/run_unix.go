@@ -20,7 +20,6 @@ import (
 const (
 	waitLineEvery = 30 * time.Second // the waiting line
 	noWaitFor     = time.Second      // --no-wait: how long the section is tried
-	logRotateWait = 2 * time.Second  // entering the section to rotate the run log
 )
 
 // run is one `coreslot run`.

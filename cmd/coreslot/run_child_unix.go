@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -206,46 +205,26 @@ func formatStillUnderstood(dir string) (missing bool, err error) {
 // writes a FORMAT the command removed; FORMAT is still missing at the re-read when it was removed
 // after that, when the release could not enter the section within 2 s, or when the run published
 // no hold to release. Any other rotation failure costs the rotation, not the line: notice reports it
-// and the line is appended. A busy section only skips the rotation. A pass-through never rotates
-// (appendNestedLog).
+// and the line is appended. A section the rotation cannot enter (held for 2 s, or admit.lock
+// unusable) only skips the rotation. A pass-through never rotates (appendNestedLog).
 func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format string, args ...any)) error {
 	if st.RunLogNeedsRotation() {
-		rotateErr, skip := rotateRunLog(st)
-		if skip != nil {
-			return skip
-		}
-		if rotateErr != nil {
-			notice("the run log was not rotated: %s", text(rotateErr.Error()))
+		err := st.RotateLog()
+		var notEntered *store.NotEnteredError
+		var format *store.FormatError
+		switch {
+		case errors.As(err, &notEntered):
+			// Append without rotating.
+		case errors.As(err, &format) && format.Err != nil:
+			return format.Err // FORMAT is malformed or cannot be read
+		case errors.As(err, &format):
+			return errFormatChanged
+		case err != nil:
+			notice("the run log was not rotated: %s", text(err.Error()))
 		}
 	}
 	if _, err := formatStillUnderstood(st.Dir()); err != nil {
 		return err
 	}
 	return st.AppendRun(rec)
-}
-
-// rotateRunLog rotates the run log inside the section, if it can enter within 2 s. skip is the
-// error that stops the append (a FORMAT not understood, or a malformed one); rotateErr is any
-// other failure, which costs the rotation alone. A busy section returns neither.
-func rotateRunLog(st *store.Store) (rotateErr, skip error) {
-	ctx, cancel := context.WithTimeout(context.Background(), logRotateWait)
-	defer cancel()
-	sec, err := st.Enter(ctx)
-	if err != nil {
-		return nil, nil // busy: append without rotating
-	}
-	defer sec.Leave()
-	// A section entered to rotate reconciles first when it is due, like every entry other than
-	// admission (PROTOCOL.md section 10.4).
-	_, understood, err := sec.Prepare(store.NowNS())
-	if !understood {
-		if err != nil {
-			return nil, err // malformed FORMAT
-		}
-		return nil, errFormatChanged
-	}
-	if err == nil {
-		err = sec.RotateLogIfNeeded()
-	}
-	return err, nil
 }
