@@ -311,6 +311,21 @@ func TestStatusObserveReportsStalled(t *testing.T) {
 	}
 }
 
+// status shows each waiting ticket's request on the ticket's line as the waiting line writes it,
+// every resource MIN..MAX in name order, between its priority and how long it has waited.
+// Mutation: changing needText's separator (`..` to `-`) reddens it.
+func TestStatusTicketLineShowsTheNeed(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 16\npg-local = 2\n")
+	c := openLib(t, dir)
+	hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(16, 16)})
+	queue(t, c, "wide", map[string]coreslot.Range{"cpu": rng(4, 12), "pg-local": rng(1, 1)})
+	r := cli(t, baseEnv(dir), "status")
+	want := fmt.Sprintf("\n  1. wide  pid %d  priority 0  need cpu 4..12, pg-local 1..1  waiting ", os.Getpid())
+	if r.code != 0 || !strings.Contains(r.stdout, want) {
+		t.Errorf("status: exit %d, want a ticket line with %q:\n%s", r.code, want, r.stdout)
+	}
+}
+
 func TestStatusEscapesLabels(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 4\n")
 	c := openLib(t, dir)
@@ -1132,6 +1147,35 @@ func TestCommandErrorsAreEscaped(t *testing.T) {
 	// A flag the run does not know is named escaped in the usage error.
 	if r := cli(t, env, "run", "--no\x1b[31m", "--", "true"); r.code != exitUsage || strings.ContainsAny(r.stderr, "\x1b\r") {
 		t.Errorf("run with an unknown flag: exit %d, want %d without a raw control character:\n%q", r.code, exitUsage, r.stderr)
+	}
+}
+
+// The refusal of an inherited grant that does not validate quotes the reason, which carries the
+// inherited CORESLOT_STATE_DIR, escaped: here the run inherits a regular file at fd 3 that
+// CORESLOT_TOKEN_FDS names as a token of a state directory whose name holds a newline and an
+// escape. The refusal is one line with no raw control character. Mutation: printing err.Error()
+// raw in decide reddens it.
+func TestInheritedGrantRefusalIsEscaped(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "x\ny\x1b[31m")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	notToken, err := os.Create(filepath.Join(t.TempDir(), "not-a-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notToken.Close()
+	cmd := cliCmd(t, append(baseEnv(dir), "CORESLOT_TOKEN_FDS=3"), "run", "--", "true")
+	cmd.ExtraFiles = []*os.File{notToken}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	_ = cmd.Run()
+	if code := exitStatus(cmd.ProcessState); code != 75 ||
+		!strings.Contains(stderr.String(), `x\ny\x1b[31m`) || !strings.Contains(stderr.String(), "does not validate") {
+		t.Errorf("exit %d, want 75 refusing with the directory escaped:\n%q", code, stderr.String())
+	}
+	if raw := rawTerminalControls([]byte(stderr.String())); len(raw) != 0 || strings.Count(stderr.String(), "\n") != 1 {
+		t.Errorf("the refusal printed a raw control character %q or several lines:\n%q", raw, stderr.String())
 	}
 }
 

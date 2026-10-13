@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -686,6 +687,61 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 			t.Error("the command ran under --strict")
 		}
 	})
+}
+
+// Without --priority a run's ticket carries the configuration's [priorities] entry of the longest
+// prefix of its label, or 0 when none matches; --priority overrides it. Mutation: run.priority
+// returning 0 instead of the entry reddens the two labels with a matching prefix.
+func TestRunTakesItsPriorityFromTheConfiguration(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 1\n\n[priorities]\n\"ci:\" = 5\n\"ci:release\" = 9\n")
+	holdToken(t, dir, "cpu", 0)
+	want := map[string]float64{"ci:release-7": 9, "ci:test": 5, "dev": 0, "ci:forced": -3}
+	var runs []*exec.Cmd
+	defer func() {
+		for _, cmd := range runs {
+			_ = unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
+			_ = cmd.Wait()
+		}
+	}()
+	for label := range want {
+		args := []string{"run", "--label", label}
+		if label == "ci:forced" {
+			args = append(args, "--priority", "-3")
+		}
+		cmd := cliCmd(t, baseEnv(dir), append(args, "--", "true")...)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, cmd)
+	}
+	waitFor(t, 30*time.Second, "the four tickets", func() bool { return len(entries(t, dir, "queue")) == len(want) })
+	got := map[string]float64{}
+	for _, tk := range statusDoc(t, dir, 0)["tickets"].([]any) {
+		m := tk.(map[string]any)
+		got[m["label"].(string)] = m["priority"].(float64)
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("ticket priorities %v, want %v", got, want)
+	}
+}
+
+// A configuration that cannot be read when the run looks up its priority is a state error at
+// that point, under --priority too: the run fails open before it queues, so no ticket is ever
+// published (queue/ is never created), and the command runs unbudgeted. Mutation: ignoring
+// run.priority's error lets the run publish a ticket and fail open only when its admission
+// reads the configuration, which creates queue/.
+func TestRunFailsOpenBeforeQueueingOnAnUnreadableConfiguration(t *testing.T) {
+	for _, args := range [][]string{{"run"}, {"run", "--priority", "3"}} {
+		dir := stateDir(t, "[resources]\ncpu = \"bogus\"\n")
+		r := cli(t, baseEnv(dir), append(args, "--label", "ci:x", "--", "sh", "-c", `echo "$CORESLOT_UNBUDGETED"`)...)
+		if r.code != 0 || !strings.HasPrefix(r.stdout, "configuration") ||
+			!strings.Contains(r.stderr, "state error: configuration") || !strings.Contains(r.stderr, "(fail-open)") {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want a fail-open on the configuration", args, r.code, r.stdout, r.stderr)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "queue")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%v: queue/ exists (%v): the run published a ticket before failing open", args, err)
+		}
+	}
 }
 
 func TestRunAppendsOneLogLine(t *testing.T) {
