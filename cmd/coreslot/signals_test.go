@@ -79,10 +79,10 @@ func signalHelper(name string, args []string) (code int, ok bool) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	case "section-stop":
-		// With the section hooks main installs, enter the admission section of the state
+		// With the lock hooks main installs, enter the admission section of the state
 		// directory args[0], send SIGTSTP to itself there and write args[1] just before leaving;
 		// after leaving, write args[2].
-		installSectionHooks()
+		installLockHooks()
 		st, err := store.Open(args[0])
 		if err != nil {
 			return 1, true
@@ -540,11 +540,11 @@ func sectionLocked(t *testing.T, dir string) bool {
 	return false
 }
 
-// The section hooks main installs defer a stop while the process holds the admission section,
+// The lock hooks main installs defer a stop while the process holds the admission section,
 // and stop it once it has left: a process stopped inside the section blocks every admission on
 // the machine (PROTOCOL.md section 8). The helper installs them, enters a real section, sends
 // itself SIGTSTP there, and writes one file just before it leaves and another after.
-// Mutations: Enter no longer calls the section hook (the helper stops inside the section and
+// Mutations: Enter no longer calls the lock hook (the helper stops inside the section and
 // never writes the first file); Leave no longer calls it (the helper never stops).
 func TestSectionHooksDeferStop(t *testing.T) {
 	dir := stateDir(t, "")

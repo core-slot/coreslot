@@ -512,12 +512,20 @@ run-log append happen outside it.
   by its deadline gives up without having changed anything.
 - **The section never waits** for anything but the filesystem: no sleeping for capacity, no lock
   other than non-blocking ones, bounded work.
-- A client SHOULD prevent its own job-control stop while inside the section (the CLI ignores
-  `SIGTSTP`, `SIGTTIN` and `SIGTTOU` there; a library never installs signal handlers). `SIGSTOP`
-  cannot be ignored: a process stopped inside the section blocks every admission on the machine
-  until it continues or dies. This is the one exception to I5. The CLI's stop is deferred, not
-  lost: in non-terminal mode it forwards `SIGTSTP` to its command's process group and then stops
-  itself, once outside the section, and forwards `SIGCONT` to that group when it is continued.
+- A client SHOULD prevent its own job-control stop while it holds any lock it took only
+  momentarily: while inside the section, and while it holds the probe lock of a token, ticket or
+  hold (section 6), inside the section or outside it. A process stopped holding a probe lock makes
+  every other client count that token as locked, or that ticket or hold as live, until it
+  continues, so a head whose minimum needs that token is not admitted although nobody is stopped
+  inside the section. The locks a client owns (its ticket while it waits, its hold and tokens
+  while its grant lives) are not momentary: a stopped holder keeps only its own grant. The CLI
+  ignores `SIGTSTP`, `SIGTTIN` and `SIGTTOU` from each try to take such a lock until it has
+  closed the descriptor that took it, but not while it sleeps between tries to enter the section;
+  a library never installs signal handlers. `SIGSTOP` cannot be ignored: a process stopped inside
+  the section blocks every admission on the machine until it continues or dies. This is the one
+  exception to I5. The CLI's stop is deferred, not lost: in non-terminal mode it forwards
+  `SIGTSTP` to its command's process group and then stops itself, once it holds no momentary
+  lock, and forwards `SIGCONT` to that group when it is continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
   says; when `FORMAT` is missing it writes `coreslot-protocol 1` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either

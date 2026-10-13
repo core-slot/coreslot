@@ -25,37 +25,49 @@ const (
 // errLeft is returned by every Section method called after Leave.
 var errLeft = errors.New("store: the admission section was left")
 
-// sectionHooks is the pair SetSectionHooks installed; nil until a program installs one.
-var sectionHooks atomic.Pointer[hookPair]
+// lockHooks is the pair SetLockHooks installed; nil until a program installs one.
+var lockHooks atomic.Pointer[hookPair]
 
 type hookPair struct{ enter, leave func() }
 
-// SetSectionHooks installs enter and leave, which bracket every moment at which this process may
-// hold flock on admit.lock: enter runs just before each try to take it (each try of Enter, the
-// try of TryEnter, the probe of SectionHeld), and leave runs exactly once for each enter, right
-// after a try that did not take the lock, or right after the descriptor that took it is closed
-// (Leave, or the probe's close). So the time between them never includes Enter's sleeps between
-// tries, only the tries themselves and the time spent inside the section, and every moment the
-// lock is held, from the try that takes it on, lies between an enter and its leave.
+// SetLockHooks installs enter and leave, which bracket every moment at which this process may
+// hold a lock it takes only momentarily: admit.lock, from each try to take it to the close that
+// leaves the section (each try of Enter, the try of TryEnter, the probe of SectionHeld), and the
+// probe lock of every token, ticket and hold (ProbeLocked, Probe, CountLocked, CountLockedProbe,
+// and the probe-before-unlink of reconciliation and of RemoveOwnTicket and ProbeAndRemoveHold).
+// enter runs just before each try, and leave runs exactly once for each enter, right after a
+// try that did not take the lock, or right after the descriptor that took it is closed. So the
+// time between them never includes Enter's sleeps between tries, only the tries themselves and
+// the time the lock is held, and every moment such a lock is held lies between an enter and its
+// leave.
 //
-// It is how the CLI defers its job-control stops while it holds the section (PROTOCOL.md section
-// 8) without deferring them while it only waits to enter. The pairs nest and may overlap: one
-// goroutine may probe while another holds the section, so the hooks must count rather than
-// toggle, and must be safe for concurrent use. They must not enter the section themselves. A
-// program installs them once, before it first enters; the library never does, and without them
-// nothing runs.
-func SetSectionHooks(enter, leave func()) {
-	sectionHooks.Store(&hookPair{enter: enter, leave: leave})
+// The locks a process owns for a lifetime are not bracketed: its ticket while it waits, and its
+// hold and tokens while its grant lives. It takes them inside the section, so their tries are
+// bracketed by the section's own pair, but they outlive it, and a process stopped while it owns
+// them only keeps what it was granted, which is intended.
+//
+// It is how the CLI defers its job-control stops while it holds such a lock (PROTOCOL.md section
+// 8) without deferring them while it only waits to enter the section. A process stopped inside
+// the section blocks every admission; one stopped holding a probe lock makes every other client
+// count that token as locked, or that ticket or hold as live, for as long as it stays stopped,
+// so a head whose minimum needs the token is never admitted although nobody is stopped inside
+// the section. The pairs nest and may overlap: a probe runs inside the section, and one goroutine
+// may probe while another holds the section, so the hooks must count rather than toggle, and
+// must be safe for concurrent use. They must be cheap, since a snapshot probes every token, and
+// must not take a lock of the state directory themselves. A program installs them once, before
+// it first takes such a lock; the library never does, and without them nothing runs.
+func SetLockHooks(enter, leave func()) {
+	lockHooks.Store(&hookPair{enter: enter, leave: leave})
 }
 
 func hookEnter() {
-	if h := sectionHooks.Load(); h != nil {
+	if h := lockHooks.Load(); h != nil {
 		h.enter()
 	}
 }
 
 func hookLeave() {
-	if h := sectionHooks.Load(); h != nil {
+	if h := lockHooks.Load(); h != nil {
 		h.leave()
 	}
 }
@@ -135,8 +147,8 @@ func (s *Store) TryEnter() (*Section, bool, error) {
 // SectionHeld probes admit.lock without entering and without creating it: one single-attempt
 // flock, released at once by closing. A missing admit.lock means nothing has ever entered, so
 // the section is free. It is for readers (status) that must not write into the state directory.
-// A probe that finds the section free holds it for that moment, so the section hooks bracket it
-// as they bracket an entry.
+// A probe that finds the section free holds it for that moment, so the lock hooks bracket it as
+// they bracket an entry.
 func (s *Store) SectionHeld() (bool, error) {
 	f, err := OpenFile(s.path(AdmitLock), os.O_RDONLY)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -152,8 +164,8 @@ func (s *Store) SectionHeld() (bool, error) {
 	return !ok, err
 }
 
-// Leave leaves the section by closing the admit.lock descriptor, then runs the section hooks'
-// leave. It is idempotent. Every Section must be left: until it is, the hooks count it as held.
+// Leave leaves the section by closing the admit.lock descriptor, then runs the lock hooks' leave.
+// It is idempotent. Every Section must be left: until it is, the hooks count it as held.
 func (sec *Section) Leave() {
 	if sec.f != nil {
 		sec.f.Close()
@@ -225,8 +237,8 @@ func (sec *Section) markHolder() error {
 	return err
 }
 
-// flockNB is tryFlock; the tests wrap it to check that the section hooks bracket every time
-// admit.lock is taken.
+// flockNB is tryFlock; the tests wrap it to check that the lock hooks bracket every lock this
+// package takes only momentarily.
 var flockNB = tryFlock
 
 // tryFlock tries flock(LOCK_EX|LOCK_NB) on f: true when this description now holds the lock,
