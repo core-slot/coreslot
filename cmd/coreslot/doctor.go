@@ -52,21 +52,30 @@ func doctorCommand(args []string, io IO) int {
 		return exitUsage
 	}
 
+	var loc location
+	loc.dir, loc.cfgPath, loc.err = config.Locate()
 	if *doClear || *doReset {
-		if code := doctorAct(*doReset, io); code != 0 {
+		if code := doctorAct(*doReset, loc, io); code != 0 {
 			return code
 		}
 	}
-	return doctorReport(io)
+	return doctorReport(loc, io)
+}
+
+// location is what config.Locate returned. doctor locates once: each lookup of the home directory
+// may start getent.
+type location struct {
+	dir, cfgPath string
+	err          error
 }
 
 // doctorAct performs --reset (which removes the degraded record too) or --clear.
-func doctorAct(doReset bool, io IO) int {
+func doctorAct(doReset bool, loc location, io IO) int {
 	what := "doctor --clear"
 	if doReset {
 		what = "doctor --reset"
 	}
-	e, _, err := openEngineReadOnly()
+	e, err := openReadOnlyAt(loc.dir, loc.cfgPath, loc.err)
 	if err != nil {
 		return doctorFailed(what, err, io)
 	}
@@ -150,8 +159,8 @@ func formatRefusal(st *store.Store) (why string, err error) {
 	return "", nil
 }
 
-// doctorReport prints the findings and returns doctor's exit status.
-func doctorReport(io IO) int {
+// doctorReport prints the findings at loc and returns doctor's exit status.
+func doctorReport(loc location, io IO) int {
 	problems := 0
 	line := func(format string, args ...any) { fmt.Fprintf(io.Stdout, format+"\n", args...) }
 	problem := func(format string, args ...any) {
@@ -159,13 +168,13 @@ func doctorReport(io IO) int {
 		line("PROBLEM: "+format, args...)
 	}
 
-	dir, override, err := config.StateDir()
-	if err != nil {
-		problem("state directory: %s", text(err.Error()))
+	dir, cfgPath := loc.dir, loc.cfgPath
+	if loc.err != nil {
+		problem("state directory: %s", text(loc.err.Error()))
 		return exitProblems
 	}
 	source := "default location"
-	if override {
+	if os.Getenv(config.StateDirEnv) != "" { // what makes Locate use it
 		source = config.StateDirEnv
 	}
 	line("state directory: %s (%s)", text(dir), source)
@@ -181,7 +190,7 @@ func doctorReport(io IO) int {
 	}
 
 	var rep engine.Report
-	e, _, err := openEngineReadOnly()
+	e, err := openReadOnlyAt(dir, cfgPath, nil)
 	if err == nil {
 		rep, err = e.Snapshot()
 	}
@@ -208,10 +217,7 @@ func doctorReport(io IO) int {
 		line("format: %d", rep.Format)
 	}
 
-	cfgPath, cerr := config.Path()
 	switch {
-	case cerr != nil:
-		problem("configuration: %s", text(cerr.Error()))
 	case err != nil:
 		line("configuration: %s (not checked)", text(cfgPath))
 	case strings.HasPrefix(rep.ConfigError, "configuration "):
