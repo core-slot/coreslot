@@ -373,6 +373,7 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	} else {
 		t.Logf("B was admitted %v after the head stopped", d)
 	}
+	e.SectionLeft() // B's hold is visible inside its admitting section, before that section bumps gen
 	if got := e.Status().Gen; got != gen+1 {
 		t.Errorf("gen went from %d to %d: something besides B's admission changed the queue", gen, got)
 	}
