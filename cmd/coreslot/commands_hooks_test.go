@@ -234,13 +234,36 @@ func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 		})
 	}
 
+	// The run refuses only once its probe is known to run: the probe's own bound is lifted, so
+	// nothing but the run's stop can end it before its 30 s sleep, and the refusal is a cancel
+	// sent after the probe wrote its pid and the run's ticket is queued. A refusal on a
+	// deadline instead would race the probe's start (a probe that has not written its pid by
+	// then fails the test) or, past the probe's 1 s bound, be preceded by that bound's kill,
+	// which would hide a missing stop.
 	t.Run("refused", func(t *testing.T) {
 		holdToken(t, dir, "cpu", 0)
-		env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+sleeper("refused"))
-		cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run --timeout 500ms -- true`, cliBinary(t))
-		out, _ := cmd.CombinedOutput()
-		if code := exitStatus(cmd.ProcessState); code != 75 {
-			t.Fatalf("exit %d, want 75 (--timeout):\n%s", code, out)
+		pidFile := filepath.Join(pids, "refused")
+		env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+sleeper("refused"), "CORESLOT_TESTHOOK_PROBE_TIMEOUT=10m")
+		cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run --label refused -- true`, cliBinary(t))
+		var out bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &out
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, 30*time.Second, "the probe's pid and the run's ticket", func() bool {
+			b, err := os.ReadFile(pidFile)
+			if err != nil {
+				return false
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+			return err == nil && unix.Kill(pid, 0) == nil && len(entries(t, dir, "queue")) == 1
+		})
+		if r := cli(t, baseEnv(dir), "cancel", "--label", "refused"); r.code != 0 {
+			t.Fatalf("cancel: exit %d (stderr %q)", r.code, r.stderr)
+		}
+		_ = cmd.Wait()
+		if code := exitStatus(cmd.ProcessState); code != 75 || !strings.Contains(out.String(), "the request was cancelled") {
+			t.Fatalf("exit %d, want 75 (the request was cancelled):\n%s", code, out.String())
 		}
 		gone(t, "refused")
 	})
