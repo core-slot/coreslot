@@ -12,7 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Config is a parsed configuration file.

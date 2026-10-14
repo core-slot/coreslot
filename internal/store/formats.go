@@ -3,7 +3,7 @@ package store
 import (
 	"slices"
 
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/testhooks"
 )
 
 // This file has no build constraint: `coreslot version`, which every platform builds, prints the

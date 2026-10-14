@@ -26,10 +26,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // Bounds of the harness itself, generous for a heavily loaded host. The traces' own bounds are

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 func k(order uint64, pid, seq int) Key { return Key{OrderKey: order, PID: pid, Seq: seq} }

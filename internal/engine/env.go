@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // The environment of a run's command (PROTOCOL.md section 17). They live in a file without a

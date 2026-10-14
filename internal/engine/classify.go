@@ -6,8 +6,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // StateReason classifies an error of the engine or the store under the error contract of

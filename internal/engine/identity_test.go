@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // onPoint runs fn once when the engine passes the pause point name, for the rest of the test.

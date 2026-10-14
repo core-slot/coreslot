@@ -43,4 +43,10 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
 - Release archives with checksums, build-provenance attestations for releases of the public
   repository, and a Homebrew formula template that builds from source.
 
-[Unreleased]: https://github.com/Nezhinskiy/coreslot/commits/HEAD
+### Changed
+
+- The module path moved to `github.com/core-slot/coreslot`, as did the repository: install with
+  `go install github.com/core-slot/coreslot/cmd/coreslot@latest` and import
+  `github.com/core-slot/coreslot`.
+
+[Unreleased]: https://github.com/core-slot/coreslot/commits/HEAD

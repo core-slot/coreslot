@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // Reconciliation period and temporary-file age (PROTOCOL.md section 10.4).

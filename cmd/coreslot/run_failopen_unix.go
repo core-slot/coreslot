@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // failOpen handles a state error (PROTOCOL.md section 14): under --strict a refusal, otherwise

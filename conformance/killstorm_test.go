@@ -24,8 +24,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // The kill-storm: randomized CLI, library and independent Python clients,

@@ -16,9 +16,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/state"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/state"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // suspendFor is how long the suspend traces keep every waiter stopped: longer than the 10 s

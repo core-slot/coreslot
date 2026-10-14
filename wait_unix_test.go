@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/engine"
 )
 
 // dueStepper is a ticket that is never admitted and whose next work is always due in a second.

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/testhooks"
 )
 
 // StateDirEnv is the only override of the state directory (PROTOCOL.md section 4.1).

@@ -8,8 +8,8 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // LiveState is what a reset found alive and therefore refused to remove.

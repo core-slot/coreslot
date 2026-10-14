@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/Nezhinskiy/coreslot/internal/spec"
+import "github.com/core-slot/coreslot/internal/spec"
 
 // The inspection types live in a file without a build constraint so that the root package can
 // alias them on every platform.

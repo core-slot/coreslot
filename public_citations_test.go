@@ -376,7 +376,7 @@ func TestLocalPathMatcher(t *testing.T) {
 		"/hom|e/ana/.local/state/coreslot",
 		"HOME=/hom|e/tester GOPATH=/hom|e/tester/go",
 		"/tmp/b/waiters -coreslot /tmp/b/coreslot",
-		"github.com/Nezhinskiy/coreslot/internal/engine/wait.go",
+		"github.com/core-slot/coreslot/internal/engine/wait.go",
 		"golang.org/x/sys@v0.49.0/unix/syscall_bsd.go",
 		"runtime/proc.go",
 		"macOS keeps home directories under /Use|rs/.",

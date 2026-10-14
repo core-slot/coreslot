@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // maxNameAttempts bounds the seq retries of a publication whose final name exists.

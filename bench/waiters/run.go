@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 type kind int

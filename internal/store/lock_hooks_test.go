@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // hookRecorder checks the contract of SetLockHooks while a test runs: every lock this process

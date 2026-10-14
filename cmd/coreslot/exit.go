@@ -7,9 +7,9 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Exit statuses of the CLI (PROTOCOL.md section 19).

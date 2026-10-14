@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Nezhinskiy/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/config"
 )
 
 // version is the CLI's version; release builds set it with -ldflags "-X main.version=...".

@@ -20,9 +20,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // The sampler checks the invariants I1, I2, I3 and I7 of a state

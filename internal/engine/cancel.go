@@ -8,8 +8,8 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // CancelContext publishes a cancel request for the ticket id inside the section (PROTOCOL.md

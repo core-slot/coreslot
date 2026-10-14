@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/testhooks"
 )
 
 // extraNofile is how far a run raises the soft RLIMIT_NOFILE it passes to its command: a grant

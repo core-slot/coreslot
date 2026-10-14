@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // outer runs script under `coreslot run need -- sh -c script`, with $BIN the coreslot binary,
