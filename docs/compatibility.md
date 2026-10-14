@@ -82,7 +82,7 @@ JSON-encoded.
 
 ## Go library
 
-The exported API of the root package, `github.com/Nezhinskiy/coreslot`, is the contract, and
+The exported API of the root package, `github.com/core-slot/coreslot`, is the contract, and
 [`api/v0.txt`](../api/v0.txt) is its golden file: one line per exported identifier, method
 signature and struct field. A test fails when the API and the file differ, or when the Linux,
 macOS and Windows builds export different APIs, so every API change is a reviewed change to that

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 const genMax = 1<<63 - 1

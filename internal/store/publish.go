@@ -17,9 +17,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // seq is the last seq of this process's publication counter (PROTOCOL.md section 7.1), shared

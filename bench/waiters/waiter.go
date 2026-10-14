@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot"
+	"github.com/core-slot/coreslot"
 )
 
 // Waiter exit codes, read by the harness.

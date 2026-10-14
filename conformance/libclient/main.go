@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot"
+	"github.com/core-slot/coreslot"
 )
 
 const deadline = 5 * time.Minute

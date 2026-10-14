@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // replaceDir removes the state directory under a holder and, when recreate, makes an empty one in

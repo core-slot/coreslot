@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // MaxBodyBytes is the largest body: 8 KiB (PROTOCOL.md section 7.2).

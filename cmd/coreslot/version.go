@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 const versionUsage = `usage: coreslot version
@@ -34,7 +34,7 @@ func versionCommand(args []string, io IO) int {
 }
 
 // cliVersion is the version -ldflags set, or else the main module's version from the binary's
-// build information, so `go install github.com/Nezhinskiy/coreslot/cmd/coreslot@v0.1.0` prints
+// build information, so `go install github.com/core-slot/coreslot/cmd/coreslot@v0.1.0` prints
 // 0.1.0 rather than 0.0.0-dev.
 func cliVersion() string {
 	info, ok := debug.ReadBuildInfo()

@@ -5,8 +5,8 @@ package engine
 import (
 	"context"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/state"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/state"
 )
 
 // AdoptContext admits already-running work without queueing (PROTOCOL.md section 12.4): inside

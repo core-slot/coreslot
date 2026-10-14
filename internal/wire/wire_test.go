@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 func TestNameRoundTrip(t *testing.T) {

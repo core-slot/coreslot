@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // EnqueueContext gives up when ctx ends while another process holds the section: it returns

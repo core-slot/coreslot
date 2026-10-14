@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 func tokenPath(dir, res string, i int) string {

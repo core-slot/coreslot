@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // waitWork counts a waiter's filesystem work through the seams of wait.go.

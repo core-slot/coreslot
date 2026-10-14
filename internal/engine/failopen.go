@@ -8,8 +8,8 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // FailOpen publishes the hold of a run its caller has decided to run unbudgeted (PROTOCOL.md
