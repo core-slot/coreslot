@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -96,12 +96,12 @@ type stallWatcher struct {
 	now time.Duration // the observer's time at the last sighting
 }
 
-func ticketKey(t coreslot.TicketInfo) (state.Key, bool) {
+func ticketKey(t engine.TicketInfo) (state.Key, bool) {
 	id, ok := wire.ParseID(t.ID)
 	return state.Key(id), ok
 }
 
-func (w *stallWatcher) see(rep coreslot.Report, now time.Duration) {
+func (w *stallWatcher) see(rep engine.Report, now time.Duration) {
 	w.now = now
 	for _, t := range rep.Tickets {
 		if k, ok := ticketKey(t); ok {
@@ -110,7 +110,7 @@ func (w *stallWatcher) see(rep coreslot.Report, now time.Duration) {
 	}
 }
 
-func (w *stallWatcher) stalled(t coreslot.TicketInfo) bool {
+func (w *stallWatcher) stalled(t engine.TicketInfo) bool {
 	k, ok := ticketKey(t)
 	return ok && w.obs.Stalled(k, w.now)
 }
@@ -120,7 +120,7 @@ func (w *stallWatcher) stalled(t coreslot.TicketInfo) bool {
 // state.StallAfter of that observation is STALLED for this observer; a single reading cannot
 // tell, since a first sighting never is. It returns the last snapshot. The observation runs on
 // the wait loop's clock; nothing ends its sleeps early.
-func observeQueue(snap func() (coreslot.Report, error), window time.Duration, clk waitClock) (coreslot.Report, *stallWatcher, error) {
+func observeQueue(snap func() (engine.Report, error), window time.Duration, clk waitClock) (engine.Report, *stallWatcher, error) {
 	w := &stallWatcher{}
 	rep, err := snap()
 	if err != nil {
@@ -141,7 +141,7 @@ func observeQueue(snap func() (coreslot.Report, error), window time.Duration, cl
 // ---------------------------------------------------------------- the view
 
 type ticketView struct {
-	info     coreslot.TicketInfo
+	info     engine.TicketInfo
 	state    string // waiting, stalled or dead
 	position int    // 1 is the head; 0 for a dead ticket
 	waited   time.Duration
@@ -150,14 +150,14 @@ type ticketView struct {
 // statusView is a snapshot with what status derives from it: ticket positions and states,
 // ages, and the locked tokens no hold lists.
 type statusView struct {
-	rep      coreslot.Report
+	rep      engine.Report
 	nowNS    int64
 	observed time.Duration
 	tickets  []ticketView
 	unlisted map[string]int // resource -> locked tokens that no live hold lists
 }
 
-func buildStatus(rep coreslot.Report, nowNS int64, w *stallWatcher, observed time.Duration) statusView {
+func buildStatus(rep engine.Report, nowNS int64, w *stallWatcher, observed time.Duration) statusView {
 	v := statusView{rep: rep, nowNS: nowNS, observed: observed, unlisted: map[string]int{}}
 	ahead := 0 // live, non-stalled tickets in front, the way a waiter counts its position
 	for _, t := range rep.Tickets {
@@ -194,7 +194,7 @@ func holderAlive(pid int) bool {
 	return err == nil || errors.Is(err, unix.EPERM)
 }
 
-func sectionHeldFor(s coreslot.SectionInfo, nowNS int64) time.Duration {
+func sectionHeldFor(s engine.SectionInfo, nowNS int64) time.Duration {
 	if !s.Held || s.EnteredNS == 0 {
 		return 0
 	}
@@ -203,7 +203,7 @@ func sectionHeldFor(s coreslot.SectionInfo, nowNS int64) time.Duration {
 
 // sectionHolder describes the admission section from admit.lock's informational body, which
 // may be stale: `free`, or `held by pid 4711 for 3s (as recorded in admit.lock)`.
-func sectionHolder(s coreslot.SectionInfo, nowNS int64) string {
+func sectionHolder(s engine.SectionInfo, nowNS int64) string {
 	switch {
 	case !s.Held:
 		return "free"

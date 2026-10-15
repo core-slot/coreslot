@@ -14,7 +14,7 @@ import (
 
 // CancelContext publishes a cancel request for the ticket id inside the section (PROTOCOL.md
 // section 13.1); the ticket's owner finds it on its next poll or at admission step 1 and stops.
-// Cancelling never signals and never revokes a grant: when no ticket with that id is in the
+// Canceling never signals and never revokes a grant: when no ticket with that id is in the
 // queue (admitted, withdrawn, removed) nothing is published and it returns ErrNoTicket. A
 // request already published means the cancellation is already requested: not an error. In a
 // state directory whose format this client does not implement nothing is written and it
@@ -78,14 +78,14 @@ func (t *Ticket) cancelRequested() (bool, error) {
 
 // onCancelled handles a cancel request found on a poll: the ticket descriptor is closed (the
 // ticket is dead at once), the ticket and the request are removed if a section can be entered
-// at once, and the result is ErrCancelled.
+// at once, and the result is ErrCanceled.
 func (t *Ticket) onCancelled() error {
 	if !t.settle(statusCancelled) {
 		_, err := t.settledOr(nil)
 		return err
 	}
 	t.removeOwn(nil)
-	return ErrCancelled
+	return ErrCanceled
 }
 
 // settle moves a waiting ticket to a final non-admitted status and closes its descriptor. It
@@ -106,7 +106,7 @@ func (t *Ticket) settle(s status) bool {
 // Withdraw withdraws a waiting ticket (PROTOCOL.md section 13.2): it closes the ticket
 // descriptor, so the ticket is dead at once to every observer, without entering the section.
 // Then, only if the section can be entered at once, it removes the ticket file; otherwise
-// reconciliation does. Every later Step returns ErrCancelled. Withdrawing an admitted ticket
+// reconciliation does. Every later Step returns ErrCanceled. Withdrawing an admitted ticket
 // returns ErrAlreadyAdmitted and changes nothing; withdrawing again is a no-op.
 func (t *Ticket) Withdraw() error {
 	t.mu.Lock()

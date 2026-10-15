@@ -11,7 +11,7 @@
 //	libclient -dir STATEDIR -mark MARKDIR -name NAME -label LABEL -need RES=MIN..MAX... \
 //	    [-priority P] [-timeout D] [-- CMD...]
 //
-// Exit status: 0 after a grant was released, 75 when the wait was cancelled or timed out, 70 on
+// Exit status: 0 after a grant was released, 75 when the wait was canceled or timed out, 70 on
 // any other error, 4 when reparented.
 package main
 
@@ -79,7 +79,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	w, err := c.Enqueue(coreslot.Request{Label: *label, Priority: *priority, Need: need})
+	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: *label, Priority: *priority, Need: need})
 	if err != nil {
 		fail(err)
 	}
@@ -91,7 +91,7 @@ func main() {
 	}
 	g, err := w.Wait(wctx)
 	switch {
-	case errors.Is(err, coreslot.ErrCancelled):
+	case errors.Is(err, coreslot.ErrCanceled):
 		fmt.Fprintln(os.Stderr, "libclient: the request was cancelled")
 		os.Exit(75)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -105,32 +105,18 @@ func main() {
 		run := exec.Command(cmd[0], cmd[1:]...)
 		run.Stdout, run.Stderr = os.Stdout, os.Stderr
 		run.ExtraFiles = g.Files()
-		run.Env = append(withoutGrantContext(os.Environ()), g.Env()...)
+		run.Env = g.Environ(os.Environ())
 		if err := run.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, "libclient: command:", err)
 		}
 	} else {
-		report, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "grant": g.Grant()})
+		report, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "grant": g.Granted()})
 		writeAtomic(filepath.Join(*mark, *name+".started"), report)
 		waitFor(ctx, filepath.Join(*mark, *name+".release"))
 	}
 	if err := g.Close(); err != nil {
 		fail(err)
 	}
-}
-
-// withoutGrantContext drops inherited grant context, as Grant.Env asks of its caller.
-func withoutGrantContext(env []string) []string {
-	var out []string
-	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "CORESLOT_GRANTED_") || k == "CORESLOT_HELD_FD" ||
-			k == "CORESLOT_TOKEN_FDS" || k == "CORESLOT_UNBUDGETED" {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 func waitFor(ctx context.Context, path string) {

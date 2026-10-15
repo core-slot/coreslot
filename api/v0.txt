@@ -1,32 +1,32 @@
 field DegradedInfo.Count int64
-field DegradedInfo.FirstNS int64
+field DegradedInfo.First time.Time
 field DegradedInfo.Malformed bool
 field DegradedInfo.Reason string
 field HolderInfo.Adopted bool
 field HolderInfo.Clamped map[string]int
-field HolderInfo.Grant map[string]int
+field HolderInfo.FailOpen bool
+field HolderInfo.Granted map[string]int
 field HolderInfo.Label string
 field HolderInfo.Name string
 field HolderInfo.PID int
-field HolderInfo.StartNS int64
-field HolderInfo.Unbudgeted bool
-field HolderInfo.UnbudgetedResources []string
+field HolderInfo.Start time.Time
+field HolderInfo.Unbudgeted []string
 field Options.Independent bool
 field Options.StateDir string
 field Range.Max int
 field Range.Min int
 field Report.Cancels []string
-field Report.ConfigError string
+field Report.ConfigError error
 field Report.DeadHolds []string
 field Report.Degraded *DegradedInfo
 field Report.Format int
-field Report.FormatError string
+field Report.FormatError error
 field Report.FormatPresent bool
 field Report.FormatUnderstood bool
 field Report.Gen int64
 field Report.Holds []HolderInfo
 field Report.Ignored map[string]int
-field Report.ReconciledNS int64
+field Report.Reconciled time.Time
 field Report.Resources map[string]ResourceInfo
 field Report.Section SectionInfo
 field Report.StateDir string
@@ -39,57 +39,61 @@ field Request.Priority int
 field ResourceInfo.Free int
 field ResourceInfo.Locked int
 field ResourceInfo.Size int
-field SectionInfo.EnteredNS int64
+field SectionBusyError.Err error
+field SectionBusyError.PID int
+field SectionInfo.Entered time.Time
 field SectionInfo.Held bool
 field SectionInfo.PID int
 field StateError.Reason string
-field TicketInfo.CreatedNS int64
+field TicketInfo.Created time.Time
 field TicketInfo.Dead bool
 field TicketInfo.ID string
 field TicketInfo.Label string
-field TicketInfo.MtimeNS int64
 field TicketInfo.Name string
-field TicketInfo.Need map[string]spec.Range
+field TicketInfo.Need map[string]Range
 field TicketInfo.PID int
 field TicketInfo.Priority int
+field TicketInfo.Refreshed time.Time
 field UsageError.Msg string
 func Open(Options) (*Client, error)
-method (*Client) Adopt(Request) (*Grant, map[string]int, error)
-method (*Client) AdoptContext(context.Context, Request) (*Grant, map[string]int, error)
-method (*Client) Enqueue(Request) (*Waiter, error)
-method (*Client) EnqueueContext(context.Context, Request) (*Waiter, error)
-method (*Client) Free(string) (int, error)
+method (*Client) Adopt(context.Context, Request) (*Grant, map[string]int, error)
+method (*Client) Available(string) (int, error)
+method (*Client) Enqueue(context.Context, Request) (*Waiter, error)
 method (*Client) Snapshot() (Report, error)
 method (*Grant) Clamped() map[string]int
 method (*Grant) Close() error
 method (*Grant) Env() []string
+method (*Grant) Environ([]string) []string
 method (*Grant) Files() []*os.File
-method (*Grant) Grant() map[string]int
+method (*Grant) Granted() map[string]int
 method (*Grant) PassThrough() bool
 method (*Grant) TokenOnly() bool
 method (*Grant) Unbudgeted() []string
+method (*SectionBusyError) Error() string
+method (*SectionBusyError) Unwrap() error
 method (*StateError) Error() string
 method (*StateError) Unwrap() error
 method (*UsageError) Error() string
 method (*Waiter) Cancel() error
-method (*Waiter) Poll() (*Grant, bool, error)
+method (*Waiter) Poll() (*Grant, error)
 method (*Waiter) Wait(context.Context) (*Grant, error)
 method (Request) Validate() error
 type Client struct
-type DegradedInfo = engine.DegradedInfo
+type DegradedInfo struct
 type Grant struct
-type HolderInfo = engine.HolderInfo
+type HolderInfo struct
 type Options struct
-type Range = spec.Range
-type Report = engine.Report
-type Request = spec.Request
-type ResourceInfo = engine.ResourceInfo
-type SectionInfo = engine.SectionInfo
+type Range struct
+type Report struct
+type Request struct
+type ResourceInfo struct
+type SectionBusyError struct
+type SectionInfo struct
 type StateError struct
-type TicketInfo = engine.TicketInfo
-type UsageError = spec.UsageError
+type TicketInfo struct
+type UsageError struct
 type Waiter struct
 var ErrAlreadyAdmitted
-var ErrCancelled
+var ErrCanceled
 var ErrRefused
 var ErrUnsupported

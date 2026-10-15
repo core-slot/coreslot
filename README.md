@@ -210,12 +210,22 @@ The module's root package implements the protocol for other Go programs, such as
 
 ```go
 c, err := coreslot.Open(coreslot.Options{})
-w, err := c.Enqueue(coreslot.Request{Label: "ci:o-r",
-	Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 3}}})
+if err != nil {
+	return err // a *StateError: the caller decides whether to run unbudgeted
+}
+w, err := c.Enqueue(ctx, coreslot.Request{Label: "make test",
+	Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 8}}})
+if err != nil {
+	return err
+}
 g, err := w.Wait(ctx) // or Poll at least every 2 s
-cmd.ExtraFiles, cmd.Env = g.Files(), append(env, g.Env()...)
-// ... run the command ...
-g.Close()
+if err != nil {
+	return err
+}
+defer g.Close()
+cmd := exec.CommandContext(ctx, "make", "test", "-j", strconv.Itoa(g.Granted()["cpu"]))
+cmd.ExtraFiles, cmd.Env = g.Files(), g.Environ(os.Environ())
+return cmd.Run()
 ```
 
 Like a nested `coreslot run`, an `Enqueue` made inside another run's grant passes through: a

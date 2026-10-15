@@ -15,15 +15,23 @@ import (
 
 // StateError is a state error (PROTOCOL.md section 14): an unusable state directory, a refused
 // filesystem, an entry of an unexpected type, owner or mode, a full directory, a malformed
-// FORMAT, or an inode mismatch at a held token. The caller decides whether to fail open.
+// FORMAT, or an inode mismatch at a held token. The caller decides whether to fail open. Err is
+// the error that caused it, when one did.
 type StateError struct {
 	Reason string
+	Err    error
 }
 
 func (e *StateError) Error() string { return "coreslot state error: " + e.Reason }
 
+// Unwrap returns the error that caused the state error, or nil.
+func (e *StateError) Unwrap() error { return e.Err }
+
+// stateErrorf formats a state error as fmt.Errorf does: the reason is the formatted text, and the
+// operand of a %w verb is its cause.
 func stateErrorf(format string, args ...any) *StateError {
-	return &StateError{Reason: fmt.Sprintf(format, args...)}
+	err := fmt.Errorf(format, args...)
+	return &StateError{Reason: err.Error(), Err: errors.Unwrap(err)}
 }
 
 // Modes of everything the store creates (PROTOCOL.md section 4.2).
@@ -42,7 +50,7 @@ func CheckEntry(path string, wantDir bool) error {
 		return nil
 	}
 	if err != nil {
-		return stateErrorf("%s: %v", path, err)
+		return stateErrorf("%s: %w", path, err)
 	}
 	return checkInfo(path, fi, wantDir)
 }

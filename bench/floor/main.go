@@ -162,18 +162,18 @@ func prepare(mode, dir string) (stop func(), err error) {
 		return nil, err
 	}
 	need := map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}
-	g, _, err := c.Adopt(coreslot.Request{Label: "floor-holder", Need: need})
+	g, _, err := c.Adopt(context.Background(), coreslot.Request{Label: "floor-holder", Need: need})
 	if err != nil {
 		return nil, err
 	}
-	head, err := c.Enqueue(coreslot.Request{Label: "floor-head", Need: need})
+	head, err := c.Enqueue(context.Background(), coreslot.Request{Label: "floor-head", Need: need})
 	if err != nil {
 		return nil, err
 	}
 	done := make(chan struct{})
 	go func() {
 		for {
-			_, _, _ = head.Poll() // the head: refreshed, never admitted
+			_, _ = head.Poll() // the head: refreshed, never admitted
 			select {
 			case <-done:
 				return
@@ -195,7 +195,7 @@ func child(args []string) int {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1
 		}
-		w, err := c.Enqueue(coreslot.Request{Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
+		w, err := c.Enqueue(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1

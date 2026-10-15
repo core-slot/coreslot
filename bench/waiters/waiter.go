@@ -54,7 +54,7 @@ func waiterMain(args []string) int {
 		fmt.Fprintf(os.Stderr, "waiter %d: open: %v\n", pid, err)
 		return exitError
 	}
-	w, err := c.Enqueue(coreslot.Request{Label: *label,
+	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: *label,
 		Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "waiter %d: enqueue: %v\n", pid, err)
@@ -117,7 +117,7 @@ func waiterMain(args []string) int {
 					fmt.Fprintf(os.Stderr, "waiter %d: close: %v\n", pid, err)
 				}
 				return exitAdmitted
-			case errors.Is(o.err, coreslot.ErrCancelled):
+			case errors.Is(o.err, coreslot.ErrCanceled):
 				return exitCancelled
 			case errors.Is(o.err, context.Canceled):
 				return exitWithdrawn

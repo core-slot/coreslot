@@ -996,8 +996,8 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
 grant both run with 8. A parent that wants concurrent children partitions its grant itself.
 
-> **Implementation note.** The Go library applies these rules to `Enqueue` and `EnqueueContext`,
-> with `Options.Independent` as its `--independent`: rules 1 and 2 admit the request at once, and a
+> **Implementation note.** The Go library applies these rules to `Client.Enqueue`, with
+> `Options.Independent` as its `--independent`: rules 1 and 2 admit the request at once, and a
 > context that does not validate is a refusal (`ErrRefused`). `Adopt` never passes through. The
 > rules apply only to a client whose state directory is the one the inherited environment names
 > (`CORESLOT_STATE_DIR`, or the default); a client opened on another directory

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -180,6 +181,17 @@ echo "ghost:x:$2:100::/srv/ghost:/bin/sh"`)
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("homeOf() error %q does not mention %q", err, want)
 			}
+		}
+	})
+	t.Run("fallback exits with an error", func(t *testing.T) {
+		path := fakeGetent(t, "exit 1")
+		home, err := homeOf(uid, unknown, []string{path}, 5*time.Second)
+		var (
+			unknownErr user.UnknownUserIdError
+			exit       *exec.ExitError
+		)
+		if !errors.As(err, &unknownErr) || !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			t.Fatalf("homeOf() = %q, %v; want both the lookup's UnknownUserIdError and getent's exit status 1", home, err)
 		}
 	})
 	t.Run("empty home", func(t *testing.T) {

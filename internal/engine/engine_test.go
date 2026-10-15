@@ -569,14 +569,14 @@ func TestCancelThroughFile(t *testing.T) {
 		t.Fatal("no cancel request published")
 	}
 	clk.advance(10 * time.Millisecond) // not even an election is due: the check is on every poll
-	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCancelled) {
-		t.Fatalf("Step after the cancel: %v, want ErrCancelled", err)
+	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCanceled) {
+		t.Fatalf("Step after the cancel: %v, want ErrCanceled", err)
 	}
 	if exists(filepath.Join(dir, store.QueueDir, tk.Name())) || exists(cancelPath) {
 		t.Error("the owner did not remove its ticket and the cancel request")
 	}
-	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCancelled) {
-		t.Errorf("a second Step: %v, want ErrCancelled", err)
+	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCanceled) {
+		t.Errorf("a second Step: %v, want ErrCanceled", err)
 	}
 	if err := other.CancelContext(context.Background(), tk.ID()); !errors.Is(err, ErrNoTicket) {
 		t.Errorf("cancelling a gone ticket: %v, want ErrNoTicket", err)
@@ -635,8 +635,8 @@ func TestWithdrawNeedsNoSection(t *testing.T) {
 	if err != nil || !dead {
 		t.Fatalf("the withdrawn ticket: dead %v, %v; want dead to a third observer", dead, err)
 	}
-	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCancelled) {
-		t.Errorf("Step after Withdraw: %v, want ErrCancelled", err)
+	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCanceled) {
+		t.Errorf("Step after Withdraw: %v, want ErrCanceled", err)
 	}
 }
 
@@ -767,8 +767,8 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 	if got := readGen(t, e); got != before {
 		t.Errorf("cancel publication: gen %d -> %d, want unchanged", before, got)
 	}
-	if _, err := c.Step(context.Background()); !errors.Is(err, ErrCancelled) {
-		t.Fatalf("Step: %v, want ErrCancelled", err)
+	if _, err := c.Step(context.Background()); !errors.Is(err, ErrCanceled) {
+		t.Fatalf("Step: %v, want ErrCanceled", err)
 	}
 	if got := readGen(t, e); got != before+1 {
 		t.Errorf("the owner's removal after the cancel: gen %d -> %d, want one bump", before, got)

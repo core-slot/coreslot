@@ -22,7 +22,7 @@ import (
 // admit is the head's admission attempt (PROTOCOL.md section 12.1 steps 1 to 7, with the
 // re-election of step 5). It returns
 // the grant when admitted, nil with no error when the head must keep waiting (the section was
-// busy, not enough is free, or a non-queued taker won a race), and ErrCancelled when a cancel
+// busy, not enough is free, or a non-queued taker won a race), and ErrCanceled when a cancel
 // request was published before this section.
 func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	point("admit.before-enter")
@@ -49,7 +49,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		if t.settle(statusCancelled) {
 			t.removeOwn(sec)
 		}
-		return nil, ErrCancelled
+		return nil, ErrCanceled
 	}
 
 	// 2-6. Sizes, effective request, locked counts, the two passes.
@@ -87,7 +87,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	defer t.mu.Unlock()
 	if t.status != statusWaiting {
 		ts.Close()
-		return nil, ErrCancelled
+		return nil, ErrCanceled
 	}
 	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared}
 	if err := g.publishHold(sec, t.req.Label, false); err != nil {
