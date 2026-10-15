@@ -46,7 +46,7 @@ func newReport(r engine.Report) Report {
 	}
 	for _, h := range r.Holds {
 		out.Holds = append(out.Holds, HolderInfo{Name: h.Name, Label: h.Label, PID: h.PID, Start: nsTime(h.StartNS),
-			Grant: h.Grant, FailOpen: h.Unbudgeted, Unbudgeted: h.UnbudgetedResources, Clamped: h.Clamped,
+			Granted: h.Grant, FailOpen: h.Unbudgeted, Unbudgeted: h.UnbudgetedResources, Clamped: h.Clamped,
 			Adopted: h.Adopted})
 	}
 	if d := r.Degraded; d != nil {

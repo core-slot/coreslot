@@ -126,6 +126,11 @@ func TestDistinctErrorClasses(t *testing.T) {
 	if err := w.Cancel(); err != nil {
 		t.Errorf("Cancel after the abandoned Wait: %v", err)
 	}
+	for i := range 2 {
+		if g, err := w.Poll(); g != nil || !errors.Is(err, ErrCanceled) {
+			t.Errorf("Poll %d after the withdrawal: %v, %v; want ErrCanceled", i, g, err)
+		}
+	}
 }
 
 // holdSection takes the admission lock through another open file description, as a process

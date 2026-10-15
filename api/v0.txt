@@ -5,7 +5,7 @@ field DegradedInfo.Reason string
 field HolderInfo.Adopted bool
 field HolderInfo.Clamped map[string]int
 field HolderInfo.FailOpen bool
-field HolderInfo.Grant map[string]int
+field HolderInfo.Granted map[string]int
 field HolderInfo.Label string
 field HolderInfo.Name string
 field HolderInfo.PID int

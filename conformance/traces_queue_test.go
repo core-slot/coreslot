@@ -51,7 +51,7 @@ func admittedAt(h coreslot.HolderInfo) time.Time { return h.Start }
 func noHold(t *testing.T, e Env, label, why string) {
 	t.Helper()
 	if h, ok := e.Hold(label); ok {
-		t.Fatalf("%s holds %v (admitted at %v): %s", label, h.Grant, admittedAt(h), why)
+		t.Fatalf("%s holds %v (admitted at %v): %s", label, h.Granted, admittedAt(h), why)
 	}
 }
 
@@ -745,7 +745,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 		t.Errorf("the reconciliation removed %d entries with nothing dead", n)
 	}
 	h, ok := e.Hold("W")
-	if !ok || h.Grant["cpu"] != 1 || r.Env["CORESLOT_GRANTED_CPU"] != "1" {
+	if !ok || h.Granted["cpu"] != 1 || r.Env["CORESLOT_GRANTED_CPU"] != "1" {
 		t.Fatalf("after the reconciliation W's hold is %+v (present %v), its command saw %v", h, ok, r.Env)
 	}
 	restored(t, e, nil, []string{"W"}, nil, 1)
@@ -819,8 +819,8 @@ func TestOversizeIsClamped(t *testing.T) {
 	o := e.Run("O", "--need", "cpu=16")
 	r := e.WaitStarted("O")
 	h := e.WaitHold("O", startWait)
-	if r.Env["CORESLOT_GRANTED_CPU"] != "10" || h.Grant["cpu"] != 10 || h.Clamped["cpu"] != 16 {
-		t.Errorf("command environment %v; hold grant %v, clamped %v", r.Env, h.Grant, h.Clamped)
+	if r.Env["CORESLOT_GRANTED_CPU"] != "10" || h.Granted["cpu"] != 10 || h.Clamped["cpu"] != 16 {
+		t.Errorf("command environment %v; hold grant %v, clamped %v", r.Env, h.Granted, h.Clamped)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
 	if got := e.Status().Resources["cpu"].Locked; got != 10 {
@@ -855,7 +855,7 @@ func TestUndeclaredResourceIsUnbudgeted(t *testing.T) {
 		t.Errorf("command environment %v", r.Env)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if h.FailOpen || !slices.Equal(h.Unbudgeted, []string{"pg-local"}) || len(h.Grant) != 1 {
+	if h.FailOpen || !slices.Equal(h.Unbudgeted, []string{"pg-local"}) || len(h.Granted) != 1 {
 		t.Errorf("hold %+v", h)
 	}
 	if _, err := os.Stat(filepath.Join(e.Dir, store.ResDir, "pg-local")); !errors.Is(err, os.ErrNotExist) {
@@ -897,7 +897,7 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 		r.Env["CORESLOT_UNBUDGETED"] == "format" || r.Env["CORESLOT_TOKEN_FDS"] != "" || r.Env["CORESLOT_HELD_FD"] != "3" {
 		t.Errorf("command environment %v", r.Env)
 	}
-	if !h.FailOpen || len(h.Grant) != 0 {
+	if !h.FailOpen || len(h.Granted) != 0 {
 		t.Errorf("hold %+v, want an unbudgeted hold with an empty grant", h)
 	}
 	rep := e.Status()

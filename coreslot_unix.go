@@ -180,8 +180,9 @@ func (c *Client) Adopt(ctx context.Context, req Request) (g *Grant, shortfall ma
 	return &Grant{g: eg}, short, nil
 }
 
-// Available returns resource's size minus its locked tokens now: what an admission could take
-// of it at this moment. It never waits for the section. A resource the configuration does not
+// Available returns resource's size minus its locked tokens now, max(0, size - locked): what an
+// admission could take of it at this moment, never below 0 (tokens locked at an index at or above
+// a size that shrank count against it). It never waits for the section. A resource the configuration does not
 // declare matches ErrRefused.
 func (c *Client) Available(resource string) (int, error) {
 	n, err := c.e.Free(resource)
@@ -223,8 +224,9 @@ func (w *Waiter) wrapGrant(g *engine.Grant) *Grant {
 // Poll makes one non-blocking attempt (PROTOCOL.md section 8); call it at least every 2 s. It
 // refreshes the ticket, checks for a cancel request and, when this waiter is the head, tries
 // admission with a single try at the section. It returns the grant once admitted, and nil and
-// nil while the request waits. After an error the request is still queued: poll again, or
-// Cancel to withdraw it.
+// nil while the request waits. Once the request is canceled (a cancel request, Cancel, or a Wait
+// that ended without a grant) it returns ErrCanceled, now and on every later Poll. After a
+// *StateError the request is still queued: poll again, or Cancel to withdraw it.
 func (w *Waiter) Poll() (*Grant, error) {
 	if w.t == nil {
 		return w.grant, nil

@@ -328,7 +328,7 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 	one := e.Run("one", "--need", "cpu=1")
 	r := e.WaitStarted("one")
 	h := e.WaitHold("one", startWait)
-	if h.Grant["cpu"] != 1 || r.Env["CORESLOT_GRANTED_CPU"] != "1" || !slices.Equal(indices(e, "one"), []int{0}) {
+	if h.Granted["cpu"] != 1 || r.Env["CORESLOT_GRANTED_CPU"] != "1" || !slices.Equal(indices(e, "one"), []int{0}) {
 		t.Fatalf("hold %+v (indices %v), environment %v: want one token, index 0", h, indices(e, "one"), r.Env)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)

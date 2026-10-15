@@ -133,15 +133,16 @@ type Report struct {
 	Degraded *DegradedInfo
 }
 
-// HolderInfo describes one live hold.
+// HolderInfo describes one live hold. In `status --json`, FailOpen is the key "unbudgeted" and
+// Unbudgeted the key "unbudgeted_resources".
 type HolderInfo struct {
 	Name  string // the hold's file name
 	Label string // the holder's label, unescaped: escape it before printing
 	PID   int    // the owner's pid, from the name
 	// Start is the wall clock at the admission, from the name.
 	Start time.Time
-	// Grant maps each resource to the number of tokens held.
-	Grant map[string]int
+	// Granted maps each resource to the number of tokens held.
+	Granted map[string]int
 	// FailOpen reports a fail-open hold: the run went ahead without the budget, because the
 	// budget could not be used, and holds no tokens.
 	FailOpen bool
