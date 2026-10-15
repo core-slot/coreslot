@@ -20,7 +20,7 @@ import (
 func waitErr(t *testing.T, dir string, between func()) error {
 	t.Helper()
 	c := open(t, dir)
-	w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestIOErrorsAreStateErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { os.Chmod(q, 0o700) })
-		_, err := c.Enqueue(Request{})
+		_, err := c.Enqueue(context.Background(), Request{})
 		var se *StateError
 		if !errors.As(err, &se) || !errors.Is(err, fs.ErrPermission) {
 			t.Fatalf("Enqueue into a read-only queue/: %v (%T), want a *StateError wrapping fs.ErrPermission", err, err)
@@ -84,19 +84,37 @@ func TestIOErrorsAreStateErrors(t *testing.T) {
 	})
 }
 
+// Open wraps the cause of a state directory it cannot create: a parent the user may not write
+// is a *StateError that errors.Is still finds fs.ErrPermission in.
+func TestOpenStateErrorWrapsItsCause(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	parent := filepath.Join(t.TempDir(), "read-only")
+	if err := os.Mkdir(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o700) })
+	_, err := Open(Options{StateDir: filepath.Join(parent, "state")})
+	var se *StateError
+	if !errors.As(err, &se) || !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("Open under a read-only parent: %v (%T), want a *StateError wrapping fs.ErrPermission", err, err)
+	}
+}
+
 // The classes a caller acts on are never state errors.
 func TestDistinctErrorClasses(t *testing.T) {
 	dir := stateDir(t, "")
 	c := open(t, dir)
 	var se *StateError
-	if _, err := c.Free("gpu"); !errors.Is(err, ErrRefused) || errors.As(err, &se) {
-		t.Errorf("Free of an undeclared resource: %v, want ErrRefused and no *StateError", err)
+	if _, err := c.Available("gpu"); !errors.Is(err, ErrRefused) || errors.As(err, &se) {
+		t.Errorf("Available of an undeclared resource: %v, want ErrRefused and no *StateError", err)
 	}
 	var ue *UsageError
-	if _, err := c.Free("Not A Name"); !errors.As(err, &ue) {
-		t.Errorf("Free of an invalid name: %v, want a *UsageError", err)
+	if _, err := c.Available("Not A Name"); !errors.As(err, &ue) {
+		t.Errorf("Available of an invalid name: %v, want a *UsageError", err)
 	}
-	w, err := c.Enqueue(Request{})
+	w, err := c.Enqueue(context.Background(), Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +148,8 @@ func holdSection(t *testing.T, dir string, pid int) {
 	}
 }
 
-// EnqueueContext and AdoptContext give up when ctx ends while the section is held: nothing is
-// published, the error matches the deadline and names the holder's pid.
+// Enqueue and Adopt give up when ctx ends while the section is held: nothing is published, and
+// the error is a *SectionBusyError that matches the deadline and names the holder's pid.
 func TestBoundedEnqueueAndAdopt(t *testing.T) {
 	dir := stateDir(t, "")
 	c := open(t, dir)
@@ -140,16 +158,22 @@ func TestBoundedEnqueueAndAdopt(t *testing.T) {
 		name string
 		do   func(ctx context.Context) error
 	}{
-		{"EnqueueContext", func(ctx context.Context) error { _, err := c.EnqueueContext(ctx, Request{}); return err }},
-		{"AdoptContext", func(ctx context.Context) error { _, _, err := c.AdoptContext(ctx, Request{}); return err }},
+		{"Enqueue", func(ctx context.Context) error { _, err := c.Enqueue(ctx, Request{}); return err }},
+		{"Adopt", func(ctx context.Context) error { _, _, err := c.Adopt(ctx, Request{}); return err }},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		start := time.Now()
 		err := op.do(ctx)
 		cancel()
-		var se *StateError
+		var (
+			se   *StateError
+			busy *SectionBusyError
+		)
 		if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &se) || !strings.Contains(err.Error(), "pid 424242") {
 			t.Errorf("%s with the section held: %v; want the deadline, naming pid 424242, no *StateError", op.name, err)
+		}
+		if !errors.As(err, &busy) || busy.PID != 424242 {
+			t.Errorf("%s with the section held: %v (%T), want a *SectionBusyError with PID 424242", op.name, err, err)
 		}
 		if took := time.Since(start); took > 2*time.Second {
 			t.Errorf("%s returned after %v, want soon after the 300 ms deadline", op.name, took)

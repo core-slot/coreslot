@@ -87,7 +87,7 @@ func passThroughNamedChild() error {
 	if got, want := c.e.Store().Dir(), os.Getenv("WANT_STATE_DIR"); got != want {
 		return fmt.Errorf("Open resolved %q, want %q", got, want)
 	}
-	w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
 	if err != nil {
 		return err
 	}
@@ -102,8 +102,8 @@ func passThroughNamedChild() error {
 		return err
 	}
 	defer g.Close()
-	if !g.PassThrough() || g.Grant()["cpu"] != 1 {
-		return fmt.Errorf("grant %v, pass-through %v; want the parent's cpu, passed through", g.Grant(), g.PassThrough())
+	if !g.PassThrough() || g.Granted()["cpu"] != 1 {
+		return fmt.Errorf("grant %v, pass-through %v; want the parent's cpu, passed through", g.Granted(), g.PassThrough())
 	}
 	fmt.Println("named: ok")
 	return nil

@@ -119,7 +119,7 @@ func (e *Engine) Config() (config.Config, error) {
 	}
 	c, err := e.cfg.Current()
 	if err != nil {
-		return config.Config{}, &store.StateError{Reason: err.Error()}
+		return config.Config{}, &store.StateError{Reason: err.Error(), Err: err}
 	}
 	return c, nil
 }
@@ -134,7 +134,7 @@ func (e *Engine) sizes() (map[string]int, error) {
 	}
 	n, err := e.cpus()
 	if err != nil {
-		return nil, &store.StateError{Reason: "machine-wide CPU count: " + err.Error()}
+		return nil, &store.StateError{Reason: "machine-wide CPU count: " + err.Error(), Err: err}
 	}
 	return c.Sizes(n), nil
 }
@@ -251,7 +251,7 @@ func (t *Ticket) publish(sec *store.Section) error {
 		// Withdrawn while re-enqueueing from token-only mode: the new ticket is dead at once.
 		t.mu.Unlock()
 		f.Close()
-		return ErrCancelled
+		return ErrCanceled
 	}
 	t.f, t.id, t.name = f, id, name
 	t.mu.Unlock()

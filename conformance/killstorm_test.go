@@ -645,7 +645,7 @@ func (st *storm) cancel(ctx context.Context, c *stormClient) {
 var cancelledMessage = map[string]string{
 	"cli": "coreslot: the request was cancelled",  // the Go CLI
 	"py":  " was cancelled",                       // the Python client: "coreslot: ticket <id> was cancelled"
-	"lib": "libclient: the request was cancelled", // conformance/libclient on coreslot.ErrCancelled
+	"lib": "libclient: the request was cancelled", // conformance/libclient on coreslot.ErrCanceled
 }
 
 // canceller cancels one client while it is seen queued: it picks a live CLI, Python or library

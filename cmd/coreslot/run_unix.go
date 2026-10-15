@@ -135,7 +135,7 @@ func (r *run) ordinary() int {
 // notAdmitted handles a wait that ended without a grant.
 func (r *run) notAdmitted(e *engine.Engine, t *engine.Ticket, err error) int {
 	switch {
-	case errors.Is(err, engine.ErrCancelled):
+	case errors.Is(err, engine.ErrCanceled):
 		return r.refuse("the request was cancelled")
 	case r.o.noWait && (errors.Is(err, errNotAtOnce) || errors.Is(err, context.DeadlineExceeded)):
 		r.notice("not admitted at once (--no-wait)%s", r.holdersText(e))

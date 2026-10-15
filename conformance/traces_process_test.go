@@ -197,7 +197,7 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 	r := e.WaitStarted("inner")
 	e.SectionLeft()
 	rep := e.Status()
-	if len(rep.Holds) != 1 || rep.Holds[0].Label != "parent" || !rep.Holds[0].Unbudgeted || len(rep.Tickets) != 0 {
+	if len(rep.Holds) != 1 || rep.Holds[0].Label != "parent" || !rep.Holds[0].FailOpen || len(rep.Tickets) != 0 {
 		t.Errorf("holds %+v, tickets %v: want only the parent's unbudgeted hold", rep.Holds, rep.Tickets)
 	}
 	if rep.Degraded == nil || rep.Degraded.Count != 1 {
@@ -332,8 +332,8 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 		t.Fatalf("hold %+v (indices %v), environment %v: want one token, index 0", h, indices(e, "one"), r.Env)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if free, err := e.Client().Free("cpu"); err != nil || free != 7 {
-		t.Errorf("Free(cpu) = %d, %v; want 7", free, err)
+	if free, err := e.Client().Available("cpu"); err != nil || free != 7 {
+		t.Errorf("Available(cpu) = %d, %v; want 7", free, err)
 	}
 	seven := e.Run("seven", "--no-wait", "--need", "cpu=7")
 	e.WaitStarted("seven") // no snapshot probes the tokens while seven takes them
@@ -419,7 +419,7 @@ func TestRepeatedClose(t *testing.T) {
 	c := e.Client()
 	admit := func(label string) *coreslot.Grant {
 		t.Helper()
-		w, err := c.Enqueue(coreslot.Request{Label: label, Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 2}}})
+		w, err := c.Enqueue(context.Background(), coreslot.Request{Label: label, Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 2}}})
 		if err != nil {
 			t.Fatal(err)
 		}

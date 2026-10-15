@@ -218,11 +218,11 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	}
 	close(release)
 	res := <-done
-	if !errors.Is(res.err, ErrCancelled) {
+	if !errors.Is(res.err, ErrCanceled) {
 		if a, ok := res.r.(Admitted); ok {
 			a.Close()
 		}
-		t.Fatalf("head Step: %#v, %v; want ErrCancelled", res.r, res.err)
+		t.Fatalf("head Step: %#v, %v; want ErrCanceled", res.r, res.err)
 	}
 	if n := lockedCount(t, e, "cpu"); n != 0 {
 		t.Errorf("%d tokens locked by a cancelled head", n)
