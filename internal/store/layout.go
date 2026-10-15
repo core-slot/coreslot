@@ -18,8 +18,8 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // Names of the layout (PROTOCOL.md section 4.4).

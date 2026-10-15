@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // Section entry backoff (PROTOCOL.md section 8): LOCK_NB, retried from 10 ms up to 250 ms.

@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/engine"
 )
 
 // installLockHooks does nothing on Windows: there is no admission section or probe lock to hold,

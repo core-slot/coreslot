@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // strayEntries places, in the directory dir of the layout, one entry per way the PROTOCOL.md

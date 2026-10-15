@@ -3,8 +3,8 @@ package coreslot
 import (
 	"errors"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Request is what a client asks for: a label, a priority in [-1000, 1000] (higher runs first)

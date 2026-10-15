@@ -1,6 +1,6 @@
 package main
 
-import "github.com/Nezhinskiy/coreslot/internal/config"
+import "github.com/core-slot/coreslot/internal/config"
 
 // windowsConfig is the configuration a Windows run reads for [platform] windows_warning: the one
 // config.Path names, which is <statedir>/config.toml under CORESLOT_STATE_DIR (PROTOCOL.md section

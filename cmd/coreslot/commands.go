@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // text escapes text the program does not control so that a message stays on one line and

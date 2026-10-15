@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // TestInteropPythonAndGo runs the independent Python client beside the Go CLI and library in one

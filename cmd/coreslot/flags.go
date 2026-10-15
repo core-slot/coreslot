@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the

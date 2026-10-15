@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot"
-	"github.com/Nezhinskiy/coreslot/internal/config"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // Bounds of the traces. I5 lets up to 4 stopped tickets at the front block the queue for about

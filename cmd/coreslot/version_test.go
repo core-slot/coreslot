@@ -9,7 +9,7 @@ import (
 // version from the build information, and a build that recorded none keeps the development default.
 func TestResolveVersion(t *testing.T) {
 	info := func(v string) *debug.BuildInfo {
-		return &debug.BuildInfo{Main: debug.Module{Path: "github.com/Nezhinskiy/coreslot", Version: v}}
+		return &debug.BuildInfo{Main: debug.Module{Path: "github.com/core-slot/coreslot", Version: v}}
 	}
 	for _, c := range []struct {
 		name, set string

@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/engine"
 )
 
 // Timing of a waiting run (PROTOCOL.md section 22).

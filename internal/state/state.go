@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Key orders tickets: ascending OrderKey, ties by PID, then Seq (PROTOCOL.md section 9).

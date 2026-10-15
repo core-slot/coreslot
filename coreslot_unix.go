@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/config"
-	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // Client is an opened budget. It is safe for concurrent use.

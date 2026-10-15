@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // readHold decodes the body of the grant's hold.

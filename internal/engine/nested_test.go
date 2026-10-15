@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/config"
 )
 
 // stateDirOf reads CORESLOT_STATE_DIR from the context it is given, not from this process's

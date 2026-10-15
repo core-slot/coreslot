@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // A run whose state directory is removed and recreated while its command runs finds out when it

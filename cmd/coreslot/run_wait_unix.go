@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/engine"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // errNotAtOnce is the outcome of a --no-wait attempt that was not admitted.

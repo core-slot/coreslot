@@ -263,7 +263,7 @@ jobs:
       - name: THIRD_PARTY_LICENSES.md matches go-licenses report
         run: |
           for os in darwin linux; do
-            GOOS=$os go-licenses report --ignore github.com/Nezhinskiy/coreslot ./... \
+            GOOS=$os go-licenses report --ignore github.com/core-slot/coreslot ./... \
               > "$RUNNER_TEMP/licenses-$os.csv"
           done
           sort -u "$RUNNER_TEMP"/licenses-*.csv > "$RUNNER_TEMP/licenses.csv"

@@ -5,7 +5,7 @@ import (
 	"maps"
 	"testing"
 
-	"github.com/Nezhinskiy/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // A run without --need asks for cpu=1..16 when its command can use the grant through a cpu
