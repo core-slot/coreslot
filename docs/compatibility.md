@@ -7,27 +7,42 @@ changed incompatibly appears there under **Removed** or **Changed** first, and u
 
 ## Versions
 
-coreslot is at **`v0`** and stays there until the on-disk format is frozen. The format is frozen
-once the whole conformance suite in [`conformance/`](../conformance) passes on macOS and on Linux
-at full length:
+coreslot is at **`v0`** until `v1.0.0`. What a format number means never changes once a release
+has shipped it, before `v1.0.0` as after it: a release that needs different metadata introduces a
+new format number instead (below). `v1.0.0` freezes the format then current; frozen means that
+from then on a new format number needs a new major version.
 
-- the deterministic traces, which pause real CLI and helper processes at named points inside the
-  protocol's steps, stop, continue or kill them there, and check the state directory and what the
-  other clients do meanwhile;
-- the kill storm, which for 60 s kills, stops, resumes and cancels 50 CLI, library and Python
-  clients, some of them nested and some in token-only mode, while it shrinks and grows the budget
-  and a sampler checks invariants I1, I2, I3 and I7 of
-  [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants).
+`v1.0.0` is not cut before the whole conformance suite passes at full length on macOS and on
+Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite is:
 
-CI runs the traces and a shortened kill storm (20 clients for 10 s) on every change, on Linux and
-macOS. What is still missing is a recorded pass of the full-length kill storm
-(`go test -tags coreslot_testhooks -race -run TestKillStorm ./conformance/`) on each system.
+- the deterministic traces in [`conformance/`](../conformance), which pause real CLI and helper
+  processes at named points inside the protocol's steps, stop, continue or kill them there, and
+  check the state directory and what the other clients do meanwhile;
+- the kill storm there, which for 60 s kills, stops, resumes and cancels 50 CLI, library and
+  Python clients, some of them nested and some in token-only mode, while it shrinks and grows the
+  budget and a sampler checks invariants I1, I2, I3 and I7 of
+  [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants);
+- the interoperability test there, which queues the Python client, the CLI and the library in one
+  FIFO order and checks that the Go and Python decoders agree on every wire fixture;
+- the Python client's own tests in [`conformance/pyclient`](../conformance/pyclient).
 
-Until then a minor release (`0.x`) may change the CLI surface and the library API within the
-deprecation window, and may introduce a new format number (below); it never changes what a number
-a release has already shipped means. `v1.0.0` freezes the format then current (format 1, unless a
-`v0` release introduced a newer one), the CLI surface and the library API listed here; after it, an
-incompatible change to any of them needs a new major version.
+At full length means without `-short` and with the Python client required:
+
+```sh
+CORESLOT_REQUIRE_PYTHON=1 go test -tags coreslot_testhooks -race ./conformance/
+(cd conformance/pyclient && python3 -m unittest)
+```
+
+CI runs the suite on every change, on Linux and macOS, but shortened: with `-short` the kill storm
+runs 20 clients for 10 s, `TestClockStepThenHeadStops` skips its forward clock step and
+`TestSuspendAllWaiters` its third phase; and the Python clients take part only when Python 3.11 or
+newer is found, which CI provides but does not require. What is still missing is a full-length pass
+on each system, which is recorded in [`evidence/README.md`](../evidence/README.md) when it is made.
+
+Until `v1.0.0` a minor release (`0.x`) may change the CLI surface and the library API within the
+deprecation window, and may introduce a new format number (below). `v1.0.0` freezes the format then
+current (format 1, unless a `v0` release introduced a newer one), the CLI surface and the library
+API listed here; after it, an incompatible change to any of them needs a new major version.
 
 ## On-disk formats
 
