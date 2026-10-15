@@ -1,9 +1,9 @@
 # Evidence
 
 Every measured claim in the README is backed by a script in this directory or a benchmark program
-under `bench/`. Each record below
-names the script, when it ran, on what, and what it printed, verbatim. A record is a reading on
-one machine on one day, not a guarantee; rerun the script to check it on yours.
+under `bench/`. Each record below names the script, when it ran, on what, and what it printed,
+verbatim. A record is a reading on one machine on one day, not a guarantee; rerun the script to
+check it on yours.
 
 Index of the evidence scripts:
 

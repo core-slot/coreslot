@@ -13,8 +13,8 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
 The first release: one machine-wide core budget that `coreslot run` and a Go library share, kept as
 token files and `flock(2)` locks under on-disk protocol format 1, for macOS and Linux.
 
-The module path is `github.com/core-slot/coreslot`; an install from an earlier path fails with
-"module declares its path as".
+The module path is `github.com/core-slot/coreslot`; an install from the earlier path,
+`github.com/Nezhinskiy/coreslot`, fails with "module declares its path as".
 
 ### Added
 
