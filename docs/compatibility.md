@@ -118,7 +118,10 @@ macOS and Windows builds export different APIs, so every API change is a reviewe
 file. Packages under `internal/` are
 not part of it.
 
-On Windows, `Open` returns `ErrUnsupported`, and nothing else is reachable.
+On a target without Unix (Windows among them), `Open` returns `ErrUnsupported`, so no `Client`,
+`Waiter` or `Grant` ever exists there. Their methods are declared so that portable programs
+compile; each returns `ErrUnsupported` where it returns an error, `Grant.Environ` returns a copy
+of its argument, and the others return zero values.
 
 ## Deprecation window
 
