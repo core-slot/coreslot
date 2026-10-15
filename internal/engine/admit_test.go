@@ -516,7 +516,7 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	if len(r.Tickets) != 1 || r.Tickets[0].Name != waiter.Name() || r.Tickets[0].Dead {
 		t.Errorf("tickets %+v", r.Tickets)
 	}
-	if ri := r.Resources["cpu"]; ri.Size != testCPUs || ri.Locked != 3 || ri.Free != 5 {
+	if ri := r.Resources["cpu"]; ri.Size != testCPUs || ri.Locked != 3 || ri.Available != 5 {
 		t.Errorf("cpu %+v, want size 8, locked 3, free 5", ri)
 	}
 	if r.Format != 1 || !r.FormatUnderstood {

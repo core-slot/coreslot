@@ -72,7 +72,7 @@ func (e *Engine) Snapshot() (Report, error) {
 			if err != nil {
 				return Report{}, err
 			}
-			r.Resources[name] = ResourceInfo{Size: sizes[name], Locked: locked, Free: max(0, sizes[name]-locked)}
+			r.Resources[name] = ResourceInfo{Size: sizes[name], Locked: locked, Available: max(0, sizes[name]-locked)}
 		}
 		// Tokens of a resource the configuration no longer declares are still locks (PROTOCOL.md
 		// section 6): report them.

@@ -325,10 +325,11 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		back := engine.Report{StateDir: got.StateDir, StateDirExists: got.StateDirExists, Format: got.Format,
+		// The library's Open has created the directory, so the engine always reports it.
+		back := engine.Report{StateDir: got.StateDir, StateDirExists: true, Format: got.Format,
 			FormatPresent: got.FormatPresent, FormatUnderstood: got.FormatUnderstood, Gen: got.Gen,
 			ReconciledNS: ns(got.Reconciled), Resources: map[string]engine.ResourceInfo{}, UndeclaredLocked: got.UndeclaredLocked,
-			DeadHolds: got.DeadHolds, Cancels: got.Cancels, Ignored: got.Ignored,
+			DeadHolds: got.DeadHolds, Cancels: got.CancelRequests, Ignored: got.Ignored,
 			Section: engine.SectionInfo{Held: got.Section.Held, PID: got.Section.PID, EnteredNS: ns(got.Section.Entered)}}
 		for name, ri := range got.Resources {
 			back.Resources[name] = engine.ResourceInfo(ri)
@@ -364,11 +365,11 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 	for _, tk := range got.Tickets {
 		deadTicket = deadTicket || (tk.Label == "withdrawn" && tk.Dead)
 	}
-	if !failOpen || !clamped || !unbudgeted || !deadTicket || len(got.DeadHolds) != 1 || len(got.Cancels) != 1 ||
+	if !failOpen || !clamped || !unbudgeted || !deadTicket || len(got.DeadHolds) != 1 || len(got.CancelRequests) != 1 ||
 		got.UndeclaredLocked["pg"] != 1 || got.Ignored["queue"] == 0 || !got.Section.Held {
 		t.Errorf("a field the scenario sets is empty: fail-open %v, clamped %v, unbudgeted %v, dead ticket %v, "+
 			"dead holds %v, cancels %v, undeclared %v, ignored %v, section %+v",
-			failOpen, clamped, unbudgeted, deadTicket, got.DeadHolds, got.Cancels, got.UndeclaredLocked, got.Ignored, got.Section)
+			failOpen, clamped, unbudgeted, deadTicket, got.DeadHolds, got.CancelRequests, got.UndeclaredLocked, got.Ignored, got.Section)
 	}
 	if got.Degraded == nil || got.Degraded.First.UnixNano() != 1700000000123456789 || got.Section.Entered.UnixNano() != 1 {
 		t.Errorf("degraded %+v, section entered %v: want the recorded nanoseconds", got.Degraded, got.Section.Entered)

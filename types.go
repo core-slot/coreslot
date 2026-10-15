@@ -85,9 +85,6 @@ func (e *SectionBusyError) Unwrap() error { return e.Err }
 type Report struct {
 	// StateDir is the state directory read.
 	StateDir string
-	// StateDirExists is false on a machine where nothing has run yet; everything else is then
-	// empty.
-	StateDirExists bool
 	// Format is the format FORMAT names: 0 when FORMAT is absent, unreadable or malformed, and
 	// when it names format 0.
 	Format int
@@ -118,11 +115,11 @@ type Report struct {
 	// Tickets is the queue, in queue order.
 	Tickets []TicketInfo
 	// Holds lists the live holds, in name order.
-	Holds []HolderInfo
+	Holds []HoldInfo
 	// DeadHolds names the holds whose owner no longer holds them, awaiting reconciliation.
 	DeadHolds []string
-	// Cancels lists the pending cancel requests, by ticket id.
-	Cancels []string
+	// CancelRequests lists the pending cancel requests, by ticket id.
+	CancelRequests []string
 	// Ignored maps a directory of the layout (queue, holds, cancel) to its entries that do not
 	// match the grammar, whose body is malformed, or that fail the filesystem policy: never
 	// trusted, only counted.
@@ -133,9 +130,9 @@ type Report struct {
 	Degraded *DegradedInfo
 }
 
-// HolderInfo describes one live hold. In `status --json`, FailOpen is the key "unbudgeted" and
+// HoldInfo describes one live hold. In `status --json`, FailOpen is the key "unbudgeted" and
 // Unbudgeted the key "unbudgeted_resources".
-type HolderInfo struct {
+type HoldInfo struct {
 	Name  string // the hold's file name
 	Label string // the holder's label, unescaped: escape it before printing
 	PID   int    // the owner's pid, from the name
@@ -177,11 +174,11 @@ type TicketInfo struct {
 	Dead bool
 }
 
-// ResourceInfo is one declared resource.
+// ResourceInfo is one declared resource. In `status --json`, Available is the key "free".
 type ResourceInfo struct {
-	Size   int // the current size
-	Locked int // tokens locked at every existing index
-	Free   int // max(0, Size - Locked)
+	Size      int // the current size
+	Locked    int // tokens locked at every existing index
+	Available int // max(0, Size - Locked), as Client.Available returns it
 }
 
 // SectionInfo is the admission section: whether it is held now, and admit.lock's informational

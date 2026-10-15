@@ -34,9 +34,9 @@ type TicketInfo struct {
 
 // ResourceInfo is one declared resource in a snapshot.
 type ResourceInfo struct {
-	Size   int // the current size
-	Locked int // tokens locked at every existing index
-	Free   int // max(0, Size - Locked)
+	Size      int // the current size
+	Locked    int // tokens locked at every existing index
+	Available int // max(0, Size - Locked); status prints it as free
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.

@@ -489,14 +489,14 @@ func (e Env) Ticket(label string) (coreslot.TicketInfo, bool) {
 }
 
 // Hold returns the live hold labelled label.
-func (e Env) Hold(label string) (coreslot.HolderInfo, bool) {
+func (e Env) Hold(label string) (coreslot.HoldInfo, bool) {
 	e.t.Helper()
 	for _, h := range e.Status().Holds {
 		if h.Label == label {
 			return h, true
 		}
 	}
-	return coreslot.HolderInfo{}, false
+	return coreslot.HoldInfo{}, false
 }
 
 // WaitTicket waits until a live ticket labelled label is in the queue.
@@ -512,9 +512,9 @@ func (e Env) WaitTicket(label string) coreslot.TicketInfo {
 }
 
 // WaitHold waits until a live hold labelled label exists.
-func (e Env) WaitHold(label string, within time.Duration) coreslot.HolderInfo {
+func (e Env) WaitHold(label string, within time.Duration) coreslot.HoldInfo {
 	e.t.Helper()
-	var h coreslot.HolderInfo
+	var h coreslot.HoldInfo
 	e.Eventually(within, "the hold of "+label+" is published", func() bool {
 		var ok bool
 		h, ok = e.Hold(label)
