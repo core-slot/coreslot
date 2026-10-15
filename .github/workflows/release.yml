@@ -72,6 +72,10 @@ jobs:
           distribution: goreleaser
           version: ${{ steps.goreleaser.outputs.version }}
           args: release --clean --skip=publish
+        env:
+          # The tag that started this run. Without it GoReleaser picks one of the tags on the
+          # commit, and a release candidate tagged on the same commit names the archives.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
