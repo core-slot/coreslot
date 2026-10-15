@@ -45,8 +45,9 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
 
 ### Changed
 
-- The module path moved to `github.com/core-slot/coreslot`, as did the repository: install with
+- The module path moved to `github.com/core-slot/coreslot`: install with
   `go install github.com/core-slot/coreslot/cmd/coreslot@latest` and import
-  `github.com/core-slot/coreslot`.
+  `github.com/core-slot/coreslot`. An install from the old path fails with "module declares its
+  path as"; use the new one.
 
 [Unreleased]: https://github.com/core-slot/coreslot/commits/HEAD

@@ -7,7 +7,8 @@ one machine on one day, not a guarantee; rerun the script to check it on yours.
 Index of the evidence scripts:
 
 - `bench/waiters` and `bench/floor` (with the `*.pprof` profiles in this directory): the waiter
-  benchmark, in "Waiter benchmark (the release gate)" below.
+  benchmark, in "Waiter benchmark (the release gate)" below. The profiles were recorded before the
+  module moved, so their symbols name `github.com/Nezhinskiy/coreslot`.
 - `probe-docker-flock.sh`: whether a container sees the host's flock, in "Docker Desktop and
   host locks" below.
 - `acceptance.py`: three test gates and a CI job with and without coreslot, in "Product
