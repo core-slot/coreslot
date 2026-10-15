@@ -56,8 +56,9 @@ type DegradedInfo struct {
 }
 
 // Report is a snapshot of the state directory: the data behind `status --json`, in its units
-// (times in Unix nanoseconds, errors as text). It is read outside the admission section, so it
-// can be momentarily inconsistent.
+// (times in Unix nanoseconds; each error both as the text the JSON carries and as the error, for
+// the library). It is read outside the admission section, so it can be momentarily
+// inconsistent.
 type Report struct {
 	StateDir         string
 	StateDirExists   bool   // false on a machine where nothing has run yet: everything else is empty
