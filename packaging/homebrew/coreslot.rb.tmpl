@@ -21,7 +21,9 @@ class Coreslot < Formula
   depends_on "go" => :build
 
   def install
-    # The same build as the release archives: cgo-free; std_go_args adds -trimpath and -s -w.
+    # The same build as the release archives: cgo-free, -trimpath and -s -w. std_go_args adds
+    # -trimpath and puts -s -w ahead of the ldflags given here (unless brew is run with
+    # --debug-symbols), so they are not repeated.
     ENV["CGO_ENABLED"] = "0"
     system "go", "build", *std_go_args(ldflags: "-X main.version=#{version}"), "./cmd/coreslot"
   end
