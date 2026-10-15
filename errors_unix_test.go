@@ -102,6 +102,30 @@ func TestOpenStateErrorWrapsItsCause(t *testing.T) {
 	}
 }
 
+// An unreadable configuration is a *StateError that still wraps its cause, through Available and
+// through the Report's ConfigError alike.
+func TestConfigStateErrorWrapsItsCause(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	c := open(t, dir)
+	if err := os.Chmod(filepath.Join(dir, "config.toml"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	var se *StateError
+	if _, err := c.Available("cpu"); !errors.As(err, &se) || !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("Available with an unreadable config.toml: %v (%T), want a *StateError wrapping fs.ErrPermission", err, err)
+	}
+	r, err := c.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.As(r.ConfigError, &se) || !errors.Is(r.ConfigError, fs.ErrPermission) {
+		t.Errorf("Report.ConfigError: %v (%T), want a *StateError wrapping fs.ErrPermission", r.ConfigError, r.ConfigError)
+	}
+}
+
 // A relative Options.StateDir is the caller's mistake, a *UsageError: a *StateError would tell a
 // caller that follows the contract to run every job unbudgeted.
 func TestRelativeStateDirIsAUsageError(t *testing.T) {
