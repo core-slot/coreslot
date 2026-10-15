@@ -22,8 +22,8 @@ coreslot run --need cpu=6 -- pytest -n 12            # 12 workers that keep abou
 coreslot status                                      # who holds what, who waits
 ```
 
-**Status:** `v0`. The on-disk format, the CLI and the library may still change before `v1.0.0`;
-the [compatibility policy](docs/compatibility.md) says how, and when the format freezes.
+**Status:** `v0`. Before `v1.0.0` the CLI and the library may still change, and a release may
+introduce a new on-disk format; the [compatibility policy](docs/compatibility.md) says how.
 
 ## Install
 
@@ -192,7 +192,7 @@ A suite that also needs the shared database adds `--need pg-local=1`. The state 
   across machines.
 - **Not multi-user.** One budget per user; never share the state directory across users or hosts.
 - **Not a memory budget.** coreslot counts cores and the resources you declare. A command's memory
-  is neither reserved nor limited; the run log only records its peak afterwards.
+  is neither reserved nor limited; afterwards the run log records the peak of its largest process.
 - **Not for Windows.** coreslot builds there, but runs every command at once, without a budget,
   with a warning.
 
@@ -240,9 +240,9 @@ written that way lives in [`conformance/pyclient`](conformance/pyclient).
 
 ## Performance
 
-Waiting is cheap: 100 commands queued at once cost **5.7 % of one core** in total, on a 14-core
-Mac, while the queue churns with arrivals, admissions, cancellations and stopped waiters (median of
-five 120 s runs, min 5.10 %, max 6.24 %;
+Waiting is cheap: 100 waiting clients (one process each) cost **5.7 % of one core** in total, on
+a 14-core Mac, while the queue churns with arrivals, admissions, cancellations and stopped waiters
+(median of five 120 s runs, min 5.10 %, max 6.24 %;
 [the run](evidence/README.md#the-gate-run-2026-10-12-2bcd53d)). A release is not cut while this
 figure is above 10 %. Larger queues:
 
