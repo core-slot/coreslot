@@ -37,9 +37,9 @@ session:
 
 | Pass | Commit | Changes |
 |---|---|---|
-| Before | e6c2e31, 2026-10-11 | The election probed every ticket ahead; `Wait` stepped every 250 ms. |
-| Pass 1 | ae0fa2c, 2026-10-12 | The election stops at the first live, non-STALLED ticket; a non-head waiter works once per second. |
-| Pass 2 | 20a71fe, 2026-10-12 | The front window of 4; re-election inside the admitting section; names-only rescans; holds probed on request; one P while the CLI waits; the harness's gen churn fixed. |
+| Before | 827552e, 2026-10-11 | The election probed every ticket ahead; `Wait` stepped every 250 ms. |
+| Pass 1 | 3eb12c4, 2026-10-12 | The election stops at the first live, non-STALLED ticket; a non-head waiter works once per second. |
+| Pass 2 | 7e0d1fe, 2026-10-12 | The front window of 4; re-election inside the admitting section; names-only rescans; holds probed on request; one P while the CLI waits; the harness's gen churn fixed. |
 
 | Platform | Waiters | Before | Pass 1 | Pass 2 |
 |---|---|---|---|---|
@@ -152,7 +152,7 @@ Applying the Linux growth to the macOS median at 100 gives about 1490 us per wai
 **about 150 % of one core for a thousand waiters on macOS**. A flat per-waiter cost gives a lower
 bound of about 67 %. Both are extrapolations.
 
-### The gate run (2026-10-12, 2bcd53d)
+### The gate run (2026-10-12, c114bc9)
 
 The gate, re-run on the macOS reference host after the last fixes of pass 2:
 
@@ -352,7 +352,7 @@ runner; `summary` over its records prints the numbers below.
 ### Setup
 
 - **Host:** the reference host (Apple M4 Pro, 14 logical CPUs, 48 GiB, macOS 27.0.1), budget
-  `cpu = 14` in a state directory of its own, coreslot built from `a18bbbe`. Never quiet: other
+  `cpu = 14` in a state directory of its own, coreslot built from `3788de2`. Never quiet: other
   coding-agent sessions and another project's Docker Desktop VM (about 3.7 cores and 32 GiB when
   sampled) ran throughout, and no new heavy work was started during a run.
 - **Jobs**, each in a copy of its working tree:

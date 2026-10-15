@@ -256,7 +256,7 @@ written that way lives in [`conformance/pyclient`](conformance/pyclient).
 Waiting is cheap: 100 waiting clients (one process each) cost **5.7 % of one core** in total, on
 a 14-core Mac, while the queue churns with arrivals, admissions, cancellations and stopped waiters
 (median of five 120 s runs, min 5.10 %, max 6.24 %;
-[the run](evidence/README.md#the-gate-run-2026-10-12-2bcd53d)). A release is not cut while this
+[the run](evidence/README.md#the-gate-run-2026-10-12-c114bc9)). A release is not cut while this
 figure is above 10 %. Larger queues:
 
 - **Linux, 1000 waiters:** 361.4 % of one core, measured once inside Docker Desktop's VM on the
