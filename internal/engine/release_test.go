@@ -35,7 +35,7 @@ func TestReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 			return admitted(t, step(t, enqueue(t, e, need("cpu=3"))))
 		},
 		"adopted": func(t *testing.T, e *Engine) *Grant {
-			g, _, err := e.AdoptContext(context.Background(), need("cpu=2"))
+			g, err := e.AdoptContext(context.Background(), need("cpu=2"))
 			if err != nil {
 				t.Fatal(err)
 			}

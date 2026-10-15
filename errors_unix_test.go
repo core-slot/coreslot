@@ -164,7 +164,7 @@ func TestBoundedEnqueueAndAdopt(t *testing.T) {
 		do   func(ctx context.Context) error
 	}{
 		{"Enqueue", func(ctx context.Context) error { _, err := c.Enqueue(ctx, Request{}); return err }},
-		{"Adopt", func(ctx context.Context) error { _, _, err := c.Adopt(ctx, Request{}); return err }},
+		{"Adopt", func(ctx context.Context) error { _, err := c.Adopt(ctx, Request{}); return err }},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		start := time.Now()

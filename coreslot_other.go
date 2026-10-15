@@ -30,9 +30,7 @@ func Open(Options) (*Client, error) { return nil, ErrUnsupported }
 func (c *Client) Enqueue(context.Context, Request) (*Waiter, error) { return nil, ErrUnsupported }
 
 // Adopt returns ErrUnsupported.
-func (c *Client) Adopt(context.Context, Request) (g *Grant, shortfall map[string]int, err error) {
-	return nil, nil, ErrUnsupported
-}
+func (c *Client) Adopt(context.Context, Request) (*Grant, error) { return nil, ErrUnsupported }
 
 // Available returns ErrUnsupported.
 func (c *Client) Available(string) (int, error) { return 0, ErrUnsupported }
@@ -54,6 +52,9 @@ func (g *Grant) Granted() map[string]int { return nil }
 
 // Clamped returns nil.
 func (g *Grant) Clamped() map[string]int { return nil }
+
+// Shortfall returns nil.
+func (g *Grant) Shortfall() map[string]int { return nil }
 
 // Unbudgeted returns nil.
 func (g *Grant) Unbudgeted() []string { return nil }

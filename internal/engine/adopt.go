@@ -14,35 +14,35 @@ import (
 // under I3 in the two passes of section 12.1 step 6 (first up to min(min, size) of each
 // requested declared resource, as many as are free, then more up to max while the grant holds
 // fewer than 512 tokens), and publishes a hold with "adopted": true listing exactly what it
-// took. It has no minimum: shortfall maps every requested declared resource to
-// max(0, min - granted). In a state directory whose format this client does not implement it
-// writes nothing and returns an error matching ErrRefused. Its wait for the section ends with
-// ctx, as EnqueueContext's does: nothing is taken or published then.
-func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, shortfall map[string]int, err error) {
+// took. It has no minimum: the grant's Shortfall maps each requested declared resource it holds
+// fewer than min of to min - held. In a state directory whose format this client does not
+// implement it writes nothing and returns an error matching ErrRefused. Its wait for the section
+// ends with ctx, as EnqueueContext's does: nothing is taken or published then.
+func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (*Grant, error) {
 	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	sec, err := e.enterUntil(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer sec.Leave()
 	n, understood, err := sec.Prepare(e.clock.Realtime())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if !understood {
-		return nil, nil, refuseFormat(n, "")
+		return nil, refuseFormat(n, "")
 	}
 	sizes, err := e.sizes()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	eff, clamped, undeclared := state.Effective(req.Need, sizes)
 	locked, err := countLocked(sec, eff)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	take := state.AdoptPlan(eff, sizes, locked)
 	mins := make(map[string]int, len(eff))
@@ -51,7 +51,7 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, 
 	}
 	first, got, err := sec.TakeTokens(mins, sizes)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	extra := make(map[string]int, len(eff))
 	for name := range eff {
@@ -60,23 +60,19 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (g *Grant, 
 	second, _, err := sec.TakeTokens(extra, sizes)
 	if err != nil {
 		first.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	ts := mergeTokens(first, second)
 	point("tokens.taken")
 	if err := ts.CheckIdentity(); err != nil {
 		ts.Close()
-		return nil, nil, err
+		return nil, err
 	}
-	g = &Grant{e: e, tokens: ts, need: req.Need, clamped: clamped, unbudgeted: undeclared}
+	g := &Grant{e: e, tokens: ts, need: req.Need, clamped: clamped, unbudgeted: undeclared}
 	if err := g.publishHold(sec, req.Label, true); err != nil {
 		ts.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	_ = sec.BumpGen() // publishing a hold bumps gen once (PROTOCOL.md section 7.8)
-	shortfall = make(map[string]int, len(eff))
-	for name := range eff {
-		shortfall[name] = max(0, req.Need[name].Min-len(ts.Indices[name]))
-	}
-	return g, shortfall, nil
+	return g, nil
 }

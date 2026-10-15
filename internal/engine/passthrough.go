@@ -129,6 +129,15 @@ func (p *PassThrough) Grant() map[string]int { return maps.Clone(p.grant) }
 // Clamped maps each resource whose min was above what the parent holds to that min.
 func (p *PassThrough) Clamped() map[string]int { return maps.Clone(p.clamped) }
 
+// Shortfall maps each clamped resource to its min minus what the grant passes on of it.
+func (p *PassThrough) Shortfall() map[string]int {
+	out := make(map[string]int, len(p.clamped))
+	for name, m := range p.clamped {
+		out[name] = m - p.grant[name]
+	}
+	return out
+}
+
 // Unbudgeted lists, sorted, the requested resources run unbudgeted: those the parent holds none
 // of, or every one under rule 1.
 func (p *PassThrough) Unbudgeted() []string { return slices.Clone(p.unbudgeted) }
