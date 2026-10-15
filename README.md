@@ -37,7 +37,7 @@ With Homebrew, from a tap whose formula builds from source
 ([`packaging/homebrew/coreslot.rb.tmpl`](packaging/homebrew/coreslot.rb.tmpl)):
 
 ```sh
-brew install Nezhinskiy/tap/coreslot
+brew install core-slot/tap/coreslot
 ```
 
 Or download a release archive (macOS and Linux, amd64 and arm64) from the
