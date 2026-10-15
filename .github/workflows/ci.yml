@@ -13,7 +13,7 @@ permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  # A merge to main is never cancelled by a later push; superseded pull request runs are.
+  # A merge to main is never canceled by a later push; superseded pull request runs are.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+        os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm]
         # "1.26" is go.mod's minimum; "stable" is the latest release (1.27 as of
         # 2026-10). setup-go resolves "1.26" to the newest 1.26 patch release.
         go: ["1.26", stable]
@@ -120,8 +120,8 @@ jobs:
         run: python3 -m unittest
 
       - name: Fuzz targets (30 s each)
-        # Fuzzing runs once, on ubuntu-latest with the latest Go; the other cells only run the seed corpus via go test.
-        if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+        # Fuzzing runs once, on ubuntu-24.04 with the latest Go; the other cells only run the seed corpus via go test.
+        if: matrix.os == 'ubuntu-24.04' && matrix.go == 'stable'
         run: |
           # Every Fuzz function in every package, discovered rather than listed,
           # so a new target is run without editing this file. -fuzz accepts one
@@ -144,7 +144,7 @@ jobs:
           fi
 
       - name: Upload fuzz failure inputs
-        if: failure() && matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+        if: failure() && matrix.os == 'ubuntu-24.04' && matrix.go == 'stable'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fuzz-failures
@@ -162,7 +162,7 @@ jobs:
   # configuration and version the release workflow uses, without publishing anything.
   snapshot-linux:
     name: release snapshot (Linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -288,7 +288,7 @@ jobs:
   # THIRD_PARTY_LICENSES.md's inventory is what go-licenses reports for both release systems.
   licenses:
     name: license inventory
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

@@ -236,7 +236,7 @@ func statusJSON(t *testing.T, e Env) statusDoc {
 	return doc
 }
 
-// pythonHoldVisible checks that the Python run labelled name holds one cpu token in status,
+// pythonHoldVisible checks that the Python run labeled name holds one cpu token in status,
 // human and JSON, with no locked token unaccounted for.
 func pythonHoldVisible(t *testing.T, e Env, name string) {
 	t.Helper()

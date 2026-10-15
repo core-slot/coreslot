@@ -107,7 +107,7 @@ Every conforming client MUST preserve these invariants:
   admission happens until they fall below it.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3). There is no backfill: the head blocks
-  every waiter behind it, and a waiter is passed over only while it is STALLED, dead or cancelled.
+  every waiter behind it, and a waiter is passed over only while it is STALLED, dead or canceled.
   Adoption and token-only admission are outside the queue by definition.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's minimum is free and no process is stopped inside the admission section, the head is
@@ -611,7 +611,7 @@ Only a non-conforming actor removes a live ticket (reconciliation removes dead o
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting, and
 the budget stays safe: it is counted from token locks, not tickets, so I3 and I7 still hold. The
 waiter does lose its place, though. No other client sees the ticket any more, so waiters behind it
-may be elected and admitted first, `status` does not show it, and it cannot be cancelled by label;
+may be elected and admitted first, `status` does not show it, and it cannot be canceled by label;
 a cancel request naming its exact id may still reach it, but only from a canceller that publishes
 without checking `queue/` first (section 13.1), and only until a reconciliation removes the request,
 whose ticket name is gone (section 10.4, step 2). When it later removes its ticket
@@ -688,7 +688,7 @@ older than 30 s (section 10.4).
 
 Inside the section the head:
 
-1. checks `cancel/` for its own ticket id; if present, it is cancelled (section 13.1);
+1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1);
 2. recomputes sizes (section 5.2) from the configuration and `cpus`;
 3. computes the effective request of each requested declared resource (section 12.2);
 4. counts, for each such resource, the tokens locked at **every** existing index (section 6);
@@ -784,7 +784,7 @@ unbudgeted.
 
 ### 13.1 Cancellation
 
-Cancelling never signals across processes. A canceller publishes `$S/cancel/<ticket-id>` inside the
+Canceling never signals across processes. A canceller publishes `$S/cancel/<ticket-id>` inside the
 section. It MAY first check, in that section, that `queue/` holds a ticket with that id and publish
 nothing when it does not; a request whose ticket is gone is removed by reconciliation either way
 (section 10.4, step 2). The owner checks `cancel/` for its id on every poll and again at admission

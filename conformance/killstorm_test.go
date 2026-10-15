@@ -35,7 +35,7 @@ import (
 // seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
 // and delays, and the size changes; the interleaving is the scheduler's). The schedule also
 // depends on -short. The first clients and the first two size changes are fixed, and one
-// client is cancelled while it is seen queued, so that every run exercises each kind of
+// client is canceled while it is seen queued, so that every run exercises each kind of
 // client, a kill of a holder, a stop, a cancellation, a shrink below the locked count and a
 // growth; the test asserts that it did.
 
@@ -651,7 +651,7 @@ var cancelledMessage = map[string]string{
 // canceller cancels one client while it is seen queued: it picks a live CLI, Python or library
 // client with a ticket, no timeout and a command that does not run, publishes a cancel request
 // for it by label, and checks that the client then exits with the refusal code and its kind's
-// cancelled message. A request that loses the race (the client was admitted first) is retried
+// canceled message. A request that loses the race (the client was admitted first) is retried
 // with another queued client, at most cancelTries times and only while the storm runs; none
 // found or none taking effect leaves the floor to fail by name.
 func (st *storm) canceller(ctx context.Context) {
@@ -1043,7 +1043,7 @@ func TestKillStorm(t *testing.T) {
 	// token lock inside the admission section, through the section's end, the CLI's start of
 	// its command and the shell, to the report. The sampler measures it from the first sample
 	// that saw the token unlisted to the one that saw it reported (a confirmed I2 for such a
-	// token is relabelled as this failure above); the marker-to-report part is measured from
+	// token is relabeled as this failure above); the marker-to-report part is measured from
 	// the files. Either reaching the bound fails here by name, not as an I2 of the client.
 	if reportAge >= st.s.TokenOnlyBound {
 		t.Errorf("%s: a token-only token was unlisted for %v before its report (bound %v)",
