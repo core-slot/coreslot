@@ -1,12 +1,12 @@
-# PROTOCOL.md ambiguities found by the independent Python client
+# Specification clarifications found by an independent implementation
 
-Of the 42 entries, all are resolved: 40 by the revised `PROTOCOL.md`, and B1/D6 by the stray rule
-that PROTOCOL §4.2/§10.4 now state. Each entry ends with its status.
+`coreslot_client.py`, next to this file, is written from `PROTOCOL.md` alone. Each entry below is
+a place where `PROTOCOL.md` (format 1) was silent, ambiguous or self-contradictory for such an
+implementer: the section, the readings, the choice the client made, and, last, the status: how
+`PROTOCOL.md` now settles it and whether the client changed to match.
 
-Each entry is a place where `PROTOCOL.md` (format 1) is silent, ambiguous or self-contradictory
-for someone implementing from it alone. Each one gives the section, the readings, and the choice
-`coreslot_client.py` made. The choice is not normative: each entry asks for a `PROTOCOL.md` fix or
-an explicit "both are valid".
+All 42 entries are settled in the current `PROTOCOL.md`. B1 and D6 are two sides of one question,
+settled together by the stray rule of PROTOCOL §4.2 and §10.4 step 1.
 
 ## A. Names, seq and publication
 

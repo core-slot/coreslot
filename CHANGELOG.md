@@ -10,6 +10,12 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
 
 ## [0.1.0] - 2026-10-15
 
+The first release: one machine-wide core budget that `coreslot run` and a Go library share, kept as
+token files and `flock(2)` locks under on-disk protocol format 1, for macOS and Linux.
+
+The module path is `github.com/core-slot/coreslot`; an install from the earlier path,
+`github.com/Nezhinskiy/coreslot`, fails with "module declares its path as".
+
 ### Added
 
 - On-disk protocol format 1, defined normatively in `PROTOCOL.md`: token files and `flock(2)` locks
@@ -42,15 +48,8 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
   reports such a grant.
 - Conformance suite with deterministic queue traces, and an independent Python client written from
   `PROTOCOL.md` alone.
-- Release archives with checksums, build-provenance attestations for releases of the public
-  repository, and a Homebrew formula template that builds from source.
-
-### Changed
-
-- The module path moved to `github.com/core-slot/coreslot`: install with
-  `go install github.com/core-slot/coreslot/cmd/coreslot@latest` and import
-  `github.com/core-slot/coreslot`. An install from the old path fails with "module declares its
-  path as"; use the new one.
+- Release archives with checksums and a build-provenance attestation for every archive, and a
+  Homebrew formula template that builds from source.
 
 [Unreleased]: https://github.com/core-slot/coreslot/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/core-slot/coreslot/releases/tag/v0.1.0

@@ -2,13 +2,18 @@
 
 ## Reporting a vulnerability
 
-Report it privately through GitHub: on the repository's **Security** tab, choose **Report a
-vulnerability** (GitHub's private vulnerability reporting). Please do not open a public issue for
-it. Include the coreslot version (`coreslot version`), the operating system and architecture, and
-the smallest sequence of commands that shows the problem.
+Report it privately, by either route:
 
-You will get an answer in the advisory thread. A confirmed issue is fixed in a release, and the
-advisory is published with it, crediting you unless you ask otherwise.
+- through GitHub: on the repository's **Security** tab, choose **Report a vulnerability**
+  (GitHub's private vulnerability reporting);
+- by e-mail to [mikhail.nezhinsky@gmail.com](mailto:mikhail.nezhinsky@gmail.com).
+
+Please do not open a public issue for it. Include the coreslot version (`coreslot version`), the
+operating system and architecture, and the smallest sequence of commands that shows the problem.
+
+You will get a first answer within 7 days, in the advisory thread or by e-mail. A confirmed issue
+is fixed in a release, and an advisory is published with it, crediting you unless you ask
+otherwise.
 
 Only the latest release is supported while coreslot is at `v0`
 ([compatibility policy](docs/compatibility.md)).
@@ -30,7 +35,7 @@ boundary and does not enforce anything.
 - **One host, one user.** Never share the state directory across users or hosts. Locks on network
   filesystems are not host-local, and a second user's processes are not part of the budget.
   coreslot refuses a state directory on a network, FUSE or VM-shared filesystem (NFS, SMB, AFP,
-  WebDAV, macFUSE, 9p, vboxsf, Ceph, AFS). Multi-user hosts are not supported in v1.
+  WebDAV, macFUSE, 9p, vboxsf, Ceph, AFS). Multi-user hosts are not supported.
 
 ### State directory policy
 

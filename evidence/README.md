@@ -1,8 +1,9 @@
 # Evidence
 
-Every measured claim in the README is backed by a script in this directory. Each record below
-names the script, when it ran, on what, and what it printed, verbatim. A record is a reading on
-one machine on one day, not a guarantee; rerun the script to check it on yours.
+Every measured claim in the README is backed by a script in this directory or a benchmark program
+under `bench/`. Each record below names the script, when it ran, on what, and what it printed,
+verbatim. A record is a reading on one machine on one day, not a guarantee; rerun the script to
+check it on yours.
 
 Index of the evidence scripts:
 
@@ -28,17 +29,18 @@ second), which cannot be met: a Go process that only wakes once a second costs m
 All figures below are aggregate waiter CPU (user + system) as a percentage of one core over the
 measured window. Microseconds are per waiter-second.
 
-### Results by round
+### Results by optimization pass
 
-The rounds are measured on this host, each in its own session:
+Two optimization passes followed the first measurement, each measured on this host in its own
+session:
 
-| Round | Commit | Changes |
+| Pass | Commit | Changes |
 |---|---|---|
 | Before | e6c2e31, 2026-10-11 | The election probed every ticket ahead; `Wait` stepped every 250 ms. |
-| Round 1 | ae0fa2c | The election stops at the first live, non-STALLED ticket; a non-head waiter works once per second. |
-| Round 2 | 20a71fe | The front window of 4; re-election inside the admitting section; names-only rescans; holds probed on request; one P while the CLI waits; the harness's gen churn fixed. |
+| Pass 1 | ae0fa2c, 2026-10-12 | The election stops at the first live, non-STALLED ticket; a non-head waiter works once per second. |
+| Pass 2 | 20a71fe, 2026-10-12 | The front window of 4; re-election inside the admitting section; names-only rescans; holds probed on request; one P while the CLI waits; the harness's gen churn fixed. |
 
-| Platform | Waiters | Before | Round 1 | Round 2 |
+| Platform | Waiters | Before | Pass 1 | Pass 2 |
 |---|---|---|---|---|
 | macOS | 50 | 9.7 (2.0 ms; a 30 s trial) | 4.40 (892 us) | **3.54** (753 us) |
 | macOS | 100, 5 runs: min / median / max | 25.01 / 25.80 / 28.99 | 9.62 / 11.04 / 11.87 | 6.38 / 6.59 / 6.92 (650 to 709 us); after the stop fix, the gate run: **5.10 / 5.70 / 6.24** |
@@ -47,7 +49,7 @@ The rounds are measured on this host, each in its own session:
 | Linux (Docker VM) | 1000 | 889.7 | not run | **361.4** (3618 us); measured once, for publication |
 | macOS | 1000 | 1028.4 (a lower bound) | not run | **not run; a projection: about 150** |
 
-**Round 2 runs.** Each window is 120 s. In every run the wait4 sum equals the harness's
+**Pass 2 runs.** Each window is 120 s. In every run the wait4 sum equals the harness's
 RUSAGE_CHILDREN delta. Host load averages (1/5/15 min) are given at the run's start and end.
 
 | Run | % of one core | us per waiter-second | Arrivals | Admitted | gen, start to end | Seconds with a gen change | Load, start to end |
@@ -70,14 +72,14 @@ to 440 bumps in 120 s, from arrivals, admissions and hold removals, the owners' 
 cancellation, re-adoption and resume bumps. A waiter reads `gen` once a second, so it rescans at
 most once a second. `gen` changed in 59 to 73 of the 120 seconds.
 
-Before round 2 the harness's re-adoption added far more, but those runs did not record `gen`. It
+Before pass 2 the harness's re-adoption added far more, but those runs did not record `gen`. It
 retried a short adoption every 20 ms, and each retry published and removed a hold, two bumps.
 
 The Linux 1000-waiter run ran inside the Docker Desktop VM, whose 14 CPUs are the shared macOS
 host's own: it competed with the host's other work and drove the VM's load to 151 (warm-up 19 s).
 It is not run on the macOS host itself, where 1000 waiters are not run on a shared machine.
 
-### Where a waiter's CPU goes (round 2)
+### Where a waiter's CPU goes (pass 2)
 
 **The floor and the steady waiter**, measured in one session with `bench/floor`: 20 processes per
 mode, 60 s each, at a host load of about 20. Each figure is the median in us per process-second.
@@ -87,8 +89,8 @@ mode, 60 s each, at a host load of about 20. Each figure is the median in us per
 | Go process that sleeps 1 s in a loop, no system calls | **60** | 54 |
 | The same plus the 18 system calls a non-head waiter makes each second, made directly | 272 | 239 |
 | Library waiter that is not the head, quiet queue (`gen` never changes) | 384 | 370 |
-| CLI waiter (`coreslot run`), quiet queue, round 2 (one P while waiting) | 268 | |
-| CLI waiter before round 2 (14 P), same session | 453 | |
+| CLI waiter (`coreslot run`), quiet queue, pass 2 (one P while waiting) | 268 | |
+| CLI waiter before pass 2 (14 P), same session | 453 | |
 
 **The split of the n=100 median of 672 us per waiter-second** (macOS):
 
@@ -102,7 +104,7 @@ mode, 60 s each, at a host load of about 20. Each figure is the median in us per
 
 The two estimates in the table are derived, not measured directly.
 
-**The in-queue profile** is in `waiter-bench-n200-darwin-round2.pprof`: the middle waiter at n=200,
+**The in-queue profile** is in `waiter-bench-n200-darwin-pass2.pprof`: the middle waiter at n=200,
 110 s at 1000 Hz, 97 ms of samples. Shares of the samples:
 
 | Share | What |
@@ -122,17 +124,17 @@ samples. In that session the twin cost 643 us and the waiter 688 us.
 
 The scheduler cost belongs to a 14-P Go runtime that makes these system calls, whoever makes them.
 It moves with host load: the same twin cost 213, 272 and 643 us in three sessions, and was most
-expensive on the quietest host, where idle Ps spin. Round 1 put 530 us on the engine. That compared
-two sessions under different loads and was wrong.
+expensive on the quietest host, where idle Ps spin. The analysis after pass 1 put 530 us on the
+engine. That compared two sessions under different loads and was wrong.
 
-**What changed in round 2, each measured on its own** (one run each, shared host):
+**What changed in pass 2, each measured on its own** (one run each, shared host):
 
 | Change | Before | After |
 |---|---|---|
 | Names-only rescans and holds on request, library waiters, n=100 | 10.30 % | 6.30 % |
 | One P while the CLI waits, quiet queue (same session as the floor above) | 453 us | 268 us |
 
-The second figure includes the other round-2 changes, but in a quiet queue only the CLI's one P
+The second figure includes the other pass-2 changes, but in a quiet queue only the CLI's one P
 and the front window differ.
 
 The 14-P library waiter is now 384 us against 370 us at GOMAXPROCS=1, so the runtime setting
@@ -151,7 +153,7 @@ bound of about 67 %. Both are extrapolations.
 
 ### The gate run (2026-10-12, 2bcd53d)
 
-The gate, re-run after the review fixes of round 2, on the macOS reference host:
+The gate, re-run on the macOS reference host after the last fixes of pass 2:
 
 ```sh
 waiters -coreslot coreslot -dir work    # the default: -n 100 -runs 5 -duration 120s
@@ -160,7 +162,7 @@ waiters -coreslot coreslot -dir work    # the default: -n 100 -runs 5 -duration 
 **PASS: min 5.10 / median 5.70 / max 6.24 % of one core.** Against 10 %, the margin is 1.75 times
 the median and 1.60 times the worst run.
 
-The earlier round-2 runs, 6.38 to 6.92 %, came before one fix: their burst stopped the first
+The earlier pass-2 runs, 6.38 to 6.92 %, came before one fix: their burst stopped the first
 live ticket of a snapshot when its waiter was a stall candidate, and otherwise 3 random
 candidates; they recorded nothing per burst. The burst now stops the first waiter in queue order
 that is a stall candidate (not stopped, leaving or profiled), plus Stall-1 random candidates, and
@@ -186,13 +188,13 @@ first waiter each burst stopped.
 Why position 2 dominates is derived from the timing, not recorded: stall-for (12 s) outlasts
 burst-every (10 s), so the previous burst's first stopped waiter is usually still stopped.
 
-Admissions are fewer than in the earlier round-2 runs: 11 to 16 against 30 to 41.
+Admissions are fewer than in the earlier pass-2 runs: 11 to 16 against 30 to 41.
 
 **Caveats on the margin:**
 
 - The floor measurements show the per-process cost moving by a factor of 2 to 3 with host load, and
   it was highest on a quiet host. These runs were at load 7 to 29.
-- The Linux VM figure is published, not gated. It measured 15.99 % at 100 waiters in round 2; its
+- The Linux VM figure is published, not gated. It measured 15.99 % at 100 waiters in pass 2; its
   tick-sampled rusage reads 2 to 4 times the macOS figures even for the sleep loop.
 
 ### Before the fix: the profile that found the quadratic scan
@@ -218,8 +220,8 @@ non-STALLED one; reading the cancel file on each poll is what section 10.3 asks 
   darwin/arm64.
 - **Linux:** the `golang:1.26` image (go1.26.9 linux/arm64, Debian 13), running on Docker
   Desktop's linuxkit kernel 7.0.14 with 14 CPUs. The run used an unprivileged user, the same way
-  `scripts/linux-test.sh` does. `pids.max` was `max`; `ulimit -n` was 1048576 in round 1 and 1024
-  in round 2, which a waiter (a few descriptors each) never approaches; no limit was raised. On
+  `scripts/linux-test.sh` does. `pids.max` was `max`; `ulimit -n` was 1048576 in pass 1 and 1024
+  in pass 2, which a waiter (a few descriptors each) never approaches; no limit was raised. On
   macOS, `kern.maxprocperuid` is 8000 and `ulimit -n` is 1048576, so no limit was
   raised there either.
 - **Waiters:** each waiter is its own process: `bench/waiters waiter`, built on the public library.
@@ -229,7 +231,7 @@ non-STALLED one; reading the cancel file on each poll is what section 10.3 asks 
   for a waiter that is not the head, on the 0.25 s to 2 s backoff for the head.
   The waiters use the default `GOMAXPROCS`. Once admitted, a waiter closes its grant and exits.
 - **Budget:** `cpu = 8`. Between bursts the harness holds all 8 tokens as eight adopted 1-token
-  grants, so the budget is always held. Since round 2 it re-adopts a token only when `Free`
+  grants, so the budget is always held. Since pass 2 it re-adopts a token only when `Free`
   reports one, once a second, instead of adopting, finding it short and closing every 20 ms.
 - **Bursts:** one every 10 s, starting 5 s into the window (12 bursts in 120 s). Each burst does
   the following:
@@ -242,7 +244,7 @@ non-STALLED one; reading the cancel file on each poll is what section 10.3 asks 
      stopped, leaving or profiled), plus Stall-1 (2) random candidates, and sends SIGCONT 12 s
      later. Their successors find them STALLED, and on resume they make the resume bump of `gen`.
 - **Window:** the window opens after every one of the n waiters has enqueued, plus 5 s to settle,
-  once every waiter has reported its CPU baseline (since round 2; the CPU between a waiter's report
+  once every waiter has reported its CPU baseline (since pass 2; the CPU between a waiter's report
   and the opening is counted, its wall time is not). The harness reads `gen` at the window's start
   and end and once a second in between, and reports the seconds in which it changed.
 - **CPU accounting:** for each waiter, the benchmark takes the kernel's rusage of that child from
@@ -299,7 +301,7 @@ docker run --rm -v "$PWD:/src:ro" -e GOFLAGS=-buildvcs=false golang:1.26 sh -c '
 		\$B/waiters -coreslot \$B/coreslot -dir /home/tester/work -n 1000 -runs 1"'
 ```
 
-The per-family floor modes (round 1, one session) gave 126 (`refresh`), 103 (`cancel`), 177
+The per-family floor modes (pass 1, one session) gave 126 (`refresh`), 103 (`cancel`), 177
 (`gen`) and 130 (`probe`) us per process-second against 54 for `sleep`; the families do not add
 up, because most of each one's cost is waking a cold process and runtime.
 
@@ -438,7 +440,7 @@ pairs favouring coreslot: 6 of 12
 
 **What it shows.** Charging the cores a gate uses, not one token per worker, removed run 1's
 loss: the ratio went from 1.144 to 1.007, inside the 1.05 bound, and no job waited. It is a tie,
-not a speed-up: six pairs favour each arm, and the run was also declared against a stricter
+not a speed-up: six pairs favor each arm, and the run was also declared against a stricter
 target, a ratio below 1.00, which it does not meet. On this mix the gates themselves need about 6
 to 9 of the 14 cores; the slowdown of the service suite against its 389 s alone came from the
 host's other work, which coreslot does not govern.
@@ -454,5 +456,7 @@ python3 evidence/acceptance.py run gates.json out 1 6
 python3 evidence/acceptance.py summary out
 ```
 
-`gates.json` follows the shape in the script's docstring; give it a state directory of its own,
-so the run is a separate budget and its run log holds only these jobs.
+`gates.json` is not in the repository: it named local paths, and most of its jobs ran in working
+trees of other projects. Write one for your own jobs, following the shape in the script's
+docstring, and give it a state directory of its own, so the run is a separate budget and its run
+log holds only these jobs.

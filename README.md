@@ -1,21 +1,12 @@
 # coreslot
 
+[![CI](https://github.com/core-slot/coreslot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/core-slot/coreslot/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/core-slot/coreslot.svg)](https://pkg.go.dev/github.com/core-slot/coreslot)
+[![Release](https://img.shields.io/github/v/release/core-slot/coreslot?sort=semver)](https://github.com/core-slot/coreslot/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/core-slot/coreslot)](LICENSE)
+
 One core budget for every test suite, build and agent on your machine: parallel gates wait their
 turn instead of melting the laptop.
-
-**Status:** release candidate; product acceptance passed on 2026-10-13. Its criterion was declared
-in advance: on a developer machine that is never quiet, three parallel test gates plus one CI job
-run with and without coreslot as alternating pairs in the same window, at least three pairs; with
-coreslot, the median time until the last job finishes is at most 1.05 × the median without it, and
-no gate fails falsely. The first run failed at 1.144: each gate asked for one token per worker, and
-the first to arrive held 12 of 14 tokens for workers that kept 4 cores busy. The second, with each
-gate asking for the cores it uses, passed over twelve pairs at 1.007 with no false failure. That is
-a tie, not a speed-up: on that mix the gates themselves needed about 6 to 9 of the 14 cores, and a
-mix that the gates themselves overload is not measured yet. All pairs and their load readings are
-in [evidence](evidence/README.md#product-acceptance-acceptancepy). The module stays at `v0` until
-the on-disk format is frozen, once the conformance suite passes on macOS and Linux; `v1.0.0`
-freezes the format then current
-([compatibility policy](docs/compatibility.md)).
 
 Several coding-agent sessions, each in its own worktree, each running its own `pytest -n <cores>`
 or `make -j<cores>`, oversubscribe a machine several times over: timing-sensitive tests fail
@@ -24,6 +15,15 @@ share of one machine-wide budget. A command asks for `min..max` cores, waits in 
 come, first served at equal priority) until `min` is free, and runs with what it got. There is no
 daemon: the budget is a directory of token files and `flock(2)` locks, so a killed client never
 leaks its share.
+
+```sh
+coreslot run --need cpu=2..16 --subst -- make -j{n}  # waits for 2 cores, runs with up to 16
+coreslot run --need cpu=6 -- pytest -n 12            # 12 workers that keep about 5 cores busy
+coreslot status                                      # who holds what, who waits
+```
+
+**Status:** `v0`. Before `v1.0.0` the CLI and the library may still change, and a release may
+introduce a new on-disk format; the [compatibility policy](docs/compatibility.md) says how.
 
 ## Install
 
@@ -42,8 +42,7 @@ brew install core-slot/tap/coreslot
 
 Or download a release archive (macOS and Linux, amd64 and arm64) from the
 [releases page](https://github.com/core-slot/coreslot/releases). Each release carries
-`checksums.txt`; releases of the public repository also carry a build-provenance attestation for
-every archive:
+`checksums.txt` and a build-provenance attestation for every archive:
 
 ```sh
 shasum -a 256 -c checksums.txt --ignore-missing
@@ -85,6 +84,14 @@ range](#choosing-a-range) below says how to pick `2..16`):
 coreslot run --need cpu=2..16 --subst -- make -j{n}
 ```
 
+Two runs that do not fit side by side queue. On a 10-core budget the second waits until the
+first exits, then runs:
+
+```sh
+coreslot run --need cpu=8 --label gate:a -- make test &
+coreslot run --need cpu=8 --label gate:b -- make test
+```
+
 See who holds what and who waits:
 
 ```sh
@@ -105,10 +112,11 @@ each other: two siblings started together under an 8-core grant both run with 8.
 wants concurrent children partitions its grant itself. `--independent` queues as an unrelated
 request instead. The Go library applies the same rule ([below](#go-library)).
 
-The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource), the
-hold's descriptor at fd 3 and the token descriptors from fd 4. The tokens stay held until the
-command exits and coreslot closes its copies; a daemon the command leaves behind with inherited
-descriptors keeps them.
+The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource) and
+inherits the descriptors that hold its grant
+([`PROTOCOL.md` section 17](PROTOCOL.md#17-descriptor-and-environment-contract)). The tokens stay
+held until the command exits and coreslot closes its copies; a daemon the command leaves behind
+with inherited descriptors keeps them.
 
 ### Choosing a range
 
@@ -116,9 +124,9 @@ A token is a core, not a worker. Ask for the cores a command keeps busy, measure
 each run appends a line to the run log, `log/runs.jsonl` in the state directory, and
 (`cpu_user_s` + `cpu_sys_s`) ÷ `ran_s` in it is the cores the run used (the command and the
 descendants it waited for; not a database or daemon it talks to). Ask for that times about 1.2. In
-the product acceptance a pytest suite's 12 workers kept 2.4 to 4.3 cores busy: asking for 12
-tokens left most of the budget idle while the other gates waited, and with 6 it ran as fast as
-it did without coreslot
+the mix measured under [Performance](#performance), a pytest suite's 12 workers kept 2.4 to 4.3
+cores busy: asking for 12 tokens left most of the budget idle while the other gates waited, and
+with 6 it ran as fast as it did without coreslot
 ([evidence](evidence/README.md#product-acceptance-acceptancepy)).
 
 `min` is the least the command can usefully run with; `max` is the point past which more
@@ -136,7 +144,7 @@ later.
 
 Without `--need`, a run whose command has `{n}` (or `{n:cpu}`, or one inside an argument with
 `--subst`) asks for `cpu=1..16`, and any other run for `cpu=1..1`: a command that cannot learn its
-grant would hold tokens it leaves idle. A command that parallelises itself without `{n}`, such as
+grant would hold tokens it leaves idle. A command that parallelizes itself without `{n}`, such as
 `go test ./...` or `cargo build`, should say `--need cpu=1..16` (or `cpu=1..`) so that it is
 counted honestly.
 
@@ -183,7 +191,10 @@ A suite that also needs the shared database adds `--need pg-local=1`. The state 
 - **Not a daemon.** Nothing runs between commands; there is no network and no distribution of work
   across machines.
 - **Not multi-user.** One budget per user; never share the state directory across users or hosts.
-  Memory is not a resource in v1, and on Windows commands run without a budget, with a warning.
+- **Not a memory budget.** coreslot counts cores and the resources you declare. A command's memory
+  is neither reserved nor limited; afterwards the run log records the peak of its largest process.
+- **Not for Windows.** coreslot builds there, but runs every command at once, without a budget,
+  with a warning.
 
 ### Containers
 
@@ -217,7 +228,8 @@ The library never prints, never installs signal handlers and never decides on it
 unbudgeted: a `*StateError` tells the caller the budget is unusable. `Open` checks the state
 directory before any request, so it returns one even where the parent runs unbudgeted because
 that directory is unusable; a caller that wants to follow its parent reads `CORESLOT_UNBUDGETED`.
-The package documentation has the full example; [`api/v0.txt`](api/v0.txt) is the exported API.
+The [package documentation](https://pkg.go.dev/github.com/core-slot/coreslot) has the full
+example; [`api/v0.txt`](api/v0.txt) is the exported API.
 
 ## Protocol
 
@@ -228,20 +240,30 @@ written that way lives in [`conformance/pyclient`](conformance/pyclient).
 
 ## Performance
 
-The release gate is 100 waiters under the bursts of arrivals, admissions, cancellations and stall
-recoveries that `bench/waiters` drives, at most 10 % of one core in aggregate, as the median of five
-120 s runs on the macOS reference host; failing it blocks a release candidate. All figures are from
-[`evidence/README.md`](evidence/README.md#waiter-benchmark-the-release-gate), which has the scripts,
-the setup and every run:
+Waiting is cheap: 100 waiting clients (one process each) cost **5.7 % of one core** in total, on
+a 14-core Mac, while the queue churns with arrivals, admissions, cancellations and stopped waiters
+(median of five 120 s runs, min 5.10 %, max 6.24 %;
+[the run](evidence/README.md#the-gate-run-2026-10-12-2bcd53d)). A release is not cut while this
+figure is above 10 %. Larger queues:
 
-- **The gate:** measured
-  [5.70 % of one core](evidence/README.md#the-gate-run-2026-10-12-2bcd53d) (min 5.10 %, max
-  6.24 %): pass.
 - **Linux, 1000 waiters:** 361.4 % of one core, measured once inside Docker Desktop's VM on the
-  same loaded host; published, not gated.
+  same, loaded Mac.
 - **macOS, 1000 waiters:** not measured.
   [A projection](evidence/README.md#projection-to-1000-waiters-on-macos-not-a-measurement) from the
   measured runs gives about 150 % of one core; it is an extrapolation, not a measurement.
+
+On a real mix coreslot cost no measurable time, and it has not yet been shown to save any. Three
+test suites and a lint job started together on a busy 14-core Mac, twelve times with coreslot and
+twelve without, alternating: the last job finished after a median of 539 s with it and 536 s without
+(ratio 1.007; the bound declared before the runs was 1.05), and no job failed. That is a tie, not a
+speed-up: on that mix the suites needed about 6 to 9 of the 14 cores, and a mix that the suites
+themselves overload is not measured yet. An earlier attempt, with one token per pytest worker,
+lost at 1.144, which is why a request asks for the cores a command keeps busy
+([choosing a range](#choosing-a-range)).
+
+[`evidence/README.md`](evidence/README.md) has the scripts, the setup and every run, of the
+[waiter benchmark](evidence/README.md#waiter-benchmark-the-release-gate) and of the
+[product acceptance](evidence/README.md#product-acceptance-acceptancepy).
 
 ## More
 
