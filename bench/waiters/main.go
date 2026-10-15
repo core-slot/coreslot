@@ -1,4 +1,4 @@
-//go:build unix
+//go:build coreslot_bench && unix
 
 // Command waiters is the waiter benchmark, the release gate: waiters, each its own process on the
 // public library, wait against a held budget while the harness drives bursts of arrivals,
@@ -17,9 +17,11 @@
 // harness's getrusage(RUSAGE_CHILDREN) delta over the run is printed as a cross-check. The
 // processes that publish cancel requests (`coreslot cancel`) are counted separately, as control.
 //
-// Usage:
+// It builds only with the coreslot_bench tag, so that installing the module's commands installs
+// coreslot alone. Usage:
 //
-//	go build -o /tmp/b/coreslot ./cmd/coreslot && go build -o /tmp/b/waiters ./bench/waiters
+//	go build -o /tmp/b/coreslot ./cmd/coreslot
+//	go build -tags coreslot_bench -o /tmp/b/waiters ./bench/waiters
 //	/tmp/b/waiters -coreslot /tmp/b/coreslot -dir /tmp/b/work
 //
 // The same binary is the waiter (`waiters waiter ...`) and the process-group leader

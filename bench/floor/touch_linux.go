@@ -1,3 +1,5 @@
+//go:build coreslot_bench
+
 package main
 
 import (
