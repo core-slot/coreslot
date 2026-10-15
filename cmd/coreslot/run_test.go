@@ -403,6 +403,28 @@ func envOf(out string) map[string]string {
 
 // ---------------------------------------------------------------- pure functions
 
+// The CLI's own state errors keep their cause, as the library's do: a location that failed and a
+// state directory that cannot be created both still match the errno behind them.
+func TestOpenEngineStateErrorWrapsItsCause(t *testing.T) {
+	cause := &os.PathError{Op: "open", Path: "/etc/passwd", Err: syscall.EACCES}
+	if _, err := openEngine(location{err: cause}, true); !errors.Is(err, syscall.EACCES) {
+		t.Errorf("openEngine of a failed location: %v (%T), want it to wrap EACCES", err, err)
+	}
+	if os.Geteuid() == 0 {
+		return // root ignores directory permissions
+	}
+	parent := filepath.Join(t.TempDir(), "read-only")
+	if err := os.Mkdir(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o700) })
+	_, err := openEngine(location{dir: filepath.Join(parent, "state")}, false)
+	var se *stateError
+	if !errors.As(err, &se) || !errors.Is(err, syscall.EACCES) {
+		t.Errorf("openEngine under a read-only parent: %v (%T), want a *stateError wrapping EACCES", err, err)
+	}
+}
+
 func TestClassify(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -415,6 +437,7 @@ func TestClassify(t *testing.T) {
 		{"refusal code", &refusalError{Msg: "timeout", Code: 99}, 99, false},
 		{"library state error", &coreslot.StateError{Reason: "symlink"}, 0, true},
 		{"cli state error", &stateError{Reason: "unusable"}, 0, true},
+		{"cli state error with a cause", &stateError{Reason: "x", Err: &os.PathError{Op: "open", Path: "/s", Err: syscall.EACCES}}, 0, true},
 		{"wrapped state error", fmt.Errorf("open: %w", &coreslot.StateError{Reason: "x"}), 0, true},
 		{"strict turns a state error into a refusal", strictRefusal(&coreslot.StateError{Reason: "x"}, 75), 75, false},
 		{"strict with --refusal-code", strictRefusal(&stateError{Reason: "x"}, 99), 99, false},

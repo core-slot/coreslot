@@ -29,7 +29,7 @@ func locate() location {
 // missing directory as empty.
 func openEngine(loc location, readOnly bool) (*engine.Engine, error) {
 	if loc.err != nil {
-		return nil, &stateError{Reason: loc.err.Error()}
+		return nil, &stateError{Reason: loc.err.Error(), Err: loc.err}
 	}
 	open := store.Open
 	if readOnly {
@@ -47,7 +47,7 @@ func openEngine(loc location, readOnly bool) (*engine.Engine, error) {
 // Classification needs no wrapping: classify judges every error the same way (stateReason).
 func asState(err error) error {
 	if reason, ok := stateReason(err); ok {
-		return &stateError{Reason: reason}
+		return &stateError{Reason: reason, Err: err}
 	}
 	return err
 }

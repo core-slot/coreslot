@@ -23,7 +23,8 @@ const (
 )
 
 // refusalError is a refusal (PROTOCOL.md section 14): nothing runs and the run exits with Code,
-// the refusal code of its --refusal-code (75 when Code is 0).
+// the refusal code of its --refusal-code (75 when Code is 0). It carries text alone on purpose:
+// under --strict it replaces a state error, which must not classify as one again.
 type refusalError struct {
 	Msg  string
 	Code int
@@ -44,9 +45,13 @@ func (e *interruptError) Error() string { return "interrupted by " + e.Sig.Strin
 // (PROTOCOL.md section 14).
 type stateError struct {
 	Reason string
+	Err    error // the cause, or nil
 }
 
 func (e *stateError) Error() string { return "state error: " + e.Reason }
+
+// Unwrap returns the cause, or nil.
+func (e *stateError) Unwrap() error { return e.Err }
 
 // execError is the run's own failure to start its command, typed at the exec: only there does a
 // missing or non-executable file mean 127 or 126. The same errno anywhere else is I/O on the state.
