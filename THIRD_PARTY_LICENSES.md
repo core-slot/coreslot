@@ -11,7 +11,7 @@ CI job `licenses` regenerates it and fails when this block differs:
 
 ```sh
 for os in darwin linux; do
-  GOOS=$os go-licenses report --ignore github.com/Nezhinskiy/coreslot ./...
+  GOOS=$os go-licenses report --ignore github.com/core-slot/coreslot ./...
 done | sort -u
 ```
 

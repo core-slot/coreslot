@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // LiveError is the refusal of Reset: something is alive, so nothing was removed. It matches

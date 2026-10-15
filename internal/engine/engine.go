@@ -18,12 +18,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/config"
-	"github.com/Nezhinskiy/coreslot/internal/spec"
-	"github.com/Nezhinskiy/coreslot/internal/state"
-	"github.com/Nezhinskiy/coreslot/internal/store"
-	"github.com/Nezhinskiy/coreslot/internal/testhooks"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/state"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // Timing of a waiter (PROTOCOL.md sections 10 and 22).

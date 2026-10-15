@@ -6,8 +6,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/state"
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/state"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // toTokenOnly switches a waiting ticket to token-only mode after a section found a FORMAT this

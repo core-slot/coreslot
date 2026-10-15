@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot"
+	"github.com/core-slot/coreslot"
 )
 
 // libraryHelper runs the helpers that use the Go library from inside a run's command.

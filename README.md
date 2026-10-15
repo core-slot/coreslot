@@ -30,24 +30,24 @@ leaks its share.
 With Go 1.26 or newer:
 
 ```sh
-go install github.com/Nezhinskiy/coreslot/cmd/coreslot@latest
+go install github.com/core-slot/coreslot/cmd/coreslot@latest
 ```
 
 With Homebrew, from a tap whose formula builds from source
 ([`packaging/homebrew/coreslot.rb.tmpl`](packaging/homebrew/coreslot.rb.tmpl)):
 
 ```sh
-brew install Nezhinskiy/tap/coreslot
+brew install core-slot/tap/coreslot
 ```
 
 Or download a release archive (macOS and Linux, amd64 and arm64) from the
-[releases page](https://github.com/Nezhinskiy/coreslot/releases). Each release carries
+[releases page](https://github.com/core-slot/coreslot/releases). Each release carries
 `checksums.txt`; releases of the public repository also carry a build-provenance attestation for
 every archive:
 
 ```sh
 shasum -a 256 -c checksums.txt --ignore-missing
-gh attestation verify coreslot_<version>_darwin_arm64.tar.gz --repo Nezhinskiy/coreslot
+gh attestation verify coreslot_<version>_darwin_arm64.tar.gz --repo core-slot/coreslot
 tar -xzf coreslot_<version>_darwin_arm64.tar.gz
 ```
 

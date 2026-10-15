@@ -1,4 +1,4 @@
-module github.com/Nezhinskiy/coreslot
+module github.com/core-slot/coreslot
 
 go 1.26.0
 

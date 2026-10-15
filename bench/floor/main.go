@@ -36,7 +36,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot"
+	"github.com/core-slot/coreslot"
 )
 
 // The once-per-second work of a non-head waiter, as system calls (internal/engine, Step):

@@ -23,7 +23,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
-	"github.com/Nezhinskiy/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // signalHelper runs the helpers of the signal tests; ok is false for an unknown name.

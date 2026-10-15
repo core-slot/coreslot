@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nezhinskiy/coreslot/internal/wire"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // CountLockedProbe counts every locked token at every index, ignoring non-token names, without
