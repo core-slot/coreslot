@@ -231,7 +231,7 @@ non-STALLED one; reading the cancel file on each poll is what section 10.3 asks 
   for a waiter that is not the head, on the 0.25 s to 2 s backoff for the head.
   The waiters use the default `GOMAXPROCS`. Once admitted, a waiter closes its grant and exits.
 - **Budget:** `cpu = 8`. Between bursts the harness holds all 8 tokens as eight adopted 1-token
-  grants, so the budget is always held. Since pass 2 it re-adopts a token only when `Free`
+  grants, so the budget is always held. Since pass 2 it re-adopts a token only when `Available`
   reports one, once a second, instead of adopting, finding it short and closing every 20 ms.
 - **Bursts:** one every 10 s, starting 5 s into the window (12 bursts in 120 s). Each burst does
   the following:
