@@ -21,6 +21,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 func stateDir(t *testing.T, cfg string) string {
@@ -217,66 +218,137 @@ func TestEnvironReplacesGrantContext(t *testing.T) {
 }
 
 // Every time in a Report is the Unix nanosecond value `status --json` prints, read as a
-// time.Time, and 0 is the zero Time; every other field is the engine's snapshot unchanged.
+// time.Time, and 0 is the zero Time; every other field is the engine's snapshot unchanged. The
+// state has a value in every field: a clamped hold with an undeclared resource, a fail-open hold,
+// a dead hold, a ticket with a pending cancel request, a dead ticket, an ignored entry, locked
+// tokens of a resource the configuration no longer declares, the section held, and a degraded
+// record, then a malformed one.
 func TestReportMatchesTheEngineSnapshot(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\ncpu = 4\npg = 1\n")
 	c := open(t, dir)
-	waitGrant(t, c, Request{Label: "hold", Need: map[string]Range{"cpu": {Min: 4, Max: 4}, "gpu": {Min: 1, Max: 1}}})
-	w, err := c.Enqueue(context.Background(), Request{Label: "queued", Priority: 5, Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
+	ctx := context.Background()
+	waitGrant(t, c, Request{Label: "hold", Need: map[string]Range{"cpu": {Min: 5, Max: 5}, "gpu": {Min: 1, Max: 1},
+		"pg": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(ctx, Request{Label: "queued", Priority: 5, Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { w.Cancel() })
+	withdrawn, err := c.Enqueue(ctx, Request{Label: "withdrawn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range r.Tickets {
+		if tk.Label != "queued" {
+			continue
+		}
+		id, ok := wire.ParseID(tk.ID)
+		if !ok {
+			t.Fatalf("ticket id %q", tk.ID)
+		}
+		if err := c.e.CancelContext(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fo, err := c.e.FailOpen(spec.Request{Label: "failed open", Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fo.Close() })
+	dead, _, err := c.Adopt(ctx, Request{Label: "dead", Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "degraded"), []byte(`{"reason":"r","first_ns":1700000000123456789,"count":2}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "queue", "not-a-ticket"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// With the section held, a withdrawal and a Close cannot remove their entries: both stay, dead.
 	holdSection(t, dir, 4242)
+	if err := withdrawn.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	dead.Close()
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	got, err := c.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := c.e.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Holds) != 1 || len(got.Tickets) != 1 || got.Degraded == nil || !got.Section.Held {
-		t.Fatalf("snapshot %+v: want a hold, a ticket, a degraded record and a held section", got)
-	}
 	ns := func(tm time.Time) int64 {
 		if tm.IsZero() {
 			return 0
 		}
 		return tm.UnixNano()
 	}
-	back := engine.Report{StateDir: got.StateDir, StateDirExists: got.StateDirExists, Format: got.Format,
-		FormatPresent: got.FormatPresent, FormatUnderstood: got.FormatUnderstood, Gen: got.Gen,
-		ReconciledNS: ns(got.Reconciled), Resources: map[string]engine.ResourceInfo{}, UndeclaredLocked: got.UndeclaredLocked,
-		DeadHolds: got.DeadHolds, Cancels: got.Cancels, Ignored: got.Ignored,
-		Section: engine.SectionInfo{Held: got.Section.Held, PID: got.Section.PID, EnteredNS: ns(got.Section.Entered)}}
-	for name, ri := range got.Resources {
-		back.Resources[name] = engine.ResourceInfo(ri)
+	check := func() Report {
+		t.Helper()
+		got, err := c.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := c.e.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		back := engine.Report{StateDir: got.StateDir, StateDirExists: got.StateDirExists, Format: got.Format,
+			FormatPresent: got.FormatPresent, FormatUnderstood: got.FormatUnderstood, Gen: got.Gen,
+			ReconciledNS: ns(got.Reconciled), Resources: map[string]engine.ResourceInfo{}, UndeclaredLocked: got.UndeclaredLocked,
+			DeadHolds: got.DeadHolds, Cancels: got.Cancels, Ignored: got.Ignored,
+			Section: engine.SectionInfo{Held: got.Section.Held, PID: got.Section.PID, EnteredNS: ns(got.Section.Entered)}}
+		for name, ri := range got.Resources {
+			back.Resources[name] = engine.ResourceInfo(ri)
+		}
+		for _, tk := range got.Tickets {
+			need := map[string]spec.Range{}
+			for name, rg := range tk.Need {
+				need[name] = spec.Range(rg)
+			}
+			back.Tickets = append(back.Tickets, engine.TicketInfo{Name: tk.Name, ID: tk.ID, Label: tk.Label, Priority: tk.Priority,
+				PID: tk.PID, Need: need, CreatedNS: ns(tk.Created), MtimeNS: ns(tk.Refreshed), Dead: tk.Dead})
+		}
+		for _, h := range got.Holds {
+			back.Holds = append(back.Holds, engine.HolderInfo{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: ns(h.Start),
+				Grant: h.Granted, Unbudgeted: h.FailOpen, UnbudgetedResources: h.Unbudgeted, Clamped: h.Clamped, Adopted: h.Adopted})
+		}
+		if d := got.Degraded; d != nil {
+			back.Degraded = &engine.DegradedInfo{Reason: d.Reason, FirstNS: ns(d.First), Count: d.Count, Malformed: d.Malformed}
+		}
+		if !reflect.DeepEqual(back, want) {
+			t.Errorf("the Report read back:\n%+v\nthe engine's snapshot:\n%+v", back, want)
+		}
+		return got
+	}
+
+	got := check()
+	var failOpen, clamped, unbudgeted, deadTicket bool
+	for _, h := range got.Holds {
+		failOpen = failOpen || h.FailOpen
+		clamped = clamped || h.Clamped["cpu"] == 5
+		unbudgeted = unbudgeted || slices.Equal(h.Unbudgeted, []string{"gpu"})
 	}
 	for _, tk := range got.Tickets {
-		need := map[string]spec.Range{}
-		for name, rg := range tk.Need {
-			need[name] = spec.Range(rg)
-		}
-		back.Tickets = append(back.Tickets, engine.TicketInfo{Name: tk.Name, ID: tk.ID, Label: tk.Label, Priority: tk.Priority,
-			PID: tk.PID, Need: need, CreatedNS: ns(tk.Created), MtimeNS: ns(tk.Refreshed), Dead: tk.Dead})
+		deadTicket = deadTicket || (tk.Label == "withdrawn" && tk.Dead)
 	}
-	for _, h := range got.Holds {
-		back.Holds = append(back.Holds, engine.HolderInfo{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: ns(h.Start),
-			Grant: h.Grant, Unbudgeted: h.FailOpen, UnbudgetedResources: h.Unbudgeted, Clamped: h.Clamped, Adopted: h.Adopted})
+	if !failOpen || !clamped || !unbudgeted || !deadTicket || len(got.DeadHolds) != 1 || len(got.Cancels) != 1 ||
+		got.UndeclaredLocked["pg"] != 1 || got.Ignored["queue"] == 0 || !got.Section.Held {
+		t.Errorf("a field the scenario sets is empty: fail-open %v, clamped %v, unbudgeted %v, dead ticket %v, "+
+			"dead holds %v, cancels %v, undeclared %v, ignored %v, section %+v",
+			failOpen, clamped, unbudgeted, deadTicket, got.DeadHolds, got.Cancels, got.UndeclaredLocked, got.Ignored, got.Section)
 	}
-	if d := got.Degraded; d != nil {
-		back.Degraded = &engine.DegradedInfo{Reason: d.Reason, FirstNS: ns(d.First), Count: d.Count, Malformed: d.Malformed}
+	if got.Degraded == nil || got.Degraded.First.UnixNano() != 1700000000123456789 || got.Section.Entered.UnixNano() != 1 {
+		t.Errorf("degraded %+v, section entered %v: want the recorded nanoseconds", got.Degraded, got.Section.Entered)
 	}
-	if !reflect.DeepEqual(back, want) {
-		t.Errorf("the Report read back:\n%+v\nthe engine's snapshot:\n%+v", back, want)
+
+	if err := os.WriteFile(filepath.Join(dir, "degraded"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if got.Degraded.First.UnixNano() != 1700000000123456789 || got.Section.Entered.UnixNano() != 1 {
-		t.Errorf("degraded since %v, section entered %v: want the recorded nanoseconds", got.Degraded.First, got.Section.Entered)
+	if got := check(); got.Degraded == nil || !got.Degraded.Malformed {
+		t.Errorf("degraded %+v after a malformed record, want Malformed", got.Degraded)
 	}
 }
 

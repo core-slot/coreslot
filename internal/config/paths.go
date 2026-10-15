@@ -88,7 +88,7 @@ func homeOf(uid int, lookupID func(string) (*user.User, error), getent []string,
 		}
 		home, nssErr := getentHome(getent, uid, timeout)
 		if nssErr != nil {
-			return "", fmt.Errorf("home directory from the password database: %w (the NSS fallback failed too: %v)", err, nssErr)
+			return "", fmt.Errorf("home directory from the password database: %w (the NSS fallback failed too: %w)", err, nssErr)
 		}
 		return home, nil
 	}
