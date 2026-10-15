@@ -98,7 +98,7 @@ func stableLocked(e Env) int {
 	return 0
 }
 
-// indices are the cpu token indices the live hold labelled label lists. Call it only while no
+// indices are the cpu token indices the live hold labeled label lists. Call it only while no
 // admission is in flight: a snapshot probes the tokens, and a probe can make an admitting
 // client skip a token (PROTOCOL.md section 6), so exact indices are read once the commands
 // started (WaitStarted reads marker files and probes nothing).
@@ -466,7 +466,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	w6.Cont()
 	w5.Cont()
 	resumedAt := time.Now()
-	var first coreslot.HolderInfo
+	var first coreslot.HoldInfo
 	e.Eventually(stalledHeadBound+startWait, "a waiter is admitted after the resumption", func() bool {
 		for _, name := range []string{"W5", "W6"} {
 			if h, ok := e.Hold(name); ok {
@@ -485,7 +485,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	// both are admitted within the bound of the resumption.
 	h5 := e.WaitHold("W5", stalledHeadBound+startWait)
 	h6 := e.WaitHold("W6", stalledHeadBound+startWait)
-	for _, h := range []coreslot.HolderInfo{h5, h6} {
+	for _, h := range []coreslot.HoldInfo{h5, h6} {
 		if d := admittedAt(h).Sub(resumedAt); d > stalledHeadBound {
 			t.Errorf("%s was admitted %v after the resumption, bound %v (load: %s)", h.Label, d, stalledHeadBound, uptime())
 		}
@@ -532,13 +532,13 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 
 	// Adoption during the reduced period takes from what is free.
 	c := e.Client()
-	ga, short, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-a", Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 3}}})
+	ga, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-a", Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 3}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ga.Close()
-	if ga.Granted()["cpu"] != 3 || short["cpu"] != 0 || !slices.Equal(indices(e, "adopt-a"), span(0, 2)) {
-		t.Fatalf("adoption: grant %v, shortfall %v, indices %v; want 3 at 0-2", ga.Granted(), short, indices(e, "adopt-a"))
+	if ga.Granted()["cpu"] != 3 || len(ga.Shortfall()) != 0 || !slices.Equal(indices(e, "adopt-a"), span(0, 2)) {
+		t.Fatalf("adoption: grant %v, shortfall %v, indices %v; want 3 at 0-2", ga.Granted(), ga.Shortfall(), indices(e, "adopt-a"))
 	}
 
 	// A queued request may take at most what is left below the size: 5, from 3-7.
@@ -552,13 +552,13 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	}
 
 	// Nothing is free: an adoption takes nothing and reports its shortfall; a request waits.
-	gb, short, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-b", Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 2}}})
+	gb, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-b", Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 2}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer gb.Close()
-	if gb.Granted()["cpu"] != 0 || short["cpu"] != 1 {
-		t.Errorf("adoption with nothing free: grant %v, shortfall %v; want none and a shortfall of 1", gb.Granted(), short)
+	if gb.Granted()["cpu"] != 0 || gb.Shortfall()["cpu"] != 1 {
+		t.Errorf("adoption with nothing free: grant %v, shortfall %v; want none and a shortfall of 1", gb.Granted(), gb.Shortfall())
 	}
 	r2 := e.Run("R2", "--need", "cpu=1")
 	e.WaitTicket("R2")
@@ -782,7 +782,7 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		w.WaitReached("admit.before-enter")
 		e.ReleaseChild("X")
 		x.ExitCode(0)
-		if got := e.Status().Resources["cpu"].Free; got != 1 {
+		if got := e.Status().Resources["cpu"].Available; got != 1 {
 			t.Fatalf("%d cpu free, want 1: W's attempt would not admit it", got)
 		}
 		e.Start("cancel", tk.ID).ExitCode(0)
@@ -797,10 +797,10 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		}
 		w.ExitCode(exitRefusal)
 		rep := e.Status()
-		if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || len(rep.Cancels) != 0 ||
+		if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || len(rep.CancelRequests) != 0 ||
 			rep.Resources["cpu"].Locked != 0 {
 			t.Errorf("after the cancellation: holds %v, dead %v, tickets %v, cancels %v, locked %d",
-				rep.Holds, rep.DeadHolds, rep.Tickets, rep.Cancels, rep.Resources["cpu"].Locked)
+				rep.Holds, rep.DeadHolds, rep.Tickets, rep.CancelRequests, rep.Resources["cpu"].Locked)
 		}
 	})
 
@@ -831,8 +831,8 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		}
 		e.WaitStarted("V")
 		e.WaitHold("V", startWait)
-		if rep := e.Status(); len(rep.Cancels) != 0 {
-			t.Errorf("a cancel request was left for the admitted ticket: %v", rep.Cancels)
+		if rep := e.Status(); len(rep.CancelRequests) != 0 {
+			t.Errorf("a cancel request was left for the admitted ticket: %v", rep.CancelRequests)
 		}
 		e.ReleaseChild("V")
 		v.ExitCode(0)
@@ -856,8 +856,8 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 			!strings.Contains(c.Stderr(), "no cancel request was published") {
 			t.Errorf("cancel stderr %q, want a refusal naming %q", c.Stderr(), holder)
 		}
-		if rep := e.Status(); len(rep.Cancels) != 0 {
-			t.Errorf("a refused cancel published a request: %v", rep.Cancels)
+		if rep := e.Status(); len(rep.CancelRequests) != 0 {
+			t.Errorf("a refused cancel published a request: %v", rep.CancelRequests)
 		}
 		v.Release("publish.after-create")
 		defer v.AutoRelease("publish.after-create")()

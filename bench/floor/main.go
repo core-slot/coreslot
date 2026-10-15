@@ -165,7 +165,7 @@ func prepare(mode, dir string) (stop func(), err error) {
 		return nil, err
 	}
 	need := map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}
-	g, _, err := c.Adopt(context.Background(), coreslot.Request{Label: "floor-holder", Need: need})
+	g, err := c.Adopt(context.Background(), coreslot.Request{Label: "floor-holder", Need: need})
 	if err != nil {
 		return nil, err
 	}

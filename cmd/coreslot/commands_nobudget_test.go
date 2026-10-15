@@ -8,7 +8,7 @@ import (
 )
 
 // On Windows status, cancel and doctor have no budget to work on, yet --help still prints the
-// command's usage on stdout and exits 0 (PROTOCOL.md section 19), recognised by the same flag set
+// command's usage on stdout and exits 0 (PROTOCOL.md section 19), recognized by the same flag set
 // as on unix; everything else exits 70. noBudget is platform-neutral, so this runs everywhere.
 // Mutation: return exitInternal for every invocation in noBudget and the help cases turn red.
 func TestNoBudgetAnswersOnlyHelp(t *testing.T) {

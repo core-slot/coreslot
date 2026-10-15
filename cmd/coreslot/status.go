@@ -266,7 +266,7 @@ func (v statusView) human() string {
 	}
 	for _, name := range slices.Sorted(maps.Keys(r.Resources)) {
 		ri := r.Resources[name]
-		line := fmt.Sprintf("  %s  size %d  locked %d  free %d", name, ri.Size, ri.Locked, ri.Free)
+		line := fmt.Sprintf("  %s  size %d  locked %d  free %d", name, ri.Size, ri.Locked, ri.Available)
 		if n := v.unlisted[name]; n > 0 {
 			line += fmt.Sprintf("  (%d locked, no hold lists %s)", n, plural(int64(n), "it", "them"))
 		}
@@ -494,7 +494,7 @@ func (v statusView) document() jsonStatus {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
 	}
 	for name, ri := range r.Resources {
-		d.Resources[name] = jsonResource{Size: ri.Size, Locked: ri.Locked, Free: ri.Free, UnlistedLocked: v.unlisted[name]}
+		d.Resources[name] = jsonResource{Size: ri.Size, Locked: ri.Locked, Free: ri.Available, UnlistedLocked: v.unlisted[name]}
 	}
 	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
 		d.Ignored[dir] = r.Ignored[dir]

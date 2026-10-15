@@ -55,7 +55,7 @@ func newFlagSet(name string) *flag.FlagSet {
 }
 
 // noBudget is status, cancel or doctor where there is no budget to inspect, cancel or repair
-// (Windows). A request for help, recognised by the command's own flag set exactly as on unix,
+// (Windows). A request for help, recognized by the command's own flag set exactly as on unix,
 // prints the usage on stdout and exits 0; anything else says why the command cannot work and
 // exits 70.
 func noBudget(name, usage string, fs *flag.FlagSet, args []string, io IO) int {

@@ -13,7 +13,6 @@ import (
 func newReport(r engine.Report) Report {
 	out := Report{
 		StateDir:         r.StateDir,
-		StateDirExists:   r.StateDirExists,
 		Format:           r.Format,
 		FormatPresent:    r.FormatPresent,
 		FormatUnderstood: r.FormatUnderstood,
@@ -22,7 +21,7 @@ func newReport(r engine.Report) Report {
 		Resources:        make(map[string]ResourceInfo, len(r.Resources)),
 		UndeclaredLocked: r.UndeclaredLocked,
 		DeadHolds:        r.DeadHolds,
-		Cancels:          r.Cancels,
+		CancelRequests:   r.Cancels,
 		Ignored:          r.Ignored,
 		Section: SectionInfo{Held: r.Section.Held, PID: r.Section.PID,
 			Entered: nsTime(r.Section.EnteredNS)},
@@ -45,7 +44,7 @@ func newReport(r engine.Report) Report {
 			PID: t.PID, Need: need, Created: nsTime(t.CreatedNS), Refreshed: nsTime(t.MtimeNS), Dead: t.Dead})
 	}
 	for _, h := range r.Holds {
-		out.Holds = append(out.Holds, HolderInfo{Name: h.Name, Label: h.Label, PID: h.PID, Start: nsTime(h.StartNS),
+		out.Holds = append(out.Holds, HoldInfo{Name: h.Name, Label: h.Label, PID: h.PID, Start: nsTime(h.StartNS),
 			Granted: h.Grant, FailOpen: h.Unbudgeted, Unbudgeted: h.UnbudgetedResources, Clamped: h.Clamped,
 			Adopted: h.Adopted})
 	}

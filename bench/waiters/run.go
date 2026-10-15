@@ -634,12 +634,12 @@ func (b *bench) adoptAll(within time.Duration) error {
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
-		g, short, err := b.client.Adopt(context.Background(), coreslot.Request{Label: "bench-harness",
+		g, err := b.client.Adopt(context.Background(), coreslot.Request{Label: "bench-harness",
 			Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
 		if err != nil {
 			return err
 		}
-		if short["cpu"] > 0 {
+		if g.Shortfall()["cpu"] > 0 {
 			g.Close()
 			time.Sleep(20 * time.Millisecond)
 			continue

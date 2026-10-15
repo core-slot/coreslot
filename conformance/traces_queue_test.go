@@ -45,9 +45,9 @@ const exitRefusal = 75
 
 func cpuConfig(n int) string { return fmt.Sprintf("[resources]\ncpu = %d\n", n) }
 
-func admittedAt(h coreslot.HolderInfo) time.Time { return h.Start }
+func admittedAt(h coreslot.HoldInfo) time.Time { return h.Start }
 
-// noHold fails the test when a live hold labelled label exists.
+// noHold fails the test when a live hold labeled label exists.
 func noHold(t *testing.T, e Env, label, why string) {
 	t.Helper()
 	if h, ok := e.Hold(label); ok {
@@ -335,7 +335,7 @@ func stopOutsideSection(e Env, p *Proc, autoRelease func()) (time.Time, int64) {
 	return at, tk.Refreshed.UnixNano()
 }
 
-// waitRefreshed waits until the ticket labelled label carries an mtime other than before.
+// waitRefreshed waits until the ticket labeled label carries an mtime other than before.
 func waitRefreshed(e Env, label string, before int64) {
 	e.t.Helper()
 	e.Eventually(startWait, label+" refreshes its ticket", func() bool {
@@ -656,9 +656,9 @@ func restored(t *testing.T, e Env, tickets, holds, cancels []string, locked int)
 	for _, h := range rep.Holds {
 		gotH = append(gotH, h.Label)
 	}
-	if !slices.Equal(gotT, tickets) || !slices.Equal(gotH, holds) || len(rep.DeadHolds) != 0 || !slices.Equal(rep.Cancels, cancels) {
+	if !slices.Equal(gotT, tickets) || !slices.Equal(gotH, holds) || len(rep.DeadHolds) != 0 || !slices.Equal(rep.CancelRequests, cancels) {
 		t.Errorf("tickets %v (want %v), holds %v (want %v), dead holds %v, cancels %v",
-			gotT, tickets, gotH, holds, rep.DeadHolds, rep.Cancels)
+			gotT, tickets, gotH, holds, rep.DeadHolds, rep.CancelRequests)
 	}
 	for dir, n := range rep.Ignored {
 		if n != 0 {
@@ -769,8 +769,8 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 
 	k := e.Pausing(point).StartChild("cancel", e.Dir, tk.ID)
 	k.CatchPublication(point, store.CancelDir)
-	if rep := e.Status(); len(rep.Cancels) != 0 {
-		t.Fatalf("a cancel request is visible before its publication completed: %v", rep.Cancels)
+	if rep := e.Status(); len(rep.CancelRequests) != 0 {
+		t.Fatalf("a cancel request is visible before its publication completed: %v", rep.CancelRequests)
 	}
 	if killed {
 		k.Kill()
@@ -792,8 +792,8 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 			t.Errorf("the reconciliation removed %d entries with nothing dead", n)
 		}
 		rep := e.Status()
-		if !slices.Contains(rep.Cancels, tk.ID) {
-			t.Fatalf("the reconciliation lost the cancel request of W's live ticket: cancels %v", rep.Cancels)
+		if !slices.Contains(rep.CancelRequests, tk.ID) {
+			t.Fatalf("the reconciliation lost the cancel request of W's live ticket: cancels %v", rep.CancelRequests)
 		}
 		restored(t, e, []string{"V", "W"}, []string{"X"}, []string{tk.ID}, 2)
 		w.Cont()

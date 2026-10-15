@@ -65,7 +65,7 @@ func recordDegraded(t *testing.T, st *store.Store, reason string) {
 // hold adopts a grant for the label and keeps it until the test ends.
 func hold(t *testing.T, c *coreslot.Client, label string, need map[string]coreslot.Range) *coreslot.Grant {
 	t.Helper()
-	g, _, err := c.Adopt(context.Background(), coreslot.Request{Label: label, Need: need})
+	g, err := c.Adopt(context.Background(), coreslot.Request{Label: label, Need: need})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,6 +324,11 @@ func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 	want := fmt.Sprintf("\n  1. wide  pid %d  priority 0  need cpu 4..12, pg-local 1..1  waiting ", os.Getpid())
 	if r.code != 0 || !strings.Contains(r.stdout, want) {
 		t.Errorf("status: exit %d, want a ticket line with %q:\n%s", r.code, want, r.stdout)
+	}
+	for _, line := range []string{"\n  cpu  size 16  locked 16  free 0\n", "\n  pg-local  size 2  locked 0  free 2\n"} {
+		if !strings.Contains(r.stdout, line) {
+			t.Errorf("status lacks the resource line %q:\n%s", strings.TrimSpace(line), r.stdout)
+		}
 	}
 }
 
@@ -783,7 +788,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := stateDir(t, "[resources]\ncpu = 4\n")
 			c := openLib(t, dir)
-			g, _, err := c.Adopt(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"cpu": rng(1, 1)}})
+			g, err := c.Adopt(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"cpu": rng(1, 1)}})
 			if err != nil { // FORMAT, gen and the token files exist
 				t.Fatal(err)
 			}

@@ -114,6 +114,14 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 			t.Errorf("the pass-through wrote under the state directory:\n%s\n---\n%s", before, after)
 		}
 	})
+	// A context that has already ended ends a pass-through as it ends an ordinary Enqueue.
+	t.Run("ended context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if w, err := open(t, dir).Enqueue(ctx, req); w != nil || !errors.Is(err, context.Canceled) {
+			t.Errorf("Enqueue with an ended context = %v, %v; want nil and context.Canceled", w, err)
+		}
+	})
 	t.Run("independent", func(t *testing.T) {
 		c, err := Open(Options{StateDir: dir, Independent: true})
 		if err != nil {
@@ -380,6 +388,9 @@ func passThroughChild() error {
 	}
 	if want := map[string]int{"pg-local": 2}; !maps.Equal(g.Clamped(), want) {
 		return fmt.Errorf("clamped %v, want %v", g.Clamped(), want)
+	}
+	if want := map[string]int{"pg-local": 1}; !maps.Equal(g.Shortfall(), want) {
+		return fmt.Errorf("shortfall %v, want %v: the clamped Min less what the parent holds", g.Shortfall(), want)
 	}
 	if !slices.Equal(g.Unbudgeted(), []string{"gpu"}) {
 		return fmt.Errorf("unbudgeted %v, want [gpu]", g.Unbudgeted())

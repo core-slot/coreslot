@@ -298,6 +298,22 @@ func (g *Grant) Grant() map[string]int {
 // Clamped maps each clamped resource to its requested min (PROTOCOL.md section 12.2).
 func (g *Grant) Clamped() map[string]int { return maps.Clone(g.clamped) }
 
+// Shortfall maps each requested resource the grant holds fewer than min tokens of, none
+// included, to min - held: an adoption's resource of which less than min was free (PROTOCOL.md
+// section 12.4), or a clamped one. A resource run unbudgeted is never in it.
+func (g *Grant) Shortfall() map[string]int {
+	out := map[string]int{}
+	for name, r := range g.need {
+		if slices.Contains(g.unbudgeted, name) {
+			continue
+		}
+		if short := r.Min - len(g.tokens.Indices[name]); short > 0 {
+			out[name] = short
+		}
+	}
+	return out
+}
+
 // Unbudgeted lists, sorted, the requested resources the configuration does not declare (every
 // requested resource for a fail-open grant).
 func (g *Grant) Unbudgeted() []string { return slices.Clone(g.unbudgeted) }

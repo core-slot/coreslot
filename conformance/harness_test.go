@@ -386,7 +386,7 @@ func (p *Proc) reap(proc *os.Process) {
 }
 
 // kill sends sig to target (the pid, or the process group as -pid) while the process is not
-// reaped; it reports whether it signalled.
+// reaped; it reports whether it signaled.
 func (p *Proc) kill(target int, sig syscall.Signal) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -477,7 +477,7 @@ func (e Env) Status() Report {
 	return r
 }
 
-// Ticket returns the queue entry labelled label.
+// Ticket returns the queue entry labeled label.
 func (e Env) Ticket(label string) (coreslot.TicketInfo, bool) {
 	e.t.Helper()
 	for _, tk := range e.Status().Tickets {
@@ -488,18 +488,18 @@ func (e Env) Ticket(label string) (coreslot.TicketInfo, bool) {
 	return coreslot.TicketInfo{}, false
 }
 
-// Hold returns the live hold labelled label.
-func (e Env) Hold(label string) (coreslot.HolderInfo, bool) {
+// Hold returns the live hold labeled label.
+func (e Env) Hold(label string) (coreslot.HoldInfo, bool) {
 	e.t.Helper()
 	for _, h := range e.Status().Holds {
 		if h.Label == label {
 			return h, true
 		}
 	}
-	return coreslot.HolderInfo{}, false
+	return coreslot.HoldInfo{}, false
 }
 
-// WaitTicket waits until a live ticket labelled label is in the queue.
+// WaitTicket waits until a live ticket labeled label is in the queue.
 func (e Env) WaitTicket(label string) coreslot.TicketInfo {
 	e.t.Helper()
 	var tk coreslot.TicketInfo
@@ -511,10 +511,10 @@ func (e Env) WaitTicket(label string) coreslot.TicketInfo {
 	return tk
 }
 
-// WaitHold waits until a live hold labelled label exists.
-func (e Env) WaitHold(label string, within time.Duration) coreslot.HolderInfo {
+// WaitHold waits until a live hold labeled label exists.
+func (e Env) WaitHold(label string, within time.Duration) coreslot.HoldInfo {
 	e.t.Helper()
-	var h coreslot.HolderInfo
+	var h coreslot.HoldInfo
 	e.Eventually(within, "the hold of "+label+" is published", func() bool {
 		var ok bool
 		h, ok = e.Hold(label)
@@ -593,7 +593,7 @@ type Proc struct {
 
 	stdout, stderr *os.File
 
-	mu     sync.Mutex // held while reaping and while signalling
+	mu     sync.Mutex // held while reaping and while signaling
 	reaped bool
 	done   chan struct{}
 	code   int

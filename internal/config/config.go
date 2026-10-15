@@ -22,13 +22,18 @@ type Config struct {
 	WindowsWarning bool                // [platform] windows_warning, default true
 }
 
-// Error reports a configuration that cannot be read or is invalid: a state error.
+// Error reports a configuration that cannot be read or is invalid: a state error. Err is the
+// error that made it unreadable, nil for an invalid one; errors.Is and errors.As see through it.
 type Error struct {
 	Path string
 	Msg  string
+	Err  error
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("configuration %s: %s", e.Path, e.Msg) }
+
+// Unwrap returns the error that made the configuration unreadable, or nil.
+func (e *Error) Unwrap() error { return e.Err }
 
 type sizeKind int
 
@@ -114,7 +119,7 @@ func Load(path string) (Config, error) {
 		return defaults(), nil
 	}
 	if err != nil {
-		return Config{}, &Error{Path: path, Msg: err.Error()}
+		return Config{}, &Error{Path: path, Msg: err.Error(), Err: err}
 	}
 	c, msg := parse(string(data))
 	if msg != "" {

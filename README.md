@@ -18,7 +18,7 @@ leaks its share.
 
 ```sh
 coreslot run --need cpu=2..16 --subst -- make -j{n}  # waits for 2 cores, runs with up to 16
-coreslot run --need cpu=6 -- pytest -n 12            # 12 workers that keep about 5 cores busy
+coreslot run --need cpu=6 -- pytest -n 12            # 12 workers that keep about 4 cores busy
 coreslot status                                      # who holds what, who waits
 ```
 
@@ -63,7 +63,7 @@ xattr -d com.apple.quarantine ./coreslot
 ## Quick start
 
 Run a test gate, asking for the cores it keeps busy rather than one per worker. A pytest worker
-that mostly waits on I/O uses a fraction of a core; here twelve workers keep about five busy
+that mostly waits on I/O uses a fraction of a core; here twelve workers keep about four busy
 ([choosing a range](#choosing-a-range) says how to measure it):
 
 ```sh
@@ -102,8 +102,9 @@ coreslot doctor            # state directory, filesystem, permissions, format, c
 
 A request whose minimum exceeds the whole budget (`cpu=16..16` on a 10-core budget) is clamped: it
 waits for the whole resource, runs alone with all of it, and says so on stderr. `--no-wait` refuses
-at once instead of queueing, `--timeout D` bounds the wait, and `--priority P` (from -1000 to 1000,
-default 0) places a request as if it had arrived `P` minutes earlier.
+at once instead of queueing, `--timeout D` bounds the wait, and `--priority P` (from -1000 to 1000;
+by default the `[priorities]` entry of the label's longest matching prefix, else 0) places a
+request as if it had arrived `P` minutes earlier.
 `coreslot cancel <ticket-id>` or `coreslot cancel --label L` withdraws a waiting request.
 
 **Nested runs are pass-through.** A `coreslot run` started inside another run's grant does not
@@ -211,8 +212,9 @@ The module's root package implements the protocol for other Go programs, such as
 ```go
 c, err := coreslot.Open(coreslot.Options{})
 if err != nil {
-	return err // a *StateError: the caller decides whether to run unbudgeted
+	return err // a *StateError or ErrUnsupported: the caller decides whether to run unbudgeted
 }
+defer c.Close()
 w, err := c.Enqueue(ctx, coreslot.Request{Label: "make test",
 	Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 8}}})
 if err != nil {
@@ -238,8 +240,9 @@ The library never prints, never installs signal handlers and never decides on it
 unbudgeted: a `*StateError` tells the caller the budget is unusable. `Open` checks the state
 directory before any request, so it returns one even where the parent runs unbudgeted because
 that directory is unusable; a caller that wants to follow its parent reads `CORESLOT_UNBUDGETED`.
-The [package documentation](https://pkg.go.dev/github.com/core-slot/coreslot) has the full
-example; [`api/v0.txt`](api/v0.txt) is the exported API.
+The [package documentation](https://pkg.go.dev/github.com/core-slot/coreslot) has runnable
+examples of `Enqueue`, `Poll`, `Adopt` and `Snapshot`, and of running unbudgeted when the budget
+cannot be used; [`api/v0.txt`](api/v0.txt) is the exported API.
 
 ## Protocol
 

@@ -136,15 +136,6 @@ should give both the same bound.
 
 **Status — resolved: PROTOCOL §7.4. A mismatch is malformed and is compared by the reader of holds/. A name above 2^63 − 1 never has a well-formed body. Matches.**
 
-**C10. §7.2: duplicate keys spelled differently** (`"cpu"` and `"c\u0070u"` in one object). §7.2
-says "a duplicate key at any depth" but not whether keys are compared before or after JSON
-unescaping. The fixture `bodies/ticket/bad-duplicate-by-escaped-spelling` requires after-unescaping,
-and only the fixture README states the rule ("Keys are compared after JSON unescaping").
-*Choice:* compare after unescaping, which agrees with the fixture (Python's decoder compares decoded
-keys). `PROTOCOL.md` should state it: a byte-level decoder would accept that body.
-
-**Status — resolved: PROTOCOL §7.2. Keys are compared after JSON unescaping. Matches.**
-
 **C4. §7.4: `unbudgeted_resources` duplicates or ordering, and `clamped` keys for resources that
 are not in `grant`.** Not stated. *Choice:* neither is checked. The client writes sorted, distinct
 names.
@@ -180,6 +171,15 @@ entries of `res/` that are not resource names. Are they token files at an "index
 *Choice:* ignored, so they are not counted as locked.
 
 **Status — resolved: PROTOCOL §6. Not token files: never probed, counted, checked or removed. Matches.**
+
+**C10. §7.2: duplicate keys spelled differently** (`"cpu"` and `"c\u0070u"` in one object). §7.2
+says "a duplicate key at any depth" but not whether keys are compared before or after JSON
+unescaping. The fixture `bodies/ticket/bad-duplicate-by-escaped-spelling` requires after-unescaping,
+and only the fixture README states the rule ("Keys are compared after JSON unescaping").
+*Choice:* compare after unescaping, which agrees with the fixture (Python's decoder compares decoded
+keys). `PROTOCOL.md` should state it: a byte-level decoder would accept that body.
+
+**Status — resolved: PROTOCOL §7.2. Keys are compared after JSON unescaping. Matches.**
 
 ## D. Waiting, election, gen
 
@@ -338,7 +338,7 @@ says; this client's first choice was `cpu=1..1` for every command.
 
 ## Skipped (optional for this client)
 
-- **Adoption (§12.4, §21.7):** not implemented. It has no CLI or library surface in this client's scope.
+- **Adoption (§12.4, §21.7):** not implemented. The client exposes no adoption command or call.
   Validators accept `"adopted": true` holds, and admission counts their tokens like any other locked
   token.
 - **`status`, `doctor`, `doctor --reset`, `doctor --clear` (§4.4, §14):** not implemented.

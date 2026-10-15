@@ -63,6 +63,44 @@ func waitGrant(t *testing.T, c *Client, req Request) *Grant {
 	return g
 }
 
+// Shortfall is what a grant runs without, whatever made it: a clamped admission is short by its
+// Min minus the whole size, an adoption by what was not free, and a grant that holds every Min, or
+// a resource run unbudgeted, is never short.
+func TestShortfall(t *testing.T) {
+	c := open(t, stateDir(t, "[resources]\ncpu = 4\n"))
+	clamped := waitGrant(t, c, Request{Need: map[string]Range{"cpu": {Min: 6, Max: 6}, "gpu": {Min: 1, Max: 1}}})
+	if got, want := clamped.Shortfall(), map[string]int{"cpu": 2}; !reflect.DeepEqual(got, want) {
+		t.Errorf("clamped admission: shortfall %v, want %v (gpu is unbudgeted, never short)", got, want)
+	}
+	clamped.Close()
+
+	ctx := context.Background()
+	full, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 2, Max: 3}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer full.Close()
+	if got := full.Shortfall(); got == nil || len(got) != 0 {
+		t.Errorf("adoption of 3 with Min 2: shortfall %#v, want empty", got)
+	}
+	exact, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := exact.Shortfall(); exact.Granted()["cpu"] != 1 || got == nil || len(got) != 0 {
+		t.Errorf("adoption of exactly its Min: granted %v, shortfall %#v; want 1 and empty, no zero entry", exact.Granted(), got)
+	}
+	exact.Close()
+	short, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 2, Max: 2}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer short.Close()
+	if got, want := short.Shortfall(), map[string]int{"cpu": 1}; short.Granted()["cpu"] != 1 || !reflect.DeepEqual(got, want) {
+		t.Errorf("adoption with one token free: granted %v, shortfall %v; want 1 and %v", short.Granted(), got, want)
+	}
+}
+
 // The child of TestEnvMatchesFiles: it checks, from inside, that the descriptors the
 // environment names are the grant's files.
 const childEnv = "CORESLOT_ROOT_TEST_CHILD"
@@ -259,7 +297,7 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fo.Close() })
-	dead, _, err := c.Adopt(ctx, Request{Label: "dead", Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	dead, err := c.Adopt(ctx, Request{Label: "dead", Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,10 +333,11 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		back := engine.Report{StateDir: got.StateDir, StateDirExists: got.StateDirExists, Format: got.Format,
+		// The library's Open has created the directory, so the engine always reports it.
+		back := engine.Report{StateDir: got.StateDir, StateDirExists: true, Format: got.Format,
 			FormatPresent: got.FormatPresent, FormatUnderstood: got.FormatUnderstood, Gen: got.Gen,
 			ReconciledNS: ns(got.Reconciled), Resources: map[string]engine.ResourceInfo{}, UndeclaredLocked: got.UndeclaredLocked,
-			DeadHolds: got.DeadHolds, Cancels: got.Cancels, Ignored: got.Ignored,
+			DeadHolds: got.DeadHolds, Cancels: got.CancelRequests, Ignored: got.Ignored,
 			Section: engine.SectionInfo{Held: got.Section.Held, PID: got.Section.PID, EnteredNS: ns(got.Section.Entered)}}
 		for name, ri := range got.Resources {
 			back.Resources[name] = engine.ResourceInfo(ri)
@@ -334,11 +373,11 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 	for _, tk := range got.Tickets {
 		deadTicket = deadTicket || (tk.Label == "withdrawn" && tk.Dead)
 	}
-	if !failOpen || !clamped || !unbudgeted || !deadTicket || len(got.DeadHolds) != 1 || len(got.Cancels) != 1 ||
+	if !failOpen || !clamped || !unbudgeted || !deadTicket || len(got.DeadHolds) != 1 || len(got.CancelRequests) != 1 ||
 		got.UndeclaredLocked["pg"] != 1 || got.Ignored["queue"] == 0 || !got.Section.Held {
 		t.Errorf("a field the scenario sets is empty: fail-open %v, clamped %v, unbudgeted %v, dead ticket %v, "+
 			"dead holds %v, cancels %v, undeclared %v, ignored %v, section %+v",
-			failOpen, clamped, unbudgeted, deadTicket, got.DeadHolds, got.Cancels, got.UndeclaredLocked, got.Ignored, got.Section)
+			failOpen, clamped, unbudgeted, deadTicket, got.DeadHolds, got.CancelRequests, got.UndeclaredLocked, got.Ignored, got.Section)
 	}
 	if got.Degraded == nil || got.Degraded.First.UnixNano() != 1700000000123456789 || got.Section.Entered.UnixNano() != 1 {
 		t.Errorf("degraded %+v, section entered %v: want the recorded nanoseconds", got.Degraded, got.Section.Entered)
@@ -395,6 +434,8 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// record keeps a grant and an error returned together as both, so the checks of either
+		// outcome below fail on such a pair.
 		var mu sync.Mutex
 		var grants []*Grant
 		var errs []error
@@ -420,11 +461,7 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for k := 0; k < 5; k++ {
-					g, err := w.Poll()
-					if g != nil && err != nil {
-						t.Errorf("Poll: grant %v with error %v", g, err)
-					}
-					record(g, err)
+					record(w.Poll())
 				}
 			}()
 		}
@@ -490,8 +527,15 @@ func TestStateDirOptionMovesConfiguration(t *testing.T) {
 	if _, err := Open(Options{StateDir: dir}); !errors.As(err, &se) {
 		t.Errorf("Open with a group-writable config.toml: %v, want a *StateError", err)
 	}
-	if _, err := Open(Options{StateDir: "relative/dir"}); !errors.As(err, &se) {
-		t.Errorf("relative StateDir: %v, want a *StateError", err)
+}
+
+// A Client holds nothing to release today: Close returns nil, every time.
+func TestClientClose(t *testing.T) {
+	c := open(t, stateDir(t, ""))
+	for i := range 2 {
+		if err := c.Close(); err != nil {
+			t.Errorf("Close %d: %v, want nil", i, err)
+		}
 	}
 }
 

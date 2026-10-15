@@ -25,7 +25,7 @@ const cancelWait = time.Second
 // tickets, no waiting ticket, a state directory that cannot be used or whose format this client
 // does not implement, and an admission section held for longer than cancelWait are refusals
 // (exit 75, not --refusal-code, which belongs to `run`). The request is a file the ticket's owner
-// finds on its next poll; nothing is signalled and a grant is never revoked.
+// finds on its next poll; nothing is signaled and a grant is never revoked.
 func cancelCommand(args []string, io IO) int {
 	fs, label := cancelFlags()
 	if err := fs.Parse(args); err != nil {
