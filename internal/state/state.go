@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"maps"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/spec"
@@ -64,7 +63,7 @@ func Effective(need map[string]spec.Range, sizes map[string]int) (eff map[string
 		}
 		eff[name] = r
 	}
-	sort.Strings(undeclared)
+	slices.Sort(undeclared)
 	return eff, clamped, undeclared
 }
 
