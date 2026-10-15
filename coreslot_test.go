@@ -426,6 +426,8 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// record keeps a grant and an error returned together as both, so the checks of either
+		// outcome below fail on such a pair.
 		var mu sync.Mutex
 		var grants []*Grant
 		var errs []error
@@ -451,11 +453,7 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for k := 0; k < 5; k++ {
-					g, err := w.Poll()
-					if g != nil && err != nil {
-						t.Errorf("Poll: grant %v with error %v", g, err)
-					}
-					record(g, err)
+					record(w.Poll())
 				}
 			}()
 		}
