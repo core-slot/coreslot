@@ -5,8 +5,8 @@ directory, its files and their bodies, the admission critical section, and the d
 environment contract between a run and the command it starts. A client written from this document
 alone, in any language, shares one budget with every other conforming client on the machine.
 
-Format 1 is not frozen until the conformance suite, including its adversarial interleavings, passes
-on macOS and Linux.
+Format 1 is not frozen yet. The [compatibility policy](docs/compatibility.md#versions) states the
+criterion that freezes it and what a release may change before then.
 
 ## 1. Conventions
 

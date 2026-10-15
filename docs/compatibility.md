@@ -7,13 +7,27 @@ changed incompatibly appears there under **Removed** or **Changed** first, and u
 
 ## Versions
 
-coreslot is at **`v0`** and stays there until the on-disk format is frozen, which happens when the
-conformance suite, including its adversarial interleavings, passes on macOS and Linux. Until then a
-minor release (`0.x`) may change the CLI surface and the library API within the deprecation window,
-and may introduce a new format number (below); it never changes what a number a release has already
-shipped means. `v1.0.0` freezes the format then current (format 1, unless a `v0` release introduced
-a newer one), the CLI surface and the library API listed here; after it, an incompatible change to
-any of them needs a new major version.
+coreslot is at **`v0`** and stays there until the on-disk format is frozen. The format is frozen
+once the whole conformance suite in [`conformance/`](../conformance) passes on macOS and on Linux
+at full length:
+
+- the deterministic traces, which pause real CLI and helper processes at named points inside the
+  protocol's steps, stop, continue or kill them there, and check the state directory and what the
+  other clients do meanwhile;
+- the kill storm, which for 60 s kills, stops, resumes and cancels 50 CLI, library and Python
+  clients, some of them nested and some in token-only mode, while it shrinks and grows the budget
+  and a sampler checks invariants I1, I2, I3 and I7 of
+  [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants).
+
+CI runs the traces and a shortened kill storm (20 clients for 10 s) on every change, on Linux and
+macOS. What is still missing is a recorded pass of the full-length kill storm
+(`go test -tags coreslot_testhooks -race -run TestKillStorm ./conformance/`) on each system.
+
+Until then a minor release (`0.x`) may change the CLI surface and the library API within the
+deprecation window, and may introduce a new format number (below); it never changes what a number
+a release has already shipped means. `v1.0.0` freezes the format then current (format 1, unless a
+`v0` release introduced a newer one), the CLI surface and the library API listed here; after it, an
+incompatible change to any of them needs a new major version.
 
 ## On-disk formats
 
@@ -110,9 +124,9 @@ From `v1.0.0`: deprecated surfaces keep working until the next major version.
 ## Platforms
 
 macOS and Linux on amd64 and arm64, built with the two Go releases the Go project supports
-(`go.mod` names the older one; 1.26 and 1.27 as of 2026-10). CI runs the tests on Linux amd64 and
-Linux arm64 with both releases and on macOS arm64 with the newer one; macOS amd64 is built for the
-release archives but not tested in CI. Windows builds, but runs commands without a budget.
+(`go.mod` names the older one; 1.26 and 1.27 as of 2026-10). CI runs the tests on Linux amd64,
+Linux arm64 and macOS arm64 with both releases; macOS amd64 is built for the release archives but
+not tested in CI. Windows builds, but runs commands without a budget.
 
 The Python client in [`conformance/pyclient`](../conformance/pyclient) is a conformance artifact:
 it proves `PROTOCOL.md` is sufficient for an independent implementation and is not a supported
