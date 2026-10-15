@@ -10,6 +10,8 @@ __pycache__/
 *.pyc
 
 # Local files of coding tools and agents: never part of the repository
+/AGENTS.md
+/CLAUDE.md
 /.claude/
 /.codex/
 /.superpowers/
