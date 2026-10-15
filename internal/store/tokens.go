@@ -50,7 +50,7 @@ func (ts *TokenSet) CheckIdentity() error {
 func CheckHeld(f *os.File, path string) error {
 	held, err := f.Stat()
 	if err != nil {
-		return stateErrorf("%s: %v", path, err)
+		return stateErrorf("%s: %w", path, err)
 	}
 	hst, ok := held.Sys().(*syscall.Stat_t)
 	if !ok || hst.Nlink == 0 {
@@ -58,7 +58,7 @@ func CheckHeld(f *os.File, path string) error {
 	}
 	now, err := os.Lstat(path)
 	if err != nil {
-		return stateErrorf("%s: %v", path, err)
+		return stateErrorf("%s: %w", path, err)
 	}
 	if !os.SameFile(held, now) {
 		return stateErrorf("%s: the path names another inode than the held file", path)

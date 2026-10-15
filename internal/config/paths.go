@@ -132,7 +132,7 @@ func getentHome(paths []string, uid int, timeout time.Duration) (string, error) 
 		return "", fmt.Errorf("%s has no entry for uid %d", path, uid)
 	}
 	if err != nil {
-		return "", fmt.Errorf("%s passwd %d: %v", path, uid, err)
+		return "", fmt.Errorf("%s passwd %d: %w", path, uid, err)
 	}
 	line, ok := strings.CutSuffix(string(out), "\n")
 	if !ok || line == "" || strings.Contains(line, "\n") {
