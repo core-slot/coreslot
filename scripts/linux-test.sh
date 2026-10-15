@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs `go test` on Linux, in the golang image of go.mod's minimum version, as an unprivileged
 # user with a real passwd entry and its own home, GOCACHE and GOPATH, so permission-denial
-# behaviour matches a developer machine rather than root's. Downloaded modules persist across
+# behavior matches a developer machine rather than root's. Downloaded modules persist across
 # runs in the named Docker volume coreslot-gomodcache, owned by that user.
 #
 # Usage: scripts/linux-test.sh [go test arguments]     e.g. scripts/linux-test.sh -race ./...

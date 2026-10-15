@@ -594,7 +594,7 @@ func lockToken(t *testing.T, e Env, k Token) int {
 	return fd
 }
 
-// fakeHold is the body of a constructed hold labelled label that lists the cpu indices idx.
+// fakeHold is the body of a constructed hold labeled label that lists the cpu indices idx.
 func fakeHold(label string, idx ...int) wire.Hold {
 	return wire.Hold{Label: label, Grant: map[string][]int{"cpu": idx}}
 }
@@ -628,7 +628,7 @@ func fakeHolds(t *testing.T, e Env, take, below int, holds ...wire.Hold) (close 
 	}
 }
 
-// fakeRawHold publishes, inside the section, a live hold labelled label whose body is body as
+// fakeRawHold publishes, inside the section, a live hold labeled label whose body is body as
 // given, valid or not. close releases it.
 func fakeRawHold(t *testing.T, e Env, label string, body []byte) (close func()) {
 	t.Helper()
@@ -1046,7 +1046,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 	})
 }
 
-// holdNamed returns the name of the hold labelled label.
+// holdNamed returns the name of the hold labeled label.
 func holdNamed(t *testing.T, e Env, label string) string {
 	t.Helper()
 	h, ok := e.Hold(label)

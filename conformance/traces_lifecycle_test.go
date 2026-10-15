@@ -98,7 +98,7 @@ func stableLocked(e Env) int {
 	return 0
 }
 
-// indices are the cpu token indices the live hold labelled label lists. Call it only while no
+// indices are the cpu token indices the live hold labeled label lists. Call it only while no
 // admission is in flight: a snapshot probes the tokens, and a probe can make an admitting
 // client skip a token (PROTOCOL.md section 6), so exact indices are read once the commands
 // started (WaitStarted reads marker files and probes nothing).

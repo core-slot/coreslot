@@ -47,7 +47,7 @@ func cpuConfig(n int) string { return fmt.Sprintf("[resources]\ncpu = %d\n", n) 
 
 func admittedAt(h coreslot.HoldInfo) time.Time { return h.Start }
 
-// noHold fails the test when a live hold labelled label exists.
+// noHold fails the test when a live hold labeled label exists.
 func noHold(t *testing.T, e Env, label, why string) {
 	t.Helper()
 	if h, ok := e.Hold(label); ok {
@@ -335,7 +335,7 @@ func stopOutsideSection(e Env, p *Proc, autoRelease func()) (time.Time, int64) {
 	return at, tk.Refreshed.UnixNano()
 }
 
-// waitRefreshed waits until the ticket labelled label carries an mtime other than before.
+// waitRefreshed waits until the ticket labeled label carries an mtime other than before.
 func waitRefreshed(e Env, label string, before int64) {
 	e.t.Helper()
 	e.Eventually(startWait, label+" refreshes its ticket", func() bool {
