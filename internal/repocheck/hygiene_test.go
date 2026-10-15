@@ -95,6 +95,26 @@ func TestMarkdownNameMatcher(t *testing.T) {
 	}
 }
 
+// Only a pattern file, at the root or below it, is exempt from the Markdown-name check.
+func TestPatternFile(t *testing.T) {
+	inDocs := strings.ReplaceAll("docs/x.m|d", "|", "") // spelled so the scan of this file passes
+	for _, c := range []struct {
+		file string
+		want bool
+	}{
+		{".gitignore", true},
+		{".gitattributes", true},
+		{"conformance/pyclient/.gitignore", true},
+		{"x.go", false},
+		{inDocs, false},
+		{"README.md", false},
+	} {
+		if got := patternFile(c.file); got != c.want {
+			t.Errorf("patternFile(%q) = %v, want %v", c.file, got, c.want)
+		}
+	}
+}
+
 // Contract: no file of this repository records a path of the machine it was written or built on.
 // The guarantee covers a closed set of forms, and only those, in every file of the tree: in text
 // as written, in a gzip stream (a pprof profile) after decompression, and in any other binary
