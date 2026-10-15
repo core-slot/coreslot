@@ -1,0 +1,6 @@
+# The wire fixtures are byte-exact protocol bodies: never convert their line endings.
+internal/wire/testdata/** -text
+
+# CPU profiles are gzip streams, and the committed ones are tool output.
+*.pprof binary
+evidence/*.pprof linguist-generated

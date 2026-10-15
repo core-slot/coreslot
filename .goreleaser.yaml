@@ -1,7 +1,7 @@
 # GoReleaser configuration. The release workflow runs it on a v* tag with --skip=publish and
 # publishes the GitHub release itself after attesting the archives (.github/workflows/release.yml);
 # CI runs it with --snapshot. The GoReleaser version is .github/goreleaser-version. Binaries are
-# cgo-free and unsigned (no Apple Developer ID in v1); every archive is listed in checksums.txt.
+# cgo-free and unsigned (no Apple Developer ID signature); every archive is listed in checksums.txt.
 version: 2
 
 project_name: coreslot
@@ -16,6 +16,7 @@ builds:
     binary: coreslot
     env:
       - CGO_ENABLED=0
+    # ci.yml's snapshot jobs expect one binary per goos x goarch below (4); change both together.
     goos:
       - darwin
       - linux

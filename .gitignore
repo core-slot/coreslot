@@ -8,3 +8,8 @@
 # embeds the checkout's absolute path
 __pycache__/
 *.pyc
+
+# Local files of coding tools and agents: never part of the repository
+/.claude/
+/.codex/
+/.superpowers/
