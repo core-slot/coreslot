@@ -56,7 +56,7 @@ field TicketInfo.Priority int
 field TicketInfo.Refreshed time.Time
 field UsageError.Msg string
 func Open(Options) (*Client, error)
-method (*Client) Adopt(context.Context, Request) (*Grant, map[string]int, error)
+method (*Client) Adopt(context.Context, Request) (*Grant, error)
 method (*Client) Available(string) (int, error)
 method (*Client) Enqueue(context.Context, Request) (*Waiter, error)
 method (*Client) Snapshot() (Report, error)
@@ -67,6 +67,7 @@ method (*Grant) Environ([]string) []string
 method (*Grant) Files() []*os.File
 method (*Grant) Granted() map[string]int
 method (*Grant) PassThrough() bool
+method (*Grant) Shortfall() map[string]int
 method (*Grant) TokenOnly() bool
 method (*Grant) Unbudgeted() []string
 method (*SectionBusyError) Error() string

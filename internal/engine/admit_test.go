@@ -237,7 +237,7 @@ func TestAdoptReportsShortfall(t *testing.T) {
 	e := newEngine(t, dir, newFakeClock())
 	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
 	enqueue(t, e, need("cpu=1")) // a waiter: adoption does not queue behind it
-	g, short, err := e.AdoptContext(context.Background(), need("cpu=3"))
+	g, err := e.AdoptContext(context.Background(), need("cpu=3"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestAdoptReportsShortfall(t *testing.T) {
 	if !reflect.DeepEqual(h.Grant, map[string][]int{"cpu": {8, 9}}) || !h.Adopted {
 		t.Errorf("hold %+v, want adopted cpu [8 9]", h)
 	}
-	if !reflect.DeepEqual(short, map[string]int{"cpu": 1}) {
+	if short := g.Shortfall(); !reflect.DeepEqual(short, map[string]int{"cpu": 1}) {
 		t.Errorf("shortfall %v, want cpu 1", short)
 	}
 	if n := lockedCount(t, e, "cpu"); n > 10 {
@@ -259,12 +259,12 @@ func TestAdoptCountsLocksAboveSize(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 10\n")
 	e := newEngine(t, dir, newFakeClock())
 	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 4)+"\n"+tokenPaths(dir, "cpu", 10, 13))
-	g, short, err := e.AdoptContext(context.Background(), need("cpu=3..5"))
+	g, err := e.AdoptContext(context.Background(), need("cpu=3..5"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer g.Close()
-	if got := g.Grant()["cpu"]; got != 1 || short["cpu"] != 2 {
+	if got, short := g.Grant()["cpu"], g.Shortfall(); got != 1 || !reflect.DeepEqual(short, map[string]int{"cpu": 2}) {
 		t.Errorf("grant %d shortfall %v, want 1 and cpu 2", got, short)
 	}
 	if n := lockedCount(t, e, "cpu"); n != 10 {

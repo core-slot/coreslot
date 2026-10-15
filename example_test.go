@@ -104,13 +104,13 @@ func ExampleClient_Adopt() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	g, shortfall, err := c.Adopt(context.Background(), coreslot.Request{Label: "already running",
+	g, err := c.Adopt(context.Background(), coreslot.Request{Label: "already running",
 		Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 4}}})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer g.Close()
-	fmt.Printf("granted %d, short of the minimum by %d\n", g.Granted()["cpu"], shortfall["cpu"])
+	fmt.Printf("granted %d, short of the minimum by %d\n", g.Granted()["cpu"], g.Shortfall()["cpu"])
 	// Output: granted 2, short of the minimum by 1
 }
 
@@ -129,7 +129,7 @@ func ExampleClient_Snapshot() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	g, _, err := c.Adopt(context.Background(), coreslot.Request{Label: "build",
+	g, err := c.Adopt(context.Background(), coreslot.Request{Label: "build",
 		Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 3}}})
 	if err != nil {
 		log.Fatal(err)

@@ -166,18 +166,18 @@ func environ() map[string]string {
 }
 
 // Adopt admits already-running work without queueing (PROTOCOL.md section 12.4), taking what
-// is free up to each resource's Max. shortfall maps every requested declared resource to
-// max(0, Min - granted): what the work runs without budget. Adopt waits for the admission
-// section until ctx ends, as Enqueue does: nothing is taken or published then.
+// is free up to each resource's Max. It has no minimum: the grant's Shortfall says what the work
+// runs without budget. Adopt waits for the admission section until ctx ends, as Enqueue does:
+// nothing is taken or published then.
 //
 // Adopt never passes through (PROTOCOL.md section 18 applies to Enqueue): inside another run's
 // grant it takes what is free like any adoption, and the parent's tokens are not free.
-func (c *Client) Adopt(ctx context.Context, req Request) (g *Grant, shortfall map[string]int, err error) {
-	eg, short, err := c.e.AdoptContext(ctx, req.spec())
+func (c *Client) Adopt(ctx context.Context, req Request) (*Grant, error) {
+	g, err := c.e.AdoptContext(ctx, req.spec())
 	if err != nil {
-		return nil, nil, wrap(err)
+		return nil, wrap(err)
 	}
-	return &Grant{g: eg}, short, nil
+	return &Grant{g: g}, nil
 }
 
 // Available returns resource's size minus its locked tokens now, max(0, size - locked): what an
@@ -325,6 +325,7 @@ type Grant struct {
 type grant interface {
 	Grant() map[string]int
 	Clamped() map[string]int
+	Shortfall() map[string]int
 	Unbudgeted() []string
 	TokenOnly() bool
 	Files() []*os.File
@@ -341,6 +342,13 @@ func (g *Grant) Granted() map[string]int { return g.g.Grant() }
 // the whole resource. For a pass-through it maps each resource whose Min exceeded what the
 // parent holds to that Min, and the grant is all the parent holds of it.
 func (g *Grant) Clamped() map[string]int { return g.g.Clamped() }
+
+// Shortfall maps each requested resource the grant holds fewer than Min of to Min minus what it
+// holds: what the work runs without budget. An adoption (Client.Adopt) takes what is free, so it
+// may fall short of any Min; an admission or a pass-through falls short only where Clamped
+// says so. A resource run unbudgeted (Unbudgeted) is never in it. It is empty when the grant
+// holds every Min.
+func (g *Grant) Shortfall() map[string]int { return g.g.Shortfall() }
 
 // Unbudgeted lists, sorted, the requested resources run unbudgeted: those the configuration does
 // not declare; for a pass-through, those the parent holds none of, or every one under a parent

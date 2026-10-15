@@ -381,6 +381,9 @@ func passThroughChild() error {
 	if want := map[string]int{"pg-local": 2}; !maps.Equal(g.Clamped(), want) {
 		return fmt.Errorf("clamped %v, want %v", g.Clamped(), want)
 	}
+	if want := map[string]int{"pg-local": 1}; !maps.Equal(g.Shortfall(), want) {
+		return fmt.Errorf("shortfall %v, want %v: the clamped Min less what the parent holds", g.Shortfall(), want)
+	}
 	if !slices.Equal(g.Unbudgeted(), []string{"gpu"}) {
 		return fmt.Errorf("unbudgeted %v, want [gpu]", g.Unbudgeted())
 	}

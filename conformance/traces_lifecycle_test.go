@@ -532,13 +532,13 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 
 	// Adoption during the reduced period takes from what is free.
 	c := e.Client()
-	ga, short, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-a", Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 3}}})
+	ga, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-a", Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 3}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ga.Close()
-	if ga.Granted()["cpu"] != 3 || short["cpu"] != 0 || !slices.Equal(indices(e, "adopt-a"), span(0, 2)) {
-		t.Fatalf("adoption: grant %v, shortfall %v, indices %v; want 3 at 0-2", ga.Granted(), short, indices(e, "adopt-a"))
+	if ga.Granted()["cpu"] != 3 || len(ga.Shortfall()) != 0 || !slices.Equal(indices(e, "adopt-a"), span(0, 2)) {
+		t.Fatalf("adoption: grant %v, shortfall %v, indices %v; want 3 at 0-2", ga.Granted(), ga.Shortfall(), indices(e, "adopt-a"))
 	}
 
 	// A queued request may take at most what is left below the size: 5, from 3-7.
@@ -552,13 +552,13 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	}
 
 	// Nothing is free: an adoption takes nothing and reports its shortfall; a request waits.
-	gb, short, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-b", Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 2}}})
+	gb, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-b", Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 2}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer gb.Close()
-	if gb.Granted()["cpu"] != 0 || short["cpu"] != 1 {
-		t.Errorf("adoption with nothing free: grant %v, shortfall %v; want none and a shortfall of 1", gb.Granted(), short)
+	if gb.Granted()["cpu"] != 0 || gb.Shortfall()["cpu"] != 1 {
+		t.Errorf("adoption with nothing free: grant %v, shortfall %v; want none and a shortfall of 1", gb.Granted(), gb.Shortfall())
 	}
 	r2 := e.Run("R2", "--need", "cpu=1")
 	e.WaitTicket("R2")
