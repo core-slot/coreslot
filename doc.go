@@ -76,6 +76,8 @@
 // nothing else is reachable. The module stays at v0 until v1.0.0, which freezes the on-disk
 // format then current.
 //
+// # Forking while a ticket is held
+//
 // A ticket's lock is carried by a close-on-exec descriptor. If the caller's own goroutines fork
 // (os/exec, for example) while the library holds a ticket, the child shares that lock until it
 // execs, and an admission or a withdrawal in that window leaves the ticket in queue/, dead once
