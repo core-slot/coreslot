@@ -521,9 +521,6 @@ func TestStateDirOptionMovesConfiguration(t *testing.T) {
 	if _, err := Open(Options{StateDir: dir}); !errors.As(err, &se) {
 		t.Errorf("Open with a group-writable config.toml: %v, want a *StateError", err)
 	}
-	if _, err := Open(Options{StateDir: "relative/dir"}); !errors.As(err, &se) {
-		t.Errorf("relative StateDir: %v, want a *StateError", err)
-	}
 }
 
 func TestUsageErrorBeforeQueueing(t *testing.T) {

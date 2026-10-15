@@ -49,9 +49,11 @@ func (r Request) spec() spec.Request {
 	return spec.Request{Label: r.Label, Priority: r.Priority, Need: need}
 }
 
-// UsageError reports a request that can never be valid, whatever the state of the budget: a
-// malformed resource name, a range out of bounds, too many resources, a priority out of range
-// or a label that is not valid UTF-8 or too long. Msg says which.
+// UsageError reports a request or Options that can never be valid, whatever the state of the
+// budget: a malformed resource name, a range out of bounds, too many resources, a priority out of
+// range, a label that is not valid UTF-8 or too long, or an Options.StateDir that is not an
+// absolute path. Msg says which. It is the caller's own mistake, never a reason to run
+// unbudgeted.
 type UsageError struct {
 	Msg string
 }

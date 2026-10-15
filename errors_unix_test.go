@@ -102,6 +102,19 @@ func TestOpenStateErrorWrapsItsCause(t *testing.T) {
 	}
 }
 
+// A relative Options.StateDir is the caller's mistake, a *UsageError: a *StateError would tell a
+// caller that follows the contract to run every job unbudgeted.
+func TestRelativeStateDirIsAUsageError(t *testing.T) {
+	_, err := Open(Options{StateDir: "relative/state"})
+	var (
+		ue *UsageError
+		se *StateError
+	)
+	if !errors.As(err, &ue) || errors.As(err, &se) {
+		t.Fatalf("Open with a relative StateDir: %v (%T), want a *UsageError and no *StateError", err, err)
+	}
+}
+
 // The classes a caller acts on are never state errors.
 func TestDistinctErrorClasses(t *testing.T) {
 	dir := stateDir(t, "")

@@ -27,7 +27,8 @@ type Client struct {
 
 // Open opens the state directory: Options.StateDir when set (with its configuration at
 // <StateDir>/config.toml), otherwise the CORESLOT_STATE_DIR override or the default of
-// PROTOCOL.md section 4.1. An unusable directory is a *StateError.
+// PROTOCOL.md section 4.1. An unusable directory is a *StateError; an Options.StateDir that is
+// not an absolute path is the caller's own mistake, a *UsageError.
 //
 // Open locates and opens the directory before any request, so inside another run's grant whose
 // parent runs unbudgeted because the directory is unusable, Open returns that *StateError rather
@@ -54,7 +55,7 @@ func Open(o Options) (*Client, error) {
 		}
 	} else {
 		if !filepath.IsAbs(dir) {
-			return nil, &StateError{Reason: "Options.StateDir " + dir + " is not an absolute path"}
+			return nil, &UsageError{Msg: fmt.Sprintf("Options.StateDir %q is not an absolute path", dir)}
 		}
 		dir = filepath.Clean(dir)
 		cfgPath = filepath.Join(dir, store.ConfigFile)
