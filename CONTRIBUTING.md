@@ -5,10 +5,14 @@ issue first so the design can be settled before the code. Security problems go t
 [SECURITY.md](SECURITY.md), not a public issue. Everyone follows the
 [code of conduct](CODE_OF_CONDUCT.md).
 
+coreslot is MIT licensed ([LICENSE](LICENSE)), and contributions are taken under the same license:
+by opening a pull request you agree that your change is licensed under the MIT license, as the rest
+of the repository is. No contributor agreement or sign-off line is needed.
+
 ## Ground rules
 
 - **The protocol comes first.** [`PROTOCOL.md`](PROTOCOL.md) is normative. A change to on-disk
-  behaviour changes `PROTOCOL.md` in the same pull request, keeps its contract inventory (section 2)
+  behavior changes `PROTOCOL.md` in the same pull request, keeps its contract inventory (section 2)
   complete, and is called out in the description; the [compatibility policy](docs/compatibility.md)
   says what a release may change.
 - **No new dependencies** beyond the standard library, `golang.org/x/sys` and
@@ -25,9 +29,10 @@ issue first so the design can be settled before the code. Security problems go t
   does (`library_purity_test.go` checks the first three).
 - **Windows builds.** `internal/store`, `internal/engine` and the root package's implementation are
   `//go:build unix`; the Windows build must keep compiling.
-- **Every invariant-bearing test names the mutation that turns it red.** Run that mutation before
-  you push, and say in the pull request what it printed. An assertion nobody has seen fail is not
-  coverage.
+- **Every invariant-bearing test names the mutation that turns it red.** A mutation is one
+  deliberate break of the code the test guards: invert a comparison, drop a check, skip an unlock.
+  Make it, run the test, see it fail for that reason and no other, revert it, and paste both
+  outputs in the pull request. An assertion nobody has seen fail is not coverage.
 - English for all prose, comments and messages.
 
 ## Build
@@ -56,8 +61,17 @@ go test -tags coreslot_testhooks -race -short ./...  # CI runs only the tests th
 GOOS=windows go build ./...
 ```
 
-The pinned versions of `staticcheck` and `govulncheck` are in
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+`staticcheck` and `govulncheck` are pinned in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml); install the pinned versions with:
+
+```sh
+pin() { sed -n "s/^ *$1: *\([^ #]*\).*/\1/p" .github/workflows/ci.yml; }
+go install "honnef.co/go/tools/cmd/staticcheck@$(pin STATICCHECK_VERSION)"
+go install "golang.org/x/vuln/cmd/govulncheck@$(pin GOVULNCHECK_VERSION)"
+```
+
+A `staticcheck` release older than the pin may fail to read the export data of the newest Go
+release.
 
 - **Test hooks.** Pause points for deterministic traces compile only with the build tag
   `coreslot_testhooks` and are inert without it. `go test -tags coreslot_testhooks ./...` runs the
@@ -80,7 +94,7 @@ The pinned versions of `staticcheck` and `govulncheck` are in
 ### Linux from a Mac
 
 `scripts/linux-test.sh` runs `go test` in the `golang` image of `go.mod`'s minimum version, as an
-unprivileged user with a real passwd entry and its own home, so permission-denial behaviour matches
+unprivileged user with a real passwd entry and its own home, so permission-denial behavior matches
 a developer machine rather than root's. It needs Docker and passes its arguments to `go test`:
 
 ```sh
