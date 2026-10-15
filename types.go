@@ -10,6 +10,19 @@ import (
 // The request and snapshot types live in a file without a build constraint, so that a program
 // that names them compiles on every platform.
 
+// Options configures [Open].
+type Options struct {
+	// StateDir names the state directory, an absolute path, instead of the default (or the
+	// CORESLOT_STATE_DIR override): another budget, separate from the one every other client of
+	// the user shares, as a test or a sandboxed pool wants. Its configuration is then read from
+	// <StateDir>/config.toml. Empty means the default; a relative path is a [*UsageError].
+	StateDir string
+	// Independent makes Enqueue an ordinary request even inside another run's grant, as the
+	// CLI's --independent does: it queues in the budget like an unrelated request, behind a
+	// parent that may hold the whole budget, instead of passing through (see [Client.Enqueue]).
+	Independent bool
+}
+
 // Request is what a client asks for: a label, a priority and, per resource, a Range.
 type Request struct {
 	// Label names the request in `coreslot status` and the run log: valid UTF-8 of at most 128
@@ -30,7 +43,7 @@ type Range struct {
 }
 
 // Validate checks every bound of format 1 (PROTOCOL.md sections 5, 6 and 7) and returns a
-// *UsageError for the first one r breaks. It checks r as Enqueue and Adopt would take it, so an
+// [*UsageError] for the first one r breaks. It checks r as Enqueue and Adopt would take it, so an
 // empty Need is cpu 1..1 and Request{}.Validate() is nil. Enqueue and Adopt validate on their
 // own; Validate is for a caller that wants to refuse a request before it opens a budget.
 func (r Request) Validate() error {
@@ -84,6 +97,9 @@ func (e *SectionBusyError) Unwrap() error { return e.Err }
 // Report is a snapshot of the state directory, the data behind `coreslot status --json`, which
 // prints the times below as Unix nanoseconds. It is read outside the admission section, so it
 // can be momentarily inconsistent.
+//
+// Report is not the JSON schema: its field names are Go's, and its error fields marshal as {}
+// with encoding/json. A program that wants a stable document parses `coreslot status --json`.
 type Report struct {
 	// StateDir is the state directory read.
 	StateDir string
@@ -95,9 +111,9 @@ type Report struct {
 	FormatPresent bool
 	// FormatUnderstood reports that this client implements Format; an absent FORMAT counts as
 	// format 1, which the first client writes. Under a format it does not implement, a client
-	// runs in token-only mode (Grant.TokenOnly).
+	// runs in token-only mode ([Grant.TokenOnly]).
 	FormatUnderstood bool
-	// FormatError is a *StateError when FORMAT is malformed or unreadable, and nil otherwise.
+	// FormatError is a [*StateError] when FORMAT is malformed or unreadable, and nil otherwise.
 	FormatError error
 	// Gen is the generation counter, in [0, 2^63-1], bumped when a ticket or a hold is published
 	// or removed (PROTOCOL.md section 7.8).
@@ -108,7 +124,7 @@ type Report struct {
 	// Resources maps each declared resource to its size and use; it is empty when ConfigError
 	// is set.
 	Resources map[string]ResourceInfo
-	// ConfigError is a *StateError when the sizes could not be computed (an invalid
+	// ConfigError is a [*StateError] when the sizes could not be computed (an invalid
 	// configuration, an unknown CPU count), and nil otherwise.
 	ConfigError error
 	// UndeclaredLocked maps each resource the configuration does not declare, but whose
@@ -151,7 +167,7 @@ type HoldInfo struct {
 	// Clamped maps each resource whose requested Min exceeded its whole size to that Min; the
 	// hold has all of it.
 	Clamped map[string]int
-	// Adopted reports an adoption (Client.Adopt): work admitted without queueing.
+	// Adopted reports an adoption ([Client.Adopt]): work admitted without queueing.
 	Adopted bool
 }
 
