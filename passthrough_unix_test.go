@@ -114,6 +114,14 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 			t.Errorf("the pass-through wrote under the state directory:\n%s\n---\n%s", before, after)
 		}
 	})
+	// A context that has already ended ends a pass-through as it ends an ordinary Enqueue.
+	t.Run("ended context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if w, err := open(t, dir).Enqueue(ctx, req); w != nil || !errors.Is(err, context.Canceled) {
+			t.Errorf("Enqueue with an ended context = %v, %v; want nil and context.Canceled", w, err)
+		}
+	})
 	t.Run("independent", func(t *testing.T) {
 		c, err := Open(Options{StateDir: dir, Independent: true})
 		if err != nil {
