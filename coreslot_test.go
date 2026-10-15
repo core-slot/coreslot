@@ -523,6 +523,16 @@ func TestStateDirOptionMovesConfiguration(t *testing.T) {
 	}
 }
 
+// A Client holds nothing to release today: Close returns nil, every time.
+func TestClientClose(t *testing.T) {
+	c := open(t, stateDir(t, ""))
+	for i := range 2 {
+		if err := c.Close(); err != nil {
+			t.Errorf("Close %d: %v, want nil", i, err)
+		}
+	}
+}
+
 func TestUsageErrorBeforeQueueing(t *testing.T) {
 	c := open(t, stateDir(t, ""))
 	var ue *UsageError

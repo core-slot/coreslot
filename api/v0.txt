@@ -57,6 +57,7 @@ field UsageError.Msg string
 func Open(Options) (*Client, error)
 method (*Client) Adopt(context.Context, Request) (*Grant, error)
 method (*Client) Available(string) (int, error)
+method (*Client) Close() error
 method (*Client) Enqueue(context.Context, Request) (*Waiter, error)
 method (*Client) Snapshot() (Report, error)
 method (*Grant) Clamped() map[string]int

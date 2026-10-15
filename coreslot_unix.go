@@ -68,6 +68,12 @@ func Open(o Options) (*Client, error) {
 	return &Client{e: e, independent: o.Independent, named: o.StateDir == ""}, nil
 }
 
+// Close releases what the Client holds. It holds nothing today and returns nil, but a later
+// version may hold a descriptor, so call it once the Client is no longer needed, and do not use
+// the Client after it. It does not end the Client's Waiters or Grants: cancel and close those on
+// their own.
+func (c *Client) Close() error { return nil }
+
 // wrap applies the error contract (engine.StateReason) at the package boundary: every error but
 // the classes a caller acts on becomes a *StateError wrapping it, and the engine's usage and
 // section errors become this package's.

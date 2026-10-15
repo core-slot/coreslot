@@ -31,6 +31,7 @@ func ExampleClient_Enqueue() {
 	if err != nil {
 		log.Fatal(err) // a *coreslot.StateError: the budget cannot be used
 	}
+	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	w, err := c.Enqueue(ctx, coreslot.Request{Label: "example",

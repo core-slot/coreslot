@@ -26,6 +26,9 @@ func Open(Options) (*Client, error) { return nil, ErrUnsupported }
 // a call that cannot have happened reports the platform rather than a success. Environ returns a
 // copy of base, and the others zero values.
 
+// Close returns ErrUnsupported.
+func (c *Client) Close() error { return ErrUnsupported }
+
 // Enqueue returns ErrUnsupported.
 func (c *Client) Enqueue(context.Context, Request) (*Waiter, error) { return nil, ErrUnsupported }
 
