@@ -3,8 +3,8 @@
 All notable changes to this project are recorded here. The format follows
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as the
-[compatibility policy](docs/compatibility.md) applies it: the module stays at `v0` until the
-on-disk format is frozen, and `v1.0.0` freezes the format then current.
+[compatibility policy](docs/compatibility.md) applies it: the module stays at `v0` until
+`v1.0.0`, which freezes the on-disk format then current, the CLI surface and the library API.
 
 ## [Unreleased]
 
@@ -36,12 +36,13 @@ The module path is `github.com/core-slot/coreslot`; an install from the earlier 
 - Configuration in `~/.config/coreslot/config.toml` (`[resources]`, `[priorities]`, `[platform]`),
   read from `<state directory>/config.toml` instead under `CORESLOT_STATE_DIR`.
 - Go library in the root package: `Open`; a `Client` that enqueues (`Enqueue`), adopts running
-  work (`Adopt`), reports what is free (`Available`) and reads the state (`Snapshot`, a `Report`);
-  a `Waiter` with `Poll`, `Wait` and `Cancel`; and a `Grant` whose `Files` and `Environ` start a
-  command inside it. Calls that wait for the admission section take a `context.Context`, and
-  errors are a `*StateError`, a `*UsageError`, a `*SectionBusyError`, the context's error or a
-  sentinel (`ErrCanceled`, `ErrRefused`, `ErrAlreadyAdmitted`, `ErrUnsupported`). The exported
-  API is pinned in `api/v0.txt`.
+  work (`Adopt`), reports what is free (`Available`), reads the state (`Snapshot`, a `Report`) and
+  is released with `Close`; a `Waiter` with `Poll`, `Wait` and `Cancel`; and a `Grant` whose
+  `Files` and `Environ` start a command inside it and whose `Shortfall` says what it runs without.
+  `Enqueue`, `Adopt` and `Wait` take a `context.Context`, and errors are a `*StateError`, a
+  `*UsageError`, a `*SectionBusyError`, the context's error or a sentinel (`ErrCanceled`,
+  `ErrRefused`, `ErrAlreadyAdmitted`, `ErrUnsupported`). The exported API is pinned in
+  `api/v0.txt`.
 - The run log records what each command used: `cpu_user_s` and `cpu_sys_s` (CPU seconds) and
   `max_rss_kib` (peak resident set size in KiB), optional keys of `PROTOCOL.md` section 20 taken
   from the command's `wait4` rusage, so they cover the descendants it waited for. A run whose
