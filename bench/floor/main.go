@@ -1,4 +1,4 @@
-//go:build unix
+//go:build coreslot_bench && unix
 
 // Command floor measures what a waiting process costs before coreslot's own work: the CPU of
 // a Go process that only wakes once per second, of one that also makes, once per second, the
@@ -16,6 +16,9 @@
 // CPU: it runs two batches, one for the warm-up alone and one for the warm-up plus the window,
 // ends each waiter with SIGINT (it withdraws and exits), and reports the difference of the
 // batches' mean wait4 rusage over the window.
+//
+// It builds only with the coreslot_bench tag, so that installing the module's commands installs
+// coreslot alone: go build -tags coreslot_bench -o /tmp/b/floor ./bench/floor.
 package main
 
 import (

@@ -52,8 +52,8 @@ The checks CI runs, in the order it runs them:
 ```sh
 gofmt -l .                                      # prints nothing
 go mod tidy && git diff --exit-code go.mod go.sum
-go vet ./... && go vet -tags coreslot_testhooks ./...
-staticcheck ./... && staticcheck -tags coreslot_testhooks ./...
+go vet ./... && go vet -tags coreslot_testhooks ./... && go vet -tags coreslot_bench ./bench/...
+staticcheck ./... && staticcheck -tags coreslot_testhooks ./... && staticcheck -tags coreslot_bench ./bench/...
 govulncheck ./...
 go test -race ./...
 go test -tags coreslot_testhooks -race -short ./...  # CI runs only the tests this tag adds
@@ -86,6 +86,9 @@ release.
   `go test -run '^$' -fuzz '^FuzzName$' -fuzztime 30s ./path/to/package/`.
 - **The exported API.** `api/v0.txt` pins the root package's API. After a deliberate API change,
   `CORESLOT_UPDATE_API=1 go test -run TestExportedAPIGolden .` rewrites it; review the diff.
+- **Benchmarks.** `bench/waiters` and `bench/floor` build only with `-tags coreslot_bench`, so
+  that `go install github.com/core-slot/coreslot/...@latest` installs `coreslot` alone;
+  [`evidence/README.md`](evidence/README.md) has the commands that run them.
 - **The Python client.** [`conformance/pyclient`](conformance/pyclient) is an independent client
   written from `PROTOCOL.md` alone (Python 3.11 or newer, standard library only). It must keep
   passing after any protocol change; a place where `PROTOCOL.md` is silent or ambiguous goes into
