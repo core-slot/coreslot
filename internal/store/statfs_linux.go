@@ -9,7 +9,7 @@ import "golang.org/x/sys/unix"
 func CheckFilesystem(dir string) error {
 	var st unix.Statfs_t
 	if err := unix.Statfs(dir, &st); err != nil {
-		return stateErrorf("statfs %s: %v", dir, err)
+		return stateErrorf("statfs %s: %w", dir, err)
 	}
 	// f_type is int32, int64 or uint32 depending on the architecture; every magic is 32 bits.
 	magic := int64(uint32(st.Type))

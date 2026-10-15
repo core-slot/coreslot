@@ -13,7 +13,7 @@ import (
 func CheckFilesystem(dir string) error {
 	var st unix.Statfs_t
 	if err := unix.Statfs(dir, &st); err != nil {
-		return stateErrorf("statfs %s: %v", dir, err)
+		return stateErrorf("statfs %s: %w", dir, err)
 	}
 	name := string(bytes.TrimRight(st.Fstypename[:], "\x00"))
 	if refusedType(name) {

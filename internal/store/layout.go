@@ -93,7 +93,7 @@ func openDir(dir string, create bool) (*Store, error) {
 			return s, nil
 		}
 	} else if err := os.MkdirAll(dir, dirMode); err != nil {
-		return nil, stateErrorf("cannot create the state directory: %v", err)
+		return nil, stateErrorf("cannot create the state directory: %w", err)
 	}
 	if err := CheckEntry(dir, true); err != nil {
 		return nil, err
@@ -213,7 +213,7 @@ func asStateError(err error) error {
 	if errors.As(err, &se) {
 		return err
 	}
-	return &StateError{Reason: err.Error()}
+	return &StateError{Reason: err.Error(), Err: err}
 }
 
 // ensureDir creates a directory of the layout with mode 0700 when absent; an existing entry is
