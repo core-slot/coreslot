@@ -135,7 +135,7 @@ func (t *Ticket) TokenOnly() bool {
 // this ticket, and, once per second, read gen (rescanning queue/ when it changed) and hold the
 // election, which examines the tickets ahead from the nearest up to the first live, non-STALLED
 // one; the head tries admission with backoff from 0.25 s up to 2 s, repeating the election
-// before each attempt. It returns Waiting or Admitted, or ErrCancelled once a cancel request
+// before each attempt. It returns Waiting or Admitted, or ErrCanceled once a cancel request
 // was found or the ticket was withdrawn. Section entries wait at most RefreshEvery/4, so a
 // caller that calls Step in a loop keeps refreshing at least every RefreshEvery (see
 // RefreshEvery). A caller that calls Step again after Due has no more work per Step than the
@@ -160,7 +160,7 @@ func (t *Ticket) Poll() (StepResult, error) {
 func (t *Ticket) Due() time.Duration {
 	t.stepMu.Lock()
 	defer t.stepMu.Unlock()
-	if _, _, done := t.settled(); done {
+	if _, done, _ := t.settled(); done {
 		return 0
 	}
 	next := t.nextElection
@@ -174,7 +174,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	if single {
 		// A Poll never waits for a concurrent Step: that Step is doing the work.
 		if !t.stepMu.TryLock() {
-			if r, err, done := t.settled(); done {
+			if r, done, err := t.settled(); done {
 				return r, err
 			}
 			return Waiting{}, nil
@@ -183,7 +183,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		t.stepMu.Lock()
 	}
 	defer t.stepMu.Unlock()
-	if r, err, done := t.settled(); done {
+	if r, done, err := t.settled(); done {
 		return r, err
 	}
 	now := t.e.clock.Monotonic()
@@ -252,22 +252,22 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 }
 
 // settled reports the outcome of a ticket that is no longer waiting.
-func (t *Ticket) settled() (StepResult, error, bool) {
+func (t *Ticket) settled() (StepResult, bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch t.status {
 	case statusAdmitted:
-		return Admitted{t.grant}, nil, true
+		return Admitted{t.grant}, true, nil
 	case statusCancelled, statusWithdrawn:
-		return nil, ErrCancelled, true
+		return nil, true, ErrCanceled
 	}
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // settledOr returns the settled outcome when a concurrent Withdraw explains err (an operation
 // on the closed descriptor), otherwise err.
 func (t *Ticket) settledOr(err error) (StepResult, error) {
-	if r, serr, done := t.settled(); done {
+	if r, done, serr := t.settled(); done {
 		return r, serr
 	}
 	return nil, err

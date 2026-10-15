@@ -2,9 +2,6 @@ package engine
 
 import "github.com/core-slot/coreslot/internal/spec"
 
-// The inspection types live in a file without a build constraint so that the root package can
-// alias them on every platform.
-
 // HolderInfo describes one live hold as a waiter or a snapshot sees it.
 type HolderInfo struct {
 	Name                string         // the hold's file name
@@ -58,8 +55,9 @@ type DegradedInfo struct {
 	Malformed bool
 }
 
-// Report is a snapshot of the state directory: the data behind `status --json`. It is read
-// outside the admission section, so it can be momentarily inconsistent.
+// Report is a snapshot of the state directory: the data behind `status --json`, in its units
+// (times in Unix nanoseconds, errors as text). It is read outside the admission section, so it
+// can be momentarily inconsistent.
 type Report struct {
 	StateDir         string
 	StateDirExists   bool   // false on a machine where nothing has run yet: everything else is empty
@@ -67,10 +65,12 @@ type Report struct {
 	FormatPresent    bool   // FORMAT was read, well-formed or malformed; false when it is absent or unreadable
 	FormatUnderstood bool   // this client implements Format (an absent FORMAT counts as 1)
 	FormatError      string // set when FORMAT is malformed or unreadable
+	FormatErr        error  // the error FormatError is the text of
 	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)
 	ReconciledNS     int64
 	Resources        map[string]ResourceInfo // declared resources
 	ConfigError      string                  // set when sizes could not be computed
+	ConfigErr        error                   // the error ConfigError is the reason of
 	UndeclaredLocked map[string]int          // res/<name> directories the configuration does not declare, with locked tokens
 	Tickets          []TicketInfo            // in queue order
 	Holds            []HolderInfo            // live holds, in name order

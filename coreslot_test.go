@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +18,9 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 func stateDir(t *testing.T, cfg string) string {
@@ -43,7 +48,7 @@ func open(t *testing.T, dir string) *Client {
 
 func waitGrant(t *testing.T, c *Client, req Request) *Grant {
 	t.Helper()
-	w, err := c.Enqueue(req)
+	w, err := c.Enqueue(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +162,7 @@ func runChild(t *testing.T, dir string, g *Grant, tokens []string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.ExtraFiles = g.Files()
-	cmd.Env = append(append(os.Environ(), g.Env()...),
+	cmd.Env = append(g.Environ(os.Environ()),
 		childEnv+"="+dir, "CORESLOT_ROOT_TEST_TOKENS="+strings.Join(tokens, "\n"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("child: %v\n%s", err, out)
@@ -192,15 +197,129 @@ func TestEnvMatchesFiles(t *testing.T) {
 	runChild(t, dir, to, []string{"res/cpu/0", "res/cpu/1"})
 }
 
+// Environ is base without its grant context, followed by Env: an inherited CORESLOT_GRANTED_*,
+// CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS or CORESLOT_UNBUDGETED never reaches the command, while
+// CORESLOT_STATE_DIR and everything else does, in order.
+func TestEnvironReplacesGrantContext(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	g := waitGrant(t, open(t, dir), Request{Need: map[string]Range{"cpu": {Min: 2, Max: 2}}})
+	base := []string{"PATH=/bin", "CORESLOT_GRANTED_CPU=9", "CORESLOT_GRANTED_GPU=1", "CORESLOT_HELD_FD=7",
+		"CORESLOT_TOKEN_FDS=8-9", "CORESLOT_UNBUDGETED=state", "CORESLOT_STATE_DIR=" + dir, "LANG=C"}
+	orig := slices.Clone(base)
+	got := g.Environ(base)
+	want := append([]string{"PATH=/bin", "CORESLOT_STATE_DIR=" + dir, "LANG=C"}, g.Env()...)
+	if !slices.Equal(got, want) {
+		t.Errorf("Environ =\n%q\nwant\n%q", got, want)
+	}
+	if !slices.Equal(base, orig) {
+		t.Errorf("Environ changed its argument: %q", base)
+	}
+}
+
+// Every time in a Report is the Unix nanosecond value `status --json` prints, read as a
+// time.Time, and 0 is the zero Time; every other field is the engine's snapshot unchanged.
+func TestReportMatchesTheEngineSnapshot(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	c := open(t, dir)
+	waitGrant(t, c, Request{Label: "hold", Need: map[string]Range{"cpu": {Min: 4, Max: 4}, "gpu": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(context.Background(), Request{Label: "queued", Priority: 5, Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Cancel() })
+	if err := os.WriteFile(filepath.Join(dir, "degraded"), []byte(`{"reason":"r","first_ns":1700000000123456789,"count":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	holdSection(t, dir, 4242)
+
+	got, err := c.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := c.e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Holds) != 1 || len(got.Tickets) != 1 || got.Degraded == nil || !got.Section.Held {
+		t.Fatalf("snapshot %+v: want a hold, a ticket, a degraded record and a held section", got)
+	}
+	ns := func(tm time.Time) int64 {
+		if tm.IsZero() {
+			return 0
+		}
+		return tm.UnixNano()
+	}
+	back := engine.Report{StateDir: got.StateDir, StateDirExists: got.StateDirExists, Format: got.Format,
+		FormatPresent: got.FormatPresent, FormatUnderstood: got.FormatUnderstood, Gen: got.Gen,
+		ReconciledNS: ns(got.Reconciled), Resources: map[string]engine.ResourceInfo{}, UndeclaredLocked: got.UndeclaredLocked,
+		DeadHolds: got.DeadHolds, Cancels: got.Cancels, Ignored: got.Ignored,
+		Section: engine.SectionInfo{Held: got.Section.Held, PID: got.Section.PID, EnteredNS: ns(got.Section.Entered)}}
+	for name, ri := range got.Resources {
+		back.Resources[name] = engine.ResourceInfo(ri)
+	}
+	for _, tk := range got.Tickets {
+		need := map[string]spec.Range{}
+		for name, rg := range tk.Need {
+			need[name] = spec.Range(rg)
+		}
+		back.Tickets = append(back.Tickets, engine.TicketInfo{Name: tk.Name, ID: tk.ID, Label: tk.Label, Priority: tk.Priority,
+			PID: tk.PID, Need: need, CreatedNS: ns(tk.Created), MtimeNS: ns(tk.Refreshed), Dead: tk.Dead})
+	}
+	for _, h := range got.Holds {
+		back.Holds = append(back.Holds, engine.HolderInfo{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: ns(h.Start),
+			Grant: h.Grant, Unbudgeted: h.FailOpen, UnbudgetedResources: h.Unbudgeted, Clamped: h.Clamped, Adopted: h.Adopted})
+	}
+	if d := got.Degraded; d != nil {
+		back.Degraded = &engine.DegradedInfo{Reason: d.Reason, FirstNS: ns(d.First), Count: d.Count, Malformed: d.Malformed}
+	}
+	if !reflect.DeepEqual(back, want) {
+		t.Errorf("the Report read back:\n%+v\nthe engine's snapshot:\n%+v", back, want)
+	}
+	if got.Degraded.First.UnixNano() != 1700000000123456789 || got.Section.Entered.UnixNano() != 1 {
+		t.Errorf("degraded since %v, section entered %v: want the recorded nanoseconds", got.Degraded.First, got.Section.Entered)
+	}
+}
+
+// A Report's FormatError and ConfigError are *StateErrors, nil when FORMAT and the configuration
+// are usable; the engine's texts are what `status --json` prints.
+func TestReportErrorsAreStateErrors(t *testing.T) {
+	dir := stateDir(t, "")
+	c := open(t, dir)
+	if r, err := c.Snapshot(); err != nil || r.FormatError != nil || r.ConfigError != nil {
+		t.Fatalf("a usable directory: format error %v, config error %v, %v", r.FormatError, r.ConfigError, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("not a format\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := c.e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fe, ce *StateError
+	if !errors.As(got.FormatError, &fe) || "coreslot state error: "+fe.Reason != want.FormatError {
+		t.Errorf("FormatError %v (%T), want a *StateError whose reason is %q", got.FormatError, got.FormatError, want.FormatError)
+	}
+	if !errors.As(got.ConfigError, &ce) || ce.Reason != want.ConfigError {
+		t.Errorf("ConfigError %v (%T), want a *StateError whose reason is %q", got.ConfigError, got.ConfigError, want.ConfigError)
+	}
+}
+
 // The Waiter's concurrency contract: the first Poll or Wait to admit wins and the others return the
 // same grant; Cancel after admission is ErrAlreadyAdmitted; Cancel before it makes Wait return
-// ErrCancelled.
+// ErrCanceled.
 func TestConcurrentPollWaitCancel(t *testing.T) {
 	dir := stateDir(t, "")
 	c := open(t, dir)
 	sawAdmitted, sawCancelled := false, false
 	for i := 0; i < 30; i++ {
-		w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+		w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,9 +348,9 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for k := 0; k < 5; k++ {
-					g, ok, err := w.Poll()
-					if ok != (g != nil) {
-						t.Errorf("Poll: ok %v with grant %v", ok, g)
+					g, err := w.Poll()
+					if g != nil && err != nil {
+						t.Errorf("Poll: grant %v with error %v", g, err)
 					}
 					record(g, err)
 				}
@@ -252,12 +371,12 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 				t.Fatalf("iteration %d: Cancel withdrew, yet a grant was returned", i)
 			}
 			for _, err := range errs {
-				if !errors.Is(err, ErrCancelled) {
-					t.Fatalf("iteration %d: after Cancel: %v, want ErrCancelled", i, err)
+				if !errors.Is(err, ErrCanceled) {
+					t.Fatalf("iteration %d: after Cancel: %v, want ErrCanceled", i, err)
 				}
 			}
 			if len(errs) == 0 {
-				t.Fatalf("iteration %d: Wait returned neither a grant nor ErrCancelled", i)
+				t.Fatalf("iteration %d: Wait returned neither a grant nor ErrCanceled", i)
 			}
 		case errors.Is(cancelErr, ErrAlreadyAdmitted):
 			sawAdmitted = true
@@ -285,15 +404,15 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 func TestStateDirOptionMovesConfiguration(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 3\n")
 	c := open(t, dir)
-	if n, err := c.Free("cpu"); err != nil || n != 3 {
-		t.Fatalf("Free = %d, %v; want the state directory's configuration (3)", n, err)
+	if n, err := c.Available("cpu"); err != nil || n != 3 {
+		t.Fatalf("Available = %d, %v; want the state directory's configuration (3)", n, err)
 	}
 	cfg := filepath.Join(dir, "config.toml")
 	if err := os.Chmod(cfg, 0o620); err != nil {
 		t.Fatal(err)
 	}
 	var se *StateError
-	if _, err := c.Free("cpu"); !errors.As(err, &se) {
+	if _, err := c.Available("cpu"); !errors.As(err, &se) {
 		t.Errorf("group-writable config.toml: %v, want a *StateError", err)
 	}
 	if _, err := Open(Options{StateDir: dir}); !errors.As(err, &se) {
@@ -307,7 +426,7 @@ func TestStateDirOptionMovesConfiguration(t *testing.T) {
 func TestUsageErrorBeforeQueueing(t *testing.T) {
 	c := open(t, stateDir(t, ""))
 	var ue *UsageError
-	if _, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 3, Max: 2}}}); !errors.As(err, &ue) {
+	if _, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 3, Max: 2}}}); !errors.As(err, &ue) {
 		t.Errorf("min > max: %v, want a *UsageError", err)
 	}
 	if r, err := c.Snapshot(); err != nil || len(r.Tickets) != 0 {
@@ -320,7 +439,7 @@ func TestUsageErrorBeforeQueueing(t *testing.T) {
 func TestWaitWithdrawsOnStateError(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 0\n") // invalid: read only at admission
 	c := open(t, dir)
-	w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}

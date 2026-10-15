@@ -3,32 +3,36 @@
 // through a flock(2) file protocol (PROTOCOL.md).
 //
 //	c, err := coreslot.Open(coreslot.Options{})
-//	w, err := c.Enqueue(coreslot.Request{Label: "ci:o-r",
-//		Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 3}}})
-//	g, err := w.Wait(ctx)          // or Poll at least every 2 s
-//	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
-//		// Inherited grant context is replaced by g.Env (PROTOCOL.md section 17).
-//		return strings.HasPrefix(kv, "CORESLOT_GRANTED_") ||
-//			strings.HasPrefix(kv, "CORESLOT_HELD_FD=") ||
-//			strings.HasPrefix(kv, "CORESLOT_TOKEN_FDS=") ||
-//			strings.HasPrefix(kv, "CORESLOT_UNBUDGETED=")
-//	})
-//	cmd.ExtraFiles, cmd.Env = g.Files(), append(env, g.Env()...)
-//	... run the command ...
-//	g.Close()
+//	if err != nil {
+//		return err // a *StateError: the caller decides whether to run unbudgeted
+//	}
+//	w, err := c.Enqueue(ctx, coreslot.Request{Label: "make test",
+//		Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 8}}})
+//	if err != nil {
+//		return err
+//	}
+//	g, err := w.Wait(ctx) // or Poll at least every 2 s
+//	if err != nil {
+//		return err
+//	}
+//	defer g.Close()
+//	cmd := exec.CommandContext(ctx, "make", "test", "-j", strconv.Itoa(g.Granted()["cpu"]))
+//	cmd.ExtraFiles, cmd.Env = g.Files(), g.Environ(os.Environ())
+//	return cmd.Run()
 //
 // The example is the same for an ordinary grant and for a pass-through. Inside another run's
 // grant, Enqueue does not queue behind its own parent: it passes through as a nested
-// `coreslot run` does (PROTOCOL.md section 18, see Client.EnqueueContext), and the grant's Files
-// are the descriptors this process inherited, which Env names at the numbers ExtraFiles gives
-// them; Close leaves them open. Only Enqueue and EnqueueContext pass through, and only on a
-// Client whose state directory is the one the inherited environment names. An ordinary grant is
-// therefore one made outside any grant, where nothing was inherited, unless Options.Independent
-// asks for one inside it, the Client is opened with Options.StateDir on another directory, or the
-// grant is Adopt's, which never passes through. Then the descriptors the inherited
-// CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS name are not the grant's, and section 17 asks a client
-// to close them before it starts its command; the library leaves that to the caller, since it
-// does not own them and a pass-through of the same process may still need them.
+// `coreslot run` does (PROTOCOL.md section 18, see Client.Enqueue), and the grant's Files are the
+// descriptors this process inherited, which Env names at the numbers ExtraFiles gives them;
+// Close leaves them open. Only Enqueue passes through, and only on a Client whose state directory
+// is the one the inherited environment names. An ordinary grant is therefore one made outside
+// any grant, where nothing was inherited, unless Options.Independent asks for one inside it, the
+// Client is opened with Options.StateDir on another directory, or the grant is Adopt's, which
+// never passes through. Then the descriptors the inherited CORESLOT_HELD_FD and
+// CORESLOT_TOKEN_FDS name are not the grant's, and section 17 asks a client to close them before
+// it starts its command; the library leaves that to the caller, since it does not own them and a
+// pass-through of the same process may still need them. Grant.Environ drops their names from
+// the command's environment either way.
 //
 // The library never prints, never installs signal handlers, never chooses exit codes and never
 // decides on its own to run unbudgeted: a *StateError tells the caller that the budget is
@@ -38,8 +42,8 @@
 // lookup), Open returns a *StateError where a nested `coreslot run` would follow the parent; a
 // caller that wants to follow it reads CORESLOT_UNBUDGETED. Once Open succeeds, an Enqueue under
 // a parent that runs unbudgeted passes through unbudgeted, the parent's decision passed on as the
-// CLI passes it. On Windows, Open returns ErrUnsupported and nothing else is reachable. The
-// module stays at v0 until format 1 is frozen.
+// CLI passes it. On a platform without Unix (Windows among them), Open returns ErrUnsupported and
+// nothing else is reachable. The module stays at v0 until format 1 is frozen.
 //
 // A ticket's lock is carried by a close-on-exec descriptor. If the caller's own goroutines fork
 // (os/exec, for example) while the library holds a ticket, the child shares that lock until it

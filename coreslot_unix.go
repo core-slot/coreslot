@@ -38,12 +38,13 @@ type Client struct {
 // fixed system path as a short-lived child process, and waits at most 5 s for each run of it.
 // That matters most to a build without cgo for Linux or another Unix but macOS, which reads
 // /etc/passwd alone and so misses an account only NSS knows (LDAP, SSSD, systemd-homed); a cgo
-// build has asked NSS already, and getent asks it a second time. EnqueueContext looks the home
+// build has asked NSS already, and getent asks it a second time. Enqueue looks the home
 // directory up the same way inside another run's grant when CORESLOT_STATE_DIR is unset. Like
 // any child the caller's process starts, getent inherits the environment and every descriptor
 // that is not close-on-exec. A caller that sets SIGCHLD to SIG_IGN or reaps every child (a PID 1
 // calling wait4(-1)) can make the wait for getent fail, and Open then returns a *StateError; such
-// a caller names the directory in Options.StateDir or CORESLOT_STATE_DIR.
+// a caller names the directory in Options.StateDir or CORESLOT_STATE_DIR, which also skips the
+// lookup, and its wait, entirely.
 func Open(o Options) (*Client, error) {
 	dir, cfgPath := o.StateDir, ""
 	if dir == "" {
@@ -66,9 +67,20 @@ func Open(o Options) (*Client, error) {
 	return &Client{e: e, independent: o.Independent, named: o.StateDir == ""}, nil
 }
 
-// wrap applies the error contract (engine.StateReason): every error but the classes a caller acts
-// on becomes a *StateError wrapping it.
+// wrap applies the error contract (engine.StateReason) at the package boundary: every error but
+// the classes a caller acts on becomes a *StateError wrapping it, and the engine's usage and
+// section errors become this package's.
 func wrap(err error) error {
+	var (
+		usage *spec.UsageError
+		busy  *engine.SectionBusyError
+	)
+	switch {
+	case errors.As(err, &usage):
+		return &UsageError{Msg: err.Error()}
+	case errors.As(err, &busy):
+		return &SectionBusyError{PID: busy.PID, Err: busy.Err}
+	}
 	if reason, ok := engine.StateReason(err); ok {
 		return &StateError{Reason: reason, err: err}
 	}
@@ -80,24 +92,17 @@ func wrap(err error) error {
 // the other clients and stops blocking them. Under a state directory format this client does
 // not implement, the waiter waits in token-only mode and its grant is TokenOnly.
 //
-// Inside another run's grant, Enqueue passes through instead, as a nested `coreslot run` does
-// (PROTOCOL.md section 18): see EnqueueContext. Options.Independent turns that off.
-//
-// Enqueue waits for the admission section as long as it takes; a process stopped inside the
-// section blocks it until that process is continued or killed. EnqueueContext bounds the wait.
-func (c *Client) Enqueue(req Request) (*Waiter, error) {
-	return c.EnqueueContext(context.Background(), req)
-}
-
-// EnqueueContext is Enqueue whose wait for the admission section ends with ctx (PROTOCOL.md
-// section 8: retried from 10 ms up to 250 ms). When ctx ends first nothing is published and the
-// error matches ctx.Err(); if another client held the section, its text names the pid
-// admit.lock records for it. Once inside the section the enqueue completes.
+// Enqueue first waits for the admission section, retried from 10 ms up to 250 ms (PROTOCOL.md
+// section 8), until ctx ends; a process stopped inside the section blocks it until that process
+// is continued or killed. When ctx ends first nothing is published and the error matches
+// ctx.Err(); if another client held the section, it is a *SectionBusyError naming the pid
+// admit.lock records for that client. Once inside the section the enqueue completes; ctx does
+// not bound the wait for the admission, which Wait's own context does.
 //
 // A process started inside another run's grant inherits that grant's context (PROTOCOL.md
 // section 17), and its request never queues behind its own parent, which may hold the whole
 // budget. Unless Options.Independent is set, and when the environment's CORESLOT_STATE_DIR (or
-// the default) is this Client's state directory, EnqueueContext applies the rule of a nested
+// the default) is this Client's state directory, Enqueue applies the rule of a nested
 // `coreslot run` (section 18):
 //
 //   - CORESLOT_UNBUDGETED is set (rule 1): the Waiter is admitted at once, with every requested
@@ -108,22 +113,24 @@ func (c *Client) Enqueue(req Request) (*Waiter, error) {
 //     resource the parent holds none of is unbudgeted with its Min.
 //   - A context that does not validate (a launcher closed the descriptors, or the parent is
 //     gone) is an error matching ErrRefused, at once and with the diagnostic; nothing is
-//     queued. It is the CLI's refusal of section 14, and Options.Independent is the way to queue
-//     anyway.
+//     queued, rather than queue behind a parent that may hold the whole budget. It is the CLI's
+//     refusal of section 14, and Options.Independent is the way to queue anyway.
 //
 // Such a grant reports PassThrough. It takes no token, publishes no ticket or hold, enters no
 // section and bumps no gen: it shares its parent's grant, so pass-throughs are not budgeted
-// against each other, and a caller that starts several commands at once partitions Grant
+// against each other, and a caller that starts several commands at once partitions Granted
 // itself. A Client opened on another state directory (Options.StateDir) is another budget,
 // which the inherited context is not part of: its requests are ordinary. When the directory the
 // environment names cannot be resolved (CORESLOT_STATE_DIR is not an absolute path, or it is
 // unset and the home directory cannot be learned), a Client opened on Options.StateDir cannot
 // tell whether it is that directory, and the request is refused (ErrRefused) rather than queued
 // behind a parent that may hold the whole budget. A Client opened without Options.StateDir is on
-// that directory by construction and never resolves it again.
-func (c *Client) EnqueueContext(ctx context.Context, req Request) (*Waiter, error) {
-	if err := spec.Normalize(req).Validate(); err != nil {
-		return nil, err
+// that directory by construction and never resolves it again. Resolving it may look the home
+// directory up as Open does, and ctx does not bound that lookup's wait for getent.
+func (c *Client) Enqueue(ctx context.Context, req Request) (*Waiter, error) {
+	sreq := req.spec()
+	if err := spec.Normalize(sreq).Validate(); err != nil {
+		return nil, wrap(err)
 	}
 	// Opened without Options.StateDir, the Client's directory is the one the environment names:
 	// Open resolved it by the same rule, from the environment the context came in, and resolving
@@ -134,13 +141,12 @@ func (c *Client) EnqueueContext(ctx context.Context, req Request) (*Waiter, erro
 	}
 	nested, err := decide(environ(), c.independent, c.e.Store().Dir())
 	if err != nil {
-		return nil, fmt.Errorf("%w: the inherited grant does not validate: %w; refusing rather than queueing "+
-			"behind a parent that may hold the whole budget (Options.Independent queues anyway)", ErrRefused, err)
+		return nil, fmt.Errorf("%w: the inherited grant does not validate: %w", ErrRefused, err)
 	}
 	if nested.Kind != engine.NotNested {
-		return &Waiter{grant: &Grant{g: nested.PassThrough(req)}}, nil
+		return &Waiter{grant: &Grant{g: nested.PassThrough(sreq)}}, nil
 	}
-	t, err := c.e.EnqueueContext(ctx, req)
+	t, err := c.e.EnqueueContext(ctx, sreq)
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -162,27 +168,22 @@ func environ() map[string]string {
 // Adopt admits already-running work without queueing (PROTOCOL.md section 12.4), taking what
 // is free up to each resource's Max. shortfall maps every requested declared resource to
 // max(0, Min - granted): what the work runs without budget. Adopt waits for the admission
-// section as long as it takes; AdoptContext bounds the wait.
+// section until ctx ends, as Enqueue does: nothing is taken or published then.
 //
 // Adopt never passes through (PROTOCOL.md section 18 applies to Enqueue): inside another run's
 // grant it takes what is free like any adoption, and the parent's tokens are not free.
-func (c *Client) Adopt(req Request) (*Grant, map[string]int, error) {
-	return c.AdoptContext(context.Background(), req)
-}
-
-// AdoptContext is Adopt whose wait for the admission section ends with ctx, as EnqueueContext's
-// does: nothing is taken or published then.
-func (c *Client) AdoptContext(ctx context.Context, req Request) (*Grant, map[string]int, error) {
-	g, short, err := c.e.AdoptContext(ctx, req)
+func (c *Client) Adopt(ctx context.Context, req Request) (g *Grant, shortfall map[string]int, err error) {
+	eg, short, err := c.e.AdoptContext(ctx, req.spec())
 	if err != nil {
 		return nil, nil, wrap(err)
 	}
-	return &Grant{g: g}, short, nil
+	return &Grant{g: eg}, short, nil
 }
 
-// Free returns resource's size minus its locked tokens now; it never waits for the section. A
-// resource the configuration does not declare matches ErrRefused.
-func (c *Client) Free(resource string) (int, error) {
+// Available returns resource's size minus its locked tokens now: what an admission could take
+// of it at this moment. It never waits for the section. A resource the configuration does not
+// declare matches ErrRefused.
+func (c *Client) Available(resource string) (int, error) {
 	n, err := c.e.Free(resource)
 	return n, wrap(err)
 }
@@ -192,13 +193,16 @@ func (c *Client) Free(resource string) (int, error) {
 // missing; the coreslot command reads through a read-only open instead, which creates nothing.
 func (c *Client) Snapshot() (Report, error) {
 	r, err := c.e.Snapshot()
-	return r, wrap(err)
+	if err != nil {
+		return Report{}, wrap(err)
+	}
+	return newReport(r), nil
 }
 
 // Waiter is a queued request. Its methods are safe for concurrent use: the first Poll or Wait
 // to admit wins and every other returns the same *Grant; Cancel after the admission returns
-// ErrAlreadyAdmitted; Cancel during Wait makes it return ErrCancelled. A pass-through's Waiter
-// (EnqueueContext) is admitted from the start: Poll and Wait return its grant at once, and
+// ErrAlreadyAdmitted; Cancel during Wait makes it return ErrCanceled. A pass-through's Waiter
+// (Client.Enqueue) is admitted from the start: Poll and Wait return its grant at once, and
 // Cancel returns ErrAlreadyAdmitted.
 type Waiter struct {
 	t *engine.Ticket // nil for a pass-through
@@ -216,26 +220,27 @@ func (w *Waiter) wrapGrant(g *engine.Grant) *Grant {
 	return w.grant
 }
 
-// Poll makes one non-blocking attempt (PROTOCOL.md section 8); call it at least every 2 s: it refreshes the ticket, checks
-// for a cancel request and, when this waiter is the head, tries admission with a single try at
-// the section. ok reports an admission. After an error the request is still queued: poll again,
-// or Cancel to withdraw it.
-func (w *Waiter) Poll() (g *Grant, ok bool, err error) {
+// Poll makes one non-blocking attempt (PROTOCOL.md section 8); call it at least every 2 s. It
+// refreshes the ticket, checks for a cancel request and, when this waiter is the head, tries
+// admission with a single try at the section. It returns the grant once admitted, and nil and
+// nil while the request waits. After an error the request is still queued: poll again, or
+// Cancel to withdraw it.
+func (w *Waiter) Poll() (*Grant, error) {
 	if w.t == nil {
-		return w.grant, true, nil
+		return w.grant, nil
 	}
 	r, err := w.t.Poll()
 	if err != nil {
-		return nil, false, wrap(err)
+		return nil, wrap(err)
 	}
-	if a, isAdmitted := r.(engine.Admitted); isAdmitted {
-		return w.wrapGrant(a.Grant), true, nil
+	if a, ok := r.(engine.Admitted); ok {
+		return w.wrapGrant(a.Grant), nil
 	}
-	return nil, false, nil
+	return nil, nil
 }
 
 // Wait polls until admitted. When ctx ends first it withdraws the ticket (it is dead at once
-// to every other client) and returns ctx.Err(); a Cancel makes it return ErrCancelled. Any other
+// to every other client) and returns ctx.Err(); a Cancel makes it return ErrCanceled. Any other
 // error (a *StateError, for example) also withdraws the ticket before it is returned.
 func (w *Waiter) Wait(ctx context.Context) (*Grant, error) {
 	if w.t == nil {
@@ -248,14 +253,14 @@ func (w *Waiter) Wait(ctx context.Context) (*Grant, error) {
 	if err == nil || ctx.Err() != nil {
 		return w.abandon(ctx)
 	}
-	if errors.Is(err, engine.ErrCancelled) {
+	if errors.Is(err, engine.ErrCanceled) {
 		return nil, err
 	}
 	// Any other error ends the wait: withdraw, so that the ticket is dead at once instead of
 	// blocking the queue unrefreshed until it stalls. An admission that won the race is
 	// returned instead.
 	if errors.Is(w.t.Withdraw(), engine.ErrAlreadyAdmitted) {
-		if g, ok, perr := w.Poll(); ok && perr == nil {
+		if g, perr := w.Poll(); g != nil && perr == nil {
 			return g, nil
 		}
 	}
@@ -292,7 +297,7 @@ func stepWhenDue(ctx context.Context, s stepper) (engine.StepResult, error) {
 // returned instead.
 func (w *Waiter) abandon(ctx context.Context) (*Grant, error) {
 	if err := w.t.Withdraw(); errors.Is(err, engine.ErrAlreadyAdmitted) {
-		if g, ok, perr := w.Poll(); ok && perr == nil {
+		if g, perr := w.Poll(); g != nil && perr == nil {
 			return g, nil
 		}
 	}
@@ -325,10 +330,10 @@ type grant interface {
 	Close() error
 }
 
-// Grant maps every requested resource to what the command may use: the tokens held (for a
-// pass-through, min(Max, held) of the parent's), or for a resource run unbudgeted, its requested
-// Min.
-func (g *Grant) Grant() map[string]int { return g.g.Grant() }
+// Granted maps every requested resource to what the command may use, as CORESLOT_GRANTED_<RES>
+// tells it: the tokens held (for a pass-through, min(Max, held) of the parent's), or for a
+// resource run unbudgeted, its requested Min.
+func (g *Grant) Granted() map[string]int { return g.g.Grant() }
 
 // Clamped maps each resource whose Min exceeded its whole size to that Min; such a grant holds
 // the whole resource. For a pass-through it maps each resource whose Min exceeded what the
@@ -344,7 +349,7 @@ func (g *Grant) Unbudgeted() []string { return g.g.Unbudgeted() }
 // carries CORESLOT_UNBUDGETED=format.
 func (g *Grant) TokenOnly() bool { return g.g.TokenOnly() }
 
-// PassThrough reports a pass-through's grant (EnqueueContext): the parent's, shared with every
+// PassThrough reports a pass-through's grant (Client.Enqueue): the parent's, shared with every
 // other pass-through under the same parent rather than budgeted against them.
 func (g *Grant) PassThrough() bool {
 	_, ok := g.g.(*engine.PassThrough)
@@ -358,14 +363,31 @@ func (g *Grant) PassThrough() bool {
 // inherited descriptors stay where they are.
 func (g *Grant) Files() []*os.File { return g.g.Files() }
 
-// Env is the CORESLOT_* environment matching Files. Remove every inherited
-// CORESLOT_GRANTED_*, CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS and CORESLOT_UNBUDGETED from the
-// command's environment before appending it (PROTOCOL.md section 17): inherited grant context
-// describes another grant. CORESLOT_STATE_DIR is not grant context and is kept. A
-// pass-through's Env carries the inherited context on, as a nested `coreslot run` passes it to
-// its command: CORESLOT_GRANTED_<RES> narrowed for each requested resource, the descriptors'
-// new numbers, and every other inherited context variable unchanged.
+// Env is the CORESLOT_* environment matching Files. Environ builds a command's environment from
+// it; a caller that builds its own removes every inherited CORESLOT_GRANTED_*, CORESLOT_HELD_FD,
+// CORESLOT_TOKEN_FDS and CORESLOT_UNBUDGETED before appending Env (PROTOCOL.md section 17):
+// inherited grant context describes another grant. CORESLOT_STATE_DIR is not grant context and
+// is kept. A pass-through's Env carries the inherited context on, as a nested `coreslot run`
+// passes it to its command: CORESLOT_GRANTED_<RES> narrowed for each requested resource, the
+// descriptors' new numbers, and every other inherited context variable unchanged.
 func (g *Grant) Env() []string { return g.g.Env() }
+
+// Environ is the environment of a command started with Files as its exec.Cmd.ExtraFiles: base
+// (typically os.Environ()) without its grant context, the variables CORESLOT_GRANTED_*,
+// CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS and CORESLOT_UNBUDGETED (PROTOCOL.md section 17),
+// followed by Env. It does not modify base.
+//
+//	cmd.ExtraFiles, cmd.Env = g.Files(), g.Environ(os.Environ())
+func (g *Grant) Environ(base []string) []string {
+	own := g.g.Env()
+	env := make([]string, 0, len(base)+len(own))
+	for _, kv := range base {
+		if k, _, _ := strings.Cut(kv, "="); !engine.IsContext(k) {
+			env = append(env, kv)
+		}
+	}
+	return append(env, own...)
+}
 
 // Close closes this process's copies of the descriptors (never unlocking, so a child keeps the
 // grant until it exits) and removes the hold when no child holds it, waiting at most 2 s for
