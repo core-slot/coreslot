@@ -16,6 +16,7 @@ builds:
     binary: coreslot
     env:
       - CGO_ENABLED=0
+    # ci.yml's snapshot jobs expect one binary per goos x goarch below (4); change both together.
     goos:
       - darwin
       - linux
