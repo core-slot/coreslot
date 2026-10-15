@@ -7,9 +7,9 @@ expected to follow it.
 
 ## Reporting
 
-Report unacceptable behaviour to the project maintainer through their GitHub profile,
-[github.com/Nezhinskiy](https://github.com/Nezhinskiy). Reports are handled privately, and the
-reporter's identity is not disclosed without their consent. Enforcement follows the Covenant's
-enforcement guidelines.
+Report unacceptable behavior to the project maintainer by e-mail, at
+[mikhail.nezhinsky@gmail.com](mailto:mikhail.nezhinsky@gmail.com). You will get a first answer
+within 7 days. Reports are handled privately, and the reporter's identity is not disclosed without
+their consent. Enforcement follows the Covenant's enforcement guidelines.
 
 A security vulnerability is not a conduct matter: report it as [SECURITY.md](SECURITY.md) describes.
