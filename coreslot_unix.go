@@ -71,8 +71,8 @@ func Open(o Options) (*Client, error) {
 
 // Close releases what the Client holds. It holds nothing today and returns nil, but a later
 // version may hold a descriptor, so call it once the Client is no longer needed, and do not use
-// the Client after it. It does not end the Client's Waiters or Grants: cancel and close those on
-// their own.
+// the Client after it. It is idempotent. It does not end the Client's Waiters or Grants: cancel
+// and close those on their own.
 func (c *Client) Close() error { return nil }
 
 // wrap applies the error contract (engine.StateReason) at the package boundary: every error but
@@ -107,7 +107,8 @@ func wrap(err error) error {
 // ctx.Err(); if another client held the section, it is a [*SectionBusyError] naming the pid
 // admit.lock records for that client. Once inside the section the enqueue completes; ctx does
 // not bound the wait for the admission, which Wait's own context does. A ctx that has already
-// ended ends every Enqueue at once with ctx.Err(), a pass-through's included.
+// ended ends every valid Enqueue at once with ctx.Err(), a pass-through's included: req is
+// validated first.
 //
 // A process started inside another run's grant inherits that grant's context (PROTOCOL.md
 // section 17), and its request never queues behind its own parent, which may hold the whole
@@ -179,9 +180,9 @@ func environ() map[string]string {
 }
 
 // Adopt admits already-running work without queueing (PROTOCOL.md section 12.4), taking what
-// is free up to each resource's Max. It has no minimum: the grant's Shortfall says what the work
-// runs without budget ([Grant.Shortfall]). Adopt waits for the admission section until ctx
-// ends, as Enqueue does: nothing is taken or published then.
+// is free up to each resource's Max. It has no minimum: the grant's [Grant.Shortfall] says what
+// the work runs without budget. Adopt waits for the admission section until ctx ends, as Enqueue
+// does: nothing is taken or published then.
 //
 // Adopt never passes through (PROTOCOL.md section 18 applies to Enqueue): inside another run's
 // grant it takes what is free like any adoption, and the parent's tokens are not free.
@@ -354,17 +355,18 @@ type grant interface {
 // resource run unbudgeted, its requested Min.
 func (g *Grant) Granted() map[string]int { return g.g.Grant() }
 
-// Clamped maps each resource whose Min exceeded its whole size to that Min; such a grant holds
-// the whole resource. For a pass-through it maps each resource whose Min exceeded what the
-// parent holds to that Min, and the grant is all the parent holds of it. Clamped records the
-// requested Min; [Grant.Shortfall] says how far short of it the grant is.
+// Clamped maps each resource whose Min exceeded its whole size to that Min. An admission so
+// clamped holds the whole resource; an adoption holds what was free. For a pass-through it maps
+// each resource whose Min exceeded what the parent holds to that Min, and the grant is all the
+// parent holds of it. Clamped records the requested Min; [Grant.Shortfall] says how far short of
+// it the grant is.
 func (g *Grant) Clamped() map[string]int { return g.g.Clamped() }
 
 // Shortfall maps each requested resource the grant holds fewer than Min of to Min minus what it
-// holds: what the work runs without budget. An adoption (Client.Adopt) takes what is free, so it
-// may fall short of any Min; an admission or a pass-through falls short only where Clamped
-// says so. A resource run unbudgeted (Unbudgeted) is never in it. It is empty when the grant
-// holds every Min.
+// holds: what the work runs without budget. An adoption ([Client.Adopt]) takes what is free, so
+// it may fall short of any Min; an admission or a pass-through falls short only where
+// [Grant.Clamped] says so. A resource run unbudgeted ([Grant.Unbudgeted]) is never in it. It is
+// empty when the grant holds every Min.
 func (g *Grant) Shortfall() map[string]int { return g.g.Shortfall() }
 
 // Unbudgeted lists, sorted, the requested resources run unbudgeted: those the configuration does

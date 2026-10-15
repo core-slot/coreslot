@@ -24,7 +24,8 @@ const (
 
 // refusalError is a refusal (PROTOCOL.md section 14): nothing runs and the run exits with Code,
 // the refusal code of its --refusal-code (75 when Code is 0). It carries text alone on purpose:
-// under --strict it replaces a state error, which must not classify as one again.
+// under --strict it replaces a state error, which neither stateReason nor an errors.As for a
+// state error may then find in it.
 type refusalError struct {
 	Msg  string
 	Code int

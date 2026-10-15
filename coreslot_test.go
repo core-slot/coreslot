@@ -83,6 +83,14 @@ func TestShortfall(t *testing.T) {
 	if got := full.Shortfall(); got == nil || len(got) != 0 {
 		t.Errorf("adoption of 3 with Min 2: shortfall %#v, want empty", got)
 	}
+	exact, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := exact.Shortfall(); exact.Granted()["cpu"] != 1 || got == nil || len(got) != 0 {
+		t.Errorf("adoption of exactly its Min: granted %v, shortfall %#v; want 1 and empty, no zero entry", exact.Granted(), got)
+	}
+	exact.Close()
 	short, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 2, Max: 2}}})
 	if err != nil {
 		t.Fatal(err)

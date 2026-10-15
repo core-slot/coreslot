@@ -325,6 +325,11 @@ func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, want) {
 		t.Errorf("status: exit %d, want a ticket line with %q:\n%s", r.code, want, r.stdout)
 	}
+	for _, line := range []string{"\n  cpu  size 16  locked 16  free 0\n", "\n  pg-local  size 2  locked 0  free 2\n"} {
+		if !strings.Contains(r.stdout, line) {
+			t.Errorf("status lacks the resource line %q:\n%s", strings.TrimSpace(line), r.stdout)
+		}
+	}
 }
 
 func TestStatusEscapesLabels(t *testing.T) {

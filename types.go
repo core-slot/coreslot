@@ -164,8 +164,8 @@ type HoldInfo struct {
 	// Unbudgeted lists, sorted, the requested resources the holder runs without tokens: those
 	// the configuration did not declare at the admission.
 	Unbudgeted []string
-	// Clamped maps each resource whose requested Min exceeded its whole size to that Min; the
-	// hold has all of it.
+	// Clamped maps each resource whose requested Min exceeded its whole size to that Min. An
+	// admission so clamped holds the whole resource; an adoption holds what was free.
 	Clamped map[string]int
 	// Adopted reports an adoption ([Client.Adopt]): work admitted without queueing.
 	Adopted bool
