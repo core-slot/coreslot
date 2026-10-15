@@ -8,8 +8,9 @@ check it on yours.
 Index of the evidence scripts:
 
 - `bench/waiters` and `bench/floor` (with the `*.pprof` profiles in this directory): the waiter
-  benchmark, in "Waiter benchmark (the release gate)" below. The profiles were recorded before the
-  module moved, so their symbols name `github.com/Nezhinskiy/coreslot`.
+  benchmark, in "Waiter benchmark (the release gate)" below. Both build only with
+  `-tags coreslot_bench`. The profiles were recorded before the module moved, so their symbols
+  name `github.com/Nezhinskiy/coreslot`.
 - `probe-docker-flock.sh`: whether a container sees the host's flock, in "Docker Desktop and
   host locks" below.
 - `acceptance.py`: three test gates and a CI job with and without coreslot, in "Product
@@ -270,8 +271,8 @@ before the fix.
 ```sh
 B=$(mktemp -d)
 go build -o "$B/coreslot" ./cmd/coreslot
-go build -o "$B/waiters" ./bench/waiters
-go build -o "$B/floor" ./bench/floor
+go build -tags coreslot_bench -o "$B/waiters" ./bench/waiters   # the tag keeps them out of go install
+go build -tags coreslot_bench -o "$B/floor" ./bench/floor
 "$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 100 -runs 5 -json "$B/n100.json"   # the 5-run spread
 "$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 50 -runs 1
 "$B/waiters" -coreslot "$B/coreslot" -dir "$B/work" -n 200 -runs 1
@@ -297,7 +298,7 @@ docker run --rm -v "$PWD:/src:ro" -e GOFLAGS=-buildvcs=false golang:1.26 sh -c '
 	useradd --create-home tester && cp -r /src /work && chown -R tester:tester /work
 	runuser -u tester -- env PATH="$PATH" HOME=/home/tester sh -c "
 		cd /work && B=/home/tester/b && mkdir -p \$B &&
-		for p in cmd/coreslot bench/waiters bench/floor; do go build -o \$B/\$(basename \$p) ./\$p; done &&
+		for p in cmd/coreslot bench/waiters bench/floor; do go build -tags coreslot_bench -o \$B/\$(basename \$p) ./\$p; done &&
 		\$B/waiters -coreslot \$B/coreslot -dir /home/tester/work -n 100 -runs 1
 		\$B/waiters -coreslot \$B/coreslot -dir /home/tester/work -n 1000 -runs 1"'
 ```

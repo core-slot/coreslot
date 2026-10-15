@@ -1,4 +1,4 @@
-//go:build unix && !darwin && !linux
+//go:build coreslot_bench && unix && !darwin && !linux
 
 package main
 

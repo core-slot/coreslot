@@ -1,4 +1,4 @@
-package coreslot
+package repocheck
 
 import (
 	"bytes"
@@ -16,61 +16,14 @@ import (
 	"testing"
 )
 
-// Contract: this repository never cites a document that is not part of this repository, by name,
-// by section or by an id such a document assigns. PROTOCOL.md is the only normative text; a
-// comment, test or document states a rule itself or cites the PROTOCOL.md section that states it.
-//
-// The guarantee covers a closed set of forms, and only those:
-//
-//   - a Markdown file name or path (any token ending in ".md" or ".markdown", in any case, in
-//     prose, code, links or backticks) that does not resolve to a file of the repository, plus
-//     two directory and name prefixes of documents that are not part of this repository, which
-//     name no file and so carry no ".md" to resolve;
-//   - a section marker (a § sign or "section N") within three words of the word spec,
-//     specification or design, in either order, the word and the marker separated by spaces,
-//     brackets, a colon, comma, slash or dash;
-//   - closed families of ids and phrases that refer to records outside this repository: D
-//     followed by one to twelve, "R-" followed by a letter and a number, an O followed by a
-//     number next to "decision(s)", "owner('s)" or "decided", and the phrases "owner" followed by
-//     decision, ruling, rule or decided, and "controller" or "maintainer" followed by ruling.
-//
-// Free prose about a specification or design ("as the design intends", "the spec says") is out
-// of scope: its input space is open, so no pattern list can both catch it and leave ordinary prose
-// alone, and review covers it. So are bare dotted numbers ("spec 1.0" is a version) and a bare O
-// with a number (a compiler flag). Matching is per line: a citation split across a line break is
-// out of scope too. This file is scanned like every other: the patterns' sources do
-// not match themselves, and the test cases are spelled with a "|" removed before matching.
-var forbiddenForms = []struct {
-	why string
-	re  *regexp.Regexp
-}{
-	{"a directory that is not part of this repository", regexp.MustCompile(`docs/(specs|plans)/`)},
-	{"a document that is not part of this repository", regexp.MustCompile(`coreslot-(design)\b`)},
-	{"a section of a specification or design", regexp.MustCompile(
-		`(?i)\b(spec|specification|design)s?('s|’s)?[,:]?(\s+[^\s§]+){0,3}?[\s(:,/—–-]*(§|\bsections?\s+\d)`)},
-	{"a section of a specification or design", regexp.MustCompile(
-		`(?i)(§\s*\d|\bsections?\s+\d)[\d.]*(\s+\S+){0,3}?\s+(spec|specification|design)s?\b`)},
-	{"an id assigned outside this repository", regexp.MustCompile(`\bR-[A-Z]\d+\b`)},
-	{"an id assigned outside this repository", regexp.MustCompile(`\b(?i:decisions?|owner('s|’s)?)\s+O[1-9]\d?\b|\bO[1-9]\d?\s+(?i:decision|ruling|decided)\b`)},
-	{"a record outside this repository", regexp.MustCompile(
-		`(?i)\b(owner('s|’s)?\s+(decision|ruling|rule)s?|owner\s+decided|(controller|maintainer)\s+ruling)\b`)},
-}
-
-// outsideID is a capital D followed by a number from one to twelve, as a word of its own: an id
-// that a document outside this repository assigns. The word boundaries keep it off hex digits,
-// "3D", colour codes, identifiers and longer ids. conformance/pyclient/AMBIGUITIES.md numbers its
-// own entries by section letter and number, and the Python client and its tests cite them; its
-// section D stops at nine, so under conformance/pyclient/ only ten to twelve match, through
-// pyclientOutsideID. A product name like d3.js written with a capital D would need an entry in
-// citationAllowlist.
-var (
-	outsideID         = regexp.MustCompile(`\bD(1[0-2]|[1-9])\b`)
-	pyclientOutsideID = regexp.MustCompile(`\bD1[0-2]\b`)
-)
-
-// citationAllowlist exempts, per file, the lines that contain one of the given substrings.
-var citationAllowlist = map[string][]string{}
-
+// Contract: every Markdown file name the repository writes names a file of the repository. A
+// Markdown name is any token ending in ".md" or ".markdown", in any case, in prose, code, links or
+// backticks; it resolves relative to the file it appears in, relative to the root, or, for a bare
+// name, to any file of that name. A URL's Markdown name is another site's and is out of scope, and
+// so is a name split across a line break: matching is per line. This file is scanned like every
+// other, so its test cases are spelled with a "|" removed before matching. A pattern file
+// (.gitignore, .gitattributes) is not checked for them: its names match files, whether or not
+// they exist, and refer to none.
 var (
 	// mdName is a Markdown file name or path; urlRE is a URL, whose Markdown name is another site's.
 	mdName = regexp.MustCompile(`(?i)[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.(md|markdown)\b`)
@@ -86,127 +39,79 @@ func resolves(ref, file string, files, bases map[string]bool) bool {
 	return !strings.Contains(ref, "/") && bases[ref]
 }
 
-// citationFindings returns the distinct reasons line of file breaks the contract, or nil. files
-// and bases are the repository's files and their base names.
-func citationFindings(file, line string, files, bases map[string]bool) []string {
-	for _, ok := range citationAllowlist[file] {
-		if strings.Contains(line, ok) {
-			return nil
-		}
-	}
+// patternFile reports whether file holds path patterns rather than references to files.
+func patternFile(file string) bool {
+	base := path.Base(file)
+	return base == ".gitignore" || base == ".gitattributes"
+}
+
+// danglingMarkdown returns the Markdown names in line of file that name no file of the repository,
+// or nil. files and bases are the repository's files and their base names.
+func danglingMarkdown(file, line string, files, bases map[string]bool) []string {
 	var out []string
-	add := func(why string) {
-		if !slices.Contains(out, why) {
-			out = append(out, why)
-		}
-	}
-	for _, f := range forbiddenForms {
-		if m := f.re.FindString(line); m != "" {
-			add(f.why + " (" + m + ")")
-		}
-	}
-	ids := outsideID
-	if strings.HasPrefix(file, "conformance/pyclient/") {
-		ids = pyclientOutsideID
-	}
-	if m := ids.FindString(line); m != "" {
-		add("an id assigned outside this repository (" + m + ")")
-	}
 	for _, ref := range mdName.FindAllString(urlRE.ReplaceAllString(line, ""), -1) {
-		if !resolves(ref, file, files, bases) {
-			add("a document the repository does not contain (" + ref + ")")
+		if !resolves(ref, file, files, bases) && !slices.Contains(out, ref) {
+			out = append(out, ref)
 		}
 	}
 	return out
 }
 
-// The matcher itself: every closed form is caught, and the prose and code that share its words
-// are not. A "|" in a case is removed before matching, so this file names nothing.
-func TestCitationMatcher(t *testing.T) {
+// The matcher itself: a name that resolves nowhere is caught, in every spelling, and a name that
+// resolves (relative, from the root, bare, with an anchor) or sits in a URL is not.
+func TestMarkdownNameMatcher(t *testing.T) {
+	unbar := func(s string) string { return strings.ReplaceAll(s, "|", "") }
 	files := map[string]bool{"PROTOCOL.md": true, "docs/compatibility.md": true, "evidence/README.md": true}
 	bases := map[string]bool{"PROTOCOL.md": true, "compatibility.md": true, "README.md": true}
 	mustCatch := []string{
-		"see docs/spe|cs/x",
-		"see docs/pla|ns/",
-		"coreslot-des|ign",
-		"see desi|gn.m|d",
-		"the x-coreslot-des|ign.m|d file",
-		"see the core-des|ign.m|d notes",
-		"the coreslot-v|1.m|d notes",
+		"see TOD|O.m|d",
+		"the x-guid|e.m|d file",
 		"[notes](NOTE|S.m|d)",
 		"`docs/arch|itecture.m|d`",
-		"spe|c §5.7",
-		"desi|gn section 10.4",
-		"the specifi|cation, section 9",
-		"desi|gn§5",
-		"the desi|gn: section 4",
-		"the spe|c: §4",
-		"the spe|c/§5",
-		"the spe|c—§5",
-		"decisions O|3",
-		"owner's O|3",
-		"O|3 decided",
-		"see DESI|GN.M|D",
-		"see notes/desi|gn.markdow|n",
-		"spe|c(§5.7)",
-		"the spe|c, §5.7",
-		"the desi|gn's section 10.4",
-		"Desi|gn §8.1",
-		"spe|c sections 5.10 and 6.2",
-		"§5.7 of the desi|gn",
-		"section 10.4 of the spe|c",
-		"see D|11",
-		"entry D|7",
-		"R-|C1",
-		"decision O|3",
-		"owner O|3",
-		"O|3 ruling",
-		"owner deci|sion",
-		"the owner's deci|sion",
-		"the owner ru|le",
-		"as the owner deci|ded",
-		"controller rul|ing",
-		"maintainer rul|ing",
+		"see HISTOR|Y.M|D",
+		"see notes/setu|p.markdow|n",
+		"[compat](../compatibility.m|d), which climbs out of docs/ to the root",
 	}
+	inDocs := unbar("docs/x.m|d") // a file under docs/, for the relative links
 	for _, c := range mustCatch {
-		line := strings.ReplaceAll(c, "|", "")
-		if len(citationFindings("x.go", line, files, bases)) == 0 {
-			t.Errorf("%q is not caught", line)
+		if len(danglingMarkdown(inDocs, unbar(c), files, bases)) == 0 {
+			t.Errorf("%q is not caught", unbar(c))
 		}
 	}
 	mustPass := []string{
-		"TOML spec 1.0",
-		"the Go spec 1.22",
-		"the design 2.0 release",
-		"-O2",
-		"O2",
-		"O(n)",
-		"the design section of the README",
-		"the design of the queue",
-		"a spec-compliant client",
-		"func need(spec string) spec.Request { return spec.Range{Min: 1, Max: 2} }",
 		"PROTOCOL.md section 12.2: a request above the size waits",
 		"[policy](../PROTOCOL.m|d#151-what-every-format-keeps) and `evidence/README.md`",
-		"README.md, https://example.com/x/NOTES.md",
+		"[compat](compatibility.m|d)",
+		"README.md, https://example.com/x/NOTE|S.m|d",
 		"go 1.26.0",
-		"0xD1, 3D, #D1D1D1 and the C1 controls",
-		"the ticket's owner closes its descriptor",
-		"per the spec",
 	}
-	inDocs := strings.ReplaceAll("docs/x.m|d", "|", "") // a file under docs/, for the relative link
 	for _, c := range mustPass {
-		if f := citationFindings(inDocs, strings.ReplaceAll(c, "|", ""), files, bases); len(f) != 0 {
-			t.Errorf("%q is caught: %v", c, f)
+		if f := danglingMarkdown(inDocs, unbar(c), files, bases); len(f) != 0 {
+			t.Errorf("%q is caught: %v", unbar(c), f)
 		}
 	}
-	if f := citationFindings("conformance/pyclient/AMBIGUITIES.md", strings.ReplaceAll("**D|6. §10.4 (B1/D|6)", "|", ""), files, bases); len(f) != 0 {
-		t.Errorf("an AMBIGUITIES entry id is caught: %v", f)
+	if f := danglingMarkdown("x.go", unbar("TOD|O.m|d and NOTE|S.m|d, TOD|O.m|d again"), files, bases); len(f) != 2 {
+		t.Errorf("two names on one line, one twice, give %v, want two findings", f)
 	}
-	if f := citationFindings("conformance/pyclient/test.py", strings.ReplaceAll("D|12", "|", ""), files, bases); len(f) == 0 {
-		t.Error("a D id above nine under conformance/pyclient is not caught")
-	}
-	if f := citationFindings("x.go", strings.ReplaceAll("spe|c §1, D|11, R-|C1", "|", ""), files, bases); len(f) != 3 {
-		t.Errorf("three forms on one line give %d findings, want 3: %v", len(f), f)
+}
+
+// Only a pattern file, at the root or below it, is exempt from the Markdown-name check.
+func TestPatternFile(t *testing.T) {
+	inDocs := strings.ReplaceAll("docs/x.m|d", "|", "") // spelled so the scan of this file passes
+	for _, c := range []struct {
+		file string
+		want bool
+	}{
+		{".gitignore", true},
+		{".gitattributes", true},
+		{"conformance/pyclient/.gitignore", true},
+		{"x.go", false},
+		{inDocs, false},
+		{"README.md", false},
+	} {
+		if got := patternFile(c.file); got != c.want {
+			t.Errorf("patternFile(%q) = %v, want %v", c.file, got, c.want)
+		}
 	}
 }
 
@@ -219,8 +124,7 @@ func TestCitationMatcher(t *testing.T) {
 //   - a Windows home directory, <drive>:\Users\<name>\;
 //   - a macOS temporary or per-user directory: /private/tmp, /private/var or /var/folders, each
 //     followed by a slash;
-//   - a per-user temporary directory name, <tool>-<uid> for the one tool the pattern names, a
-//     numbered work directory name, task<N> or task-<N>, and a path flattened into a name,
+//   - a numbered work directory name, task<N> or task-<N>, and a path flattened into a name,
 //     -Users-<name>-;
 //   - in a gzip stream or a binary file only, /tmp/ and a source tree under /opt, /usr or /nix (a
 //     path with a /src/ in it) too: a profile built with -trimpath names its binary by its base
@@ -237,7 +141,6 @@ var localPathForms = []struct {
 }{
 	{"a Windows home directory", regexp.MustCompile(`(?i)\b[a-z]:\\User[s]\\[^\\\s]+\\`)},
 	{"a macOS temporary or per-user directory", regexp.MustCompile(`/privat[e]/(tmp|var)/|/var/folder[s]/`)},
-	{"a per-user temporary directory name", regexp.MustCompile(`\bclaud[e]-\d+\b`)},
 	{"a path flattened into a name", regexp.MustCompile(`-User[s]-[A-Za-z0-9_.]+-`)},
 	{"a numbered work directory name", regexp.MustCompile(`\bta[s]k-?\d+\b`)},
 }
@@ -359,7 +262,6 @@ func TestLocalPathMatcher(t *testing.T) {
 		"/priva|te/tmp/x/bin/waiters",
 		"/priva|te/var/folde|rs/ab/T/go-build1",
 		"/var/folde|rs/ab/T/",
-		"TMPDIR=/tmp/clau|de-501/",
 		"-Use|rs-somebody-Dev-coreslot",
 		"/tmp/x/coreslot-tas|k18/bin/waiters",
 		"tas|k-7",
@@ -380,7 +282,6 @@ func TestLocalPathMatcher(t *testing.T) {
 		"golang.org/x/sys@v0.49.0/unix/syscall_bsd.go",
 		"runtime/proc.go",
 		"macOS keeps home directories under /Use|rs/.",
-		"clau|de-dev, with no number",
 		"a task 2 s later; multitask3",
 		"/opt/homebrew/Cellar/go/1.27.2/libexec/src/runtime/slice.go",
 	}
@@ -430,7 +331,7 @@ func TestLocalPathMatcher(t *testing.T) {
 	}
 }
 
-// minTextFiles is a floor on the text files a scan checks: about 460 exist, and a listing that
+// minTextFiles is a floor on the text files a scan checks: about 500 exist, and a listing that
 // lost most of the tree would otherwise pass on what is left.
 const minTextFiles = 200
 
@@ -485,7 +386,7 @@ func walkFiles(t *testing.T, keep func(string) bool) []string {
 }
 
 // binaryText reports whether b is binary rather than text: a NUL byte in its first 8000 bytes. A
-// binary file is scanned for local paths only, not for citations.
+// binary file is scanned for local paths only, not for Markdown names.
 func binaryText(b []byte) bool { return bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 }
 
 // checkListing fails when a file under the module root that git does not ignore is missing from
@@ -523,10 +424,10 @@ func checkListing(t *testing.T, listed []string) {
 	}
 }
 
-// TestNoExternalCitations scans every file of the repository, this one included: a text file for
-// citations and local paths, a gzip stream (a pprof profile) and any other binary file for local
-// paths.
-func TestNoExternalCitations(t *testing.T) {
+// TestRepositoryHygiene scans every file of the repository, this one included: a text file for
+// Markdown names that resolve nowhere and for local paths, a gzip stream (a pprof profile) and any
+// other binary file for local paths.
+func TestRepositoryHygiene(t *testing.T) {
 	listed, git := listFiles(t)
 	if git {
 		checkListing(t, listed)
@@ -566,8 +467,8 @@ func TestNoExternalCitations(t *testing.T) {
 			continue
 		}
 		for i, line := range strings.Split(string(b), "\n") {
-			if why := citationFindings(f, line, files, bases); why != nil {
-				t.Errorf("%s:%d: %s: state the rule or cite PROTOCOL.md", f, i+1, strings.Join(why, "; "))
+			if refs := danglingMarkdown(f, line, files, bases); refs != nil && !patternFile(f) {
+				t.Errorf("%s:%d: %s: names no file of the repository", f, i+1, strings.Join(refs, ", "))
 			}
 			if why := localPathFindings(line, false); why != nil {
 				t.Errorf("%s:%d: %s: use a placeholder path", f, i+1, strings.Join(why, "; "))

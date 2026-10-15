@@ -1,4 +1,4 @@
-package coreslot
+package repocheck
 
 import (
 	"go/ast"
