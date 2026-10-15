@@ -8,6 +8,11 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A release's archives and its binary's version are named after the tag that started the
+  release, even when another tag points at the same commit.
+
 ## [0.1.0] - 2026-10-15
 
 The first release: one machine-wide core budget that `coreslot run` and a Go library share, kept as
