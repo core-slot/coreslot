@@ -8,6 +8,8 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-15
+
 ### Added
 
 - On-disk protocol format 1, defined normatively in `PROTOCOL.md`: token files and `flock(2)` locks
@@ -50,4 +52,5 @@ on-disk format is frozen, and `v1.0.0` freezes the format then current.
   `github.com/core-slot/coreslot`. An install from the old path fails with "module declares its
   path as"; use the new one.
 
-[Unreleased]: https://github.com/core-slot/coreslot/commits/HEAD
+[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/core-slot/coreslot/releases/tag/v0.1.0
