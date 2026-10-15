@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -622,7 +623,7 @@ func (b *bench) adoptAll(within time.Duration) error {
 	for len(b.grants) < b.p.Size && time.Now().Before(deadline) {
 		// Adopt only a token that is free: an adoption that comes up short publishes and removes
 		// a hold, two gen bumps that make every waiter rescan, so it is not retried blindly.
-		free, err := b.client.Free("cpu")
+		free, err := b.client.Available("cpu")
 		if err != nil {
 			return err
 		}
@@ -633,7 +634,7 @@ func (b *bench) adoptAll(within time.Duration) error {
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
-		g, short, err := b.client.Adopt(coreslot.Request{Label: "bench-harness",
+		g, short, err := b.client.Adopt(context.Background(), coreslot.Request{Label: "bench-harness",
 			Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
 		if err != nil {
 			return err

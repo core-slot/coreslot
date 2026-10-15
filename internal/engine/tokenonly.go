@@ -77,7 +77,7 @@ func (t *Ticket) tokenOnlyAttempt(ctx context.Context, single bool) (*Grant, err
 		waiting := t.status == statusWaiting
 		t.mu.Unlock()
 		if !waiting {
-			return nil, ErrCancelled
+			return nil, ErrCanceled
 		}
 		if err := t.publish(sec); err != nil {
 			return nil, err
@@ -112,7 +112,7 @@ func (t *Ticket) tokenOnlyAttempt(ctx context.Context, single bool) (*Grant, err
 	defer t.mu.Unlock()
 	if t.status != statusWaiting {
 		ts.Close()
-		return nil, ErrCancelled
+		return nil, ErrCanceled
 	}
 	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared, tokenOnly: true}
 	t.status, t.grant = statusAdmitted, g

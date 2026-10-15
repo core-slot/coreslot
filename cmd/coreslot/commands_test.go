@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -64,7 +65,7 @@ func recordDegraded(t *testing.T, st *store.Store, reason string) {
 // hold adopts a grant for the label and keeps it until the test ends.
 func hold(t *testing.T, c *coreslot.Client, label string, need map[string]coreslot.Range) *coreslot.Grant {
 	t.Helper()
-	g, _, err := c.Adopt(coreslot.Request{Label: label, Need: need})
+	g, _, err := c.Adopt(context.Background(), coreslot.Request{Label: label, Need: need})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func hold(t *testing.T, c *coreslot.Client, label string, need map[string]coresl
 // queue enqueues a request and withdraws it when the test ends.
 func queue(t *testing.T, c *coreslot.Client, label string, need map[string]coreslot.Range) *coreslot.Waiter {
 	t.Helper()
-	w, err := c.Enqueue(coreslot.Request{Label: label, Need: need})
+	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: label, Need: need})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +267,7 @@ func TestStatusObserveReportsStalled(t *testing.T) {
 			case <-stop:
 				return
 			case <-time.After(250 * time.Millisecond):
-				_, _, _ = live.Poll()
+				_, _ = live.Poll()
 			}
 		}
 	}()
@@ -612,13 +613,13 @@ func TestStatusUsage(t *testing.T) {
 // observer's own clock; a single reading cannot tell, and a refresh makes it waiting again.
 func TestStatusFlagsStalledTicket(t *testing.T) {
 	id := wire.ID{OrderKey: 100, PID: 7, Seq: 1}
-	ticket := func(mtime int64) coreslot.Report {
-		return coreslot.Report{Tickets: []coreslot.TicketInfo{{ID: id.String(), PID: 7, MtimeNS: mtime}}}
+	ticket := func(mtime int64) engine.Report {
+		return engine.Report{Tickets: []engine.TicketInfo{{ID: id.String(), PID: 7, MtimeNS: mtime}}}
 	}
-	run := func(window time.Duration, mtimeAt func(call int) int64) (*stallWatcher, coreslot.Report) {
+	run := func(window time.Duration, mtimeAt func(call int) int64) (*stallWatcher, engine.Report) {
 		clk := &fakeClock{limit: time.Hour, cancel: func() {}}
 		calls := 0
-		rep, w, err := observeQueue(func() (coreslot.Report, error) {
+		rep, w, err := observeQueue(func() (engine.Report, error) {
 			calls++
 			return ticket(mtimeAt(calls)), nil
 		}, window, clk)
@@ -627,7 +628,7 @@ func TestStatusFlagsStalledTicket(t *testing.T) {
 		}
 		return w, rep
 	}
-	v := func(w *stallWatcher, rep coreslot.Report) string {
+	v := func(w *stallWatcher, rep engine.Report) string {
 		return buildStatus(rep, 0, w, 0).tickets[0].state
 	}
 
@@ -782,7 +783,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := stateDir(t, "[resources]\ncpu = 4\n")
 			c := openLib(t, dir)
-			g, _, err := c.Adopt(coreslot.Request{Need: map[string]coreslot.Range{"cpu": rng(1, 1)}})
+			g, _, err := c.Adopt(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"cpu": rng(1, 1)}})
 			if err != nil { // FORMAT, gen and the token files exist
 				t.Fatal(err)
 			}
@@ -907,19 +908,19 @@ func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
 		t.Errorf("an ambiguous label published cancel requests: %v", got)
 	}
 	for _, w := range []*coreslot.Waiter{a, b, solo} {
-		if _, ok, err := w.Poll(); ok || err != nil {
-			t.Errorf("a waiter was disturbed: admitted %v, %v", ok, err)
+		if g, err := w.Poll(); g != nil || err != nil {
+			t.Errorf("a waiter was disturbed: admitted %v, %v", g, err)
 		}
 	}
 
 	if r := cli(t, baseEnv(dir), "cancel", "--label", "solo"); r.code != 0 {
 		t.Fatalf("cancel --label solo: exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if _, _, err := solo.Poll(); err != coreslot.ErrCancelled {
-		t.Errorf("the cancelled waiter's Poll = %v, want ErrCancelled", err)
+	if _, err := solo.Poll(); err != coreslot.ErrCanceled {
+		t.Errorf("the cancelled waiter's Poll = %v, want ErrCanceled", err)
 	}
-	if _, ok, err := a.Poll(); ok || err != nil {
-		t.Errorf("a twin was disturbed: %v, %v", ok, err)
+	if g, err := a.Poll(); g != nil || err != nil {
+		t.Errorf("a twin was disturbed: %v, %v", g, err)
 	}
 }
 
@@ -939,8 +940,8 @@ func TestCancelByIDAndRefusals(t *testing.T) {
 	if r := cli(t, baseEnv(dir), "cancel", id); r.code != 0 {
 		t.Errorf("cancelling twice: exit %d, want 0 (already requested is not an error; stderr %q)", r.code, r.stderr)
 	}
-	if _, _, err := w.Poll(); err != coreslot.ErrCancelled {
-		t.Errorf("Poll = %v, want ErrCancelled", err)
+	if _, err := w.Poll(); err != coreslot.ErrCanceled {
+		t.Errorf("Poll = %v, want ErrCanceled", err)
 	}
 
 	gone := wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String()

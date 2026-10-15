@@ -54,8 +54,8 @@ func (s ticketStepper) holders() ([]engine.HolderInfo, error) { return s.t.Holde
 // waitOneP runs wait with the Go runtime limited to one P (runtime.GOMAXPROCS(1)) and restores
 // the previous setting afterwards. A waiting process sleeps almost all the time, and with one P
 // its wake-ups do not wake idle threads of the other Ps: a CLI waiter in a quiet queue measured
-// 268 us of CPU per second against 453 us before, in one session (evidence/README.md, the second
-// optimization pass). Only this process changes: GOMAXPROCS is not exported to the command.
+// 268 us of CPU per second against 453 us before, in one session (evidence/README.md, "Where a
+// waiter's CPU goes"). Only this process changes: GOMAXPROCS is not exported to the command.
 func waitOneP(wait func() (*engine.Grant, error)) (*engine.Grant, error) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	return wait()

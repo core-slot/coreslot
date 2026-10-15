@@ -52,7 +52,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.FormatPresent = present
 	switch {
 	case err != nil:
-		r.FormatError = err.Error()
+		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
 		r.FormatUnderstood = true // the first entry writes format 1
 	default:
@@ -65,7 +65,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.Gen, r.ReconciledNS = g.N, g.ReconciledNS
 
 	if sizes, err := e.sizes(); err != nil {
-		r.ConfigError = reasonOf(err)
+		r.ConfigError, r.ConfigErr = reasonOf(err), err
 	} else {
 		for _, name := range slices.Sorted(maps.Keys(sizes)) {
 			locked, err := e.st.CountLockedProbe(name)

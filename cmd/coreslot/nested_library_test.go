@@ -59,7 +59,7 @@ func libWait(args []string) int {
 		return 1
 	}
 	start := time.Now()
-	w, err := c.Enqueue(coreslot.Request{Label: "lib", Need: map[string]coreslot.Range{"cpu": {Min: lo, Max: hi}}})
+	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: "lib", Need: map[string]coreslot.Range{"cpu": {Min: lo, Max: hi}}})
 	if err != nil {
 		fmt.Println("error:", err)
 		return 1
@@ -73,7 +73,7 @@ func libWait(args []string) int {
 		return 1
 	}
 	defer g.Close()
-	fmt.Printf("grant cpu=%d passthrough=%v after %v\n", g.Grant()["cpu"], g.PassThrough(), took.Round(10*time.Millisecond))
+	fmt.Printf("grant cpu=%d passthrough=%v after %v\n", g.Granted()["cpu"], g.PassThrough(), took.Round(10*time.Millisecond))
 	fmt.Printf("queue [%s]\nholds [%s]\ngen %s -> %s\n", names("queue"), names("holds"), before, gen())
 	if took > 2*time.Second {
 		fmt.Println("slow")
@@ -86,7 +86,7 @@ func libWait(args []string) int {
 // behind its own parent and timed out (it would have waited forever without a bound); now it
 // runs at once on the parent's grant, with no ticket, no hold of its own and no gen bump. With
 // Options.Independent it queues as an unrelated request and waits again. Mutation: making
-// EnqueueContext ignore the inherited context (always queue) reddens "pass-through" with the
+// Enqueue ignore the inherited context (always queue) reddens "pass-through" with the
 // timeout of the defect.
 func TestLibraryInsideRunPassesThrough(t *testing.T) {
 	t.Run("pass-through", func(t *testing.T) {

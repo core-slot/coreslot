@@ -35,8 +35,13 @@ The module path is `github.com/core-slot/coreslot`; an install from the earlier 
   idle.
 - Configuration in `~/.config/coreslot/config.toml` (`[resources]`, `[priorities]`, `[platform]`),
   read from `<state directory>/config.toml` instead under `CORESLOT_STATE_DIR`.
-- Go library in the root package (`Open`, `Enqueue`, `Poll`, `Wait`, `Cancel`, `Adopt`, `Free`,
-  `Snapshot`, `Grant`), with its exported API pinned in `api/v0.txt`.
+- Go library in the root package: `Open`; a `Client` that enqueues (`Enqueue`), adopts running
+  work (`Adopt`), reports what is free (`Available`) and reads the state (`Snapshot`, a `Report`);
+  a `Waiter` with `Poll`, `Wait` and `Cancel`; and a `Grant` whose `Files` and `Environ` start a
+  command inside it. Calls that wait for the admission section take a `context.Context`, and
+  errors are a `*StateError`, a `*UsageError`, a `*SectionBusyError`, the context's error or a
+  sentinel (`ErrCanceled`, `ErrRefused`, `ErrAlreadyAdmitted`, `ErrUnsupported`). The exported
+  API is pinned in `api/v0.txt`.
 - The run log records what each command used: `cpu_user_s` and `cpu_sys_s` (CPU seconds) and
   `max_rss_kib` (peak resident set size in KiB), optional keys of `PROTOCOL.md` section 20 taken
   from the command's `wait4` rusage, so they cover the descendants it waited for. A run whose

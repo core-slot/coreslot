@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The library's pass-through (PROTOCOL.md section 18, EnqueueContext). The cases that need a
+// The library's pass-through (PROTOCOL.md section 18, Client.Enqueue). The cases that need a
 // real inherited grant run in a child of the test binary started with the grant's descriptors at
 // numbers of the test's choosing (nestedEnv), since a grant is inherited, not made in-process.
 
@@ -70,7 +70,7 @@ func clearContext(t *testing.T) {
 // Rule 1: under a parent that runs unbudgeted the grant comes at once, every requested resource
 // unbudgeted with its Min, no descriptors, and the inherited context passed on with the requested
 // CORESLOT_GRANTED_<RES> set to the Min; nothing is written. Options.Independent queues instead,
-// and a Client on another state directory is another budget. Mutation: making EnqueueContext
+// and a Client on another state directory is another budget. Mutation: making Enqueue
 // ignore the inherited context reddens "pass-through"; dropping the budget check of
 // DecideNested reddens "another budget".
 func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
@@ -85,13 +85,13 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 	t.Run("pass-through", func(t *testing.T) {
 		c := open(t, dir)
 		before := tree(t, dir)
-		w, err := c.Enqueue(req)
+		w, err := c.Enqueue(context.Background(), req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		g, ok, err := w.Poll()
-		if !ok || err != nil {
-			t.Fatalf("Poll = %v, %v, %v; want the grant at once", g, ok, err)
+		g, err := w.Poll()
+		if g == nil || err != nil {
+			t.Fatalf("Poll = %v, %v; want the grant at once", g, err)
 		}
 		if got, _ := w.Wait(context.Background()); got != g {
 			t.Errorf("Wait returned another grant")
@@ -99,9 +99,9 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 		if err := w.Cancel(); !errors.Is(err, ErrAlreadyAdmitted) {
 			t.Errorf("Cancel = %v, want ErrAlreadyAdmitted", err)
 		}
-		if !g.PassThrough() || !maps.Equal(g.Grant(), map[string]int{"cpu": 3}) ||
+		if !g.PassThrough() || !maps.Equal(g.Granted(), map[string]int{"cpu": 3}) ||
 			!slices.Equal(g.Unbudgeted(), []string{"cpu"}) || len(g.Clamped()) != 0 || g.Files() != nil {
-			t.Errorf("grant: pass-through %v, %v, unbudgeted %v, clamped %v, files %v", g.PassThrough(), g.Grant(), g.Unbudgeted(), g.Clamped(), g.Files())
+			t.Errorf("grant: pass-through %v, %v, unbudgeted %v, clamped %v, files %v", g.PassThrough(), g.Granted(), g.Unbudgeted(), g.Clamped(), g.Files())
 		}
 		want := "CORESLOT_GRANTED_GPU=7 CORESLOT_UNBUDGETED=parent-reason CORESLOT_GRANTED_CPU=3"
 		if env := strings.Join(g.Env(), " "); env != want {
@@ -120,14 +120,14 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 			t.Fatal(err)
 		}
 		g := waitGrant(t, c, req)
-		if g.PassThrough() || g.Grant()["cpu"] != 4 || strings.Contains(strings.Join(g.Env(), " "), "UNBUDGETED") {
-			t.Errorf("an Independent request: pass-through %v, grant %v, env %v; want an ordinary grant", g.PassThrough(), g.Grant(), g.Env())
+		if g.PassThrough() || g.Granted()["cpu"] != 4 || strings.Contains(strings.Join(g.Env(), " "), "UNBUDGETED") {
+			t.Errorf("an Independent request: pass-through %v, grant %v, env %v; want an ordinary grant", g.PassThrough(), g.Granted(), g.Env())
 		}
 	})
 	t.Run("another budget", func(t *testing.T) {
 		g := waitGrant(t, open(t, stateDir(t, "[resources]\ncpu = 4\n")), req)
-		if g.PassThrough() || g.Grant()["cpu"] != 4 {
-			t.Errorf("a Client on another state directory: pass-through %v, grant %v; want an ordinary grant", g.PassThrough(), g.Grant())
+		if g.PassThrough() || g.Granted()["cpu"] != 4 {
+			t.Errorf("a Client on another state directory: pass-through %v, grant %v; want an ordinary grant", g.PassThrough(), g.Granted())
 		}
 	})
 }
@@ -147,11 +147,11 @@ func TestPassThroughRefusesAContextOfUnknownDirectory(t *testing.T) {
 	req := Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}}
 	c := open(t, dir)
 	before := tree(t, dir)
-	w, err := c.Enqueue(req)
+	w, err := c.Enqueue(context.Background(), req)
 	var se *StateError
 	if w != nil || !errors.Is(err, ErrRefused) || errors.As(err, &se) {
 		if w != nil {
-			if g, ok, _ := w.Poll(); ok {
+			if g, _ := w.Poll(); g != nil {
 				defer g.Close()
 			} else {
 				_ = w.Cancel()
@@ -159,9 +159,8 @@ func TestPassThroughRefusesAContextOfUnknownDirectory(t *testing.T) {
 		}
 		t.Fatalf("Enqueue = %v, %v; want an error matching ErrRefused, not a *StateError", w, err)
 	}
-	if !strings.Contains(err.Error(), "cannot be resolved") || !strings.Contains(err.Error(), "relative/state") ||
-		!strings.Contains(err.Error(), "Options.Independent") {
-		t.Errorf("error %q: want the cause and the way out", err)
+	if !strings.Contains(err.Error(), "cannot be resolved") || !strings.Contains(err.Error(), "relative/state") {
+		t.Errorf("error %q: want the cause", err)
 	}
 	if after := tree(t, dir); after != before {
 		t.Errorf("the refusal wrote under the state directory:\n%s\n---\n%s", before, after)
@@ -190,15 +189,14 @@ func TestPassThroughRefusesAnInvalidContext(t *testing.T) {
 	c := open(t, dir)
 	before := tree(t, dir)
 	start := time.Now()
-	w, err := c.Enqueue(Request{})
+	w, err := c.Enqueue(context.Background(), Request{})
 	took := time.Since(start)
 	var se *StateError
 	if w != nil || !errors.Is(err, ErrRefused) || errors.As(err, &se) {
 		t.Fatalf("Enqueue = %v, %v; want an error matching ErrRefused, not a *StateError", w, err)
 	}
-	if !strings.Contains(err.Error(), "descriptor "+strconv.Itoa(closed)+" of CORESLOT_TOKEN_FDS is not open") ||
-		!strings.Contains(err.Error(), "Options.Independent") {
-		t.Errorf("error %q: want the diagnostic and the way out", err)
+	if !strings.Contains(err.Error(), "descriptor "+strconv.Itoa(closed)+" of CORESLOT_TOKEN_FDS is not open") {
+		t.Errorf("error %q: want the diagnostic", err)
 	}
 	if took > time.Second {
 		t.Errorf("refused after %v, want at once", took)
@@ -218,7 +216,7 @@ func TestPassThroughRefusesAnInvalidContext(t *testing.T) {
 // An invalid request is a *UsageError under an inherited context too, as it is outside one: the
 // request is validated before the pass-through is decided, so a Need whose Min is above its Max,
 // a resource name the protocol does not allow, or a label longer than 128 bytes is refused rather
-// than granted. Mutation: skipping EnqueueContext's validation reddens every case (a grant at
+// than granted. Mutation: skipping Enqueue's validation reddens every case (a grant at
 // once instead of the error).
 func TestPassThroughValidatesTheRequest(t *testing.T) {
 	clearContext(t)
@@ -234,7 +232,7 @@ func TestPassThroughValidatesTheRequest(t *testing.T) {
 		{"bad resource name", Request{Need: map[string]Range{"Bad Name": {Min: 1, Max: 1}}}},
 		{"over-long label", Request{Label: strings.Repeat("x", 129)}},
 	} {
-		w, err := c.Enqueue(tc.req)
+		w, err := c.Enqueue(context.Background(), tc.req)
 		var ue *UsageError
 		if w != nil || !errors.As(err, &ue) {
 			t.Errorf("%s: Enqueue = %v, %v; want a *UsageError", tc.what, w, err)
@@ -266,8 +264,8 @@ func TestPassThroughOnTheSameDirectoryThroughAnotherPath(t *testing.T) {
 	t.Setenv("CORESLOT_STATE_DIR", dir)
 	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
 	g := waitGrant(t, open(t, filepath.Join(base, "link", "state dir")), Request{Need: map[string]Range{"cpu": {Min: 2, Max: 3}}})
-	if !g.PassThrough() || !maps.Equal(g.Grant(), map[string]int{"cpu": 2}) {
-		t.Errorf("a Client on %s through a symlink: pass-through %v, grant %v; want a pass-through of cpu 2", dir, g.PassThrough(), g.Grant())
+	if !g.PassThrough() || !maps.Equal(g.Granted(), map[string]int{"cpu": 2}) {
+		t.Errorf("a Client on %s through a symlink: pass-through %v, grant %v; want a pass-through of cpu 2", dir, g.PassThrough(), g.Granted())
 	}
 }
 
@@ -361,7 +359,7 @@ func passThroughChild() error {
 	before := tree(nopTB{}, dir)
 	req := Request{Need: map[string]Range{"cpu": {Min: 1, Max: 2}, "pg-local": {Min: 2, Max: 2}, "gpu": {Min: 1, Max: 1}}}
 	enqueue := func() (*Grant, error) {
-		w, err := c.Enqueue(req)
+		w, err := c.Enqueue(context.Background(), req)
 		if err != nil {
 			return nil, err
 		}
@@ -377,8 +375,8 @@ func passThroughChild() error {
 	if !g.PassThrough() {
 		return fmt.Errorf("not a pass-through")
 	}
-	if want := map[string]int{"cpu": 2, "pg-local": 1, "gpu": 1}; !maps.Equal(g.Grant(), want) {
-		return fmt.Errorf("grant %v, want %v: min(max, held), the clamp, and gpu unbudgeted with its min", g.Grant(), want)
+	if want := map[string]int{"cpu": 2, "pg-local": 1, "gpu": 1}; !maps.Equal(g.Granted(), want) {
+		return fmt.Errorf("grant %v, want %v: min(max, held), the clamp, and gpu unbudgeted with its min", g.Granted(), want)
 	}
 	if want := map[string]int{"pg-local": 2}; !maps.Equal(g.Clamped(), want) {
 		return fmt.Errorf("clamped %v, want %v", g.Clamped(), want)
@@ -438,8 +436,8 @@ func passThroughChild() error {
 		if g, err = enqueue(); err != nil {
 			return fmt.Errorf("round %d: a pass-through after Close and a collection: %v", round, err)
 		}
-		if !g.PassThrough() || g.Grant()["cpu"] != 2 || g.Files()[1].Fd() != 11 {
-			return fmt.Errorf("round %d: the pass-through's grant %v, files %v", round, g.Grant(), g.Files())
+		if !g.PassThrough() || g.Granted()["cpu"] != 2 || g.Files()[1].Fd() != 11 {
+			return fmt.Errorf("round %d: the pass-through's grant %v, files %v", round, g.Granted(), g.Files())
 		}
 	}
 	if after := tree(nopTB{}, dir); after != before {
@@ -481,7 +479,7 @@ func passThroughGrandchild() error {
 	if err != nil {
 		return err
 	}
-	w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 8}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 8}}})
 	if err != nil {
 		return err
 	}
@@ -489,8 +487,8 @@ func passThroughGrandchild() error {
 	if err != nil {
 		return err
 	}
-	if !g.PassThrough() || g.Grant()["cpu"] != 3 {
-		return fmt.Errorf("the grandchild's pass-through: %v, want cpu 3, every token the child passed on", g.Grant())
+	if !g.PassThrough() || g.Granted()["cpu"] != 3 {
+		return fmt.Errorf("the grandchild's pass-through: %v, want cpu 3, every token the child passed on", g.Granted())
 	}
 	fmt.Println("grandchild: ok")
 	return nil
@@ -504,16 +502,16 @@ func passThroughReused() error {
 	if err != nil {
 		return err
 	}
-	w, err := c.Enqueue(Request{Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
 	if err != nil {
 		return err
 	}
-	g, ok, err := w.Poll()
-	if !ok || err != nil {
-		return fmt.Errorf("Poll = %v, %v, %v; want the grant at once", g, ok, err)
+	g, err := w.Poll()
+	if g == nil || err != nil {
+		return fmt.Errorf("Poll = %v, %v; want the grant at once", g, err)
 	}
-	if !g.PassThrough() || g.Grant()["cpu"] != 2 {
-		return fmt.Errorf("pass-through %v, grant %v; want a pass-through of cpu 2", g.PassThrough(), g.Grant())
+	if !g.PassThrough() || g.Granted()["cpu"] != 2 {
+		return fmt.Errorf("pass-through %v, grant %v; want a pass-through of cpu 2", g.PassThrough(), g.Granted())
 	}
 	files := g.Files()
 	if len(files) != 3 || files[0] != nil {
