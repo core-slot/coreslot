@@ -1,7 +1,6 @@
 name: ci
 
-# Private repository: macOS minutes bill at 10x, so feature branches are checked through their
-# pull request only, not on every push.
+# Feature branches are checked through their pull request, not on every push.
 on:
   push:
     branches: [main]
@@ -42,10 +41,6 @@ jobs:
         # "1.26" is go.mod's minimum; "stable" is the latest release (1.27 as of
         # 2026-10). setup-go resolves "1.26" to the newest 1.26 patch release.
         go: ["1.26", stable]
-        exclude:
-          # macOS minutes bill at 10x: macOS runs the latest Go only.
-          - os: macos-latest
-            go: "1.26"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -164,8 +159,7 @@ jobs:
         run: CGO_ENABLED=0 go test ./internal/config/ -run TestHomeIgnoresHOME
 
   # The release archives build, and the Linux binary from them runs: the same GoReleaser
-  # configuration and version the release workflow uses, without publishing anything. Every
-  # pull request runs this one.
+  # configuration and version the release workflow uses, without publishing anything.
   snapshot-linux:
     name: release snapshot (Linux)
     runs-on: ubuntu-latest
@@ -191,6 +185,31 @@ jobs:
           distribution: goreleaser
           version: ${{ steps.goreleaser.outputs.version }}
           args: release --snapshot --clean
+      - name: The snapshot binaries carry no test hooks
+        # The release build is never the coreslot_testhooks build: no binary records a -tags
+        # setting in its build information or contains the hooks' variable prefix. Four
+        # binaries, one per target in .goreleaser.yaml, so a lost build cannot pass unchecked.
+        shell: bash
+        run: |
+          bins=(dist/coreslot_*/coreslot)
+          if [ "${#bins[@]}" -ne 4 ] || [ ! -f "${bins[0]}" ]; then
+            echo "::error::want 4 snapshot binaries, found: ${bins[*]}"
+            exit 1
+          fi
+          for bin in "${bins[@]}"; do
+            info="$(go version -m "$bin")"
+            if grep -E '^[[:space:]]+build[[:space:]]+-tags=' <<<"$info"; then
+              echo "::error::$bin was built with build tags"
+              exit 1
+            fi
+            found=0
+            grep -qa CORESLOT_TESTHOOK "$bin" || found=$?
+            if [ "$found" -ne 1 ]; then
+              echo "::error::$bin contains CORESLOT_TESTHOOK, or grep failed (status $found)"
+              exit 1
+            fi
+            echo "$bin: no build tags, no test hooks"
+          done
       - name: The linux/amd64 snapshot binary runs
         env:
           # A separate budget whose path contains a space, like the default macOS one.
@@ -207,9 +226,6 @@ jobs:
   snapshot-macos:
     name: release snapshot (macOS)
     runs-on: macos-latest
-    # macOS minutes bill at 10x: on pushes to main (and a release's tag, which calls this
-    # workflow) and on demand, not on pull requests.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 20
     permissions:
       contents: read
@@ -232,6 +248,31 @@ jobs:
           distribution: goreleaser
           version: ${{ steps.goreleaser.outputs.version }}
           args: release --snapshot --clean
+      - name: The snapshot binaries carry no test hooks
+        # The release build is never the coreslot_testhooks build: no binary records a -tags
+        # setting in its build information or contains the hooks' variable prefix. Four
+        # binaries, one per target in .goreleaser.yaml, so a lost build cannot pass unchecked.
+        shell: bash
+        run: |
+          bins=(dist/coreslot_*/coreslot)
+          if [ "${#bins[@]}" -ne 4 ] || [ ! -f "${bins[0]}" ]; then
+            echo "::error::want 4 snapshot binaries, found: ${bins[*]}"
+            exit 1
+          fi
+          for bin in "${bins[@]}"; do
+            info="$(go version -m "$bin")"
+            if grep -E '^[[:space:]]+build[[:space:]]+-tags=' <<<"$info"; then
+              echo "::error::$bin was built with build tags"
+              exit 1
+            fi
+            found=0
+            grep -qa CORESLOT_TESTHOOK "$bin" || found=$?
+            if [ "$found" -ne 1 ]; then
+              echo "::error::$bin contains CORESLOT_TESTHOOK, or grep failed (status $found)"
+              exit 1
+            fi
+            echo "$bin: no build tags, no test hooks"
+          done
       - name: The darwin/arm64 snapshot binary runs
         env:
           # A separate budget whose path contains a space, like the default macOS one.
