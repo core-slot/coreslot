@@ -104,7 +104,8 @@ func wrap(err error) error {
 // is continued or killed. When ctx ends first nothing is published and the error matches
 // ctx.Err(); if another client held the section, it is a *SectionBusyError naming the pid
 // admit.lock records for that client. Once inside the section the enqueue completes; ctx does
-// not bound the wait for the admission, which Wait's own context does.
+// not bound the wait for the admission, which Wait's own context does. A ctx that has already
+// ended ends every Enqueue at once with ctx.Err(), a pass-through's included.
 //
 // A process started inside another run's grant inherits that grant's context (PROTOCOL.md
 // section 17), and its request never queues behind its own parent, which may hold the whole
@@ -135,9 +136,11 @@ func wrap(err error) error {
 // that directory by construction and never resolves it again. Resolving it may look the home
 // directory up as Open does, and ctx does not bound that lookup's wait for getent.
 func (c *Client) Enqueue(ctx context.Context, req Request) (*Waiter, error) {
-	sreq := req.spec()
-	if err := spec.Normalize(sreq).Validate(); err != nil {
-		return nil, wrap(err)
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err // before a pass-through too, which waits for nothing
 	}
 	// Opened without Options.StateDir, the Client's directory is the one the environment names:
 	// Open resolved it by the same rule, from the environment the context came in, and resolving
@@ -148,8 +151,9 @@ func (c *Client) Enqueue(ctx context.Context, req Request) (*Waiter, error) {
 	}
 	nested, err := decide(environ(), c.independent, c.e.Store().Dir())
 	if err != nil {
-		return nil, fmt.Errorf("%w: the inherited grant does not validate: %w", ErrRefused, err)
+		return nil, fmt.Errorf("%w: the inherited grant context cannot be used: %w", ErrRefused, err)
 	}
+	sreq := req.spec()
 	if nested.Kind != engine.NotNested {
 		return &Waiter{grant: &Grant{g: nested.PassThrough(sreq)}}, nil
 	}
