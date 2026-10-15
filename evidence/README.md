@@ -232,7 +232,8 @@ non-STALLED one; reading the cancel file on each poll is what section 10.3 asks 
   The waiters use the default `GOMAXPROCS`. Once admitted, a waiter closes its grant and exits.
 - **Budget:** `cpu = 8`. Between bursts the harness holds all 8 tokens as eight adopted 1-token
   grants, so the budget is always held. Since pass 2 it re-adopts a token only when `Available`
-  reports one, once a second, instead of adopting, finding it short and closing every 20 ms.
+  (then `Free`) reports one, once a second, instead of adopting, finding it short and closing
+  every 20 ms.
 - **Bursts:** one every 10 s, starting 5 s into the window (12 bursts in 120 s). Each burst does
   the following:
   1. It publishes 5 cancel requests (`coreslot cancel <id>`) and sends SIGTERM to 5 waiters. On
@@ -336,7 +337,7 @@ token locks, so containers must take part through a client on the host.
 
 ## Product acceptance: `acceptance.py`
 
-**The criterion (README, Status), declared before the first run:** on a developer machine that is
+**The criterion, declared before the first run:** on a developer machine that is
 never quiet, three parallel test gates plus one CI job run with and without coreslot as
 alternating pairs in the same window, at least three pairs; with coreslot, the median time until
 the last job finishes is at most 1.05 × the median without it, and no gate fails falsely.
