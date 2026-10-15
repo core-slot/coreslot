@@ -141,13 +141,13 @@ func ExampleClient_Snapshot() {
 		log.Fatal(err)
 	}
 	cpu := r.Resources["cpu"]
-	fmt.Printf("cpu: size %d, locked %d, free %d\n", cpu.Size, cpu.Locked, cpu.Free)
+	fmt.Printf("cpu: size %d, locked %d, available %d\n", cpu.Size, cpu.Locked, cpu.Available)
 	for _, h := range r.Holds {
 		fmt.Printf("%s holds cpu %d (adopted %v)\n", h.Label, h.Granted["cpu"], h.Adopted)
 	}
 	fmt.Println("queued:", len(r.Tickets))
 	// Output:
-	// cpu: size 4, locked 3, free 1
+	// cpu: size 4, locked 3, available 1
 	// build holds cpu 3 (adopted true)
 	// queued: 0
 }
