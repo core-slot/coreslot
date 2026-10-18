@@ -466,6 +466,17 @@ pressure level every 5 s, and keeps each set's run-log lines; `acceptance.py sum
 prints the table, the medians and the ratio of each pair. Run 1 used an earlier copy of the same
 runner; `summary` over its records prints the numbers below.
 
+Since runs 1 and 2 the runner can also alternate the order (`--order abba`: even pairs run with
+coreslot first, so that neither arm always starts on a machine the other has just heated), wait
+between sets until the thermal state is nominal and a single-core speed probe is back within a
+tolerance of its first reading (`--probe-tolerance`), record swap in use and the thermal state
+beside the load, and measure each job alone (`acceptance.py alone GATES.json OUTDIR RUNS`, under
+`coreslot run --need cpu=1..256`) for its duration, its cores used and whether it passes alone.
+`summary` then adds mean completion (the mean of the jobs' end times) with a one-sided sign test
+over the pairs, and the failures of each arm, counting as false a failure of a job that passed
+every alone run, with a one-sided Fisher exact test. Over runs 1 and 2 its first lines are
+unchanged.
+
 ### Setup
 
 - **Host:** the reference host (Apple M4 Pro, 14 logical CPUs, 48 GiB, macOS 27.0.1), budget
@@ -568,11 +579,28 @@ host's other work, which coreslot does not govern.
 the gates themselves overload (several suites each asking for every core), which is the case
 coreslot is for; the cores each gate used without coreslot (not recorded); any other host.
 
+**Mean completion, computed later from the same records.** `summary` over run 2's records now
+also prints:
+
+```text
+mean completion (the mean of the jobs' end times):
+median with = 227.7 s, median without = 210.1 s, ratio = 1.084
+per pair (with / the preceding without): 1.002, 1.019, 0.906, 1.392, 1.178, 1.202, 1.050, 1.220, 1.180, 1.001, 0.869, 1.146
+pairs favouring coreslot: 2 of 12; one-sided sign test p = 0.9968
+```
+
+On this light mix coreslot made the jobs finish later on average, by 8 %: nothing queued, and the
+CLI suite, granted 6 tokens and so 6 workers in every set, took 263 to 387 s with coreslot against
+180 to 304 s with `-n auto` without it. The service suite ended last in every set of both arms,
+which is why the time to the last job's end tied.
+
 ### Reproduce
 
 ```sh
 python3 evidence/acceptance.py run gates.json out 1 6
 python3 evidence/acceptance.py summary out
+python3 evidence/acceptance.py alone gates.json out 3 --probe-tolerance 0.05
+python3 evidence/acceptance.py run gates.json out 1 12 --order abba --cooldown 60 --probe-tolerance 0.05
 ```
 
 `gates.json` is not in the repository: it named local paths, and most of its jobs ran in working
