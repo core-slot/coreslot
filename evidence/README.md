@@ -198,6 +198,123 @@ Admissions are fewer than in the earlier pass-2 runs: 11 to 16 against 30 to 41.
 - The Linux VM figure is published, not gated. It measured 15.99 % at 100 waiters in pass 2; its
   tick-sampled rusage reads 2 to 4 times the macOS figures even for the sleep loop.
 
+### Re-measured 2026-10-17/18 (89897d5 against c114bc9)
+
+The gate, re-run on the same reference host (Mac16,7, macOS 27.0.1, go1.27.2) at the head of
+`main`, `89897d5`, and at the commit of the gate run above, `c114bc9`, with the harness's
+defaults (`-n 100 -duration 120s`). The host was quieter than on 2026-10-12: the 1-minute load
+was 2.6 to 4.9 at the start of every run, though the 15-minute average was still 11.75 at the
+first interleaved run. Each build comes from `git archive` of its commit; `89897d5` builds the
+benchmark with `-tags coreslot_bench`, and `c114bc9` and `a28590a` predate that tag (no file
+there names it). In all 27 runs below the wait4 sum equals the harness's RUSAGE_CHILDREN delta,
+no waiter reported an error, and every run stopped 36 waiters.
+
+**`89897d5`, 2026-10-17 23:04 to 23:15 UTC.**
+
+| Run | % of one core | us per waiter-second | Arrivals | Admitted | gen, start to end | Seconds with a gen change | Load, start to end |
+|---|---|---|---|---|---|---|---|
+| 1 | 6.697 | 674 | 132 | 13 | 108 to 458 | 75 | 3.69 3.46 3.50 to 3.62 3.40 3.46 |
+| 2 | 7.290 | 733 | 132 | 13 | 108 to 456 | 71 | 3.62 3.40 3.46 to 4.61 3.70 3.56 |
+| 3 | 7.121 | 717 | 133 | 14 | 108 to 460 | 75 | 4.61 3.70 3.56 to 3.59 3.59 3.53 |
+| 4 | 7.780 | 782 | 131 | 12 | 108 to 457 | 72 | 3.59 3.59 3.53 to 4.09 3.72 3.59 |
+| 5 | 7.798 | 784 | 131 | 12 | 108 to 459 | 73 | 4.09 3.72 3.59 to 4.62 3.95 3.68 |
+
+```text
+summary: 5 runs; % of one core: min 6.697, median 7.290, max 7.798; gate median <= 10.0 % at 100 waiters: PASS
+```
+
+**`c114bc9`, 2026-10-18 01:07 to 01:17 UTC.**
+
+| Run | % of one core | us per waiter-second | Arrivals | Admitted | gen, start to end | Seconds with a gen change | Load, start to end |
+|---|---|---|---|---|---|---|---|
+| 1 | 4.376 | 441 | 135 | 16 | 108 to 473 | 73 | 3.73 3.20 3.05 to 3.96 3.64 3.26 |
+| 2 | 4.471 | 449 | 130 | 11 | 108 to 452 | 73 | 3.96 3.64 3.26 to 4.90 4.02 3.45 |
+| 3 | 5.182 | 520 | 135 | 15 | 108 to 459 | 62 | 4.90 4.02 3.45 to 3.46 3.67 3.38 |
+| 4 | 5.632 | 566 | 131 | 12 | 108 to 450 | 74 | 3.46 3.67 3.38 to 3.43 3.53 3.36 |
+| 5 | 6.856 | 691 | 135 | 16 | 108 to 465 | 72 | 3.43 3.53 3.36 to 2.77 3.20 3.24 |
+
+```text
+summary: 5 runs; % of one core: min 4.376, median 5.182, max 6.856; gate median <= 10.0 % at 100 waiters: PASS
+```
+
+**`89897d5` again, 2026-10-18 01:17 to 01:27 UTC.**
+
+| Run | % of one core | us per waiter-second | Arrivals | Admitted | gen, start to end | Seconds with a gen change | Load, start to end |
+|---|---|---|---|---|---|---|---|
+| 1 | 5.688 | 572 | 132 | 13 | 108 to 458 | 72 | 2.77 3.20 3.24 to 3.74 3.29 3.26 |
+| 2 | 7.305 | 735 | 132 | 13 | 108 to 461 | 74 | 3.74 3.29 3.26 to 3.05 3.23 3.24 |
+| 3 | 7.688 | 772 | 130 | 10 | 108 to 450 | 73 | 3.05 3.23 3.24 to 3.70 3.46 3.33 |
+| 4 | 6.349 | 638 | 131 | 12 | 108 to 458 | 74 | 3.70 3.46 3.33 to 4.33 3.65 3.41 |
+| 5 | 7.892 | 793 | 131 | 12 | 108 to 455 | 73 | 4.33 3.65 3.41 to 3.07 3.34 3.31 |
+
+```text
+summary: 5 runs; % of one core: min 5.688, median 7.305, max 7.892; gate median <= 10.0 % at 100 waiters: PASS
+```
+
+Read one after another, these three series suggest that a waiter became about 40 % more
+expensive between `c114bc9` and `89897d5`: medians of 7.29 and 7.31 % against 5.18 %. The
+interleaved runs do not bear that out.
+
+**Interleaved, 2026-10-18 02:31 to 02:56 UTC.** Four rounds, each one run of `c114bc9`, then
+`a28590a`, then `89897d5`, so that the three builds share the same stretches of host time.
+`a28590a` is the merge that brought `c114bc9` into the main line; on the waiters' path it
+changes only comments and help text, so the two measure what two builds of the same code differ
+by.
+
+| Round, build | % of one core | us per waiter-second | Arrivals | Admitted | gen, start to end | Seconds with a gen change | Load, start to end |
+|---|---|---|---|---|---|---|---|
+| 1, c114bc9 | 6.323 | 635 | 130 | 11 | 108 to 454 | 75 | 3.20 10.98 11.75 to 3.50 8.72 10.77 |
+| 1, a28590a | 7.184 | 722 | 131 | 12 | 108 to 454 | 72 | 3.50 8.72 10.77 to 3.09 6.95 9.79 |
+| 1, 89897d5 | 6.130 | 617 | 132 | 13 | 108 to 459 | 74 | 3.09 6.95 9.79 to 2.77 5.63 8.88 |
+| 2, c114bc9 | 6.675 | 672 | 132 | 13 | 108 to 458 | 75 | 2.77 5.63 8.88 to 2.58 4.60 8.02 |
+| 2, a28590a | 6.467 | 650 | 132 | 13 | 108 to 459 | 75 | 2.58 4.60 8.02 to 3.71 4.22 7.39 |
+| 2, 89897d5 | 6.236 | 627 | 132 | 13 | 108 to 460 | 72 | 3.71 4.22 7.39 to 4.78 4.42 7.03 |
+| 3, c114bc9 | 6.500 | 653 | 130 | 11 | 108 to 453 | 72 | 4.78 4.42 7.03 to 3.54 4.10 6.54 |
+| 3, a28590a | 5.900 | 594 | 132 | 13 | 108 to 460 | 74 | 3.54 4.10 6.54 to 3.81 3.86 6.10 |
+| 3, 89897d5 | 5.950 | 599 | 132 | 13 | 108 to 458 | 74 | 3.81 3.86 6.10 to 4.07 3.84 5.78 |
+| 4, c114bc9 | 7.175 | 722 | 132 | 13 | 108 to 464 | 74 | 4.07 3.84 5.78 to 2.68 3.42 5.34 |
+| 4, a28590a | 8.440 | 849 | 132 | 13 | 108 to 457 | 74 | 2.68 3.42 5.34 to 3.73 3.53 5.12 |
+| 4, 89897d5 | 8.324 | 837 | 132 | 13 | 108 to 458 | 73 | 3.73 3.53 5.12 to 3.10 3.46 4.88 |
+
+| Build | Median of the four rounds | Min | Max |
+|---|---|---|---|
+| `c114bc9` | **6.588** | 6.323 | 7.175 |
+| `a28590a` | **6.825** | 5.900 | 8.440 |
+| `89897d5` | **6.183** | 5.950 | 8.324 |
+
+**What it shows:**
+
+- No cost increase from `c114bc9` to `89897d5` that these runs can resolve. Interleaved,
+  `89897d5`'s median is below `c114bc9`'s, and the spread within each build exceeds the
+  difference between the medians. An effect smaller than about one point is not excluded at four
+  rounds.
+- The spread follows the time, not the build. In round 4 all three builds rose together, to
+  7.18, 8.44 and 8.32 %. The queue did the same work in every run (130 to 135 arrivals, 10 to 16
+  admitted, a gen change in 62 to 75 seconds of the window); what moved is the CPU each waiter
+  spends per second.
+- Between sessions the same code moves by more than the step the sequential series suggested:
+  `c114bc9` measured a median of 5.18 % (4.38 to 6.86, rising run by run) in one session and
+  6.59 % (6.32 to 7.18) in the interleaved runs that followed. The 2026-10-12 median, 5.70 %,
+  lies inside the first range. Comparing two builds therefore takes interleaved runs: two
+  consecutive 5-run series do not tell a difference of two points from the host's drift.
+- The gate holds. Every median of `89897d5` here is 6.18 to 7.31 %, against 10 %: a margin of
+  1.37 to 1.62 times the median on this host, not the 1.75 measured on 2026-10-12. No single run
+  in these series exceeded 8.44 %.
+
+To repeat the interleaved comparison, build each commit from its own tree (`c114bc9` and
+`a28590a` without the tag, which they predate) and alternate single runs:
+
+```sh
+git archive c114bc9 | tar -x -C "$SRC_OLD"
+(cd "$SRC_OLD" && GOFLAGS=-buildvcs=false go build -o "$B_OLD/coreslot" ./cmd/coreslot \
+	&& GOFLAGS=-buildvcs=false go build -o "$B_OLD/waiters" ./bench/waiters)
+for r in 1 2 3 4; do
+	for b in "$B_OLD" "$B_MID" "$B_NEW"; do
+		"$b/waiters" -coreslot "$b/coreslot" -dir "$b/work-$r" -runs 1 -json "$b/round-$r.json"
+	done
+done
+```
+
 ### Before the fix: the profile that found the quadratic scan
 
 `waiter-bench-n200-darwin.pprof` covers the middle waiter of the n=200 run of 2026-10-11, about 100
