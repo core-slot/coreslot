@@ -485,6 +485,9 @@ func TestRunUsageErrors(t *testing.T) {
 		{"run", "--need", "gpu=1", "--", "echo", "{n}"},
 		{"run"},
 		{"run", "--on-timeout", "maybe", "--", "true"},
+		{"run", "--light", "--timeout", "1s", "--", "true"},
+		{"run", "--light", "--no-wait", "--", "true"},
+		{"run", "--light", "--priority", "5", "--", "true"},
 	} {
 		if r := cli(t, baseEnv(dir), args...); r.code != 64 {
 			t.Errorf("%q: exit %d, want 64 (stderr %q)", args, r.code, r.stderr)
@@ -646,6 +649,49 @@ func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "degraded")); err == nil {
 		t.Error("a timeout recorded degraded mode")
+	}
+}
+
+// A --light run starts at once on a full budget, outside it: an unbudgeted hold while it runs,
+// its reason in the command's environment and the run log, and no degraded record. Mutation:
+// dropping the r.o.light branch of ordinary makes the run queue behind the held token until cli
+// kills it, so it exits 137, not 0.
+func TestLightRunsAtOnceOutsideTheBudget(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		t.Fatalf("setup run: %d %q", r.code, r.stderr)
+	}
+	holdToken(t, dir, "cpu", 0)
+	before := len(runLog(t, dir))
+
+	start := time.Now()
+	r := cli(t, append(baseEnv(dir), "SNAPSHOT="+strings.Join(helper(t, "snapshot"), " ")), "run", "--light",
+		"--label", "dl", "--", "sh", "-c",
+		`echo "granted=$CORESLOT_GRANTED_CPU unbudgeted=$CORESLOT_UNBUDGETED tokens=$CORESLOT_TOKEN_FDS"; $SNAPSHOT`)
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("the light run took %v on a full budget: it waited", d)
+	}
+	if got := strings.Split(strings.TrimSpace(r.stdout), "\n")[0]; got != "granted=1 unbudgeted=light tokens=" {
+		t.Errorf("command saw %q", got)
+	}
+	if !strings.Contains(r.stdout, "hold dl unbudgeted=true") {
+		t.Errorf("the snapshot taken while the command ran shows no unbudgeted hold: %q", r.stdout)
+	}
+	lines := runLog(t, dir)
+	if len(lines) != before+1 {
+		t.Fatalf("run log has %d lines, want %d", len(lines), before+1)
+	}
+	if last := lines[len(lines)-1]; fmt.Sprint(last["unbudgeted_resources"]) != "[cpu]" || last["fail_open"] != "light" {
+		t.Errorf("run log line %v: want unbudgeted_resources [cpu] and the reason light", last)
+	}
+	if h := entries(t, dir, "holds"); len(h) != 0 {
+		t.Errorf("the unbudgeted hold outlived the run: %q", h)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "degraded")); err == nil {
+		t.Error("a light run recorded degraded mode")
 	}
 }
 

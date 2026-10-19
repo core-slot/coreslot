@@ -433,7 +433,7 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | `label` | string | as in the ticket |
 | `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns, and a body whose `start_ns` differs is malformed |
-| `unbudgeted` | boolean | `true` for a run outside the budget: a fail-open run, or a run whose wait timed out and that runs anyway (section 14) |
+| `unbudgeted` | boolean | `true` for a run outside the budget: a fail-open run, a run whose wait timed out and that runs anyway, or a light run (section 14) |
 | `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a run outside the budget could not budget (section 14); writers list distinct names in ascending order, readers check neither |
 | `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
@@ -846,6 +846,13 @@ rule applies.
 
 > **Implementation note.** The Go CLI's reason for such a run is `timeout`.
 
+A **light** run (the CLI's `--light`) is one its caller declares too light to budget: it publishes
+no ticket and runs at once with `min` of each named resource outside the budget, exactly as a run
+whose wait timed out, with the same unbudgeted hold, `CORESLOT_UNBUDGETED=<reason>`, run-log
+`fail_open` and `FORMAT` rule, and no `degraded` record.
+
+> **Implementation note.** The Go CLI's reason for a light run is `light`.
+
 `status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record. It
 also exits 3 while a state error makes runs fail open (section 19).
 
@@ -1097,7 +1104,7 @@ any numbering conforms (section 7.1).
 
 The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
 [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
-[--no-wait] [--strict] [--independent] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
+[--no-wait] [--strict] [--independent] [--light] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
 `N..N`, `RES=MIN..` means `MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage
 error, and every form keeps the bounds of section 7.3. With no `--need` the request is `cpu=1..16`
 when COMMAND carries a `cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside
@@ -1106,7 +1113,9 @@ cannot learn its grant would leave every token beyond its first idle. The effect
 the max at the size (section 12.2), so `cpu=1..16` on a budget of 8 takes at most 8. A run log's
 `need` (section 20) and the waiting line (section 10.3) show the request as these rules complete
 it. `--timeout` defaults to 0, no limit, and a negative one is a usage error; `--on-timeout`
-defaults to `fail`, so a `--timeout` that expires refuses; strict mode is `--strict`;
+defaults to `fail`, so a `--timeout` that expires refuses; `--light` is a light run (section 14),
+and with `--priority`, `--timeout`, `--on-timeout` or `--no-wait`, which shape a wait it does not
+have, a usage error; strict mode is `--strict`;
 `--refusal-code` defaults to 75. The other commands are
 `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
 `coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]` and `coreslot version`.

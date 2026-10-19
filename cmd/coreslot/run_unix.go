@@ -21,14 +21,15 @@ const (
 
 // run is one `coreslot run`.
 type run struct {
-	o       runOptions
-	io      IO
-	startNS int64 // wall clock at the run's start
-	start   time.Time
-	load    float64
-	waited  time.Duration
-	env     []string     // the command's environment before its grant: the inherited context dropped
-	nofile  *nofileProbe // learns the descriptor limit the run was started with (rlimit_unix.go)
+	o         runOptions
+	io        IO
+	startNS   int64 // wall clock at the run's start
+	start     time.Time
+	load      float64
+	waited    time.Duration
+	env       []string     // the command's environment before its grant: the inherited context dropped
+	nofile    *nofileProbe // learns the descriptor limit the run was started with (rlimit_unix.go)
+	pipeNoted bool         // the waiting line said once whether stdin is a pipe
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -79,6 +80,9 @@ func (r *run) ordinary() int {
 	e, err := openEngine(locate(), false)
 	if err != nil {
 		return r.failOpen(nil, err)
+	}
+	if r.o.light {
+		return r.lightRun(e)
 	}
 	prio, err := r.priority(e)
 	if err != nil {

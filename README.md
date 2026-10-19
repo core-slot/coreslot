@@ -121,7 +121,14 @@ with inherited descriptors keeps them.
 
 ### Choosing a range
 
-A token is a core, not a worker. Ask for the cores a command keeps busy, measured on this machine:
+A token is a core, not a worker. Start a command you have not measured low, at `cpu=1` or
+`cpu=2`, rather than at a guess of 4 or 8: a request too large holds cores nobody uses while the
+other gates wait, and a request too small costs only its own speed until it is corrected. After
+any run of a minute or more whose use does not match its tokens, coreslot prints one line saying
+so and what would fit, for example `coreslot: gate:unit used 1.15 of 8 cpu over 1h07m54s;
+--need cpu=2 would fit`, or `... used 3.20 cpu on 1 over 10m00s; --need cpu=4 would cover it`.
+The line counts what the run log counts (below), so a command whose work runs in a container or
+a daemon it talks to looks idle to it. Ask for the cores a command keeps busy, measured on this machine:
 each run appends a line to the run log, `log/runs.jsonl` in the state directory, and
 (`cpu_user_s` + `cpu_sys_s`) ÷ `ran_s` in it is the cores the run used (the command and the
 descendants it waited for; not a database or daemon it talks to). Ask for that times about 1.2. In
@@ -129,6 +136,19 @@ the mix measured under [Performance](#performance), a pytest suite's 12 workers 
 cores busy: asking for 12 tokens left most of the budget idle while the other gates waited, and
 with 6 it ran as fast as it did without coreslot
 ([evidence](evidence/README.md#product-acceptance-acceptancepy)).
+
+A command that keeps well under one core busy for a long time, such as a download or a stream
+that waits on the network, needs no token: `coreslot run --light -- curl -O URL` runs at once
+outside the budget, with `CORESLOT_GRANTED_CPU=1`. `status` still shows it, as an unbudgeted hold,
+and the run log still records what it used, so the line above says when a light run was not
+(`... used 3.20 cpu outside the budget ...; --need cpu=4 would count it`). A run under 0.25 cores
+on its tokens is pointed at `--light`. A nested run inside a light run passes through unbudgeted,
+as inside any run outside the budget.
+
+**Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
+budget that admits `a` and makes `b` wait leaves `a` blocked on the full pipe until `b` reads it:
+the two wait on each other until a `--timeout`. Write `coreslot run --need cpu=2 -- sh -c 'a | b'`,
+or give the light stages `--light`. A waiting run whose stdin is a pipe says so once.
 
 `min` is the least the command can usefully run with; `max` is the point past which more
 parallelism stops paying, which you find by measuring. `cpu=4..` means `4..16` and `cpu=..8` means

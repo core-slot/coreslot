@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"runtime"
 	"slices"
 	"strconv"
@@ -125,8 +126,24 @@ func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited 
 		return fmt.Sprintf("coreslot: waiting for %s: token-only mode, the state directory's format is not implemented here (%s)",
 			r.o.needText(), duration(waited))
 	}
-	return fmt.Sprintf("coreslot: waiting for %s: position %d (%s)%s", r.o.needText(), w.Position,
-		duration(waited), holderList(holders, time.Now().UnixNano()))
+	return fmt.Sprintf("coreslot: waiting for %s: position %d (%s)%s%s", r.o.needText(), w.Position,
+		duration(waited), holderList(holders, time.Now().UnixNano()), r.pipeNote())
+}
+
+// pipeNote is what the first waiting line adds when the run's stdin is a pipe: the command
+// writing it may be a stage of the same pipeline that holds the tokens this run waits for, and
+// blocks on the full pipe until this run reads it, so the two wait on each other until a
+// timeout. coreslot cannot see the other end of a pipe, so it says so once rather than deciding.
+func (r *run) pipeNote() string {
+	if r.pipeNoted || r.io.Stdin == nil {
+		return ""
+	}
+	r.pipeNoted = true
+	if fi, err := r.io.Stdin.Stat(); err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
+		return ""
+	}
+	return "; stdin is a pipe: if the command writing it holds tokens, it may be waiting for this run " +
+		"to read; run the whole pipeline under one coreslot run"
 }
 
 // holdersText describes the live holds and the section's holder, for a --no-wait refusal.

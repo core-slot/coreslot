@@ -112,3 +112,22 @@ func timeoutLogs(holdPublished bool, holdErr error, ticketUnderstood bool) bool 
 	}
 	return ticketUnderstood
 }
+
+// lightReason is the reason a --light run gives in its hold, its run-log line and
+// CORESLOT_UNBUDGETED.
+const lightReason = "light"
+
+// lightRun is --light: the command runs at once with min of each resource outside the budget,
+// as a timeout run does but without having queued. Its unbudgeted hold shows it in status, and
+// its run-log line keeps the cores it used, which the usage hint compares with one core.
+func (r *run) lightRun(e *engine.Engine) int {
+	g, herr := e.UnbudgetedHold(r.o.request(0), lightReason)
+	c := r.unbudgetedChild(lightReason, g)
+	if timeoutLogs(g != nil && g.HoldName() != "", herr, false) {
+		c.log = e.Store()
+	}
+	if herr != nil {
+		r.notice("the unbudgeted hold was not published: %s", text(herr.Error()))
+	}
+	return r.runChild(c)
+}

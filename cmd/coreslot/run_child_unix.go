@@ -108,14 +108,19 @@ func (r *run) runChild(c child) int {
 	if r.releaseFailed(released) {
 		return status
 	}
-	if c.log != nil || c.nested {
-		rec := store.RunRecord{
-			TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
-			UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
-			RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
-			Nested: c.nested,
+	rec := store.RunRecord{
+		TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
+		UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
+		RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
+		Nested: c.nested,
+	}
+	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil {
+		if h := usageHint(r.o.label, tokens, *rec.CPUUserS+*rec.CPUSysS, rec.RanS); h != "" {
+			r.notice("%s", h)
 		}
-		recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	}
+	if c.log != nil || c.nested {
 		var err error
 		if c.nested {
 			err = appendNestedLog(rec) // reads FORMAT outside the section only now, after the command

@@ -25,13 +25,14 @@ type runOptions struct {
 	noWait      bool
 	strict      bool
 	independent bool
+	light       bool
 	subst       bool
 	refusalCode int
 	argv        []string
 }
 
 const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D]
-       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--subst]
+       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--light] [--subst]
        [--refusal-code N] -- COMMAND...`
 
 // runHelp is what `coreslot run --help` prints: the synopsis, then each flag with its default.
@@ -53,6 +54,8 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
   --strict              refuse instead of running unbudgeted when the state directory or the
                         configuration cannot be used
   --independent         queue as a request of its own, even inside another run's grant
+  --light               run at once outside the budget with MIN of each resource, for a
+                        command that keeps well under one core busy (a download, a stream)
   --subst               replace placeholders inside arguments too, as in make -j{n}
   --refusal-code N      exit status of a refusal, 1 to 255 (default 75)
 
@@ -84,6 +87,7 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 	fs.BoolVar(&o.noWait, "no-wait", false, "refuse unless admitted at once")
 	fs.BoolVar(&o.strict, "strict", false, "refuse instead of failing open")
 	fs.BoolVar(&o.independent, "independent", false, "ignore an inherited grant and queue")
+	fs.BoolVar(&o.light, "light", false, "run at once outside the budget")
 	fs.BoolVar(&o.subst, "subst", false, "replace placeholders inside arguments too")
 	fs.IntVar(&o.refusalCode, "refusal-code", exitRefusal, "exit status of a refusal")
 	if err := fs.Parse(args); err != nil {
@@ -93,11 +97,18 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 		}
 		return o, usagef("%s\n%s", text(err.Error()), runUsage) // names an unknown flag as given
 	}
+	var waitFlags []string // flags that shape a wait, which a --light run does not have
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "priority" {
 			o.prioritySet = true
 		}
+		if slices.Contains([]string{"priority", "timeout", "on-timeout", "no-wait"}, f.Name) {
+			waitFlags = append(waitFlags, "--"+f.Name)
+		}
 	})
+	if o.light && len(waitFlags) > 0 {
+		return o, usagef("--light does not wait, so %s has no meaning", strings.Join(waitFlags, " and "))
+	}
 	o.argv = fs.Args()
 	if len(o.argv) == 0 {
 		return o, usagef("no command given\n%s", runUsage)

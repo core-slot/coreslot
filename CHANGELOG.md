@@ -8,6 +8,14 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `coreslot run --light` runs a command too light to budget, such as a download, at once outside
+  the budget, still shown by `status` and recorded in the run log.
+- After a run of a minute or more, one line on stderr when the cores the command used do not match
+  the cpu tokens it held, with the request that would fit.
+- A waiting run whose stdin is a pipe says once that the command writing it may be waiting for it.
+
 ### Fixed
 
 - A release's archives and its binary's version are named after the tag that started the
