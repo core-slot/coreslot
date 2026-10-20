@@ -699,3 +699,68 @@ python3 evidence/overload.py run evidence/overload/stand.json out 1 6 --seed run
   --cooldown 20 --probe-tolerance 0.05 --max-cooldown 60
 python3 evidence/overload.py summary out
 ```
+
+### Results (2026-10-20, blocks 1-6, coreslot `de142c7`)
+
+Run 3 **failed** its declared criterion: hypothesis 2 held in 5 of 6 blocks, not 6. Hypotheses 1
+and 4 held; hypothesis 3 failed. `overload.py summary evidence/overload/run3` printed:
+
+```text
+blocks: [1, 2, 3, 4, 5, 6]
+medians over blocks; critical(s) and thermal are the maximum over blocks
+arm  mean-verdict(s)  makespan(s)  warn+(s)  critical(s)  swapouts  thermal  false-failures
+F             62.35        78.35      15.5            0   49130.0        1               2
+S             43.25         63.6       0.0            0       0.0        1               1
+K    43.150000000000006        84.25       0.0            0       0.0        1               0
+K/F mean_verdict_s: per block [0.509, 0.685, 0.598, 0.682, 0.765, 1.037]; K better in 5 of 6; one-sided sign test p = 0.1094
+K/F makespan_s: per block [0.801, 1.07, 1.048, 0.851, 1.167, 1.162]; K better in 2 of 6; one-sided sign test p = 0.8906
+K/S mean_verdict_s: per block [0.847, 0.94, 0.722, 0.995, 1.226, 1.483]; K better in 4 of 6; one-sided sign test p = 0.3438
+K/S makespan_s: per block [1.234, 1.304, 1.101, 1.103, 1.331, 1.478]; K better in 0 of 6; one-sided sign test p = 1.0000
+```
+
+Per block (seconds; swapouts in 16 KiB pages):
+
+| Block | Order | F: verdict / makespan | S: verdict / makespan | K: verdict / makespan | Warn+ s (F, S, K) | Swapouts (F, S, K) | Failed |
+|---|---|---|---|---|---|---|---|
+| 1 | FSK | 85.9 / 100.1 | 51.6 / 65.0 | 43.7 / 80.2 | 44, 0, 0 | 323692, 0, 0 | F: fastapi-tests |
+| 2 | FKS | 59.0 / 75.8 | 43.0 / 62.2 | 40.4 / 81.1 | 14, 0, 0 | 61112, 0, 0 | none |
+| 3 | FSK | 60.9 / 83.4 | 50.4 / 79.4 | 36.4 / 87.4 | 14, 9, 0 | 37148, 0, 0 | S: fastapi-tests |
+| 4 | SFK | 62.5 / 78.1 | 42.8 / 60.3 | 42.6 / 66.5 | 17, 0, 0 | 0, 0, 0 | F: fastapi-tests |
+| 5 | SFK | 63.1 / 78.6 | 39.4 / 68.9 | 48.3 / 91.7 | 20, 0, 0 | 111112, 0, 0 | none |
+| 6 | FKS | 62.2 / 76.7 | 43.5 / 60.3 | 64.5 / 89.1 | 9, 0, 0 | 0, 0, 0 | none |
+
+**What it shows.**
+
+- Against running everything at once, coreslot removed the memory pressure and the false
+  failures: F reached the warn level in every block (9 to 44 s) and swapped in four, and its
+  FastAPI suite failed in two blocks although it passed both calibration runs; K never left the
+  normal level, never swapped and never failed. Its mean time to verdict was 36% lower by the
+  median ratio (0.64), lower in 5 of 6 blocks, which is not the significance the run declared.
+- Against the two-slot semaphore, coreslot was not better. The medians of the mean time to
+  verdict tie (43.15 s against 43.25 s, K lower in 4 of 6 blocks) and the semaphore's makespan
+  was shorter in every block (median ratio 1.17 against coreslot). The semaphore let memory reach
+  warn once (block 3, 9 s) and its FastAPI suite failed in that block.
+- No arm reached the critical level, so hypothesis 1 holds without separating the arms; the warn
+  level and the swapouts separate them.
+
+**Why coreslot lost time, read from the timelines in `run3/results.jsonl`.** In block 3 the
+one-second lint waited 39 s: SQLAlchemy's suite, granted all 10 cpu tokens by its learned range
+`2..10`, held the head of the line. In block 6 both type checks waited for memory behind the test
+suites: each needs 10 GiB, clamped to the whole 9 GiB budget, so it waits until every other
+holder is gone. Three rules of this run made the budget conservative: the elastic maximum learned
+from a gate run alone on all cores; a memory budget from the memory available before calibration,
+while the free arm ran this mix with up to about 20 GiB of demand and reached only warn; and a
+strict FIFO with no room for a small request beside a large holder.
+
+**Threats to validity.**
+
+- Six blocks; the arm order drawn from the seed never put K first, so K always started after
+  another arm had heated the fanless machine (every arm reached thermal state 1, fair).
+- The runner kept only the stderr of a failed gate, and pytest reports to stdout, so the failing
+  FastAPI tests are not named; that they passed both calibration runs is all that makes them
+  false failures.
+- One machine, one mix, the owner's desktop applications open throughout.
+
+**What it does not show.** Any other machine or mix, Linux, a budget tuned past the calibration
+rule, or arrivals spread wider than 5 s. The exploratory runs that led to this design are not
+pooled with it.
