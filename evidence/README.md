@@ -15,6 +15,8 @@ Index of the evidence scripts:
   host locks" below.
 - `acceptance.py`: three test gates and a CI job with and without coreslot, in "Product
   acceptance" below.
+- `overload.py` with `overload/`: four agents whose gates overload memory and CPU, free, behind a
+  semaphore and under coreslot, in "Acceptance run 3" below.
 
 ## Waiter benchmark (the release gate)
 
@@ -607,3 +609,93 @@ python3 evidence/acceptance.py run gates.json out 1 12 --order abba --cooldown 6
 trees of other projects. Write one for your own jobs, following the shape in the script's
 docstring, and give it a state directory of its own, so the run is a separate budget and its run
 log holds only these jobs.
+
+## Acceptance run 3: agents whose gates overload memory and CPU (`overload.py`)
+
+**Status: pre-registered.** This section was committed before the first measured block; the
+results are appended below it, whatever they are. The analysis is `overload.py summary`, which is
+not changed after the first block.
+
+**Question.** Several coding agents on one laptop start their verification gates within a few
+seconds of each other. Does a coreslot budget, with needs learned from each gate's measured use,
+keep the laptop out of memory pressure while returning verdicts sooner than running everything
+at once, and sooner than the do-it-yourself fix of a two-slot semaphore?
+
+### Stand
+
+Every workload is public and pinned; `evidence/overload/setup.sh` builds the stand under
+`~/bench.noindex` (excluded from Spotlight and Time Machine) and coreslot from this checkout.
+
+| Agent | Repository at its pin | Chain of gates |
+|---|---|---|
+| A1, A2 | microsoft/vscode 1.142.0 (`d956e8a`), `npm ci`, Electron 43.7.7 types | `npm run typecheck-client` (TypeScript 7.0.2) |
+| A3 | fastapi/fastapi 0.156.2 (`44cc742`), `uv sync --frozen --group tests --all-extras` | `ruff check fastapi tests`, then `pytest -n {n}` |
+| A4 | sqlalchemy/sqlalchemy rel_2_1_5 (`4fbf72c`), pytest 9.1.1, pytest-xdist 3.8.0 | `pytest -n {n} test/orm` (SQLite) |
+
+`evidence/overload/stand.json` holds the exact argv. Agents arrive at offsets drawn from
+U(0, 5 s), once per block, the same for the block's three sets: subagents are started together,
+as the reports behind this run describe (anthropics/claude-code#101193, jakebromberg/ship-dag#108).
+
+**Host.** MacBook Air `Mac16,12`, Apple M4, 10 cores (4 performance), 16 GiB, macOS 27.0.1
+(26A434), on AC, Low Power Mode off, no other heavy work started during the run; the owner's
+desktop applications stay open and are part of the machine as it is used. Node 24.10.0, npm
+11.6.0, uv 0.11.19, Python 3.13.0, Go 1.27.1.
+
+### Calibration: the learned needs
+
+`overload.py calibrate stand.json evidence/overload/run3 2` ran each gate alone twice without
+coreslot (`run3/calibration.jsonl`) and derived the needs by the rule in the script: memory
+ceil(1.2 × the peak of the gate's whole process tree, sampled every second, or of its largest
+process if higher); cpu ceil(1.2 × cores used), as a range from 2 for a gate that takes `{n}`.
+The budget is the 10 logical CPUs and the memory available before calibration, 9 GiB.
+
+| Gate | Wall (s) | Cores used | Peak tree (GiB) | Largest process (GiB) | Need |
+|---|---|---|---|---|---|
+| vscode-typecheck | 9.2, 9.2 | 5.04, 4.86 | 7.88, 7.49 | 7.86, 7.45 | cpu=7, mem=10 (clamped to 9) |
+| fastapi-ruff | 1.0, 1.0 | 0.03, 0.05 | 0.00, 0.00 | 0.02, 0.02 | cpu=1, mem=1 |
+| fastapi-tests | 31.7, 31.6 | 5.28, 5.55 | 2.69, 2.64 | 0.27, 0.27 | cpu=2..7, mem=4 |
+| sqlalchemy-orm-tests | 28.9, 31.1 | 8.44, 8.84 | 2.47, 2.44 | 0.28, 0.23 | cpu=2..10, mem=3 |
+
+Every gate passed both runs, so a failure of any gate in a set is a false failure. The pytest
+gates show why the needs come from the tree: coreslot's run log records `max_rss_kib`, the
+largest single process (0.27 GiB), which would under-declare these gates' memory about tenfold.
+
+### Arms, order and stopping
+
+- **F** — no admission: every gate starts when its agent reaches it; `{n}` is `auto`.
+- **S** — a counting semaphore of two slots around the heavy gates (the type checks and the test
+  suites); the lint runs free; `{n}` is `auto`.
+- **K** — every gate through `coreslot run` with its learned need; `{n}` is the cpu grant.
+
+Six blocks (1 to 6), each running F, S and K once in an order drawn from the seed `run3` and the
+block number. Before each set the runner waits 20 s and then until the thermal state is nominal
+and a single-core probe is within 5% of its first reading, at most 60 s. Each set records every
+gate's start, end and exit, and once a second the memory pressure level, swap, the swapouts
+counter and the load, with the thermal state every fifth second.
+
+A pilot block (block 0, seed `pilot`, `evidence/overload/pilot`) ran before this section was
+written, to check the runner; it is kept and never pooled with the measured blocks.
+
+### Hypotheses and the criterion, declared before the run
+
+1. **No critical memory pressure under coreslot:** K spends 0 s at the critical level
+   (`kern.memorystatus_vm_pressure_level` 4) in every one of the six sets.
+2. **Sooner verdicts than free running:** K's mean time to verdict (each agent's chain end minus
+   its arrival, averaged over the four agents) is below F's in 6 of 6 blocks (one-sided sign test
+   p = 0.016).
+3. **Sooner verdicts than the semaphore:** the same against S, in 6 of 6 blocks.
+4. **No false failure** in K.
+
+Run 3 passes when 1, 2 and 4 hold; 3 is reported pass or fail on its own. Reported beside them
+and not part of the criterion: makespan (expected to be longer under K, which runs one type check
+at a time), seconds at warn or worse, swapouts, and the hottest thermal state per arm.
+
+### Reproduce
+
+```sh
+evidence/overload/setup.sh
+python3 evidence/overload.py calibrate evidence/overload/stand.json out 2
+python3 evidence/overload.py run evidence/overload/stand.json out 1 6 --seed run3 \
+  --cooldown 20 --probe-tolerance 0.05 --max-cooldown 60
+python3 evidence/overload.py summary out
+```

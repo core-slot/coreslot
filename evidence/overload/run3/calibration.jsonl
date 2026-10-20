@@ -1,0 +1,8 @@
+{"gate": "vscode-typecheck", "run": 1, "exit": 0, "wall_s": 9.2, "cores_used": 5.04, "peak_tree_gib": 7.88, "max_rss_gib": 7.86}
+{"gate": "fastapi-ruff", "run": 1, "exit": 0, "wall_s": 1.0, "cores_used": 0.03, "peak_tree_gib": 0.0, "max_rss_gib": 0.02}
+{"gate": "fastapi-tests", "run": 1, "exit": 0, "wall_s": 31.7, "cores_used": 5.28, "peak_tree_gib": 2.69, "max_rss_gib": 0.27}
+{"gate": "sqlalchemy-orm-tests", "run": 1, "exit": 0, "wall_s": 28.9, "cores_used": 8.44, "peak_tree_gib": 2.47, "max_rss_gib": 0.28}
+{"gate": "vscode-typecheck", "run": 2, "exit": 0, "wall_s": 9.2, "cores_used": 4.86, "peak_tree_gib": 7.49, "max_rss_gib": 7.45}
+{"gate": "fastapi-ruff", "run": 2, "exit": 0, "wall_s": 1.0, "cores_used": 0.05, "peak_tree_gib": 0.0, "max_rss_gib": 0.02}
+{"gate": "fastapi-tests", "run": 2, "exit": 0, "wall_s": 31.6, "cores_used": 5.55, "peak_tree_gib": 2.64, "max_rss_gib": 0.27}
+{"gate": "sqlalchemy-orm-tests", "run": 2, "exit": 0, "wall_s": 31.1, "cores_used": 8.84, "peak_tree_gib": 2.44, "max_rss_gib": 0.23}
