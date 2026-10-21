@@ -23,17 +23,19 @@ import (
 // statsSchema is the version of the `stats --json` document.
 const statsSchema = 1
 
-// learned is what stats and suggest read: the run log's statistics and the needs file.
+// learned is what stats and suggest read: the run log's statistics and the needs file, which is
+// empty when it cannot be read, with needsErr saying why.
 type learned struct {
 	stats     []runstats.Stats
 	skipped   int
 	needsPath string
 	needs     needs.File
+	needsErr  error
 }
 
 // learn reads the run log under the state directory, sizes cpu from the configuration and the
 // machine, summarizes the runs (only label's base, when label is not empty) and loads the needs
-// file. Each failure is a state error for the caller to report.
+// file. Each failure but the needs file's is a state error for the caller to report.
 func learn(label string) (learned, error) {
 	loc := locate()
 	if loc.err != nil {
@@ -64,10 +66,15 @@ func learn(label string) (learned, error) {
 		}
 	}
 	l.needsPath = needs.PathFor(loc.cfgPath)
-	if l.needs, err = needs.Load(l.needsPath); err != nil {
-		return learned{}, fmt.Errorf("needs file %s: %w", l.needsPath, err)
-	}
+	l.needs, l.needsErr = needs.Load(l.needsPath)
 	return l, nil
+}
+
+// needsNotice prints, for a needs file that cannot be read, the notice that ignores it.
+func needsNotice(io IO, cmd string, l learned) {
+	if l.needsErr != nil {
+		fmt.Fprintf(io.Stderr, "coreslot: %s: needs file %s: %s; ignoring it\n", cmd, text(l.needsPath), text(l.needsErr.Error()))
+	}
 }
 
 // parseOnly parses args with fs, which takes no operands. It returns false with the exit
@@ -97,8 +104,9 @@ func cpuText(r spec.Range) string {
 }
 
 // statsCommand is `coreslot stats [--label L] [--json]`: per label, what its last runs used and
-// what they suggest. It exits 1 when the state directory, the run log, the configuration or the
-// needs file cannot be read (a state error, PROTOCOL.md section 19).
+// what they suggest. It exits 1 when the state directory, the run log or the configuration cannot
+// be read (a state error, PROTOCOL.md section 19); a needs file that cannot be read is a notice,
+// and every label's current entry is then none.
 func statsCommand(args []string, io IO) int {
 	fs, label, asJSON := statsFlags()
 	if code, ok := parseOnly(fs, args, "stats", statsUsage, io); !ok {
@@ -109,6 +117,7 @@ func statsCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: stats: %s\n", text(err.Error()))
 		return exitProblems
 	}
+	needsNotice(io, "stats", l)
 	if *asJSON {
 		if err := writeStatsJSON(io, l); err != nil {
 			fmt.Fprintf(io.Stderr, "coreslot: stats: %s\n", text(err.Error()))
@@ -275,13 +284,13 @@ type suggestion struct {
 	kept  string // why the entry is kept as it is, when set is nil
 }
 
-// suggestions decides, per label, the keys to set: mem, cpu unless the entry gives cpu per
+// suggestions decides, per label, the keys to set: mem, cpu unless f's entry gives cpu per
 // worker, and the evidence. A pinned entry, or one that does not parse, is kept.
-func suggestions(l learned) []suggestion {
+func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
 	var out []suggestion
-	for _, s := range l.stats {
+	for _, s := range stats {
 		sg := suggestion{label: s.Label}
-		e, _, err := l.needs.Lookup(s.Label)
+		e, _, err := f.Lookup(s.Label)
 		switch {
 		case err != nil:
 			sg.kept = "kept, its entry does not parse: " + err.Error()
@@ -305,8 +314,10 @@ func suggestions(l learned) []suggestion {
 
 // suggestCommand is `coreslot suggest [--label L] [--write]`: it prints the needs-file entries
 // the run log suggests, and with --write sets them in the needs file, keeping every other key
-// and every pinned entry. It exits 1 when what it reads cannot be read or the needs file cannot
-// be written (a state error, PROTOCOL.md section 19); a malformed needs file is left as it is.
+// and every pinned entry, as the file reads under its lock. It exits 1 when what it reads cannot
+// be read or the needs file cannot be written (a state error, PROTOCOL.md section 19); a
+// malformed needs file is left as it is. Without --write, a needs file that cannot be read is a
+// notice, as in stats.
 func suggestCommand(args []string, io IO) int {
 	fs, label, write := suggestFlags()
 	if code, ok := parseOnly(fs, args, "suggest", suggestUsage, io); !ok {
@@ -317,15 +328,21 @@ func suggestCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: suggest: %s\n", text(err.Error()))
 		return exitProblems
 	}
+	if *write && l.needsErr != nil {
+		fmt.Fprintf(io.Stderr, "coreslot: suggest: needs file %s: %s\n", text(l.needsPath), text(l.needsErr.Error()))
+		return exitProblems
+	}
+	needsNotice(io, "suggest", l)
 	if len(l.stats) == 0 {
 		fmt.Fprintln(io.Stdout, "no runs recorded")
 		return 0
 	}
-	sgs := suggestions(l)
 	if !*write {
-		return printSuggestions(io, l.needsPath, sgs)
+		return printSuggestions(io, l.needsPath, suggestions(l.stats, l.needs))
 	}
+	var sgs []suggestion
 	err = needs.Update(l.needsPath, func(entries map[string]map[string]any) error {
+		sgs = suggestions(l.stats, needs.FromEntries(entries))
 		for _, sg := range sgs {
 			if sg.set == nil {
 				continue

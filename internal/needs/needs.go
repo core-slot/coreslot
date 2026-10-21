@@ -67,6 +67,15 @@ func Load(path string) (File, error) {
 	return File{entries: entries}, nil
 }
 
+// FromEntries is the File whose [needs] table is entries, as Update hands them to its edit.
+func FromEntries(entries map[string]map[string]any) File {
+	f := File{entries: make(map[string]any, len(entries))}
+	for label, e := range entries {
+		f.entries[label] = e
+	}
+	return f
+}
+
 // needsTable is the [needs] table of a decoded file, nil when it has none.
 func needsTable(raw map[string]any) (map[string]any, error) {
 	v, ok := raw["needs"]

@@ -172,3 +172,19 @@ func TestSuggestWriteMalformed(t *testing.T) {
 		t.Errorf("the malformed file changed: %q", data)
 	}
 }
+
+// A needs file that cannot be read is one notice for stats and a dry-run suggest, which go on as
+// if it had no entries. Mutation: fail learn on the needs file's error → exit 1, red.
+func TestStatsMalformedNeedsIsANotice(t *testing.T) {
+	dir := statsDir(t)
+	writeNeeds(t, dir, "[needs\nnot toml\n")
+	for _, args := range [][]string{{"stats"}, {"stats", "--json"}, {"suggest"}} {
+		r := cli(t, baseEnv(dir), args...)
+		if r.code != 0 || strings.Count(r.stderr, "needs.toml") != 1 || !strings.HasSuffix(r.stderr, "; ignoring it\n") {
+			t.Errorf("%q over a malformed needs file: exit %d, stderr %q; want 0 and one notice", args, r.code, r.stderr)
+		}
+	}
+	if r := cli(t, baseEnv(dir), "stats"); !strings.Contains(r.stdout, "current  none") {
+		t.Errorf("stats over a malformed needs file:\n%s", r.stdout)
+	}
+}
