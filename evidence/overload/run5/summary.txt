@@ -1,0 +1,75 @@
+# Acceptance run 5: summary
+
+Valid blocks used: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]; re-runs: [].
+
+Medians over the valid blocks (false failures as a total):
+
+| Arm | Mean verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | False failures | waited_free_s |
+|---|---|---|---|---|---|---|
+| KS | 37.8 | 66.1 | 0.0 | 0.0 | 0 | 27.65 |
+| KL | 37.150000000000006 | 66.65 | 0.0 | 0.0 | 0 | 29.3 |
+| S | 37.1 | 62.4 | 6.0 | 0.0 | 0 | - |
+
+Per-block ratios (valid blocks):
+
+- KL/KS mean_verdict_s: [0.799, 1.0, 0.992, 0.984, 1.006, 1.141, 1.014, 0.944, 0.894, 1.054, 1.054, 0.96]
+- KL/KS makespan_s: [0.801, 1.0, 1.006, 1.022, 1.006, 1.077, 1.016, 0.929, 0.912, 1.034, 1.112, 0.98]
+- KL/S mean_verdict_s: [0.476, 0.97, 1.2, 1.072, 0.986, 1.373, 0.802, 0.52, 0.815, 0.683, 1.096, 1.184]
+- KL/S makespan_s: [0.611, 1.091, 1.264, 1.211, 1.139, 1.289, 0.808, 0.633, 0.842, 0.88, 1.189, 1.194]
+
+Wait decomposition against the static sizes, summed over the valid blocks (s; above static: runs):
+
+| Arm | M | MC | C | HM | HMC | HC | latency | above static |
+|---|---|---|---|---|---|---|---|---|
+| KS | 465.1 | 236.2 | 0.0 | 149.4 | 64.8 | 0.0 | 63.2 | 0 |
+| KL | 439.4 | 237.9 | 0.0 | 147.0 | 64.9 | 0.0 | 71.6 | 0 |
+
+Every verdict set:
+
+| Block | As block | Order | Arm | Mean verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | waited_free_s | Failed | Flags | Valid |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 |  | KS S KL | KS | 37.8 | 65.2 | 14 | 0 | 25.8 | none |  | yes |
+| 1 |  | KS S KL | S | 63.4 | 85.4 | 41 | 0 | - | none | high_load | yes |
+| 1 |  | KS S KL | KL | 30.2 | 52.2 | 0 | 0 | 21.8 | none | high_load | yes |
+| 2 |  | S KL KS | S | 36.1 | 60.3 | 0 | 0 | - | none | high_load | yes |
+| 2 |  | S KL KS | KL | 35.0 | 65.8 | 0 | 0 | 38.3 | none | high_load | yes |
+| 2 |  | S KL KS | KS | 35.0 | 65.8 | 0 | 0 | 38.3 | none | high_load | yes |
+| 3 |  | KL KS S | KL | 39.6 | 68.0 | 0 | 0 | 28.8 | none | high_load | yes |
+| 3 |  | KL KS S | KS | 39.9 | 67.6 | 0 | 0 | 28.8 | none | high_load | yes |
+| 3 |  | KL KS S | S | 33.0 | 53.8 | 0 | 0 | - | none | high_load | yes |
+| 4 |  | KS KL S | KS | 37.8 | 69.0 | 0 | 0 | 28.5 | none | high_load | yes |
+| 4 |  | KS KL S | KL | 37.2 | 70.5 | 0 | 0 | 30.5 | none | high_load | yes |
+| 4 |  | KS KL S | S | 34.7 | 58.2 | 3 | 0 | - | none | high_load | yes |
+| 5 |  | KL S KS | KL | 36.2 | 70.6 | 0 | 0 | 29.8 | none | high_load | yes |
+| 5 |  | KL S KS | S | 36.7 | 62.0 | 8 | 0 | - | none | high_load | yes |
+| 5 |  | KL S KS | KS | 36.0 | 70.2 | 0 | 0 | 29.8 | none | high_load | yes |
+| 6 |  | S KS KL | S | 35.9 | 58.5 | 4 | 0 | - | none | high_load | yes |
+| 6 |  | S KS KL | KS | 43.2 | 70.0 | 0 | 0 | 21.8 | none | high_load | yes |
+| 6 |  | S KS KL | KL | 49.3 | 75.4 | 0 | 0 | 29.8 | none | high_load | yes |
+| 7 |  | KS S KL | KS | 36.3 | 51.4 | 0 | 0 | 0 | none | high_load | yes |
+| 7 |  | KS S KL | S | 45.9 | 64.6 | 13 | 0 | - | none | high_load | yes |
+| 7 |  | KS S KL | KL | 36.8 | 52.2 | 0 | 0 | 0 | none | high_load | yes |
+| 8 |  | S KL KS | S | 58.1 | 83.1 | 30 | 3 | - | none | high_load | yes |
+| 8 |  | S KL KS | KL | 30.2 | 52.6 | 0 | 0 | 17.8 | none | high_load | yes |
+| 8 |  | S KL KS | KS | 32.0 | 56.6 | 0 | 0 | 17.8 | none | high_load | yes |
+| 9 |  | KL KS S | KL | 37.1 | 54.7 | 0 | 0 | 0 | none | high_load | yes |
+| 9 |  | KL KS S | KS | 41.5 | 60.0 | 0 | 0 | 0 | none | high_load | yes |
+| 9 |  | KL KS S | S | 45.5 | 65.0 | 16 | 0 | - | none | high_load | yes |
+| 10 |  | KS KL S | KS | 35.3 | 65.3 | 0 | 0 | 37.3 | none | high_load | yes |
+| 10 |  | KS KL S | KL | 37.2 | 67.5 | 0 | 0 | 37.3 | none | high_load | yes |
+| 10 |  | KS KL S | S | 54.5 | 76.7 | 29 | 0 | - | none | high_load | yes |
+| 11 |  | KL S KS | KL | 41.1 | 74.7 | 0 | 0 | 34.8 | none | high_load | yes |
+| 11 |  | KL S KS | S | 37.5 | 62.8 | 0 | 0 | - | none | high_load | yes |
+| 11 |  | KL S KS | KS | 39.0 | 67.2 | 0 | 0 | 34.8 | none | high_load | yes |
+| 12 |  | S KS KL | S | 34.7 | 54.5 | 0 | 0 | - | none | high_load | yes |
+| 12 |  | S KS KL | KS | 42.8 | 66.4 | 0 | 0 | 26.8 | none | high_load | yes |
+| 12 |  | S KS KL | KL | 41.1 | 65.1 | 0 | 0 | 22.8 | none | high_load | yes |
+
+Criteria:
+
+- Mechanism (KL's summed waited_free_s below KS's, one-sided exact sign test, alpha 0.05): 2 of 12, p = 0.9968, fail
+- Price (KL: no critical second, no false failure, median of KL's warn+ less KS's at most 10 s): median 0.0 s, critical 0 s, false failures 0, pass
+
+Outcome:
+
+- Mechanism fails: the live size does not remove the waits on this machine.
