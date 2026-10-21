@@ -2,6 +2,7 @@ package memsample
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -112,5 +113,49 @@ func TestHolderUseRootGone(t *testing.T) {
 	read := residentOf(map[int][2]int64{11: {40, 0}})
 	if got := holderUse(procs, map[int]int64{10: 0}, read); len(got) != 0 {
 		t.Errorf("holderUse = %v; want empty", got)
+	}
+}
+
+// Mutation: read the leaf only (no walk up), and a leaf of max under a 4 GiB parent gives no
+// limit instead of 3072.
+func TestCgroupLimit(t *testing.T) {
+	const gib = 1 << 30
+	files := func(kv ...any) func(string) (string, error) {
+		m := map[string]string{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i].(string)] = fmt.Sprint(kv[i+1]) + "\n"
+		}
+		return func(path string) (string, error) {
+			if v, ok := m[path]; ok {
+				return v, nil
+			}
+			return "", os.ErrNotExist
+		}
+	}
+	const self = "0::/a/b\n"
+	for _, c := range []struct {
+		name   string
+		self   string
+		read   func(string) (string, error)
+		mib    int64
+		wantOK bool
+	}{
+		{"leaf max, parent 4 GiB with 1 GiB used", self, files(
+			"/sys/fs/cgroup/a/b/memory.max", "max", "/sys/fs/cgroup/a/b/memory.current", gib,
+			"/sys/fs/cgroup/a/memory.max", 4*gib, "/sys/fs/cgroup/a/memory.current", gib), 3072, true},
+		{"leaf 2 GiB with 1.5 GiB used under 4 GiB", self, files(
+			"/sys/fs/cgroup/a/b/memory.max", 2*gib, "/sys/fs/cgroup/a/b/memory.current", 3*gib/2,
+			"/sys/fs/cgroup/a/memory.max", 4*gib, "/sys/fs/cgroup/a/memory.current", 2*gib), 512, true},
+		{"every level max", self, files(
+			"/sys/fs/cgroup/a/b/memory.max", "max", "/sys/fs/cgroup/a/b/memory.current", gib,
+			"/sys/fs/cgroup/a/memory.max", "max", "/sys/fs/cgroup/a/memory.current", gib), 0, false},
+		{"v1 only", "12:memory:/a/b\n1:name=systemd:/a/b\n", files(
+			"/sys/fs/cgroup/a/b/memory.max", gib, "/sys/fs/cgroup/a/b/memory.current", 0), 0, false},
+		{"current above max", self, files(
+			"/sys/fs/cgroup/a/b/memory.max", gib, "/sys/fs/cgroup/a/b/memory.current", 2*gib), 0, true},
+	} {
+		if mib, ok := cgroupLimit(c.self, c.read); mib != c.mib || ok != c.wantOK {
+			t.Errorf("%s: cgroupLimit = %d, %v; want %d, %v", c.name, mib, ok, c.mib, c.wantOK)
+		}
 	}
 }

@@ -5,6 +5,7 @@
 package memsample
 
 import (
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -113,4 +114,45 @@ func meminfo(text, key string) (kib int64, ok bool) {
 		return n, err == nil && n >= 0
 	}
 	return 0, false
+}
+
+// cgroupLimit returns the room, in MiB, under the tightest memory.max of the cgroup v2 named by
+// the 0:: line of selfCgroup (the text of /proc/self/cgroup) and its ancestors below
+// /sys/fs/cgroup: memory.max less memory.current, never below 0. A level whose memory.max is
+// "max" or that cannot be read is skipped; ok is false when no level sets a limit, or when there
+// is no 0:: line (cgroup v1). It lives here, not in the Linux file, so that it is tested on every
+// platform.
+func cgroupLimit(selfCgroup string, read func(path string) (string, error)) (mib int64, ok bool) {
+	var cg string
+	found := false
+	for line := range strings.Lines(selfCgroup) {
+		if cg, found = strings.CutPrefix(strings.TrimSpace(line), "0::"); found {
+			break
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	num := func(dir, name string) (int64, bool) {
+		v, err := read(path.Join("/sys/fs/cgroup", dir, name))
+		if err != nil {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n, err == nil
+	}
+	for dir := cg; ; dir = path.Dir(dir) {
+		limit, ok1 := num(dir, "memory.max")
+		current, ok2 := num(dir, "memory.current")
+		if ok1 && ok2 {
+			room := max(limit-current, 0) >> 20
+			if !ok || room < mib {
+				mib, ok = room, true
+			}
+		}
+		if parent := path.Dir(dir); parent == "/" || parent == "." || parent == dir {
+			break
+		}
+	}
+	return mib, ok
 }

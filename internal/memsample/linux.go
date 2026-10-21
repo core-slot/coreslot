@@ -127,12 +127,28 @@ func stat(pid int) ([]string, bool) {
 	return strings.Fields(s[strings.LastIndexByte(s, ')')+1:]), true
 }
 
-// Headroom returns MemAvailable of /proc/meminfo in MiB.
+// Headroom returns MemAvailable of /proc/meminfo in MiB, or the room under this process's cgroup
+// v2 memory limit when that is smaller.
 func Headroom() (mib int64, ok bool) {
 	data, err := os.ReadFile(procMeminfo)
 	if err != nil {
 		return 0, false
 	}
 	kib, ok := meminfo(string(data), "MemAvailable")
-	return kib / 1024, ok
+	if !ok {
+		return 0, false
+	}
+	mib = kib / 1024
+	if self, err := os.ReadFile("/proc/self/cgroup"); err == nil {
+		if limit, ok := cgroupLimit(string(self), readString); ok {
+			mib = min(mib, limit)
+		}
+	}
+	return mib, true
+}
+
+// readString reads a file as text.
+func readString(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	return string(data), err
 }
