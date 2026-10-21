@@ -95,6 +95,22 @@ def pressure():
     return int(v) if v.isdigit() else None
 
 
+HEADROOM_PAGES = ("vm.page_free_count", "vm.page_speculative_count", "vm.page_purgeable_count",
+                  "vm.page_pageable_external_count")
+
+
+def headroom_mib():
+    """The memory the kernel can hand out without paging anything anonymous out, read as
+    coreslot reads it on macOS: free, speculative, purgeable and file-backed pageable pages
+    times vm.pagesize; None when a sysctl is missing."""
+    r = subprocess.run(["sysctl", "-n", "vm.pagesize", *HEADROOM_PAGES], capture_output=True,
+                       text=True)
+    vals = r.stdout.split()
+    if r.returncode or len(vals) != 1 + len(HEADROOM_PAGES) or not all(v.isdigit() for v in vals):
+        return None
+    return sum(int(v) for v in vals[1:]) * int(vals[0]) >> 20
+
+
 def tree_rss_kib(root):
     """Resident KiB of root and all its descendants, from one ps listing."""
     r = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True, text=True)
@@ -114,8 +130,8 @@ def tree_rss_kib(root):
 
 
 class Sampler(threading.Thread):
-    """Once a second: memory pressure, swap in use, the swapouts counter and the 1-min load;
-    every fifth second also the thermal state (0 nominal .. 3 critical)."""
+    """Once a second: memory pressure, swap in use, the swapouts counter, the 1-min load and the
+    headroom; every fifth second also the thermal state (0 nominal .. 3 critical)."""
 
     def __init__(self):
         super().__init__(daemon=True)
@@ -126,7 +142,7 @@ class Sampler(threading.Thread):
         while not self.stop.is_set():
             s = {"t": round(time.time(), 1), "pressure": pressure(),
                  "swap_mib": acceptance.swap_used_mib(), "swapouts": vm_counter("Swapouts"),
-                 "load1": round(os.getloadavg()[0], 2)}
+                 "load1": round(os.getloadavg()[0], 2), "headroom_mib": headroom_mib()}
             if i % 5 == 0:
                 s["thermal"] = acceptance.thermal()
             self.samples.append(s)

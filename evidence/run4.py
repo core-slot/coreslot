@@ -109,9 +109,12 @@ def fresh_state(cfg):
     os.chmod(state, 0o700)
 
 
-def write_config(cfg, cpu, mem):
+def write_config(cfg, cpu, mem, live=None):
+    """Writes the shares, and [memory] live when live is a bool (run 4 wrote no [memory])."""
     with open(os.path.join(checked_state(cfg), "config.toml"), "w") as f:
         f.write(f'[resources]\ncpu = "{cpu}"\nmem = "{mem}"\n')
+        if live is not None:
+            f.write(f"[memory]\nlive = {str(live).lower()}\n")
 
 
 def budget_empty(cfg):
@@ -181,8 +184,9 @@ def stop_live():
 
 
 def run_one(cfg, gate, arm):
-    """Runs one gate in the arm's form and returns (exit, output)."""
-    if arm == "K":
+    """Runs one gate in the arm's form and returns (exit, output); every arm starting with K is
+    a coreslot arm."""
+    if arm.startswith("K"):
         r = cs(cfg, "run", "--label", gate["label"], "--", *gate["argv"], runner=run_gate,
                cwd=gate["cwd"], env=gate.get("env", {}))
     else:
@@ -239,8 +243,8 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
     ac = on_ac()
     page, bg = background()
     errors = []
-    if arm == "K":
-        write_config(cfg, kshare["cpu"], kshare["mem"])
+    if arm.startswith("K"):
+        write_config(cfg, kshare["cpu"], kshare["mem"], kshare.get("live"))
         dst = os.path.join(checked_state(cfg), "needs.toml")
         shutil.copyfile(needs, dst)
         want = sha256(needs)
@@ -291,11 +295,12 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
     finally:
         sampler.stop.set()
         sampler.join()
-    if arm == "K" and sha256(dst) != want:
+    if arm.startswith("K") and sha256(dst) != want:
         errors.append("the needs file changed during the set")
     verdict = {n: round(max(g["end"] for g in gates if g["agent"] == n) - offsets[n], 1)
                for n in cfg["agents"] if any(g["agent"] == n for g in gates)}
-    runlog = [json.loads(l) for l in acceptance.runlog_lines(cfg)[runlog0:]] if arm == "K" else []
+    runlog = ([json.loads(l) for l in acceptance.runlog_lines(cfg)[runlog0:]]
+              if arm.startswith("K") else [])
     flags = (["hot_start"] if cd["cooldown_gave_up"] else []) + (
         ["high_load"] if bg["load1"] > 3 else [])
     reasons = invalid_reasons(sampler.samples, ac, "; ".join(errors))
@@ -307,7 +312,7 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
            "mean_verdict_s": round(statistics.mean(verdict.values()), 1) if verdict else None,
            "makespan_s": round(max(g["end"] for g in gates), 1) if gates else None,
            "waited_free_s": round(sum(l.get("waited_free_s") or 0 for l in runlog), 1)
-           if arm == "K" else None,
+           if arm.startswith("K") else None,
            "samples": sampler.samples, "runlog": runlog}
     with open(path, "a") as f:
         f.write(json.dumps(rec) + "\n")
