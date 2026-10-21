@@ -1267,3 +1267,299 @@ change.
 **Reproduce.** `evidence/overload/run5.sh` (verdict 1 12, summary); `run5.sh summary` rewrites
 `summary.json` and `summary.txt` from the committed records (byte-identical). The measured binary was built with
 `CGO_ENABLED=0 go build -trimpath -o ~/bench.noindex/bin/coreslot ./cmd/coreslot` at `54f8cb0`.
+
+## Acceptance run 6: coreslot against no admission and every semaphore, under background memory (`run6.py`)
+
+**Status: pre-registered.** This section, the runner (`run6.py`, `stats6.py`, `figures6.py`,
+`ballast.py`, `overload/run6.sh`) and the frozen needs files with their SHA-256 were committed and
+pushed before the first pilot set. The pilot's sizing, `run6/size.json`, is committed and pushed
+before the first main set. The results are appended below, whatever they are. The analysis is
+`run6.py size` and `run6.py summary`, which are not changed after this commit.
+
+**Question.** On one 16 GiB laptop, under three levels of background memory, does coreslot with
+needs it learned itself cost nothing against running everything at once, and does it match the
+best counting semaphore on time while beating it on memory?
+
+### Claims
+
+- **C1, free under pressure.** On the memory-heavy mix, coreslot's mean time to verdict is below
+  running everything at once, and its memory pressure and swap are lower (false failures
+  reported).
+- **C2, free without pressure.** On the light mix, coreslot's mean time to verdict is at most 3 %
+  above running everything at once.
+- **C3, the best semaphore, time.** coreslot (its share chosen on other blocks, by cross-fitting)
+  is at most 3 % slower than the semaphore with the best N, chosen in hindsight per background
+  level on the tested blocks (an oracle favouring the semaphore).
+- **C4, the best semaphore, safety.** Against that speed-optimal semaphore, coreslot has less
+  memory pressure and less swap.
+- **C5, robustness.** Every fixed N is worse than coreslot at its untuned default (mem 60 %) at
+  some background level: slower beyond 3 %, or more pressure.
+
+**Stated cost, no claim.** The makespan, reported with its interval and its mechanism: strict FIFO
+with peak reservations leaves capacity idle while the head of the queue waits.
+
+### Stand
+
+Run 4's stand file, unchanged: `evidence/overload/stand4.json`, on run 4's host.
+
+- **The heavy mix**: run 4's four agents. A1 and A2 each run the VS Code type check; A3 runs
+  FastAPI's ruff, then its pytest suite; A4 runs SQLAlchemy's pytest `test/orm`.
+- **The light mix**: agents A3 and A4 of the heavy stand, no type check.
+
+coreslot is built at `ebac0a7` (`coreslot 0.1.1-0.20261021174039-ebac0a73fadd`), the head of an
+open pull request, not a release, with `CGO_ENABLED=0 go build -trimpath -o
+~/bench.noindex/bin/coreslot ./cmd/coreslot`. Every coreslot call goes through the stand's own
+state directory; the owner's budget and configuration are never touched.
+
+### Arms
+
+- **F**: no admission; every gate starts when its agent reaches it; `{n}` is `auto`.
+- **S1, S2, S3**: a counting semaphore of 1, 2 or 3 slots around the heavy gates (the type checks
+  and the test suites); the lint runs free; `{n}` is `auto`. F is the semaphore of four slots,
+  one per agent.
+- **K60, K67**: every gate as `coreslot run --label bench:<gate> -- <argv>`, with no `--need`,
+  cpu `"140%"`, mem `"60%"` or `"67%"`, and the learned `run6/needs.toml`.
+- **KH**: as K60 with the hand weights `run6/needs-hand.toml`: what a user writes by hand after
+  watching one run.
+- **KC**: as K60 with no needs file in the state directory, a cold start.
+
+Which arms run where:
+
+| Phase | Mix | Arms | Arrivals | Ballast |
+|---|---|---|---|---|
+| pilot, main | heavy | F, S1, S2, S3, K60, K67, KH | U(0, 5 s) | 0, 1536 or 3072 MiB |
+| pilot, main | light | K60, F | U(0, 5 s) | none |
+| sensitivity | spread | F, S1, S2, S3, K60 | U(0, 30 s) | none |
+| sensitivity | cold | K60, KC | U(0, 5 s) | none |
+
+With 128 MiB tokens, mem `"60%"` is 76 tokens (9728 of 16384 MiB) and `"67%"` 85 tokens; cpu
+`"140%"` is 14 tokens. Each set records the sizes `coreslot status --json` reports.
+
+### Background levels and the ballast
+
+A heavy block holds a ballast for the whole block, every set and the pauses between them: a child
+process (`ballast.py`) holding 0, 1536 or 3072 MiB of resident memory, filled from `os.urandom` so
+the compressor cannot shrink it, and touching one byte per 16 KiB page once a second so its pages
+stay in use. It exits when the runner dies, so a killed runner never leaves it holding memory.
+Each set records the ballast's resident size.
+
+**The level schedule.** Blocks 1-3, 4-6, ... each hold every level once, in an order shuffled with
+the seed `run6-level-<phase>-<group>`, the group being `(block - 1) div 3`. So 12 pilot blocks hold
+4 per level, and the heavy main n, a multiple of 3, holds n / 3 per level.
+
+**The order schedule.** Block b of a phase and mix runs its arms in an order shuffled with the
+seed `run6-order-<phase>-<mix>-<b>`. Each set records its position and the arm before it.
+
+**Arrivals.** Agents arrive at offsets drawn from U(0, 5 s), U(0, 30 s) in the spread run, with the
+seed `run6-<phase>-<mix>-<b>`, the same for every set of the block.
+
+**Pacing**, as run 4's: before each set the runner waits 20 s and then until the thermal state is
+nominal and a single-core probe is within 10 % of the reading taken at the session's start, at
+most 120 s.
+
+**The primer.** Each session starts with `--primer`: one K60 set of the session's first block,
+inside its ballast, recorded to `run6/primer.jsonl` only. It warms the stand after the pause and
+enters no analysis.
+
+### Learning, frozen before the pilot
+
+`run6.py learn` starts from an empty state directory with cpu `"140%"` and mem `"60%"`, and runs
+every gate alone, back to back:
+
+- **6 runs in its K form** (under coreslot). `coreslot suggest --write` then writes the needs file
+  from the label's last 5 runs, the product's window, so the first, cold run drops out.
+- **3 runs in its F form** (its argv with `{n}` as `auto`, no coreslot). They are the false-failure
+  baseline: a gate counts for false failures only if it passed all three. They are also the
+  slowdown reference for F and S.
+- **The hand weights** (KH) come from each gate's first F-form run: its peak footprint (the summed
+  physical footprint of the runner's descendants, sampled once a second) rounded up to a whole GiB,
+  and its cores (CPU seconds over the run time) rounded up, at least 1 of each; pinned, and fixed.
+
+Every gate passed all 6 K-form and all 3 F-form alone runs, so every gate counts for false
+failures. `suggest --write` wrote (`run6/needs.toml`):
+
+| Gate | cpu | mem | tokens | Evidence line it wrote |
+|---|---|---|---|---|
+| `vscode-typecheck` | `5` | `8960M` | 70 | 5 runs 2026-10-21: max 4.9 cores, 5 of 5 saturated, peak 8.7 GiB (footprint) at 12s |
+| `fastapi-ruff` | `2` | `128M` | 1 | 5 runs 2026-10-21: max 1.5 cores, 5 of 5 saturated, peak 21 MiB (max_rss) |
+| `fastapi-tests` | `1..6` | `3200M` | 25 | 5 runs 2026-10-21: max 5.6 cores, 0 of 5 saturated, peak 3.1 GiB (footprint) at 8s |
+| `sqlalchemy-orm-tests` | `1..10` | `2944M` | 23 | 5 runs 2026-10-21: max 9.0 cores, 0 of 5 saturated, peak 2.8 GiB (footprint) at 33s |
+
+The hand weights (`run6/needs-hand.toml`): the type check cpu 5, mem 9G (72 tokens); the lint cpu
+3, mem 1G (8 tokens: its first F-form run ended before a sample saw it, so 1 GiB is the floor, not
+a measurement); the FastAPI suite cpu 5, mem 3G (24); the SQLAlchemy suite cpu 9, mem 3G (24).
+
+**Expected before the data.** Under the learned needs, mem 60 % leaves 6 tokens beside a type
+check and 67 % leaves 15: both admit only the lint beside it, so K67 is expected to behave almost
+like K60. This is stated before the data, not a reason to change the design. Under the hand
+weights, the type check's 72 tokens leave 4, so not even the lint runs beside it. In the light mix
+the two suites need 48 tokens together, so K60 admits both at once.
+
+**The frozen files.** `run6/needs.sha256`:
+
+```
+5873710ad727e55bd87ee367cc307b0fba0671be6c6249618e78e5df0f18816a  needs.toml
+d46a727f87e808c4f9c94463dc918beeb4be0c02093bee0795866a16640fa98d  needs-hand.toml
+```
+
+Every verdict command exits before its first set unless both files match. Each K set copies its
+needs file into the state directory, records the file's SHA-256, and is invalid if the file changed
+during the set. `learn` refuses once any pilot, main or sensitivity record exists.
+
+### Metrics
+
+- **Primary: the mean time to verdict.** Each agent's chain end minus its arrival, averaged over
+  the mix's agents.
+- **Pressure.** Warn seconds: the once-a-second samples with `kern.memorystatus_vm_pressure_level`
+  ≥ 2; critical seconds: ≥ 4.
+- **Swap.** Swapout bytes: the rise of the swapout counter over the set times the page size. The
+  swapin and pagein counters are reported.
+- **Makespan.** The last gate's end.
+- **False failures.** A failure of a gate that passed all three F-form alone runs, counted with
+  its exact 95 % interval, per arm and per gate.
+- **Slowdown.** A gate's own execution over its form's median alone time. For F and S it is the
+  gate's wall time after the semaphore over the median of its 3 F-form runs; for K it is the run
+  log's `ran_s` over the median `ran_s` of K-form runs 2-6. The alone runs ran back to back with no
+  cooldown, so this reference was taken on a warm machine.
+
+**A set coreslot failed.** A K set with a gate that left no run-log line, ran fail-open, or exited
+with one of coreslot's own codes (64, 70, 75, 126, 127) stays in its block, flagged
+`coreslot_failed`. Its primary becomes the block's slowest primary, and in every sign test its
+warn seconds and swap count as worse than any value.
+
+### The pilot and the size rule
+
+The pilot runs 12 heavy blocks (4 per level) and 12 light blocks, all arms, with the main phase's
+rules; it enters no hypothesis test. `run6.py size` reads the first 12 valid pilot blocks of each
+mix:
+
+- **σ̂ heavy**: the standard deviation of the per-block ln(K\*/S\*). K\* is the per-level oracle
+  among K60 and K67, S\* among S1, S2, S3 and F: the arm with the lowest mean primary over the
+  level's pilot blocks, a tie to the earlier arm in that list.
+- **σ̂ light**: the standard deviation of the per-block ln(K60/F).
+- **The σ adjustment.** Each σ̂ is raised to its one-sided 80 % upper bound,
+  σ = σ̂ · √(11 / χ²₀.₂₀,₁₁), the χ² quantile by Wilson-Hilferty.
+- **The size rule.** n = ⌈(z₀.₉₅ + z₀.₈₀)² σ² / ln(1.03)²⌉ + 2: blocks for a one-sided paired
+  t test at α = 0.05 with power 0.80 against the margin ln(1.03), when the true ratio is 1. Heavy:
+  rounded up to a multiple of 3, then clamped to at least 30 and at most 120. Light: clamped to at
+  least 12 and at most 60. When the formula's n is above the cap, `size.json` says
+  `underpowered` and the run goes on at the cap.
+- **The light mix's pressure count**: the light pilot F sets with a warn-or-worse sample.
+
+`size.json` holds both σ̂, both σ, the unclamped and clamped n and that count. `size` refuses once a
+main record exists.
+
+### Hypotheses, declared before the run
+
+The main phase runs blocks 1..n of each mix. `run6.py summary` reads only the main records (never
+the pilot's) and chooses the oracles on exactly the blocks it tests:
+
+- **S\*** per background level: among S1, S2, S3 and F, the arm with the lowest mean primary over
+  that level's tested blocks, a tie to the earlier arm. It is chosen in hindsight, on the tested
+  blocks, which favours the semaphore.
+- **K\*cf** per block, by cross-fitting: each level's blocks, in block order, are split
+  alternately into two halves; a block gets the share (K60 or K67) with the lower mean primary over
+  the other half.
+
+Each hypothesis is one-sided at α = 0.05. A paired t test is on per-block log ratios; a sign test
+is exact on per-block pairs, ties dropped (all ties: p = 1, no wins). "Coreslot" in C1, C2 and C5
+is K60.
+
+- **H1 (C1).** On the heavy blocks: the mean of ln(K60/F) is below 0 (paired t), **and** K60's
+  warn seconds are below F's (sign test), **and** K60's swapout bytes are below F's (sign test).
+  Rejected when all three have p < 0.05.
+- **H4 (C4).** On the heavy blocks: K\*cf's warn seconds are below S\*'s, **and** K\*cf's swapout
+  bytes are below S\*'s, both sign tests with p < 0.05.
+- **H5 (C5).** For each N of 1, 2 and 3, six tests, each at α / 6: at each of the three levels, the
+  mean of ln(S_N/K60) is above ln(1.03) (paired t, its lower bound against the margin), and K60's
+  warn seconds are below S_N's (sign test). N passes when any of its six tests has p < 0.05 / 6.
+  Rejected when all three N pass.
+- **H3 (C3).** On the heavy blocks: the mean of ln(K\*cf/S\*) is below ln(1.03) (paired t),
+  p < 0.05. Per level, its geometric mean ratio and one-sided 95 % upper bound are reported, and a
+  level whose bound is above 1.03 is flagged.
+- **H2 (C2).** On the light blocks: the mean of ln(K60/F) is below ln(1.03) (paired t), p < 0.05.
+
+**The chain.** The hypotheses are tested in the fixed order H1, H4, H5, H3, H2, each at the full
+α = 0.05. The chain stops at the first one not rejected or untested; every hypothesis after it is
+reported as exploratory and supports no claim.
+
+**The light mix's pressure rule.** C2 is about a mix without pressure. If more than one light
+pilot F set had a warn-or-worse sample, H2 is untested.
+
+**Reported without a test.**
+
+- Per arm and mix: the mean primary, the median makespan and warn seconds, the critical seconds,
+  swapout bytes, swapins and pageins (median, mean and the BCa 90 % interval of the mean), false
+  failures (count, exact 95 % interval, per gate), and each gate's slowdown.
+- As geometric mean ratios with a one-sided 95 % upper bound and a BCa 90 % interval:
+  - the stated cost, the makespan ratios K60/F (heavy and light) and K\*cf/S\*;
+  - K60/S\*, KH/K60, K\*/S\* (coreslot's share chosen in hindsight too), and K\*cf/Scf (the
+    semaphore cross-fitted like coreslot), with Scf's choices;
+  - each fixed semaphore's regret against S\*, per level.
+- Order effects: each set's log primary over its block's geometric mean, by position and by the arm
+  before it.
+- The sensitivity runs, 6 valid blocks each: the spread run's mean primaries and each of F, S1, S2
+  and S3 over K60; the cold run's KC/K60.
+- The sets coreslot failed, and the oracles chosen.
+
+### Validity, re-runs and an incomplete run
+
+- **A valid set.** As run 4's: a set is invalid only for a runner error, battery power, a gap of
+  more than 10 s between its once-a-second samples (the Mac slept), or a needs file that changed.
+  A set that started after the cooldown gave up is flagged `hot_start`, and one that started with a
+  1-minute load above 3 `high_load`; flagged sets stay valid and are reported.
+- **A valid block** is one whose every arm has a valid set. An invalid set drops its whole block
+  from every hypothesis and from the oracle choice until a re-run of the block is valid.
+- **Re-runs.** A block with an invalid set is re-run at the end under the next block number, with
+  its order, level and offsets (`verdict main heavy 31 31 --as-block 5`). In the main phase at most
+  10 % of n re-runs count (n div 10); later ones are ignored. The pilot re-runs the same way.
+- **The sample size is fixed.** `summary` uses the first n valid blocks of each mix by block number
+  and refuses to analyse while a mix has fewer and re-runs left.
+- **Incomplete.** With the re-runs spent and fewer than n valid blocks, the mix is reported as
+  incomplete with its descriptive numbers, and its hypotheses are untested. By the chain, a short
+  heavy mix leaves every hypothesis untested or exploratory.
+- **A resumed session** skips each (block, arm) already recorded and takes a block's level, order
+  and offsets from its number alone.
+
+### Sessions
+
+Sessions run at night, so that the owner's work does not load the machine during a set. The owner's
+applications may stay open: each set records the background as totals (memory in use, the 1-minute
+load, the process count) and the running applications as a count and a SHA-256 of their names; the
+names stay on the machine. The raw records stay local until the publication audit, after which they
+are committed with the results.
+
+### What each outcome means
+
+A claim is supported only by its hypothesis rejected inside the chain.
+
+- **H1 not rejected:** coreslot is not shown to be free under pressure on this machine. This is the
+  run's headline, so everything after it is exploratory.
+- **H1, then H4 not rejected:** coreslot beats no admission, but is not shown to be safer than the
+  speed-optimal semaphore.
+- **H1 and H4, then H5 not rejected:** some fixed N is not shown to be worse than coreslot's
+  default at any level; that semaphore is a fair alternative on this mix.
+- **H1, H4 and H5, then H3 not rejected:** coreslot is safer and more robust than every fixed N but
+  not shown within 3 % of the hindsight-best semaphore's time.
+- **H1, H4, H5 and H3, then H2 not rejected or untested:** coreslot holds against the semaphores
+  under pressure, but its cost without pressure is not shown to be at most 3 %.
+- **All five rejected:** C1-C5 hold on this machine and mix; the makespan is reported as the cost.
+
+### Reproduce
+
+```sh
+evidence/overload/setup.sh
+evidence/overload/run6.sh                                  # learn, then pilot heavy and light 1 12
+python3 evidence/run6.py size evidence/overload/run6       # run6/size.json, n per mix
+evidence/overload/run6.sh verdict main heavy 1 30 --primer  # 1 n_heavy, over as many sessions
+evidence/overload/run6.sh verdict main light 1 12 --primer  # 1 n_light
+evidence/overload/run6.sh verdict main heavy 31 31 --as-block 5  # a re-run of an invalid block 5
+evidence/overload/run6.sh verdict sens spread 1 6 --primer
+evidence/overload/run6.sh verdict sens cold 1 6 --primer
+python3 evidence/run6.py summary evidence/overload/run6
+python3 evidence/run6.py figures evidence/overload/run6
+```
+
+Re-issuing an interrupted command resumes it. `evidence/overload/run6.sh --dry` runs learn and one
+block of each mix on `stand-dry.json`, to check the runner in a few minutes; its output is not
+evidence.
