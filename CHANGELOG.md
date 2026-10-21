@@ -50,6 +50,8 @@ All notable changes to this project are recorded here. The format follows
   allows, so `status` may show `mem` with 0 free while runs are still admitted. An older client on
   the same machine sizes `mem` from the configuration alone and waits while those admissions hold
   more than its size.
+- On Linux, `waited_free_s` counts the memory free under the tightest cgroup v2 limit when that is
+  less than `MemAvailable`, the same headroom the live size reads.
 
 ### Fixed
 

@@ -326,10 +326,12 @@ room = max(0, headroom − unrealised − unlisted)
 - `unlisted` is 128 MiB for each locked `mem` token that no live hold lists (a token-only client's,
   a probe's).
 
-A hold's tree is measured only when its body says `"tree": true` (section 7.4), no other live hold
-with `"tree": true` names the same pid, and the process with that pid started no more than 1 s
-after the hold's `start_ns` (so a reused pid is not measured); the tree is that process and its
-descendants, less the subtree of every other measured hold's pid. The configured size is a floor:
+A hold's tree is measured only when its body says `"tree": true` (section 7.4), it lists `mem`
+tokens, no other live hold with `"tree": true` names the same pid, and the process with that pid
+started no more than 1 s after the hold's `start_ns` (so a reused pid is not measured); the tree is
+that process and its descendants, less the subtree of every other live hold's pid, whether or not
+that hold says `"tree": true` or is measured, so memory a hold inside the tree uses never realises
+two reservations. A hold that lists no `mem` tokens is not read. The configured size is a floor:
 the live size never lowers it, and a hold's reservation stays counted until its tree uses it, so
 two admissions never promise the same free memory twice. A configuration,
 headroom or `holds/` read that fails leaves the configured size; a process listing that fails
@@ -860,8 +862,9 @@ For each requested declared resource of size `s` with request `min..max`:
 
 `mem` clamps like any other resource. A clamped CLI run prints a notice (`coreslot: cpu: requested
 16, budget is 10; running alone with 10`, or for `mem` in bytes, `coreslot: mem: requested 10 GiB,
-budget is 9.5 GiB; running alone with 9.5 GiB`; against a live size, section 5.2, `coreslot: mem:
-requested 40 GiB, more than the budget and free memory allow; running alone with 12 GiB`), and its
+budget is 9.5 GiB; running alone with 9.5 GiB`; against a live size of 96, section 5.2,
+`coreslot: mem: requested 20 GiB, more than the budget and free memory allow; running alone with
+12 GiB`), and its
 `{n}` is the clamped grant. A `mem` need
 above 32 GiB, the 256 tokens a range may name (section 7.3), reserves 32 GiB.
 
@@ -1222,7 +1225,8 @@ sum and `peak_after_s` when it was read. When no reading succeeded, or `max_rss_
 `mem_peak_kib` is `max_rss_kib`, `mem_peak_source` is `max_rss` and `peak_after_s` is absent.
 `waited_free_s` is written by a run whose request names `mem`: the part of its wait during which
 the memory the kernel can hand out without paging anything anonymous out (on macOS the free,
-speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable` of `/proc/meminfo`)
+speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable` of `/proc/meminfo`
+or, when smaller, the room under the tightest cgroup v2 limit, the headroom of section 5.2)
 was at least its `mem` need, read at most once per second. It informs; no admission reads it.
 `need` and `grant` stay in tokens, `mem`'s included.
 
@@ -1363,7 +1367,7 @@ res/pg-local/0                                        [L]
 ```json
 {"label": "gate:big", "grant": {"cpu": [0,1,2,3,4,5,6,7,8,9], "pg-local": [0]},
  "start_ns": 1791720600000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {"cpu": 16}, "adopted": false}
+ "clamped": {"cpu": 16}, "adopted": false, "tree": true}
 ```
 
 The CLI prints `coreslot: cpu: requested 16, budget is 10; running alone with 10` and starts the
@@ -1543,7 +1547,7 @@ takes `cpu` 0-1 and `mem` 0-23 and publishes the hold:
 {"label": "gate:mem",
  "grant": {"cpu": [0, 1], "mem": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
  "start_ns": 1791722400000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {}, "adopted": false}
+ "clamped": {}, "adopted": false, "tree": true}
 ```
 
 The command starts with fd 3 = the hold, fds 4-5 = `cpu` tokens 0-1, fds 6-29 = `mem` tokens 0-23,
