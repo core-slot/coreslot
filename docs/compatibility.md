@@ -8,15 +8,19 @@ changed incompatibly appears there under **Removed** or **Changed** first, and u
 ## Versions
 
 coreslot is at **`v0`** until `v1.0.0`. A format number's metadata (the names, bodies and layout of
-the state directory) never changes once a release has shipped it, before `v1.0.0` as after it: a
-release that needs different metadata introduces a new format number instead (below). Before
+the state directory) is never redefined once a release has shipped it, before `v1.0.0` as after it:
+a release that needs different metadata introduces a new format number instead (below). Within a
+format a release adds at most an optional key every reader may ignore, or an optional file no
+admission reads, as `needs.toml`, `needs.toml.lock` and their temporary files are. Before
 `v1.0.0`, a minor release may still change what a format number means elsewhere, such as the
 configuration's defaults or its size grammar ([`PROTOCOL.md` section 5](../PROTOCOL.md#5-resources-sizes-and-configuration)).
 Such a change is listed in [`CHANGELOG.md`](../CHANGELOG.md) under **Changed**, with what an older
 client on the same machine then gets wrong: when the cpu default went from `"100%"` to `"140%"`, an
 older client on a 10-CPU machine without a configuration file computes a cpu budget of 10 where a
 new one computes 14, reads `mem = "60%"` as a share of CPUs, refuses `"N%"` above 100 as an invalid
-configuration, and finds a `mem` need undeclared. `v1.0.0` freezes the format then current; frozen
+configuration, and finds a `mem` need undeclared. When `mem` became a built-in resource, a `mem`
+declared in the user's own unit changed meaning: `mem = 16` is 16 GiB, `mem = "50%"` half of the
+physical memory, `--need mem=4` 4 GiB and `CORESLOT_GRANTED_MEM` MiB. `v1.0.0` freezes the format then current; frozen
 means that from then on a new format number, or a change of what one means, needs a new major
 version.
 

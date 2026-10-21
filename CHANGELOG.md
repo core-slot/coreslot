@@ -33,7 +33,11 @@ All notable changes to this project are recorded here. The format follows
 - Without a configuration, the cpu budget is `"140%"` of the CPU count instead of `"100%"`, and
   `"N%"` accepts N up to 400. An older client on the same machine still computes `"100%"`, reads
   `mem = "60%"` as a share of CPUs and refuses `"N%"` above 100; upgrade every client together.
-- `CORESLOT_GRANTED_MEM` and `{n:mem}` are in MiB, not tokens.
+- `mem` is built in, in tokens of 128 MiB, and no longer a resource in the user's own unit. An
+  existing `[resources] mem = 16` is now 16 GiB and `mem = "50%"` half of the physical memory, not
+  of the CPU count; `--need mem=4` reserves 4 GiB (32 tokens) and `--need mem=2..4` is a usage
+  error (exit 64); `CORESLOT_GRANTED_MEM` and `{n:mem}` are in MiB, not tokens; and a library
+  `Need{"mem": {4, 4}}` reserves 4 tokens, 512 MiB.
 - `status --json` (schema 1) adds `size_mib`, `locked_mib` and `free_mib` to the `mem` resource; the
   human output of `status`, `doctor` and the run's notices shows memory in bytes.
 
