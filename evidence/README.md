@@ -766,3 +766,125 @@ strict FIFO with no room for a small request beside a large holder.
 **What it does not show.** Any other machine or mix, Linux, a budget tuned past the calibration
 rule, or arrivals spread wider than 5 s. The exploratory runs that led to this design are not
 pooled with it.
+
+## Acceptance run 4: needs coreslot learned itself, against a tuned semaphore (`run4.py`)
+
+**Status: pre-registered.** This section was committed before the first tuning set; the tuning
+result is committed before the first verdict block, and the results are appended below, whatever
+they are. The analysis is `run4.py summary`, which is not changed after this commit.
+
+**Question.** On one 16 GiB laptop whose agents' gates overload memory and CPU, does coreslot with
+needs it learned itself beat running everything at once, and come close to a semaphore whose slot
+count was tuned for this mix?
+
+### Stand
+
+Run 3's stand, unchanged: microsoft/vscode 1.142.0 (`d956e8a`, `typecheck-client`, two agents),
+fastapi/fastapi 0.156.2 (`44cc742`, ruff, then pytest), sqlalchemy/sqlalchemy rel_2_1_5
+(`4fbf72c`, pytest `test/orm`), built by `evidence/overload/setup.sh` on the same host. coreslot is
+built at `9ca499c`, the head of an open pull request (memory admission, the run log's memory peak,
+`stats` and `suggest`), not a release. `evidence/overload/stand4.json` holds the exact argv: run
+3's, with `-rfE` added to the pytest gates so that failing tests are named, a label
+`bench:<gate>` per gate, and a pattern that picks a gate's failure lines from its output.
+
+### Arms
+
+- **F** — no admission: every gate starts when its agent reaches it; `{n}` is `auto`.
+- **S** — a counting semaphore of N slots around the heavy gates (the type checks and the test
+  suites); the lint runs free; `{n}` is `auto`; N tuned.
+- **K** — every gate as `coreslot run --label bench:<gate> -- <argv>`, with no `--need`: the needs
+  file supplies it. The needs file is the one `coreslot suggest --write` produced in the learning
+  phase; the cpu and mem shares of the budget are tuned.
+
+### Learning
+
+`run4.py learn` starts from an empty state directory of its own, with `cpu = "140%"` and
+`mem = "60%"`. Every gate runs alone under coreslot (round 1), `coreslot suggest --write` writes
+the needs file, every gate runs alone again on its learned needs (round 2), and `suggest --write`
+runs again. Then every gate runs alone once without coreslot, in its F form: that run is the gate's
+baseline for false failures. The needs file is copied to `run4/needs.toml` and frozen; before each
+K set it is copied into the state directory, and its hash is checked after the set.
+
+### Tuning, on sets not used for the verdict
+
+Six configurations, three sets each, with arrival offsets drawn from the seed
+`run4-tune-<configuration>-<repetition>`: S with N = 2 and N = 3 (N = 4 is F, since the stand has
+four heavy gates), and K with cpu `"140%"` and `"200%"`, each at mem `"60%"` and `"80%"`.
+
+- **S_best** is the N with the lower median of the mean time to verdict; a tie goes to the smaller
+  N.
+- **K_best** is the configuration with the lowest median of the mean time to verdict among those
+  with zero seconds of critical memory pressure and zero false failures over their three sets. When
+  none qualifies, it is the one with the fewest critical seconds, then the fewest false failures,
+  then the lowest median. Ties go to the lower mem share, then the lower cpu share.
+
+The tuning result, `run4/tuning.json`, is committed before the first verdict block.
+
+### Verdict design
+
+Twelve valid blocks, each of three sets: F, S_best and K_best. Block b runs the arms in the order
+`perms[(b - 1) mod 6]` of the fixed list FSK, SKF, KFS, FKS, KSF, SFK, so each arm runs first in
+four blocks and in each position four times. Agents arrive at offsets drawn from U(0, 5 s) with the
+seed `run4-<b>`, the same for the block's three sets. Before each set the runner waits 20 s and then
+until the thermal state is nominal and a single-core probe is within 10% of the reading taken at the
+start of the phase, at most 120 s, and records whether the Mac is on AC power and the 1-minute load.
+
+A set is invalid only for a runner error, battery power, or a gap of more than 10 s between its
+once-a-second samples (the Mac slept). A block with an invalid set is re-run at the end under the
+next block number, with the same order and offsets (`run4.py verdict 13 13 --as-block B`); at most
+four re-runs. The sample size is fixed: `run4.py summary` refuses to analyse before the twelfth
+valid block. If the cap is spent with fewer than twelve valid blocks, the run is reported as
+incomplete with its descriptive numbers and **no test and no decision**. A set that started after
+the cooldown gave up is flagged `hot_start`, and one that started with a 1-minute load above 3
+`high_load`; flagged sets stay valid and are reported.
+
+### Hypotheses, declared before the run
+
+One-sided, per block, with an exact sign test over the twelve valid blocks at α = 0.05, so a
+hypothesis passes with at least 10 wins of 12. A tie counts as not a win, and the count stays 12.
+
+- **H1.** K's mean time to verdict (each agent's chain end minus its arrival, averaged over the four
+  agents) is below F's.
+- **H2.** K's seconds at warn-or-worse memory pressure (`kern.memorystatus_vm_pressure_level` ≥ 2)
+  are below F's.
+- **H3.** K's mean time to verdict is below 1.10 × S's.
+
+**False failures.** A failure of a gate that passed its alone baseline. A gate that failed its
+baseline stays in the mix and is excluded from the count.
+
+**Reported without a test.** The makespan ratios, the seconds at critical pressure, swapouts, false
+failures, the names of failing tests, and K's `waited_free_s`. Only coreslot measures waiting while
+memory was free: it counts every second a run waited while the kernel's headroom covered its memory
+need, whatever the wait was for, so it is an upper bound on the waiting that memory admission
+caused.
+
+### Decision
+
+- H1 and H3 pass: develop the one-machine scenario further and publish it as the headline.
+- H1 passes and H3 fails: coreslot beats no admission but not a tuned semaphore; the next step is
+  chosen from `waited_free_s`.
+- H1 fails: it is reported, and the project's memory scenario is not shown.
+- **Live-memory admission is worth designing** if K's `waited_free_s` is at least 5 s and at least
+  10% of K's summed waiting in 6 or more of the 12 blocks.
+
+### Disclosure
+
+The results name the machine, the OS and every version, and give the background at each set's
+start as totals only: memory in use (active, wired and compressed pages), the 1-minute load and the
+process count. No process names are recorded: the owner's applications stay private. Every set is
+reported, invalid and flagged ones included; the raw records (`run4/learn.jsonl`, `tune.jsonl`,
+`results.jsonl` with each K set's run-log lines) are committed with the results, together with the
+threats to validity.
+
+### Reproduce
+
+```sh
+evidence/overload/setup.sh
+evidence/overload/run4.sh            # learn, tune, verdict 1 12, summary, figures
+evidence/overload/run4.sh verdict 13 13 --as-block 5   # a re-run of an invalid block 5
+evidence/overload/run4.sh summary
+```
+
+`evidence/overload/run4.sh --dry` runs the same phases on `stand-dry.json`, two agents whose gates
+allocate 300 MiB for 2 s or sleep 1 s, with one configuration per arm and one block, to check the
+runner in a few minutes; its output is not evidence.
