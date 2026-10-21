@@ -1,0 +1,25 @@
+{
+ "coreslot": "~/bench.noindex/bin/coreslot",
+ "state_dir": "~/bench.noindex/state",
+ "cpu": 10,
+ "window_s": 5,
+ "agents": {
+  "A1": [{"gate": "vscode-typecheck", "label": "bench:vscode-typecheck", "cwd": "~/bench.noindex/vscode",
+          "heavy": true, "fail_pattern": "error TS[0-9]+",
+          "argv": ["npm", "run", "--silent", "typecheck-client"]}],
+  "A2": [{"gate": "vscode-typecheck", "label": "bench:vscode-typecheck", "cwd": "~/bench.noindex/vscode",
+          "heavy": true, "fail_pattern": "error TS[0-9]+",
+          "argv": ["npm", "run", "--silent", "typecheck-client"]}],
+  "A3": [{"gate": "fastapi-ruff", "label": "bench:fastapi-ruff", "cwd": "~/bench.noindex/fastapi",
+          "heavy": false, "argv": [".venv/bin/ruff", "check", "fastapi", "tests"]},
+         {"gate": "fastapi-tests", "label": "bench:fastapi-tests", "cwd": "~/bench.noindex/fastapi",
+          "heavy": true, "free_n": "auto", "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}"]}],
+  "A4": [{"gate": "sqlalchemy-orm-tests", "label": "bench:sqlalchemy-orm-tests",
+          "cwd": "~/bench.noindex/sqlalchemy", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/orm"]}]
+ }
+}
