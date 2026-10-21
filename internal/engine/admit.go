@@ -90,7 +90,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, ErrCanceled
 	}
 	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared}
-	if err := g.publishHold(sec, t.req.Label, false); err != nil {
+	if err := g.publishHold(sec, t.req, false); err != nil {
 		ts.Close()
 		return nil, err
 	}
@@ -256,12 +256,13 @@ type Grant struct {
 	closed bool
 }
 
-// publishHold publishes the grant's hold inside sec and keeps its descriptor.
-func (g *Grant) publishHold(sec *store.Section, label string, adopted bool) error {
+// publishHold publishes the grant's hold for req inside sec and keeps its descriptor. An adopted
+// hold never claims a tree: the adopting process is not the one doing the work.
+func (g *Grant) publishHold(sec *store.Section, req spec.Request, adopted bool) error {
 	g.adopted = adopted
 	start := max(g.e.clock.Realtime(), 0)
-	h := wire.Hold{Label: label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
-		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted}
+	h := wire.Hold{Label: req.Label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
+		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted, Tree: req.Tree && !adopted}
 	f, name, err := sec.PublishHold(h, os.Getpid(), g.e.seq())
 	if err != nil {
 		return err

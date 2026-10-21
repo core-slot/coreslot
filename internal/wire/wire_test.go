@@ -826,3 +826,30 @@ func TestNameDisplay(t *testing.T) {
 		}
 	}
 }
+
+// TestHoldTreeKey pins the optional tree key: written only when true, absent or not a boolean
+// reads as false and leaves the body well-formed. Mutation: dropping omitempty from the tree key
+// reddens the exact-encoding tests, whose bodies carry no tree.
+func TestHoldTreeKey(t *testing.T) {
+	const okHold = `{"label":"x","grant":{"cpu":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
+	for body, want := range map[string]bool{
+		okHold:                                   false,
+		okHold[:len(okHold)-1] + `,"tree":true}`: true,
+		okHold[:len(okHold)-1] + `,"tree":1}`:    false,
+	} {
+		h, err := DecodeHold([]byte(body))
+		if err != nil {
+			t.Fatalf("DecodeHold(%s): %v", body, err)
+		}
+		if h.Tree != want {
+			t.Errorf("DecodeHold(%s).Tree = %v, want %v", body, h.Tree, want)
+		}
+	}
+	b, err := Encode(Hold{Label: "x", StartNS: 5, Tree: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `,"adopted":false,"tree":true}`; !strings.HasSuffix(string(b), want) {
+		t.Errorf("hold body = %s, want it to end %s", b, want)
+	}
+}

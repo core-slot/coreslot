@@ -57,7 +57,7 @@ func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) 
 	if !understood {
 		return g, refuseFormat(n, "; nothing written")
 	}
-	if err := g.publishHold(sec, req.Label, false); err != nil {
+	if err := g.publishHold(sec, req, false); err != nil {
 		return g, err
 	}
 	_ = sec.BumpGen()

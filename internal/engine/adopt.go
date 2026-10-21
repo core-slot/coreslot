@@ -69,7 +69,7 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (*Grant, er
 		return nil, err
 	}
 	g := &Grant{e: e, tokens: ts, need: req.Need, clamped: clamped, unbudgeted: undeclared}
-	if err := g.publishHold(sec, req.Label, true); err != nil {
+	if err := g.publishHold(sec, req, true); err != nil {
 		ts.Close()
 		return nil, err
 	}

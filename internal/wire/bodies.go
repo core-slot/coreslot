@@ -42,6 +42,7 @@ type Hold struct {
 	UnbudgetedResources []string
 	Clamped             map[string]int
 	Adopted             bool
+	Tree                bool // the process tree at the hold's pid carries the grant's work
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -67,6 +68,7 @@ type holdJSON struct {
 	UnbudgetedResources []string         `json:"unbudgeted_resources"`
 	Clamped             map[string]int   `json:"clamped"`
 	Adopted             bool             `json:"adopted"`
+	Tree                bool             `json:"tree,omitempty"`
 }
 
 type cancelJSON struct {
@@ -278,6 +280,8 @@ func DecodeHold(body []byte) (Hold, error) {
 	if h.Adopted, err = o.boolean("adopted"); err != nil {
 		return Hold{}, err
 	}
+	// tree is optional: absent or not a boolean, it reads as false.
+	h.Tree, _ = o["tree"].(bool)
 	grant, err := o.object("grant")
 	if err != nil {
 		return Hold{}, err
