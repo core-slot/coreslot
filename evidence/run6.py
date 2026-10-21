@@ -21,7 +21,8 @@ OUT/needs-hand.toml; KC with mem = "60%" and no needs file, a cold start.
   learn    every gate of the stand alone: 6 runs in its K form (coreslot, cpu = "140%",
            mem = "60%"), then 3 in its F form (its argv with "free_n"), each recorded to
            OUT/learn.jsonl with its peak footprint (the summed physical footprint of the runner's
-           descendants, coreslot's meter on macOS, VmRSS on Linux, sampled once a second), cores (their CPU seconds over the run time), run time and exit.
+           descendants, coreslot's meter on macOS, VmRSS on Linux, sampled once a second), cores (their CPU seconds over the run time), run time and exit;
+           a K run also with its run-log line's ran_s.
            Then `coreslot suggest --write`, whose window of the last 5 runs per label drops the
            first, cold K run, copied to OUT/needs.toml; OUT/needs-hand.toml, one pinned entry per
            gate from its first F-form run (hand_entry); OUT/needs.sha256, both files' SHA-256.
@@ -194,10 +195,14 @@ def learn(cfg, out):
                 if (g["gate"], form, n) in done:
                     continue
                 started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                log0 = len(acceptance.runlog_lines(cfg))
                 code, output, peak, cores, wall = measured(cfg, g, form)
                 rec = {"started": started, "gate": g["gate"], "label": g["label"], "form": form,
                        "run": n, "exit": code, "wall_s": wall, "peak_kib": peak, "cores": cores,
                        "failures": run4.fail_lines(g, output) if code else []}
+                if form == "K":  # coreslot's own run time, the K slowdown's denominator
+                    new = acceptance.runlog_lines(cfg)[log0:]
+                    rec["ran_s"] = json.loads(new[-1]).get("ran_s") if new else None
                 with open(path, "a") as f:
                     f.write(json.dumps(rec) + "\n")
                 print(json.dumps(rec), flush=True)
@@ -577,11 +582,13 @@ def tests(heavy, light, s_star, kcf, light_pressure_sets):
 
 
 def alone_medians(out):
-    """(gate, form) -> the median alone run time; the K form drops its first, cold run."""
+    """(gate, form) -> the median alone run time: the runner's wall time for F, the run log's
+    ran_s for K, which drops its first, cold run."""
     runs = {}
     for r in run4.read_jsonl(os.path.join(out, "learn.jsonl")):
-        if not (r["form"] == "K" and r["run"] == 1):
-            runs.setdefault((r["gate"], r["form"]), []).append(r["wall_s"])
+        t = r.get("ran_s") if r["form"] == "K" else r["wall_s"]
+        if not (r["form"] == "K" and r["run"] == 1) and t is not None:
+            runs.setdefault((r["gate"], r["form"]), []).append(t)
     return {k: statistics.median(v) for k, v in runs.items()}
 
 

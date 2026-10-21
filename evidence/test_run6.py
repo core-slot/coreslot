@@ -188,7 +188,8 @@ class Learn(Rooted):
         recs = run4.read_jsonl(os.path.join(self.out, "learn.jsonl"))
         self.assertEqual(len(recs), 45)
         self.assertEqual({k for k in recs[0]}, {"started", "gate", "label", "form", "run", "exit",
-                                                "wall_s", "peak_kib", "cores", "failures"})
+                                                "wall_s", "peak_kib", "cores", "failures",
+                                                "ran_s"})
 
     def test_learn_resumes_same_state(self):
         # mutation: call fresh_state whenever learn starts -> the state is reset on resume -> red
@@ -797,7 +798,8 @@ class Analysis(unittest.TestCase):
         edit(self.out, "main-heavy.jsonl", lambda r: [l.update(ran_s=r["mean_verdict_s"] / 2)
                                                       for l in r["runlog"]])
         write(self.out, "learn.jsonl", [{"gate": "tc", "form": form, "run": n, "exit": 0,
-                                         "wall_s": 40.0} for form in "KF" for n in (1, 2, 3)])
+                                         "wall_s": 40.0, "ran_s": 40.0}
+                                        for form in "KF" for n in (1, 2, 3)])
         for b in range(1, 9):
             write(self.out, "sens-spread.jsonl", [sset("sens", "spread", b, a, 50 * noise(b, a))
                                                   for a in run6.SPREAD_ARMS])
@@ -809,6 +811,17 @@ class Analysis(unittest.TestCase):
         self.assertEqual(k60["false_failures"]["by_gate"]["tc"]["n"], 30)
         self.assertIn("bca90", r["order"]["prev_arm"]["none"])
         self.assertEqual(r["sensitivity"]["spread"]["blocks"], list(range(1, 7)))
+
+    def test_k_slowdown_against_alone_ran_s(self):
+        # mutation: the K denominator from wall_s in alone_medians -> coreslot's start-up counts
+        # in K's alone time only, K60's slowdown 0.4 -> red
+        write(self.out, "learn.jsonl", [{"gate": "tc", "form": form, "run": n, "exit": 0,
+                                         "wall_s": 0.15 if form == "K" else 0.06, "ran_s": 0.06}
+                                        for form in "KF" for n in (1, 2, 3)])
+        blocks = {1: {a: sset("main", "heavy", 1, a, 0.06) for a in ("K60", "F")}}
+        res = run6.per_arm(blocks, ("K60", "F"), self.out)
+        self.assertEqual({a: round(res[a]["slowdown"]["tc"]["median"], 6) for a in res},
+                         {"K60": 1.0, "F": 1.0})
 
     def test_figures_written(self):
         # mutations: drop f7 from figures6.write's figures -> f7-light.svg is missing -> red;
