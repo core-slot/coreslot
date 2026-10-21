@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"unicode/utf8"
@@ -97,6 +98,48 @@ func (r RunRecord) wire() runJSON {
 		j.UnbudgetedResources = []string{}
 	}
 	return j
+}
+
+// record is the inverse of wire.
+func (j runJSON) record() RunRecord {
+	need := make(map[string]spec.Range, len(j.Need))
+	for name, rg := range j.Need {
+		need[name] = spec.Range{Min: rg[0], Max: rg[1]}
+	}
+	return RunRecord{TimeNS: j.TimeNS, Label: j.Label, Need: need, Grant: j.Grant,
+		Clamped: j.Clamped, UnbudgetedResources: j.UnbudgetedResources, WaitedS: j.WaitedS,
+		RanS: j.RanS, CPUUserS: j.CPUUserS, CPUSysS: j.CPUSysS, MaxRSSKiB: j.MaxRSSKiB,
+		MemPeakKiB: j.MemPeakKiB, MemPeakSource: j.MemPeakSource, PeakAfterS: j.PeakAfterS,
+		WaitedFreeS: j.WaitedFreeS, Exit: j.Exit, Load1: j.Load1, FailOpen: j.FailOpen, Nested: j.Nested}
+}
+
+// ReadRuns reads the run log, the rotated generation (log/runs.1.jsonl) first and then
+// log/runs.jsonl, each through OpenFile; a missing file is empty. A line that does not decode is
+// skipped and counted in skipped. A key a line lacks is left unknown.
+func (s *Store) ReadRuns() (runs []RunRecord, skipped int, err error) {
+	for _, name := range []string{RunLogOld, RunLog} {
+		f, err := OpenFile(s.path(LogDir, name), os.O_RDONLY)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return nil, 0, err
+		}
+		for line := range bytes.Lines(data) {
+			var j runJSON
+			if json.Unmarshal(line, &j) != nil {
+				skipped++
+				continue
+			}
+			runs = append(runs, j.record())
+		}
+	}
+	return runs, skipped, nil
 }
 
 // line encodes r as one JSON line of at most MaxRunLine bytes, LF included, shortening the
