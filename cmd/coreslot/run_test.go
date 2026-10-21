@@ -1378,6 +1378,25 @@ func TestFreeMeterFailedReadAddsNothing(t *testing.T) {
 	none.observe(time.Second) // nil-safe
 }
 
+// At admission the time since the last reading counts when that reading was free, however short
+// and without a new reading: admitted 0.9 s after a free reading is 0.9 s, and 3.9 s into a free
+// wait is 3.9 s. Mutation: count the tail through observe's once-a-second gate, and they are 0
+// and 3 s.
+func TestFreeMeterCountsTheTailAtAdmission(t *testing.T) {
+	for _, admitAt := range []time.Duration{900 * time.Millisecond, 3900 * time.Millisecond} {
+		m := &freeMeter{needMiB: 512, headroom: headroomSeq(600, 600, 600, 600, 100)}
+		for at := time.Duration(0); at < admitAt; at += time.Second {
+			m.observe(at)
+		}
+		m.admit(admitAt)
+		if got := m.total(); got != admitAt {
+			t.Errorf("admitted at %v: free for %v, want %v", admitAt, got, admitAt)
+		}
+	}
+	var none *freeMeter
+	none.admit(time.Second) // nil-safe
+}
+
 // admitAfter waits n times, then admits.
 type admitAfter struct{ n int }
 
@@ -1393,8 +1412,9 @@ func (s *admitAfter) step(context.Context) (engine.StepResult, error) {
 
 func (s *admitAfter) holders() ([]engine.HolderInfo, error) { return nil, nil }
 
-// The wait loop reads the headroom after every step, the admitting one included: three waits of
-// a second each, all free, are 3 s. Mutation: drop the reading at admission, and it is 2 s.
+// The wait loop counts every waiting step's interval and, at admission, the tail since the last
+// reading: three waits of a second each, all free, are 3 s. Mutation: drop the count at
+// admission, and it is 2 s.
 func TestWaitLoopMetersWaits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

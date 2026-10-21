@@ -110,13 +110,22 @@ func (m *freeMeter) observe(now time.Duration) {
 	m.read, m.last, m.free = true, now, ok && mib >= m.needMiB
 }
 
+// admit accounts for the time from the last reading to admission, however short, without
+// reading again. A nil meter does nothing.
+func (m *freeMeter) admit(now time.Duration) {
+	if m != nil && m.read && m.free {
+		m.sum += now - m.last
+	}
+}
+
 // total is the time counted as free.
 func (m *freeMeter) total() time.Duration { return m.sum }
 
 // waitLoop steps the ticket whenever it next has work due (once per second while it is not the
 // head, on the admission backoff while it is) until it is admitted, ctx ends or the budget
 // fails, and writes a waiting line to w every 30 s of waiting, with the live holds listed then.
-// After every step, the admitting one included, it lets m observe the headroom.
+// After every waiting step it lets m observe the headroom, and at admission it lets m count the
+// tail since the last reading.
 func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, []engine.HolderInfo, time.Duration) string, m *freeMeter) (*engine.Grant, error) {
 	start := clk.Now()
 	next := start + waitLineEvery
@@ -128,11 +137,12 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 			}
 			return nil, err
 		}
-		m.observe(clk.Now())
 		switch v := res.(type) {
 		case engine.Admitted:
+			m.admit(clk.Now())
 			return v.Grant, nil
 		case engine.Waiting:
+			m.observe(clk.Now())
 			if now := clk.Now(); now >= next {
 				holders, err := s.holders()
 				if err != nil { // informative: a failure leaves them out
