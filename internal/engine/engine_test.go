@@ -63,7 +63,11 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.real += int64(d)
 }
 
+// testCPUs is the default cpu size on testMachine: 140% of its 6 CPUs, rounded down.
 const testCPUs = 8
+
+// testMachine is the machine every test engine resolves sizes against: 6 CPUs and 16 GiB.
+func testMachine() (config.Machine, error) { return config.Machine{CPUs: 6, MemMiB: 16384}, nil }
 
 // newStateDir creates a state directory whose config.toml holds cfg (none when cfg is empty).
 func newStateDir(t *testing.T, cfg string) string {
@@ -91,7 +95,7 @@ func newEngine(t *testing.T, dir string, clk *fakeClock) *Engine {
 		c = clk.clock()
 	}
 	return New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
-		func() (int, error) { return testCPUs, nil }, c)
+		testMachine, c)
 }
 
 func need(spec string) spec.Request {
@@ -193,7 +197,7 @@ func TestHelperProcess(t *testing.T) {
 		fail(err)
 	}
 	e := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
-		func() (int, error) { return testCPUs, nil }, SystemClock())
+		testMachine, SystemClock())
 	var keep []any
 	detail := ""
 	var tk *Ticket

@@ -82,18 +82,18 @@ var (
 
 // Engine runs requests against one opened state directory. It is safe for concurrent use.
 type Engine struct {
-	st    *store.Store
-	cfg   *config.Watcher
-	cpus  func() (int, error)
-	clock Clock
-	seq   func() int
+	st      *store.Store
+	cfg     *config.Watcher
+	machine func() (config.Machine, error)
+	clock   Clock
+	seq     func() int
 }
 
 // New returns an engine over st. cfg yields the configuration (under the state-directory
 // override its Path is <statedir>/config.toml, which is then checked against the filesystem
-// policy before every load); cpus yields the machine-wide online CPU count. A nil field of
-// clock is replaced by SystemClock's.
-func New(st *store.Store, cfg *config.Watcher, cpus func() (int, error), clock Clock) *Engine {
+// policy before every load); machine yields the machine-wide online CPU count and the physical
+// memory. A nil field of clock is replaced by SystemClock's.
+func New(st *store.Store, cfg *config.Watcher, machine func() (config.Machine, error), clock Clock) *Engine {
 	sys := SystemClock()
 	if clock.Realtime == nil {
 		clock.Realtime = sys.Realtime
@@ -101,7 +101,7 @@ func New(st *store.Store, cfg *config.Watcher, cpus func() (int, error), clock C
 	if clock.Monotonic == nil {
 		clock.Monotonic = sys.Monotonic
 	}
-	return &Engine{st: st, cfg: cfg, cpus: cpus, clock: clock, seq: store.NextSeq}
+	return &Engine{st: st, cfg: cfg, machine: machine, clock: clock, seq: store.NextSeq}
 }
 
 // Store is the engine's state directory.
@@ -124,19 +124,19 @@ func (e *Engine) Config() (config.Config, error) {
 	return c, nil
 }
 
-// sizes recomputes every declared resource's size from the configuration and the CPU count
-// (PROTOCOL.md section 5.2). An invalid configuration or an unknown CPU count is a
+// sizes recomputes every declared resource's size from the configuration and the machine
+// (PROTOCOL.md section 5.2). An invalid configuration or an unknown CPU count or memory is a
 // *store.StateError.
 func (e *Engine) sizes() (map[string]int, error) {
 	c, err := e.Config()
 	if err != nil {
 		return nil, err
 	}
-	n, err := e.cpus()
+	m, err := e.machine()
 	if err != nil {
-		return nil, &store.StateError{Reason: "machine-wide CPU count: " + err.Error(), Err: err}
+		return nil, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
 	}
-	return c.Sizes(n), nil
+	return c.Sizes(m), nil
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,

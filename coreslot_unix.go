@@ -65,7 +65,7 @@ func Open(o Options) (*Client, error) {
 	if err != nil {
 		return nil, wrap(err)
 	}
-	e := engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{})
+	e := engine.New(st, &config.Watcher{Path: cfgPath}, config.ReadMachine, engine.Clock{})
 	return &Client{e: e, independent: o.Independent, named: o.StateDir == ""}, nil
 }
 

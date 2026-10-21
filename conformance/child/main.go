@@ -160,7 +160,7 @@ func open(dir string) (*engine.Engine, *store.Store) {
 	if err != nil {
 		fail(err.Error())
 	}
-	e := engine.New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}, config.MachineCPUs, engine.Clock{})
+	e := engine.New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}, config.ReadMachine, engine.Clock{})
 	return e, st
 }
 

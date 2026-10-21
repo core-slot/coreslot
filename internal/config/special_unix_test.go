@@ -86,7 +86,7 @@ func TestLoadDanglingSymlinkIsAMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a dangling symlink must read as a missing file: %v", err)
 	}
-	if got := c.Sizes(8)["cpu"]; got != 8 || len(c.Resources) != 1 {
+	if got := c.Sizes(Machine{CPUs: 8})["cpu"]; got != 11 || len(c.Resources) != 2 {
 		t.Errorf("a dangling symlink did not give the defaults: cpu %d, resources %v", got, c.Resources)
 	}
 }
@@ -102,7 +102,7 @@ func TestLoadReadsThroughASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := loadWithin(t, path)
-	if err != nil || c.Sizes(8)["cpu"] != 3 {
-		t.Errorf("Load through a symlink = cpu %d, %v; want 3", c.Sizes(8)["cpu"], err)
+	if err != nil || c.Sizes(Machine{CPUs: 8})["cpu"] != 3 {
+		t.Errorf("Load through a symlink = cpu %d, %v; want 3", c.Sizes(Machine{CPUs: 8})["cpu"], err)
 	}
 }

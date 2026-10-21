@@ -1,5 +1,5 @@
 // Package config reads coreslot's configuration and resolves resource sizes against the
-// machine-wide CPU count (PROTOCOL.md section 5).
+// machine-wide CPU count and physical memory (PROTOCOL.md section 5).
 package config
 
 import (
@@ -8,16 +8,18 @@ import (
 	"io/fs"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Config is a parsed configuration file.
 type Config struct {
-	Resources      map[string]SizeExpr // declared resources; cpu is "100%" unless declared
+	Resources      map[string]SizeExpr // declared resources; cpu is "140%" and mem "60%" unless declared
 	Priorities     map[string]int      // label prefix -> priority
 	WindowsWarning bool                // [platform] windows_warning, default true
 }
@@ -38,32 +40,93 @@ func (e *Error) Unwrap() error { return e.Err }
 type sizeKind int
 
 const (
-	sizeAbsolute sizeKind = iota // an integer, used as given
-	sizePercent                  // "N%": max(1, floor(cpus*N/100))
-	sizeMinus                    // "-K": max(1, cpus-K)
+	sizeAbsolute   sizeKind = iota // an integer, used as given
+	sizePercent                    // "N%": max(1, floor(cpus*N/100))
+	sizeMinus                      // "-K": max(1, cpus-K)
+	sizeMemPercent                 // mem "N%": N% of physical memory, in whole mem tokens
+	sizeMemMiB                     // mem of n MiB, in whole mem tokens
 )
 
-// SizeExpr is a configured size; Resolve turns it into a size for a CPU count.
+// SizeExpr is a configured size; Resolve turns it into a size for a machine.
 type SizeExpr struct {
 	kind sizeKind
 	n    int
 }
 
-var defaultCPU = SizeExpr{kind: sizePercent, n: 100}
+var (
+	defaultCPU = SizeExpr{kind: sizePercent, n: 140}
+	defaultMem = SizeExpr{kind: sizeMemPercent, n: 60}
+)
 
-// Resolve returns the size for cpus machine-wide online CPUs, within [1, spec.MaxSize].
-func (s SizeExpr) Resolve(cpus int) int {
+// Machine is what sizes resolve against: the machine-wide online CPU count and the physical
+// memory in MiB.
+type Machine struct {
+	CPUs   int
+	MemMiB int64
+}
+
+// ReadMachine reads the machine's CPU count and physical memory.
+func ReadMachine() (Machine, error) {
+	cpus, err := MachineCPUs()
+	if err != nil {
+		return Machine{}, err
+	}
+	mib, err := memsample.Total()
+	if err != nil {
+		return Machine{}, err
+	}
+	return Machine{CPUs: cpus, MemMiB: mib}, nil
+}
+
+// Resolve returns the size on machine m, within [1, spec.MaxSize]. A memory size is in mem
+// tokens, rounded down.
+func (s SizeExpr) Resolve(m Machine) int {
 	v := s.n
 	switch s.kind {
 	case sizePercent:
-		v = cpus * s.n / 100
+		v = m.CPUs * s.n / 100
 	case sizeMinus:
-		v = cpus - s.n
+		v = m.CPUs - s.n
+	case sizeMemPercent:
+		v = spec.MemTokensFloor(m.MemMiB * int64(s.n) / 100)
+	case sizeMemMiB:
+		v = spec.MemTokensFloor(int64(s.n))
 	}
 	return min(max(v, 1), spec.MaxSize)
 }
 
-// ParseSize accepts an integer in [1, spec.MaxSize], a string "N%" with N in 1..100, or a string
+// ParseMemSize parses the size of the mem resource: an integer is GiB and 0 turns memory
+// admission off; a string is "N%" of physical memory with N in 1..100, or a size spec.ParseBytes
+// reads ("9.5G", "768M"), where a size of 0 is off too. Anything else is an error.
+func ParseMemSize(v any) (size SizeExpr, off bool, err error) {
+	switch x := v.(type) {
+	case int64:
+		if x < 0 {
+			return SizeExpr{}, false, fmt.Errorf("mem %d is negative", x)
+		}
+		return ParseMemSize(strconv.FormatInt(x, 10))
+	case string:
+		if pct, ok := strings.CutSuffix(x, "%"); ok {
+			n, ok := spec.ParseDigits(pct)
+			if !ok || n < 1 || n > 100 {
+				return SizeExpr{}, false, fmt.Errorf(`mem %q: want "N%%" with N in 1..100`, x)
+			}
+			return SizeExpr{kind: sizeMemPercent, n: n}, false, nil
+		}
+		mib, err := spec.ParseBytes(x)
+		if err != nil {
+			return SizeExpr{}, false, fmt.Errorf(`mem: %v, or "N%%" of memory`, err)
+		}
+		if mib == 0 {
+			return SizeExpr{}, true, nil
+		}
+		return SizeExpr{kind: sizeMemMiB, n: int(mib)}, false, nil
+	default:
+		return SizeExpr{}, false, fmt.Errorf(`mem %v (%T): want an integer of GiB, "N%%" or a size such as "768M"`, v, v)
+	}
+}
+
+// ParseSize accepts an integer in [1, spec.MaxSize], a string "N%" with N in 1..400, or a string
 // "-K" with K a non-negative integer. Anything else is an error.
 func ParseSize(v any) (SizeExpr, error) {
 	switch x := v.(type) {
@@ -77,8 +140,8 @@ func ParseSize(v any) (SizeExpr, error) {
 	case string:
 		if pct, ok := strings.CutSuffix(x, "%"); ok {
 			n, ok := spec.ParseDigits(pct)
-			if !ok || n < 1 || n > 100 {
-				return SizeExpr{}, fmt.Errorf(`size %q: want "N%%" with N in 1..100`, x)
+			if !ok || n < 1 || n > 400 {
+				return SizeExpr{}, fmt.Errorf(`size %q: want "N%%" with N in 1..400`, x)
 			}
 			return SizeExpr{kind: sizePercent, n: n}, nil
 		}
@@ -97,7 +160,7 @@ func ParseSize(v any) (SizeExpr, error) {
 
 func defaults() Config {
 	return Config{
-		Resources:      map[string]SizeExpr{"cpu": defaultCPU},
+		Resources:      map[string]SizeExpr{"cpu": defaultCPU, "mem": defaultMem},
 		Priorities:     map[string]int{},
 		WindowsWarning: true,
 	}
@@ -110,7 +173,7 @@ type notRegularError struct{ msg string }
 func (e notRegularError) Error() string { return e.msg }
 
 // Load reads the configuration at path, through symbolic links. A missing file, a dangling
-// symlink included, is the defaults (cpu = "100%" only), with no error; an unreadable file, one
+// symlink included, is the defaults (cpu = "140%" and mem = "60%"), with no error; an unreadable file, one
 // that is not a regular file (a directory, a FIFO, a device; Load never blocks on it), or a
 // malformed or invalid one is a *Error. Unknown tables and keys are ignored.
 func Load(path string) (Config, error) {
@@ -142,6 +205,18 @@ func parse(data string) (Config, string) {
 		for _, name := range slices.Sorted(maps.Keys(tbl)) {
 			if err := spec.ValidateName(name); err != nil {
 				return Config{}, "[resources]: " + err.Error()
+			}
+			if name == "mem" {
+				size, off, err := ParseMemSize(tbl[name])
+				if err != nil {
+					return Config{}, "[resources] " + err.Error()
+				}
+				if off {
+					delete(c.Resources, name)
+				} else {
+					c.Resources[name] = size
+				}
+				continue
 			}
 			size, err := ParseSize(tbl[name])
 			if err != nil {
@@ -180,14 +255,15 @@ func parse(data string) (Config, string) {
 	return c, ""
 }
 
-// Sizes resolves every declared resource for cpus; the result always contains cpu.
-func (c Config) Sizes(cpus int) map[string]int {
+// Sizes resolves every declared resource on machine m; the result always contains cpu, and
+// mem when it is declared.
+func (c Config) Sizes(m Machine) map[string]int {
 	sizes := make(map[string]int, len(c.Resources)+1)
 	for name, s := range c.Resources {
-		sizes[name] = s.Resolve(cpus)
+		sizes[name] = s.Resolve(m)
 	}
 	if _, ok := sizes["cpu"]; !ok {
-		sizes["cpu"] = defaultCPU.Resolve(cpus)
+		sizes["cpu"] = defaultCPU.Resolve(m)
 	}
 	return sizes
 }

@@ -23,11 +23,11 @@ func TestLoadMissingFileIsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load of a missing file: %v", err)
 	}
-	if got := c.Sizes(14); !maps.Equal(got, map[string]int{"cpu": 14}) {
-		t.Errorf("Sizes(14) = %v, want map[cpu:14]", got)
+	if got := c.Sizes(m14); !maps.Equal(got, map[string]int{"cpu": 19, "mem": 76}) {
+		t.Errorf("Sizes = %v, want map[cpu:19 mem:76]", got)
 	}
-	if len(c.Resources) != 1 || len(c.Priorities) != 0 {
-		t.Errorf("defaults = %+v, want cpu only and no priorities", c)
+	if len(c.Resources) != 2 || len(c.Priorities) != 0 {
+		t.Errorf("defaults = %+v, want cpu and mem only and no priorities", c)
 	}
 	if !c.WindowsWarning {
 		t.Error("WindowsWarning defaults to false, want true")
@@ -54,8 +54,8 @@ anything = "is ignored"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Sizes(14); !maps.Equal(got, map[string]int{"cpu": 12, "pg-local": 2}) {
-		t.Errorf("Sizes(14) = %v", got)
+	if got := c.Sizes(m14); !maps.Equal(got, map[string]int{"cpu": 12, "mem": 76, "pg-local": 2}) {
+		t.Errorf("Sizes = %v", got)
 	}
 	if c.WindowsWarning {
 		t.Error("windows_warning = false not honoured")
@@ -64,13 +64,13 @@ anything = "is ignored"
 		t.Errorf("PriorityFor(interactive:shell) = %d, %v", p, ok)
 	}
 
-	// A file that declares other resources but not cpu still has cpu = 100%.
+	// A file that declares other resources but not cpu still has cpu = 140%.
 	c, err = Load(writeConfig(t, "[resources]\npg-local = 1\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Sizes(14); !maps.Equal(got, map[string]int{"cpu": 14, "pg-local": 1}) {
-		t.Errorf("Sizes(14) without cpu = %v", got)
+	if got := c.Sizes(m14); !maps.Equal(got, map[string]int{"cpu": 19, "mem": 76, "pg-local": 1}) {
+		t.Errorf("Sizes without cpu = %v", got)
 	}
 }
 
@@ -89,12 +89,12 @@ func TestParseSize(t *testing.T) {
 			t.Errorf("ParseSize(%#v): unexpected error %v", tc.in, err)
 			continue
 		}
-		if got := s.Resolve(cpus); got != tc.want {
+		if got := s.Resolve(Machine{CPUs: cpus}); got != tc.want {
 			t.Errorf("ParseSize(%#v).Resolve(%d) = %d, want %d", tc.in, cpus, got, tc.want)
 		}
 	}
 	invalid := []any{
-		int64(0), int64(4097), "0%", "101%", "abc", int64(-3), true, 1.5, "12", "", "%", "-", "+2",
+		int64(0), int64(4097), "0%", "401%", "abc", int64(-3), true, 1.5, "12", "", "%", "-", "+2",
 		"50 %", "-2%", map[string]any{},
 	}
 	for _, in := range invalid {
@@ -104,8 +104,65 @@ func TestParseSize(t *testing.T) {
 	}
 	// A size computed above the protocol's maximum is the maximum.
 	s, _ := ParseSize("100%")
-	if got := s.Resolve(5000); got != 4096 {
+	if got := s.Resolve(Machine{CPUs: 5000}); got != 4096 {
 		t.Errorf(`"100%%".Resolve(5000) = %d, want 4096`, got)
+	}
+}
+
+// m14 is the machine most tests here resolve against: 14 CPUs, 16 GiB.
+var m14 = Machine{CPUs: 14, MemMiB: 16384}
+
+// With no file, cpu is 140% of the CPUs and mem 60% of memory in 128 MiB tokens, rounded down.
+// Mutation: a default cpu of "100%" instead of "140%", and this test reddens.
+func TestDefaultSizes(t *testing.T) {
+	c, msg := parse("")
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	if got := c.Sizes(Machine{CPUs: 10, MemMiB: 16384}); !maps.Equal(got, map[string]int{"cpu": 14, "mem": 76}) {
+		t.Errorf("Sizes = %v, want map[cpu:14 mem:76]", got)
+	}
+}
+
+func TestCPUPercentUpTo400(t *testing.T) {
+	s, err := ParseSize("400%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Resolve(Machine{CPUs: 10}); got != 40 {
+		t.Errorf(`"400%%" on 10 CPUs = %d, want 40`, got)
+	}
+	for _, bad := range []string{"401%", "0%"} {
+		if _, err := ParseSize(bad); err == nil {
+			t.Errorf("ParseSize(%q) accepted", bad)
+		}
+	}
+}
+
+func TestMemSizes(t *testing.T) {
+	m := Machine{CPUs: 8, MemMiB: 16384}
+	for body, want := range map[string]int{`"60%"`: 76, "9": 72, `"9.5G"`: 76, `"768M"`: 6,
+		`"1M"`: 1, `"100%"`: 128} {
+		c, msg := parse("[resources]\nmem = " + body + "\n")
+		if msg != "" {
+			t.Errorf("mem = %s: %s", body, msg)
+			continue
+		}
+		if got := c.Sizes(m)["mem"]; got != want {
+			t.Errorf("mem = %s: %d tokens, want %d", body, got, want)
+		}
+	}
+	for _, body := range []string{`"101%"`, `"-2"`, "true", "4.5", `"9GB"`} {
+		if _, msg := parse("[resources]\nmem = " + body + "\n"); msg == "" {
+			t.Errorf("mem = %s accepted", body)
+		}
+	}
+	c, msg := parse("[resources]\nmem = 0\n")
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	if got := c.Sizes(m); !maps.Equal(got, map[string]int{"cpu": 11}) {
+		t.Errorf("mem = 0: Sizes = %v, want map[cpu:11]", got)
 	}
 }
 
@@ -186,8 +243,8 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := &Watcher{Path: path}
-	if c, err := w.Current(); err != nil || c.Sizes(14)["cpu"] != 10 {
-		t.Fatalf("first Current() = %v, %v", c.Sizes(14), err)
+	if c, err := w.Current(); err != nil || c.Sizes(m14)["cpu"] != 10 {
+		t.Fatalf("first Current() = %v, %v", c.Sizes(m14), err)
 	}
 
 	// Renamed over, same size, same mtime (cp -p to a temporary name, then mv).
@@ -201,8 +258,8 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Rename(tmp, path); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || c.Sizes(14)["cpu"] != 12 {
-		t.Errorf("Current() after a rename keeping size and mtime: cpu = %d, %v; want 12", c.Sizes(14)["cpu"], err)
+	if c, err := w.Current(); err != nil || c.Sizes(m14)["cpu"] != 12 {
+		t.Errorf("Current() after a rename keeping size and mtime: cpu = %d, %v; want 12", c.Sizes(m14)["cpu"], err)
 	}
 
 	// Rewritten in place, same size, same mtime.
@@ -212,8 +269,8 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || c.Sizes(14)["cpu"] != 11 {
-		t.Errorf("Current() after an in-place rewrite keeping size and mtime: cpu = %d, %v; want 11", c.Sizes(14)["cpu"], err)
+	if c, err := w.Current(); err != nil || c.Sizes(m14)["cpu"] != 11 {
+		t.Errorf("Current() after an in-place rewrite keeping size and mtime: cpu = %d, %v; want 11", c.Sizes(m14)["cpu"], err)
 	}
 
 	// An invalid file is reported as a *config.Error.
@@ -229,7 +286,7 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || !maps.Equal(c.Sizes(14), map[string]int{"cpu": 14}) {
-		t.Errorf("Current() after removal = %v, %v; want defaults", c.Sizes(14), err)
+	if c, err := w.Current(); err != nil || !maps.Equal(c.Sizes(m14), map[string]int{"cpu": 19, "mem": 76}) {
+		t.Errorf("Current() after removal = %v, %v; want defaults", c.Sizes(m14), err)
 	}
 }
