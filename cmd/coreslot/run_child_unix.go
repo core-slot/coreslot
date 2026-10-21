@@ -15,6 +15,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -138,6 +139,12 @@ func (r *run) runChild(c child) int {
 	}
 	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil {
 		if h := usageHint(r.o.label, tokens, *rec.CPUUserS+*rec.CPUSysS, rec.RanS); h != "" {
+			r.notice("%s", h)
+		}
+	}
+	if _, ok := c.hintTokens(); ok && c.failOpen != lightReason && rec.MemPeakKiB != nil {
+		grantMiB := int64(c.grant["mem"]) * spec.MemTokenMiB
+		if h := memHint(r.o.label, grantMiB, slices.Contains(c.clamped, "mem"), *rec.MemPeakKiB, rec.RanS); h != "" {
 			r.notice("%s", h)
 		}
 	}
