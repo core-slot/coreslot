@@ -1,0 +1,37 @@
+B1 F: cooldown {'cooldown_s': 20.3, 'probe_s': 0.0637, 'thermal': 0, 'cooldown_gave_up': False}
+B1 F: mean verdict 85.9 s, makespan 100.1 s, warn+ 44 s, failed ['fastapi-tests']
+B1 S: cooldown {'cooldown_s': 50.8, 'probe_s': 0.0685, 'thermal': 0, 'cooldown_gave_up': False}
+B1 S: mean verdict 51.6 s, makespan 65.0 s, warn+ 0 s, failed []
+B1 K: cooldown {'cooldown_s': 50.8, 'probe_s': 0.0661, 'thermal': 0, 'cooldown_gave_up': False}
+B1 K: mean verdict 43.7 s, makespan 80.2 s, warn+ 0 s, failed []
+B2 F: cooldown {'cooldown_s': 50.8, 'probe_s': 0.0675, 'thermal': 0, 'cooldown_gave_up': False}
+B2 F: mean verdict 59.0 s, makespan 75.8 s, warn+ 14 s, failed []
+B2 K: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0683, 'thermal': 0, 'cooldown_gave_up': False}
+B2 K: mean verdict 40.4 s, makespan 81.1 s, warn+ 0 s, failed []
+B2 S: cooldown {'cooldown_s': 50.8, 'probe_s': 0.0665, 'thermal': 0, 'cooldown_gave_up': False}
+B2 S: mean verdict 43.0 s, makespan 62.2 s, warn+ 0 s, failed []
+B3 F: cooldown {'cooldown_s': 50.8, 'probe_s': 0.0685, 'thermal': 0, 'cooldown_gave_up': False}
+B3 F: mean verdict 60.9 s, makespan 83.4 s, warn+ 14 s, failed []
+B3 S: cooldown {'cooldown_s': 60.3, 'probe_s': 0.067, 'thermal': 0, 'cooldown_gave_up': False}
+B3 S: mean verdict 50.4 s, makespan 79.4 s, warn+ 9 s, failed ['fastapi-tests']
+B3 K: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0687, 'thermal': 0, 'cooldown_gave_up': False}
+B3 K: mean verdict 36.4 s, makespan 87.4 s, warn+ 0 s, failed []
+B4 S: cooldown {'cooldown_s': 50.8, 'probe_s': 0.0662, 'thermal': 0, 'cooldown_gave_up': False}
+B4 S: mean verdict 42.8 s, makespan 60.3 s, warn+ 0 s, failed []
+B4 F: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0674, 'thermal': 0, 'cooldown_gave_up': False}
+B4 F: mean verdict 62.5 s, makespan 78.1 s, warn+ 17 s, failed ['fastapi-tests']
+B4 K: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0663, 'thermal': 1, 'cooldown_gave_up': True}
+B4 K: mean verdict 42.6 s, makespan 66.5 s, warn+ 0 s, failed []
+B5 S: cooldown {'cooldown_s': 50.8, 'probe_s': 0.068, 'thermal': 0, 'cooldown_gave_up': False}
+B5 S: mean verdict 39.4 s, makespan 68.9 s, warn+ 0 s, failed []
+B5 F: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0684, 'thermal': 0, 'cooldown_gave_up': False}
+B5 F: mean verdict 63.1 s, makespan 78.6 s, warn+ 20 s, failed []
+B5 K: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0744, 'thermal': 1, 'cooldown_gave_up': True}
+B5 K: mean verdict 48.3 s, makespan 91.7 s, warn+ 0 s, failed []
+B6 F: cooldown {'cooldown_s': 50.8, 'probe_s': 0.0674, 'thermal': 0, 'cooldown_gave_up': False}
+B6 F: mean verdict 62.2 s, makespan 76.7 s, warn+ 9 s, failed []
+B6 K: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0674, 'thermal': 1, 'cooldown_gave_up': True}
+B6 K: mean verdict 64.5 s, makespan 89.1 s, warn+ 0 s, failed []
+B6 S: cooldown {'cooldown_s': 60.3, 'probe_s': 0.0695, 'thermal': 0, 'cooldown_gave_up': False}
+B6 S: mean verdict 43.5 s, makespan 60.3 s, warn+ 0 s, failed []
+exit=0
