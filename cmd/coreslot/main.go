@@ -2,7 +2,7 @@
 // other declared resources, shared through the flock(2) protocol of PROTOCOL.md.
 //
 //	coreslot run [--need RES=MIN..MAX]... [flags] -- COMMAND...
-//	coreslot status | cancel | doctor | version
+//	coreslot status | cancel | doctor | stats | suggest | version
 //
 // All printing, signal handling and exit statuses live here; the library does none of them.
 package main
@@ -33,6 +33,8 @@ commands:
   status   show the budget, its holders and its queue
   cancel   cancel a waiting request
   doctor   check the state directory and the configuration
+  stats    show what each label's recent runs used
+  suggest  suggest needs.toml entries from the run log
   version  print the version and the protocol formats implemented`
 
 func main() {
@@ -58,6 +60,10 @@ func dispatch(args []string, io IO) int {
 		return cancelCommand(args[1:], io)
 	case "doctor":
 		return doctorCommand(args[1:], io)
+	case "stats":
+		return statsCommand(args[1:], io)
+	case "suggest":
+		return suggestCommand(args[1:], io)
 	case "help", "-h", "--help":
 		fmt.Fprintln(io.Stdout, usage)
 		return 0
