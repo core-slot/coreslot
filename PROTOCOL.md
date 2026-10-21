@@ -110,7 +110,10 @@ Every conforming client MUST preserve these invariants:
 - **I3 bounded admission:** an admission or adoption never brings the number of locked tokens of a
   resource — at **any** index that exists, including indices at or above the current size — above
   that resource's current size. A later shrink may leave locked tokens above the new size; no
-  admission happens until they fall below it.
+  admission happens until they fall below it. For `mem` the current size of an attempt may be its
+  live size (section 5.2), which is never below the configured size; a client that sizes `mem`
+  from the configuration alone sees the tokens a live size admitted as locked above its size, as
+  after a shrink, and waits until they fall below it.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3). There is no backfill: the head blocks
   every waiter behind it, and a waiter is passed over only while it is STALLED, dead or canceled.
@@ -301,6 +304,47 @@ a float, a table) is invalid. A computed size above 4096 is 4096.
 used). Clients MUST recompute sizes from the configuration, `cpus` and `memory` at every admission
 attempt.
 
+**Live size of `mem`.** A client MAY, for one admission or adoption attempt, size `mem` from the
+memory the kernel can still hand out instead of from the configuration alone. It does so only when
+`mem` is declared, the request's `mem` is fixed (`min = max`), the configuration's `[memory] live`
+is not `false` (section 5.3), and the configured size less the locked count of `mem` is below that
+`min`; otherwise the size is the configured one. The **live size** is
+
+```
+size = max(static, min(4096, locked + ⌊room / 128 MiB⌋))
+room = max(0, headroom − unrealised − unlisted)
+```
+
+- `static` is the configured size and `locked` the locked count of `mem` (section 6), read inside
+  the section;
+- `headroom` is the memory, in MiB, that the kernel can hand out now without paging anonymous
+  memory out, and inside a memory-limited cgroup at most the room under its tightest limit;
+- `unrealised` sums, over the live holds of `holds/`, `max(0, tokens × 128 MiB − used)`, where
+  `tokens` is the number of `mem` tokens the hold lists and `used` the resident memory of the
+  hold's process tree; a hold whose tree is not measured counts its whole reservation
+  (`used = 0`), and malformed and stray holds are left out, so their tokens count as unlisted;
+- `unlisted` is 128 MiB for each locked `mem` token that no live hold lists (a token-only client's,
+  a probe's).
+
+A hold's tree is measured only when its body says `"tree": true` (section 7.4), no other live hold
+with `"tree": true` names the same pid, and the process with that pid started no more than 1 s
+after the hold's `start_ns` (so a reused pid is not measured); the tree is that process and its
+descendants, less the subtree of every other measured hold's pid. The configured size is a floor:
+the live size never lowers it, and a hold's reservation stays counted until its tree uses it, so
+two admissions never promise the same free memory twice. A configuration,
+headroom or `holds/` read that fails leaves the configured size; a process listing that fails
+counts every hold whole. A client that does not implement the live size sizes `mem` from the
+configuration and conforms; it waits while live admissions keep more `mem` locked than its size
+(section 3, I3).
+
+> **Implementation note.** The Go client reads the headroom on macOS as the free, speculative,
+> purgeable and file-backed pageable pages times the page size, and on Linux as `MemAvailable` of
+> `/proc/meminfo`, or, when smaller, the least `memory.max` less `memory.current` of its cgroup v2
+> and that cgroup's ancestors. A tree's resident memory is the physical footprint of its processes
+> on macOS, and their `RssAnon` plus the largest `RssShmem` among them once on Linux, from one
+> listing of the process table per attempt (on Linux a start time is field 22 of
+> `/proc/<pid>/stat`, in ticks of 1/100 s after `btime` of `/proc/stat`).
+
 ### 5.3 Configuration file
 
 The configuration is `<home>/.config/coreslot/config.toml` (`<home>` as in section 4.1). Under the
@@ -328,6 +372,9 @@ pg-local = 2      # any declared resource
 
 [platform]
 windows_warning = false   # default true (section 16)
+
+[memory]
+live = false      # default true: the live size of mem (section 5.2)
 ```
 
 - `[resources]`: each key MUST be a resource name (section 5.1) and each value a size (section
@@ -342,8 +389,10 @@ windows_warning = false   # default true (section 16)
   > **Implementation note.** The Go library uses `Request.Priority` as given and does not read
   > `[priorities]`; the Go CLI applies it when `--priority` is absent.
 - `[platform]`: `windows_warning`, a boolean.
-- `resources`, `priorities` and `platform`, when present, MUST be tables; any other value of one of
-  them is invalid. Other tables and keys are ignored.
+- `[memory]`: `live`, a boolean; `false` sizes `mem` from the configuration alone, and a client
+  that implements the live size (section 5.2) then never computes it.
+- `resources`, `priorities`, `platform` and `memory`, when present, MUST be tables; any other value
+  of one of them is invalid. Other tables and keys are ignored.
 
 A missing file means `cpu = "140%"` and `mem = "60%"` and nothing else, with no notice. A file that
 is not valid TOML or violates the rules above is an invalid configuration: a state error (section
@@ -503,6 +552,11 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a run outside the budget could not budget (section 14); writers list distinct names in ascending order, readers check neither |
 | `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
+| `tree` | boolean | optional: `true` when the process whose pid the name carries, with its descendants, carries the grant's work, so that its tree's resident memory measures the hold (section 5.2); absent means `false`. The CLI's run writes it (its command is its child); a library's grant and an adoption leave it out |
+
+`tree` is an exception to section 7.2's "a writer MUST write every key of its table": a writer MAY
+leave it out, and a reader reads it as `false` when it is absent or is anything but `true`, which
+never makes a body malformed.
 
 Comparing `start_ns` with the name needs the name, so it is done by the reader of `holds/`, not by
 a body decoder. A start-ns in a name may be as large as 2^64 − 1 (section 7.1) while `start_ns` is
@@ -758,7 +812,9 @@ Inside the section the head:
 2. recomputes sizes (section 5.2) from the configuration and `cpus`;
 3. computes the effective request of each requested declared resource (section 12.2);
 4. counts, for each such resource, the tokens locked at **every** existing index (section 6);
-   `free = size − locked`;
+   `free = size − locked`. A client that implements the live size of `mem` (section 5.2) computes
+   it here, after counting, from the configured size and this locked count; when it is above the
+   configured size, `mem`'s effective request (step 3) and `free` are computed again against it;
 5. if any resource's `free` is below its effective `min`, leaves the section and waits. Otherwise it
    repeats the election (section 10.3) over a fresh listing of `queue/`, the **re-election**: every
    well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
@@ -804,7 +860,9 @@ For each requested declared resource of size `s` with request `min..max`:
 
 `mem` clamps like any other resource. A clamped CLI run prints a notice (`coreslot: cpu: requested
 16, budget is 10; running alone with 10`, or for `mem` in bytes, `coreslot: mem: requested 10 GiB,
-budget is 9.5 GiB; running alone with 9.5 GiB`), and its `{n}` is the clamped grant. A `mem` need
+budget is 9.5 GiB; running alone with 9.5 GiB`; against a live size, section 5.2, `coreslot: mem:
+requested 40 GiB, more than the budget and free memory allow; running alone with 12 GiB`), and its
+`{n}` is the clamped grant. A `mem` need
 above 32 GiB, the 256 tokens a range may name (section 7.3), reserves 32 GiB.
 
 ### 12.3 After the command exits
@@ -838,7 +896,8 @@ every hold a run published, including a fail-open run's unbudgeted hold (section
 ### 12.4 Adoption
 
 Adoption admits already-running work without queueing (for example containers that survived a pool
-restart). Inside the section the adopter recomputes sizes, counts locked tokens as in step 4, and
+restart). Inside the section the adopter recomputes sizes, counts locked tokens as in step 4 (and
+sizes `mem` from them the same way, section 5.2), and
 takes tokens from what is free, under I3 (indices below the size, `free = size − locked`), in the
 two passes of step 6: the minimum pass takes up to `min(min, size)` of each requested declared
 resource (as many as are free), the extra pass takes more up to `max` per resource while the grant
@@ -1499,6 +1558,44 @@ and `CORESLOT_GRANTED_CPU=2`, `CORESLOT_GRANTED_MEM=3072`, `CORESLOT_HELD_FD=3`,
  "mem_peak_kib": 2831155, "mem_peak_source": "anon", "peak_after_s": 22.0, "waited_free_s": 0,
  "exit": 0, "load1": 3.2, "fail_open": ""}
 ```
+
+### 21.11 Admission above the static size
+
+The configuration declares `mem = "1G"` (size 8) beside the sizes above, `/proc/meminfo` says
+`MemAvailable: 4194304 kB` (4 096 MiB), and no cgroup limits memory. A library client, pid 7600,
+holds `mem` 0-7 for `pool:a`; its hold has no `tree` key. Pid 7700 runs
+`coreslot run --need mem=2G --label gate:b -- ./build` at 12:50:00 with no ticket ahead: 2 048 MiB
+is 16 tokens, so its ticket's `need` is `{"mem": [16, 16]}`.
+
+Before:
+
+```
+holds/01791722700000000000-0000007600-000002-pool_a   [L]
+queue/01791723000000000000-0000007700-000001-gate_b   [L]
+res/mem/0 ... res/mem/7                               [L] (held by pid 7600)
+```
+
+Inside the section the configured size of `mem` is 8 and 8 tokens are locked, so `free = 0`, below
+the `min` of 16. The request is fixed and `[memory] live` is not `false`, so the run computes the
+live size (sections 5.2 and 12.1 step 4): the headroom is 4 096 MiB; `pool:a`'s tree is not
+measured, so its 8 tokens are unrealised whole, 1 024 MiB; no locked token is unlisted; `room =
+4096 − 1024 − 0 = 3072` MiB, 24 tokens; `size = max(8, min(4096, 8 + 24)) = 32`. The effective
+request is `16..16`, not clamped, and `free = 32 − 8 = 24`. The re-election finds no ticket ahead,
+and it takes `mem` 8-23, below the size of 32, and publishes:
+
+```json
+{"label": "gate:b",
+ "grant": {"mem": [8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
+ "start_ns": 1791723000000000000, "unbudgeted": false, "unbudgeted_resources": [],
+ "clamped": {}, "adopted": false, "tree": true}
+```
+
+The command starts with fd 3 = the hold, fds 4-19 = `mem` tokens 8-23, and
+`CORESLOT_GRANTED_MEM=2048`, `CORESLOT_HELD_FD=3`, `CORESLOT_TOKEN_FDS=4-19`. `coreslot status`
+now shows `mem` at a size of 1 GiB with 3 GiB locked and 0 free. A client that sizes `mem` from the
+configuration alone (one that does not implement the live size, or any client under `[memory] live
+= false`) asking for `mem` 1..1 meanwhile finds size 8 with 24 locked, and waits until the locked
+count falls below 8.
 
 ## 22. Timing constants
 

@@ -27,6 +27,12 @@ All notable changes to this project are recorded here. The format follows
   its `--need` leaves out.
 - After a run whose memory peak outgrew its `mem` need, or passed 1 GiB with none, one line on
   stderr pointing at `coreslot suggest --write`.
+- A live size for `mem`: when the configured `mem` leaves a fixed `mem` need unmet, the run and the
+  library admit it from the memory the kernel can still hand out, less what the running holds have
+  reserved and not yet used, up to 4096 tokens (512 GiB).
+- `[memory] live = false` in the configuration turns the live size off.
+- The hold body's optional `tree` key: `true` when the hold's process tree carries the grant's work,
+  so that its resident memory counts against its reservation; the CLI's runs write it.
 
 ### Changed
 
@@ -40,6 +46,10 @@ All notable changes to this project are recorded here. The format follows
   `Need{"mem": {4, 4}}` reserves 4 tokens, 512 MiB.
 - `status --json` (schema 1) adds `size_mib`, `locked_mib` and `free_mib` to the `mem` resource; the
   human output of `status`, `doctor` and the run's notices shows memory in bytes.
+- The configured `mem` is a floor, not a ceiling: runs are admitted above it while free memory
+  allows, so `status` may show `mem` with 0 free while runs are still admitted. An older client on
+  the same machine sizes `mem` from the configuration alone and waits while those admissions hold
+  more than its size.
 
 ### Fixed
 
