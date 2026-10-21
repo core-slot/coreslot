@@ -1136,3 +1136,123 @@ evidence/overload/run5.sh summary
 
 `evidence/overload/run5.sh --dry` learns the needs of `stand-dry.json` with `run4.py learn` and runs
 one block of the three arms on it, to check the runner in a minute; its output is not evidence.
+
+### Results (2026-10-21, blocks 1-12, coreslot `54f8cb0`)
+
+Run 5 is **complete**: twelve valid blocks, no invalid set, no re-run. The mechanism criterion
+**failed** and the price criterion **passed**. By the pre-registered reading: **the live size does
+not remove the waits on this machine.** It cost nothing in memory pressure either: in this run
+it never admitted a run above the static size. Every number below is quoted from, or computed from,
+the committed records in `run5/` (`summary.json`, printed as `summary.txt`; `results.jsonl`),
+except the machine facts, read on the host with `sw_vers` and `sysctl` when the results were
+written.
+
+**Machine.** Run 4's: MacBook Air (Mac16,12), Apple M4, 10 cores, 16 GiB, macOS 27.0.1 (26A434),
+on AC power throughout; coreslot built with Go 1.27.1, `CGO_ENABLED=0`; the runner on Python
+3.13.0. The owner's applications stayed open. At the start of the 36 verdict sets, memory in use
+(active + wired + compressed) was 6735-10119 MiB (median 7539.5), about 1.5 GiB more than in run 4
+(median 6008). The 1-minute load was 2.23-15.17 (median 6.045) and the process count 517-572
+(median 544.5).
+
+**Timeline.** The pre-registration was pushed at 15:04:33 UTC. The first verdict set started at
+15:06:56 and the last at 16:18:43.
+
+**Medians over the twelve valid blocks:**
+
+| Arm | Mean time to verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | False failures (total) | `waited_free_s` |
+|---|---|---|---|---|---|---|
+| KS (static) | 37.8 | 66.1 | 0.0 | 0.0 | 0 | 27.65 |
+| KL (live) | 37.15 | 66.65 | 0.0 | 0.0 | 0 | 29.3 |
+| S (N = 2) | 37.1 | 62.4 | 6.0 | 0.0 | 0 | - |
+
+**The criteria** (as declared):
+
+- **Mechanism, failed:** KL's summed `waited_free_s` was below KS's in 2 of 12 blocks, p = 0.9968.
+  It was lower in blocks 1 and 12, higher in blocks 4 and 6, and equal in the other eight. Per
+  block, KS then KL, as `waited_free_s` of all waiting:
+  - KS: 25.8 of 59.6 s, 38.3 of 77.4, 28.8 of 95.4, 28.5 of 85.4, 29.8 of 79.4, 21.8 of 106.4,
+    0 of 68.6, 17.8 of 44.6, 0 of 81.6, 37.3 of 78.4, 34.8 of 93.5, 26.8 of 108.4.
+  - KL: 21.8 of 39.6 s, 38.3 of 77.4, 28.8 of 95.4, 30.5 of 83.4, 29.8 of 79.4, 29.8 of 126.5,
+    0 of 68.6, 17.8 of 40.6, 0 of 69.6, 37.3 of 84.4, 34.8 of 93.4, 22.8 of 102.4.
+- **Price, passed:** KL had no critical second and no false failure. The per-block difference of
+  warn-or-worse seconds, KL less KS, was −14 s in block 1 and 0 in the other eleven (median 0 s,
+  limit 10 s).
+
+**Why the two K arms behaved alike.** The replay of every K run against the static sizes counts
+the runs whose admission took `mem` above the static 76 tokens. It found **0 in KL**, as in KS. In
+this run, the live size never raised `mem` for an admission, so KL ran the static rule. Its sets
+differ from KS's only by run-to-run noise, and in 8 of 12 blocks the two arms' `waited_free_s`
+came out equal.
+
+The wait decomposition, summed over the twelve blocks, puts KS's waiting and KL's in the same
+places:
+
+| Arm | Own memory | Own memory and cpu | Own cpu | Head's memory | Head's memory and cpu | Head's cpu | Latency | Above static (runs) |
+|---|---|---|---|---|---|---|---|---|
+| KS | 465.1 | 236.2 | 0 | 149.4 | 64.8 | 0 | 63.2 | 0 |
+| KL | 439.4 | 237.9 | 0 | 147.0 | 64.9 | 0 | 71.6 | 0 |
+
+Where the `waited_free_s` came from, summed over the twelve blocks for KS and KL:
+
+| Gate | KS (s) | KL (s) |
+|---|---|---|
+| The lint | 98.2 | 116.2 |
+| The SQLAlchemy suite | 139.9 | 151.9 |
+| The FastAPI suite | 44.1 | 15.0 |
+| The type check | 7.5 | 8.5 |
+
+The lint needs one token and waits only behind a head, which no live size reaches under strict
+FIFO.
+
+The records do not include the holders' resident memory, so the live room an attempt saw cannot
+be recomputed. The bound it had to meet can be stated:
+- **A suite queued while a type check runs.** The suite needs 25 or 27 tokens (3200 or 3456 MiB).
+  The type check's reservation is 8576 MiB, and only the part its tree already uses is subtracted
+  from that reservation.
+- **What the headroom showed.** Over KL's one-second samples the headroom was 1846-9473 MiB
+  (median 6224). In those seconds it covered the suite's need by itself, which `waited_free_s`
+  counts. Less the type check's unused reservation, it did not.
+
+**Reported without a test.**
+
+- *Time to verdict and makespan:*
+  - KL/KS per block: mean time to verdict 0.799-1.141 (median 0.996), makespan 0.801-1.112
+    (median 1.006).
+  - KL/S per block: mean time to verdict 0.476-1.373 (median 0.978), makespan 0.611-1.289
+    (median 1.115).
+- *S's pressure:*
+  - S had warn-or-worse samples in 8 of 12 sets (median 6 s), and the only critical seconds of
+    the run: 3 s, in block 8.
+  - S swapped out 11965.6, 2235.1, 10040.5, 1994.0 and 7955.8 MiB in blocks 1, 7, 8, 9 and 10.
+  - KS swapped out 238.3 MiB in block 1 and KL nothing.
+- *False failures:* none in any arm.
+- *Flags:* 35 of the 36 verdict sets are flagged `high_load` (the 1-minute load at their start was
+  above 3); none is flagged `hot_start`. Flagged sets stay valid, as pre-registered. The thermal
+  state read nominal at every set's start. During the sets it reached state 1 ("fair") in 55 of
+  KS's 153 thermal samples, 57 of KL's 154 and 64 of S's 153, and never went above it.
+
+**What it shows.** On this laptop and this mix, with the owner's applications using a median 7.5
+GiB, the live size never admitted a run that the static 60 % share did not. Its rule subtracts the
+type check's unused 8576 MiB reservation from the kernel's headroom, and the headroom left no room
+for a suite beside a running type check. So the waits that `waited_free_s` counts stayed: a
+median of 29.3 s per block under KL and 27.65 s under KS. They are not waits for free memory the
+rule could see. Most of them are runs queued behind a head that needed memory (the lint, the
+suites), or runs waiting beside a type check whose reservation the rule kept. Pressure,
+time to verdict and makespan were those of the static rule.
+
+**Threats to validity.**
+- One machine, one mix and one day.
+- **The background.** It used about 1.5 GiB more memory than in run 4, which shrinks the headroom
+  the live size reads.
+- **What the records omit.** Holders' resident memory was not recorded, so the live room per
+  attempt is inferred, not measured.
+- **The sets themselves.** Sets ran under a 1-minute load above 3 and reached "fair" thermal state.
+- **The build.** The measured coreslot is the head of an open pull request, not a release.
+
+**What it does not show.** A machine with more memory, or with a smaller learned need against its
+share, where the room after reservations covers a second heavy run. Linux. Any head-of-line
+change.
+
+**Reproduce.** `evidence/overload/run5.sh` (verdict 1 12, summary); `run5.sh summary` recomputes the
+summary from the committed records. The measured binary was built with
+`CGO_ENABLED=0 go build -trimpath -o ~/bench.noindex/bin/coreslot ./cmd/coreslot` at `54f8cb0`.
