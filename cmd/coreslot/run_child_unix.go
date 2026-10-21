@@ -125,6 +125,10 @@ func (r *run) runChild(c child) int {
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
 	setMemPeak(&rec, peakKiB, peakAfterS, sampled)
+	if r.freeWait != nil {
+		free := r.freeWait.total().Seconds()
+		rec.WaitedFreeS = &free
+	}
 	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil {
 		if h := usageHint(r.o.label, tokens, *rec.CPUUserS+*rec.CPUSysS, rec.RanS); h != "" {
 			r.notice("%s", h)

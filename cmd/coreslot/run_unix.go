@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Timing of a waiting run (PROTOCOL.md section 22).
@@ -30,6 +32,7 @@ type run struct {
 	env       []string     // the command's environment before its grant: the inherited context dropped
 	nofile    *nofileProbe // learns the descriptor limit the run was started with (rlimit_unix.go)
 	pipeNoted bool         // the waiting line said once whether stdin is a pipe
+	freeWait  *freeMeter   // set when the request names mem: how long it waited while that was free
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -89,6 +92,9 @@ func (r *run) ordinary() int {
 		return r.failOpen(e, err)
 	}
 	req := r.o.request(prio)
+	if mem, ok := req.Need["mem"]; ok {
+		r.freeWait = &freeMeter{needMiB: int64(mem.Min) * spec.MemTokenMiB, headroom: memsample.Headroom}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -112,7 +118,7 @@ func (r *run) ordinary() int {
 			g, err = r.tryOnce(ctx, t)
 		} else {
 			g, err = waitOneP(func() (*engine.Grant, error) {
-				return waitLoop(ctx, ticketStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
+				return waitLoop(ctx, ticketStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine, r.freeWait)
 			})
 		}
 		if err != nil {

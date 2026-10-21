@@ -1307,7 +1307,7 @@ func TestWaitingLineEvery30s(t *testing.T) {
 	s := &fakeStepper{}
 	var out bytes.Buffer
 	r := &run{o: runOptions{need: map[string]spec.Range{"cpu": {Min: 4, Max: 12}}}}
-	_, err := waitLoop(ctx, s, clk, &out, r.waitingLine)
+	_, err := waitLoop(ctx, s, clk, &out, r.waitingLine, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitLoop = %v, want the context's end", err)
 	}
@@ -1325,6 +1325,73 @@ func TestWaitingLineEvery30s(t *testing.T) {
 	}
 	if s.calls != 96 {
 		t.Errorf("%d steps in 95 s, want 96: one at the start and one each time the next is due (1 s)", s.calls)
+	}
+}
+
+// headroomSeq returns the readings in order, and the last one from then on.
+func headroomSeq(readings ...int64) func() (int64, bool) {
+	i := 0
+	return func() (int64, bool) {
+		v := readings[min(i, len(readings)-1)]
+		i++
+		return v, v >= 0
+	}
+}
+
+// An interval counts as free when the reading at its start was at least the need: free at 0
+// and 2 s, short at 1 s, so 0..1 and 2..3 count. A reading less than a second after the last is
+// not taken. Mutation: count the interval when the headroom is below the need, and it is 1 s.
+func TestFreeMeter(t *testing.T) {
+	m := &freeMeter{needMiB: 512, headroom: headroomSeq(600, 100, 512, 100)}
+	for _, at := range []time.Duration{0, time.Second, 1500 * time.Millisecond, 2 * time.Second, 3 * time.Second} {
+		m.observe(at)
+	}
+	if got := m.total(); got != 2*time.Second {
+		t.Errorf("free for %v, want 2s", got)
+	}
+}
+
+// A headroom that cannot be read is never free. Mutation: treat a failed read as free.
+func TestFreeMeterFailedReadAddsNothing(t *testing.T) {
+	m := &freeMeter{needMiB: 0, headroom: headroomSeq(-1)}
+	for i := range 4 {
+		m.observe(time.Duration(i) * time.Second)
+	}
+	if got := m.total(); got != 0 {
+		t.Errorf("free for %v, want 0", got)
+	}
+	var none *freeMeter
+	none.observe(time.Second) // nil-safe
+}
+
+// admitAfter waits n times, then admits.
+type admitAfter struct{ n int }
+
+func (s *admitAfter) due() time.Duration { return time.Second }
+
+func (s *admitAfter) step(context.Context) (engine.StepResult, error) {
+	if s.n == 0 {
+		return engine.Admitted{}, nil
+	}
+	s.n--
+	return engine.Waiting{Position: 1}, nil
+}
+
+func (s *admitAfter) holders() ([]engine.HolderInfo, error) { return nil, nil }
+
+// The wait loop reads the headroom after every step, the admitting one included: three waits of
+// a second each, all free, are 3 s. Mutation: drop the reading at admission, and it is 2 s.
+func TestWaitLoopMetersWaits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	clk := &fakeClock{limit: time.Minute, cancel: cancel}
+	m := &freeMeter{needMiB: 128, headroom: headroomSeq(1024)}
+	r := &run{o: runOptions{need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}}}
+	if _, err := waitLoop(ctx, &admitAfter{n: 3}, clk, io.Discard, r.waitingLine, m); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.total(); got != 3*time.Second {
+		t.Errorf("free for %v while waiting, want 3s", got)
 	}
 }
 
