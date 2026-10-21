@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/core-slot/coreslot"
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
@@ -159,6 +161,21 @@ func runHelper(name string, args []string) int {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	case "hold-mem":
+		// Fill args[0] MiB with incompressible bytes, then hold them for the duration args[1].
+		mib, err := strconv.Atoi(args[0])
+		if err != nil {
+			return 2
+		}
+		hold, err := time.ParseDuration(args[1])
+		if err != nil {
+			return 2
+		}
+		b := make([]byte, mib<<20)
+		_, _ = rand.NewChaCha8([32]byte{1}).Read(b)
+		time.Sleep(hold)
+		runtime.KeepAlive(b)
+		return 0
 	case "burn":
 		// Touch every page of burnBytes, so that they are resident, then spin until this process
 		// has used burnCPU of CPU time by its own rusage.
@@ -962,6 +979,35 @@ func TestRunLogRecordsUsage(t *testing.T) {
 		checkUsage(t, "the pass-through", lines[0])
 		checkUsage(t, "the run around the pass-through", lines[1])
 	})
+}
+
+// A run records the peak of its whole command tree, which wait4's rusage cannot see while the
+// shell waits for two children at once: two helpers of 200 MiB each, held for 2.5 s, so that
+// the sampler reads them both at 1 and 2 s. Mutation: drop the sampler from runChild, and the
+// peak is the larger child's max_rss, about 200 MiB.
+func TestRunLogsTreePeak(t *testing.T) {
+	if memsample.Source == "" {
+		t.Skip("no process-tree sampler on " + runtime.GOOS)
+	}
+	dir := stateDir(t, "")
+	args := append([]string{"run", "--label", "t", "--", "sh", "-c", `"$@" & "$@" & wait`, "sh"},
+		helper(t, "hold-mem", "200", "2500ms")...)
+	r := cli(t, baseEnv(dir), args...)
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	lines := runLog(t, dir)
+	if len(lines) != 1 {
+		t.Fatalf("run log %v: want one line", lines)
+	}
+	kib, ok := lines[0]["mem_peak_kib"].(float64)
+	if !ok || kib < 360<<10 || lines[0]["mem_peak_source"] != memsample.Source {
+		t.Errorf("mem_peak_kib %v, mem_peak_source %v; want at least %d KiB from %s",
+			lines[0]["mem_peak_kib"], lines[0]["mem_peak_source"], 360<<10, memsample.Source)
+	}
+	if after, ok := lines[0]["peak_after_s"].(float64); !ok || after < 1 {
+		t.Errorf("peak_after_s %v; want a sample time of at least 1 s", lines[0]["peak_after_s"])
+	}
 }
 
 // A command that could not start has no rusage: its run still writes a line, without the usage

@@ -14,8 +14,12 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
 )
+
+// memSampleEvery is the period of the command tree's memory sampler.
+const memSampleEvery = time.Second
 
 // admitted runs the command on an admitted grant.
 func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
@@ -94,6 +98,9 @@ func (r *run) runChild(c child) int {
 	started := time.Now()
 	status := 0
 	var released error
+	var peakKiB int64
+	var peakAfterS float64
+	sampled := false
 	if err := exposeInherited(cmd.Start); err != nil {
 		childDone(terminal)
 		released = c.release()
@@ -101,7 +108,9 @@ func (r *run) runChild(c child) int {
 		r.notice("cannot run %s: %s", text(argv[0]), text(err.Error()))
 		status = code
 	} else {
+		sampler := startPeakSampler(cmd.Process.Pid, memSampleEvery, memsample.Tree)
 		status = superviseChild(cmd, terminal)
+		peakKiB, peakAfterS, sampled = sampler.stop()
 		childDone(terminal)
 		released = c.release()
 	}
@@ -115,6 +124,7 @@ func (r *run) runChild(c child) int {
 		Nested: c.nested,
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	setMemPeak(&rec, peakKiB, peakAfterS, sampled)
 	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil {
 		if h := usageHint(r.o.label, tokens, *rec.CPUUserS+*rec.CPUSysS, rec.RanS); h != "" {
 			r.notice("%s", h)

@@ -45,6 +45,14 @@ type RunRecord struct {
 	CPUUserS  *float64
 	CPUSysS   *float64
 	MaxRSSKiB *int64
+	// MemPeakKiB is the command tree's memory peak in KiB and MemPeakSource its measure: the
+	// sampler's (memsample.Source) or "max_rss"; PeakAfterS is when the sampler read it, in
+	// seconds after the start. WaitedFreeS is how long the run waited while the memory it needs
+	// was free. Each is nil or empty when unknown, and is then not encoded.
+	MemPeakKiB    *int64
+	MemPeakSource string
+	PeakAfterS    *float64
+	WaitedFreeS   *float64
 }
 
 type runJSON struct {
@@ -59,6 +67,10 @@ type runJSON struct {
 	CPUUserS            *float64          `json:"cpu_user_s,omitempty"`
 	CPUSysS             *float64          `json:"cpu_sys_s,omitempty"`
 	MaxRSSKiB           *int64            `json:"max_rss_kib,omitempty"`
+	MemPeakKiB          *int64            `json:"mem_peak_kib,omitempty"`
+	MemPeakSource       string            `json:"mem_peak_source,omitempty"`
+	PeakAfterS          *float64          `json:"peak_after_s,omitempty"`
+	WaitedFreeS         *float64          `json:"waited_free_s,omitempty"`
 	Exit                int               `json:"exit"`
 	Load1               float64           `json:"load1"`
 	FailOpen            string            `json:"fail_open"`
@@ -72,8 +84,9 @@ func (r RunRecord) wire() runJSON {
 	}
 	j := runJSON{TimeNS: r.TimeNS, Label: r.Label, Need: need, Grant: r.Grant,
 		Clamped: r.Clamped, UnbudgetedResources: r.UnbudgetedResources, WaitedS: r.WaitedS,
-		RanS: r.RanS, CPUUserS: r.CPUUserS, CPUSysS: r.CPUSysS, MaxRSSKiB: r.MaxRSSKiB, Exit: r.Exit,
-		Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
+		RanS: r.RanS, CPUUserS: r.CPUUserS, CPUSysS: r.CPUSysS, MaxRSSKiB: r.MaxRSSKiB,
+		MemPeakKiB: r.MemPeakKiB, MemPeakSource: r.MemPeakSource, PeakAfterS: r.PeakAfterS,
+		WaitedFreeS: r.WaitedFreeS, Exit: r.Exit, Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
 	if j.Grant == nil {
 		j.Grant = map[string]int{}
 	}

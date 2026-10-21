@@ -377,6 +377,36 @@ func TestRunLogUsageKeys(t *testing.T) {
 	}
 }
 
+// The memory keys are written when known and left out when not, never as a measured zero.
+// Mutation: drop omitempty from mem_peak_kib.
+func TestRunRecordMemKeys(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	kib, after, free := int64(368640), 2.5, 1.0
+	r := RunRecord{TimeNS: 1791720000000000000, Label: "mem"}
+	measured := r
+	measured.MemPeakKiB, measured.MemPeakSource, measured.PeakAfterS, measured.WaitedFreeS = &kib, "footprint", &after, &free
+	for _, rec := range []RunRecord{r, measured} {
+		if err := s.AppendRun(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
+	if len(lines) != 2 {
+		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
+	}
+	for _, key := range []string{"mem_peak_kib", "mem_peak_source", "peak_after_s", "waited_free_s"} {
+		if strings.Contains(lines[0], `"`+key+`"`) {
+			t.Errorf("a line without memory has %s: %s", key, lines[0])
+		}
+	}
+	for _, want := range []string{`"mem_peak_kib":368640`, `"mem_peak_source":"footprint"`, `"peak_after_s":2.5`, `"waited_free_s":1`} {
+		if !strings.Contains(lines[1], want) {
+			t.Errorf("line = %s; want it to contain %s", lines[1], want)
+		}
+	}
+}
+
 // A pass-through appends outside the section and never rotates: AppendRun leaves a log at or
 // above 10 MiB where it is, and only RotateLog renames it.
 func TestAppendRunNeverRotates(t *testing.T) {
