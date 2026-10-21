@@ -15,6 +15,27 @@ All notable changes to this project are recorded here. The format follows
 - After a run of a minute or more, one line on stderr when the cores the command used do not match
   the cpu tokens it held, with the request that would fit.
 - A waiting run whose stdin is a pipe says once that the command writing it may be waiting for it.
+- The `mem` resource, declared by default at `"60%"` of physical memory in tokens of 128 MiB:
+  `--need mem=3G` reserves memory beside cores, and `mem` in `[resources]` takes GiB, `"N%"` of
+  memory or a size such as `"768M"`, with `0` switching it off.
+- The run log records each run's memory peak, the command's whole process tree sampled every second
+  (`mem_peak_kib`, `mem_peak_source`, `peak_after_s`), and for a run that names `mem`, how long it
+  waited while that much memory was free (`waited_free_s`).
+- `coreslot stats` shows what each label's last 5 runs used; `coreslot suggest` prints the needs
+  they suggest, and `--write` writes them into `needs.toml`.
+- `needs.toml`, beside the configuration: a labelled run takes from its entry the `cpu` and `mem`
+  its `--need` leaves out.
+- After a run whose memory peak outgrew its `mem` need, or passed 1 GiB with none, one line on
+  stderr pointing at `coreslot suggest --write`.
+
+### Changed
+
+- Without a configuration, the cpu budget is `"140%"` of the CPU count instead of `"100%"`, and
+  `"N%"` accepts N up to 400. An older client on the same machine still computes `"100%"`, reads
+  `mem = "60%"` as a share of CPUs and refuses `"N%"` above 100; upgrade every client together.
+- `CORESLOT_GRANTED_MEM` and `{n:mem}` are in MiB, not tokens.
+- `status --json` (schema 1) adds `size_mib`, `locked_mib` and `free_mib` to the `mem` resource; the
+  human output of `status`, `doctor` and the run's notices shows memory in bytes.
 
 ### Fixed
 

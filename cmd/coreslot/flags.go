@@ -43,10 +43,14 @@ const runHelp = runUsage + `
 Runs COMMAND once the budget grants it between MIN and MAX tokens of each resource it needs.
 
   --need RES=MIN..MAX   tokens of RES the command needs; repeatable. RES=N means N..N,
-                        RES=MIN.. means MIN..max(MIN, 16) and RES=..MAX means 1..MAX
+                        RES=MIN.. means MIN..max(MIN, 16) and RES=..MAX means 1..MAX; memory
+                        is one size, mem=3G or mem=768M. A labelled run takes the cpu and mem
+                        it leaves out from the label's entry in needs.toml, beside the
+                        configuration; with neither --need nor cpu there, the default applies
                         (default cpu=1..16 when COMMAND has a cpu placeholder, else cpu=1..1)
   --label L             a name for the request, shown by status and kept in the run log, so
-                        never a secret (default none)
+                        never a secret; it names the request's entry in needs.toml, without a
+                        final @N or @- (default none)
   --priority P          -1000 to 1000: the request queues as if it arrived P minutes earlier
                         (default the configuration's [priorities] entry for the label, else 0)
   --timeout D           stop waiting after D, for example 90s or 10m (default 0, no limit)
@@ -62,7 +66,8 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
   --refusal-code N      exit status of a refusal, 1 to 255 (default 75)
 
 An argument that is exactly {n} becomes the number of cpu tokens granted, {n:RES} the number of
-RES tokens; {{n}} and {{n:RES}} stand for the literal text. A cpu placeholder is {n} or {n:cpu}
+RES tokens and {n:mem} the memory granted in MiB; {{n}} and {{n:RES}} stand for the literal
+text. A cpu placeholder is {n} or {n:cpu}
 as an argument, or inside one with --subst.`
 
 type needList []string

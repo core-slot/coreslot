@@ -27,6 +27,11 @@
 // that is already running, without queueing, and [Client.Snapshot] reads the state directory as
 // `coreslot status` does.
 //
+// A request names memory as the resource "mem", in tokens of 128 MiB ({Min: 24, Max: 24} is
+// 3 GiB); [Grant.Granted] counts it in tokens, and [Grant.Environ] gives the command
+// CORESLOT_GRANTED_MEM in MiB. The library writes no run log, so `coreslot stats` and
+// `coreslot suggest` learn nothing from its grants.
+//
 // # Pass-through
 //
 // The example is the same for an ordinary grant and for a pass-through. Inside another run's

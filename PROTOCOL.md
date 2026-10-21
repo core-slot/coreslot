@@ -5,10 +5,11 @@ directory, its files and their bodies, the admission critical section, and the d
 environment contract between a run and the command it starts. A client written from this document
 alone, in any language, shares one budget with every other conforming client on the machine.
 
-Format 1 does not change once released: a release that needs different metadata introduces a new
-format number instead (section 15), and within a format the only addition is an optional key that
-every reader may ignore (section 7.2). Until `v1.0.0` a minor release may introduce such a number;
-from `v1.0.0` on, that needs a new major version
+Format 1's names, bodies and layout do not change once released: a release that needs different
+metadata introduces a new format number instead (section 15), and within a format the only addition
+is an optional key that every reader may ignore (section 7.2). Until `v1.0.0` a minor release may
+introduce such a number, and may change what format 1 means elsewhere, such as the configuration's
+defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
 ## 1. Conventions
@@ -50,9 +51,12 @@ Every shared file, field, environment variable and transition of format 1, and w
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
 | `config.toml` (under the override only) | file | [5.3](#53-configuration-file) |
+| `needs.toml` (under the override only) | file | [5.4](#54-needs-file) |
+| `mem` | resource | [5.2](#52-sizes) |
 | ticket body | body | [7.3](#73-ticket) |
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
+| run-log memory keys | field | [20](#20-run-log) |
 | `CORESLOT_GRANTED_*` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_TOKEN_FDS` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
@@ -201,15 +205,18 @@ cancel/          cancellation requests (section 7.5)
 degraded         degraded-mode record (section 7.9)
 log/runs.jsonl   run log (section 7.10)
 config.toml      configuration (section 5.3); optional, present only under the override
+needs.toml       needs file (section 5.4); optional, present only under the override; never checked
 ```
 
 `log/` may also contain `runs.1.jsonl`. Each of `queue/`, `holds/`, `cancel/` and `$S` itself may
-contain temporary files named `.tmp-<pid>-<seq>` (section 11). A client creates a directory of the
-layout when it first needs it, with mode `0700`; `EEXIST` is not an error, and the existing entry is
-checked as in section 4.2. Missing ancestors of `$S` (`~/.local/state/` often does not exist) are
-created with mode `0700` and are not checked: the policy of section 4.2 starts at `$S`. `queue/`,
-`holds/`, `cancel/` and `log/` are created only by a client that has read a `FORMAT` it understands
-(section 15.2).
+contain temporary files named `.tmp-<pid>-<seq>` (section 11). Under the override, `$S` may also
+contain `needs.toml.lock` and the needs file's temporary files (section 5.4); like `needs.toml`,
+they are not checked as in section 4.2. A client creates a directory of the layout when it first
+needs it, with mode `0700`; `EEXIST` is not an error, and the existing entry is checked as in
+section 4.2. Missing ancestors of `$S` (`~/.local/state/` often does not exist) are created with
+mode `0700` and are not checked: the policy of section 4.2 starts at `$S`. `queue/`, `holds/`,
+`cancel/` and `log/` are created only by a client that has read a `FORMAT` it understands (section
+15.2).
 
 Directory listings are bounded: a directory holds at most 65 536 entries. A reader MUST NOT read
 more than 65 537 entries of one directory, and a directory with more than 65 536 is a state error.
@@ -222,8 +229,9 @@ or resetting `$S` while any client is live creates a second set of token inodes 
 supported. The CLI's `doctor --reset` runs inside the admission section and checks that no holds,
 tickets, other section holder or locked tokens exist; only then does it remove the entries of
 `queue/`, `holds/` and `cancel/`, `gen`, `FORMAT`, `degraded` and `log/`. It keeps `admit.lock`,
-`res/` and `config.toml`: the format-stable files (section 15.1), whose inodes live clients may hold
-open, and the configuration. A reset never deletes, renames or replaces `admit.lock` or a token
+`res/`, `config.toml`, `needs.toml` and `needs.toml.lock`: the format-stable files (section 15.1),
+whose inodes live clients may hold open, and the configuration. The run history the needs file is
+learned from goes with `log/`. A reset never deletes, renames or replaces `admit.lock` or a token
 file. It refuses when `FORMAT` is well-formed and names a format the client does not implement (a
 newer client's waiters are invisible to it and its entries are not format-1 grammar); a missing,
 malformed or implemented `FORMAT` does not stop it. It does not reconcile first (section 10.4):
@@ -237,25 +245,47 @@ reconciliation removes them once they are older than 30 s.
 
 A resource name matches `^[a-z][a-z0-9-]{0,31}$`. Its **environment form** upper-cases it and maps
 `-` to `_` (`pg-local` → `PG_LOCAL`); the grammar admits no `_`, so two names never share a form.
-The resource `cpu` always exists; other resources exist when the configuration declares them.
+The resource `cpu` always exists, and so does `mem` unless the configuration switches it off
+(section 5.3); other resources exist when the configuration declares them.
 
 ### 5.2 Sizes
 
-A size is an integer in `[1, 4096]`. A configured size is one of:
+A size is an integer in `[1, 4096]`. A configured size of every resource but `mem` is one of:
 
 | Configured as | Size |
 |---|---|
 | an integer `n`, `1 ≤ n ≤ 4096` | `n` |
-| a string `"N%"`, `N` an integer `1..100` | `max(1, ⌊cpus × N / 100⌋)` |
+| a string `"N%"`, `N` an integer `1..400` | `max(1, ⌊cpus × N / 100⌋)` |
 | a string `"-K"`, `K` a non-negative integer | `max(1, cpus − K)` |
 
 In both string forms, `N` and `K` are written as 1 to 9 ASCII decimal digits, leading zeros allowed
 (`"05%"` means `"5%"`, `"-007"` means `"-7"`), with nothing else in the string: no sign before the
 digits, no space.
 
-Any other value (an integer outside `[1, 4096]` such as `0`, `4097` or `-3`, `"0%"`, `"101%"`,
+Any other value (an integer outside `[1, 4096]` such as `0`, `4097` or `-3`, `"0%"`, `"401%"`,
 `"+5%"`, `" 5%"`, a digit string longer than 9, a string of another shape, a boolean, a float, a
 table) is invalid. A computed size above 4096 is 4096.
+
+The `mem` resource counts memory in tokens of 128 MiB. Its configured size is one of:
+
+| Configured as | Size |
+|---|---|
+| an integer `n`, `1 ≤ n ≤ 999999` | `n × 8`: `n` GiB |
+| a string `"N%"`, `N` an integer `1..100` | `max(1, ⌊⌊memory × N / 100⌋ / 128⌋)`: `N` % of the physical memory |
+| a size string: 1 to 6 digits, optionally `.` and 1 to 3 digits, then optionally `G` (GiB, also meant without a suffix) or `M` (MiB) | `max(1, ⌊mib / 128⌋)`, `mib` the size in MiB rounded up to a whole MiB (`"9.5G"` is 9 728 MiB, size 76; `"768M"` is size 6) |
+| the integer `0`, or a size string of value 0 (`"0"`, `"0G"`, `"0M"`) | `mem` is switched off: it is not declared |
+
+`N` is written as in the other resources' `"N%"`. Any other value (a negative integer or one above
+999999, `"0%"`, `"101%"`, `"-2"`, `"1.5T"`, a size with more than 6 digits or 3 decimals, a boolean,
+a float, a table) is invalid. A computed size above 4096 is 4096.
+
+`memory` is the machine's physical memory in MiB, rounded down:
+
+| System | Source |
+|---|---|
+| macOS | the `hw.memsize` sysctl |
+| Linux | `MemTotal` in `/proc/meminfo`; never a cgroup's limit |
+| other systems | the system's physical memory; a client that cannot obtain it treats it as a state error |
 
 `cpus` is the machine-wide online CPU count:
 
@@ -266,7 +296,8 @@ table) is invalid. A computed size above 4096 is 4096.
 | other systems | the system's machine-wide online processor count; a client that cannot obtain one treats it as a state error |
 
 `cpus` is never a process's affinity mask or cgroup quota (for example Go's `runtime.NumCPU` is not
-used). Clients MUST recompute sizes from the configuration and `cpus` at every admission attempt.
+used). Clients MUST recompute sizes from the configuration, `cpus` and `memory` at every admission
+attempt.
 
 ### 5.3 Configuration file
 
@@ -285,7 +316,8 @@ The file is TOML 1.0:
 
 ```toml
 [resources]
-cpu = "-2"        # integer; "N%" of the machine-wide CPU count; or "-K"; default "100%"
+cpu = "-2"        # integer; "N%" of the machine-wide CPU count; or "-K"; default "140%"
+mem = "9.5G"      # integer GiB; "N%" of physical memory; or a size; 0 switches it off; default "60%"
 pg-local = 2      # any declared resource
 
 [priorities]      # label prefix -> priority; --priority overrides
@@ -297,7 +329,8 @@ windows_warning = false   # default true (section 16)
 ```
 
 - `[resources]`: each key MUST be a resource name (section 5.1) and each value a size (section
-  5.2). `cpu` is `"100%"` when not declared.
+  5.2). `cpu` is `"140%"` when not declared, and `mem` is `"60%"`; `mem = 0` switches memory off,
+  and a request naming `mem` then finds it undeclared (section 12.1).
 - `[priorities]`: each key is a label prefix and each value an integer in `[-1000, 1000]`. A request
   without an explicit priority takes the value of the longest prefix of its label; with no matching
   prefix its priority is 0. This applies where a request can leave its priority unset (the CLI
@@ -310,9 +343,40 @@ windows_warning = false   # default true (section 16)
 - `resources`, `priorities` and `platform`, when present, MUST be tables; any other value of one of
   them is invalid. Other tables and keys are ignored.
 
-A missing file means `cpu = "100%"` and nothing else, with no notice. A file that is not valid TOML
-or violates the rules above is an invalid configuration: a state error (section 14). Clients
-re-read the file when its mtime changes, at the next admission attempt.
+A missing file means `cpu = "140%"` and `mem = "60%"` and nothing else, with no notice. A file that
+is not valid TOML or violates the rules above is an invalid configuration: a state error (section
+14). Clients re-read the file when its mtime changes, at the next admission attempt.
+
+### 5.4 Needs file
+
+The needs file is `needs.toml` in the configuration's directory: `<home>/.config/coreslot/needs.toml`,
+or `$S/needs.toml` under the override. It says what a labelled request needs when its caller leaves
+a resource out. No client is required to read it, and none of the protocol's decisions depends on
+it; a client that reads it MUST NOT refuse a run because of it: a file or an entry that cannot be
+read is a notice, and the request goes on without it. It is read through symbolic links, as the
+real configuration is, and is not checked as in section 4.2, also under the override.
+
+```toml
+[needs."gate:unit"]
+cpu = "4"           # a need's value, as RES=... takes it: "N" or "MIN..MAX"; an integer is N..N
+mem = "3G"          # a size, as section 5.2 writes one; an integer is GiB
+pinned = true       # the user's entry: never rewritten from measurements
+evidence = "5 runs 2026-10-20..21: max 3.4 cores, 0 of 5 saturated, peak 2.7 GiB (footprint) at 22s"
+```
+
+Each key of `[needs]` is a label without a final worker count: a label ending in `@` followed by
+digits or by `-` (`gate:unit@12`, `gate:unit@-`) finds the entry of what precedes the `@`, and a
+label that is empty without it finds none. A key the reader does not know is ignored.
+
+A writer replaces the file whole under `flock(LOCK_EX)` on `needs.toml.lock` beside the file it
+replaces (the file a symbolic link names, so that every link shares one lock): it writes a
+temporary file `.needs-<pid>-<seq>.tmp` in the same directory, syncs it and renames it over the
+file. The temporary name is outside the grammar of section 11, so reconciliation never removes one.
+A file that cannot be parsed is left as it is.
+
+> **Implementation note.** The Go CLI reads the entry of a run's `--label` for each resource its
+> `--need` leaves out, `cpu` and `mem`; `coreslot suggest --write` writes `cpu`, `mem` and
+> `evidence` from the run log (section 20) and keeps pinned entries and every other key.
 
 ## 6. Tokens and descriptor ownership
 
@@ -420,7 +484,7 @@ Body:
 |---|---|---|
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
 | `priority` | integer | `-1000..1000` |
-| `need` | object | resource name → `[min, max]`, an array of exactly two integers, `1 ≤ min ≤ max ≤ 256`; 1 to 8 entries; the minimums sum to at most 512; names need not be declared (section 14) |
+| `need` | object | resource name → `[min, max]`, an array of exactly two integers, `1 ≤ min ≤ max ≤ 256`; 1 to 8 entries; the minimums sum to at most 512; names need not be declared (section 14); a `mem` count is in 128 MiB tokens |
 | `created_ns` | integer | `≥ 0`; the wall clock read for `arrival_ns` (section 9) |
 
 ### 7.4 Hold
@@ -431,7 +495,7 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | as in the ticket |
-| `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held |
+| `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held; each `mem` token is 128 MiB |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns, and a body whose `start_ns` differs is malformed |
 | `unbudgeted` | boolean | `true` for a run outside the budget: a fail-open run, a run whose wait timed out and that runs anyway, or a light run (section 14) |
 | `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a run outside the budget could not budget (section 14); writers list distinct names in ascending order, readers check neither |
@@ -736,8 +800,10 @@ For each requested declared resource of size `s` with request `min..max`:
   whole resource, runs alone on it, and its hold's `clamped` records the requested `min`;
 - otherwise the effective request is `min..min(max, s)`.
 
-A clamped CLI run prints a notice (`coreslot: cpu: requested 16, budget is 10; running alone with
-10`), and its `{n}` is the clamped grant.
+`mem` clamps like any other resource. A clamped CLI run prints a notice (`coreslot: cpu: requested
+16, budget is 10; running alone with 10`, or for `mem` in bytes, `coreslot: mem: requested 10 GiB,
+budget is 9.5 GiB; running alone with 9.5 GiB`), and its `{n}` is the clamped grant. A `mem` need
+above 32 GiB, the 256 tokens a range may name (section 7.3), reserves 32 GiB.
 
 ### 12.3 After the command exits
 
@@ -930,7 +996,7 @@ and this environment:
 
 | Variable | Value |
 |---|---|
-| `CORESLOT_GRANTED_<RES>` | for each resource the request names, in environment form (section 5.1): the number of tokens granted, or, for a resource run unbudgeted, its requested `min` |
+| `CORESLOT_GRANTED_<RES>` | for each resource the request names, in environment form (section 5.1): the number of tokens granted, or, for a resource run unbudgeted, its requested `min`; `CORESLOT_GRANTED_MEM` is that count in MiB (tokens × 128) |
 | `CORESLOT_HELD_FD` | `3`, when the run passes a hold descriptor |
 | `CORESLOT_TOKEN_FDS` | the token descriptors' numbers, when it passes any |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open, token-only (`format`) or unbudgeted pass-through run |
@@ -965,9 +1031,10 @@ is passed on.
 > fd 3 or above.
 
 **Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
-`cpu` (or of `RES`); `{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with
-`--subst`, placeholders inside arguments are replaced too (`make -j{n}`). The grant of a resource
-run unbudgeted is the value of its `CORESLOT_GRANTED_<RES>`. A placeholder naming a resource the
+`cpu` (or of `RES`), and `{n:mem}` by the `mem` grant in MiB, as `CORESLOT_GRANTED_MEM` gives it;
+`{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with `--subst`, placeholders inside
+arguments are replaced too (`make -j{n}`). The grant of a resource run unbudgeted is the value of
+its `CORESLOT_GRANTED_<RES>`. A placeholder naming a resource the
 request does not name (`{n}` in a request without `cpu`, `{n:RES}` for another `RES`) is a usage
 error, detected before the request queues.
 
@@ -1063,6 +1130,10 @@ writes no line. The object carries:
 | `cpu_user_s` | number | optional; user CPU seconds of the command (below) |
 | `cpu_sys_s` | number | optional; system CPU seconds of the command (below) |
 | `max_rss_kib` | integer | optional; peak resident set size of the command, in KiB (below) |
+| `mem_peak_kib` | integer | optional; memory peak of the command's process tree, in KiB (below) |
+| `mem_peak_source` | string | optional; what `mem_peak_kib` measured: `footprint`, `anon` or `max_rss` (below) |
+| `peak_after_s` | number | optional; seconds from the command's start to the reading of `mem_peak_kib` |
+| `waited_free_s` | number | optional; seconds of `waited_s` during which the memory the request needs was free (below) |
 | `exit` | integer | the run's exit status |
 | `load1` | number | one-minute load average at start |
 | `fail_open` | string | the fail-open reason, or empty |
@@ -1079,6 +1150,21 @@ KiB on Linux and the BSDs but in bytes on macOS; a writer MUST convert it to KiB
 MUST omit the key on a platform whose unit it does not know. As in a body (section 7.2), a reader
 MUST ignore a key it does not know: lines only gain optional keys within a format.
 
+The memory keys `mem_peak_kib`, `mem_peak_source`, `peak_after_s` and `waited_free_s` are OPTIONAL
+too, under the same rule: a writer omits what it does not know, and a reader treats an absent key as
+unknown. A writer that samples reads the private memory of the command and every descendant every
+1 s while the command runs, and sums it: on macOS each process's physical footprint (source
+`footprint`); on Linux each process's `RssAnon` plus `VmSwap` from `/proc/<pid>/status`, with the
+largest `RssShmem` among them added once, since shared memory is held once (source `anon`). A
+process that exits between the listing and its reading is skipped. `mem_peak_kib` is the largest
+sum and `peak_after_s` when it was read. When no reading succeeded, or `max_rss_kib` is larger,
+`mem_peak_kib` is `max_rss_kib`, `mem_peak_source` is `max_rss` and `peak_after_s` is absent.
+`waited_free_s` is written by a run whose request names `mem`: the part of its wait during which
+the memory the kernel can hand out without paging anything anonymous out (on macOS the free,
+speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable` of `/proc/meminfo`)
+was at least its `mem` need, read at most once per second. It informs; no admission reads it.
+`need` and `grant` stay in tokens, `mem`'s included.
+
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. The log's `clamped` is an array of resource names, unlike the hold body's `clamped` object
 (section 7.4). A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
@@ -1088,12 +1174,17 @@ generation). One generation is kept. A token-only client writes no log.
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open` and the
 > independent Python client shortens `label`. Both write the usage keys on Linux, macOS and the
 > BSDs, and only `cpu_user_s` and `cpu_sys_s` elsewhere; the Go CLI writes the seconds unrounded
-> and the Python client rounds them to milliseconds, as each does `waited_s` and `ran_s`.
+> and the Python client rounds them to milliseconds, as each does `waited_s` and `ran_s`. The Go
+> CLI samples memory on macOS and Linux and writes `mem_peak_source` `max_rss` elsewhere when it
+> knows `max_rss_kib`; the Python client writes none of the memory keys. `coreslot stats` and
+> `coreslot suggest` read both generations of the log, skip lines that do not parse, and learn a
+> label from its last 5 runs that were labelled, not a pass-through and not run outside the budget.
 
 ## 21. Worked examples
 
-All examples use one Linux machine: `/sys/devices/system/cpu/online` is `0-13` (`cpus = 14`), the
-configuration declares `cpu = "-4"` (size 10) and `pg-local = 2`, and `$S` is
+All examples use one Linux machine: `/sys/devices/system/cpu/online` is `0-13` (`cpus = 14`),
+`MemTotal` is 16 GiB (`memory = 16384`), the configuration declares `cpu = "-4"` (size 10) and
+`pg-local = 2` and leaves `mem` at `"60%"` (9 830 MiB, size 76), and `$S` is
 `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 1` unless stated. Listings show
 the entries under `$S` that matter; `[L]` marks a file whose lock is held by a live process.
 `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is independent of the others;
@@ -1109,7 +1200,11 @@ The examples use the `coreslot` CLI, which is not part of the protocol: `coreslo
 error, and every form keeps the bounds of section 7.3. With no `--need` the request is `cpu=1..16`
 when COMMAND carries a `cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside
 one with `--subst`; the escape `{{n}}` is not one), and `cpu=1..1` otherwise: a command that
-cannot learn its grant would leave every token beyond its first idle. The effective request caps
+cannot learn its grant would leave every token beyond its first idle. `--need mem=SIZE` takes one
+size, a size string of section 5.2 above 0 and never a range, and asks for that many 128 MiB tokens
+rounded up as a fixed range, at most 256. A labelled run takes each of `cpu` and `mem` that its
+`--need` leaves out from the needs file's entry for its label (section 5.4), and only a run with no
+`--need` and no `cpu` from that entry gets the default `cpu` above. The effective request caps
 the max at the size (section 12.2), so `cpu=1..16` on a budget of 8 takes at most 8. A run log's
 `need` (section 20) and the waiting line (section 10.3) show the request as these rules complete
 it. `--timeout` defaults to 0, no limit, and a negative one is a usage error; `--on-timeout`
@@ -1118,7 +1213,9 @@ and with `--priority`, `--timeout`, `--on-timeout` or `--no-wait`, which shape a
 have, a usage error; strict mode is `--strict`;
 `--refusal-code` defaults to 75. The other commands are
 `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
-`coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]` and `coreslot version`.
+`coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]`,
+`coreslot stats [--label LABEL] [--json]`, `coreslot suggest [--label LABEL] [--write]` and
+`coreslot version`.
 
 ### 21.1 Enqueue
 
@@ -1372,6 +1469,35 @@ A pass-through does not enter the section or lock anything. After `make` exits i
 (`coreslot-protocol 1`, understood) and appends one run-log line marked `"nested": true`
 (section 20); apart from that line, `$S` is unchanged before and after.
 
+### 21.10 Admission with mem
+
+Pid 7500 runs `coreslot run --need cpu=2 --need mem=3G --label gate:mem -- ./build` at 12:40:00
+with no ticket ahead and no hold. `mem=3G` is 3 072 MiB, 24 tokens, so the ticket's `need` is
+`{"cpu": [2, 2], "mem": [24, 24]}`.
+
+Inside the section the sizes are `cpu = 10`, `pg-local = 2` and `mem = 76`; nothing is locked. It
+takes `cpu` 0-1 and `mem` 0-23 and publishes the hold:
+
+```json
+{"label": "gate:mem",
+ "grant": {"cpu": [0, 1], "mem": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
+ "start_ns": 1791722400000000000, "unbudgeted": false, "unbudgeted_resources": [],
+ "clamped": {}, "adopted": false}
+```
+
+The command starts with fd 3 = the hold, fds 4-5 = `cpu` tokens 0-1, fds 6-29 = `mem` tokens 0-23,
+and `CORESLOT_GRANTED_CPU=2`, `CORESLOT_GRANTED_MEM=3072`, `CORESLOT_HELD_FD=3`,
+`CORESLOT_TOKEN_FDS=4-29`. Its tree's largest reading, 22 s after the start, is 2 831 155 KiB
+(2.7 GiB), within its grant. After it exits, the run appends:
+
+```json
+{"time_ns": 1791722400000000000, "label": "gate:mem", "need": {"cpu": [2, 2], "mem": [24, 24]},
+ "grant": {"cpu": 2, "mem": 24}, "clamped": [], "unbudgeted_resources": [], "waited_s": 0.01,
+ "ran_s": 41.2, "cpu_user_s": 70.3, "cpu_sys_s": 4.1, "max_rss_kib": 1903412,
+ "mem_peak_kib": 2831155, "mem_peak_source": "anon", "peak_after_s": 22.0, "waited_free_s": 0,
+ "exit": 0, "load1": 3.2, "fail_open": ""}
+```
+
 ## 22. Timing constants
 
 | Constant | Value |
@@ -1387,3 +1513,5 @@ A pass-through does not enter the section or lock anything. After `make` exits i
 | hold removal after exit | section entry within 2 s, else left to reconciliation |
 | waiting line (CLI) | every 30 s |
 | run-log rotation | at 10 MiB, one generation |
+| `mem` token | 128 MiB |
+| memory sampling (CLI) | every 1 s while the command runs |
