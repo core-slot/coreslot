@@ -734,11 +734,13 @@ Per block (seconds; swapouts in 16 KiB pages):
 - Against running everything at once, coreslot removed the memory pressure and the false
   failures: F reached the warn level in every block (9 to 44 s) and swapped in four, and its
   FastAPI suite failed in two blocks although it passed both calibration runs; K never left the
-  normal level, never swapped and never failed. Its mean time to verdict was 36% lower by the
-  median ratio (0.64), lower in 5 of 6 blocks, which is not the significance the run declared.
+  normal level, never swapped and never failed. Its mean time to verdict was 32% lower by the
+  median per-block ratio (0.6835), lower in 5 of 6 blocks, which is not the significance the run
+  declared.
 - Against the two-slot semaphore, coreslot was not better. The medians of the mean time to
   verdict tie (43.15 s against 43.25 s, K lower in 4 of 6 blocks) and the semaphore's makespan
-  was shorter in every block (median ratio 1.17 against coreslot). The semaphore let memory reach
+  was shorter in every block (coreslot's makespan over the semaphore's: median per-block ratio
+  1.269). The semaphore let memory reach
   warn once (block 3, 9 s) and its FastAPI suite failed in that block.
 - No arm reached the critical level, so hypothesis 1 holds without separating the arms; the warn
   level and the swapouts separate them.
