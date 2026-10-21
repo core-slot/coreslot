@@ -5,6 +5,8 @@ and 3 slots, under three levels of background memory held by a ballast.
 usage:
   run6.py learn STAND OUT
   run6.py verdict STAND OUT PHASE MIX FIRST LAST [--as-block B] [--primer]
+  run6.py size OUT
+  run6.py summary OUT
 
 STAND is run 4's stand file (run4.py's docstring); its optional "light_agents" names the agents of
 the light mix (A3 and A4 of the heavy stand). Every coreslot call goes through run4.cs() with the
@@ -35,6 +37,18 @@ OUT/needs-hand.toml; KC with mem = "60%" and no needs file, a cold start.
            recorded to OUT/primer.jsonl only. Appends one record per set to
            OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded, so the same
            command continues an interrupted session.
+  size     from OUT/pilot-*.jsonl only: sigma-hat heavy, the SD of the per-block ln(K*/S*) with K*
+           and S* the per-level oracles over the pilot's valid blocks, and sigma-hat light, the SD
+           of ln(K60/F); each raised to its one-sided 80 % upper bound, then the blocks each mix
+           needs, and the light F sets with a warn-or-worse sample; to OUT/size.json. Exits 2 while
+           the pilot has fewer than 12 valid blocks of either mix.
+  summary  from OUT/main-*.jsonl, OUT/sens-*.jsonl and OUT/size.json: the first n valid blocks of
+           each mix by block number (a block counts when every arm has a valid set; an
+           `--as-block` re-run replaces its block), the oracles chosen on exactly those blocks,
+           the pre-registered chain H1-H5 (one-sided, alpha 0.05, exploratory after the first
+           non-rejection) and the reported estimates; to OUT/summary.json and OUT/summary.txt.
+           Exits 2 while a mix lacks n valid blocks and has re-runs left (10 % of n); with them
+           spent, the summary is incomplete: descriptive numbers and no test.
 """
 import argparse
 import glob
@@ -45,6 +59,7 @@ import random
 import resource
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import threading
@@ -55,6 +70,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acceptance  # noqa: E402  (probe)
 import overload  # noqa: E402  (load)
 import run4  # noqa: E402  (cs, run_one, run_set, fresh_state, write_config, offsets_for, ...)
+import stats6  # noqa: E402
 from ballast import Ballast  # noqa: E402
 
 LEARN_SHARE = {"cpu": "140%", "mem": "60%"}
@@ -290,9 +306,352 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
                              **arm_kw(out, arm))
 
 
+# --- analysis ---------------------------------------------------------------------------------
+
+ALPHA, MARGIN = 0.05, math.log(1.03)
+PILOT_BLOCKS = 12
+N_HEAVY, N_LIGHT = (30, 120, 3), (12, 60, 1)  # blocks_needed's lo, hi and multiple
+S_ARMS, K_SHARES = ("S1", "S2", "S3"), ("K60", "K67")
+
+
+def records(out, phase, mix):
+    return run4.read_jsonl(os.path.join(out, f"{phase}-{mix}.jsonl"))
+
+
+def valid_blocks(recs, arms):
+    """block -> arm -> set, in block order, for the blocks whose every arm has a valid set. An
+    `--as-block B` re-run counts as block B and replaces its sets: a block's sets are those of its
+    latest valid re-run, else its own when valid."""
+    runs = {}
+    for r in recs:
+        runs.setdefault(r.get("as_block") or r["block"], {}).setdefault(r["block"], {})[
+            r["arm"]] = r
+    blocks = {}
+    for b in sorted(runs):
+        for src in sorted(runs[b], key=lambda x: (x != b, x), reverse=True):
+            sets = runs[b][src]
+            if all(a in sets and sets[a]["valid"] for a in arms):
+                blocks[b] = sets
+                break
+    return blocks
+
+
+def reruns(recs):
+    return sorted({r["block"] for r in recs if r.get("as_block")})
+
+
+def counter(r, key):
+    """The rise of a sampled counter over the set."""
+    c = [s[key] for s in r["samples"] if s.get(key) is not None]
+    return c[-1] - c[0] if len(c) > 1 else 0
+
+
+def swapout_bytes(r):
+    return counter(r, "swapouts") * r.get("page_bytes", 16384)
+
+
+def ln_ratio(sets, a, b):
+    return math.log(sets[a]["mean_verdict_s"] / sets[b]["mean_verdict_s"])
+
+
+def by_level(blocks):
+    levels = {}
+    for b, sets in blocks.items():
+        levels.setdefault(next(iter(sets.values()))["level_mib"], []).append(b)
+    return dict(sorted(levels.items()))
+
+
+def lowest(blocks, bs, arms):
+    """The arm with the lowest mean primary over the blocks bs; a tie goes to the earlier arm."""
+    return min(arms, key=lambda a: (statistics.fmean(blocks[b][a]["mean_verdict_s"] for b in bs),
+                                    arms.index(a)))
+
+
+def cross_fit(blocks, arms):
+    """block -> the arm with the lowest mean over the other half of its level's blocks, the
+    halves being the level's blocks in block order taken alternately."""
+    chosen = {}
+    for bs in by_level(blocks).values():
+        halves = (bs[0::2], bs[1::2])
+        for i, half in enumerate(halves):
+            other = halves[1 - i]
+            for b in half:
+                chosen[b] = lowest(blocks, other, arms) if other else arms[0]
+    return chosen
+
+
+def per_level(blocks, arms):
+    return {lvl: lowest(blocks, bs, arms) for lvl, bs in by_level(blocks).items()}
+
+
+def sign(below, above):
+    """The sign test of pairs where the first value is below the second; ties dropped."""
+    w = sum(x < y for x, y in zip(below, above))
+    lo = sum(x > y for x, y in zip(below, above))
+    return {"wins": w, "losses": lo, "p": stats6.sign_test(w, lo)}
+
+
+def finite(x):
+    return None if x is None or math.isinf(x) or math.isnan(x) else round(x, 4)
+
+
+def expo(x):
+    """exp(x) for a log ratio; None for an infinite or missing bound."""
+    return finite(math.exp(x)) if x < 700 else None
+
+
+def estimate(d):
+    """A ratio from log differences: its geometric mean, one-sided 95 % upper bound and BCa 90 %
+    interval."""
+    if not d:
+        return None
+    up = stats6.paired_upper(d, 0.0)
+    lo, hi = stats6.bca(d)
+    return {"n": len(d), "gmr": expo(up["mean"]), "upper": expo(up["upper"]),
+            "bca90": [expo(lo), expo(hi)]}
+
+
+def size(out):
+    heavy = valid_blocks(records(out, "pilot", "heavy"), HEAVY_ARMS)
+    light = valid_blocks(records(out, "pilot", "light"), LIGHT_ARMS)
+    if len(heavy) < PILOT_BLOCKS or len(light) < PILOT_BLOCKS:
+        print(f"run6: the pilot has {len(heavy)} heavy and {len(light)} light valid blocks, not"
+              f" {PILOT_BLOCKS} of each", file=sys.stderr)
+        sys.exit(2)
+    k, s = per_level(heavy, K_SHARES), per_level(heavy, S_ARMS)
+    lvl = {b: lv for lv, bs in by_level(heavy).items() for b in bs}
+    sd_heavy = statistics.stdev(ln_ratio(heavy[b], k[lvl[b]], s[lvl[b]]) for b in heavy)
+    sd_light = statistics.stdev(ln_ratio(light[b], "K60", "F") for b in light)
+    sig_heavy = stats6.sigma_upper(sd_heavy, len(heavy))
+    sig_light = stats6.sigma_upper(sd_light, len(light))
+    res = {"sigma_hat_heavy": sd_heavy, "sigma_heavy": sig_heavy,
+           "n_heavy": stats6.blocks_needed(sig_heavy, *N_HEAVY),
+           "sigma_hat_light": sd_light, "sigma_light": sig_light,
+           "n_light": stats6.blocks_needed(sig_light, *N_LIGHT),
+           "light_pressure_sets": sum(1 for r in records(out, "pilot", "light")
+                                      if r["arm"] == "F" and run4.warn_s(r) > 0)}
+    with open(os.path.join(out, "size.json"), "w") as f:
+        json.dump(res, f, indent=1)
+    print(json.dumps(res, indent=1))
+
+
+def tests(heavy, light, s_star, kcf, light_pressure_sets):
+    """The pre-registered chain, each test one-sided at ALPHA; after the first non-rejection the
+    rest are exploratory."""
+    hb, lb = list(heavy), list(light)
+    lvl = {b: lv for lv, bs in by_level(heavy).items() for b in bs}
+    sstar = {b: f"S{s_star[lvl[b]]}" for b in hb}
+
+    def warn(arm_of, bs, blocks):
+        return [run4.warn_s(blocks[b][arm_of(b)]) for b in bs]
+
+    def swap(arm_of, bs, blocks):
+        return [swapout_bytes(blocks[b][arm_of(b)]) for b in bs]
+
+    def arm(a):
+        return lambda b: a
+
+    h1 = {"blocks": hb, "t": stats6.paired_upper([ln_ratio(heavy[b], "K60", "F") for b in hb], 0),
+          "warn": sign(warn(arm("K60"), hb, heavy), warn(arm("F"), hb, heavy)),
+          "swapout": sign(swap(arm("K60"), hb, heavy), swap(arm("F"), hb, heavy))}
+    h1["reject"] = all(h1[k]["p"] < ALPHA for k in ("t", "warn", "swapout"))
+    h2 = {"blocks": lb,
+          "t": stats6.paired_upper([ln_ratio(light[b], "K60", "F") for b in lb], MARGIN),
+          "exploratory": light_pressure_sets > 1}
+    h2["reject"] = h2["t"]["p"] < ALPHA
+    d3 = {b: math.log(heavy[b][kcf[b]]["mean_verdict_s"] / heavy[b][sstar[b]]["mean_verdict_s"])
+          for b in hb}
+    h3 = {"blocks": hb, "t": stats6.paired_upper(list(d3.values()), MARGIN), "per_level": {}}
+    for lv, bs in by_level(heavy).items():
+        t = stats6.paired_upper([d3[b] for b in bs], MARGIN)
+        h3["per_level"][lv] = {"gmr": expo(t["mean"]), "upper": expo(t["upper"]),
+                               "flagged": t["upper"] > MARGIN}
+    h3["reject"] = h3["t"]["p"] < ALPHA
+    h4 = {"blocks": hb, "warn": sign(warn(kcf.get, hb, heavy), warn(sstar.get, hb, heavy)),
+          "swapout": sign(swap(kcf.get, hb, heavy), swap(sstar.get, hb, heavy))}
+    h4["reject"] = h4["warn"]["p"] < ALPHA and h4["swapout"]["p"] < ALPHA
+    h5 = {"blocks": hb, "alpha": ALPHA / 6, "per_n": {}}
+    for n in (1, 2, 3):
+        ps = []
+        for lv, bs in by_level(heavy).items():
+            ps.append(stats6.paired_lower([ln_ratio(heavy[b], f"S{n}", "K60") for b in bs],
+                                          MARGIN)["p"])
+            ps.append(sign(warn(arm("K60"), bs, heavy), warn(arm(f"S{n}"), bs, heavy))["p"])
+        h5["per_n"][n] = {"p": ps, "any": any(p < ALPHA / 6 for p in ps)}
+    h5["reject"] = all(v["any"] for v in h5["per_n"].values())
+    chain, going = {"H1": h1, "H2": h2, "H3": h3, "H4": h4, "H5": h5}, True
+    for h in chain.values():
+        if not going or h.pop("exploratory", False):
+            h["status"], going = "exploratory", False
+        else:
+            h["status"], going = ("rejected" if h["reject"] else "not rejected"), h["reject"]
+    for h in chain.values():
+        if "t" in h:
+            h["t"] = {k: finite(v) for k, v in h["t"].items()}
+    return chain
+
+
+def alone_medians(out):
+    """(gate, form) -> the median alone run time; the K form drops its first, cold run."""
+    runs = {}
+    for r in run4.read_jsonl(os.path.join(out, "learn.jsonl")):
+        if not (r["form"] == "K" and r["run"] == 1):
+            runs.setdefault((r["gate"], r["form"]), []).append(r["wall_s"])
+    return {k: statistics.median(v) for k, v in runs.items()}
+
+
+def counted_gates(out):
+    """The gates that passed all three of their F-form alone runs."""
+    exits = {}
+    for r in run4.read_jsonl(os.path.join(out, "learn.jsonl")):
+        if r["form"] == "F":
+            exits.setdefault(r["gate"], []).append(r["exit"])
+    return {g for g, e in exits.items() if len(e) == LEARN_RUNS["F"] and not any(e)}
+
+
+def per_arm(blocks, arms, out):
+    alone, counted = alone_medians(out), counted_gates(out)
+    res = {}
+    for a in arms:
+        rs = [blocks[b][a] for b in blocks]
+        if not rs:
+            continue
+        runs = [g for r in rs for g in r["gates"] if g["gate"] in counted]
+        fails = sum(1 for g in runs if g["exit"])
+        slow = {}
+        for r in rs:
+            for g in r["gates"]:
+                base = alone.get((g["gate"], "K" if a.startswith("K") else "F"))
+                if base:
+                    slow.setdefault(g["gate"], []).append((g["end"] - g["start"]) / base)
+        res[a] = {"mean_verdict_s": round(statistics.fmean(r["mean_verdict_s"] for r in rs), 1),
+                  "makespan_s": statistics.median(r["makespan_s"] for r in rs),
+                  "warn_s": statistics.median(run4.warn_s(r) for r in rs),
+                  "critical_s": statistics.median(run4.critical_s(r) for r in rs),
+                  "critical_s_total": sum(run4.critical_s(r) for r in rs),
+                  "swapout_bytes": statistics.median(swapout_bytes(r) for r in rs),
+                  "swapins": statistics.median(counter(r, "swapins") for r in rs),
+                  "pageins": statistics.median(counter(r, "pageins") for r in rs),
+                  "false_failures": {"k": fails, "n": len(runs), "ci95": [
+                      finite(x) for x in stats6.clopper_pearson(fails, len(runs))]
+                      if runs else None},
+                  "slowdown": {g: round(statistics.median(v), 3) for g, v in slow.items()}}
+    return res
+
+
+def order_effects(blocks):
+    """The mean d of a set, ln of its primary over its block's geometric mean, by its position
+    and by the arm before it."""
+    pos, prev = {}, {}
+    for sets in blocks.values():
+        gm = statistics.fmean(math.log(r["mean_verdict_s"]) for r in sets.values())
+        for r in sets.values():
+            d = math.log(r["mean_verdict_s"]) - gm
+            pos.setdefault(r["position"], []).append(d)
+            prev.setdefault(r["prev_arm"] or "none", []).append(d)
+    return {"position": {k: round(statistics.fmean(v), 4) for k, v in sorted(pos.items())},
+            "prev_arm": {k: round(statistics.fmean(v), 4) for k, v in sorted(prev.items())}}
+
+
+def sensitivity(out):
+    spread = valid_blocks(records(out, "sens", "spread"), SPREAD_ARMS)
+    cold = valid_blocks(records(out, "sens", "cold"), COLD_ARMS)
+    means = {a: round(statistics.fmean(spread[b][a]["mean_verdict_s"] for b in spread), 1)
+             for a in SPREAD_ARMS} if spread else {}
+    return {"spread": {"blocks": list(spread), "means": means,
+                       "to_K60": {a: estimate([ln_ratio(spread[b], a, "K60") for b in spread])
+                                  for a in SPREAD_ARMS if a != "K60"}},
+            "cold": {"blocks": list(cold),
+                     "KC/K60": estimate([ln_ratio(cold[b], "KC", "K60") for b in cold])}}
+
+
+def reported(heavy, light, s_star, kcf, out):
+    lvl = {b: lv for lv, bs in by_level(heavy).items() for b in bs}
+    sstar = {b: f"S{s_star[lvl[b]]}" for b in heavy}
+    k_star = per_level(heavy, K_SHARES)
+    scf = cross_fit(heavy, S_ARMS)
+
+    def ratio(blocks, num, den, key="mean_verdict_s"):
+        return estimate([math.log(blocks[b][num(b)][key] / blocks[b][den(b)][key])
+                         for b in blocks])
+
+    def arm(a):
+        return lambda b: a
+    return {"per_arm": {"heavy": per_arm(heavy, HEAVY_ARMS, out),
+                        "light": per_arm(light, LIGHT_ARMS, out)},
+            "makespan": {"K60/F heavy": ratio(heavy, arm("K60"), arm("F"), "makespan_s"),
+                         "K60/F light": ratio(light, arm("K60"), arm("F"), "makespan_s"),
+                         "K*cf/S*": ratio(heavy, kcf.get, sstar.get, "makespan_s")},
+            "K60/S*": ratio(heavy, arm("K60"), sstar.get),
+            "KH/K60": ratio(heavy, arm("KH"), arm("K60")),
+            "K*/S*": ratio(heavy, lambda b: k_star[lvl[b]], sstar.get),
+            "K*cf/Scf": ratio(heavy, kcf.get, scf.get),
+            "cross_fit_s": scf,
+            "regret": {lv: {n: estimate([ln_ratio(heavy[b], f"S{n}", f"S{s_star[lv]}")
+                                         for b in bs]) for n in (1, 2, 3)}
+                       for lv, bs in by_level(heavy).items()},
+            "order": order_effects(heavy),
+            "sensitivity": sensitivity(out)}
+
+
+def summary_text(s):
+    lines = ["Acceptance run 6: summary", "",
+             f"Blocks used: heavy {s['blocks']['heavy']}", f"  light {s['blocks']['light']}",
+             f"Re-runs: {s['reruns']}", f"S* per level (MiB -> N): {s['oracles']['S']}",
+             f"K*cf per block: {s['oracles']['Kcf']}", ""]
+    if s["incomplete"]:
+        lines += [s["incomplete"], ""]
+    else:
+        for name, h in s["tests"].items():
+            ps = {k: h[k]["p"] for k in ("t", "warn", "swapout") if k in h}
+            lines.append(f"{name}: {h['status']}; p {ps or h.get('per_n')}")
+        lines.append("")
+    lines += ["Reported, untested:", json.dumps(s["reported"], indent=1), ""]
+    return "\n".join(lines)
+
+
+def summary(out):
+    path = os.path.join(out, "size.json")
+    if not os.path.exists(path):
+        print(f"run6: {path} is missing; run size first", file=sys.stderr)
+        sys.exit(2)
+    with open(path) as f:
+        sz = json.load(f)
+    mixes = {"heavy": (HEAVY_ARMS, sz["n_heavy"]), "light": (LIGHT_ARMS, sz["n_light"])}
+    used, spent, full = {}, {}, {}
+    for mix, (arms, n) in mixes.items():
+        recs = records(out, "main", mix)
+        blocks = valid_blocks(recs, arms)
+        used[mix] = {b: blocks[b] for b in list(blocks)[:n]}
+        spent[mix], full[mix] = reruns(recs), len(blocks) >= n
+        if not full[mix] and len(spent[mix]) < n // 10:
+            print(f"run6: main {mix}: {len(blocks)} of {n} valid blocks, {len(spent[mix])} of"
+                  f" {n // 10} re-runs; no summary yet", file=sys.stderr)
+            sys.exit(2)
+    heavy, light = used["heavy"], used["light"]
+    s_star = {lv: int(a[1:]) for lv, a in per_level(heavy, S_ARMS).items()}
+    kcf = cross_fit(heavy, K_SHARES)
+    s = {"size": sz, "blocks": {m: list(b) for m, b in used.items()}, "reruns": spent,
+         "oracles": {"S": s_star, "Kcf": kcf}, "tests": None, "incomplete": None,
+         "reported": reported(heavy, light, s_star, kcf, out)}
+    if all(full.values()):
+        s["tests"] = tests(heavy, light, s_star, kcf, sz["light_pressure_sets"])
+    else:
+        s["incomplete"] = (f"incomplete: {len(heavy)} heavy and {len(light)} light valid blocks"
+                           " with the re-runs spent; no test")
+    with open(os.path.join(out, "summary.json"), "w") as f:
+        json.dump(s, f, indent=1)
+    text = summary_text(s)
+    with open(os.path.join(out, "summary.txt"), "w") as f:
+        f.write(text)
+    print(text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("size", "summary"):
+        sub.add_parser(name).add_argument("out")
     for name in ("learn", "verdict"):
         p = sub.add_parser(name)
         p.add_argument("stand")
@@ -305,6 +664,10 @@ def main():
             p.add_argument("--as-block", type=int, default=None)
             p.add_argument("--primer", action="store_true")
     args = ap.parse_args()
+    if args.cmd == "size":
+        return size(args.out)
+    if args.cmd == "summary":
+        return summary(args.out)
     cfg = overload.load(args.stand)
 
     def interrupted(*_):
