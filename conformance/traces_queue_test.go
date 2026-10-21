@@ -287,7 +287,7 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if r.Env["CORESLOT_GRANTED_CPU"] != "1" || r.Env["CORESLOT_UNBUDGETED"] != "" {
 		t.Errorf("environment %v", r.Env)
 	}
-	m, err := config.ReadMachine()
+	m, err := config.ReadMachine(true)
 	if err != nil {
 		t.Fatal(err)
 	}

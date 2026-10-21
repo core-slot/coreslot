@@ -211,7 +211,7 @@ func TestInteropSizesAgree(t *testing.T) {
 	if err != nil {
 		t.Skipf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
 	}
-	machine, err := config.ReadMachine()
+	machine, err := config.ReadMachine(true)
 	if err != nil {
 		t.Fatal(err)
 	}

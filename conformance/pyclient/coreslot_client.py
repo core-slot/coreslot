@@ -1324,7 +1324,7 @@ class Client:
         S = sec.S
         cfg = self.config()
         cpus = self.cpus()
-        memory = self.memory() if "mem" in need and cfg.declared("mem") else 0
+        memory = self.memory() if cfg.declared("mem") else 0
         sizes: dict[str, int] = {}
         for r in need:
             if cfg.declared(r):

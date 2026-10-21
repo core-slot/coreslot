@@ -67,7 +67,7 @@ func (c *fakeClock) advance(d time.Duration) {
 const testCPUs = 8
 
 // testMachine is the machine every test engine resolves sizes against: 6 CPUs and 16 GiB.
-func testMachine() (config.Machine, error) { return config.Machine{CPUs: 6, MemMiB: 16384}, nil }
+func testMachine(bool) (config.Machine, error) { return config.Machine{CPUs: 6, MemMiB: 16384}, nil }
 
 // newStateDir creates a state directory whose config.toml holds cfg (none when cfg is empty).
 func newStateDir(t *testing.T, cfg string) string {
@@ -350,6 +350,33 @@ func tokenPaths(dir, res string, from, to int) string {
 }
 
 // ---------------------------------------------------------------- ordering, cancel, reconcile
+
+// Sizes read the machine's memory only when the configuration declares mem: with mem = 0 a
+// machine whose memory cannot be read still resolves cpu, and with the default mem it is a state
+// error. Mutation: read memory whatever the configuration declares, and mem = 0 is a state error.
+func TestSizesReadMemoryOnlyForMem(t *testing.T) {
+	noMem := func(mem bool) (config.Machine, error) {
+		if mem {
+			return config.Machine{}, errors.New("no memory reading here")
+		}
+		return config.Machine{CPUs: 6}, nil
+	}
+	sizes := func(cfg string) (map[string]int, error) {
+		dir := newStateDir(t, cfg)
+		st, err := store.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}, noMem, SystemClock()).sizes()
+	}
+	if got, err := sizes("[resources]\nmem = 0\n"); err != nil || len(got) != 1 || got["cpu"] != testCPUs {
+		t.Errorf("mem = 0: sizes %v, %v; want cpu %d alone", got, err, testCPUs)
+	}
+	var se *store.StateError
+	if _, err := sizes(""); !errors.As(err, &se) {
+		t.Errorf("default mem on a machine without a memory reading: %v, want a state error", err)
+	}
+}
 
 func TestFIFOAtEqualPriority(t *testing.T) {
 	dir := newStateDir(t, "[resources]\ncpu = 1\n")

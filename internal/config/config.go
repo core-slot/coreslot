@@ -65,11 +65,12 @@ type Machine struct {
 	MemMiB int64
 }
 
-// ReadMachine reads the machine's CPU count and physical memory.
-func ReadMachine() (Machine, error) {
+// ReadMachine reads the machine's CPU count, and its physical memory when mem: a configuration
+// that does not declare mem resolves on a machine whose memory cannot be read.
+func ReadMachine(mem bool) (Machine, error) {
 	cpus, err := MachineCPUs()
-	if err != nil {
-		return Machine{}, err
+	if err != nil || !mem {
+		return Machine{CPUs: cpus}, err
 	}
 	mib, err := memsample.Total()
 	if err != nil {
@@ -266,6 +267,13 @@ func (c Config) Sizes(m Machine) map[string]int {
 		sizes["cpu"] = defaultCPU.Resolve(m)
 	}
 	return sizes
+}
+
+// DeclaresMem reports whether the configuration declares mem: only then do sizes need the
+// machine's memory.
+func (c Config) DeclaresMem() bool {
+	_, ok := c.Resources["mem"]
+	return ok
 }
 
 // PriorityFor returns the priority of the longest configured prefix of label, and false when no

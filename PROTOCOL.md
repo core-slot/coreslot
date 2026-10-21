@@ -285,7 +285,7 @@ a float, a table) is invalid. A computed size above 4096 is 4096.
 |---|---|
 | macOS | the `hw.memsize` sysctl |
 | Linux | `MemTotal` in `/proc/meminfo`; never a cgroup's limit |
-| other systems | the system's physical memory; a client that cannot obtain it treats it as a state error |
+| other systems | the system's physical memory; a client that cannot obtain it while the configuration declares `mem` treats it as a state error, and resolves the other resources without it otherwise |
 
 `cpus` is the machine-wide online CPU count:
 

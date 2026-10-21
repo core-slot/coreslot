@@ -54,7 +54,7 @@ func learn(label string) (learned, error) {
 	if err != nil {
 		return learned{}, err
 	}
-	m, err := config.ReadMachine()
+	m, err := config.ReadMachine(false) // only the cpu size is read below
 	if err != nil {
 		return learned{}, fmt.Errorf("machine: %w", err)
 	}

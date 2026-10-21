@@ -84,16 +84,16 @@ var (
 type Engine struct {
 	st      *store.Store
 	cfg     *config.Watcher
-	machine func() (config.Machine, error)
+	machine func(mem bool) (config.Machine, error)
 	clock   Clock
 	seq     func() int
 }
 
 // New returns an engine over st. cfg yields the configuration (under the state-directory
 // override its Path is <statedir>/config.toml, which is then checked against the filesystem
-// policy before every load); machine yields the machine-wide online CPU count and the physical
-// memory. A nil field of clock is replaced by SystemClock's.
-func New(st *store.Store, cfg *config.Watcher, machine func() (config.Machine, error), clock Clock) *Engine {
+// policy before every load); machine yields the machine-wide online CPU count, and the physical
+// memory when mem. A nil field of clock is replaced by SystemClock's.
+func New(st *store.Store, cfg *config.Watcher, machine func(mem bool) (config.Machine, error), clock Clock) *Engine {
 	sys := SystemClock()
 	if clock.Realtime == nil {
 		clock.Realtime = sys.Realtime
@@ -125,14 +125,14 @@ func (e *Engine) Config() (config.Config, error) {
 }
 
 // sizes recomputes every declared resource's size from the configuration and the machine
-// (PROTOCOL.md section 5.2). An invalid configuration or an unknown CPU count or memory is a
-// *store.StateError.
+// (PROTOCOL.md section 5.2). An invalid configuration, an unknown CPU count, or an unknown
+// memory while the configuration declares mem is a *store.StateError.
 func (e *Engine) sizes() (map[string]int, error) {
 	c, err := e.Config()
 	if err != nil {
 		return nil, err
 	}
-	m, err := e.machine()
+	m, err := e.machine(c.DeclaresMem())
 	if err != nil {
 		return nil, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
 	}
