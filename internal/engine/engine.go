@@ -45,7 +45,7 @@ const (
 	ElectEvery = time.Second
 	// Head admission retry backoff.
 	HeadFirstBackoff = 250 * time.Millisecond
-	HeadMaxBackoff   = 2 * time.Second
+	HeadMaxBackoff   = 500 * time.Millisecond
 	// sectionWait bounds how long one Step waits to enter the section, so that a waiter keeps
 	// refreshing while another client holds it (see RefreshEvery).
 	sectionWait = RefreshEvery / 4

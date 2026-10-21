@@ -134,7 +134,7 @@ func (t *Ticket) TokenOnly() bool {
 // bump gen in the section after a refresh gap above 10 s on either clock), check cancel/ for
 // this ticket, and, once per second, read gen (rescanning queue/ when it changed) and hold the
 // election, which examines the tickets ahead from the nearest up to the first live, non-STALLED
-// one; the head tries admission with backoff from 0.25 s up to 2 s, repeating the election
+// one; the head tries admission with backoff from 0.25 s up to 0.5 s, repeating the election
 // before each attempt. It returns Waiting or Admitted, or ErrCanceled once a cancel request
 // was found or the ticket was withdrawn. Section entries wait at most RefreshEvery/4, so a
 // caller that calls Step in a loop keeps refreshing at least every RefreshEvery (see

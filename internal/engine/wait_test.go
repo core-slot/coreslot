@@ -238,7 +238,7 @@ func TestNonHeadWorksOncePerSecond(t *testing.T) {
 }
 
 // The head, Stepped when its work is due, still retries admission on its backoff: 0.25 s after
-// the first attempt, then 0.5 s, 1 s and 2 s.
+// the first attempt, then every 0.5 s. Mutation: HeadMaxBackoff back at 2 s, and 4 attempts.
 func TestHeadRetriesOnBackoff(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -249,13 +249,14 @@ func TestHeadRetriesOnBackoff(t *testing.T) {
 	if len(at) < 2 || at[1] != HeadFirstBackoff {
 		t.Fatalf("Steps at %v, want the second at %v", at, HeadFirstBackoff)
 	}
-	if tk.attempts != 4 { // at 0, 0.25, 0.75 and 1.75 s
-		t.Fatalf("%d admission attempts in 2 s (Steps at %v), want 4", tk.attempts, at)
+	if tk.attempts != 5 { // at 0, 0.25, 0.75, 1.25 and 1.75 s
+		t.Fatalf("%d admission attempts in 2 s (Steps at %v), want 5", tk.attempts, at)
 	}
 }
 
 // Stepped when Due says, a head whose section entries all wait out their deadline still
-// refreshes at most RefreshEvery/2 apart (see RefreshEvery), although its backoff reaches 2 s.
+// refreshes at most RefreshEvery/2 apart (see RefreshEvery), and its backoff stops at 0.5 s.
+// Mutation: HeadMaxBackoff back at 2 s, and the backoff check fails.
 func TestRefreshCadenceWhenDue(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -295,8 +296,8 @@ func TestRefreshCadenceWhenDue(t *testing.T) {
 		}
 		prev = r
 	}
-	if tk.backoff != HeadMaxBackoff {
-		t.Fatalf("backoff %v after 60 s of failed entries, want %v", tk.backoff, HeadMaxBackoff)
+	if tk.backoff != 500*time.Millisecond {
+		t.Fatalf("backoff %v after 60 s of failed entries, want 500ms", tk.backoff)
 	}
 }
 

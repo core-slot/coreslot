@@ -51,7 +51,7 @@ REFRESH_S = 2.0
 STALL_S = 10.0
 MAX_PASS_GAP_S = 3.0  # §10.2: a longer interval between an observer's own passes is not watched
 POLL_S = 1.0
-HEAD_BACKOFF_MIN, HEAD_BACKOFF_MAX = 0.25, 2.0
+HEAD_BACKOFF_MIN, HEAD_BACKOFF_MAX = 0.25, 0.5
 FRONT_WINDOW = 4  # §10.3: tickets at the front of the queue every election also watches
 ENTRY_BACKOFF_MIN, ENTRY_BACKOFF_MAX = 0.01, 0.25
 RECONCILE_NS = 30 * 10**9
@@ -1897,7 +1897,7 @@ class Ticket:
 
     def _back_off(self) -> None:
         """A failed head (or token-only) attempt: retry after the current interval, 0.25 s first,
-        and double the next one up to 2 s (§10.3, §15.2)."""
+        and double the next one up to 0.5 s (§10.3, §15.2)."""
         self._delay = self._backoff
         self._backoff = min(self._backoff * 2, HEAD_BACKOFF_MAX)
 
