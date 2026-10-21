@@ -1,0 +1,27 @@
+{
+ "_budget": {
+  "cpu": 10,
+  "mem": 9,
+  "rule": "cpu: the logical CPUs; mem: free + inactive + speculative + purgeable memory before calibration, floored to GiB"
+ },
+ "vscode-typecheck": {
+  "cpu": "7",
+  "mem": 10,
+  "stable": true
+ },
+ "fastapi-ruff": {
+  "cpu": "1",
+  "mem": 1,
+  "stable": true
+ },
+ "fastapi-tests": {
+  "cpu": "2..7",
+  "mem": 4,
+  "stable": true
+ },
+ "sqlalchemy-orm-tests": {
+  "cpu": "2..10",
+  "mem": 3,
+  "stable": true
+ }
+}
