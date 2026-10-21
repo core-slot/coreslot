@@ -19,6 +19,8 @@ Index of the evidence scripts:
   semaphore and under coreslot, in "Acceptance run 3" below.
 - `run4.py` with `overload/run4.sh` and `overload/run4/`: the same stand with needs coreslot
   learned itself, against no admission and a tuned semaphore, in "Acceptance run 4" below.
+- `run5.py` with `overload/run5.sh` and `overload/run5/`: run 4's stand and needs, coreslot's
+  live memory size against its static size and the semaphore, in "Acceptance run 5" below.
 
 ## Waiter benchmark (the release gate)
 
@@ -1035,3 +1037,102 @@ verdict 1 12, summary, figures); `run4.sh summary` recomputes the summary from t
 records. `setup.sh` builds coreslot without `CGO_ENABLED=0`; the measured binary was built with
 `CGO_ENABLED=0 go build -o ~/bench.noindex/bin/coreslot ./cmd/coreslot` from this branch, whose Go
 code is that of `9ca499c`.
+
+## Acceptance run 5: the live memory size against the static size (`run5.py`)
+
+**Status: pre-registered.** This section was committed and pushed before the first verdict set;
+the results are appended below, whatever they are. The analysis is `run5.py summary`, which is not
+changed after this commit.
+
+**Question.** On run 4's laptop and mix, does coreslot's live memory size remove the waits that the
+static `mem` budget imposed while the kernel could have covered the memory, and at what cost in
+memory pressure?
+
+Run 4 found its K runs waiting a median of 36.45 s per block while the kernel's headroom covered
+their memory need. The live size, added since, raises the `mem` size for one admission attempt
+when the static size less the locked tokens cannot cover a fixed `mem` need: to the locked tokens
+plus the kernel's headroom less the unused part of every running hold's reservation, never below
+the static size (PROTOCOL.md at `54f8cb0`, "Live size of `mem`"). `[memory] live = false` turns it off.
+
+### Stand
+
+Run 4's stand, unchanged: `evidence/overload/stand4.json`, the same four agents, gates and argv, on
+the same host. The needs are run 4's, not learned again: `run5/needs.toml` is a byte-for-byte copy
+of `run4/needs.toml`, copied into the state directory before each coreslot set and its hash checked
+after it. coreslot is built at `54f8cb0`, the head of an open pull request (the live memory size),
+not a release, with `CGO_ENABLED=0` and no build tags, into `~/bench.noindex/bin/coreslot`.
+
+With the shares below the static sizes are 14 cpu tokens and 76 `mem` tokens (9728 of 16384 MiB);
+each set records the sizes `coreslot status --json` reports. The type check's 67 tokens leave 9
+beside it, so under the static size only the lint fits next to a type check.
+
+### Arms
+
+- **KS** — every gate as `coreslot run --label bench:<gate> -- <argv>`, with no `--need`, cpu
+  `"140%"`, mem `"60%"` and `[memory] live = false`: the static size, run 4's K_best.
+- **KL** — the same with `[memory] live = true`: the live size.
+- **S** — a counting semaphore of 2 slots around the heavy gates; the lint runs free; `{n}` is
+  `auto`: run 4's S_best.
+
+There is no tuning phase: every arm's configuration is fixed above.
+
+### Verdict design
+
+Twelve valid blocks, each of three sets: KS, KL and S. Block b runs the arms in the order
+`perms[(b - 1) mod 6]` of the fixed list KS S KL, S KL KS, KL KS S, KS KL S, KL S KS, S KS KL (run
+4's list with F read as KS and K as KL), so each of the six orders is used twice. Agents arrive at
+offsets drawn from U(0, 5 s) with the seed `run5-<b>`, the same for the block's three sets. Pacing,
+cooldown and probe are run 4's: before each set the runner waits 20 s and then until the thermal
+state is nominal and a single-core probe is within 10% of the reading taken at the start of the
+phase, at most 120 s. Every one-second sample adds `headroom_mib`, the free, speculative, purgeable
+and file-backed pageable pages (`vm.page_free_count`, `vm.page_speculative_count`,
+`vm.page_purgeable_count`, `vm.page_pageable_external_count`) times `vm.pagesize`, the sysctls
+coreslot itself reads.
+
+**Validity, as run 4's.** A set is invalid only for a runner error, battery power, or a gap of more
+than 10 s between its once-a-second samples. A block with an invalid set is re-run at the end under
+the next block number, with the same order and offsets (`run5.py verdict 13 13 --as-block B`); at
+most four re-runs. `run5.py summary` refuses to analyse before the twelfth valid block. If the cap
+is spent with fewer than twelve valid blocks, the run is reported as incomplete with its
+descriptive numbers and **no test and no outcome**. A set that started after the cooldown gave up
+is flagged `hot_start`, and one that started with a 1-minute load above 3 `high_load`; flagged sets
+stay valid and are reported.
+
+### Criteria, declared before the run
+
+- **Mechanism:** a one-sided exact sign test over the 12 blocks that KL's summed `waited_free_s`
+  (over the set's run-log lines) is below KS's; a tie is not a win; α = 0.05, so it passes with at
+  least 10 wins of 12.
+- **Price:** passes when KL has no critical second (`kern.memorystatus_vm_pressure_level` ≥ 4) and
+  no false failure in any block, and the median over the 12 blocks of (KL's warn-or-worse seconds
+  − KS's, per block) is at most **10 s**, a sixth of the 58 s median that no admission caused in
+  run 4.
+
+**False failures.** As run 4's: a failure of a gate that passed its alone baseline, run 4's F-form
+runs in `run4/learn.jsonl`.
+
+**Reported without a test.** The mean time to verdict and the makespan per arm; the per-block
+ratios KL/KS and KL/S; for KS and KL, run 4's wait decomposition: each stretch of a run's wait,
+replayed against the static sizes, classed as memory only (its own `mem` need did not fit, its cpu
+minimum did), memory and cpu, cpu only, behind the head (it fitted, but the earliest queued waiting
+run did not, for memory, memory and cpu, or cpu), or latency (nothing was lacking); and how many KL
+runs were admitted above the static size (their grant and the grants held at their admission
+together above 76 tokens). The same count for KS checks the replay: on run 4's K sets it is 0 in
+every block.
+
+### What each outcome means
+
+- Mechanism and price pass: the live size does what it is for at an acceptable cost.
+- Mechanism fails: it does not remove the waits on this machine.
+- Price fails: it costs more pressure than allowed; reported as is.
+
+### Reproduce
+
+```sh
+evidence/overload/run5.sh            # verdict 1 12, summary
+evidence/overload/run5.sh verdict 13 13 --as-block 5   # a re-run of an invalid block 5
+evidence/overload/run5.sh summary
+```
+
+`evidence/overload/run5.sh --dry` learns the needs of `stand-dry.json` with `run4.py learn` and runs
+one block of the three arms on it, to check the runner in a minute; its output is not evidence.
