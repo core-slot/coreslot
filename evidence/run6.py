@@ -35,14 +35,15 @@ OUT/needs-hand.toml; KC with mem = "60%" and no needs file, a cold start.
            match OUT/needs.sha256, else exit 2. Each block runs its arms in the order order_for
            gives it, with a ballast held for the whole block at level_for's level (heavy; 0 MiB
            otherwise) and offsets from the seed run6-<phase>-<mix>-<block>; with --as-block B,
-           block B's order, level and offsets, exit 2 unless block B has an invalid set. The
-           running apps' names go to OUT/apps.local.txt only. --primer first runs one K60 set of the first block,
-           recorded to OUT/primer.jsonl only. Appends one record per set to
-           OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded, so the same
+           block B's order, level and offsets, exit 2 unless block B has an invalid set and is
+           not itself a re-run. Each record carries `coreslot version`, read once per command;
+           the running apps' names go to OUT/apps.local.txt only. --primer first runs one K60
+           set of the first block, recorded to OUT/primer.jsonl only. Appends one record per set
+           to OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded, so the same
            command continues an interrupted session.
-  size     from the first 12 valid pilot blocks of each mix: sigma-hat heavy, the SD of the
-           per-block ln(K*/S*) with K* and S* the per-level oracles (S* among S1-S3 and F, four
-           slots), and sigma-hat light, the SD of ln(K60/F); each raised to its one-sided 80 %
+  size     from the first 12 valid pilot blocks of each mix, its first 3 re-runs counted:
+           sigma-hat heavy, the SD of the per-block ln(K*/S*) with K* and S* the per-level
+           oracles (S* among S1-S3 and F, four slots), and sigma-hat light, the SD of ln(K60/F); each raised to its one-sided 80 %
            upper bound, then the blocks each mix needs (unclamped too; "underpowered" above the
            cap), and their light F sets with a warn-or-worse sample; to OUT/size.json. Exits 2
            while the pilot lacks 12 valid blocks of a mix, or once a main record exists.
@@ -291,6 +292,10 @@ def static_sizes(cfg):
     return sizes
 
 
+def coreslot_version(cfg):
+    return run4.cs(cfg, "version", capture_output=True, text=True).stdout.strip()
+
+
 def mix_cfg(cfg, mix):
     if mix == "light":
         names = cfg.get("light_agents", LIGHT_AGENTS)
@@ -307,8 +312,9 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
     check_needs(out)
     path = os.path.join(out, f"{phase}-{mix}.jsonl")
     recs = run4.read_jsonl(path)
-    if as_block and not any(r["block"] == as_block and not r["valid"] for r in recs):
-        print(f"run6: block {as_block} has no invalid set to re-run", file=sys.stderr)
+    if as_block and (as_block in reruns(recs) or
+                     not any(r["block"] == as_block and not r["valid"] for r in recs)):
+        print(f"run6: block {as_block} is a re-run or has no invalid set", file=sys.stderr)
         sys.exit(2)
     done = {(r["block"], r["arm"]) for r in recs}
     blocks = [(b, [a for a in order_for(phase, mix, as_block or b) if (b, a) not in done])
@@ -318,6 +324,7 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
         return
     scfg = mix_cfg(cfg, mix)
     apps, static, baseline = apps_meta(out), static_sizes(cfg), acceptance.probe()
+    version = coreslot_version(cfg)
     hashes = {name: run4.sha256(os.path.join(out, name)) for name in NEEDS_FILES}
     for i, (b, pending) in enumerate(blocks):
         src = as_block or b
@@ -332,6 +339,7 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
                         "order": " ".join(order), "level_mib": level, "position": pos,
                         "prev_arm": order[pos - 1] if pos else None,
                         "ballast_rss_mib": ballast.rss_mib(), **apps,
+                        "coreslot_version": version,
                         "needs_sha256": hashes.get(K_NEEDS.get(arm)),
                         "static": static.get(K_MEM.get(arm))}
                 run4.run_set(scfg, dst, arm=arm, offsets=offsets, meta=meta, baseline=baseline,
@@ -341,7 +349,7 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
 # --- analysis ---------------------------------------------------------------------------------
 
 ALPHA, MARGIN = 0.05, math.log(1.03)
-PILOT_BLOCKS, SENS_BLOCKS = 12, 6
+PILOT_BLOCKS, SENS_BLOCKS, PILOT_RERUNS = 12, 6, 3
 N_HEAVY, N_LIGHT = (30, 120, 3), (12, 60, 1)  # blocks_needed's lo, hi and multiple
 S_ARMS, K_SHARES = ("S1", "S2", "S3", "F"), ("K60", "K67")  # F: four slots for four agents
 CHAIN = ("H1", "H4", "H5", "H3", "H2")
@@ -399,9 +407,9 @@ def reruns(recs):
     return sorted({r["block"] for r in recs if r.get("as_block")})
 
 
-def capped(recs, n):
-    """The records without the re-runs past 10 % of n, in block order, and those re-runs."""
-    extra = reruns(recs)[n // 10:]
+def capped(recs, cap):
+    """The records without the re-runs past the first cap, in block order, and those re-runs."""
+    extra = reruns(recs)[cap:]
     return [r for r in recs if r["block"] not in extra], extra
 
 
@@ -487,8 +495,9 @@ def size(out):
     if glob.glob(os.path.join(out, "main-*.jsonl")):
         print("run6: size would choose n after main records exist", file=sys.stderr)
         sys.exit(2)
-    heavy = first(valid_blocks(records(out, "pilot", "heavy"), HEAVY_ARMS), PILOT_BLOCKS)
-    light = first(valid_blocks(records(out, "pilot", "light"), LIGHT_ARMS), PILOT_BLOCKS)
+    heavy, light = (first(valid_blocks(capped(records(out, "pilot", m), PILOT_RERUNS)[0], arms),
+                          PILOT_BLOCKS)
+                    for m, arms in (("heavy", HEAVY_ARMS), ("light", LIGHT_ARMS)))
     if len(heavy) < PILOT_BLOCKS or len(light) < PILOT_BLOCKS:
         print(f"run6: the pilot has {len(heavy)} heavy and {len(light)} light valid blocks, not"
               f" {PILOT_BLOCKS} of each", file=sys.stderr)
@@ -722,7 +731,7 @@ def summary(out):
     mixes = {"heavy": (HEAVY_ARMS, sz["n_heavy"]), "light": (LIGHT_ARMS, sz["n_light"])}
     used, spent, ignored, full = {}, {}, {}, {}
     for mix, (arms, n) in mixes.items():
-        recs, ignored[mix] = capped(records(out, "main", mix), n)
+        recs, ignored[mix] = capped(records(out, "main", mix), n // 10)
         blocks = valid_blocks(recs, arms)
         used[mix] = first(blocks, n)
         spent[mix], full[mix] = reruns(recs), len(blocks) >= n
@@ -760,7 +769,7 @@ def figures(out):
         s = json.load(f)
     used = {}
     for mix, arms in (("heavy", HEAVY_ARMS), ("light", LIGHT_ARMS)):
-        recs, _ = capped(records(out, "main", mix), s["size"][f"n_{mix}"])
+        recs, _ = capped(records(out, "main", mix), s["size"][f"n_{mix}"] // 10)
         blocks = valid_blocks(recs, arms)
         used[mix] = {b: blocks[b] for b in s["blocks"][mix]}
     names, mid = figures6.write(out, s, used["heavy"], used["light"])

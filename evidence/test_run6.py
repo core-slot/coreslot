@@ -393,15 +393,17 @@ class Verdict(Rooted):
                 (run6, "static_sizes", lambda cfg: {"60%": {"cpu": 14, "mem": 76},
                                                     "67%": {"cpu": 14, "mem": 85}}),
                 (run6, "running_apps", lambda: ["Terminal"]),
+                (run6, "coreslot_version", lambda cfg: "coreslot 0.0.0-test"),
                 (run6.acceptance, "probe", lambda: 1.0)):
             p = mock.patch.object(target, name, fake)
             p.start()
             self.addCleanup(p.stop)
 
-    def record(self, phase, mix, block, arms, valid=True):
+    def record(self, phase, mix, block, arms, valid=True, as_block=None):
         with open(os.path.join(self.out, f"{phase}-{mix}.jsonl"), "a") as f:
             for arm in arms:
-                f.write(json.dumps({"block": block, "arm": arm, "valid": valid}) + "\n")
+                f.write(json.dumps({"block": block, "arm": arm, "valid": valid,
+                                    "as_block": as_block}) + "\n")
 
     def test_resume_keeps_level_and_order(self):
         # mutation: level_for(phase, first) for level_for(phase, src) in verdict -> block 5
@@ -424,6 +426,8 @@ class Verdict(Rooted):
                          (1, hashlib.sha256(b"Terminal").hexdigest()))
         self.assertNotIn("Terminal", json.dumps(c["meta"]))
         self.assertIn('["Terminal"]', text(os.path.join(self.out, "apps.local.txt")))
+        # mutation: drop coreslot_version from the meta -> KeyError -> red
+        self.assertEqual(c["meta"]["coreslot_version"], "coreslot 0.0.0-test")
 
     def test_as_block_reuses(self):
         # mutations: seed the offsets with the block for `--as-block` -> block 13's offsets ->
@@ -439,6 +443,11 @@ class Verdict(Rooted):
         for c in self.calls:
             self.assertEqual(c["offsets"], run4.offsets_for(self.cfg, "run6-main-heavy-4"))
             self.assertEqual((c["meta"]["block"], c["meta"]["as_block"]), (13, 4))
+        # mutation: drop the refusal of a re-run's own number -> block 14 re-runs block 13 -> red
+        self.record("main", "heavy", 13, ["F"], valid=False, as_block=4)
+        with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
+            run6.verdict(self.cfg, self.out, "main", "heavy", 14, 14, as_block=13)
+        self.assertEqual((cm.exception.code, len(self.calls)), (2, len(run6.HEAVY_ARMS)))
 
     def test_needs_hash_checked(self):
         # mutation: return early from check_needs -> the changed file is used -> red
@@ -480,6 +489,7 @@ class BallastOnError(Rooted):
         with mock.patch.object(run6, "Ballast", Small), mock.patch.object(run4, "run_set", boom), \
                 mock.patch.object(run6, "static_sizes", lambda cfg: {}), \
                 mock.patch.object(run6, "running_apps", lambda: []), \
+                mock.patch.object(run6, "coreslot_version", lambda cfg: ""), \
                 mock.patch.object(run6.acceptance, "probe", lambda: 1.0), \
                 mock.patch.object(run6, "level_for", lambda phase, block: 64):
             with self.assertRaises(RuntimeError):
@@ -716,6 +726,18 @@ class Analysis(unittest.TestCase):
         os.remove(os.path.join(self.out, "pilot-light.jsonl"))
         for b in range(1, 13):
             write(self.out, "pilot-light.jsonl", light_block(b, "pilot"))
+        with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
+            run6.size(self.out)
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_pilot_reruns_capped(self):
+        # mutation: size over the uncapped pilot records -> the fourth re-run completes a 12th
+        # valid heavy block and size runs -> red
+        for b in range(1, 13):
+            write(self.out, "pilot-heavy.jsonl", heavy_block(b, "pilot", invalid=("F",) * (b > 8)))
+            write(self.out, "pilot-light.jsonl", light_block(b, "pilot"))
+        for b in range(13, 17):
+            write(self.out, "pilot-heavy.jsonl", heavy_block(b, "pilot", as_block=b - 4))
         with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
             run6.size(self.out)
         self.assertEqual(cm.exception.code, 2)
