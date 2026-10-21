@@ -1523,7 +1523,8 @@ the first 12 valid light pilot blocks had a warn-or-worse sample, H2 is untested
   blocks is reported as it is: the spread run's mean primaries and each of F, S1, S2 and S3 over
   K60; the cold run's KC/K60.
 - The covariates each set records (memory in use, the thermal state, the 1-minute load),
-  descriptively per arm and background level. No covariate-adjusted test is run.
+  tabulated from the set records per arm and background level in the results (`summary` does
+  not compute them). No covariate-adjusted test is run.
 - The sets coreslot failed, and the oracles chosen.
 
 ### Validity, re-runs and an incomplete run
