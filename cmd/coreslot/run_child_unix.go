@@ -25,6 +25,11 @@ const memSampleEvery = time.Second
 func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 	for _, name := range slices.Sorted(maps.Keys(g.Clamped())) {
 		n := amount(name, g.Grant()[name])
+		if name == "mem" && g.LiveMem() {
+			r.notice("mem: requested %s, more than the budget and free memory allow; running alone with %s",
+				amount(name, g.Clamped()[name]), n)
+			continue
+		}
 		r.notice("%s: requested %s, budget is %s; running alone with %s", name, amount(name, g.Clamped()[name]), n, n)
 	}
 	if g.TokenOnly() {

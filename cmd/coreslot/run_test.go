@@ -1057,10 +1057,11 @@ func TestClampNotice(t *testing.T) {
 	}
 }
 
-// A clamped mem need is reported in bytes. Mutation: printing the clamp notice's counts as
-// tokens turns it red.
+// A clamped mem need is reported in bytes. [memory] live = false keeps the clamp at the static
+// size, so that it never depends on the test machine's memory. Mutation: printing the clamp
+// notice's counts as tokens turns it red.
 func TestClampNoticeMem(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 10\nmem = \"9.5G\"\n")
+	dir := stateDir(t, "[resources]\ncpu = 10\nmem = \"9.5G\"\n[memory]\nlive = false\n")
 	r := cli(t, baseEnv(dir), "run", "--need", "mem=10G", "--", "true")
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -1068,6 +1069,36 @@ func TestClampNoticeMem(t *testing.T) {
 	want := "coreslot: mem: requested 10 GiB, budget is 9.5 GiB; running alone with 9.5 GiB\n"
 	if !strings.Contains(r.stderr, want) {
 		t.Errorf("stderr %q, want the notice %q", r.stderr, want)
+	}
+}
+
+// A run's hold says that its process tree carries the work, so that the live mem size may
+// measure it. Mutation: the run's request not setting Tree.
+func TestRunHoldHasTree(t *testing.T) {
+	dir := stateDir(t, "[resources]\nmem = \"8G\"\n[memory]\nlive = false\n")
+	cmd := cliCmd(t, baseEnv(dir), "run", "--need", "mem=1G", "--", "sleep", "1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Wait() }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no hold published within 10 s")
+		}
+		entries, _ := os.ReadDir(filepath.Join(dir, store.HoldsDir))
+		for _, en := range entries {
+			if strings.HasPrefix(en.Name(), ".") {
+				continue
+			}
+			body, err := os.ReadFile(filepath.Join(dir, store.HoldsDir, en.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), `"tree":true`) {
+				t.Errorf("hold body %s, want \"tree\":true", body)
+			}
+			return
+		}
 	}
 }
 
