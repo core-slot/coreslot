@@ -25,7 +25,7 @@ def level_of(sets):
 
 
 def sstar(sets, s_star):
-    return f"S{s_star[level_of(sets)]}"
+    return s_star[level_of(sets)]
 
 
 def ticks(lo, hi, n=5):
@@ -180,13 +180,13 @@ def f4_pareto(heavy, level):
 
 
 def f5_regret(heavy, s_star, regret):
-    arms = ["S1", "S2", "S3", "K60"]
+    arms = ["S1", "S2", "S3", "F", "K60"]
     levels = sorted({level_of(s) for s in heavy.values()})
     vals = {}
     for lv in levels:
-        for n in (1, 2, 3):
-            e = regret[lv][n]
-            vals[lv, f"S{n}"] = (e["gmr"], e["bca90"]) if e else None
+        for a in arms[:-1]:
+            e = regret[lv][a]
+            vals[lv, a] = (e["gmr"], e["bca90"]) if e else None
         bs = [b for b in heavy if level_of(heavy[b]) == lv]
         d = [math.log(heavy[b]["K60"]["mean_verdict_s"]
                       / heavy[b][sstar(heavy[b], s_star)]["mean_verdict_s"]) for b in bs]
@@ -200,13 +200,13 @@ def f5_regret(heavy, s_star, regret):
                  "ratio to S* (geometric mean)")
     for i, lv in enumerate(levels):
         body.append(f'<text x="{x(i):.1f}" y="{box[3] + 16}" text-anchor="middle" '
-                    f'fill="{MUTED}">{lv} (S* = S{s_star[lv]})</text>')
+                    f'fill="{MUTED}">{lv} (S* = {s_star[lv]})</text>')
         for j, a in enumerate(arms):
             v = vals[lv, a]
             if not v or v[0] is None:
                 continue
             g, (lo, hi) = v
-            cx, c = x(i - 0.3 + 0.2 * j), ARM_COLOUR[a]
+            cx, c = x(i - 0.32 + 0.16 * j), ARM_COLOUR[a]
             if lo is not None and hi is not None:
                 body.append(f'<line x1="{cx:.1f}" x2="{cx:.1f}" y1="{y(hi):.1f}" y2="{y(lo):.1f}" '
                             f'stroke="{c}" stroke-width="2"/>')
@@ -266,10 +266,9 @@ def f7_light(light):
 def write(out, summary, heavy, light):
     """Writes the figures into out; heavy and light are block -> arm -> set for the blocks the
     summary used."""
-    s_star = {int(lv): n for lv, n in summary["oracles"]["S"].items()}
+    s_star = {int(lv): a for lv, a in summary["oracles"]["S"].items()}
     kcf = {int(b): a for b, a in summary["oracles"]["Kcf"].items()}
-    regret = {int(lv): {int(n): e for n, e in r.items()}
-              for lv, r in summary["reported"]["regret"].items()}
+    regret = {int(lv): r for lv, r in summary["reported"]["regret"].items()}
     mid, timeline = f1_timeline(heavy, s_star, kcf)
     figs = {"f1-timeline.svg": timeline, "f3-paired.svg": f3_paired(heavy, s_star, kcf),
             "f5-regret.svg": f5_regret(heavy, s_star, regret), "f6-ecdf.svg": f6_ecdf(heavy),

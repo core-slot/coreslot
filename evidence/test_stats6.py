@@ -5,6 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import acceptance  # noqa: E402
 import stats6  # noqa: E402
 
 
@@ -34,13 +35,10 @@ class Student(unittest.TestCase):
 
 
 class Sign(unittest.TestCase):
-    def test_sign_test(self):
-        self.assertAlmostEqual(stats6.sign_test(10, 2), 0.019287, delta=1e-6)
-        self.assertAlmostEqual(stats6.sign_test(9, 3), 0.072998, delta=1e-6)
-
     def test_sign_test_all_ties(self):
-        # mutation: range(wins, n) for range(wins, n + 1) in sign_test -> no pairs sum to 0 -> red
-        self.assertEqual(stats6.sign_test(0, 0), 1.0)
+        # mutation: range(wins, n) for range(wins, n + 1) in acceptance.sign_test -> no pairs
+        # sum to 0 -> red
+        self.assertEqual(acceptance.sign_test(0, 0), 1.0)
 
     def test_clopper_pearson(self):
         lo, hi = stats6.clopper_pearson(0, 30)

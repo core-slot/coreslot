@@ -15,3 +15,6 @@ __pycache__/
 /.claude/
 /.codex/
 /.superpowers/
+
+# The names of the apps running during an acceptance run, kept on the machine that ran it
+apps.local.txt

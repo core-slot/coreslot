@@ -113,8 +113,8 @@ def headroom_mib():
     return sum(int(v) for v in vals[1:]) * int(vals[0]) >> 20
 
 
-def tree_rss_kib(root):
-    """Resident KiB of root and all its descendants, from one ps listing."""
+def tree_kib(root):
+    """pid -> resident KiB of root and each of its descendants, from one ps listing."""
     r = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True, text=True)
     kids, rss = {}, {}
     for line in r.stdout.splitlines():
@@ -123,12 +123,16 @@ def tree_rss_kib(root):
             pid, ppid, kib = int(p[0]), int(p[1]), int(p[2])
             kids.setdefault(ppid, []).append(pid)
             rss[pid] = kib
-    total, todo = 0, [root]
+    tree, todo = {}, [root]
     while todo:
         pid = todo.pop()
-        total += rss.get(pid, 0)
+        tree[pid] = rss.get(pid, 0)
         todo.extend(kids.get(pid, []))
-    return total
+    return tree
+
+
+def tree_rss_kib(root):
+    return sum(tree_kib(root).values())
 
 
 class Sampler(threading.Thread):

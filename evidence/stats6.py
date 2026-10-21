@@ -1,6 +1,6 @@
 """The statistics of acceptance run 6, standard library only: Student's t through the regularized
 incomplete beta, one-sided paired t tests against a bound, a BCa bootstrap interval of the mean,
-the exact sign test, the Clopper-Pearson interval, and the block count the pilot's sigma asks for.
+the Clopper-Pearson interval, and the block count the pilot's sigma asks for.
 """
 import math
 import random
@@ -118,13 +118,6 @@ def bca(d, alpha=0.10, reps=10000, seed=0):
         z = nd.inv_cdf(q)
         return nd.cdf(z0 + (z0 + z) / (1 - a * (z0 + z)))
     return (_quantile(boot, adjusted(alpha / 2)), _quantile(boot, adjusted(1 - alpha / 2)))
-
-
-def sign_test(wins, losses):
-    """One-sided exact: the chance of at least `wins` of the untied pairs favoring one arm by luck.
-    Ties are dropped by the caller; with none left, the sum is comb(0, 0) and p is 1."""
-    n = wins + losses
-    return sum(math.comb(n, k) for k in range(wins, n + 1)) / 2 ** n
 
 
 def clopper_pearson(k, n, alpha=0.05):

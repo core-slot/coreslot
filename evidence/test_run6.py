@@ -1,4 +1,5 @@
 """Tests of run6.py, its ballast and its run_set arms: python3 -m unittest evidence/test_run6.py"""
+import hashlib
 import json
 import math
 import os
@@ -152,7 +153,7 @@ class Learn(Rooted):
             p = mock.patch.object(run4, name, fake)
             p.start()
             self.addCleanup(p.stop)
-        p = mock.patch.object(run6, "descendants_rss_kib", lambda: 2_000_000)
+        p = mock.patch.object(run6, "descendants_kib", lambda: 2_000_000)
         p.start()
         self.addCleanup(p.stop)
 
@@ -216,6 +217,46 @@ class Learn(Rooted):
             self.learn()
         self.assertEqual(cm.exception.code, 2)
         self.assertEqual(self.runs, [])
+
+
+class Meter(Rooted):
+    @unittest.skipUnless(sys.platform == "darwin", "the physical footprint is macOS's")
+    def test_footprint_counts_shared_pages_once(self):
+        # mutation: sum each descendant's RSS in descendants_kib -> the file the child and its
+        # three forked children read counts four times, over 256 MiB -> red
+        data = os.path.join(self.root, "data")
+        with open(data, "wb") as f:
+            f.write(b"x" * (64 << 20))
+        child = subprocess.Popen([sys.executable, "-c", (
+            "import mmap, os, sys, time\nb = b'y' * (32 << 20)\n"
+            "m = mmap.mmap(os.open(sys.argv[1], os.O_RDONLY), 0, prot=mmap.PROT_READ)\n"
+            "for _ in range(3):\n    if os.fork() == 0:\n        m[::4096]; time.sleep(60)\n"
+            "m[::4096]; print('ok', flush=True); time.sleep(60)"),
+            data], stdout=subprocess.PIPE, text=True, start_new_session=True)
+        self.addCleanup(child.wait)
+        self.addCleanup(os.killpg, child.pid, signal.SIGKILL)
+        self.assertEqual(child.stdout.readline(), "ok\n")
+        time.sleep(1)  # the forked children's reads
+        self.assertTrue(32 << 10 <= run6.descendants_kib() < 64 << 10)
+
+    def test_interrupted_gate_is_stopped(self):
+        # mutation: drop run4.run_gate's stop on an exception -> learn's interrupted gate, its
+        # sleep, outlives the interrupt -> red
+        pidfile = os.path.join(self.root, "pid")
+        g = dict(gate("sleeper"), argv=["sh", "-c", f"sleep 37 & echo $! > {pidfile}; wait"])
+
+        def interrupt(*_):
+            raise KeyboardInterrupt
+        self.addCleanup(signal.signal, signal.SIGALRM, signal.signal(signal.SIGALRM, interrupt))
+        signal.alarm(1)
+        with self.assertRaises(KeyboardInterrupt):
+            run6.measured(self.cfg, g, "F")
+        pid = int(text(pidfile))
+        self.addCleanup(kill_quietly, pid)
+        deadline = time.monotonic() + 2
+        while alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(alive(pid))
 
 
 class RunSet(Rooted):
@@ -356,10 +397,10 @@ class Verdict(Rooted):
             p.start()
             self.addCleanup(p.stop)
 
-    def record(self, phase, mix, block, arms):
+    def record(self, phase, mix, block, arms, valid=True):
         with open(os.path.join(self.out, f"{phase}-{mix}.jsonl"), "a") as f:
             for arm in arms:
-                f.write(json.dumps({"block": block, "arm": arm}) + "\n")
+                f.write(json.dumps({"block": block, "arm": arm, "valid": valid}) + "\n")
 
     def test_resume_keeps_level_and_order(self):
         # mutation: level_for(phase, first) for level_for(phase, src) in verdict -> block 5
@@ -377,9 +418,20 @@ class Verdict(Rooted):
                          (run6.level_for("main", 5), 3, o5[2]))
         self.assertEqual(c["path"], os.path.join(self.out, "main-heavy.jsonl"))
         self.assertEqual(c["offsets"], run4.offsets_for(self.cfg, "run6-main-heavy-5"))
+        # mutation: record the apps' names -> "Terminal" is in the record -> red
+        self.assertEqual((c["meta"]["apps_count"], c["meta"]["apps_sha256"]),
+                         (1, hashlib.sha256(b"Terminal").hexdigest()))
+        self.assertNotIn("Terminal", json.dumps(c["meta"]))
+        self.assertIn('["Terminal"]', text(os.path.join(self.out, "apps.local.txt")))
 
     def test_as_block_reuses(self):
-        # mutation: seed the offsets with the block for `--as-block` -> block 13's offsets -> red
+        # mutations: seed the offsets with the block for `--as-block` -> block 13's offsets ->
+        # red; drop the refusal of a block with no invalid set -> block 5 is re-run -> red
+        self.record("main", "heavy", 5, run6.HEAVY_ARMS)
+        self.record("main", "heavy", 4, ["F"], valid=False)
+        with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
+            run6.verdict(self.cfg, self.out, "main", "heavy", 13, 13, as_block=5)
+        self.assertEqual((cm.exception.code, self.calls), (2, []))
         run6.verdict(self.cfg, self.out, "main", "heavy", 13, 13, as_block=4)
         self.assertEqual([c["arm"] for c in self.calls], run6.order_for("main", "heavy", 4))
         self.assertEqual(self.levels, [run6.level_for("main", 4)])
@@ -456,13 +508,15 @@ def sset(phase, mix, block, arm, verdict, warn=0, swap=0, valid=True, as_block=N
     samples = [{"t": i, "pressure": 2 if i < warn else 1, "swapouts": swap if i == warn + 1 else 0,
                 "swapins": 0, "pageins": 0} for i in range(warn + 2)]
     return {"phase": phase, "mix": mix, "block": block, "as_block": as_block, "arm": arm,
-            "config": arm, "valid": valid, "invalid": [] if valid else ["battery"],
+            "valid": valid, "invalid": [] if valid else ["battery"],
             "started": "1970-01-01T00:00:00+00:00", "order": " ".join(order),
             "level_mib": run6.level_for(phase, src) if mix == "heavy" else 0, "position": pos,
             "prev_arm": order[pos - 1] if pos else None, "mean_verdict_s": verdict,
             "verdict_s": {"A1": verdict}, "makespan_s": verdict + 10, "samples": samples,
-            "page_bytes": 16384,
-            "gates": [{"agent": "A1", "gate": "tc", "start": 0, "end": verdict, "exit": 0}]}
+            "page_bytes": 16384, "runlog": [{"label": "bench:tc", "time_ns": 0, "ran_s": verdict,
+                                             "exit": 0, "fail_open": ""}] * arm.startswith("K"),
+            "gates": [{"agent": "A1", "gate": "tc", "label": "bench:tc", "start": 0,
+                       "end": verdict, "exit": 0}]}
 
 
 def heavy_block(block, phase="main", values=None, invalid=(), as_block=None):
@@ -481,6 +535,15 @@ def light_block(block, phase="main", k60=1.0, f_warn=0):
 def write(out, name, recs):
     with open(os.path.join(out, name), "a") as f:
         for r in recs:
+            f.write(json.dumps(r) + "\n")
+
+
+def edit(out, name, change):
+    """Rewrites out/name with change(record) applied to every record."""
+    recs = run4.read_jsonl(os.path.join(out, name))
+    with open(os.path.join(out, name), "w") as f:
+        for r in recs:
+            change(r)
             f.write(json.dumps(r) + "\n")
 
 
@@ -523,7 +586,7 @@ class Analysis(unittest.TestCase):
         for b in range(1, 13):
             write(self.out, "pilot-heavy.jsonl", heavy_block(b, "pilot", {"S1": 40}))
         s = self.summary()
-        self.assertEqual(s["oracles"]["S"], {"0": 2, "1536": 2, "3072": 2})
+        self.assertEqual(s["oracles"]["S"], {"0": "S2", "1536": "S2", "3072": "S2"})
         self.assertEqual(s["tests"]["H1"]["status"], "rejected")
 
     def test_invalid_block_dropped_everywhere(self):
@@ -532,16 +595,12 @@ class Analysis(unittest.TestCase):
         write_size(self.out)
         write_main(self.out, heavy=range(1, 32),
                    values=lambda b: {"S3": 10, "K67": 10} if b == 7 else None)
-        with open(os.path.join(self.out, "main-heavy.jsonl")) as f:
-            recs = [json.loads(l) for l in f]
-        with open(os.path.join(self.out, "main-heavy.jsonl"), "w") as f:
-            for r in recs:
-                r["valid"] = not (r["block"] == 7 and r["arm"] == "K60")
-                f.write(json.dumps(r) + "\n")
+        edit(self.out, "main-heavy.jsonl",
+             lambda r: r.update(valid=not (r["block"] == 7 and r["arm"] == "K60")))
         want = [b for b in range(1, 32) if b != 7]
         s = self.summary()
         self.assertEqual(s["blocks"]["heavy"], want)
-        self.assertEqual(s["oracles"]["S"], {"0": 2, "1536": 2, "3072": 2})
+        self.assertEqual(s["oracles"]["S"], {"0": "S2", "1536": "S2", "3072": "S2"})
         self.assertEqual(sorted(map(int, s["oracles"]["Kcf"])), want)
         self.assertEqual(set(s["oracles"]["Kcf"].values()), {"K60"})
         for h in ("H1", "H3", "H4", "H5"):
@@ -554,33 +613,41 @@ class Analysis(unittest.TestCase):
             self.assertEqual(s["tests"][h]["blocks"], list(range(1, 31)), h)
 
     def test_chain_stops(self):
-        # mutation: keep going after a non-rejection (`going = True` for `going = h["reject"]`)
-        # -> H3 is "rejected" -> red
+        # mutations: keep going after a non-rejection (`going = True` for `going = h["reject"]`)
+        # -> H4 is "rejected" -> red; CHAIN in the order H1-H5 -> a failed H2 stops H3 -> red;
+        # drop "estimate" from H1, H2 or H3 -> KeyError -> red
         write_size(self.out)
         write_main(self.out, k60_light=1.10)
         t = self.summary()["tests"]
-        self.assertEqual([t[h]["status"] for h in ("H1", "H2", "H3", "H4", "H5")],
-                         ["rejected", "not rejected", "exploratory", "exploratory",
-                          "exploratory"])
+        self.assertEqual(list(t), ["H1", "H4", "H5", "H3", "H2"])
+        self.assertEqual([h["status"] for h in t.values()], ["rejected"] * 4 + ["not rejected"])
+        for h, gmr in (("H1", 0.8), ("H2", 1.1), ("H3", 80 / 90)):
+            self.assertAlmostEqual(t[h]["estimate"]["gmr"], gmr, delta=0.02)
+            self.assertLess(t[h]["estimate"]["bca90"][0], t[h]["estimate"]["upper"])
+        os.remove(os.path.join(self.out, "main-heavy.jsonl"))
+        write_main(self.out, light=(), values=lambda b: {"K60": 105})
+        t = self.summary()["tests"]
         self.assertTrue(t["H3"]["reject"])
+        self.assertEqual([h["status"] for h in t.values()],
+                         ["not rejected"] + ["exploratory"] * 4)
         write_size(self.out, pressure=2)
-        os.remove(os.path.join(self.out, "main-light.jsonl"))
-        write_main(self.out, heavy=())
+        for mix in ("heavy", "light"):
+            os.remove(os.path.join(self.out, f"main-{mix}.jsonl"))
+        write_main(self.out)
         t = self.summary()["tests"]
         self.assertTrue(t["H2"]["reject"])
-        self.assertEqual([t[h]["status"] for h in ("H1", "H2", "H3", "H4", "H5")],
-                         ["rejected"] + ["exploratory"] * 4)
+        self.assertEqual([h["status"] for h in t.values()], ["rejected"] * 4 + ["untested"])
         write_size(self.out, pressure=1)
         t = self.summary()["tests"]
-        self.assertEqual([t[h]["status"] for h in ("H1", "H2", "H3", "H4", "H5")],
-                         ["rejected"] * 5)
+        self.assertEqual([h["status"] for h in t.values()], ["rejected"] * 5)
 
     def test_oracle_per_level(self):
-        # mutation: choose S* over all the blocks for every level -> one N everywhere -> red
-        best = {0: "S3", 1536: "S2", 3072: "S1"}
+        # mutations: choose S* over all the blocks for every level -> one N everywhere -> red;
+        # S_ARMS without F -> S2 at 3072 MiB, where F, four slots, is the fastest -> red
+        best = {0: "S3", 1536: "S2", 3072: "F"}
         write_size(self.out)
         write_main(self.out, values=lambda b: {best[run6.level_for("main", b)]: 85})
-        self.assertEqual(self.summary()["oracles"]["S"], {"0": 3, "1536": 2, "3072": 1})
+        self.assertEqual(self.summary()["oracles"]["S"], {"0": "S3", "1536": "S2", "3072": "F"})
 
     def test_cross_fit_uses_other_half(self):
         # mutation: cross_fit choosing on all the level's blocks -> K67's mean, 77, beats K60's 80
@@ -597,44 +664,65 @@ class Analysis(unittest.TestCase):
         write_size(self.out)
         write_main(self.out)
         for p, want in ((0.012, "not rejected"), (0.008, "rejected")):
-            with mock.patch.object(run6.stats6, "sign_test", lambda w, lo: p), \
-                    mock.patch.object(run6.stats6, "paired_lower", lambda d, b: {"p": p}):
+            with mock.patch.object(run6.run4, "sign_test", lambda w, n: p), \
+                    mock.patch.object(run6.stats6, "paired_lower",
+                                      lambda d, b: {"p": p, "mean": 0.1, "lower": 0.05}):
                 t = self.summary()["tests"]
             self.assertEqual(t["H4"]["status"], "rejected")
             self.assertEqual(t["H5"]["status"], want, p)
+        # mutation: drop the "test" label from H5's rows -> KeyError -> red
+        rows = t["H5"]["per_n"]["1"]["tests"]
+        self.assertEqual([(r["level"], r["test"]) for r in rows],
+                         [(lv, k) for lv in run6.LEVELS_MIB for k in ("time", "warn")])
+        self.assertEqual((rows[0]["gmr"], rows[0]["lower"], rows[1]["wins"]),
+                         (round(math.exp(0.1), 4), round(math.exp(0.05), 4), 10))
 
-    def test_size_rule(self):
-        # mutation: pass sigma-hat, not its upper bound, to blocks_needed -> n_heavy 69, not 108 -> red
-        dev = [0.12, -0.10, 0.15, -0.05, 0.02, -0.14, 0.08, -0.02, 0.11, -0.09, 0.0, -0.08]
-        for b in range(1, 13):
-            write(self.out, "pilot-heavy.jsonl", heavy_block(b, "pilot", {
-                "K60": 80 * math.exp(dev[b - 1]), "K67": 100, "S1": 95, "S2": 90, "S3": 95}))
-            write(self.out, "pilot-light.jsonl", light_block(b, "pilot", f_warn=int(b < 3)))
-        write(self.out, "main-heavy.jsonl", heavy_block(1))  # never read by size
+    def size(self):
         with mock.patch("sys.stdout"):
             run6.size(self.out)
         with open(os.path.join(self.out, "size.json")) as f:
-            got = json.load(f)
+            return json.load(f)
+
+    def test_size_rule(self):
+        # mutations: pass sigma-hat, not its upper bound, to blocks_needed -> n_heavy 69, not 108
+        # -> red; size over every valid pilot block -> blocks 13-15 move sigma-hat -> red; count
+        # every light F record with a warn sample -> block 5's invalid one makes 3 -> red; drop
+        # the refusal once a main record exists -> size runs -> red
+        dev = [0.12, -0.10, 0.15, -0.05, 0.02, -0.14, 0.08, -0.02, 0.11, -0.09, 0.0, -0.08]
+        for b in range(1, 16):
+            write(self.out, "pilot-heavy.jsonl", heavy_block(b, "pilot", {
+                "K60": 80 * math.exp(dev[b - 1]) if b < 13 else 200, "K67": 100, "S1": 95,
+                "S2": 90, "S3": 95}))
+            write(self.out, "pilot-light.jsonl", light_block(b, "pilot", f_warn=int(b < 3)))
+        write(self.out, "pilot-light.jsonl", [sset("pilot", "light", 5, "F", 50, 1, valid=False)])
+        got = self.size()
         ln = [math.log(round(80 * math.exp(x), 2) / 90) for x in dev]
         self.assertAlmostEqual(got["sigma_hat_heavy"], statistics.stdev(ln), places=9)
         self.assertAlmostEqual(got["sigma_heavy"],
                                stats6.sigma_upper(statistics.stdev(ln), 12), places=9)
-        self.assertEqual(got["n_heavy"], 108)
-        self.assertEqual(got["n_light"], 12)
-        self.assertEqual(got["light_pressure_sets"], 2)
-        with open(os.path.join(self.out, "pilot-light.jsonl")) as f:
-            recs = [json.loads(l) for l in f]
-        with open(os.path.join(self.out, "pilot-light.jsonl"), "w") as f:
-            for r in recs:
-                r["valid"] = r["block"] != 12
-                f.write(json.dumps(r) + "\n")
+        self.assertEqual((got["n_heavy"], got["n_heavy_unclamped"], got["n_light"]), (108, 108, 12))
+        self.assertEqual((got["light_pressure_sets"], got["underpowered"]), (2, False))
+        # mutation: drop the underpowered update -> 108 above a cap of 90 is not flagged -> red
+        with mock.patch.object(run6, "N_HEAVY", (30, 90, 3)):
+            got = self.size()
+        self.assertEqual((got["n_heavy"], got["n_heavy_unclamped"], got["underpowered"]),
+                         (90, 108, True))
+        edit(self.out, "pilot-light.jsonl", lambda r: r.update(valid=r["block"] < 3))
+        with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
+            run6.size(self.out)
+        self.assertEqual(cm.exception.code, 2)
+        write(self.out, "main-heavy.jsonl", heavy_block(1))
+        os.remove(os.path.join(self.out, "pilot-light.jsonl"))
+        for b in range(1, 13):
+            write(self.out, "pilot-light.jsonl", light_block(b, "pilot"))
         with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
             run6.size(self.out)
         self.assertEqual(cm.exception.code, 2)
 
     def test_incomplete_when_cap_spent(self):
-        # mutation: `<=` for `<` in summary's re-run cap check -> with the 3 re-runs spent it
-        # still exits 2 -> red
+        # mutations: `<=` for `<` in summary's re-run cap check -> with the 3 re-runs spent it
+        # still exits 2 -> red; test only when every mix is full -> the short light mix leaves
+        # H1 untested -> red
         write_size(self.out)
         write_main(self.out, heavy=range(1, 30))
         write(self.out, "main-heavy.jsonl", heavy_block(30, invalid=("F",)))
@@ -644,13 +732,83 @@ class Analysis(unittest.TestCase):
         for b in (31, 32, 33):
             write(self.out, "main-heavy.jsonl", heavy_block(b, invalid=("F",), as_block=30))
         s = self.summary()
-        self.assertIsNone(s["tests"])
-        self.assertIn("incomplete", s["incomplete"])
+        self.assertEqual([h["status"] for h in s["tests"].values()],
+                         ["untested"] + ["exploratory"] * 4)
+        self.assertTrue(all("untested" in s["tests"][h] for h in ("H1", "H4", "H5", "H3")))
+        self.assertTrue(s["tests"]["H2"]["reject"])
+        self.assertIn("incomplete: heavy", s["incomplete"])
         self.assertEqual(s["reruns"]["heavy"], [31, 32, 33])
         self.assertEqual(s["reported"]["per_arm"]["heavy"]["F"]["mean_verdict_s"],
                          round(statistics.fmean(100 * noise(b, "F") for b in range(1, 30)), 1))
         with open(os.path.join(self.out, "summary.txt")) as f:
             self.assertIn("incomplete", f.read())
+        os.remove(os.path.join(self.out, "main-light.jsonl"))
+        write_main(self.out, heavy=range(34, 35), light=range(1, 12))
+        write(self.out, "main-light.jsonl", light_block(12)[:1] + [
+            sset("main", "light", b, "F", 50, valid=False, as_block=12 if b > 12 else None)
+            for b in (12, 13)])
+        t = self.summary()["tests"]
+        self.assertEqual([h["status"] for h in t.values()], ["rejected"] * 4 + ["untested"])
+
+    def test_rerun_only_for_invalid_within_cap(self):
+        # mutations: prefer a valid re-run to the block's own valid sets -> block 5's F is 130
+        # -> red; drop the cap in capped -> re-run 35 completes block 2 -> red
+        write_size(self.out)
+        write_main(self.out, heavy=range(1, 32),
+                   values=lambda b: {"F": 130} if b in (1, 2) else None)
+        edit(self.out, "main-heavy.jsonl",
+             lambda r: r.update(valid=not (r["block"] in (1, 2) and r["arm"] == "F")))
+        for b, src, ok in ((32, 5, True), (33, 1, True), (34, 2, False), (35, 2, True)):
+            write(self.out, "main-heavy.jsonl", heavy_block(
+                b, values={"F": 130}, invalid=() if ok else ("F",), as_block=src))
+        s = self.summary()
+        self.assertEqual(s["blocks"]["heavy"], [1] + list(range(3, 32)))
+        self.assertEqual(s["reruns_ignored"]["heavy"], [35])
+        f = [130] + [round(100 * noise(b, "F"), 2) for b in range(3, 32)]
+        self.assertEqual(s["reported"]["per_arm"]["heavy"]["F"]["mean_verdict_s"],
+                         round(statistics.fmean(f), 1))
+
+    def test_coreslot_failure_counts_against_it(self):
+        # mutations: drop `line is None`, `line.get("fail_open")` or the CORESLOT_EXITS check in
+        # coreslot_failed -> block 1, 2 or 3 is not flagged -> red; skip the imputation -> K60's
+        # mean stays 80 -> red; drop worse() -> H1's warn test counts 30 wins -> red
+        write_size(self.out)
+        write_main(self.out)
+        broken = {1: {"runlog": []}, 2: {"runlog": [dict(time_ns=0, label="bench:tc", ran_s=1,
+                                                          exit=0, fail_open="timeout")]},
+                  3: {"gates": [dict(agent="A1", gate="tc", label="bench:tc", start=0, end=1,
+                                     exit=70)]}}
+        edit(self.out, "main-heavy.jsonl",
+             lambda r: r.update(broken.get(r["block"], {}) if r["arm"] == "K60" else {}))
+        s = self.summary()
+        self.assertEqual(s["coreslot_failed"]["heavy"], ["1 K60", "2 K60", "3 K60"])
+        self.assertEqual(s["tests"]["H1"]["warn"], {"wins": 27, "losses": 3,
+                                                    "p": run4.sign_test(27, 30)})
+        k60 = [100 * noise(b, "F") if b < 4 else 80 * noise(b, "K60") for b in range(1, 31)]
+        self.assertAlmostEqual(s["reported"]["per_arm"]["heavy"]["K60"]["mean_verdict_s"],
+                               statistics.fmean(k60), delta=0.1)
+
+    def test_slowdown_and_intervals(self):
+        # mutations: `g["end"] - g["start"]` for every arm in per_arm -> K60's slowdown counts
+        # its admission wait, 2.0 -> red; drop the BCa interval from ci or by_gate from the
+        # false failures -> KeyError -> red; sensitivity over every valid block -> 8 -> red
+        write_size(self.out)
+        write_main(self.out)
+        edit(self.out, "main-heavy.jsonl", lambda r: [l.update(ran_s=r["mean_verdict_s"] / 2)
+                                                      for l in r["runlog"]])
+        write(self.out, "learn.jsonl", [{"gate": "tc", "form": form, "run": n, "exit": 0,
+                                         "wall_s": 40.0} for form in "KF" for n in (1, 2, 3)])
+        for b in range(1, 9):
+            write(self.out, "sens-spread.jsonl", [sset("sens", "spread", b, a, 50 * noise(b, a))
+                                                  for a in run6.SPREAD_ARMS])
+        r = self.summary()["reported"]
+        k60 = r["per_arm"]["heavy"]["K60"]
+        self.assertAlmostEqual(k60["slowdown"]["tc"]["mean"], 1.0, delta=0.03)
+        self.assertLess(k60["slowdown"]["tc"]["bca90"][0], k60["slowdown"]["tc"]["bca90"][1])
+        self.assertEqual(k60["swapout_bytes"]["bca90"], [100 * 16384] * 2)
+        self.assertEqual(k60["false_failures"]["by_gate"]["tc"]["n"], 30)
+        self.assertIn("bca90", r["order"]["prev_arm"]["none"])
+        self.assertEqual(r["sensitivity"]["spread"]["blocks"], list(range(1, 7)))
 
     def test_figures_written(self):
         # mutations: drop f7 from figures6.write's figures -> f7-light.svg is missing -> red;

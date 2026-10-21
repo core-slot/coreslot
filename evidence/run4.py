@@ -168,6 +168,9 @@ def run_gate(argv, **kw):
         _live.add(p)
     try:
         out, _ = p.communicate()
+    except BaseException:  # interrupted in the thread that waits for it (learn's): stop it
+        stop_live()
+        raise
     finally:
         with _live_lock:
             _live.discard(p)
@@ -275,8 +278,9 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
                         sem.release()
                 e = time.time()
                 with lock:
-                    gates.append({"agent": name, "gate": g["gate"], "start": round(s - t0, 1),
-                                  "end": round(e - t0, 1), "exit": code})
+                    gates.append({"agent": name, "gate": g["gate"], "label": g.get("label"),
+                                  "start": round(s - t0, 1), "end": round(e - t0, 1),
+                                  "exit": code})
                     if code:
                         failures.append({"agent": name, "gate": g["gate"],
                                          "lines": fail_lines(g, out)})
@@ -462,9 +466,14 @@ def critical_s(r):
     return sum((s["pressure"] or 1) >= 4 for s in r["samples"])
 
 
+def counter(r, key):
+    """The rise of a sampled counter over the set."""
+    c = [s[key] for s in r["samples"] if s.get(key) is not None]
+    return c[-1] - c[0] if len(c) > 1 else 0
+
+
 def swapout_mib(r):
-    c = [s["swapouts"] for s in r["samples"] if s.get("swapouts") is not None]
-    return round((c[-1] - c[0]) * r.get("page_bytes", 16384) / 2**20, 1) if len(c) > 1 else 0
+    return round(counter(r, "swapouts") * r.get("page_bytes", 16384) / 2**20, 1)
 
 
 def waited_s(r):
