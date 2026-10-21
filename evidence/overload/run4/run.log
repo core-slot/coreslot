@@ -1,0 +1,73 @@
+==== run4-learn.log
+{"started": "2026-10-21T08:55:22+00:00", "gate": "vscode-typecheck", "round": 1, "form": "K", "exit": 0, "wall_s": 11.4, "failures": []}
+{"started": "2026-10-21T08:55:33+00:00", "gate": "fastapi-ruff", "round": 1, "form": "K", "exit": 0, "wall_s": 0.1, "failures": []}
+{"started": "2026-10-21T08:55:34+00:00", "gate": "fastapi-tests", "round": 1, "form": "K", "exit": 0, "wall_s": 23.2, "failures": []}
+{"started": "2026-10-21T08:55:57+00:00", "gate": "sqlalchemy-orm-tests", "round": 1, "form": "K", "exit": 0, "wall_s": 28.7, "failures": []}
+bench:fastapi-ruff: wrote cpu = "1", mem = "128M" and its evidence
+bench:fastapi-tests: wrote cpu = "1..6", mem = "3456M" and its evidence
+bench:sqlalchemy-orm-tests: wrote cpu = "1..10", mem = "3200M" and its evidence
+bench:vscode-typecheck: wrote cpu = "5", mem = "8576M" and its evidence
+{"started": "2026-10-21T08:56:25+00:00", "gate": "vscode-typecheck", "round": 2, "form": "K", "exit": 0, "wall_s": 11.0, "failures": []}
+{"started": "2026-10-21T08:56:36+00:00", "gate": "fastapi-ruff", "round": 2, "form": "K", "exit": 0, "wall_s": 0.1, "failures": []}
+{"started": "2026-10-21T08:56:37+00:00", "gate": "fastapi-tests", "round": 2, "form": "K", "exit": 0, "wall_s": 20.7, "failures": []}
+{"started": "2026-10-21T08:56:57+00:00", "gate": "sqlalchemy-orm-tests", "round": 2, "form": "K", "exit": 0, "wall_s": 21.5, "failures": []}
+bench:fastapi-ruff: wrote cpu = "1", mem = "128M" and its evidence
+bench:fastapi-tests: wrote cpu = "1..6", mem = "3456M" and its evidence
+bench:sqlalchemy-orm-tests: wrote cpu = "1..10", mem = "3200M" and its evidence
+bench:vscode-typecheck: wrote cpu = "5", mem = "8576M" and its evidence
+{"started": "2026-10-21T08:57:19+00:00", "gate": "vscode-typecheck", "round": 3, "form": "F", "exit": 0, "wall_s": 13.4, "failures": []}
+{"started": "2026-10-21T08:57:32+00:00", "gate": "fastapi-ruff", "round": 3, "form": "F", "exit": 0, "wall_s": 0.0, "failures": []}
+{"started": "2026-10-21T08:57:32+00:00", "gate": "fastapi-tests", "round": 3, "form": "F", "exit": 0, "wall_s": 18.4, "failures": []}
+{"started": "2026-10-21T08:57:51+00:00", "gate": "sqlalchemy-orm-tests", "round": 3, "form": "F", "exit": 0, "wall_s": 21.9, "failures": []}
+==== run4-tune.log
+{'block': None, 'as_block': None, 'config': 'S2', 'rep': 1} S: mean verdict 44.9 s, makespan 68.1 s, warn+ 31 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'S3', 'rep': 1} S: mean verdict 47.6 s, makespan 59.1 s, warn+ 26 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-140%-60%', 'rep': 1} K: mean verdict 37.0 s, makespan 64.7 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-140%-80%', 'rep': 1} K: mean verdict 37.0 s, makespan 61.7 s, warn+ 4 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-200%-60%', 'rep': 1} K: mean verdict 45.0 s, makespan 73.0 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-200%-80%', 'rep': 1} K: mean verdict 39.9 s, makespan 64.1 s, warn+ 3 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'S2', 'rep': 2} S: mean verdict 55.7 s, makespan 77.4 s, warn+ 34 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'S3', 'rep': 2} S: mean verdict 67.7 s, makespan 85.3 s, warn+ 45 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-140%-60%', 'rep': 2} K: mean verdict 30.8 s, makespan 57.2 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-140%-80%', 'rep': 2} K: mean verdict 37.6 s, makespan 63.5 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-200%-60%', 'rep': 2} K: mean verdict 37.9 s, makespan 64.8 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-200%-80%', 'rep': 2} K: mean verdict 31.8 s, makespan 48.3 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'S2', 'rep': 3} S: mean verdict 35.7 s, makespan 55.9 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'S3', 'rep': 3} S: mean verdict 64.6 s, makespan 85.2 s, warn+ 43 s, failed ['fastapi-tests'], valid True 
+{'block': None, 'as_block': None, 'config': 'K-140%-60%', 'rep': 3} K: mean verdict 34.5 s, makespan 65.2 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-140%-80%', 'rep': 3} K: mean verdict 32.8 s, makespan 58.2 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-200%-60%', 'rep': 3} K: mean verdict 34.0 s, makespan 66.0 s, warn+ 0 s, failed [], valid True 
+{'block': None, 'as_block': None, 'config': 'K-200%-80%', 'rep': 3} K: mean verdict 34.7 s, makespan 59.8 s, warn+ 0 s, failed [], valid True 
+{
+ "S": {
+  "N": 2
+ },
+ "K": {
+  "cpu": "140%",
+  "mem": "60%"
+ },
+ "medians": {
+  "S2": 44.9,
+  "S3": 64.6,
+  "K-140%-60%": 34.5,
+  "K-140%-80%": 37.0,
+  "K-200%-60%": 37.9,
+  "K-200%-80%": 34.7
+ },
+ "critical_s": {
+  "S2": 0,
+  "S3": 0,
+  "K-140%-60%": 0,
+  "K-140%-80%": 0,
+  "K-200%-60%": 0,
+  "K-200%-80%": 0
+ },
+ "false_failures": {
+  "S2": 0,
+  "S3": 1,
+  "K-140%-60%": 0,
+  "K-140%-80%": 0,
+  "K-200%-60%": 0,
+  "K-200%-80%": 0
+ }
+}
