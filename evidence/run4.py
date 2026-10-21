@@ -238,7 +238,9 @@ def offsets_for(cfg, seed):
 
 
 def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None, needs=None):
-    """Runs one set of arm and appends its record to path."""
+    """Runs one set of arm and appends its record to path. An arm starting with S holds each
+    heavy gate on one of `slots` slots; a K arm copies needs into the state directory, or with
+    needs None removes the needs file there, a cold start."""
     cd = acceptance.cooldown(pacing(cfg), baseline)
     ac = on_ac()
     page, bg = background()
@@ -246,8 +248,11 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
     if arm.startswith("K"):
         write_config(cfg, kshare["cpu"], kshare["mem"], kshare.get("live"))
         dst = os.path.join(checked_state(cfg), "needs.toml")
-        shutil.copyfile(needs, dst)
-        want = sha256(needs)
+        if needs:
+            shutil.copyfile(needs, dst)
+        elif os.path.lexists(dst):
+            os.remove(dst)
+        want = sha256(needs) if needs else None
         if not budget_empty(cfg):
             sys.exit(f"run4: {meta}: the budget is not empty")
     runlog0 = len(acceptance.runlog_lines(cfg))
@@ -259,7 +264,7 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
         try:
             time.sleep(offsets[name])
             for g in chain:
-                held = arm == "S" and g["heavy"]
+                held = arm.startswith("S") and g["heavy"]
                 if held:
                     sem.acquire()
                 s = time.time()
@@ -295,7 +300,7 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
     finally:
         sampler.stop.set()
         sampler.join()
-    if arm.startswith("K") and sha256(dst) != want:
+    if arm.startswith("K") and (sha256(dst) if os.path.exists(dst) else None) != want:
         errors.append("the needs file changed during the set")
     verdict = {n: round(max(g["end"] for g in gates if g["agent"] == n) - offsets[n], 1)
                for n in cfg["agents"] if any(g["agent"] == n for g in gates)}

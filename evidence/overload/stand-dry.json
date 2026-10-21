@@ -7,6 +7,7 @@
  "cooldown_s": 2,
  "max_cooldown_s": 10,
  "tune": {"S": [1], "K": [["140%", "60%"]], "reps": 1},
+ "light_agents": ["A2"],
  "agents": {
   "A1": [{"gate": "dry-alloc", "label": "bench:dry-alloc", "cwd": "~/bench.noindex", "heavy": true,
           "fail_pattern": "^FAILED ",
