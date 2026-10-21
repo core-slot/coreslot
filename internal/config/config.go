@@ -22,6 +22,7 @@ type Config struct {
 	Resources      map[string]SizeExpr // declared resources; cpu is "140%" and mem "60%" unless declared
 	Priorities     map[string]int      // label prefix -> priority
 	WindowsWarning bool                // [platform] windows_warning, default true
+	LiveMem        bool                // [memory] live, default true
 }
 
 // Error reports a configuration that cannot be read or is invalid: a state error. Err is the
@@ -164,6 +165,7 @@ func defaults() Config {
 		Resources:      map[string]SizeExpr{"cpu": defaultCPU, "mem": defaultMem},
 		Priorities:     map[string]int{},
 		WindowsWarning: true,
+		LiveMem:        true,
 	}
 }
 
@@ -251,6 +253,19 @@ func parse(data string) (Config, string) {
 				return Config{}, "[platform] windows_warning: want a boolean"
 			}
 			c.WindowsWarning = b
+		}
+	}
+	if v, ok := raw["memory"]; ok {
+		tbl, ok := v.(map[string]any)
+		if !ok {
+			return Config{}, "[memory] is not a table"
+		}
+		if w, ok := tbl["live"]; ok {
+			b, ok := w.(bool)
+			if !ok {
+				return Config{}, "[memory] live: want a boolean"
+			}
+			c.LiveMem = b
 		}
 	}
 	return c, ""
