@@ -147,7 +147,7 @@ func BenchmarkListingHolderUse(b *testing.B) {
 		if _, ok := Listing(); !ok {
 			b.Fatal("Listing() not ok")
 		}
-		if use := HolderUse(procs, roots); len(use) != 1 {
+		if use := HolderUse(procs, roots, nil); len(use) != 1 {
 			b.Fatalf("HolderUse = %v; want one root", use)
 		}
 	}

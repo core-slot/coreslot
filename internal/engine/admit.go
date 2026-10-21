@@ -53,7 +53,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	}
 
 	// 2-6. Sizes, effective request, locked counts, the two passes.
-	sizes, err := t.e.sizes()
+	sizes, live, err := t.e.sizes()
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if err != nil {
 		return nil, err
 	}
-	sizes, live := t.e.attemptSizes(t.req.Need, sizes, locked)
+	sizes, live = t.e.attemptSizes(t.req.Need, sizes, locked, live)
 	if live {
 		eff, clamped, undeclared = state.Effective(t.req.Need, sizes)
 	}

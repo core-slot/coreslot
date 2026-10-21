@@ -2,9 +2,6 @@ package state
 
 import "github.com/core-slot/coreslot/internal/spec"
 
-// liveMemCap is the most mem tokens the live size ever gives.
-const liveMemCap = 4096
-
 // MemHold is one live hold's memory reservation as the live size reads it.
 type MemHold struct {
 	Tokens  int   // mem tokens the hold lists
@@ -29,6 +26,6 @@ func LiveMemSize(static, locked int, headroomMiB int64, holds []MemHold) (size i
 	}
 	unlisted := int64(max(0, locked-listed)) * spec.MemTokenMiB
 	room := max(0, headroomMiB-unrealised-unlisted)
-	size = max(static, int(min(liveMemCap, int64(locked)+room/spec.MemTokenMiB)))
+	size = max(static, int(min(spec.MaxSize, int64(locked)+room/spec.MemTokenMiB)))
 	return size, size > static
 }

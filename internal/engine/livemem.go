@@ -18,7 +18,7 @@ import (
 // headroom it measures no tree.
 var liveMem = struct {
 	headroom func() (mib int64, ok bool)
-	use      func(roots map[int]int64) map[int]int64 // nil map: nothing measured
+	use      func(roots map[int]int64, stop map[int]bool) map[int]int64 // nil map: nothing measured
 }{
 	headroom: func() (int64, bool) {
 		if mib, set := testhooks.Headroom(); set {
@@ -26,7 +26,7 @@ var liveMem = struct {
 		}
 		return memsample.Headroom()
 	},
-	use: func(roots map[int]int64) map[int]int64 {
+	use: func(roots map[int]int64, stop map[int]bool) map[int]int64 {
 		if _, set := testhooks.Headroom(); set {
 			return nil
 		}
@@ -34,23 +34,20 @@ var liveMem = struct {
 		if !ok {
 			return nil
 		}
-		return memsample.HolderUse(procs, roots)
+		return memsample.HolderUse(procs, roots, stop)
 	},
 }
 
 // attemptSizes returns the sizes for this attempt: sizes unchanged unless the request's mem is
-// fixed, the configuration's LiveMem is on, mem is declared and sizes["mem"]-locked["mem"] is
-// below its min; then mem's size is state.LiveMemSize over the live holds, read inside the
-// section the caller is in. A failed configuration or headroom read or listing of holds/ leaves
-// sizes unchanged; a failed process listing or use read counts the holds it touches whole. It
-// never returns an error.
-func (e *Engine) attemptSizes(need map[string]spec.Range, sizes, locked map[string]int) (out map[string]int, raised bool) {
+// fixed, live (the LiveMem of the configuration sizes came from) is on, mem is declared and
+// sizes["mem"]-locked["mem"] is below its min; then mem's size is state.LiveMemSize over the live
+// holds, read inside the section the caller is in. A failed headroom read or listing of holds/
+// leaves sizes unchanged; a failed process listing or use read counts the holds it touches
+// whole. It never returns an error.
+func (e *Engine) attemptSizes(need map[string]spec.Range, sizes, locked map[string]int, live bool) (out map[string]int, raised bool) {
 	r, requested := need["mem"]
 	static, declared := sizes["mem"]
-	if !requested || !declared || r.Min != r.Max || static-locked["mem"] >= r.Min {
-		return sizes, false
-	}
-	if c, err := e.Config(); err != nil || !c.LiveMem {
+	if !live || !requested || !declared || r.Min != r.Max || static-locked["mem"] >= r.Min {
 		return sizes, false
 	}
 	headroom, ok := liveMem.headroom()
@@ -112,24 +109,26 @@ func liveMemHolds(st *store.Store) ([]memHold, bool) {
 	return live, true
 }
 
-// measure turns holds into the live size's input: a hold's use is its tree's when it claims its
-// tree and is the only hold claiming that pid's, else not measured.
+// measure turns holds into the live size's input: a hold listing mem tokens is measured, less
+// every other live hold's subtree, when it alone claims its pid's tree; else it counts whole.
 func measure(holds []memHold) []state.MemHold {
 	claims := make(map[int]int)
+	stop := make(map[int]bool, len(holds))
 	for _, h := range holds {
+		stop[h.pid] = true
 		if h.tree {
 			claims[h.pid]++
 		}
 	}
 	roots := make(map[int]int64)
 	for _, h := range holds {
-		if h.tree && claims[h.pid] == 1 {
+		if h.tree && claims[h.pid] == 1 && h.tokens > 0 {
 			roots[h.pid] = h.startNS
 		}
 	}
 	var use map[int]int64
 	if len(roots) > 0 {
-		use = liveMem.use(roots)
+		use = liveMem.use(roots, stop)
 	}
 	out := make([]state.MemHold, 0, len(holds))
 	for _, h := range holds {

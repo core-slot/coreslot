@@ -23,22 +23,18 @@ type Proc struct {
 const startSlack = int64(time.Second)
 
 // HolderUse returns, per root pid, the resident memory in KiB of its tree in procs, leaving out
-// the subtree of every other root. A root absent from procs, started more than 1 s after
+// the subtree of every other pid in stop. A root absent from procs, started more than 1 s after
 // roots[pid] (its hold's start, ns), or none of whose processes could be read, is absent.
-func HolderUse(procs map[int]Proc, roots map[int]int64) map[int]int64 {
-	return holderUse(procs, roots, resident)
+func HolderUse(procs map[int]Proc, roots map[int]int64, stop map[int]bool) map[int]int64 {
+	return holderUse(procs, roots, stop, resident)
 }
 
 // holderUse is HolderUse over read, which gives a process's private and shared KiB: private adds
 // over the tree, the largest shared counts once.
-func holderUse(procs map[int]Proc, roots map[int]int64, read func(pid int) (private, shared int64, ok bool)) map[int]int64 {
+func holderUse(procs map[int]Proc, roots map[int]int64, stop map[int]bool, read func(pid int) (private, shared int64, ok bool)) map[int]int64 {
 	parents := make(map[int]int, len(procs))
 	for pid, p := range procs {
 		parents[pid] = p.PPID
-	}
-	stop := make(map[int]bool, len(roots))
-	for pid := range roots {
-		stop[pid] = true
 	}
 	use := make(map[int]int64, len(roots))
 	for root, start := range roots {

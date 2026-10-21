@@ -62,11 +62,11 @@ func residentOf(m map[int][2]int64) func(int) (int64, int64, bool) {
 }
 
 // A hold nested inside another hold's tree is that hold's own: the outer one leaves its subtree
-// out. Mutation: walk descendants without the stop at other roots, and 10's use is 3110.
+// out. Mutation: walk descendants without the stop set, and 10's use is 3110.
 func TestHolderUseExcludesNestedRoot(t *testing.T) {
 	procs := map[int]Proc{10: {PPID: 1}, 11: {PPID: 10}, 12: {PPID: 11}, 13: {PPID: 12}}
 	read := residentOf(map[int][2]int64{10: {100, 0}, 11: {10, 0}, 12: {1000, 0}, 13: {2000, 0}})
-	got := holderUse(procs, map[int]int64{10: 0, 12: 0}, read)
+	got := holderUse(procs, map[int]int64{10: 0, 12: 0}, map[int]bool{10: true, 12: true}, read)
 	if got[10] != 110 || got[12] != 3000 || len(got) != 2 {
 		t.Errorf("holderUse = %v; want map[10:110 12:3000]", got)
 	}
@@ -81,7 +81,7 @@ func TestHolderUseReusedPID(t *testing.T) {
 		20: {PPID: 1, StartNS: start - int64(time.Second)},
 	}
 	read := residentOf(map[int][2]int64{10: {100, 0}, 20: {200, 0}})
-	got := holderUse(procs, map[int]int64{10: start, 20: start}, read)
+	got := holderUse(procs, map[int]int64{10: start, 20: start}, nil, read)
 	if _, ok := got[10]; ok || got[20] != 200 {
 		t.Errorf("holderUse = %v; want map[20:200]", got)
 	}
@@ -92,7 +92,7 @@ func TestHolderUseReusedPID(t *testing.T) {
 func TestHolderUseSharedOnce(t *testing.T) {
 	procs := map[int]Proc{10: {PPID: 1}, 11: {PPID: 10}}
 	read := residentOf(map[int][2]int64{10: {100, 300}, 11: {50, 500}})
-	if got := holderUse(procs, map[int]int64{10: 0}, read); got[10] != 650 {
+	if got := holderUse(procs, map[int]int64{10: 0}, nil, read); got[10] != 650 {
 		t.Errorf("holderUse = %v; want map[10:650]", got)
 	}
 }
@@ -101,7 +101,7 @@ func TestHolderUseSharedOnce(t *testing.T) {
 // or not anything was read, and 10 is present with 0.
 func TestHolderUseUnreadable(t *testing.T) {
 	procs := map[int]Proc{10: {PPID: 1}, 11: {PPID: 10}}
-	if got := holderUse(procs, map[int]int64{10: 0}, residentOf(nil)); len(got) != 0 {
+	if got := holderUse(procs, map[int]int64{10: 0}, nil, residentOf(nil)); len(got) != 0 {
 		t.Errorf("holderUse = %v; want empty", got)
 	}
 }
@@ -111,7 +111,7 @@ func TestHolderUseUnreadable(t *testing.T) {
 func TestHolderUseRootGone(t *testing.T) {
 	procs := map[int]Proc{11: {PPID: 10}}
 	read := residentOf(map[int][2]int64{11: {40, 0}})
-	if got := holderUse(procs, map[int]int64{10: 0}, read); len(got) != 0 {
+	if got := holderUse(procs, map[int]int64{10: 0}, nil, read); len(got) != 0 {
 		t.Errorf("holderUse = %v; want empty", got)
 	}
 }

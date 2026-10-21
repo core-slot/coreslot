@@ -14,7 +14,7 @@ import (
 // clamp depends on the test machine's memory. Helper processes run this init too.
 func init() {
 	liveMem.headroom = func() (int64, bool) { return 0, false }
-	liveMem.use = func(map[int]int64) map[int]int64 { return nil }
+	liveMem.use = func(map[int]int64, map[int]bool) map[int]int64 { return nil }
 }
 
 // setLiveMem replaces the live size's readings for one test: the headroom in MiB, and the use in
@@ -29,7 +29,7 @@ func setLiveMem(t *testing.T, headroomMiB, useKiB int64) *int {
 		*reads++
 		return headroomMiB, true
 	}
-	liveMem.use = func(roots map[int]int64) map[int]int64 {
+	liveMem.use = func(roots map[int]int64, _ map[int]bool) map[int]int64 {
 		if useKiB < 0 {
 			return nil
 		}
@@ -186,5 +186,24 @@ func TestLiveAdoptedHoldCountsWhole(t *testing.T) {
 	}
 	if r := step(t, enqueue(t, e, need("mem=2G"))); isAdmitted(r) {
 		t.Fatal("mem=2G admitted: the adopted hold's reservation was measured")
+	}
+}
+
+// B's process runs inside A's tree and B's whole reservation counts, so A's tree is read without
+// B's subtree; C, a tree hold with no mem tokens, stops the walk unread; D and E name one pid and
+// both count whole. Mutation: stop only at the measured roots, and 12 is no stop; roots without
+// the h.tokens > 0 check, and 14 is a root; claims[h.pid] == 1 as >= 1, and 16 is a root.
+func TestMeasureStopsAtEveryLiveHold(t *testing.T) {
+	setLiveMem(t, 0, -1)
+	var roots map[int]int64
+	var stop map[int]bool
+	liveMem.use = func(r map[int]int64, s map[int]bool) map[int]int64 {
+		roots, stop = r, s
+		return nil
+	}
+	measure([]memHold{{pid: 10, tree: true, tokens: 32}, {pid: 12, tokens: 8}, {pid: 14, tree: true},
+		{pid: 16, tree: true, tokens: 8}, {pid: 16, tree: true, tokens: 8}})
+	if !reflect.DeepEqual(roots, map[int]int64{10: 0}) || !reflect.DeepEqual(stop, map[int]bool{10: true, 12: true, 14: true, 16: true}) {
+		t.Errorf("use asked roots %v, stop %v; want roots map[10:0], stop map[10 12 14 16]", roots, stop)
 	}
 }

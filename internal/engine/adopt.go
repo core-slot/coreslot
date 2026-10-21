@@ -35,7 +35,7 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (*Grant, er
 	if !understood {
 		return nil, refuseFormat(n, "")
 	}
-	sizes, err := e.sizes()
+	sizes, live, err := e.sizes()
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (*Grant, er
 	if err != nil {
 		return nil, err
 	}
-	sizes, live := e.attemptSizes(req.Need, sizes, locked)
+	sizes, live = e.attemptSizes(req.Need, sizes, locked, live)
 	if live {
 		eff, clamped, undeclared = state.Effective(req.Need, sizes)
 	}

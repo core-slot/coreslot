@@ -367,7 +367,8 @@ func TestSizesReadMemoryOnlyForMem(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}, noMem, SystemClock()).sizes()
+		sizes, _, err := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}, noMem, SystemClock()).sizes()
+		return sizes, err
 	}
 	if got, err := sizes("[resources]\nmem = 0\n"); err != nil || len(got) != 1 || got["cpu"] != testCPUs {
 		t.Errorf("mem = 0: sizes %v, %v; want cpu %d alone", got, err, testCPUs)
