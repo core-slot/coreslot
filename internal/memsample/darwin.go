@@ -33,6 +33,7 @@ func footprint(pid int) (int64, bool) {
 		footprintAt = 72 // offset of ri_phys_footprint in rusage_info_v4
 	)
 	var buf [512]byte
+	//lint:ignore SA1019 x/sys/unix wraps no proc_pid_rusage; a libSystem call needs cgo or an assembly trampoline
 	_, _, errno := unix.Syscall6(unix.SYS_PROC_INFO, pidRusage, uintptr(pid), rusageV4, 0,
 		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	if errno != 0 {
