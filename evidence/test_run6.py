@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 import signal
 import statistics
 import subprocess
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -455,9 +457,11 @@ def sset(phase, mix, block, arm, verdict, warn=0, swap=0, valid=True, as_block=N
                 "swapins": 0, "pageins": 0} for i in range(warn + 2)]
     return {"phase": phase, "mix": mix, "block": block, "as_block": as_block, "arm": arm,
             "config": arm, "valid": valid, "invalid": [] if valid else ["battery"],
+            "started": "1970-01-01T00:00:00+00:00", "order": " ".join(order),
             "level_mib": run6.level_for(phase, src) if mix == "heavy" else 0, "position": pos,
             "prev_arm": order[pos - 1] if pos else None, "mean_verdict_s": verdict,
-            "makespan_s": verdict + 10, "samples": samples, "page_bytes": 16384,
+            "verdict_s": {"A1": verdict}, "makespan_s": verdict + 10, "samples": samples,
+            "page_bytes": 16384,
             "gates": [{"agent": "A1", "gate": "tc", "start": 0, "end": verdict, "exit": 0}]}
 
 
@@ -647,6 +651,29 @@ class Analysis(unittest.TestCase):
                          round(statistics.fmean(100 * noise(b, "F") for b in range(1, 30)), 1))
         with open(os.path.join(self.out, "summary.txt")) as f:
             self.assertIn("incomplete", f.read())
+
+    def test_figures_written(self):
+        # mutations: drop f7 from figures6.write's figures -> f7-light.svg is missing -> red;
+        # draw f4 over `("K60", "F")` for arms_of(heavy) -> f4-pareto-0.svg lacks KH -> red;
+        # `len(ARMS)` for `len(order)` in run4.timeline_svg's height -> the last arms' lanes fall
+        # below the picture -> red
+        write_size(self.out)
+        write_main(self.out)
+        self.summary()
+        with mock.patch("sys.stdout"):
+            run6.figures(self.out)
+        heavy = set(run6.HEAVY_ARMS)
+        want = {"f1-timeline.svg": heavy, "f3-paired.svg": {"K*cf", "S*", "K60", "F"},
+                "f5-regret.svg": {"S1", "S2", "S3", "K60"}, "f6-ecdf.svg": heavy,
+                "f7-light.svg": {"K60", "F"}}
+        want.update({f"f4-pareto-{lv}.svg": heavy for lv in run6.LEVELS_MIB})
+        for name, arms in want.items():
+            root = ET.parse(os.path.join(self.out, name)).getroot()
+            self.assertEqual(root.tag, "{http://www.w3.org/2000/svg}svg", name)
+            seen = [e.text or "" for e in root.iter("{http://www.w3.org/2000/svg}text")
+                    if float(e.get("y", 0)) <= float(root.get("height"))]
+            words = set(re.findall(r"[\w*]+", " ".join(seen)))
+            self.assertLessEqual(arms, words, name)
 
 
 if __name__ == "__main__":

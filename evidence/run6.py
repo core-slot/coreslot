@@ -7,6 +7,7 @@ usage:
   run6.py verdict STAND OUT PHASE MIX FIRST LAST [--as-block B] [--primer]
   run6.py size OUT
   run6.py summary OUT
+  run6.py figures OUT
 
 STAND is run 4's stand file (run4.py's docstring); its optional "light_agents" names the agents of
 the light mix (A3 and A4 of the heavy stand). Every coreslot call goes through run4.cs() with the
@@ -49,6 +50,10 @@ OUT/needs-hand.toml; KC with mem = "60%" and no needs file, a cold start.
            non-rejection) and the reported estimates; to OUT/summary.json and OUT/summary.txt.
            Exits 2 while a mix lacks n valid blocks and has re-runs left (10 % of n); with them
            spent, the summary is incomplete: descriptive numbers and no test.
+  figures  from OUT/summary.json and the main sets of the blocks it used: OUT/f1-timeline.svg
+           (the block nearest the median ln K*cf/S*), f3-paired.svg (per-block ln K*cf/S* and
+           ln K60/F), f4-pareto-<level>.svg (per ballast level), f5-regret.svg, f6-ecdf.svg
+           (time to verdict per agent) and f7-light.svg (light K60/F per block).
 """
 import argparse
 import glob
@@ -68,6 +73,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acceptance  # noqa: E402  (probe)
+import figures6  # noqa: E402
 import overload  # noqa: E402  (load)
 import run4  # noqa: E402  (cs, run_one, run_set, fresh_state, write_config, offsets_for, ...)
 import stats6  # noqa: E402
@@ -647,10 +653,25 @@ def summary(out):
     print(text)
 
 
+def figures(out):
+    path = os.path.join(out, "summary.json")
+    if not os.path.exists(path):
+        print(f"run6: {path} is missing; run summary first", file=sys.stderr)
+        sys.exit(2)
+    with open(path) as f:
+        s = json.load(f)
+    used = {}
+    for mix, arms in (("heavy", HEAVY_ARMS), ("light", LIGHT_ARMS)):
+        blocks = valid_blocks(records(out, "main", mix), arms)
+        used[mix] = {b: blocks[b] for b in s["blocks"][mix]}
+    names, mid = figures6.write(out, s, used["heavy"], used["light"])
+    print(f"wrote {', '.join(names)} (timeline: block {mid})")
+
+
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("size", "summary"):
+    for name in ("size", "summary", "figures"):
         sub.add_parser(name).add_argument("out")
     for name in ("learn", "verdict"):
         p = sub.add_parser(name)
@@ -668,6 +689,8 @@ def main():
         return size(args.out)
     if args.cmd == "summary":
         return summary(args.out)
+    if args.cmd == "figures":
+        return figures(args.out)
     cfg = overload.load(args.stand)
 
     def interrupted(*_):

@@ -645,7 +645,7 @@ def timeline_svg(block, sets, order, agents):
     w, l, r, row, gap = 760, 90, 20, 18, 34
     end = max(max(g["end"] for g in s["gates"]) for s in sets.values()) or 1
     x = (lambda t: l + t / end * (w - l - r))
-    h = 40 + len(ARMS) * (len(agents) * row + 12 + gap) + 30
+    h = 40 + len(order) * (len(agents) * row + 12 + gap) + 30
     body = [f'<text x="{l}" y="18" fill="{INK}">Block {block}: gates per agent over time;'
             ' the band is memory pressure</text>']
     y0 = 40
