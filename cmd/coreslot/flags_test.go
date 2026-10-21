@@ -37,7 +37,7 @@ func TestRunDefaultNeed(t *testing.T) {
 			map[string]spec.Range{"cpu": {Min: 1, Max: 2}}},
 	}
 	for _, c := range cases {
-		o, err := parseRun(c.args, IO{})
+		o, err := parseRun(c.args, IO{}, nil)
 		if err != nil {
 			t.Errorf("%s: parseRun(%q): %v", c.name, c.args, err)
 			continue
@@ -56,7 +56,7 @@ func TestRunDefaultNeedKeepsPlaceholderCheck(t *testing.T) {
 		{"--", "echo", "{n}", "{n:gpu}"},
 		{"--subst", "--", "make", "-j{n}", "-l{n:gpu}"},
 	} {
-		_, err := parseRun(args, IO{})
+		_, err := parseRun(args, IO{}, nil)
 		var ue *spec.UsageError
 		if !errors.As(err, &ue) {
 			t.Errorf("parseRun(%q) = %v, want a usage error", args, err)
@@ -68,7 +68,7 @@ func TestRunDefaultNeedKeepsPlaceholderCheck(t *testing.T) {
 func TestRunRejectsMalformedOneSidedNeed(t *testing.T) {
 	for _, need := range []string{"cpu=..", "cpu=...", "cpu=-1..", "cpu=..0", "cpu=0..", "cpu=257..",
 		"cpu=..257", "cpu= 4..", "cpu=4.. "} {
-		_, err := parseRun([]string{"--need", need, "--", "true"}, IO{})
+		_, err := parseRun([]string{"--need", need, "--", "true"}, IO{}, nil)
 		var ue *spec.UsageError
 		if !errors.As(err, &ue) {
 			t.Errorf("--need %q: parseRun = %v, want a usage error", need, err)
@@ -87,7 +87,7 @@ func TestNeedTextShowsTheNormalizedRange(t *testing.T) {
 		{[]string{"--", "echo", "{n}"}, "cpu 1..16"},
 		{[]string{"--", "true"}, "cpu 1..1"},
 	} {
-		o, err := parseRun(c.args, IO{})
+		o, err := parseRun(c.args, IO{}, nil)
 		if err != nil {
 			t.Fatalf("parseRun(%q): %v", c.args, err)
 		}

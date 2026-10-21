@@ -30,7 +30,7 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 	if g.TokenOnly() {
 		r.notice("the state directory's format is not implemented here; running in token-only mode, outside the queue")
 	}
-	if un := g.Unbudgeted(); len(un) > 0 && !g.TokenOnly() {
+	if un := r.namedOnly(g.Unbudgeted()); len(un) > 0 && !g.TokenOnly() {
 		r.notice("%s: not declared in the configuration; running unbudgeted with %s",
 			strings.Join(un, ", "), grantText(g.Grant(), un))
 	}
@@ -46,6 +46,13 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		c.log = e.Store() // FORMAT was understood in the admitting section
 	}
 	return r.runChild(c)
+}
+
+// namedOnly is the resources of names that the run's --need named (or the default cpu): a
+// resource that came from the needs file is granted and logged like any other, but the notices
+// about it are left out, since the user never typed it.
+func (r *run) namedOnly(names []string) []string {
+	return slices.DeleteFunc(slices.Clone(names), func(name string) bool { return !r.o.named[name] })
 }
 
 func grantText(grant map[string]int, names []string) string {

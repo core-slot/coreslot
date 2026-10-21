@@ -199,12 +199,12 @@ func (r *run) passThrough(held map[string][]*os.File) int {
 		counts[name] = len(files)
 	}
 	grant, clamped, unbudgeted := engine.NestedGrant(r.o.request(0), counts)
-	for _, name := range slices.Sorted(maps.Keys(clamped)) {
+	for _, name := range r.namedOnly(slices.Sorted(maps.Keys(clamped))) {
 		r.notice("%s: requested %d, the parent run holds %d; running with %d", name, clamped[name], grant[name], grant[name])
 	}
-	if len(unbudgeted) > 0 {
+	if none := r.namedOnly(unbudgeted); len(none) > 0 {
 		r.notice("%s: the parent run holds none; running unbudgeted with %s",
-			strings.Join(unbudgeted, ", "), grantText(grant, unbudgeted))
+			strings.Join(none, ", "), grantText(grant, none))
 	}
 	return r.runChild(child{
 		env:        withGrant(grant),

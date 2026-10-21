@@ -12,6 +12,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -25,7 +26,8 @@ const (
 type run struct {
 	o         runOptions
 	io        IO
-	startNS   int64 // wall clock at the run's start
+	loc       location // the state directory and configuration, located once
+	startNS   int64    // wall clock at the run's start
 	start     time.Time
 	load      float64
 	waited    time.Duration
@@ -37,7 +39,14 @@ type run struct {
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
 func runCommand(args []string, io IO) int {
-	o, err := parseRun(args, io)
+	loc := locate()
+	var lookup func(string) (needs.Entry, bool)
+	if loc.err == nil {
+		lookup = newNeedsLookup(loc.cfgPath, func(format string, args ...any) {
+			fmt.Fprintf(io.Stderr, "coreslot: "+format+"\n", args...)
+		})
+	}
+	o, err := parseRun(args, io, lookup)
 	if errors.Is(err, errHelp) {
 		return 0
 	}
@@ -48,7 +57,7 @@ func runCommand(args []string, io IO) int {
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, startNS: time.Now().UnixNano(), start: time.Now(), load: load1()}
+	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now(), load: load1()}
 	defer func() { r.nofile.stop() }()
 	return r.decide()
 }
@@ -80,7 +89,7 @@ func (r *run) priority(e *engine.Engine) (int, error) {
 
 // ordinary is a run that queues (PROTOCOL.md section 18 rule 3).
 func (r *run) ordinary() int {
-	e, err := openEngine(locate(), false)
+	e, err := openEngine(r.loc, false)
 	if err != nil {
 		return r.failOpen(nil, err)
 	}

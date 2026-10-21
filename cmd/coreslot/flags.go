@@ -10,13 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the
 // CLI is not part of the protocol).
 type runOptions struct {
-	need        map[string]spec.Range // normalized; defaultNeed when no --need is given
+	need        map[string]spec.Range // normalized: --need, then the needs file, then defaultNeed
+	named       map[string]bool       // the resources --need named, or cpu when defaultNeed supplied it
 	label       string
 	priority    int
 	prioritySet bool // --priority given: it overrides the configuration's [priorities]
@@ -74,12 +76,16 @@ var errHelp = errors.New("help requested")
 // parseRun parses the arguments of `coreslot run`. Every error is a *spec.UsageError (exit 64),
 // detected before anything queues: a malformed or duplicate need, an invalid request, a bad flag
 // value, a missing command, or a placeholder naming a resource the request does not name.
-func parseRun(args []string, streams IO) (runOptions, error) {
+//
+// lookup, when not nil, finds the needs file's entry for a label. Each resource's range comes
+// from --need, else from the entry for the run's label, else, for cpu and only when no --need
+// was given at all, from defaultNeed.
+func parseRun(args []string, streams IO, lookup func(label string) (needs.Entry, bool)) (runOptions, error) {
 	o := runOptions{onTimeout: "fail", refusalCode: exitRefusal}
 	fs := flag.NewFlagSet("coreslot run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var needs needList
-	fs.Var(&needs, "need", "RES=MIN..MAX, RES=MIN.., RES=..MAX or RES=N (repeatable)")
+	var needArgs needList
+	fs.Var(&needArgs, "need", "RES=MIN..MAX, RES=MIN.., RES=..MAX or RES=N (repeatable)")
 	fs.StringVar(&o.label, "label", "", "label of the request")
 	fs.IntVar(&o.priority, "priority", 0, "priority in [-1000, 1000]")
 	fs.DurationVar(&o.timeout, "timeout", 0, "give up waiting after this long")
@@ -113,12 +119,28 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 	if len(o.argv) == 0 {
 		return o, usagef("no command given\n%s", runUsage)
 	}
-	need, err := spec.ParseNeeds(needs)
+	need, err := spec.ParseNeeds(needArgs)
 	if err != nil {
 		return o, err
 	}
-	if len(need) == 0 {
-		need = defaultNeed(o.argv, o.subst)
+	o.named = make(map[string]bool, len(need)+1)
+	for name := range need {
+		o.named[name] = true
+	}
+	if o.label != "" && lookup != nil {
+		if e, ok := lookup(o.label); ok {
+			if _, given := need["cpu"]; !given && e.CPU != nil {
+				need["cpu"] = *e.CPU
+			}
+			if _, given := need["mem"]; !given && e.MemMiB > 0 {
+				t := spec.MemTokensCeil(e.MemMiB)
+				need["mem"] = spec.Range{Min: t, Max: t}
+			}
+		}
+	}
+	if _, ok := need["cpu"]; !ok && len(needArgs) == 0 {
+		need["cpu"] = defaultNeed(o.argv, o.subst)["cpu"]
+		o.named["cpu"] = true
 	}
 	req := spec.Normalize(spec.Request{Label: o.label, Priority: o.priority, Need: need})
 	if err := req.Validate(); err != nil {
