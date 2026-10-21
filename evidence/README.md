@@ -17,6 +17,8 @@ Index of the evidence scripts:
   acceptance" below.
 - `overload.py` with `overload/`: four agents whose gates overload memory and CPU, free, behind a
   semaphore and under coreslot, in "Acceptance run 3" below.
+- `run4.py` with `overload/run4.sh` and `overload/run4/`: the same stand with needs coreslot
+  learned itself, against no admission and a tuned semaphore, in "Acceptance run 4" below.
 
 ## Waiter benchmark (the release gate)
 
@@ -888,3 +890,148 @@ evidence/overload/run4.sh summary
 `evidence/overload/run4.sh --dry` runs the same phases on `stand-dry.json`, two agents whose gates
 allocate 300 MiB for 2 s or sleep 1 s, with one configuration per arm and one block, to check the
 runner in a few minutes; its output is not evidence.
+
+### Results (2026-10-21, blocks 1-12, coreslot `9ca499c`)
+
+Run 4 is **complete**: twelve valid blocks, no invalid set, no re-run. H1 and H2 passed, H3
+failed. By the pre-registered decision: **coreslot beats no admission but not a tuned semaphore;
+the next step is chosen from `waited_free_s`**, and by its rule **live-memory admission is worth
+designing**. Every number below is quoted from, or computed from, the committed records in
+`run4/` (`summary.json`, printed as `summary.txt`; `results.jsonl`, `tune.jsonl`, `tuning.json`,
+`learn.jsonl`, `needs.toml`), except the machine facts, read on the host with `sw_vers` and
+`sysctl` when the results were written.
+
+**Machine.** MacBook Air (Mac16,12), Apple M4, 10 cores, 16 GiB, macOS 27.0.1 (26A434), on AC
+power throughout; coreslot built with Go 1.27.1, `CGO_ENABLED=0`; the runner on Python 3.13.0.
+The owner's applications stayed open: at the start of the 36 verdict sets, memory in use (active +
+wired + compressed) was 5379-7223 MiB (median 6008), the 1-minute load 3.15-16.84 (median 7.18) and
+the process count 449-530 (median 483.5). The stand was not rebuilt since run 3 (its three
+repository pins were checked before learning), so its tool versions are run 3's, listed above.
+
+**Timeline.** The pre-registration was pushed at 08:53:59 UTC; learning started at 08:55:22,
+tuning at 08:59:10; the verdict parameters were pushed at 09:33:02 and the first verdict set
+started at 09:33:48, the last at 10:56:23.
+
+**Learning.** Every gate passed alone in both rounds under coreslot and in its F-form baseline, so
+every gate counts for false failures. `coreslot suggest --write` wrote (`run4/needs.toml`):
+
+| Gate | cpu | mem | Evidence line it wrote |
+|---|---|---|---|
+| `vscode-typecheck` | `5` | `8576M` | 2 runs 2026-10-21: max 4.8 cores, 2 of 2 saturated, peak 8.3 GiB (footprint) at 11s |
+| `fastapi-ruff` | `1` | `128M` | 2 runs 2026-10-21: max 0.6 cores, 0 of 2 saturated, peak 22 MiB (max_rss) |
+| `fastapi-tests` | `1..6` | `3456M` | 2 runs 2026-10-21: max 5.5 cores, 0 of 2 saturated, peak 3.3 GiB (footprint) at 11s |
+| `sqlalchemy-orm-tests` | `1..10` | `3200M` | 2 runs 2026-10-21: max 9.0 cores, 1 of 2 saturated, peak 3 GiB (footprint) at 27s |
+
+With the 60 % budget (76 tokens of 128 MiB: 9728 of 16384 MiB), the type check's 8576 MiB leaves 1152 MiB beside it, so while a
+type check runs only the lint fits next to it.
+
+**Tuning** (`run4/tuning.json`, 18 sets, all valid): S with N = 2 had a median mean time to verdict
+of 44.9 s against 64.6 s for N = 3, so S_best is N = 2. The four K configurations had medians of
+34.5 s (cpu `140%`, mem `60%`), 37.0 s (`140%`, `80%`), 37.9 s (`200%`, `60%`) and 34.7 s
+(`200%`, `80%`); none had a critical second or a false failure, so K_best is cpu `140%`, mem
+`60%`, the defaults. S with N = 3 had one false failure. Every tuning set, as `tune.jsonl`
+records it (warn+ counts one-second samples; the background is taken at the set's start; every
+tuning set is flagged `high_load`, all are valid):
+
+| Configuration | Set | Mean verdict (s) | Makespan (s) | Warn+ (samples) | Critical | Failed | Flags | Memory in use (MiB) | load1 | Processes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| S2 | 1 | 44.9 | 68.1 | 31 | 0 | none | high_load | 9042 | 4.79 | 518 |
+| S3 | 1 | 47.6 | 59.1 | 26 | 0 | none | high_load | 8698 | 10.44 | 494 |
+| K-140%-60% | 1 | 37.0 | 64.7 | 0 | 0 | none | high_load | 7414 | 16.03 | 472 |
+| K-140%-80% | 1 | 37.0 | 61.7 | 4 | 0 | none | high_load | 7244 | 10.96 | 471 |
+| K-200%-60% | 1 | 45.0 | 73.0 | 0 | 0 | none | high_load | 7275 | 9.64 | 467 |
+| K-200%-80% | 1 | 39.9 | 64.1 | 3 | 0 | none | high_load | 7290 | 5.93 | 470 |
+| S2 | 2 | 55.7 | 77.4 | 34 | 0 | none | high_load | 7395 | 9.37 | 470 |
+| S3 | 2 | 67.7 | 85.3 | 45 | 0 | none | high_load | 6102 | 9.38 | 445 |
+| K-140%-60% | 2 | 30.8 | 57.2 | 0 | 0 | none | high_load | 6672 | 7.36 | 468 |
+| K-140%-80% | 2 | 37.6 | 63.5 | 0 | 0 | none | high_load | 6243 | 7.13 | 474 |
+| K-200%-60% | 2 | 37.9 | 64.8 | 0 | 0 | none | high_load | 6167 | 5.01 | 469 |
+| K-200%-80% | 2 | 31.8 | 48.3 | 0 | 0 | none | high_load | 6860 | 3.98 | 511 |
+| S2 | 3 | 35.7 | 55.9 | 0 | 0 | none | high_load | 5358 | 6.14 | 511 |
+| S3 | 3 | 64.6 | 85.2 | 43 | 0 | fastapi-tests | high_load | 6537 | 7.2 | 515 |
+| K-140%-60% | 3 | 34.5 | 65.2 | 0 | 0 | none | high_load | 6097 | 6.19 | 489 |
+| K-140%-80% | 3 | 32.8 | 58.2 | 0 | 0 | none | high_load | 6767 | 4.2 | 511 |
+| K-200%-60% | 3 | 34.0 | 66.0 | 0 | 0 | none | high_load | 6307 | 5.07 | 505 |
+| K-200%-80% | 3 | 34.7 | 59.8 | 0 | 0 | none | high_load | 5816 | 4.15 | 507 |
+
+At the start of the tuning sets memory in use was 5358-9042 MiB (median 6719.5), the 1-minute load
+3.98-16.03 (median 6.66) and the process count 445-518 (median 481.5).
+
+**Medians over the twelve valid blocks:**
+
+| Arm | Mean time to verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | Swapout (MiB) | False failures (median, total) | `waited_free_s` |
+|---|---|---|---|---|---|---|---|
+| F | 84.45 | 99.1 | 58.0 | 0.0 | 8224.0 | 0, 3 | - |
+| S (N = 2) | 34.45 | 52.85 | 0.0 | 0.0 | 0.0 | 0, 0 | - |
+| K | 35.3 | 63.1 | 0.0 | 0.0 | 0.0 | 0, 0 | 36.45 |
+
+**The tests** (one-sided exact sign test over 12 blocks, α = 0.05; a tie is not a win):
+
+- **H1, passed:** K's mean time to verdict was below F's in 12 of 12 blocks, p = 0.0002. The
+  per-block ratio K/F ran from 0.371 to 0.555 (median 0.4305).
+- **H2, passed:** K's seconds at warn-or-worse pressure were below F's in 12 of 12 blocks,
+  p = 0.0002: K had no such sample, F a median of 58. The runner counts one-second samples, which
+  lay about 1.1 s apart in F's sets, so the time itself was about a tenth longer.
+- **H3, failed:** K's mean time to verdict was below 1.10 × S's in 7 of 12 blocks, p = 0.3872.
+  The per-block ratio K/S ran from 0.81 to 1.314 (median 1.0065).
+
+**Reported without a test.**
+
+- *Makespan:* K/F per block 0.505-0.826 (median 0.6365); K/S 0.887-1.313 (median 1.1415), so K
+  finished the whole mix later than the two-slot semaphore in 9 of 12 blocks.
+- *Critical pressure:* 0 s in every set of every arm. *Swapouts:* F a median of 8224 MiB per set;
+  S 0 except 24.2, 38.0 and 23.2 MiB in blocks 1, 9 and 12; K 0 except 4.2 MiB in block 12.
+- *False failures:* 3, all in F and all in FastAPI's suite, agent A3, in blocks 3, 7 and 11; none
+  in S or K. The failing tests: in blocks 3 and 11,
+  `ERROR tests/test_tutorial/test_static_files/test_tutorial001.py::test_openapi_schema`; in block
+  7, `FAILED tests/test_tutorial/test_static_files/test_tutorial001.py::test_static_files` and the
+  same `ERROR` line.
+- *K's `waited_free_s`* per block, beside K's summed waiting: 37.6 of 90.5 s, 49.4 of 76.5, 11.5 of
+  49.6, 3.8 of 64.6, 10.8 of 69.6, 46.3 of 102.4, 35.3 of 99.4, 43.4 of 75.5, 5.8 of 64.6, 34.3 of
+  91.4, 40.6 of 94.4, 51.4 of 78.4 (blocks 1-12; median 36.45 s). It reached at least 5 s and at
+  least 10 % of K's waiting in 10 of 12 blocks, the pre-registered rule for designing live-memory
+  admission. It is an upper bound: it counts every second a run waited while the kernel's headroom
+  covered its memory need, whatever the wait was for, including waits for cpu tokens.
+- *Flags:* every one of the 36 verdict sets is flagged `high_load` (the 1-minute load at its start
+  was above 3); the F set of block 2 is also
+  flagged `hot_start` (the cooldown gave up). Flagged sets stay valid, as pre-registered. The
+  thermal state read nominal at every set's start; during the sets it reached state 1 ("fair") in
+  all 36 verdict sets, in 145 of F's 217 thermal samples, 56 of S's 129 and 53 of K's 146, and never
+  went above it.
+
+Figures: [`run4/ratios.svg`](overload/run4/ratios.svg) (per-block K/F and K/S ratios) and
+[`run4/timeline.svg`](overload/run4/timeline.svg) (block 1, the lower of the two blocks around
+the median K/F ratio: 0.429, against block 11's 0.432; each arm's gates per agent over time, with
+the memory-pressure level).
+
+**What it shows.** On this laptop and this mix, coreslot with needs it learned from two alone runs
+per gate had no sample at warn-or-worse pressure where running everything at once had a median of
+58, swapped 4.2 MiB in one set where it swapped a median of 8224 MiB, had no false failure where it
+had 3 (a count, not tested), and cut the mean time to verdict to less than half (median ratio
+0.4305). It did not
+come within 10 % of a semaphore whose slot count was tuned for this mix: their mean times to
+verdict were close (median ratio 1.0065), but K's makespan was longer. The type check's
+learned need takes 8576 of the 9728 MiB budget, so a test suite cannot start beside it, and K's
+runs spent a median of 36.45 s per block waiting while the kernel reported their memory need free
+(an upper bound); by the pre-registered rule live-memory admission is worth designing, and the
+next step is chosen from `waited_free_s`. Of the four static shares tuned, none had a lower median
+than the default, on three sets each.
+
+**Threats to validity.** One machine, one mix and one day. A fanless laptop throttles: the cooldown
+and the probe bound it, and the thermal state read nominal at every set's start, but it reached
+"fair" during all 36 verdict sets, in a larger share of F's samples (145 of 217) than of S's (56 of
+129) or K's (53 of 146), which weighs against F; and sets ran under a 1-minute load above 3. The owner's applications were open (totals above). The learned needs come from alone runs, two
+per gate. Three tuning sets per configuration choose the configuration but prove nothing about it.
+The 1 s sampler can miss a short peak, bounded below by the largest single process's `max_rss`.
+`waited_free_s` is an upper bound, as stated. S's slot count was tuned on this exact mix, which a
+user of a semaphore would have to do by hand; K's needs were learned without tuning, and its shares
+were tuned among four configurations whose medians lay within 3.4 s.
+
+**What it does not show.** Several machines, Linux, other mixes, or any mix where a tuned slot
+count is not known in advance.
+
+**Reproduce.** `evidence/overload/setup.sh`, then `evidence/overload/run4.sh` (learn, tune,
+verdict 1 12, summary, figures); `run4.sh summary` recomputes the summary from the committed
+records. `setup.sh` builds coreslot without `CGO_ENABLED=0`; the measured binary was built with
+`CGO_ENABLED=0 go build -o ~/bench.noindex/bin/coreslot ./cmd/coreslot` from this branch, whose Go
+code is that of `9ca499c`.
