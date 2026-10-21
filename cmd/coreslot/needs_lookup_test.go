@@ -126,7 +126,7 @@ func TestNoticeForNamedResource(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if want := "coreslot: mem: not declared in the configuration; running unbudgeted with mem=16"; !strings.Contains(r.stderr, want) {
+	if want := "coreslot: mem: not declared in the configuration; running unbudgeted with mem=2 GiB"; !strings.Contains(r.stderr, want) {
 		t.Errorf("stderr %q, want %q", r.stderr, want)
 	}
 }
@@ -140,8 +140,8 @@ func TestNestedQuietOnEntryResource(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if got := strings.TrimSpace(r.stdout); got != "16" {
-		t.Errorf("the command saw mem %q, want 16 from the needs file", got)
+	if got := strings.TrimSpace(r.stdout); got != "2048" {
+		t.Errorf("the command saw mem %q, want 2048 (MiB) from the needs file", got)
 	}
 	if strings.Contains(r.stderr, "holds none") {
 		t.Errorf("stderr %q has a notice for a mem the user never typed", r.stderr)

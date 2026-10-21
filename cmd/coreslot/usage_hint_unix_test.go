@@ -93,6 +93,20 @@ func TestHintTokens(t *testing.T) {
 	}
 }
 
+// The waiting line shows a mem need in bytes, and a holder's mem grant too. Mutation: amount
+// printing tokens for mem turns it red.
+func TestWaitingLineMem(t *testing.T) {
+	need := map[string]spec.Range{"cpu": {Min: 1, Max: 1}, "mem": {Min: 24, Max: 24}}
+	holders := []engine.HolderInfo{{Label: "gate", PID: 4711, Grant: map[string]int{"cpu": 2, "mem": 8}}}
+	r := &run{o: runOptions{need: need}}
+	line := r.waitingLine(engine.Waiting{Position: 1}, holders, 0)
+	for _, want := range []string{"waiting for cpu 1..1, mem 3 GiB: ", "gate pid 4711 cpu2 mem 1 GiB ("} {
+		if !strings.Contains(line, want) {
+			t.Errorf("waiting line %q, want %q", line, want)
+		}
+	}
+}
+
 // The first waiting line says when stdin is a pipe, and no later one does. Mutation: dropping
 // the pipeNoted check turns the second-line check red; `== 0` written `== 1` the file row.
 func TestPipeNote(t *testing.T) {

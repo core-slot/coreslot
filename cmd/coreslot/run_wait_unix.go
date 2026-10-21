@@ -11,7 +11,6 @@ import (
 	"os"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -192,7 +191,7 @@ func (r *run) holdersText(e *engine.Engine) string {
 	return s
 }
 
-// holderList is `; holders: gate pid 4711 cpu12 (3m12s), ...`, or "" without holders. Labels
+// holderList is `; holders: gate pid 4711 cpu12 mem 3 GiB (3m12s), ...`, or "" without holders. Labels
 // are escaped so that each holder stays on the line.
 func holderList(holders []engine.HolderInfo, nowNS int64) string {
 	if len(holders) == 0 {
@@ -206,7 +205,11 @@ func holderList(holders []engine.HolderInfo, nowNS int64) string {
 		}
 		var grant []string
 		for _, name := range slices.Sorted(maps.Keys(h.Grant)) {
-			grant = append(grant, name+strconv.Itoa(h.Grant[name]))
+			if name == "mem" {
+				grant = append(grant, "mem "+amount(name, h.Grant[name]))
+			} else {
+				grant = append(grant, name+amount(name, h.Grant[name]))
+			}
 		}
 		if h.Unbudgeted {
 			grant = append(grant, "unbudgeted")

@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -266,9 +267,9 @@ func (v statusView) human() string {
 	}
 	for _, name := range slices.Sorted(maps.Keys(r.Resources)) {
 		ri := r.Resources[name]
-		line := fmt.Sprintf("  %s  size %d  locked %d  free %d", name, ri.Size, ri.Locked, ri.Available)
+		line := fmt.Sprintf("  %s  size %s  locked %s  free %s", name, amount(name, ri.Size), amount(name, ri.Locked), amount(name, ri.Available))
 		if n := v.unlisted[name]; n > 0 {
-			line += fmt.Sprintf("  (%d locked, no hold lists %s)", n, plural(int64(n), "it", "them"))
+			line += fmt.Sprintf("  (%s locked, no hold lists %s)", amount(name, n), plural(int64(n), "it", "them"))
 		}
 		p("%s", line)
 	}
@@ -287,7 +288,7 @@ func (v statusView) human() string {
 		if len(h.Clamped) > 0 {
 			var parts []string
 			for _, name := range slices.Sorted(maps.Keys(h.Clamped)) {
-				parts = append(parts, fmt.Sprintf("%s (asked %d)", name, h.Clamped[name]))
+				parts = append(parts, fmt.Sprintf("%s (asked %s)", name, amount(name, h.Clamped[name])))
 			}
 			line += "  clamped " + strings.Join(parts, ", ")
 		}
@@ -355,7 +356,7 @@ func plural(n int64, one, many string) string {
 	return many
 }
 
-// holdTokens is `cpu 12, gpu 1`, or `no tokens` for an unbudgeted hold.
+// holdTokens is `cpu 12, gpu 1, mem 3 GiB`, or `no tokens` for an unbudgeted hold.
 func holdTokens(grant map[string]int) string {
 	if len(grant) == 0 {
 		return "no tokens"
@@ -363,11 +364,11 @@ func holdTokens(grant map[string]int) string {
 	return tokenList(grant)
 }
 
-// tokenList is a count of tokens per resource in name order: `cpu 12, gpu 1`.
+// tokenList is an amount per resource in name order: `cpu 12, gpu 1, mem 3 GiB`.
 func tokenList(tokens map[string]int) string {
 	var parts []string
 	for _, name := range slices.Sorted(maps.Keys(tokens)) {
-		parts = append(parts, fmt.Sprintf("%s %d", name, tokens[name]))
+		parts = append(parts, name+" "+amount(name, tokens[name]))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -431,11 +432,15 @@ type jsonHolder struct {
 	Alive     *bool   `json:"alive"`
 }
 
+// jsonResource is one resource in tokens; mem alone adds its amounts in MiB.
 type jsonResource struct {
-	Size           int `json:"size"`
-	Locked         int `json:"locked"`
-	Free           int `json:"free"`
-	UnlistedLocked int `json:"unlisted_locked"`
+	Size           int    `json:"size"`
+	Locked         int    `json:"locked"`
+	Free           int    `json:"free"`
+	UnlistedLocked int    `json:"unlisted_locked"`
+	SizeMiB        *int64 `json:"size_mib,omitempty"`
+	LockedMiB      *int64 `json:"locked_mib,omitempty"`
+	FreeMiB        *int64 `json:"free_mib,omitempty"`
 }
 
 type jsonHold struct {
@@ -494,7 +499,12 @@ func (v statusView) document() jsonStatus {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
 	}
 	for name, ri := range r.Resources {
-		d.Resources[name] = jsonResource{Size: ri.Size, Locked: ri.Locked, Free: ri.Available, UnlistedLocked: v.unlisted[name]}
+		jr := jsonResource{Size: ri.Size, Locked: ri.Locked, Free: ri.Available, UnlistedLocked: v.unlisted[name]}
+		if name == "mem" {
+			mib := func(tokens int) *int64 { n := int64(tokens) * spec.MemTokenMiB; return &n }
+			jr.SizeMiB, jr.LockedMiB, jr.FreeMiB = mib(ri.Size), mib(ri.Locked), mib(ri.Available)
+		}
+		d.Resources[name] = jr
 	}
 	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
 		d.Ignored[dir] = r.Ignored[dir]

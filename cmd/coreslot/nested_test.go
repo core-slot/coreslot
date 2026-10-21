@@ -135,6 +135,19 @@ func TestNestedSiblingsBothRun(t *testing.T) {
 	}
 }
 
+// The pass-through's clamp notice reads mem in bytes. Mutation: printing its counts as tokens
+// turns it red.
+func TestNestedNoticeMem(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 8\nmem = \"8G\"\n")
+	r := outer(t, dir, []string{"cpu=1", "mem=1G"}, `"$BIN" run --need mem=3G -- true`)
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if want := "coreslot: mem: requested 3 GiB, the parent run holds 1 GiB; running with 1 GiB"; !strings.Contains(r.stderr, want) {
+		t.Errorf("stderr %q, want the notice %q", r.stderr, want)
+	}
+}
+
 func TestNestedClampsAboveHeld(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 8\n")
 	r := outer(t, dir, []string{"cpu=4"}, `"$BIN" run --need cpu=8..8 -- echo {n}`)

@@ -198,11 +198,17 @@ func (o runOptions) sortedNeed() []string {
 // needText is the request in the form of the waiting line: `cpu 4..12, pg-local 1..1`.
 func (o runOptions) needText() string { return needText(o.need) }
 
-// needText is a request as the waiting line and status show it: `cpu 4..12, gpu 1..1`.
+// needText is a request as the waiting line and status show it: `cpu 4..12, gpu 1..1`, with a
+// fixed mem need as one size, `mem 3 GiB`.
 func needText(need map[string]spec.Range) string {
 	var parts []string
 	for _, name := range slices.Sorted(maps.Keys(need)) {
-		parts = append(parts, fmt.Sprintf("%s %d..%d", name, need[name].Min, need[name].Max))
+		r := need[name]
+		if name == "mem" && r.Min == r.Max {
+			parts = append(parts, "mem "+amount(name, r.Min))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s %s..%s", name, amount(name, r.Min), amount(name, r.Max)))
 	}
 	return strings.Join(parts, ", ")
 }

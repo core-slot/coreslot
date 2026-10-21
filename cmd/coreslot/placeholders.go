@@ -3,6 +3,8 @@ package main
 import (
 	"regexp"
 	"strconv"
+
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // placeholderRE matches a placeholder, `{n}` or `{n:RES}`, or its escape, `{{n}}` or
@@ -64,8 +66,9 @@ func placeholderResources(argv []string, inside bool) []string {
 
 // substitute replaces the placeholders of argv with the grant (PROTOCOL.md section 17): an
 // argument that is exactly `{n}` becomes the grant of cpu and `{n:RES}` the grant of RES;
-// `{{n}}` and `{{n:RES}}` become the literal `{n}` and `{n:RES}`. With inside (--subst),
-// placeholders and escapes within arguments are replaced too (`-j{n}`). A placeholder naming a
+// `{{n}}` and `{{n:RES}}` become the literal `{n}` and `{n:RES}`; `{n:mem}` is in MiB, as
+// CORESLOT_GRANTED_MEM is. With inside (--subst), placeholders and escapes within arguments are
+// replaced too (`-j{n}`). A placeholder naming a
 // resource missing from grant is left as it is; the caller has refused it before queueing.
 func substitute(argv []string, grant map[string]int, inside bool) []string {
 	out := make([]string, len(argv))
@@ -85,6 +88,8 @@ func substitute(argv []string, grant map[string]int, inside bool) []string {
 			switch {
 			case escaped:
 				b = append(b, m[0][1:len(m[0])-1]...)
+			case ok && res == "mem":
+				b = strconv.AppendInt(b, int64(n)*spec.MemTokenMiB, 10)
 			case ok:
 				b = strconv.AppendInt(b, int64(n), 10)
 			default:

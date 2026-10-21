@@ -4,7 +4,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -25,8 +24,8 @@ const memSampleEvery = time.Second
 // admitted runs the command on an admitted grant.
 func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 	for _, name := range slices.Sorted(maps.Keys(g.Clamped())) {
-		n := g.Grant()[name]
-		r.notice("%s: requested %d, budget is %d; running alone with %d", name, g.Clamped()[name], n, n)
+		n := amount(name, g.Grant()[name])
+		r.notice("%s: requested %s, budget is %s; running alone with %s", name, amount(name, g.Clamped()[name]), n, n)
 	}
 	if g.TokenOnly() {
 		r.notice("the state directory's format is not implemented here; running in token-only mode, outside the queue")
@@ -59,7 +58,7 @@ func (r *run) namedOnly(names []string) []string {
 func grantText(grant map[string]int, names []string) string {
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
-		parts = append(parts, fmt.Sprintf("%s=%d", name, grant[name]))
+		parts = append(parts, name+"="+amount(name, grant[name]))
 	}
 	return strings.Join(parts, ", ")
 }

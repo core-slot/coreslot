@@ -1057,6 +1057,20 @@ func TestClampNotice(t *testing.T) {
 	}
 }
 
+// A clamped mem need is reported in bytes. Mutation: printing the clamp notice's counts as
+// tokens turns it red.
+func TestClampNoticeMem(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 10\nmem = \"9.5G\"\n")
+	r := cli(t, baseEnv(dir), "run", "--need", "mem=10G", "--", "true")
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	want := "coreslot: mem: requested 10 GiB, budget is 9.5 GiB; running alone with 9.5 GiB\n"
+	if !strings.Contains(r.stderr, want) {
+		t.Errorf("stderr %q, want the notice %q", r.stderr, want)
+	}
+}
+
 // A run's command gets the soft descriptor limit the run was started with plus 256, not 256 above
 // the limit the Go runtime raised the run's own to at start-up; a pass-through started by that
 // command gets 256 more again. Mutation: pass currentNofile() instead of the probed original to

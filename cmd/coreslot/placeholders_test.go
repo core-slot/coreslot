@@ -51,3 +51,12 @@ func TestPlaceholderResources(t *testing.T) {
 		}
 	}
 }
+
+// {n:mem} is the mem grant in MiB, as CORESLOT_GRANTED_MEM is. Mutation: substituting the token
+// count turns it red.
+func TestSubstituteMemMiB(t *testing.T) {
+	got := substitute([]string{"x", "{n:mem}", "--mem={n:mem}M"}, map[string]int{"cpu": 2, "mem": 24}, true)
+	if want := []string{"x", "3072", "--mem=3072M"}; !slices.Equal(got, want) {
+		t.Errorf("substitute = %q, want %q", got, want)
+	}
+}

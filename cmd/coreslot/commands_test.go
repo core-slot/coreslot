@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -329,6 +331,48 @@ func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 		if !strings.Contains(r.stdout, line) {
 			t.Errorf("status lacks the resource line %q:\n%s", strings.TrimSpace(line), r.stdout)
 		}
+	}
+}
+
+// memReport is a snapshot with a 9.5 GiB mem budget, 3 GiB of it locked by one hold.
+func memReport() engine.Report {
+	return engine.Report{Resources: map[string]engine.ResourceInfo{
+		"cpu": {Size: 16, Locked: 2, Available: 14},
+		"mem": {Size: 76, Locked: 24, Available: 52},
+	}, Holds: []engine.HolderInfo{{Name: "h", Label: "gate", PID: 7, Grant: map[string]int{"cpu": 2, "mem": 24}}}}
+}
+
+// status prints mem in bytes and every other resource in tokens. Mutation: printing the resource
+// line's counts as tokens for mem turns it red.
+func TestStatusHumanMem(t *testing.T) {
+	h := buildStatus(memReport(), 0, nil, 0).human()
+	for _, line := range []string{"\n  mem  size 9.5 GiB  locked 3 GiB  free 6.5 GiB\n", "\n  cpu  size 16  locked 2  free 14\n",
+		"  gate  pid 7  cpu 2, mem 3 GiB  held "} {
+		if !strings.Contains(h, line) {
+			t.Errorf("status lacks the resource line %q:\n%s", strings.TrimSpace(line), h)
+		}
+	}
+}
+
+// status --json keeps schema 1 and token counts, and adds MiB to mem alone. Mutation: dropping
+// omitempty from the MiB fields gives cpu size_mib 0 and turns it red.
+func TestStatusJSONMemMiB(t *testing.T) {
+	var buf bytes.Buffer
+	if err := buildStatus(memReport(), 0, nil, 0).writeJSON(&buf); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Schema    int                       `json:"schema"`
+		Resources map[string]map[string]int `json:"resources"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	wantMem := map[string]int{"size": 76, "locked": 24, "free": 52, "unlisted_locked": 0,
+		"size_mib": 9728, "locked_mib": 3072, "free_mib": 6656}
+	wantCPU := map[string]int{"size": 16, "locked": 2, "free": 14, "unlisted_locked": 0}
+	if doc.Schema != 1 || !maps.Equal(doc.Resources["mem"], wantMem) || !maps.Equal(doc.Resources["cpu"], wantCPU) {
+		t.Errorf("schema %d, resources %v; want schema 1, mem %v, cpu %v", doc.Schema, doc.Resources, wantMem, wantCPU)
 	}
 }
 
