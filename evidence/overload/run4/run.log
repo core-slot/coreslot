@@ -71,3 +71,40 @@ bench:vscode-typecheck: wrote cpu = "5", mem = "8576M" and its evidence
   "K-200%-80%": 0
  }
 }
+==== run4-verdict.log
+{'block': 1, 'as_block': None, 'order': 'FSK', 'config': 'F'} F: mean verdict 87.5 s, makespan 98.8 s, warn+ 63 s, failed [], valid True 
+{'block': 1, 'as_block': None, 'order': 'FSK', 'config': 'S2'} S: mean verdict 37.9 s, makespan 53.1 s, warn+ 0 s, failed [], valid True 
+{'block': 1, 'as_block': None, 'order': 'FSK', 'config': 'K-140%-60%'} K: mean verdict 37.5 s, makespan 63.0 s, warn+ 0 s, failed [], valid True 
+{'block': 2, 'as_block': None, 'order': 'SKF', 'config': 'S2'} S: mean verdict 34.1 s, makespan 49.5 s, warn+ 0 s, failed [], valid True 
+{'block': 2, 'as_block': None, 'order': 'SKF', 'config': 'K-140%-60%'} K: mean verdict 34.2 s, makespan 63.2 s, warn+ 0 s, failed [], valid True 
+{'block': 2, 'as_block': None, 'order': 'SKF', 'config': 'F'} F: mean verdict 66.0 s, makespan 76.5 s, warn+ 46 s, failed [], valid True 
+{'block': 3, 'as_block': None, 'order': 'KFS', 'config': 'K-140%-60%'} K: mean verdict 30.9 s, makespan 49.4 s, warn+ 0 s, failed [], valid True 
+{'block': 3, 'as_block': None, 'order': 'KFS', 'config': 'F'} F: mean verdict 78.5 s, makespan 90.0 s, warn+ 58 s, failed ['fastapi-tests'], valid True 
+{'block': 3, 'as_block': None, 'order': 'KFS', 'config': 'S2'} S: mean verdict 30.6 s, makespan 49.6 s, warn+ 0 s, failed [], valid True 
+{'block': 4, 'as_block': None, 'order': 'FKS', 'config': 'F'} F: mean verdict 60.7 s, makespan 72.3 s, warn+ 37 s, failed [], valid True 
+{'block': 4, 'as_block': None, 'order': 'FKS', 'config': 'K-140%-60%'} K: mean verdict 33.7 s, makespan 49.7 s, warn+ 0 s, failed [], valid True 
+{'block': 4, 'as_block': None, 'order': 'FKS', 'config': 'S2'} S: mean verdict 28.9 s, makespan 48.4 s, warn+ 0 s, failed [], valid True 
+{'block': 5, 'as_block': None, 'order': 'KSF', 'config': 'K-140%-60%'} K: mean verdict 36.0 s, makespan 53.2 s, warn+ 0 s, failed [], valid True 
+{'block': 5, 'as_block': None, 'order': 'KSF', 'config': 'S2'} S: mean verdict 41.6 s, makespan 58.7 s, warn+ 10 s, failed [], valid True 
+{'block': 5, 'as_block': None, 'order': 'KSF', 'config': 'F'} F: mean verdict 95.7 s, makespan 105.3 s, warn+ 65 s, failed [], valid True 
+{'block': 6, 'as_block': None, 'order': 'SFK', 'config': 'S2'} S: mean verdict 32.2 s, makespan 52.6 s, warn+ 0 s, failed [], valid True 
+{'block': 6, 'as_block': None, 'order': 'SFK', 'config': 'F'} F: mean verdict 90.5 s, makespan 103.3 s, warn+ 62 s, failed [], valid True 
+{'block': 6, 'as_block': None, 'order': 'SFK', 'config': 'K-140%-60%'} K: mean verdict 40.7 s, makespan 66.4 s, warn+ 0 s, failed [], valid True 
+{'block': 7, 'as_block': None, 'order': 'FSK', 'config': 'F'} F: mean verdict 81.4 s, makespan 99.4 s, warn+ 55 s, failed ['fastapi-tests'], valid True 
+{'block': 7, 'as_block': None, 'order': 'FSK', 'config': 'S2'} S: mean verdict 35.4 s, makespan 51.7 s, warn+ 0 s, failed [], valid True 
+{'block': 7, 'as_block': None, 'order': 'FSK', 'config': 'K-140%-60%'} K: mean verdict 39.7 s, makespan 64.4 s, warn+ 0 s, failed [], valid True 
+{'block': 8, 'as_block': None, 'order': 'SKF', 'config': 'S2'} S: mean verdict 34.8 s, makespan 56.9 s, warn+ 0 s, failed [], valid True 
+{'block': 8, 'as_block': None, 'order': 'SKF', 'config': 'K-140%-60%'} K: mean verdict 33.6 s, makespan 62.4 s, warn+ 0 s, failed [], valid True 
+{'block': 8, 'as_block': None, 'order': 'SKF', 'config': 'F'} F: mean verdict 78.7 s, makespan 89.3 s, warn+ 51 s, failed [], valid True 
+{'block': 9, 'as_block': None, 'order': 'KFS', 'config': 'K-140%-60%'} K: mean verdict 34.6 s, makespan 50.3 s, warn+ 0 s, failed [], valid True 
+{'block': 9, 'as_block': None, 'order': 'KFS', 'config': 'F'} F: mean verdict 76.3 s, makespan 86.8 s, warn+ 49 s, failed [], valid True 
+{'block': 9, 'as_block': None, 'order': 'KFS', 'config': 'S2'} S: mean verdict 42.7 s, makespan 56.7 s, warn+ 5 s, failed [], valid True 
+{'block': 10, 'as_block': None, 'order': 'FKS', 'config': 'F'} F: mean verdict 101.7 s, makespan 120.9 s, warn+ 68 s, failed [], valid True 
+{'block': 10, 'as_block': None, 'order': 'FKS', 'config': 'K-140%-60%'} K: mean verdict 39.8 s, makespan 71.8 s, warn+ 0 s, failed [], valid True 
+{'block': 10, 'as_block': None, 'order': 'FKS', 'config': 'S2'} S: mean verdict 30.5 s, makespan 54.7 s, warn+ 0 s, failed [], valid True 
+{'block': 11, 'as_block': None, 'order': 'KSF', 'config': 'K-140%-60%'} K: mean verdict 38.5 s, makespan 66.9 s, warn+ 0 s, failed [], valid True 
+{'block': 11, 'as_block': None, 'order': 'KSF', 'config': 'S2'} S: mean verdict 29.3 s, makespan 52.3 s, warn+ 0 s, failed [], valid True 
+{'block': 11, 'as_block': None, 'order': 'KSF', 'config': 'F'} F: mean verdict 89.2 s, makespan 105.4 s, warn+ 60 s, failed ['fastapi-tests'], valid True 
+{'block': 12, 'as_block': None, 'order': 'SFK', 'config': 'S2'} S: mean verdict 41.9 s, makespan 60.3 s, warn+ 0 s, failed [], valid True 
+{'block': 12, 'as_block': None, 'order': 'SFK', 'config': 'F'} F: mean verdict 93.1 s, makespan 109.7 s, warn+ 58 s, failed [], valid True 
+{'block': 12, 'as_block': None, 'order': 'SFK', 'config': 'K-140%-60%'} K: mean verdict 34.5 s, makespan 65.7 s, warn+ 0 s, failed [], valid True 
