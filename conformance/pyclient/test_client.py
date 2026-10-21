@@ -278,7 +278,7 @@ class BodyTests(unittest.TestCase):
         for raw in ("0000000005%", "-0000000007", "+5%", " 5%", "5 %", "-+7", "000%", "-"):
             with self.assertRaises(ValueError, msg=raw):
                 cc.size_of(raw, 14)
-        for raw in (0, 4097, -3, "0%", "101%", "x", True, 1.5, {}):
+        for raw in (0, 4097, -3, "0%", "401%", "x", True, 1.5, {}):
             with self.assertRaises(ValueError, msg=raw):
                 cc.size_of(raw, 14)
         self.assertEqual(cc.parse_token_fds("4-13"), list(range(4, 14)))
@@ -327,6 +327,41 @@ class NeedGrammarTests(unittest.TestCase):
                            (["--", "echo", "{n:gpu}"], one),
                            (["--need", "cpu=2", "--", "pytest", "-n", "{n}"], {"cpu": (2, 2)})):
             self.assertEqual(self.needs(*args), want, args)
+
+    def test_need_mem_arg(self):
+        """§21: --need mem=SIZE is one size above 0, in 128 MiB tokens rounded up, at most 256.
+        Mutation: round the tokens down instead of up, and mem=1M asks for 0."""
+        for text, want in (("mem=3G", 24), ("mem=3", 24), ("mem=768M", 6), ("mem=1M", 1),
+                           ("mem=129M", 2), ("mem=2.5G", 20), ("mem=100G", 256)):
+            self.assertEqual(self.needs("--need", text, "--", "true"), {"mem": (want, want)}, text)
+        for text in ("mem=1..2", "mem=3G..", "mem=0", "mem=0G", "mem=3GB", "mem=1.5T", "mem=-1",
+                     "mem=1234567", "mem=1.2345G"):
+            with self.assertRaises(cc.UsageError, msg=text):
+                self.needs("--need", text, "--", "true")
+
+
+class SizeTests(unittest.TestCase):
+    """§5.2 and §5.3: the sizes of cpu and mem, and their defaults."""
+
+    def sizes(self, text: str, cpus: int, memory: int) -> dict:
+        cfg = cc.Config.parse(text.encode())
+        return {r: cfg.size(r, cpus, memory) for r in cfg.resources}
+
+    def test_default_sizes(self):
+        """cpu is "140%" and mem "60%" when not declared.
+        Mutation: a default cpu of "100%", and cpu is 10."""
+        self.assertEqual(self.sizes("", 10, 16384), {"cpu": 14, "mem": 76})
+
+    def test_sizes_mem(self):
+        """Mutation: an integer mem read as MiB instead of GiB, and 9 is not 72."""
+        for body, want in (('"60%"', 76), ("9", 72), ('"9.5G"', 76), ('"768M"', 6), ('"1M"', 1),
+                           ('"100%"', 128)):
+            self.assertEqual(self.sizes(f"[resources]\nmem = {body}\n", 8, 16384)["mem"], want, body)
+        for body in ('"101%"', '"-2"', "true", "4.5", '"9GB"'):
+            with self.assertRaises(ValueError, msg=body):
+                cc.Config.parse(f"[resources]\nmem = {body}\n".encode())
+        self.assertEqual(self.sizes("[resources]\nmem = 0\n", 8, 16384), {"cpu": 11})
+        self.assertEqual(cc.size_of("400%", 10), 40)
 
 
 class StateDirTests(Base):
@@ -395,7 +430,7 @@ class StateDirTests(Base):
             self.client().config()
 
     def test_invalid_configuration(self):
-        for text in ("[resources]\ncpu = 0\n", '[resources]\ncpu = "101%"\n', "[resources]\nCPU = 2\n",
+        for text in ("[resources]\ncpu = 0\n", '[resources]\ncpu = "401%"\n', "[resources]\nCPU = 2\n",
                      "not toml ===", '[priorities]\n"a" = 1001\n', "[platform]\nwindows_warning = 1\n",
                      "resources = 3\n"):
             self.config(text)
@@ -403,8 +438,8 @@ class StateDirTests(Base):
                 self.client().config()
         self.config("[resources]\npg-local = 2\n[other]\nx = 1\n")
         cfg = self.client().config()
-        self.assertEqual(cfg.size("cpu", 14), 14)  # cpu defaults to "100%"
-        self.assertEqual(cfg.size("pg-local", 14), 2)
+        self.assertEqual(cfg.size("cpu", 14, 16384), 19)  # cpu defaults to "140%"
+        self.assertEqual(cfg.size("pg-local", 14, 16384), 2)
 
     def test_malformed_format_fails_open_without_writing(self):
         self.write(os.path.join(self.S, "FORMAT"), b"coreslot-protocol one\n")
@@ -1172,6 +1207,22 @@ class LauncherTests(Base):
             p = self.cli("run", "--need", bad, "--", "true", stderr=subprocess.DEVNULL)
             self.assertEqual(p.wait(timeout=20), 64, bad)
 
+    def test_granted_mem_mib(self):
+        """§17: CORESLOT_GRANTED_MEM and {n:mem} are the mem grant in MiB; the clamp notice is in
+        bytes. Mutation: write the token count, and the child sees 12 instead of 1536."""
+        self.config('[resources]\nmem = "2G"\n')
+        report = ["sh", "-c", 'echo "$CORESLOT_GRANTED_MEM $1"', "sh"]
+        p = self.cli("run", "--need", "mem=1536M", "--", *report, "{n:mem}", stdout=subprocess.PIPE)
+        stdout, _ = p.communicate(timeout=20)
+        self.assertEqual((p.returncode, stdout.decode().strip()), (0, "1536 1536"))
+        p = self.cli("run", "--need", "mem=3G", "--", *report, "{n:mem}", stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE)
+        stdout, err = p.communicate(timeout=20)
+        self.assertEqual((p.returncode, stdout.decode().strip()), (0, "2048 2048"), err)
+        self.assertIn(b"mem: requested 3 GiB, budget is 2 GiB; running alone with 2 GiB", err)
+        log = [json.loads(line) for line in self.read("log", "runs.jsonl").splitlines()]
+        self.assertEqual((log[-1]["need"], log[-1]["grant"]), ({"mem": [24, 24]}, {"mem": 16}))
+
     def test_pass_through(self):
         self.config("[resources]\ncpu = 4\npg-local = 2\n")
         out = os.path.join(self.root, "inner.json")
@@ -1317,14 +1368,14 @@ class AlignmentTests(Base):
         os.symlink(os.path.join(self.root, "nowhere.toml"), path)
         c = self._real_config_client(home)
         self.assertEqual(c.config_path(), path)
-        self.assertEqual(c.config().size("cpu", 14), 14)  # the defaults
+        self.assertEqual(c.config().size("cpu", 14, 16384), 19)  # the defaults
         target = os.path.join(self.root, "real.toml")
         with open(target, "w") as fh:
             fh.write("[resources]\ncpu = 3\n")
         os.chmod(target, 0o666)  # no owner or mode check on the real configuration
         os.unlink(path)
         os.symlink(target, path)
-        self.assertEqual(c.config().size("cpu", 14), 3)
+        self.assertEqual(c.config().size("cpu", 14, 16384), 3)
         os.unlink(path)
         os.mkdir(path)
         with self.assertRaises(cc.StateError):

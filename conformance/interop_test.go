@@ -7,14 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -182,6 +185,85 @@ func TestInteropPythonAndGo(t *testing.T) {
 			t.Logf("%d fixtures: Go and Python agree", len(goVerdicts))
 		}
 	})
+}
+
+// pySizesScript prints the sizes the Python client resolves on this machine for each
+// configuration file named, and the physical memory sysconf reports, in MiB.
+const pySizesScript = `
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import coreslot_client as cc
+cpus, memory = cc.machine_cpus(), cc.machine_memory()
+out = {"sysconf_mib": os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") >> 20, "sizes": []}
+for path in sys.argv[2:]:
+    with open(path, "rb") as fh:
+        cfg = cc.Config.parse(fh.read())
+    out["sizes"].append({r: cfg.size(r, cpus, memory) for r in cfg.resources})
+json.dump(out, sys.stdout)
+`
+
+// TestInteropSizesAgree checks that the Go and the Python client, each following PROTOCOL.md
+// section 5.2, resolve the same sizes on this machine, the defaults included.
+// Mutation: machine_memory in the Python client returns hw.memsize or MemTotal in decimal
+// megabytes, and the "60%" default of mem disagrees.
+func TestInteropSizesAgree(t *testing.T) {
+	py, pyc, err := pyClient(t)
+	if err != nil {
+		t.Skipf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
+	}
+	machine, err := config.ReadMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configs := []string{"", "[resources]\ncpu = \"400%\"\n", "[resources]\nmem = \"9.5G\"\n", "[resources]\nmem = 0\n"}
+	dir := t.TempDir()
+	paths := make([]string, len(configs))
+	want := make([]map[string]int, len(configs))
+	for i, body := range configs {
+		paths[i] = filepath.Join(dir, fmt.Sprintf("config%d.toml", i))
+		if err := os.WriteFile(paths[i], []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(paths[i])
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		want[i] = cfg.Sizes(machine)
+	}
+	script := filepath.Join(dir, "sizes.py")
+	if err := os.WriteFile(script, []byte(pySizesScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(py, append([]string{script, filepath.Dir(pyc)}, paths...)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Python sizes: %v\n%s", err, stderr.String())
+	}
+	var got struct {
+		SysconfMiB int64            `json:"sysconf_mib"`
+		Sizes      []map[string]int `json:"sizes"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if got.SysconfMiB != machine.MemMiB {
+		source := map[string]string{"darwin": "hw.memsize", "linux": "MemTotal"}[runtime.GOOS]
+		t.Logf("sysconf reports %d MiB of physical memory and %s %d MiB; both clients use %s, PROTOCOL.md's source",
+			got.SysconfMiB, source, machine.MemMiB, source)
+	}
+	if len(got.Sizes) != len(configs) {
+		t.Fatalf("Python resolved %d configurations, want %d", len(got.Sizes), len(configs))
+	}
+	for i, body := range configs {
+		if !maps.Equal(got.Sizes[i], want[i]) {
+			t.Errorf("config %q on %d CPUs and %d MiB: Go resolves %v, Python %v", body, machine.CPUs, machine.MemMiB, want[i], got.Sizes[i])
+		}
+	}
+	if !t.Failed() {
+		t.Logf("%d CPUs, %d MiB: the clients agree on %v", machine.CPUs, machine.MemMiB, want)
+	}
 }
 
 // runLogNeeds is the need of every run-log line, formatted as fmt prints a decoded map.
