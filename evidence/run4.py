@@ -60,7 +60,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acceptance  # noqa: E402  (probe, cooldown, runlog_lines, sign_test)
-import overload  # noqa: E402  (load, Sampler, vm_counter)
+import overload  # noqa: E402  (load, Sampler)
 
 ROOT = os.path.expanduser("~/bench.noindex")
 DEFAULT_DIRS = ("~/Library/Application Support/coreslot", "~/.local/state/coreslot")
