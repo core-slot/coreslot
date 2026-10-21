@@ -21,6 +21,7 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_PASSWD_MISS", "1")
 	t.Setenv("CORESLOT_TESTHOOK_PROBE_SHELL", "/nonexistent")
 	t.Setenv("CORESLOT_TESTHOOK_PROBE_TIMEOUT", "1m")
+	t.Setenv("CORESLOT_TESTHOOK_HEADROOM_MIB", "4096")
 	if err := os.WriteFile(filepath.Join(dir, "realtime-offset"), []byte("1h"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -59,5 +60,8 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	}
 	if got := ProbeTimeout(time.Second); got != time.Second {
 		t.Errorf("ProbeTimeout(1s) = %v, want 1s", got)
+	}
+	if mib, set := Headroom(); mib != 0 || set {
+		t.Errorf("Headroom() = %d, %v, want 0, false", mib, set)
 	}
 }

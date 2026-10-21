@@ -62,6 +62,10 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if err != nil {
 		return nil, err
 	}
+	sizes, live := t.e.attemptSizes(t.req.Need, sizes, locked)
+	if live {
+		eff, clamped, undeclared = state.Effective(t.req.Need, sizes)
+	}
 	take, ok := state.Plan(eff, sizes, locked)
 	if !ok {
 		return nil, nil
@@ -89,7 +93,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		ts.Close()
 		return nil, ErrCanceled
 	}
-	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared}
+	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared, liveMem: live}
 	if err := g.publishHold(sec, t.req, false); err != nil {
 		ts.Close()
 		return nil, err
@@ -250,6 +254,7 @@ type Grant struct {
 	unbudgeted []string
 	tokenOnly  bool
 	adopted    bool
+	liveMem    bool   // the attempt that admitted it used a raised mem size
 	failOpen   string // the reason of a fail-open run's grant
 
 	mu     sync.Mutex
@@ -324,6 +329,9 @@ func (g *Grant) TokenOnly() bool { return g.tokenOnly }
 
 // Adopted reports an adoption's grant.
 func (g *Grant) Adopted() bool { return g.adopted }
+
+// LiveMem reports that the attempt that admitted g used a raised mem size.
+func (g *Grant) LiveMem() bool { return g.liveMem }
 
 // HoldName is the hold's file name in holds/; empty without a hold.
 func (g *Grant) HoldName() string { return g.holdName }

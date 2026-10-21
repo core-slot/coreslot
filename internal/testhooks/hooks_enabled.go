@@ -22,6 +22,9 @@
 //     learn the descriptor limit it was started with, so that a test can make that probe fail.
 //   - CORESLOT_TESTHOOK_PROBE_TIMEOUT: a Go duration that replaces the CLI's bound on that probe,
 //     so that a test's probe may run a program slower than the bound allows.
+//   - CORESLOT_TESTHOOK_HEADROOM_MIB: a decimal integer of MiB that replaces the kernel's memory
+//     headroom in the live mem size, which then measures no holder's tree, so that a test's
+//     live admission never depends on the machine's memory.
 package testhooks
 
 import (
@@ -162,4 +165,17 @@ func ProbeTimeout(d time.Duration) time.Duration {
 		panic(fmt.Sprintf("testhooks: CORESLOT_TESTHOOK_PROBE_TIMEOUT: %v", err))
 	}
 	return t
+}
+
+// Headroom returns CORESLOT_TESTHOOK_HEADROOM_MIB; set is false when it is unset.
+func Headroom() (mib int64, set bool) {
+	v := os.Getenv("CORESLOT_TESTHOOK_HEADROOM_MIB")
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		panic(fmt.Sprintf("testhooks: CORESLOT_TESTHOOK_HEADROOM_MIB: %v", err))
+	}
+	return n, true
 }
