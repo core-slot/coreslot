@@ -1154,8 +1154,8 @@ on AC power throughout; coreslot built with Go 1.27.1, `CGO_ENABLED=0`; the runn
 (median 6008). The 1-minute load was 2.23-15.17 (median 6.045) and the process count 517-572
 (median 544.5).
 
-**Timeline.** The pre-registration was pushed at 15:04:33 UTC. The first verdict set started at
-15:06:56 and the last at 16:18:43.
+**Timeline.** The pre-registration was committed at 15:04:33 UTC and pushed at 15:04:36. The
+first verdict set started at 15:06:56 and the last at 16:18:43.
 
 **Medians over the twelve valid blocks:**
 
@@ -1174,15 +1174,21 @@ on AC power throughout; coreslot built with Go 1.27.1, `CGO_ENABLED=0`; the runn
     0 of 68.6, 17.8 of 44.6, 0 of 81.6, 37.3 of 78.4, 34.8 of 93.5, 26.8 of 108.4.
   - KL: 21.8 of 39.6 s, 38.3 of 77.4, 28.8 of 95.4, 30.5 of 83.4, 29.8 of 79.4, 29.8 of 126.5,
     0 of 68.6, 17.8 of 40.6, 0 of 69.6, 37.3 of 84.4, 34.8 of 93.4, 22.8 of 102.4.
+
+  The test compares the sums as the summary rounds them, to 0.1 s; the pre-registration did not
+  say so. On the unrounded sums KL is lower in 6 blocks (1, 3, 5, 8, 11, 12), higher in 4 and
+  equal in 2 (7 and 9, both 0), p = 0.6128; in blocks 3, 5, 8 and 11 the difference is at most
+  0.02 s. The outcome is the same.
 - **Price, passed:** KL had no critical second and no false failure. The per-block difference of
   warn-or-worse seconds, KL less KS, was −14 s in block 1 and 0 in the other eleven (median 0 s,
   limit 10 s).
 
 **Why the two K arms behaved alike.** The replay of every K run against the static sizes counts
 the runs whose admission took `mem` above the static 76 tokens. It found **0 in KL**, as in KS. In
-this run, the live size never raised `mem` for an admission, so KL ran the static rule. Its sets
-differ from KS's only by run-to-run noise, and in 8 of 12 blocks the two arms' `waited_free_s`
-came out equal.
+this run, by that replay, the live size never raised `mem` for an admission, so KL ran the static
+rule. We read the remaining differences between its sets and KS's as run-to-run noise (an
+inference: the arms differ only in the switch); in 8 of 12 blocks the two arms' rounded
+`waited_free_s` came out equal.
 
 The wait decomposition, summed over the twelve blocks, puts KS's waiting and KL's in the same
 places:
@@ -1201,17 +1207,21 @@ Where the `waited_free_s` came from, summed over the twelve blocks for KS and KL
 | The FastAPI suite | 44.1 | 15.0 |
 | The type check | 7.5 | 8.5 |
 
-The lint needs one token and waits only behind a head, which no live size reaches under strict
-FIFO.
+The lint needs one token, which the static size leaves free beside any other gate; its waits are
+for a head that does not fit, which no live size reaches under strict FIFO.
 
-The records do not include the holders' resident memory, so the live room an attempt saw cannot
-be recomputed. The bound it had to meet can be stated:
+The records hold each run's memory peak (`mem_peak_kib`, `peak_after_s`) but not the holders'
+resident memory over time, so the live room an attempt saw cannot be recomputed. The bound it had
+to meet can be stated, and what follows from it is an inference, not a measurement:
 - **A suite queued while a type check runs.** The suite needs 25 or 27 tokens (3200 or 3456 MiB).
   The type check's reservation is 8576 MiB, and only the part its tree already uses is subtracted
   from that reservation.
 - **What the headroom showed.** Over KL's one-second samples the headroom was 1846-9473 MiB
-  (median 6224). In those seconds it covered the suite's need by itself, which `waited_free_s`
-  counts. Less the type check's unused reservation, it did not.
+  (median 6224). Where it covered a suite's need by itself, `waited_free_s` counts the second.
+  The type check's footprint peaked at 8017-8914 MiB, 8.0-13.0 s after its start (its 48 K runs'
+  `mem_peak_kib`), so its unused reservation is most of 8576 MiB early in its run and little or
+  none at its peak. We infer that the headroom less that unused part rarely covered a suite: no
+  KL admission went above the static size.
 
 **Reported without a test.**
 
@@ -1231,21 +1241,22 @@ be recomputed. The bound it had to meet can be stated:
   state read nominal at every set's start. During the sets it reached state 1 ("fair") in 55 of
   KS's 153 thermal samples, 57 of KL's 154 and 64 of S's 153, and never went above it.
 
-**What it shows.** On this laptop and this mix, with the owner's applications using a median 7.5
-GiB, the live size never admitted a run that the static 60 % share did not. Its rule subtracts the
-type check's unused 8576 MiB reservation from the kernel's headroom, and the headroom left no room
-for a suite beside a running type check. So the waits that `waited_free_s` counts stayed: a
-median of 29.3 s per block under KL and 27.65 s under KS. They are not waits for free memory the
-rule could see. Most of them are runs queued behind a head that needed memory (the lint, the
-suites), or runs waiting beside a type check whose reservation the rule kept. Pressure,
-time to verdict and makespan were those of the static rule.
+**What it shows.** On this laptop and this mix, with memory in use at a median 7.5 GiB at the sets'
+start, the live size never admitted a run that the static 60 % share did not (measured, by the
+replay). The waits that `waited_free_s` counts stayed: a median of 29.3 s per block under KL and
+27.65 s under KS. Pressure, time to verdict and makespan were those of the static rule. Why, by
+inference from the bound above: the rule subtracts the part of the type check's 8576 MiB
+reservation that its tree has not used yet, and while a type check ran the headroom less that
+part did not cover a suite; and a run queued behind a head (the lint, the suites) is not reached
+by any size under strict FIFO.
 
 **Threats to validity.**
 - One machine, one mix and one day.
 - **The background.** It used about 1.5 GiB more memory than in run 4, which shrinks the headroom
   the live size reads.
-- **What the records omit.** Holders' resident memory was not recorded, so the live room per
-  attempt is inferred, not measured.
+- **What the records omit.** Holders' resident memory over time was not recorded, so the live
+  room per attempt, and the reason no admission went above the static size, are inferred, not
+  measured.
 - **The sets themselves.** Sets ran under a 1-minute load above 3 and reached "fair" thermal state.
 - **The build.** The measured coreslot is the head of an open pull request, not a release.
 
@@ -1253,6 +1264,6 @@ time to verdict and makespan were those of the static rule.
 share, where the room after reservations covers a second heavy run. Linux. Any head-of-line
 change.
 
-**Reproduce.** `evidence/overload/run5.sh` (verdict 1 12, summary); `run5.sh summary` recomputes the
-summary from the committed records. The measured binary was built with
+**Reproduce.** `evidence/overload/run5.sh` (verdict 1 12, summary); `run5.sh summary` rewrites
+`summary.json` and `summary.txt` from the committed records (byte-identical). The measured binary was built with
 `CGO_ENABLED=0 go build -trimpath -o ~/bench.noindex/bin/coreslot ./cmd/coreslot` at `54f8cb0`.
