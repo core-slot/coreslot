@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -84,8 +83,9 @@ var errHelp = errors.New("help requested")
 //
 // lookup, when not nil, finds the needs file's entry for a label. Each resource's range comes
 // from --need, else from the entry for the run's label, else, for cpu and only when no --need
-// was given at all, from defaultNeed.
-func parseRun(args []string, streams IO, lookup func(label string) (needs.Entry, bool)) (runOptions, error) {
+// was given at all, from defaultNeed. An entry that makes a valid request invalid is set aside
+// with lookup's notice, and the run goes on without it: the needs file never refuses a run.
+func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error) {
 	o := runOptions{onTimeout: "fail", refusalCode: exitRefusal}
 	fs := flag.NewFlagSet("coreslot run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -132,23 +132,28 @@ func parseRun(args []string, streams IO, lookup func(label string) (needs.Entry,
 	for name := range need {
 		o.named[name] = true
 	}
+	withEntry := maps.Clone(need)
+	var setAside func(error)
 	if o.label != "" && lookup != nil {
-		if e, ok := lookup(o.label); ok {
+		if e, ok, ignore := lookup(o.label); ok {
+			setAside = ignore
 			if _, given := need["cpu"]; !given && e.CPU != nil {
-				need["cpu"] = *e.CPU
+				withEntry["cpu"] = *e.CPU
 			}
 			if _, given := need["mem"]; !given && e.MemMiB > 0 {
 				t := spec.MemTokensCeil(e.MemMiB)
-				need["mem"] = spec.Range{Min: t, Max: t}
+				withEntry["mem"] = spec.Range{Min: t, Max: t}
 			}
 		}
 	}
-	if _, ok := need["cpu"]; !ok && len(needArgs) == 0 {
-		need["cpu"] = defaultNeed(o.argv, o.subst)["cpu"]
-		o.named["cpu"] = true
+	req, err := o.validRequest(withEntry, len(needArgs) > 0)
+	if err != nil && setAside != nil {
+		if bare, berr := o.validRequest(need, len(needArgs) > 0); berr == nil {
+			setAside(err)
+			req, err = bare, nil
+		}
 	}
-	req := spec.Normalize(spec.Request{Label: o.label, Priority: o.priority, Need: need})
-	if err := req.Validate(); err != nil {
+	if err != nil {
 		return o, err
 	}
 	o.need = req.Need
@@ -166,6 +171,17 @@ func parseRun(args []string, streams IO, lookup func(label string) (needs.Entry,
 		}
 	}
 	return o, nil
+}
+
+// validRequest is the validated request for need, which takes defaultNeed's cpu when it has none and
+// no --need was given.
+func (o *runOptions) validRequest(need map[string]spec.Range, given bool) (spec.Request, error) {
+	if _, ok := need["cpu"]; !ok && !given {
+		need["cpu"] = defaultNeed(o.argv, o.subst)["cpu"]
+		o.named["cpu"] = true
+	}
+	req := spec.Normalize(spec.Request{Label: o.label, Priority: o.priority, Need: need})
+	return req, req.Validate()
 }
 
 // defaultNeed is the request of a run without --need: cpu=1..spec.DefaultMax when the command

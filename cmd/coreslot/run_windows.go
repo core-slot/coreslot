@@ -11,7 +11,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
-	"github.com/core-slot/coreslot/internal/needs"
 )
 
 // installLockHooks does nothing on Windows: there is no admission section or probe lock to hold,
@@ -25,7 +24,7 @@ func shieldInherited() {}
 // command runs at once with min of each resource, after one warning unless the configuration
 // silences it; --strict refuses instead.
 func runCommand(args []string, io IO) int {
-	var lookup func(string) (needs.Entry, bool)
+	var lookup needsLookup
 	if path, err := config.Path(); err == nil {
 		lookup = newNeedsLookup(path, func(format string, args ...any) {
 			fmt.Fprintf(io.Stderr, "coreslot: "+format+"\n", args...)

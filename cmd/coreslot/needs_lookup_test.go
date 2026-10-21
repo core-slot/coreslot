@@ -16,7 +16,7 @@ import (
 )
 
 // lookupOf is newNeedsLookup over a needs file holding text, with the notices it prints.
-func lookupOf(t *testing.T, text string) (func(string) (needs.Entry, bool), *[]string) {
+func lookupOf(t *testing.T, text string) (needsLookup, *[]string) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "needs.toml"), []byte(text), 0o600); err != nil {
@@ -28,7 +28,7 @@ func lookupOf(t *testing.T, text string) (func(string) (needs.Entry, bool), *[]s
 	}), &notices
 }
 
-func wantNeed(t *testing.T, args []string, lookup func(string) (needs.Entry, bool), want map[string]spec.Range) runOptions {
+func wantNeed(t *testing.T, args []string, lookup needsLookup, want map[string]spec.Range) runOptions {
 	t.Helper()
 	o, err := parseRun(args, IO{}, lookup)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestNeedsWorkerSuffix(t *testing.T) {
 // An unlabelled run never reads the needs file. Mutation: drop the label check → red.
 func TestNeedsUnlabelled(t *testing.T) {
 	calls := 0
-	lookup := func(string) (needs.Entry, bool) { calls++; return needs.Entry{}, false }
+	lookup := func(string) (needs.Entry, bool, func(error)) { calls++; return needs.Entry{}, false, nil }
 	wantNeed(t, []string{"--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 1, Max: 1}})
 	if calls != 0 {
 		t.Errorf("lookup called %d times for an unlabelled run", calls)
@@ -91,6 +91,20 @@ func TestPlaceholderMemFromEntry(t *testing.T) {
 	lookup, _ := lookupOf(t, "[needs.\"a\"]\nmem = \"2G\"\n")
 	wantNeed(t, []string{"--label", "a", "--", "echo", "{n:mem}"}, lookup,
 		map[string]spec.Range{"cpu": {Min: 1, Max: 1}, "mem": {Min: 16, Max: 16}})
+}
+
+// An entry that makes a valid request invalid is set aside with one notice naming the file, the
+// label and the error, and the run goes on without it. Mutation: return the merged request's
+// validation error → a usage error, red.
+func TestNeedsEntryNeverRefuses(t *testing.T) {
+	lookup, notices := lookupOf(t, "[needs.\"a\"]\ncpu = \"256\"\nmem = \"32G\"\n")
+	wantNeed(t, []string{"--label", "a", "--need", "gpu=1", "--", "true"}, lookup,
+		map[string]spec.Range{"gpu": {Min: 1, Max: 1}})
+	if len(*notices) != 1 || !strings.HasPrefix((*notices)[0], "needs file ") ||
+		!strings.Contains((*notices)[0], "the entry for a makes the request invalid: ") ||
+		!strings.HasSuffix((*notices)[0], "; running without it") {
+		t.Errorf("notices %q, want one naming the file, the label and the error", *notices)
+	}
 }
 
 // writeNeeds writes the needs file of the state directory dir (its configuration's sibling).
@@ -153,7 +167,7 @@ func TestNestedQuietOnEntryResource(t *testing.T) {
 func TestNeedsLookupUnreadable(t *testing.T) {
 	lookup, notices := lookupOf(t, "[needs\n")
 	for range 2 {
-		if _, ok := lookup("a"); ok {
+		if _, ok, _ := lookup("a"); ok {
 			t.Error("a malformed file gave an entry")
 		}
 	}

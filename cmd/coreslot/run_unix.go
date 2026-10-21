@@ -12,7 +12,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
-	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -40,7 +39,7 @@ type run struct {
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
 func runCommand(args []string, io IO) int {
 	loc := locate()
-	var lookup func(string) (needs.Entry, bool)
+	var lookup needsLookup
 	if loc.err == nil {
 		lookup = newNeedsLookup(loc.cfgPath, func(format string, args ...any) {
 			fmt.Fprintf(io.Stderr, "coreslot: "+format+"\n", args...)
