@@ -1,0 +1,17 @@
+[needs]
+  [needs."bench:vscode-typecheck"]
+    cpu = "5"
+    mem = "9G"
+    pinned = true
+  [needs."bench:fastapi-ruff"]
+    cpu = "3"
+    mem = "1G"
+    pinned = true
+  [needs."bench:fastapi-tests"]
+    cpu = "5"
+    mem = "3G"
+    pinned = true
+  [needs."bench:sqlalchemy-orm-tests"]
+    cpu = "9"
+    mem = "3G"
+    pinned = true

@@ -1,0 +1,17 @@
+[needs]
+  [needs."bench:fastapi-ruff"]
+    cpu = "2"
+    evidence = "5 runs 2026-10-21: max 1.5 cores, 5 of 5 saturated, peak 21 MiB (max_rss)"
+    mem = "128M"
+  [needs."bench:fastapi-tests"]
+    cpu = "1..6"
+    evidence = "5 runs 2026-10-21: max 5.6 cores, 0 of 5 saturated, peak 3.1 GiB (footprint) at 8s"
+    mem = "3200M"
+  [needs."bench:sqlalchemy-orm-tests"]
+    cpu = "1..10"
+    evidence = "5 runs 2026-10-21: max 9.0 cores, 0 of 5 saturated, peak 2.8 GiB (footprint) at 33s"
+    mem = "2944M"
+  [needs."bench:vscode-typecheck"]
+    cpu = "5"
+    evidence = "5 runs 2026-10-21: max 4.9 cores, 5 of 5 saturated, peak 8.7 GiB (footprint) at 12s"
+    mem = "8960M"
