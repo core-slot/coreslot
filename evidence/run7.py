@@ -95,5 +95,108 @@ P_INFEASIBLE_TIMEOUTS = 2  # P is infeasible when more than 2 of the 12 pilot he
 
 # --- learn ------------------------------------------------------------------------------------
 
+def load(path):
+    """overload.load, with the wide agents' cwd expanded as well."""
+    cfg = overload.load(path)
+    for chain in cfg.setdefault("wide_agents", {}).values():
+        for g in chain:
+            g["cwd"] = os.path.expanduser(g["cwd"])
+    return cfg
+
+
+def learn_gates(cfg):
+    """Every gate of the agents and the wide agents, once each, in the stand's order."""
+    return list({g["gate"]: g for agents in (cfg["agents"], cfg.get("wide_agents", {}))
+                 for chain in agents.values() for g in chain}.values())
+
+
+def seal(out):
+    """OUT/needs.sha256: the SHA-256 of needs.toml and learn.jsonl, as sha256sum writes it."""
+    with open(os.path.join(out, "needs.sha256"), "w") as f:
+        for name in ("needs.toml", "learn.jsonl"):
+            f.write(f"{run4.sha256(os.path.join(out, name))}  {name}\n")
+
+
+def suggest(cfg, out, name):
+    """`coreslot suggest --write`, its needs file copied to OUT/name."""
+    r = run4.cs(cfg, "suggest", "--write", capture_output=True, text=True)
+    print(run4.scrub(r.stdout + r.stderr), end="", flush=True)
+    if r.returncode:
+        sys.exit(f"run7: suggest --write exited {r.returncode}")
+    shutil.copyfile(os.path.join(run4.checked_state(cfg), "needs.toml"), os.path.join(out, name))
+
+
+def learn(cfg, out):
+    for pattern in run6.RECORDS:
+        if glob.glob(os.path.join(out, pattern)):
+            print(f"run7: learn would change the needs {pattern} used", file=sys.stderr)
+            sys.exit(2)
+    os.makedirs(out, exist_ok=True)
+    state = os.path.join(out, "learn-state.json")
+    if os.path.exists(state):
+        with open(state) as f:
+            recorded = json.load(f)["state_dir"]
+        if recorded != run4.scrub(cfg["state_dir"]):
+            sys.exit(f"run7: learn started in {recorded}, not in this stand's state directory")
+    else:
+        run4.fresh_state(cfg)
+        run6.write_learn_state(cfg, out)
+    run4.write_config(cfg, K_SHARE["cpu"], K_SHARE["mem"])
+    path = os.path.join(out, "learn.jsonl")
+    recs = run4.read_jsonl(path)
+    done = {(r["gate"], r["form"], r["pass"], r["run"]) for r in recs}
+    pacing = run4.pacing(cfg)
+    pacing.cooldown = max(pacing.cooldown, LEARN_COOLDOWN_S)
+    baseline = []
+
+    def runs(todo):
+        for g, form, pass_, n in todo:
+            if (g["gate"], form, pass_, n) in done:
+                continue
+            if not baseline:
+                baseline.append(acceptance.probe())
+            acceptance.cooldown(pacing, baseline[0])
+            started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            log0 = len(acceptance.runlog_lines(cfg))
+            code, output, peak, cores, wall = run6.measured(cfg, g, form)
+            rec = {"started": started, "gate": g["gate"], "label": g["label"], "form": form,
+                   "pass": pass_, "run": n, "exit": code, "wall_s": wall, "peak_kib": peak,
+                   "cores": cores, "failures": run4.fail_lines(g, output) if code else []}
+            if form == "K":  # coreslot's own run time, the K slowdown's denominator
+                new = acceptance.runlog_lines(cfg)[log0:]
+                rec["ran_s"] = json.loads(new[-1]).get("ran_s") if new else None
+            with open(path, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+            print(json.dumps(rec), flush=True)
+
+    gates = learn_gates(cfg)
+    # suggest #1 rewrites the entries relearn runs under, so it never runs once relearn began
+    if not any(r["pass"] == "relearn" for r in recs):
+        runs((g, form, "learn", n) for g in gates for form, k in LEARN_RUNS.items()
+             for n in range(1, k + 1))
+        suggest(cfg, out, "needs-pass1.toml")
+    runs((g, "K", "relearn", n) for g in gates for n in range(1, RELEARN_RUNS + 1))
+    suggest(cfg, out, "needs.toml")
+    seal(out)
+
 
 # --- sets -------------------------------------------------------------------------------------
+
+
+def main():
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("learn")
+    p.add_argument("stand")
+    p.add_argument("out")
+    args = ap.parse_args()
+    cfg = load(args.stand)
+
+    def interrupted(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
+    learn(cfg, args.out)
+
+
+if __name__ == "__main__":
+    main()
