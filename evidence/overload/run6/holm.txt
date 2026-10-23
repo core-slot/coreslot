@@ -1,0 +1,9 @@
+Acceptance run 6: Holm's step-down, secondary analysis, not pre-registered (declared deviation)
+
+Family-wise alpha 0.05 over k = 5 hypotheses
+
+H1: rank 1, p 3.944e-31 against 0.01: rejected (primary chain: rejected)
+H2: rank 2, p 0.0002 against 0.0125: rejected (primary chain: exploratory)
+H3: rank 3, p 0.0006 against 0.01667: rejected (primary chain: exploratory)
+H4: rank 4, p 0.1094 against 0.025: not rejected (primary chain: not rejected)
+H5: rank 5, p 0.2879 against 0.05: not rejected (primary chain: exploratory)

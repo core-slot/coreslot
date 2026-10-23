@@ -1,0 +1,43 @@
+{
+ "label": "secondary analysis, not pre-registered (declared deviation)",
+ "alpha": 0.05,
+ "k": 5,
+ "hypotheses": {
+  "H1": {
+   "p": 3.944304526105059e-31,
+   "rank": 1,
+   "threshold": 0.01,
+   "rejected": true,
+   "primary": "rejected"
+  },
+  "H4": {
+   "p": 0.109375,
+   "rank": 4,
+   "threshold": 0.025,
+   "rejected": false,
+   "primary": "not rejected"
+  },
+  "H5": {
+   "p": 0.2879292348747672,
+   "rank": 5,
+   "threshold": 0.05,
+   "rejected": false,
+   "primary": "exploratory"
+  },
+  "H3": {
+   "p": 0.0006,
+   "rank": 3,
+   "threshold": 0.016666666666666666,
+   "rejected": true,
+   "primary": "exploratory"
+  },
+  "H2": {
+   "p": 0.0002,
+   "rank": 2,
+   "threshold": 0.0125,
+   "rejected": true,
+   "primary": "exploratory"
+  }
+ },
+ "left_out": {}
+}
