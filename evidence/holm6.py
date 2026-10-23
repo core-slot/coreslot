@@ -6,8 +6,9 @@ primary analysis stays the pre-registered chain, unchanged.
 
 Each hypothesis enters with one p-value: H1 the largest of its three; H4 the larger of its two; H5,
 for each N, six times the smallest of its six p-values, capped at 1, then the largest over N; H3
-and H2 their single p. A hypothesis summary.json marks untested (H2 under the light mix's pressure
-rule, or a mix short of n) stays out, and Holm runs over the rest.
+and H2 their single p. Only H2, and only when summary.json marks it untested under the light mix's
+pressure rule, stays out, and Holm runs over the other four; any other hypothesis marked untested
+(a mix short of n) enters with p = 1, which the deviation does not allow to leave the family.
 
   python3 evidence/holm6.py OUT    # reads OUT/summary.json; writes OUT/holm.json and OUT/holm.txt
 """
@@ -18,6 +19,7 @@ import sys
 ALPHA = 0.05
 LABEL = "secondary analysis, not pre-registered (declared deviation)"
 CHAIN = ("H1", "H4", "H5", "H3", "H2")
+LIGHT_PRESSURE = "more than one light pilot F set under pressure"  # run6.py's reason, verbatim
 
 
 def one_p(name, h):
@@ -38,8 +40,10 @@ def analyse(s):
     ps, left_out = {}, {}
     for name in CHAIN:
         h = s["tests"][name]
-        if "untested" in h:
+        if name == "H2" and h.get("untested") == LIGHT_PRESSURE:
             left_out[name] = h["untested"]
+        elif "untested" in h:
+            ps[name] = 1.0
         else:
             ps[name] = one_p(name, h)
     order = sorted(ps, key=lambda n: ps[n])

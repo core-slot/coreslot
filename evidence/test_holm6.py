@@ -68,6 +68,20 @@ class StepDown(unittest.TestCase):
                          {"H1": True, "H4": True, "H5": True, "H3": True})
         self.assertAlmostEqual(r["hypotheses"]["H4"]["threshold"], 0.05 / 3, places=12)
 
+    def test_only_h2_under_the_light_pressure_rule_leaves_the_family(self):
+        # mutation: any untested hypothesis left out (the rule before) -> k 2, H4, H5 and H2
+        #   absent -> red
+        # mutation: H2 left out whatever its reason -> k 4, H2 absent -> red
+        s = fixture(h1=(0.001, 0.001, 0.001), h3=0.001)
+        for name in ("H4", "H5", "H2"):
+            s["tests"][name] = {"untested": "its mix is short of n, re-runs spent",
+                                "status": "untested" if name == "H4" else "exploratory"}
+        r = holm6.analyse(s)
+        self.assertEqual(r["k"], 5)
+        self.assertEqual(r["left_out"], {})
+        self.assertEqual([r["hypotheses"][n]["p"] for n in ("H4", "H5", "H2")], [1.0] * 3)
+        self.assertFalse(r["hypotheses"]["H4"]["rejected"])
+
     def test_stops_at_the_second_hypothesis(self):
         # mutation: no stop (each p against its own threshold only) -> H3 0.014 < 0.05 / 3,
         #   H2 0.015 < 0.05 / 2 and H5 0.016 < 0.05 rejected -> red
