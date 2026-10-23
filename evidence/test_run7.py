@@ -3,13 +3,16 @@ import contextlib
 import copy
 import hashlib
 import json
+import math
 import os
 import subprocess
+import statistics
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -19,6 +22,7 @@ import overload  # noqa: E402
 import run4  # noqa: E402
 import run6  # noqa: E402
 import run7  # noqa: E402
+import stats7  # noqa: E402
 
 
 def text(path):
@@ -661,6 +665,180 @@ class Static(unittest.TestCase):
                                   lambda cfg, cpu, mem: writes.append((cpu, mem))):
             self.assertEqual(run7.static_sizes7(stand(root)), {"cpu": 14, "mem": 76})
         self.assertEqual(writes, [("140%", "60%")])
+
+
+# --- analysis ---------------------------------------------------------------------------------
+
+HEAVY7 = {"quiet": {"K60": 100, "S1": 125, "S2": 102, "P": 100},
+          "loaded": {"K60": 100, "S1": 140, "S2": 125, "P": 101}}
+SWAP7 = {"quiet": {"K60": 0, "S1": 0, "S2": 0, "P": 0},
+         "loaded": {"K60": 10, "S1": 500, "S2": 400, "P": 300}}
+
+
+def noise(block, arm):
+    """A deterministic spread of -2 % to +2 % so that no log ratio is constant."""
+    w = sum((i + 1) * ord(c) for i, c in enumerate(arm))  # distinct mod 5 from K60's
+    return 1 + ((block * 7 + w * 3) % 5 - 2) / 100
+
+
+def fake_set(arm, block, level, mean, swapouts=0, swapins=0, warn=0, invalid=None,
+             phase="pilot", mix="heavy", as_block=None):
+    """A minimal run-7 set record: `warn` samples at pressure 2, swapouts and swapins rising by
+    the pages given; a K60 set carries its gate's run-log line and the static sizes."""
+    order = run7.order_for(phase, mix, as_block or block, run7.MIXES[mix])
+    pos, t0 = order.index(arm), 1_800_000_000 + 600 * block
+    samples = [{"t": i, "pressure": 2 if i < warn else 1,
+                "swapouts": swapouts if i == warn + 1 else 0,
+                "swapins": swapins if i == warn + 1 else 0, "pageins": 0}
+               for i in range(warn + 2)]
+    return {"phase": phase, "mix": mix, "block": block, "as_block": as_block, "arm": arm,
+            "level": level, "level_name": level, "valid": not invalid,
+            "invalid": list(invalid or []), "flags": [], "order": " ".join(order),
+            "position": pos, "prev_arm": order[pos - 1] if pos else None,
+            "started": datetime.fromtimestamp(t0, timezone.utc).isoformat(),
+            "mean_verdict_s": mean, "verdict_s": {"A1": mean}, "makespan_s": mean + 10,
+            "samples": samples, "page_bytes": 16384,
+            "gates": [{"agent": "A1", "gate": "tc", "label": "bench:tc", "start": 0, "end": mean,
+                       "exit": 0}],
+            "runlog": [{"label": "bench:tc", "time_ns": t0 * 10**9, "waited_s": 0.0,
+                        "ran_s": mean, "grant": {"cpu": 4, "mem": 40}, "exit": 0,
+                        "fail_open": ""}] if arm == "K60" else [],
+            "static": {"cpu": 14, "mem": 76} if arm == "K60" else None}
+
+
+def heavy_block7(block, phase="pilot", times=None, swap=None, invalid=None, as_block=None):
+    """A heavy block's four sets at its level: HEAVY7 with noise, scaled by `times`, SWAP7 with
+    `swap` overriding an arm's swapouts, `invalid` an arm's reasons."""
+    level = run7.level_for(phase, as_block or block)
+    t, sw = times or {}, dict(SWAP7[level], **(swap or {}))
+    return [fake_set(a, block, level, round(HEAVY7[level][a] * t.get(a, 1) * noise(block, a), 2),
+                     sw[a], 0, 0, (invalid or {}).get(a), phase, "heavy", as_block)
+            for a in run7.HEAVY_ARMS]
+
+
+def light_block7(block, phase="pilot", k60=1.0, f_warn=0):
+    return [fake_set("K60", block, "quiet", round(50 * k60 * noise(block, "K60"), 2),
+                     phase=phase, mix="light"),
+            fake_set("F", block, "quiet", round(50 * noise(block, "F"), 2), warn=f_warn,
+                     phase=phase, mix="light")]
+
+
+def wide_block7(block, phase="pilot"):
+    return [fake_set(a, block, "quiet", round(v * noise(block, a), 2), phase=phase, mix="wide")
+            for a, v in (("K60", 100), ("S2", 120), ("F", 100))]
+
+
+def append(out, name, recs):
+    with open(os.path.join(out, name), "a") as f:
+        for r in recs:
+            f.write(json.dumps(r) + "\n")
+
+
+def pilot_levels():
+    """level -> the pilot's heavy blocks 1-12 at that level."""
+    return {lv: [b for b in range(1, 13) if run7.level_for("pilot", b) == lv]
+            for lv in run7.LEVELS}
+
+
+class PilotCheck(unittest.TestCase):
+    def setUp(self):
+        self.out = tempfile.mkdtemp()
+
+    def write_pilot(self, heavy=range(1, 13), kw=lambda b: {}, wide=range(1, 7)):
+        for b in heavy:
+            append(self.out, "pilot-heavy.jsonl", heavy_block7(b, **kw(b)))
+        for b in range(1, 13):
+            append(self.out, "pilot-light.jsonl", light_block7(b, f_warn=int(b == 3)))
+        for b in wide:
+            append(self.out, "pilot-wide.jsonl", wide_block7(b))
+
+    def check(self):
+        with mock.patch("sys.stdout"):
+            run7.pilot_check(self.out)
+        with open(os.path.join(self.out, "pilot_check.json")) as f:
+            return json.load(f)
+
+    def ln(self, level, num):
+        """ln(num/K60) over the pilot's heavy blocks at level, from the written records."""
+        sets = {}
+        for r in run4.read_jsonl(os.path.join(self.out, "pilot-heavy.jsonl")):
+            sets.setdefault(r["block"], {})[r["arm"]] = r["mean_verdict_s"]
+        return [math.log(sets[b][num] / sets[b]["K60"]) for b in pilot_levels()[level]]
+
+    def test_pilot_check_go(self):
+        # mutations: T2's discordance over all 12 pilot blocks, not the 6 loaded -> m 30 -> red;
+        # T1 over every level's blocks -> its mean moves -> red
+        tie, loss = pilot_levels()["loaded"][:2]
+        self.write_pilot(kw=lambda b: {"swap": {"S2": 10 if b == tie else 5 if b == loss
+                                                else 400}})
+        c = self.check()
+        for name, level, num in (("T1", "loaded", "S2"), ("T3", "quiet", "S1")):
+            d = self.ln(level, num)
+            mean, sd = statistics.fmean(d), statistics.stdev(d)
+            self.assertAlmostEqual(c[name]["mean"], mean, places=12)
+            self.assertAlmostEqual(c[name]["sd"], sd, places=12)
+            self.assertEqual(c[name]["cp_at_n"], stats7.t_power(72, mean, sd, 0.05))
+        self.assertEqual((c["T2"]["wins"], c["T2"]["losses"]), (4, 1))
+        self.assertEqual(c["T2"]["cp_at_n"], stats7.sign_power(60, 0.8, 0.05))
+        self.assertEqual((c["p_timeouts"], c["p_feasible"], c["light_pressure_sets"]),
+                         (0, True, 1))
+        self.assertEqual((c["futile"], c["go"]), ([], True))
+
+    def test_pilot_check_futile_t3(self):
+        # mutation: judge T3 on the loaded blocks -> S1 is slower there, T3 not futile -> red
+        quiet = pilot_levels()["quiet"]
+        self.write_pilot(kw=lambda b: {"times": {"S1": 0.75}} if b in quiet else {})
+        c = self.check()
+        self.assertLessEqual(c["T3"]["mean"], 0)
+        self.assertEqual((c["futile"], c["go"]), (["T3"], False))
+
+    def test_p_invalid_does_not_drop_p1_block(self):
+        # mutation: valid_blocks over HEAVY_ARMS -> no heavy block is valid -> refused -> red
+        self.write_pilot(kw=lambda b: {"invalid": {"P": ["battery"]}})
+        c = self.check()
+        self.assertEqual(c["blocks"]["heavy"], list(range(1, 13)))
+        self.assertAlmostEqual(c["T1"]["mean"], statistics.fmean(self.ln("loaded", "S2")))
+        self.assertAlmostEqual(c["T3"]["mean"], statistics.fmean(self.ln("quiet", "S1")))
+        self.assertEqual((c["p_timeouts"], c["p_feasible"], c["go"]), (0, True, True))
+
+    def test_p_infeasible(self):
+        # mutation: `<` for `<=` in p_feasible -> 2 timeouts make P infeasible -> red
+        timed_out = {"invalid": {"P": ["set_timeout"]}}
+        self.write_pilot(kw=lambda b: timed_out if b in (2, 5) else {})
+        c = self.check()
+        self.assertEqual((c["p_timeouts"], c["p_feasible"]), (2, True))
+        os.remove(os.path.join(self.out, "pilot-heavy.jsonl"))
+        self.write_pilot(kw=lambda b: timed_out if b in (2, 5, 9) else {})
+        c = self.check()
+        self.assertEqual((c["p_timeouts"], c["p_feasible"], c["go"]), (3, False, True))
+
+    def refused(self):
+        with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
+            self.check()
+        return cm.exception.code
+
+    def test_pilot_check_refuses(self):
+        # mutations: the pilot over the uncapped records -> the fourth re-run completes block
+        # 12 -> red; drop the wide mix from the pilot -> 5 wide blocks pass -> red; drop the
+        # refusal once main exists -> it runs -> red
+        self.write_pilot(heavy=range(1, 12))
+        self.assertEqual(self.refused(), 2)
+        append(self.out, "pilot-heavy.jsonl", heavy_block7(12, invalid={"K60": ["battery"]}))
+        for b in range(13, 17):  # only the fourth re-run is valid, past the cap of 3
+            append(self.out, "pilot-heavy.jsonl", heavy_block7(
+                b, as_block=12, invalid={"K60": ["battery"]} if b < 16 else None))
+        self.assertEqual(self.refused(), 2)
+        for name in ("heavy", "light", "wide"):
+            os.remove(os.path.join(self.out, f"pilot-{name}.jsonl"))
+        self.write_pilot(wide=range(1, 6))
+        self.assertEqual(self.refused(), 2)
+        append(self.out, "pilot-wide.jsonl", wide_block7(6))
+        append(self.out, "main-heavy.jsonl", heavy_block7(1, "main"))
+        self.assertEqual(self.refused(), 2)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "pilot_check.json")))
+        os.remove(os.path.join(self.out, "main-heavy.jsonl"))
+        self.assertTrue(self.check()["go"])
+
 
 if __name__ == "__main__":
     unittest.main()

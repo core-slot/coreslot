@@ -50,8 +50,12 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            main, pilot_check.json's SHA-256, all read once per command. Appends one record per
            set to OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded.
   pilot-check
-           from the pilot's first valid blocks: the futility check of P1's three components and
-           whether P is feasible, to OUT/pilot_check.json; main runs only when its "go" is true.
+           from the pilot's first 12 heavy blocks valid over K60, S1 and S2 (P's validity never
+           drops one), its first 12 light and 6 wide valid blocks, each mix counting at most 3
+           re-runs: the futility check of P1's three components (a mean <= 0, wins <= losses, or
+           a power at 72 blocks per level below 0.5) and whether P is feasible (at most 2 of the
+           pilot's P sets timed out), to OUT/pilot_check.json; main runs only when its "go" is
+           true. Exits 2 while the pilot is short, or once a main record exists.
   summary  from OUT/main-*.jsonl, OUT/sens-*.jsonl and OUT/pilot_check.json: P1 by
            intersection-union, then the secondary family by Holm at 0.05, and the reported
            estimates; to OUT/summary.json and OUT/summary.txt.
@@ -78,6 +82,7 @@ import ballast  # noqa: E402  (Ballast)
 import overload  # noqa: E402  (load, Sampler, headroom_mib)
 import run4  # noqa: E402  (cs, fresh_state, write_config, checked_state, pacing, ...)
 import run6  # noqa: E402  (measured, write_learn_state, check_needs, apps_meta, mix_cfg, ...)
+import stats7  # noqa: E402
 
 HEAVY_ARMS = ("K60", "S1", "S2", "P")
 P1_ARMS = ("K60", "S1", "S2")
@@ -613,6 +618,89 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
                      level_name=level_name, **arm_kw7(out, arm))
 
 
+# --- pilot check ------------------------------------------------------------------------------
+
+PILOT_RERUNS = 3  # the re-runs each pilot mix counts
+
+
+def swap_traffic_pages(r):
+    """The pages swapped out and in over the set."""
+    return run4.counter(r, "swapouts") + run4.counter(r, "swapins")
+
+
+def by_level7(blocks):
+    """level name -> {block: sets}, in LEVELS order."""
+    return {lv: {b: sets for b, sets in blocks.items() if sets["K60"]["level_name"] == lv}
+            for lv in LEVELS}
+
+
+def p_sets(blocks, recs):
+    """block -> the P set recorded beside the P1 sets the block took, valid or not."""
+    by = {(r["block"], r["arm"]): r for r in recs}
+    return {b: by[(sets["K60"]["block"], "P")] for b, sets in blocks.items()
+            if (sets["K60"]["block"], "P") in by}
+
+
+def ln_ratios(blocks, num, den):
+    return [run6.ln_ratio(sets, num, den) for sets in blocks.values()]
+
+
+def traffic_diffs(blocks, a, b):
+    """a's swap traffic minus b's per block; a set coreslot failed counts as infinite."""
+    return [run6.worse(sets[a], swap_traffic_pages) - swap_traffic_pages(sets[b])
+            for sets in blocks.values()]
+
+
+def t_futility(d):
+    """The pilot's mean and SD of d and the t test's power at N_LEVEL blocks; fewer than two
+    values leave no power."""
+    if len(d) < 2:
+        return {"mean": statistics.fmean(d) if d else None, "sd": None, "cp_at_n": 0.0}
+    mean, sd = statistics.fmean(d), statistics.stdev(d)
+    return {"mean": mean, "sd": sd, "cp_at_n": stats7.t_power(N_LEVEL, mean, sd, ALPHA)}
+
+
+def sign_futility(d, n):
+    """Wins (d < 0) and losses of the n pilot blocks, and the sign test's power at N_LEVEL blocks
+    with the pilot's discordance and win rate; no discordant pair leaves no power."""
+    wins, losses = sum(x < 0 for x in d), sum(x > 0 for x in d)
+    m = wins + losses
+    cp = stats7.sign_power(round(N_LEVEL * m / n), wins / m, ALPHA) if m else 0.0
+    return {"wins": wins, "losses": losses, "cp_at_n": cp}
+
+
+def pilot_check(out):
+    if glob.glob(os.path.join(out, "main-*.jsonl")):
+        refuse("pilot-check would judge the pilot after main records exist")
+    recs, pilot = {}, {}
+    for mix, arms in (("heavy", P1_ARMS), ("light", LIGHT_ARMS), ("wide", WIDE_ARMS)):
+        recs[mix] = run6.capped(run6.records(out, "pilot", mix), PILOT_RERUNS)[0]
+        pilot[mix] = run6.first(run6.valid_blocks(recs[mix], arms), PILOT_BLOCKS[mix])
+    short = [f"{len(bs)} of {PILOT_BLOCKS[m]} {m}" for m, bs in pilot.items()
+             if len(bs) < PILOT_BLOCKS[m]]
+    if short:
+        refuse(f"the pilot has {', '.join(short)} valid blocks")
+    lv = by_level7(pilot["heavy"])
+    loaded = lv["loaded"]
+    p_timeouts = sum("set_timeout" in r["invalid"]
+                     for r in p_sets(pilot["heavy"], recs["heavy"]).values())
+    res = {"blocks": {m: list(bs) for m, bs in pilot.items()},
+           "T1": t_futility(ln_ratios(loaded, "S2", "K60")),
+           "T2": sign_futility(traffic_diffs(loaded, "K60", "S2"), len(loaded)) if loaded
+           else {"wins": 0, "losses": 0, "cp_at_n": 0.0},
+           "T3": t_futility(ln_ratios(lv["quiet"], "S1", "K60")),
+           "p_timeouts": p_timeouts, "p_feasible": p_timeouts <= P_INFEASIBLE_TIMEOUTS,
+           "light_pressure_sets": sum(run4.warn_s(sets["F"]) > 0
+                                      for sets in pilot["light"].values())}
+    res["futile"] = [t for t in ("T1", "T2", "T3") if res[t]["cp_at_n"] < FUTILITY_CP or (
+        res[t]["wins"] <= res[t]["losses"] if t == "T2"
+        else res[t]["mean"] is None or res[t]["mean"] <= 0)]
+    res["go"] = not res["futile"]
+    with open(os.path.join(out, "pilot_check.json"), "w") as f:
+        json.dump(res, f, indent=1)
+    print(json.dumps(res, indent=1))
+
+
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -627,7 +715,11 @@ def main():
             p.add_argument("last", type=int)
             p.add_argument("--as-block", type=int, default=None)
             p.add_argument("--primer", action="store_true")
+    for name in ("pilot-check", "summary"):
+        sub.add_parser(name).add_argument("out")
     args = ap.parse_args()
+    if args.cmd == "pilot-check":
+        return pilot_check(args.out)
     cfg = load(args.stand)
 
     def interrupted(*_):
