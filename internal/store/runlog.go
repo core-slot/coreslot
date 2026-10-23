@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"unicode/utf8"
@@ -45,6 +46,14 @@ type RunRecord struct {
 	CPUUserS  *float64
 	CPUSysS   *float64
 	MaxRSSKiB *int64
+	// MemPeakKiB is the command tree's memory peak in KiB and MemPeakSource its measure: the
+	// sampler's (memsample.Source) or "max_rss"; PeakAfterS is when the sampler read it, in
+	// seconds after the start. WaitedFreeS is how long the run waited while the memory it needs
+	// was free. Each is nil or empty when unknown, and is then not encoded.
+	MemPeakKiB    *int64
+	MemPeakSource string
+	PeakAfterS    *float64
+	WaitedFreeS   *float64
 }
 
 type runJSON struct {
@@ -59,6 +68,10 @@ type runJSON struct {
 	CPUUserS            *float64          `json:"cpu_user_s,omitempty"`
 	CPUSysS             *float64          `json:"cpu_sys_s,omitempty"`
 	MaxRSSKiB           *int64            `json:"max_rss_kib,omitempty"`
+	MemPeakKiB          *int64            `json:"mem_peak_kib,omitempty"`
+	MemPeakSource       string            `json:"mem_peak_source,omitempty"`
+	PeakAfterS          *float64          `json:"peak_after_s,omitempty"`
+	WaitedFreeS         *float64          `json:"waited_free_s,omitempty"`
 	Exit                int               `json:"exit"`
 	Load1               float64           `json:"load1"`
 	FailOpen            string            `json:"fail_open"`
@@ -72,8 +85,9 @@ func (r RunRecord) wire() runJSON {
 	}
 	j := runJSON{TimeNS: r.TimeNS, Label: r.Label, Need: need, Grant: r.Grant,
 		Clamped: r.Clamped, UnbudgetedResources: r.UnbudgetedResources, WaitedS: r.WaitedS,
-		RanS: r.RanS, CPUUserS: r.CPUUserS, CPUSysS: r.CPUSysS, MaxRSSKiB: r.MaxRSSKiB, Exit: r.Exit,
-		Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
+		RanS: r.RanS, CPUUserS: r.CPUUserS, CPUSysS: r.CPUSysS, MaxRSSKiB: r.MaxRSSKiB,
+		MemPeakKiB: r.MemPeakKiB, MemPeakSource: r.MemPeakSource, PeakAfterS: r.PeakAfterS,
+		WaitedFreeS: r.WaitedFreeS, Exit: r.Exit, Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
 	if j.Grant == nil {
 		j.Grant = map[string]int{}
 	}
@@ -84,6 +98,48 @@ func (r RunRecord) wire() runJSON {
 		j.UnbudgetedResources = []string{}
 	}
 	return j
+}
+
+// record is the inverse of wire.
+func (j runJSON) record() RunRecord {
+	need := make(map[string]spec.Range, len(j.Need))
+	for name, rg := range j.Need {
+		need[name] = spec.Range{Min: rg[0], Max: rg[1]}
+	}
+	return RunRecord{TimeNS: j.TimeNS, Label: j.Label, Need: need, Grant: j.Grant,
+		Clamped: j.Clamped, UnbudgetedResources: j.UnbudgetedResources, WaitedS: j.WaitedS,
+		RanS: j.RanS, CPUUserS: j.CPUUserS, CPUSysS: j.CPUSysS, MaxRSSKiB: j.MaxRSSKiB,
+		MemPeakKiB: j.MemPeakKiB, MemPeakSource: j.MemPeakSource, PeakAfterS: j.PeakAfterS,
+		WaitedFreeS: j.WaitedFreeS, Exit: j.Exit, Load1: j.Load1, FailOpen: j.FailOpen, Nested: j.Nested}
+}
+
+// ReadRuns reads the run log, the rotated generation (log/runs.1.jsonl) first and then
+// log/runs.jsonl, each through OpenFile; a missing file is empty. A line that does not decode is
+// skipped and counted in skipped. A key a line lacks is left unknown.
+func (s *Store) ReadRuns() (runs []RunRecord, skipped int, err error) {
+	for _, name := range []string{RunLogOld, RunLog} {
+		f, err := OpenFile(s.path(LogDir, name), os.O_RDONLY)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return nil, 0, err
+		}
+		for line := range bytes.Lines(data) {
+			var j runJSON
+			if json.Unmarshal(line, &j) != nil {
+				skipped++
+				continue
+			}
+			runs = append(runs, j.record())
+		}
+	}
+	return runs, skipped, nil
 }
 
 // line encodes r as one JSON line of at most MaxRunLine bytes, LF included, shortening the

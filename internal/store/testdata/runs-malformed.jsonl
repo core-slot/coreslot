@@ -1,0 +1,3 @@
+{"time_ns":1791720000000000000,"label":"old:tests","need":{"cpu":[1,4]},"grant":{"cpu":4},"clamped":[],"unbudgeted_resources":[],"waited_s":0.5,"ran_s":10,"cpu_user_s":20,"cpu_sys_s":2,"max_rss_kib":65536,"exit":0,"load1":1.5,"fail_open":""}
+x
+{"time_ns":1791720001000000000,"label":"cut:off","need":{"cpu":[1,

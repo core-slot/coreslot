@@ -20,6 +20,7 @@ import (
 
 	"github.com/core-slot/coreslot"
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -269,8 +270,8 @@ func TestStateDirWithSpace(t *testing.T) {
 	}
 }
 
-// With no configuration file at all the budget is cpu = 100%, there is no degraded mode, and a
-// run prints nothing.
+// With no configuration file at all the budget is cpu = 140% and mem = 60%, there is no degraded
+// mode, and a run prints nothing.
 func TestFreshMachineRunsQuietly(t *testing.T) {
 	e := State(t)
 	if _, err := os.Stat(e.Dir); !errors.Is(err, os.ErrNotExist) {
@@ -286,13 +287,14 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if r.Env["CORESLOT_GRANTED_CPU"] != "1" || r.Env["CORESLOT_UNBUDGETED"] != "" {
 		t.Errorf("environment %v", r.Env)
 	}
-	cpus, err := config.MachineCPUs()
+	m, err := config.ReadMachine(true)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cpu, mem := m.CPUs*140/100, spec.MemTokensFloor(m.MemMiB*60/100)
 	rep := e.Status()
-	if len(rep.Resources) != 1 || rep.Resources["cpu"].Size != cpus {
-		t.Errorf("resources %v, want only cpu of size %d", rep.Resources, cpus)
+	if len(rep.Resources) != 2 || rep.Resources["cpu"].Size != cpu || rep.Resources["mem"].Size != mem {
+		t.Errorf("resources %v, want cpu of size %d and mem of size %d", rep.Resources, cpu, mem)
 	}
 	if rep.Degraded != nil || rep.ConfigError != nil || rep.FormatError != nil || rep.Format != 1 {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)

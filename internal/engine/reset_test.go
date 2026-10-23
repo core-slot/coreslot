@@ -240,7 +240,7 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 				t.Fatal(err)
 			}
 			e := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
-				func() (int, error) { return testCPUs, nil }, SystemClock())
+				testMachine, SystemClock())
 			rep, err := e.Snapshot()
 			if err != nil {
 				t.Fatal(err)

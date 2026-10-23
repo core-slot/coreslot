@@ -65,7 +65,7 @@ func Open(o Options) (*Client, error) {
 	if err != nil {
 		return nil, wrap(err)
 	}
-	e := engine.New(st, &config.Watcher{Path: cfgPath}, config.MachineCPUs, engine.Clock{})
+	e := engine.New(st, &config.Watcher{Path: cfgPath}, config.ReadMachine, engine.Clock{})
 	return &Client{e: e, independent: o.Independent, named: o.StateDir == ""}, nil
 }
 
@@ -350,9 +350,10 @@ type grant interface {
 	Close() error
 }
 
-// Granted maps every requested resource to what the command may use, as CORESLOT_GRANTED_<RES>
-// tells it: the tokens held (for a pass-through, min(Max, held) of the parent's), or for a
-// resource run unbudgeted, its requested Min.
+// Granted maps every requested resource to what the command may use, in tokens, as
+// CORESLOT_GRANTED_<RES> tells it (CORESLOT_GRANTED_MEM in MiB): the tokens held (for a
+// pass-through, min(Max, held) of the parent's), or for a resource run unbudgeted, its requested
+// Min.
 func (g *Grant) Granted() map[string]int { return g.g.Grant() }
 
 // Clamped maps each resource whose Min exceeded its whole size to that Min. An admission so

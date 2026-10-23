@@ -68,6 +68,7 @@ MAX_TOTAL = 512
 # request of a command that takes a cpu placeholder).
 DEFAULT_MAX = 16
 MAX_SIZE = 4096
+MEM_TOKEN_MIB = 128  # §5.2: one token of mem
 MAX_INDEX = 4095
 PRIORITY_NS = 60 * 10**9
 INT64_MIN, INT64_MAX = -(1 << 63), (1 << 63) - 1
@@ -688,6 +689,35 @@ def machine_cpus() -> int:
     return n
 
 
+def machine_memory() -> int:
+    """§5.2: the machine's physical memory in MiB, rounded down."""
+    if sys.platform == "darwin":
+        if _LIBC is not None:
+            val = ctypes.c_uint64(0)
+            size = ctypes.c_size_t(ctypes.sizeof(val))
+            if _LIBC.sysctlbyname(b"hw.memsize", ctypes.byref(val), ctypes.byref(size), None, 0) == 0:
+                if val.value >= 1 << 20:
+                    return val.value >> 20
+        raise StateError("memory", "cannot read hw.memsize")
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/meminfo", encoding="ascii") as fh:
+                for line in fh:
+                    m = re.fullmatch(r"MemTotal:\s+([0-9]+) kB\n?", line)
+                    if m and int(m.group(1)) >= 1024:
+                        return int(m.group(1)) >> 10
+        except (OSError, ValueError) as exc:
+            raise StateError("memory", f"cannot read /proc/meminfo: {exc}") from exc
+        raise StateError("memory", "no MemTotal in /proc/meminfo")
+    try:
+        mib = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") >> 20
+    except (AttributeError, ValueError, OSError):
+        mib = -1
+    if mib < 1:
+        raise StateError("memory", "cannot obtain the physical memory")
+    return mib
+
+
 def parse_cpu_list(text: str) -> int:
     """Count CPUs in a list such as `0-3,8-11` (§5.2); a final LF is tolerated."""
     if text.endswith("\n"):
@@ -726,7 +756,7 @@ def size_of(raw, cpus: int) -> int:
         raise ValueError(f"size {raw} outside [1, 4096]")
     if isinstance(raw, str):
         m = re.fullmatch(r"([0-9]{1,9})%", raw)
-        if m and 1 <= int(m.group(1)) <= 100:
+        if m and 1 <= int(m.group(1)) <= 400:
             return min(MAX_SIZE, max(1, cpus * int(m.group(1)) // 100))
         m = re.fullmatch(r"-([0-9]{1,9})", raw)
         if m:
@@ -734,18 +764,48 @@ def size_of(raw, cpus: int) -> int:
     raise ValueError(f"invalid size {raw!r}")
 
 
+def parse_mib(text: str) -> int:
+    """§5.2's size string in MiB, rounded up to a whole MiB; raise ValueError for another shape."""
+    m = re.fullmatch(r"([0-9]{1,6})(?:\.([0-9]{1,3}))?([GM]?)", text)
+    if not m:
+        raise ValueError(f"invalid size {text!r}")
+    milli = int(m.group(1)) * 1000 + int((m.group(2) or "").ljust(3, "0"))
+    return -(-milli * (1 if m.group(3) == "M" else 1024) // 1000)
+
+
+def mem_size_of(raw, memory: int) -> int | None:
+    """§5.2: the size of `mem` in tokens on `memory` MiB; None when the value switches it off."""
+    if type(raw) is int and 0 <= raw <= 999999:
+        mib = raw * 1024
+    elif isinstance(raw, str) and (m := re.fullmatch(r"([0-9]{1,9})%", raw)):
+        if not 1 <= int(m.group(1)) <= 100:
+            raise ValueError(f"invalid mem size {raw!r}")
+        return min(MAX_SIZE, max(1, memory * int(m.group(1)) // 100 // MEM_TOKEN_MIB))
+    elif isinstance(raw, str):
+        mib = parse_mib(raw)
+    else:
+        raise ValueError(f"invalid mem size {raw!r}")
+    if mib == 0:
+        return None
+    return min(MAX_SIZE, max(1, mib // MEM_TOKEN_MIB))
+
+
 class Config:
     def __init__(self, resources: dict | None = None, priorities: dict | None = None,
                  windows_warning: bool = True):
-        self.resources = {"cpu": "100%"}
+        self.resources = {"cpu": "140%", "mem": "60%"}
         self.resources.update(resources or {})
+        if "mem" in self.resources and mem_size_of(self.resources["mem"], 0) is None:
+            del self.resources["mem"]  # §5.3: mem = 0 switches memory off
         self.priorities = dict(priorities or {})
         self.windows_warning = windows_warning
 
     def declared(self, name: str) -> bool:
         return name in self.resources
 
-    def size(self, name: str, cpus: int) -> int:
+    def size(self, name: str, cpus: int, memory: int) -> int:
+        if name == "mem":
+            return mem_size_of(self.resources[name], memory)
         return size_of(self.resources[name], cpus)
 
     def priority_for(self, label: str) -> int:
@@ -769,7 +829,8 @@ class Config:
         for name, raw in resources.items():
             if not is_resource_name(name):
                 raise ValueError(f"resource name {name!r}")
-            size_of(raw, 1)  # shape check; the size itself is recomputed at each attempt
+            # shape check; the size itself is recomputed at each attempt
+            mem_size_of(raw, 1) if name == "mem" else size_of(raw, 1)
         for prefix, prio in priorities.items():
             if not _is_int(prio, -1000, 1000):
                 raise ValueError(f"priority for {prefix!r}")
@@ -829,7 +890,19 @@ _NEED_ARG = re.compile(r"([^=]+)=(?:(0|[1-9][0-9]*)|(0|[1-9][0-9]*)?\.\.(0|[1-9]
 
 
 def parse_need_arg(text: str) -> tuple[str, tuple[int, int]]:
-    """§21: RES=N is N..N, RES=MIN.. is MIN..max(MIN, 16), RES=..MAX is 1..MAX; RES=.. is malformed."""
+    """§21: RES=N is N..N, RES=MIN.. is MIN..max(MIN, 16), RES=..MAX is 1..MAX; RES=.. is malformed.
+
+    mem=SIZE is one size above 0, never a range: that many 128 MiB tokens rounded up, at most 256.
+    """
+    if text.startswith("mem="):
+        try:
+            mib = parse_mib(text[4:])
+        except ValueError:
+            mib = 0
+        if mib == 0:
+            raise UsageError(f"malformed need {text!r} (want mem=SIZE above 0, such as mem=3G or mem=768M)")
+        n = min(MAX_PER_RESOURCE, -(-mib // MEM_TOKEN_MIB))
+        return "mem", (n, n)
     m = _NEED_ARG.fullmatch(text)
     if not m or all(g is None for g in m.group(2, 3, 4)):
         raise UsageError(f"malformed need {text!r} (want RES=MIN..MAX, RES=MIN.., RES=..MAX or RES=N)")
@@ -890,7 +963,7 @@ class Client:
     """
 
     def __init__(self, state_dir: str | None = None, *, observer_clock=None, cli: bool = False,
-                 cpus: int | None = None, diag=None):
+                 cpus: int | None = None, memory: int | None = None, diag=None):
         if state_dir is None:
             env = os.environ.get("CORESLOT_STATE_DIR", "")
             self._override = env != ""
@@ -901,6 +974,7 @@ class Client:
         self.observer_clock = observer_clock or time.monotonic
         self.cli = cli
         self._cpus = cpus
+        self._memory = memory
         self._S: str | None = None
         self._diag = diag or (lambda msg: print(msg, file=sys.stderr, flush=True))
         self.ignored_entries = 0  # queue/ entries the last election ignored (§4.4: counted)
@@ -949,6 +1023,9 @@ class Client:
 
     def cpus(self) -> int:
         return self._cpus if self._cpus is not None else machine_cpus()
+
+    def memory(self) -> int:
+        return self._memory if self._memory is not None else machine_memory()
 
     def _prepare(self) -> str:
         S = self.state_dir()
@@ -1247,11 +1324,12 @@ class Client:
         S = sec.S
         cfg = self.config()
         cpus = self.cpus()
+        memory = self.memory() if cfg.declared("mem") else 0
         sizes: dict[str, int] = {}
         for r in need:
             if cfg.declared(r):
                 try:
-                    sizes[r] = cfg.size(r, cpus)
+                    sizes[r] = cfg.size(r, cpus, memory)
                 except ValueError as exc:
                     raise StateError("config", str(exc)) from exc
         undeclared = sorted(r for r in need if r not in sizes)
@@ -1977,7 +2055,7 @@ class Grant:
     def environment(self) -> dict[str, str]:
         env = {}
         for r, n in self.granted.items():
-            env["CORESLOT_GRANTED_" + r.upper().replace("-", "_")] = str(n)
+            env["CORESLOT_GRANTED_" + r.upper().replace("-", "_")] = granted_value(r, n)
         if self.hold_fd is not None:
             env["CORESLOT_HELD_FD"] = "3"
         n = len(self.token_fds())
@@ -2111,11 +2189,28 @@ def placeholder_resources(argv: list[str], subst: bool) -> set[str]:
     return out
 
 
+def granted_value(name: str, tokens: int) -> str:
+    """§17: CORESLOT_GRANTED_<RES> and {n:RES}: the count, for mem in MiB."""
+    return str(tokens * MEM_TOKEN_MIB if name == "mem" else tokens)
+
+
+def amount(name: str, tokens: int) -> str:
+    """A count for a notice: mem in bytes, MiB below 1 GiB and GiB with one decimal above."""
+    if name != "mem":
+        return str(tokens)
+    mib = tokens * MEM_TOKEN_MIB
+    if mib < 1024:
+        return f"{mib} MiB"
+    tenths = (mib * 10 + 512) // 1024
+    return f"{tenths // 10} GiB" if tenths % 10 == 0 else f"{tenths // 10}.{tenths % 10} GiB"
+
+
 def substitute(argv: list[str], granted: dict[str, int], subst: bool) -> list[str]:
     def rep(m):
         if m.group(0).startswith("{{"):
             return m.group(0)[1:-1]
-        return str(granted[m.group(1) or "cpu"])
+        r = m.group(1) or "cpu"
+        return granted_value(r, granted[r])
 
     out = []
     for a in argv:
@@ -2316,8 +2411,8 @@ def _diag(msg: str) -> None:
 
 def _notices(grant: Grant, sizes_hint: dict | None = None) -> None:
     for r, lo in sorted(grant.clamped.items()):
-        n = grant.granted[r]
-        _diag(f"coreslot: {r}: requested {lo}, budget is {n}; running alone with {n}")
+        n = amount(r, grant.granted[r])
+        _diag(f"coreslot: {r}: requested {amount(r, lo)}, budget is {n}; running alone with {n}")
     for r in grant.unbudgeted_resources:
         if not grant.reason:
             _diag(f"coreslot: {r}: not declared in the configuration; running unbudgeted with "
@@ -2328,7 +2423,7 @@ def _run_unbudgeted(opts, needs, env, reason: str, hold=None, strip: bool = True
                     usage: dict | None = None) -> int:
     child_env = _strip_context(env) if strip else dict(env)
     for r, (lo, _) in needs.items():
-        child_env["CORESLOT_GRANTED_" + _env_form(r)] = str(lo)
+        child_env["CORESLOT_GRANTED_" + _env_form(r)] = granted_value(r, lo)
     child_env["CORESLOT_UNBUDGETED"] = reason
     hold_fd = hold[0] if hold else None
     if hold_fd is not None:
@@ -2508,11 +2603,12 @@ def _cli_passthrough(opts, needs, env, t0) -> int:
         if r in held:
             granted[r] = min(hi, held[r])
             if lo > held[r]:
-                _diag(f"coreslot: {r}: requested {lo}, the parent holds {held[r]}; running with {held[r]}")
+                n = amount(r, held[r])
+                _diag(f"coreslot: {r}: requested {amount(r, lo)}, the parent holds {n}; running with {n}")
         else:
             granted[r] = lo
             _diag(f"coreslot: {r}: not held by the parent run; running unbudgeted with {lo}")
-        child_env["CORESLOT_GRANTED_" + _env_form(r)] = str(granted[r])
+        child_env["CORESLOT_GRANTED_" + _env_form(r)] = granted_value(r, granted[r])
     argv = substitute(opts.command, granted, opts.subst)
     started = time.monotonic()
     usage: dict = {}

@@ -68,7 +68,8 @@ func EnvName(name string) string {
 
 // ParseNeed parses one need argument: `RES=MIN..MAX`, `RES=N` (meaning N..N), `RES=MIN..`
 // (meaning MIN..max(MIN, DefaultMax)) or `RES=..MAX` (meaning 1..MAX). A range names at least
-// one end, so `RES=..` is malformed.
+// one end, so `RES=..` is malformed. The mem resource takes one size instead, `mem=3G` or
+// `mem=768M`, which is a fixed range of 128 MiB tokens rounded up.
 func ParseNeed(arg string) (string, Range, error) {
 	name, spec, ok := strings.Cut(arg, "=")
 	if !ok {
@@ -76,6 +77,13 @@ func ParseNeed(arg string) (string, Range, error) {
 	}
 	if err := ValidateName(name); err != nil {
 		return "", Range{}, usagef("invalid need %q: %v", arg, err)
+	}
+	if name == "mem" {
+		r, err := parseMemNeed(arg, spec)
+		if err != nil {
+			return "", Range{}, err
+		}
+		return name, r, nil
 	}
 	lo, hi, isRange := strings.Cut(spec, "..")
 	switch {

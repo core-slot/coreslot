@@ -42,6 +42,35 @@ func TestUsageHint(t *testing.T) {
 	}
 }
 
+// The memory hint names a peak that outgrew the mem grant by more than one token, or a big peak
+// with no mem need, and the suggest command for the label's base. Mutation: comparing the peak
+// with the grant without the one-token slack turns the 2.1 GiB row red.
+func TestMemHint(t *testing.T) {
+	const gib = 1024 * 1024 // KiB
+	for _, c := range []struct {
+		label    string
+		grantMiB int64
+		clamped  bool
+		peakKiB  int64
+		ranS     float64
+		want     string // "" for no hint
+		not      string
+	}{
+		{"a", 2048, false, 5 * gib / 2, 3, "peaked at 2.5 GiB on a 2 GiB mem grant; coreslot suggest --write --label a", ""},
+		{"a", 2048, false, 21 * gib / 10, 3, "", ""},
+		{"a@10", 0, false, 3 * gib / 2, 3, "peaked at 1.5 GiB with no mem need; coreslot suggest --write --label a", ""},
+		{"a", 0, false, 900 * 1024, 3, "", ""},
+		{"a", 9728, true, 11 * gib, 3, "clamped to the budget's 9.5 GiB", "suggest"},
+		{"a", 0, false, 3 * gib, 0.5, "", ""},
+		{"", 0, false, 3 * gib, 3, "", ""},
+	} {
+		got := memHint(c.label, c.grantMiB, c.clamped, c.peakKiB, c.ranS)
+		if c.want == "" && got != "" || !strings.Contains(got, c.want) || c.not != "" && strings.Contains(got, c.not) {
+			t.Errorf("memHint(%q, %d, %v, %d, %v) = %q, want it to contain %q", c.label, c.grantMiB, c.clamped, c.peakKiB, c.ranS, got, c.want)
+		}
+	}
+}
+
 // Only a run that sized its own request is told how to size it. Mutation: treating every
 // failOpen reason as light turns the timeout row red.
 func TestHintTokens(t *testing.T) {
@@ -60,6 +89,20 @@ func TestHintTokens(t *testing.T) {
 	} {
 		if tokens, ok := c.c.hintTokens(); tokens != c.tokens || ok != c.ok {
 			t.Errorf("%s: got (%d, %v), want (%d, %v)", c.name, tokens, ok, c.tokens, c.ok)
+		}
+	}
+}
+
+// The waiting line shows a mem need in bytes, and a holder's mem grant too. Mutation: amount
+// printing tokens for mem turns it red.
+func TestWaitingLineMem(t *testing.T) {
+	need := map[string]spec.Range{"cpu": {Min: 1, Max: 1}, "mem": {Min: 24, Max: 24}}
+	holders := []engine.HolderInfo{{Label: "gate", PID: 4711, Grant: map[string]int{"cpu": 2, "mem": 8}}}
+	r := &run{o: runOptions{need: need}}
+	line := r.waitingLine(engine.Waiting{Position: 1}, holders, 0)
+	for _, want := range []string{"waiting for cpu 1..1, mem 3 GiB: ", "gate pid 4711 cpu2 mem 1 GiB ("} {
+		if !strings.Contains(line, want) {
+			t.Errorf("waiting line %q, want %q", line, want)
 		}
 	}
 }

@@ -4,7 +4,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -14,19 +13,24 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
+
+// memSampleEvery is the period of the command tree's memory sampler.
+const memSampleEvery = time.Second
 
 // admitted runs the command on an admitted grant.
 func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 	for _, name := range slices.Sorted(maps.Keys(g.Clamped())) {
-		n := g.Grant()[name]
-		r.notice("%s: requested %d, budget is %d; running alone with %d", name, g.Clamped()[name], n, n)
+		n := amount(name, g.Grant()[name])
+		r.notice("%s: requested %s, budget is %s; running alone with %s", name, amount(name, g.Clamped()[name]), n, n)
 	}
 	if g.TokenOnly() {
 		r.notice("the state directory's format is not implemented here; running in token-only mode, outside the queue")
 	}
-	if un := g.Unbudgeted(); len(un) > 0 && !g.TokenOnly() {
+	if un := r.namedOnly(g.Unbudgeted()); len(un) > 0 && !g.TokenOnly() {
 		r.notice("%s: not declared in the configuration; running unbudgeted with %s",
 			strings.Join(un, ", "), grantText(g.Grant(), un))
 	}
@@ -44,10 +48,17 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 	return r.runChild(c)
 }
 
+// namedOnly is the resources of names that the run's --need named (or the default cpu): a
+// resource that came from the needs file is granted and logged like any other, but the notices
+// about it are left out, since the user never typed it.
+func (r *run) namedOnly(names []string) []string {
+	return slices.DeleteFunc(slices.Clone(names), func(name string) bool { return !r.o.named[name] })
+}
+
 func grantText(grant map[string]int, names []string) string {
 	parts := make([]string, 0, len(names))
 	for _, name := range names {
-		parts = append(parts, fmt.Sprintf("%s=%d", name, grant[name]))
+		parts = append(parts, name+"="+amount(name, grant[name]))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -94,6 +105,9 @@ func (r *run) runChild(c child) int {
 	started := time.Now()
 	status := 0
 	var released error
+	var peakKiB int64
+	var peakAfterS float64
+	sampled := false
 	if err := exposeInherited(cmd.Start); err != nil {
 		childDone(terminal)
 		released = c.release()
@@ -101,7 +115,9 @@ func (r *run) runChild(c child) int {
 		r.notice("cannot run %s: %s", text(argv[0]), text(err.Error()))
 		status = code
 	} else {
+		sampler := startPeakSampler(cmd.Process.Pid, memSampleEvery, memsample.Tree)
 		status = superviseChild(cmd, terminal)
+		peakKiB, peakAfterS, sampled = sampler.stop()
 		childDone(terminal)
 		released = c.release()
 	}
@@ -115,8 +131,19 @@ func (r *run) runChild(c child) int {
 		Nested: c.nested,
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	setMemPeak(&rec, peakKiB, peakAfterS, sampled)
+	if r.freeWait != nil {
+		free := r.freeWait.total().Seconds()
+		rec.WaitedFreeS = &free
+	}
 	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil {
 		if h := usageHint(r.o.label, tokens, *rec.CPUUserS+*rec.CPUSysS, rec.RanS); h != "" {
+			r.notice("%s", h)
+		}
+	}
+	if _, ok := c.hintTokens(); ok && c.failOpen != lightReason && rec.MemPeakKiB != nil {
+		grantMiB := int64(c.grant["mem"]) * spec.MemTokenMiB
+		if h := memHint(r.o.label, grantMiB, slices.Contains(c.clamped, "mem"), *rec.MemPeakKiB, rec.RanS); h != "" {
 			r.notice("%s", h)
 		}
 	}

@@ -7,10 +7,22 @@ changed incompatibly appears there under **Removed** or **Changed** first, and u
 
 ## Versions
 
-coreslot is at **`v0`** until `v1.0.0`. What a format number means never changes once a release
-has shipped it, before `v1.0.0` as after it: a release that needs different metadata introduces a
-new format number instead (below). `v1.0.0` freezes the format then current; frozen means that
-from then on a new format number needs a new major version.
+coreslot is at **`v0`** until `v1.0.0`. A format number's metadata (the names, bodies and layout of
+the state directory) is never redefined once a release has shipped it, before `v1.0.0` as after it:
+a release that needs different metadata introduces a new format number instead (below). Within a
+format a release adds at most an optional key every reader may ignore, or an optional file no
+admission reads, as `needs.toml`, `needs.toml.lock` and their temporary files are. Before
+`v1.0.0`, a minor release may still change what a format number means elsewhere, such as the
+configuration's defaults or its size grammar ([`PROTOCOL.md` section 5](../PROTOCOL.md#5-resources-sizes-and-configuration)).
+Such a change is listed in [`CHANGELOG.md`](../CHANGELOG.md) under **Changed**, with what an older
+client on the same machine then gets wrong: when the cpu default went from `"100%"` to `"140%"`, an
+older client on a 10-CPU machine without a configuration file computes a cpu budget of 10 where a
+new one computes 14, reads `mem = "60%"` as a share of CPUs, refuses `"N%"` above 100 as an invalid
+configuration, and finds a `mem` need undeclared. When `mem` became a built-in resource, a `mem`
+declared in the user's own unit changed meaning: `mem = 16` is 16 GiB, `mem = "50%"` half of the
+physical memory, `--need mem=4` 4 GiB and `CORESLOT_GRANTED_MEM` MiB. `v1.0.0` freezes the format then current; frozen
+means that from then on a new format number, or a change of what one means, needs a new major
+version.
 
 `v1.0.0` is not cut before the whole conformance suite passes at full length on macOS and on
 Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite is:
@@ -88,13 +100,15 @@ contract and may change in any release; parse `status --json` instead.
 
 | Surface | Supported |
 |---|---|
-| `run` | `--need RES=MIN..MAX` (or `RES=N`, `RES=MIN..`, `RES=..MAX`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--subst`, `--refusal-code`; placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` |
+| `run` | `--need RES=MIN..MAX` (or `RES=N`, `RES=MIN..`, `RES=..MAX`; `mem=SIZE` such as `mem=3G` or `mem=768M`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--light`, `--subst`, `--refusal-code`; placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` (`{n:mem}` in MiB) |
 | `status` | `--json`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
 | `doctor` | `--clear`, `--reset` |
+| `stats` | `--label LABEL`, `--json` (its own `"schema": 1`) |
+| `suggest` | `--label LABEL`, `--write` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
-| configuration | `<home>/.config/coreslot/config.toml`: `[resources]`, `[priorities]`, `[platform] windows_warning` |
-| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs and by the library) |
+| configuration | `<home>/.config/coreslot/config.toml`: `[resources]` (with `cpu` and `mem` declared by default), `[priorities]`, `[platform] windows_warning`; `needs.toml` beside it: `[needs."<label>"]` with `cpu`, `mem`, `pinned`, `evidence` |
+| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>` (`CORESLOT_GRANTED_MEM` in MiB), `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs and by the library) |
 | descriptors | the hold at fd 3, tokens from fd 4 in ascending resource name and index |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
 
@@ -106,8 +120,9 @@ changing a field raises the schema number, and that release prints the new numbe
 top-level fields are `schema`, `state_dir`, `state_dir_exists`, `format`, `format_present`,
 `format_understood`, `format_error`, `gen`, `reconciled_ns`, `config_error`, `degraded`, `section`,
 `resources`, `undeclared_locked`, `holds`, `tickets`, `dead_holds`, `cancel_requests`, `ignored`
-and `observed_s`. A ticket's `stalled` is `null` unless `--observe` ran. Labels are carried exactly,
-JSON-encoded.
+and `observed_s`. A ticket's `stalled` is `null` unless `--observe` ran. Counts are tokens
+everywhere; the `mem` resource alone adds `size_mib`, `locked_mib` and `free_mib`, the same amounts
+in MiB. Labels are carried exactly, JSON-encoded.
 
 ## Go library
 

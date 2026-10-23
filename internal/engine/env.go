@@ -21,7 +21,7 @@ const (
 
 // ChildEnv is the CORESLOT_* environment a client gives the command it starts (PROTOCOL.md
 // section 17), the one builder of it in this module: CORESLOT_GRANTED_<RES> for each resource of
-// granted, in ascending resource name; CORESLOT_HELD_FD=3 when held; CORESLOT_TOKEN_FDS when
+// granted, in ascending resource name, in tokens except mem's, which is in MiB; CORESLOT_HELD_FD=3 when held; CORESLOT_TOKEN_FDS when
 // tokens is above 0, naming that many descriptors from fd 4 (`4` for one, `4-<3+tokens>` for
 // more); and
 // CORESLOT_UNBUDGETED=unbudgeted when unbudgeted is not empty. The order and the spelling are
@@ -29,7 +29,11 @@ const (
 func ChildEnv(granted map[string]int, held bool, tokens int, unbudgeted string) []string {
 	var env []string
 	for _, name := range slices.Sorted(maps.Keys(granted)) {
-		env = append(env, EnvGranted+spec.EnvName(name)+"="+strconv.Itoa(granted[name]))
+		n := granted[name]
+		if name == "mem" {
+			n *= spec.MemTokenMiB
+		}
+		env = append(env, EnvGranted+spec.EnvName(name)+"="+strconv.Itoa(n))
 	}
 	if held {
 		env = append(env, EnvHeldFD+"=3")

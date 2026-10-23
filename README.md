@@ -113,8 +113,8 @@ each other: two siblings started together under an 8-core grant both run with 8.
 wants concurrent children partitions its grant itself. `--independent` queues as an unrelated
 request instead. The Go library applies the same rule ([below](#go-library)).
 
-The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource) and
-inherits the descriptors that hold its grant
+The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource,
+memory in MiB) and inherits the descriptors that hold its grant
 ([`PROTOCOL.md` section 17](PROTOCOL.md#17-descriptor-and-environment-contract)). The tokens stay
 held until the command exits and coreslot closes its copies; a daemon the command leaves behind
 with inherited descriptors keeps them.
@@ -163,11 +163,46 @@ sizes 1, 8, 1, 8, 1 runs one after another, with 7 tokens idle during every 1-to
 nothing idles. A grant is fixed for the run's lifetime: it does not grow when tokens free up
 later.
 
-Without `--need`, a run whose command has `{n}` (or `{n:cpu}`, or one inside an argument with
-`--subst`) asks for `cpu=1..16`, and any other run for `cpu=1..1`: a command that cannot learn its
+Without `--need` (and without `cpu` in its [needs file](#memory) entry), a run whose command has
+`{n}` (or `{n:cpu}`, or one inside an argument with `--subst`) asks for `cpu=1..16`, and any other
+run for `cpu=1..1`: a command that cannot learn its
 grant would hold tokens it leaves idle. A command that parallelizes itself without `{n}`, such as
 `go test ./...` or `cargo build`, should say `--need cpu=1..16` (or `cpu=1..`) so that it is
 counted honestly.
+
+### Memory
+
+Memory is a budget too: by default 60 % of the machine's physical memory, counted in tokens of
+128 MiB. A run that names memory waits until that much is free beside everything else:
+
+```sh
+coreslot run --need cpu=4 --need mem=3G --label gate:unit -- pytest -n 12
+```
+
+A memory need is one size (`mem=3G`, `mem=768M`), not a range. The command gets
+`CORESLOT_GRANTED_MEM=3072`, in MiB, and `{n:mem}` is the same number. A need larger than the
+budget is clamped like cpu; one above 32 GiB reserves 32 GiB. A run that names no memory is not
+counted against it, and nothing limits what a command uses.
+
+Rather than a `--need` on every run, keep each label's needs in `needs.toml`, beside the
+configuration (`~/.config/coreslot/needs.toml`). A labelled run takes from its entry each resource
+its `--need` leaves out; a final worker count in the label is ignored, so `gate:unit@12` uses the
+entry of `gate:unit`:
+
+```toml
+[needs."gate:unit"]
+cpu = "4"
+mem = "3G"
+```
+
+coreslot measures every run: the run log records the memory peak of the command and all its
+descendants, sampled every second. `coreslot stats` shows, per label, what its last 5 runs used;
+`coreslot suggest` prints the entries they suggest (the most cores and the largest peak among
+them), and `coreslot suggest --write` writes them into `needs.toml` with their evidence, leaving an
+entry marked `pinned = true` as it is. After a run whose peak outgrew its memory need by more than
+one token, or passed 1 GiB with none, coreslot says so on stderr, for example
+`coreslot: gate:unit peaked at 2.5 GiB on a 2 GiB mem grant; coreslot suggest --write --label
+gate:unit`.
 
 ### Exit status
 
@@ -184,13 +219,14 @@ records degraded mode, and exports `CORESLOT_UNBUDGETED`. `--strict` refuses ins
 
 ## Configuration
 
-Without a configuration file the budget is `cpu = "100%"` of the machine. To change it, write
-`~/.config/coreslot/config.toml` (the home directory comes from the password database, not
-`$HOME`):
+Without a configuration file the budget is `cpu = "140%"` of the CPU count and `mem = "60%"` of
+the physical memory. To change it, write `~/.config/coreslot/config.toml` (the home directory comes
+from the password database, not `$HOME`):
 
 ```toml
 [resources]
-cpu = "-2"        # an integer; "N%" of the CPU count; or "-K" for all but K
+cpu = "-2"        # an integer; "N%" of the CPU count, N up to 400; or "-K" for all but K
+mem = "16G"       # GiB as an integer; "N%" of physical memory; a size such as "768M"; 0 turns it off
 pg-local = 2      # any other resource, for example a shared local database
 
 [priorities]      # label prefix -> priority; --priority overrides
@@ -212,8 +248,8 @@ A suite that also needs the shared database adds `--need pg-local=1`. The state 
 - **Not a daemon.** Nothing runs between commands; there is no network and no distribution of work
   across machines.
 - **Not multi-user.** One budget per user; never share the state directory across users or hosts.
-- **Not a memory budget.** coreslot counts cores and the resources you declare. A command's memory
-  is neither reserved nor limited; afterwards the run log records the peak of its largest process.
+- **Not a memory limit.** A memory need reserves part of the budget; it does not cap what the
+  command uses, and a run that names no memory is not counted against it.
 - **Not for Windows.** coreslot builds there, but runs every command at once, without a budget,
   with a warning.
 

@@ -8,10 +8,10 @@ import (
 )
 
 // contractInventory is every shared file, field, environment variable and transition of format 1,
-// the items PROTOCOL.md's contract inventory (its section 2) must list, including the two the
-// state-directory override adds (section 4.1): `config.toml` and `CORESLOT_STATE_DIR`. The list is
-// kept here, apart from the document, so that an item added to, dropped from or renamed in only one
-// of the two fails the test. title is the heading of the section that defines the item, without its
+// the items PROTOCOL.md's contract inventory (its section 2) must list, including the three the
+// state-directory override adds (section 4.1): `config.toml`, `needs.toml` and
+// `CORESLOT_STATE_DIR`. The list is kept here, apart from the document, so that an item added to,
+// dropped from or renamed in only one of the two fails the test. title is the heading of the section that defines the item, without its
 // number; a row must link to that heading, outside the worked examples. A word in the body is not
 // enough: `gen`, `hold` or `res/` appear in many sections that do not define them. mention is what
 // the defining section's text must contain.
@@ -26,9 +26,12 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"degraded", "degraded", "degraded"},
 	{"log/", "log/ (run log)", "log/runs.jsonl"},
 	{"config.toml", "Configuration file", "config.toml"},
+	{"needs.toml", "Needs file", "needs.toml.lock"},
+	{"mem", "Sizes", "128 MiB"},
 	{"ticket body", "Ticket", "created_ns"},
 	{"hold body", "Hold", "start_ns"},
 	{"cancel body", "Cancel request", "requester_pid"},
+	{"run-log memory keys", "Run log", "mem_peak_kib"},
 	{"CORESLOT_GRANTED_*", "Descriptor and environment contract", "CORESLOT_GRANTED_"},
 	{"CORESLOT_HELD_FD", "Descriptor and environment contract", "CORESLOT_HELD_FD"},
 	{"CORESLOT_TOKEN_FDS", "Descriptor and environment contract", "CORESLOT_TOKEN_FDS"},

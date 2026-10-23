@@ -224,7 +224,7 @@ func doctorReport(loc location, io IO) int {
 		line("configuration: %s (%s)", text(cfgPath), state)
 		for _, name := range slices.Sorted(maps.Keys(rep.Resources)) {
 			ri := rep.Resources[name]
-			line("resource %s: size %d, locked %d, free %d", name, ri.Size, ri.Locked, ri.Available)
+			line("resource %s: size %s, locked %s, free %s", name, amount(name, ri.Size), amount(name, ri.Locked), amount(name, ri.Available))
 		}
 	}
 

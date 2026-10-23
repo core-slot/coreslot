@@ -10,7 +10,7 @@ import (
 // run, a pass-through's narrowed grant and a Windows run all get their variables from it, so
 // each case pins the bytes those callers produced before they shared it. Mutation: sorting by
 // environment form instead of resource name reddens "resource-name order"; dropping the case of a
-// single token reddens "one token".
+// single token reddens "one token"; writing mem's token count reddens "mem in MiB".
 //
 // The order is the resource name's, as the descriptors' is: CORESLOT_GRANTED_A_B sorts before
 // CORESLOT_GRANTED_A0 although '_' sorts after '0'. The CLI's pass-through used to order the
@@ -40,6 +40,8 @@ func TestChildEnv(t *testing.T) {
 			want: "CORESLOT_GRANTED_CPU=4 CORESLOT_GRANTED_PG_LOCAL=1"},
 		{name: "resource-name order", granted: map[string]int{"ab": 1, "a-b": 2, "a0": 3},
 			want: "CORESLOT_GRANTED_A_B=2 CORESLOT_GRANTED_A0=3 CORESLOT_GRANTED_AB=1"},
+		{name: "mem in MiB", granted: map[string]int{"cpu": 2, "mem": 24},
+			want: "CORESLOT_GRANTED_CPU=2 CORESLOT_GRANTED_MEM=3072"},
 		{name: "nothing", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

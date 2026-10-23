@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/core-slot/coreslot/internal/needs"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Bounds of the usage hint, the line a run prints after its command when the cores it used do
@@ -43,6 +46,36 @@ func usageHint(label string, tokens int, cpuS, ranS float64) string {
 		return fmt.Sprintf("%s used %.2f cpu on %d over %s; --need cpu=%d would cover it", who, used, tokens, over, fit)
 	}
 	return ""
+}
+
+// Bounds of the memory hint: a run shorter than memHintAfter says nothing, and a peak with no mem
+// need is worth one only above memHintAlone.
+const (
+	memHintAfter = time.Second
+	memHintAlone = 1024 // MiB
+)
+
+// memHint is the line saying that a run's memory peak, peakKiB over ranS seconds, outgrew its mem
+// grant of grantMiB by more than one token, or passed memHintAlone with no mem grant, or "" when
+// it did not. A grant the budget clamped is named as the cause, since a bigger need would not
+// change it; otherwise the line points at the suggest command for the label's base. A run without
+// a label is never learned, so it gets no hint.
+func memHint(label string, grantMiB int64, clamped bool, peakKiB int64, ranS float64) string {
+	peakMiB := peakKiB / 1024
+	if label == "" || ranS < memHintAfter.Seconds() {
+		return ""
+	}
+	peak := spec.FormatMiB(peakMiB)
+	suggest := "coreslot suggest --write --label " + needs.BaseLabel(label)
+	switch {
+	case grantMiB == 0 && peakMiB > memHintAlone:
+		return fmt.Sprintf("%s peaked at %s with no mem need; %s", label, peak, suggest)
+	case grantMiB == 0 || peakMiB <= grantMiB+spec.MemTokenMiB:
+		return ""
+	case clamped:
+		return fmt.Sprintf("%s peaked at %s on a mem grant clamped to the budget's %s", label, peak, spec.FormatMiB(grantMiB))
+	}
+	return fmt.Sprintf("%s peaked at %s on a %s mem grant; %s", label, peak, spec.FormatMiB(grantMiB), suggest)
 }
 
 // hintTokens is the cpu tokens the usage hint compares with, and whether the run gets a hint at

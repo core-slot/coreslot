@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -377,6 +378,36 @@ func TestRunLogUsageKeys(t *testing.T) {
 	}
 }
 
+// The memory keys are written when known and left out when not, never as a measured zero.
+// Mutation: drop omitempty from mem_peak_kib.
+func TestRunRecordMemKeys(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	kib, after, free := int64(368640), 2.5, 1.0
+	r := RunRecord{TimeNS: 1791720000000000000, Label: "mem"}
+	measured := r
+	measured.MemPeakKiB, measured.MemPeakSource, measured.PeakAfterS, measured.WaitedFreeS = &kib, "footprint", &after, &free
+	for _, rec := range []RunRecord{r, measured} {
+		if err := s.AppendRun(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
+	if len(lines) != 2 {
+		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
+	}
+	for _, key := range []string{"mem_peak_kib", "mem_peak_source", "peak_after_s", "waited_free_s"} {
+		if strings.Contains(lines[0], `"`+key+`"`) {
+			t.Errorf("a line without memory has %s: %s", key, lines[0])
+		}
+	}
+	for _, want := range []string{`"mem_peak_kib":368640`, `"mem_peak_source":"footprint"`, `"peak_after_s":2.5`, `"waited_free_s":1`} {
+		if !strings.Contains(lines[1], want) {
+			t.Errorf("line = %s; want it to contain %s", lines[1], want)
+		}
+	}
+}
+
 // A pass-through appends outside the section and never rotates: AppendRun leaves a log at or
 // above 10 MiB where it is, and only RotateLog renames it.
 func TestAppendRunNeverRotates(t *testing.T) {
@@ -398,5 +429,105 @@ func TestAppendRunNeverRotates(t *testing.T) {
 	}
 	if exists(filepath.Join(dir, LogDir, RunLogOld)) {
 		t.Error("AppendRun created runs.1.jsonl")
+	}
+}
+
+// ReadRuns reads the rotated generation first, then the current one.
+// Mutation: read runs.jsonl before runs.1.jsonl, or skip runs.1.jsonl.
+func TestReadRunsBothGenerations(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	if runs, skipped, err := s.ReadRuns(); err != nil || len(runs) != 0 || skipped != 0 {
+		t.Fatalf("ReadRuns without a log = %v, %d, %v; want nothing", runs, skipped, err)
+	}
+	for _, label := range []string{"first", "second"} {
+		if err := s.AppendRun(RunRecord{TimeNS: 1791720000000000000, Label: label}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(filepath.Join(dir, LogDir, RunLog), filepath.Join(dir, LogDir, RunLogOld)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendRun(RunRecord{TimeNS: 1791720000000000000, Label: "third"}); err != nil {
+		t.Fatal(err)
+	}
+	runs, skipped, err := s.ReadRuns()
+	if err != nil || skipped != 0 {
+		t.Fatalf("ReadRuns = %d skipped, %v", skipped, err)
+	}
+	var labels []string
+	for _, r := range runs {
+		labels = append(labels, r.Label)
+	}
+	if want := []string{"first", "second", "third"}; !slices.Equal(labels, want) {
+		t.Errorf("labels %v, want %v", labels, want)
+	}
+}
+
+// A line that does not decode is skipped and counted; an old line without the memory keys is
+// kept, with those fields unknown.
+// Mutation: return the decode error instead of skipping the line.
+func TestReadRunsSkipsMalformed(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	data, err := os.ReadFile(filepath.Join("testdata", "runs-malformed.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, LogDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, LogDir, RunLog), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runs, skipped, err := s.ReadRuns()
+	if err != nil || skipped != 2 || len(runs) != 1 {
+		t.Fatalf("ReadRuns = %d runs, %d skipped, %v; want 1 run, 2 skipped", len(runs), skipped, err)
+	}
+	r := runs[0]
+	if r.Label != "old:tests" || r.Need["cpu"] != (spec.Range{Min: 1, Max: 4}) || r.CPUUserS == nil || *r.CPUUserS != 20 {
+		t.Errorf("old run %+v", r)
+	}
+	if r.MemPeakKiB != nil || r.MemPeakSource != "" || r.PeakAfterS != nil || r.WaitedFreeS != nil {
+		t.Errorf("old run has memory fields it never recorded: %+v", r)
+	}
+}
+
+// What AppendRun writes, ReadRuns gives back field for field.
+// Mutation: leave MemPeakKiB out of the reader's conversion.
+func TestReadRunsRoundTrip(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	user, sys, rss, peak, after, free := 3.5, 0.25, int64(65536), int64(2831156), 22.0, 4.0
+	want := RunRecord{
+		TimeNS:              1791720000000000000,
+		Label:               "fastapi:tests@10",
+		Need:                map[string]spec.Range{"cpu": {Min: 1, Max: 16}, "mem": {Min: 22, Max: 22}},
+		Grant:               map[string]int{"cpu": 10, "mem": 22},
+		Clamped:             []string{"cpu"},
+		UnbudgetedResources: []string{"gpu"},
+		WaitedS:             1.5,
+		RanS:                12.25,
+		Exit:                1,
+		Load1:               3.5,
+		FailOpen:            "light",
+		Nested:              true,
+		CPUUserS:            &user,
+		CPUSysS:             &sys,
+		MaxRSSKiB:           &rss,
+		MemPeakKiB:          &peak,
+		MemPeakSource:       "footprint",
+		PeakAfterS:          &after,
+		WaitedFreeS:         &free,
+	}
+	if err := s.AppendRun(want); err != nil {
+		t.Fatal(err)
+	}
+	runs, skipped, err := s.ReadRuns()
+	if err != nil || skipped != 0 || len(runs) != 1 {
+		t.Fatalf("ReadRuns = %d runs, %d skipped, %v", len(runs), skipped, err)
+	}
+	if !reflect.DeepEqual(runs[0], want) {
+		t.Errorf("read back\n%+v\nwant\n%+v", runs[0], want)
 	}
 }
