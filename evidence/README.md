@@ -1597,14 +1597,16 @@ evidence.
 
 ### Results (2026-10-23, coreslot `ebac0a7`)
 
-Run 6 is **complete**: 120 heavy and 60 light main blocks, every set valid (840 heavy and 120
-light main sets, 42 sensitivity sets), no re-run, no set coreslot failed, and one coreslot version
-in every record (`coreslot 0.1.1-0.20261021174039-ebac0a73fadd`). By the pre-registered chain:
-**H1 is rejected and H4 is not, so the chain stops there; H5, H3 and H2 are exploratory.** C1 is
-supported on this machine; C4 is not shown, and C5, C3 and C2 support no claim. Every number below
-is quoted from, or computed from, the committed records in `run6/` (`summary.json`, printed as
-`summary.txt`; the set records `pilot-*.jsonl`, `main-*.jsonl` and `sens-*.jsonl`), or from
-`holm.json` for the secondary analysis.
+Run 6 is **complete**: 120 heavy and 60 light main blocks, every set valid (1110 sets: 108 pilot,
+960 main, that is 840 heavy and 120 light, and 42 sensitivity; plus 2 primer sets), no re-run, no
+set coreslot failed, and one coreslot version in every record
+(`coreslot 0.1.1-0.20261021174039-ebac0a73fadd`). By the pre-registered chain: **H1 is rejected
+and H4 is not, so the chain stops there; H5, H3 and H2 are exploratory.** C1 is supported on this
+machine; C4 is not shown, and C5, C3 and C2 support no claim. Every number below is quoted from,
+or computed from, the committed records in `run6/` (`summary.json`, printed as `summary.txt`; the
+set records `pilot-*.jsonl`, `main-*.jsonl` and `sens-*.jsonl`), or from `holm.json` for the
+secondary analysis, which is not pre-registered. The exceptions are the timeline's times of commits
+and pull-request comments, which come from git and GitHub.
 
 **Machine and background.** Run 4's stand and host, on AC power in every set. The owner's
 applications stayed open: 12 or 13 at each main verdict command's start (the records keep only
@@ -1614,13 +1616,14 @@ process count 361-525 (median 431). At the start of the 120 light main sets, mem
 4063-7474 MiB (median 6872), the load 6.1-18.36 (median 10.635) and the process count 455-554
 (median 544): the light mix, which ran later, had the busier background.
 
-**Timeline (UTC).** The pre-registration commit is dated 19:11:15 on 2026-10-21 and its anchor
-comment on the pull request 19:11:49. The pilot ran from 20:44:35 (its primer set) to 23:56:03
-(the last sample of the last light pilot set). `size.json` was committed at 23:56:34. The main
-session started at 23:57:15 (its primer set), the first heavy main set at 23:58:59 on 2026-10-21;
-the heavy main sets ran until 02:25 on 2026-10-23, the light main sets from 02:25:59 to 04:22, the
-spread sensitivity run from 04:22:37 and the cold run until 05:28:44. The declared deviation
-below was posted at 00:11:32 on 2026-10-23, when 763 of the 840 heavy main sets had started.
+**Timeline (UTC).** The pre-registration commit is dated 19:11:15 on 2026-10-21 (git) and its anchor
+comment on the pull request 19:11:49 (GitHub). The pilot ran from 20:44:35 (its primer set) to
+23:56:03 (the last sample of the last light pilot set). `size.json` was committed at 23:56:34 (git).
+The main session started at 23:57:15 (its primer set), the first heavy main set at 23:58:59 on
+2026-10-21; the heavy main sets ran until 02:25 on 2026-10-23, the light main sets from 02:25:59 to
+04:22, the spread sensitivity run from 04:22:37 and the cold run until 05:28:44. The declared
+deviation below was posted at 00:11:32 on 2026-10-23 (GitHub), when 763 of the 840 heavy main sets
+had started.
 
 **The pilot's sizes** (`run6/size.json`). Heavy: σ̂ 0.1150, raised to σ 0.1442, asks for 150
 blocks; the run went on at the cap of 120, so it is **underpowered** against its design. Light:
@@ -1698,11 +1701,12 @@ Each fixed semaphore's regret against S\*, mean time to verdict (GMR, BCa 90 %),
 S2 26.7, S3 34.5, K60 28.7; over K60, F 1.4532 [1.2004, 1.7144], S1 1.0719 [0.9895, 1.1683], S2
 0.9308 [0.8451, 1.0766], S3 1.1913 [1.0424, 1.4227]. Cold start: KC/K60 1.1574 [1.0763, 1.3374].
 
-**Order effects** (heavy; mean log primary over the block's geometric mean, BCa 90 %). By position,
-every interval holds 0 except position 4, −0.0449 [−0.0800, −0.0025], and position 6, 0.0682
-[0.0195, 0.1236]. By the arm before, after F −0.1412 [−0.1618, −0.1179] and after S1 0.0915
-[0.0368, 0.1522]; the others hold 0. A set after F is never F, the slowest arm, which pulls that row
-down by construction.
+**Order effects** (heavy; mean log primary over the block's geometric mean, BCa 90 %). Positions
+count from 0, a block's first set, to 6, its last, as in the records. By position, every interval
+holds 0 except position 4 (the fifth set), −0.0449 [−0.0800, −0.0025], and position 6 (the
+seventh), 0.0682 [0.0195, 0.1236]. By the arm before, after F −0.1412 [−0.1618, −0.1179] and after
+S1 0.0915 [0.0368, 0.1522]; the others hold 0. A set after F is never F, the slowest arm.
+Inference: that pulls the after-F row down by construction.
 
 **Covariates**, from the set records: medians at the sets' start, and the thermal samples during
 the sets that read state 1 ("fair"; none read higher; every set started at nominal).
@@ -1748,10 +1752,22 @@ Secondary analysis, not pre-registered (declared deviation), over k = 5:
 | 4 | H4 | 0.1094 | 0.025 | not rejected | not rejected |
 | 5 | H5 | 0.2879 | 0.05 | not rejected | exploratory |
 
-**Where the two differ.** The primary analysis rejects H1 only and leaves H5, H3 and H2
-exploratory. The secondary analysis also rejects H3 and H2. It agrees that H4 is not rejected,
-and it does not reject H5: N = 1's smallest p, 0.048, times six is 0.288. The H3 and H2 p-values
-are `summary.json`'s, rounded to four decimals; no Holm decision is near its threshold.
+**Where the two differ.** The primary analysis rejects H1 only and leaves H5, H3 and H2 exploratory.
+The secondary analysis, not pre-registered, also rejects H3 and H2. It agrees that H4 is not
+rejected, and it does not reject H5: N = 1's smallest p, 0.048, times six is 0.288. The H3 and H2
+p-values are `summary.json`'s, rounded to four decimals; no Holm decision is near its threshold. The
+commits that add it say "declared secondary analysis" in their subjects; it is the same analysis,
+not pre-registered.
+
+**The sessions ran through the day, not at night.** The pre-registration says sessions run at night
+(see "Sessions"). On 2026-10-21 at 22:44 local time (20:44 UTC), before the pilot's first set, the
+owner asked in the controller's session to start at once rather than wait for a night window. The
+pilot ran from 20:44 to 23:56 UTC on 2026-10-21, and the main phase ran as one session from 23:58
+UTC on 2026-10-21 to 05:28 UTC on 2026-10-23, about 29.5 hours, through the owner's working day:
+the heavy main sets started in every UTC hour of 2026-10-22, 30 to 34 in each (`started` in
+`main-heavy.jsonl`). The owner's interactive use is part of the logged background (the memory in
+use, the load, the application count). No validity rule depends on the time of day, so every set
+stays valid. This deviation was not posted on the pull request before the run.
 
 ### Figures
 
@@ -1784,9 +1800,10 @@ Deviations) would also reject H3 and H2. Read with that label, inferences:
   per-level bounds exceed 1.03 at 0 and 1536 MiB, so the margin is not shown at every level.
 - *Without pressure.* K60 matched F on the light mix (H2's ratio 0.9985, bound 1.0123): within
   3 % and 5 %, not shown within 1 %.
-- *Robustness.* S1 is a fair alternative on this mix: no warn second in any heavy set, no swap,
-  and its time not shown more than 3 % above K60's at any level. S2 and S3 lose to K60 on warn
-  seconds or time at some level.
+- *Robustness.* S1 is a fair alternative on this mix: no warn second in any heavy set, no swap, and
+  its time not shown more than 3 % above K60's at any level at the declared α / 6 = 0.0083. At an
+  unadjusted 0.05 it would be shown at 0 MiB: S1/K60 1.0577, lower bound 1.0303, p = 0.048. S2 and
+  S3 lose to K60 on warn seconds or time at some level.
 
 Measured, outside the tests: K60 had no false failure in 780 runs of a counted gate, where every
 semaphore and F failed the FastAPI suite in 3 to 14 of 120 heavy sets; and coreslot's makespan
@@ -1798,21 +1815,28 @@ stated cost.
 - **Underpowered.** The pilot asked for 150 heavy blocks and 69 light ones; the run had 120 and 60.
 - **The oracle.** S\* is chosen in hindsight on the tested blocks, which favours the semaphore; at
   this stand it kept pressure near zero, so H4 had few differing blocks to count.
-- **The deviation.** The secondary analysis was declared after a descriptive look at H4's swap
-  comparison; its H3 and H2 rejections are reported as secondary for that reason.
+- **The deviation.** The secondary analysis, not pre-registered, was declared after a descriptive
+  look at the valid heavy main blocks 1-106: per-arm means, ratios and win counts, H4's swap
+  comparison among them. H3's ratio is built from those per-arm means, so its secondary rejection
+  carries that caveat, and so does H2's as a rejection of the same declared family, although the
+  light mix was not looked at.
 - **The ballast.** In 80 of 560 ballasted sets the ballast's resident size read below 90 % of its
   level before the set, so those sets ran with less background than their level names. Inference:
   the sets before them pushed part of it out of memory (never in a block's first set; 22 of the 80
   followed F).
 - **The background.** The owner's applications stayed open; 839 of 840 heavy and all light sets
   started with a 1-minute load above 3, and the light mix ran under a median load of 10.6 against
-  the heavy mix's 6.3. Thermal state reached "fair" in up to 66 % of a cell's samples (heavy F at
-  3072 MiB) and never higher.
-- **Order.** Positions 4 and 6 and the set after S1 show order effects whose intervals exclude 0;
-  each arm's position is shuffled per block, so they add noise rather than favour an arm.
-- **Rounding.** `summary.json` rounds the t tests' p to four decimals; the Holm column uses those.
-- **One machine, two nights, one build:** the measured coreslot is the head of an open pull
-  request, not a release.
+  the heavy mix's 6.3. Thermal state reached "fair" in up to 66 % of the samples of a cell that
+  carry a thermal reading, which is every fifth sample (heavy F at 3072 MiB: 494 of 752; 494 of all
+  its 3671 samples, 13.5 %), and never higher. The sessions ran through the owner's working day,
+  not at night (see Deviations).
+- **Order.** Positions 4 and 6 (0-based: the fifth and seventh sets) and the set after S1 show
+  order effects whose intervals exclude 0. Each arm's position is shuffled per block. Inference:
+  they add noise rather than favour an arm.
+- **Rounding.** `summary.json` rounds the t tests' p to four decimals; the Holm column of the
+  secondary analysis, not pre-registered, uses those.
+- **One machine, one build, one main session of about 29.5 hours:** the measured coreslot is the
+  head of an open pull request, not a release.
 
 ### What it does not show
 
@@ -1826,7 +1850,7 @@ cross-fitted Scf.
 ```sh
 python3 evidence/run6.py summary evidence/overload/run6   # summary.json and summary.txt from the records
 python3 evidence/run6.py figures evidence/overload/run6   # the figures
-python3 evidence/holm6.py evidence/overload/run6          # holm.json and holm.txt from summary.json
+python3 evidence/holm6.py evidence/overload/run6          # holm.json, holm.txt: not pre-registered
 ```
 
 The records were taken with the commands of the pre-registration's "Reproduce", with the main
