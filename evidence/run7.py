@@ -13,11 +13,11 @@ STAND is overload/stand7.json: run 4's stand with FastAPI's tests under `--dist 
 stand's state directory; GNU parallel runs with PARALLEL_HOME=<state_dir>/../parallel-home.
 
 The arms: K60 runs every gate under coreslot with cpu = "140%", mem = "60%" and OUT/needs.toml;
-S1 and S2 hold each heavy gate on one of 1 or 2 slots of a counting semaphore, S1 a machine-wide
-flock; P runs each heavy gate through GNU sem with --memsuspend 9G and -j 4; F runs every gate
-when its agent reaches it. The mixes: heavy (K60, S1, S2, P on the stand's agents, at the quiet
-and the loaded level), light (K60, F on A3 and A4), wide (K60, S2, F on the wide agents) and
-spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet level only.
+S1 and S2 hold each heavy gate on one of 1 or 2 slots of an in-process counting semaphore, the
+light gates free; P runs each heavy gate through GNU sem with --memsuspend 9G and -j 4; F runs
+every gate when its agent reaches it. The mixes: heavy (K60, S1, S2, P on the stand's agents, at
+the quiet and the loaded level), light (K60, F on A3 and A4), wide (K60, S2, F on the wide
+agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet level only.
 
   learn    every gate of the agents and the wide agents alone, each run after a cooldown of at
            least 20 s: 6 runs in its K form (coreslot, cpu = "140%", mem = "60%"), then 3 in its
@@ -367,8 +367,12 @@ def output(*argv):
 
 def provenance(cfg, out, phase):
     """Every record's provenance, read once per verdict session; a tree git cannot read counts
-    as dirty."""
-    status = output("git", "-C", REPO, "status", "--porcelain", "--", "evidence")
+    as dirty. OUT's own records, when it lies under the repository, never make it dirty."""
+    spec = ["evidence"]
+    rel = os.path.relpath(os.path.realpath(out), os.path.realpath(REPO))
+    if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+        spec.append(f":(exclude){rel}")
+    status = output("git", "-C", REPO, "status", "--porcelain", "--", *spec)
     version = output("parallel", "--version")
     meta = {"binary_sha256": run4.sha256(cfg["coreslot"]),
             "evidence_head": (output("git", "-C", REPO, "rev-parse", "HEAD") or "").strip() or None,

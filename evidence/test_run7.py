@@ -460,6 +460,25 @@ class RunSet7(unittest.TestCase):
                          hashlib.sha256(b'{"go": true}').hexdigest())
         self.assertIn(("git", "-C", run7.REPO, "status", "--porcelain", "--", "evidence"), calls)
 
+    def test_tree_check_ignores_own_records(self):
+        # mutation: drop the exclusion of OUT -> its records read dirty -> red
+        self.cfg["coreslot"] = __file__
+        out = os.path.join(run7.REPO, "evidence", "overload", "run7")
+        modified, specs = [""], []
+
+        def output(*argv):  # git status as it reads with and without OUT excluded
+            if "status" not in argv:
+                return "x\n"
+            specs.append(argv[argv.index("--") + 1:])
+            own = "" if ":(exclude)evidence/overload/run7" in argv else "?? " + out + "/\n"
+            return own + modified[0]
+        with mock.patch.object(run7, "output", output):
+            self.assertFalse(run7.provenance(self.cfg, out, "pilot")["tree_dirty"])
+            run7.provenance(self.cfg, self.root, "pilot")
+            self.assertEqual(specs[-1], ("evidence",))  # an OUT outside the repository
+            modified[0] = " M evidence/run7.py\n"
+            self.assertTrue(run7.provenance(self.cfg, out, "pilot")["tree_dirty"])
+
 
 class Design(unittest.TestCase):
     def test_level_for_pairs(self):
