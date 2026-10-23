@@ -25,6 +25,26 @@ func Tree(root int) (kib int64, ok bool) {
 	return treeSum(root, parents, footprint)
 }
 
+// Listing reads the process table once: kern.proc.all's parent and start time of every process.
+func Listing() (map[int]Proc, bool) {
+	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return nil, false
+	}
+	out := make(map[int]Proc, len(procs))
+	for _, p := range procs {
+		out[int(p.Proc.P_pid)] = Proc{PPID: int(p.Eproc.Ppid), StartNS: p.Proc.P_starttime.Nano()}
+	}
+	return out, true
+}
+
+// resident reads pid's physical footprint, the measure Tree adds; macOS has no shared part to
+// count once.
+func resident(pid int) (private, shared int64, ok bool) {
+	private, ok = footprint(pid)
+	return private, 0, ok
+}
+
 // footprint reads ri_phys_footprint of pid's rusage_info_v4 (proc_pid_rusage), in KiB.
 func footprint(pid int) (int64, bool) {
 	const (

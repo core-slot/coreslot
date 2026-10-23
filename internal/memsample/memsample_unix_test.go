@@ -112,3 +112,43 @@ func BenchmarkTree(b *testing.B) {
 		Tree(os.Getpid())
 	}
 }
+
+// Mutation: build StartNS from the seconds alone (no ×1e9) on macOS, or without btime on Linux,
+// and the start is decades before the last hour.
+func TestListingHasSelf(t *testing.T) {
+	procs, ok := Listing()
+	if !ok {
+		t.Fatal("Listing() not ok")
+	}
+	p, ok := procs[os.Getpid()]
+	now := time.Now()
+	if !ok || p.PPID != os.Getppid() {
+		t.Fatalf("Listing()[%d] = %+v, %v; want PPID %d", os.Getpid(), p, ok, os.Getppid())
+	}
+	if start := time.Unix(0, p.StartNS); start.Before(now.Add(-time.Hour)) || start.After(now) {
+		t.Errorf("StartNS = %v; want within the last hour before %v", start, now)
+	}
+}
+
+// The cost the admission section pays per live attempt: one listing of the machine, and the use
+// of the test's own tree in a table of 500 processes.
+func BenchmarkListingHolderUse(b *testing.B) {
+	listed, ok := Listing()
+	if !ok {
+		b.Fatal("Listing() not ok")
+	}
+	self := os.Getpid()
+	procs := map[int]Proc{self: listed[self]}
+	for pid := 1 << 22; len(procs) < 500; pid++ {
+		procs[pid] = Proc{PPID: 1}
+	}
+	roots := map[int]int64{self: time.Now().UnixNano()}
+	for b.Loop() {
+		if _, ok := Listing(); !ok {
+			b.Fatal("Listing() not ok")
+		}
+		if use := HolderUse(procs, roots, nil); len(use) != 1 {
+			b.Fatalf("HolderUse = %v; want one root", use)
+		}
+	}
+}

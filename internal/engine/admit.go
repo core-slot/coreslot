@@ -53,7 +53,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	}
 
 	// 2-6. Sizes, effective request, locked counts, the two passes.
-	sizes, err := t.e.sizes()
+	sizes, live, err := t.e.sizes()
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +61,10 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	locked, err := countLocked(sec, eff)
 	if err != nil {
 		return nil, err
+	}
+	sizes, live = t.e.attemptSizes(t.req.Need, sizes, locked, live)
+	if live {
+		eff, clamped, undeclared = state.Effective(t.req.Need, sizes)
 	}
 	take, ok := state.Plan(eff, sizes, locked)
 	if !ok {
@@ -89,8 +93,8 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		ts.Close()
 		return nil, ErrCanceled
 	}
-	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared}
-	if err := g.publishHold(sec, t.req.Label, false); err != nil {
+	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared, liveMem: live}
+	if err := g.publishHold(sec, t.req, false); err != nil {
 		ts.Close()
 		return nil, err
 	}
@@ -250,18 +254,20 @@ type Grant struct {
 	unbudgeted []string
 	tokenOnly  bool
 	adopted    bool
+	liveMem    bool   // the attempt that admitted it used a raised mem size
 	failOpen   string // the reason of a fail-open run's grant
 
 	mu     sync.Mutex
 	closed bool
 }
 
-// publishHold publishes the grant's hold inside sec and keeps its descriptor.
-func (g *Grant) publishHold(sec *store.Section, label string, adopted bool) error {
+// publishHold publishes the grant's hold for req inside sec and keeps its descriptor. An adopted
+// hold never claims a tree: the adopting process is not the one doing the work.
+func (g *Grant) publishHold(sec *store.Section, req spec.Request, adopted bool) error {
 	g.adopted = adopted
 	start := max(g.e.clock.Realtime(), 0)
-	h := wire.Hold{Label: label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
-		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted}
+	h := wire.Hold{Label: req.Label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
+		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted, Tree: req.Tree && !adopted}
 	f, name, err := sec.PublishHold(h, os.Getpid(), g.e.seq())
 	if err != nil {
 		return err
@@ -323,6 +329,9 @@ func (g *Grant) TokenOnly() bool { return g.tokenOnly }
 
 // Adopted reports an adoption's grant.
 func (g *Grant) Adopted() bool { return g.adopted }
+
+// LiveMem reports that the attempt that admitted g used a raised mem size.
+func (g *Grant) LiveMem() bool { return g.liveMem }
 
 // HoldName is the hold's file name in holds/; empty without a hold.
 func (g *Grant) HoldName() string { return g.holdName }

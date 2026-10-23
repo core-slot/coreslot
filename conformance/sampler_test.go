@@ -119,6 +119,10 @@ type Sampler struct {
 	// Request returns the request behind a hold's label, for I7. Holds whose label it does not
 	// know are not checked for I7.
 	Request func(label string) (map[string]spec.Range, bool)
+	// LiveBound is, per resource, the most tokens a live size can admit (mem's ⌊headroom /
+	// 128 MiB⌋ under the test hook's headroom): I3 then bounds the locked count by it too. A
+	// resource without one keeps the size and the shrink's bound.
+	LiveBound map[string]int
 
 	mu          sync.Mutex
 	dir         string
@@ -138,6 +142,7 @@ type Sampler struct {
 	last        time.Time // when the previous sample was taken
 	samples     int
 	missed      int
+	aboveStatic map[string]int // per resource, the samples that saw it locked above max(size, bound)
 	configMtime time.Time
 }
 
@@ -150,7 +155,7 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 		t.Fatal(err)
 	}
 	s := &Sampler{TokenOnlyBound: DefaultTokenOnlyBound, dir: e.Dir, scratch: t.TempDir(),
-		inodes: map[Token][2]uint64{}, unlisted: map[Token]time.Time{}, confirmedAt: map[Token]int{}, admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
+		inodes: map[Token][2]uint64{}, unlisted: map[Token]time.Time{}, confirmedAt: map[Token]int{}, aboveStatic: map[string]int{}, admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
 	var err error
 	if s.st, err = store.Open(e.Dir); err != nil {
 		t.Fatal(err)
@@ -172,11 +177,16 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 	return s
 }
 
-// configBody is the configuration declaring sizes.
+// configBody is the configuration declaring sizes. mem is written in MiB: a bare integer would
+// be GiB.
 func configBody(sizes map[string]int) string {
 	var b strings.Builder
 	b.WriteString("[resources]\n")
 	for _, r := range slices.Sorted(maps.Keys(sizes)) {
+		if r == "mem" {
+			fmt.Fprintf(&b, "mem = \"%dM\"\n", sizes[r]*spec.MemTokenMiB)
+			continue
+		}
 		fmt.Fprintf(&b, "%s = %d\n", r, sizes[r])
 	}
 	return b.String()
@@ -227,13 +237,15 @@ func (s *Sampler) Resize(ctx context.Context, sizes map[string]int) (locked map[
 	if err != nil {
 		return nil, err
 	}
-	s.sizes = maps.Clone(sizes)
 	for r, n := range sizes {
-		s.ceiling[r] = max(n, obs.lockedCount[r])
+		// The locked count a shrink leaves above the new size is bounded by what the old size
+		// allowed: a resize never makes an I3 violation (or a live admission) part of the bound.
+		s.ceiling[r] = max(n, min(obs.lockedCount[r], max(s.sizes[r], s.ceiling[r])))
 		if w, ok := s.window[r]; !ok || n < w {
 			s.window[r] = n
 		}
 	}
+	s.sizes = maps.Clone(sizes)
 	return obs.lockedCount, nil
 }
 
@@ -480,11 +492,16 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 			"hold (%v), more than the %d the admitted, unreported token-only runs take", len(ks), r, ks, allowance[r])
 	}
 
-	// I3: the locked count of a resource, at every index, stays within the bound.
+	// I3: the locked count of a resource, at every index, stays within the bound, or within
+	// the resource's live bound when it has one.
 	for _, r := range slices.Sorted(maps.Keys(s.sizes)) {
 		size, bound, n := s.sizes[r], s.ceiling[r], obs.lockedCount[r]
+		if n > max(size, bound, s.LiveBound[r]) {
+			add("I3", "I3 "+r, "%d tokens of %s locked; size %d, bound %d, live bound %d", n, r, size, bound,
+				s.LiveBound[r])
+		}
 		if n > max(size, bound) {
-			add("I3", "I3 "+r, "%d tokens of %s locked; size %d, bound %d", n, r, size, bound)
+			s.aboveStatic[r]++
 		}
 		s.ceiling[r] = max(size, min(bound, n))
 	}
@@ -540,6 +557,14 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		add("I2", "malformed "+name, "live hold %s has a malformed body", name)
 	}
 	return found
+}
+
+// AboveStatic returns, per resource, how many samples saw more tokens locked than its size and
+// the shrink's bound allow: admissions that only a live size explains.
+func (s *Sampler) AboveStatic() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.aboveStatic)
 }
 
 // TokenOnlyReportAge returns the longest time a token stayed unlisted, as the sampler saw it,

@@ -201,9 +201,10 @@ func usagef(format string, args ...any) error {
 }
 
 // request is the request of the run, with priority as given: the caller applies the
-// configuration's [priorities] unless --priority was given.
+// configuration's [priorities] unless --priority was given. Its hold says that the run's process
+// tree carries the work.
 func (o runOptions) request(priority int) spec.Request {
-	return spec.Request{Label: o.label, Priority: priority, Need: o.need}
+	return spec.Request{Label: o.label, Priority: priority, Need: o.need, Tree: true}
 }
 
 // sortedNeed lists the requested resources in ascending name order.

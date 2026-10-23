@@ -196,6 +196,41 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// TestMemoryTable pins [memory] live: on unless the file turns it off. Mutation: defaulting
+// LiveMem to false reddens the missing file.
+func TestMemoryTable(t *testing.T) {
+	for what, path := range map[string]string{
+		"missing file":     filepath.Join(t.TempDir(), "absent", "config.toml"),
+		"no [memory]":      writeConfig(t, "[resources]\npg-local = 1\n"),
+		"unknown key only": writeConfig(t, "[memory]\nfuture = 1\n"),
+	} {
+		c, err := Load(path)
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if !c.LiveMem {
+			t.Errorf("%s: LiveMem = false, want true", what)
+		}
+	}
+	c, err := Load(writeConfig(t, "[memory]\nlive = false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.LiveMem {
+		t.Error("live = false not honoured")
+	}
+	for body, want := range map[string]string{
+		"memory = 3\n":              "[memory] is not a table",
+		"[memory]\nlive = \"no\"\n": "[memory] live: want a boolean",
+	} {
+		_, err := Load(writeConfig(t, body))
+		var ce *Error
+		if !errors.As(err, &ce) || ce.Msg != want {
+			t.Errorf("Load(%q) = %v, want a *config.Error %q", body, err, want)
+		}
+	}
+}
+
 func TestPriorityLongestPrefix(t *testing.T) {
 	c := Config{Priorities: map[string]int{"ci:": 0, "ci:urgent": 50, "interactive:": 10, "c": -5}}
 	cases := []struct {

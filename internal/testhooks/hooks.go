@@ -34,3 +34,7 @@ func ProbeShell() string { return "/bin/sh" }
 // ProbeTimeout is how long the CLI lets that probe run; always d, the CLI's own bound, without the
 // coreslot_testhooks tag.
 func ProbeTimeout(d time.Duration) time.Duration { return d }
+
+// Headroom replaces the kernel's memory headroom, in MiB; always 0, false without the
+// coreslot_testhooks tag.
+func Headroom() (mib int64, set bool) { return 0, false }

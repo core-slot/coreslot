@@ -35,7 +35,7 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (*Grant, er
 	if !understood {
 		return nil, refuseFormat(n, "")
 	}
-	sizes, err := e.sizes()
+	sizes, live, err := e.sizes()
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +43,10 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (*Grant, er
 	locked, err := countLocked(sec, eff)
 	if err != nil {
 		return nil, err
+	}
+	sizes, live = e.attemptSizes(req.Need, sizes, locked, live)
+	if live {
+		eff, clamped, undeclared = state.Effective(req.Need, sizes)
 	}
 	take := state.AdoptPlan(eff, sizes, locked)
 	mins := make(map[string]int, len(eff))
@@ -68,8 +72,8 @@ func (e *Engine) AdoptContext(ctx context.Context, req spec.Request) (*Grant, er
 		ts.Close()
 		return nil, err
 	}
-	g := &Grant{e: e, tokens: ts, need: req.Need, clamped: clamped, unbudgeted: undeclared}
-	if err := g.publishHold(sec, req.Label, true); err != nil {
+	g := &Grant{e: e, tokens: ts, need: req.Need, clamped: clamped, unbudgeted: undeclared, liveMem: live}
+	if err := g.publishHold(sec, req, true); err != nil {
 		ts.Close()
 		return nil, err
 	}

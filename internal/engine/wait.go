@@ -549,5 +549,5 @@ func holderInfo(en store.Entry, body []byte) *HolderInfo {
 	}
 	return &HolderInfo{Name: en.Name, Label: h.Label, PID: en.ID.PID, StartNS: int64(en.ID.OrderKey),
 		Grant: grant, Unbudgeted: h.Unbudgeted, UnbudgetedResources: h.UnbudgetedResources,
-		Clamped: h.Clamped, Adopted: h.Adopted}
+		Clamped: h.Clamped, Adopted: h.Adopted, Tree: h.Tree}
 }

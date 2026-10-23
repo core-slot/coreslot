@@ -21,7 +21,7 @@ func (e *Engine) Free(resource string) (int, error) {
 	if err := spec.ValidateName(resource); err != nil {
 		return 0, err
 	}
-	sizes, err := e.sizes()
+	sizes, _, err := e.sizes()
 	if err != nil {
 		return 0, err
 	}
@@ -64,7 +64,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	}
 	r.Gen, r.ReconciledNS = g.N, g.ReconciledNS
 
-	if sizes, err := e.sizes(); err != nil {
+	if sizes, _, err := e.sizes(); err != nil {
 		r.ConfigError, r.ConfigErr = reasonOf(err), err
 	} else {
 		for _, name := range slices.Sorted(maps.Keys(sizes)) {

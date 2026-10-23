@@ -87,7 +87,7 @@ func (t *Ticket) tokenOnlyAttempt(ctx context.Context, single bool) (*Grant, err
 		return nil, nil
 	}
 
-	sizes, err := t.e.sizes()
+	sizes, _, err := t.e.sizes()
 	if err != nil {
 		return nil, err
 	}

@@ -125,18 +125,18 @@ func (e *Engine) Config() (config.Config, error) {
 }
 
 // sizes recomputes every declared resource's size from the configuration and the machine
-// (PROTOCOL.md section 5.2). An invalid configuration, an unknown CPU count, or an unknown
-// memory while the configuration declares mem is a *store.StateError.
-func (e *Engine) sizes() (map[string]int, error) {
+// (PROTOCOL.md section 5.2), and returns its LiveMem. An invalid configuration, an unknown CPU
+// count, or an unknown memory while the configuration declares mem is a *store.StateError.
+func (e *Engine) sizes() (map[string]int, bool, error) {
 	c, err := e.Config()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	m, err := e.machine(c.DeclaresMem())
 	if err != nil {
-		return nil, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
+		return nil, false, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
 	}
-	return c.Sizes(m), nil
+	return c.Sizes(m), c.LiveMem, nil
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,

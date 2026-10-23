@@ -20,7 +20,12 @@ older client on a 10-CPU machine without a configuration file computes a cpu bud
 new one computes 14, reads `mem = "60%"` as a share of CPUs, refuses `"N%"` above 100 as an invalid
 configuration, and finds a `mem` need undeclared. When `mem` became a built-in resource, a `mem`
 declared in the user's own unit changed meaning: `mem = 16` is 16 GiB, `mem = "50%"` half of the
-physical memory, `--need mem=4` 4 GiB and `CORESLOT_GRANTED_MEM` MiB. `v1.0.0` freezes the format then current; frozen
+physical memory, `--need mem=4` 4 GiB and `CORESLOT_GRANTED_MEM` MiB. When `mem` gained a live size
+([`PROTOCOL.md` section 5.2](../PROTOCOL.md#52-sizes)), the configured `mem` became a floor: a newer
+client admits a fixed `mem` need above it from the memory the kernel can still hand out, unless
+`[memory] live = false`. An older client sizes `mem` from the configuration alone, so it waits while
+newer clients' live admissions hold more `mem` than its size, as after a shrink, and `status` may
+show `mem` with 0 free while newer clients are still admitted above it. `v1.0.0` freezes the format then current; frozen
 means that from then on a new format number, or a change of what one means, needs a new major
 version.
 
@@ -107,7 +112,7 @@ contract and may change in any release; parse `status --json` instead.
 | `stats` | `--label LABEL`, `--json` (its own `"schema": 1`) |
 | `suggest` | `--label LABEL`, `--write` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
-| configuration | `<home>/.config/coreslot/config.toml`: `[resources]` (with `cpu` and `mem` declared by default), `[priorities]`, `[platform] windows_warning`; `needs.toml` beside it: `[needs."<label>"]` with `cpu`, `mem`, `pinned`, `evidence` |
+| configuration | `<home>/.config/coreslot/config.toml`: `[resources]` (with `cpu` and `mem` declared by default), `[priorities]`, `[platform] windows_warning`, `[memory] live`; `needs.toml` beside it: `[needs."<label>"]` with `cpu`, `mem`, `pinned`, `evidence` |
 | environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>` (`CORESLOT_GRANTED_MEM` in MiB), `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs and by the library) |
 | descriptors | the hold at fd 3, tokens from fd 4 in ascending resource name and index |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
