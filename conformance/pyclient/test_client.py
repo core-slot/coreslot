@@ -673,9 +673,10 @@ class LivenessTests(Base):
         self.fail("W1 was never admitted")
 
     def test_head_backoff_starts_at_a_quarter_second(self):
-        """§10.3, §22: the head retries admission after 0.25 s, then doubles up to 2 s; a waiter
+        """§10.3, §22: the head retries admission after 0.25 s, then doubles up to 0.5 s; a waiter
         that is not the head polls every second and starts over at 0.25 s when it is head again.
-        A token-only waiter (§15.2) retries with the same backoff."""
+        A token-only waiter (§15.2) retries with the same backoff.
+        Mutation: HEAD_BACKOFF_MAX back at 2.0, and the delays reach 2.0."""
         self.config("[resources]\ncpu = 1\n")
         self.lock(os.path.join(self.S, "res", "cpu", "0"))  # nothing is free
         clock = FakeClock()
@@ -684,7 +685,7 @@ class LivenessTests(Base):
         for _ in range(6):
             self.assertEqual(h.step(), ("waiting", 1))
             delays.append(h.poll_delay())
-        self.assertEqual(delays, [0.25, 0.5, 1.0, 2.0, 2.0, 2.0])
+        self.assertEqual(delays, [0.25, 0.5, 0.5, 0.5, 0.5, 0.5])
         ahead = os.path.join(self.S, "queue", "00000000000000000001-0000000001-000001")
         self.write(ahead, body(), lock=True)
         g = self.gen()
@@ -702,7 +703,7 @@ class LivenessTests(Base):
         for _ in range(3):
             self.assertEqual(t.step(), ("waiting", 0))
             delays.append(t.poll_delay())
-        self.assertEqual(delays, [0.25, 0.5, 1.0])
+        self.assertEqual(delays, [0.25, 0.5, 0.5])
 
     def test_position_counts_only_well_formed_tickets(self):
         """§10.3: position is 1 plus the tickets ahead not passed over, malformed ones excluded."""

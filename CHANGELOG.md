@@ -52,6 +52,8 @@ All notable changes to this project are recorded here. The format follows
   more than its size.
 - On Linux, `waited_free_s` counts the memory free under the tightest cgroup v2 limit when that is
   less than `MemAvailable`, the same headroom the live size reads.
+- The waiting head retries admission at most every 0.5 s (was 2 s), so a freed budget is taken
+  sooner.
 
 ### Fixed
 

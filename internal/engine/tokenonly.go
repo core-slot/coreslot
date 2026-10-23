@@ -28,7 +28,7 @@ func (t *Ticket) toTokenOnly() {
 }
 
 // stepTokenOnly is one Step in token-only mode: at most once per head backoff (0.25 s up to
-// 2 s) it enters the section and decides the mode from the FORMAT read there. A format this
+// 0.5 s) it enters the section and decides the mode from the FORMAT read there. A format this
 // client implements, or no FORMAT (which the entry writes), ends token-only mode: the request
 // enqueues in that section as a new one, with a fresh arrival (PROTOCOL.md section 15.2).
 // Otherwise it tries token-only admission.
