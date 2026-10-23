@@ -1594,3 +1594,240 @@ python3 evidence/run6.py figures evidence/overload/run6
 Re-issuing an interrupted command resumes it. `evidence/overload/run6.sh --dry` runs learn and one
 block of each mix on `stand-dry.json`, to check the runner in a few minutes; its output is not
 evidence.
+
+### Results (2026-10-23, coreslot `ebac0a7`)
+
+Run 6 is **complete**: 120 heavy and 60 light main blocks, every set valid (840 heavy and 120
+light main sets, 42 sensitivity sets), no re-run, no set coreslot failed, and one coreslot version
+in every record (`coreslot 0.1.1-0.20261021174039-ebac0a73fadd`). By the pre-registered chain:
+**H1 is rejected and H4 is not, so the chain stops there; H5, H3 and H2 are exploratory.** C1 is
+supported on this machine; C4 is not shown, and C5, C3 and C2 support no claim. Every number below
+is quoted from, or computed from, the committed records in `run6/` (`summary.json`, printed as
+`summary.txt`; the set records `pilot-*.jsonl`, `main-*.jsonl` and `sens-*.jsonl`), or from
+`holm.json` for the secondary analysis.
+
+**Machine and background.** Run 4's stand and host, on AC power in every set. The owner's
+applications stayed open: 12 or 13 at each main verdict command's start (the records keep only
+the count and a hash). At the start of the 840 heavy main sets, memory in use was 2786-7138 MiB
+(median 5179), with the ballast included; the 1-minute load was 2.83-14.45 (median 6.26) and the
+process count 361-525 (median 431). At the start of the 120 light main sets, memory in use was
+4063-7474 MiB (median 6872), the load 6.1-18.36 (median 10.635) and the process count 455-554
+(median 544): the light mix, which ran later, had the busier background.
+
+**Timeline (UTC).** The pre-registration commit is dated 19:11:15 on 2026-10-21 and its anchor
+comment on the pull request 19:11:49. The pilot ran from 20:44:35 (its primer set) to 23:56:03
+(the last sample of the last light pilot set). `size.json` was committed at 23:56:34. The main
+session started at 23:57:15 (its primer set), the first heavy main set at 23:58:59 on 2026-10-21;
+the heavy main sets ran until 02:25 on 2026-10-23, the light main sets from 02:25:59 to 04:22, the
+spread sensitivity run from 04:22:37 and the cold run until 05:28:44. The declared deviation
+below was posted at 00:11:32 on 2026-10-23, when 763 of the 840 heavy main sets had started.
+
+**The pilot's sizes** (`run6/size.json`). Heavy: σ̂ 0.1150, raised to σ 0.1442, asks for 150
+blocks; the run went on at the cap of 120, so it is **underpowered** against its design. Light:
+σ̂ 0.0774, σ 0.0970, asks for 69; the run went on at the cap of 60. No F set of the first 12 light
+pilot blocks had a warn-or-worse sample, so the light pressure rule left H2 tested.
+
+**The oracles.** S\* per background level: S2 at 0 and 1536 MiB, S1 at 3072 MiB. K\*cf chose K60
+in 60 blocks and K67 in 60. The cross-fitted semaphore Scf chose S2 in 80 blocks and S1 in 40.
+
+**The hypotheses, in the chain's order** (geometric mean ratio, one-sided 95 % bound, BCa 90 %
+interval):
+
+- **H1, rejected.** K60/F mean time to verdict 0.4694, upper bound 0.4857, BCa [0.4546, 0.4863],
+  paired t p < 10⁻⁴ (`summary.json` rounds it to 0.0). K60's warn seconds were below F's in 120 of
+  120 blocks, p = 7.5·10⁻³⁷; its swapout below F's in 101, with no loss and 19 ties, p = 3.9·10⁻³¹.
+- **H4, not rejected.** K\*cf against S\*: warn seconds lower in 9 blocks, higher in none (111
+  ties), p = 0.00195; swapout lower in 5 and higher in 1 (114 ties), p = 0.109. The chain stops.
+- **H5, exploratory.** Each N's six tests at 0.05 / 6:
+  - N = 1 passes none. S1/K60 time 1.0577 (lower bound 1.0303, p = 0.048) at 0 MiB, 1.0233 (0.9918,
+    p = 0.64) at 1536, 1.0572 (1.0213, p = 0.106) at 3072; neither arm had a warn second in any
+    block (every pair tied, p = 1).
+  - N = 2 passes: warn lower than S2's in 24 blocks of 24 untied at 3072 MiB (p = 6.0·10⁻⁸) and 9
+    of 9 at 1536 (p = 0.00195); time 1.1156 (1.0625, p = 0.0044) at 3072.
+  - N = 3 passes all six (time 1.132, 1.3097, 1.489; every p ≤ 0.00025).
+- **H3, exploratory.** K\*cf/S\* 0.9784, upper bound 1.0040, BCa [0.9531, 1.0028], p = 0.0006
+  against 1.03. Per level: 1.007 (upper 1.0449, flagged) at 0 MiB, 0.970 (1.0308, flagged) at 1536,
+  0.959 (0.9916) at 3072.
+- **H2, exploratory.** Light K60/F 0.9985, upper bound 1.0123, BCa [0.9856, 1.0125], p = 0.0002
+  against 1.03. The bound is below 1.05 and not below 1.01.
+
+**Reported without a test.** Per arm and mix: the mean primary, the median makespan and warn
+seconds, the mean critical seconds and swapout with their BCa 90 % intervals (swapout in MiB,
+bytes / 2²⁰), and false failures with their exact 95 % interval:
+
+| Mix | Arm | Mean time to verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | Swapout (MiB) | False failures |
+|---|---|---|---|---|---|---|---|
+| heavy | F | 74.6 | 85.85 | 51.0 | 3.325 [2.4667, 4.6583] | 11969.1 [10528.9, 13420.2] | 14 / 600 [0.0128, 0.0388] |
+| heavy | S1 | 36.0 | 59.75 | 0.0 | 0 | 0 | 3 / 600 [0.001, 0.0145] |
+| heavy | S2 | 35.9 | 51.95 | 0.0 | 0.2083 [0.05, 0.575] | 718.7 [435.1, 1166.1] | 8 / 600 [0.0058, 0.0261] |
+| heavy | S3 | 45.6 | 55.9 | 6.0 | 0.5083 [0.275, 0.9083] | 2721.0 [1969.8, 3634.6] | 13 / 600 [0.0116, 0.0368] |
+| heavy | K60 | 34.3 | 55.7 | 0.0 | 0 | 0 | 0 / 600 [0, 0.0061] |
+| heavy | K67 | 34.3 | 57.8 | 0.0 | 0 | 1.2 [0.2, 4.9] | 0 / 600 [0, 0.0061] |
+| heavy | KH | 35.8 | 57.3 | 0.0 | 0 | 0.1 [0.0, 0.2] | 2 / 600 [0.0004, 0.012] |
+| light | K60 | 28.7 | 32.15 | 0.0 | 0 | 0 | 0 / 180 [0, 0.0203] |
+| light | F | 28.8 | 33.65 | 0.0 | 0 | 0 | 2 / 180 [0.0013, 0.0396] |
+
+The median swapout was 0 in every arm but heavy F (11994.3 MiB). Every false failure was the
+FastAPI suite's: F 14 of 120 [0.0653, 0.188], S3 13 [0.059, 0.1781], S2 8 [0.0292, 0.1271], S1 3
+[0.0052, 0.0713], KH 2 [0.002, 0.0589], light F 2 of 60 [0.0041, 0.1153]; every other gate failed
+in no set. The swapins, pageins and each gate's slowdown are in `summary.json`.
+
+Ratios (geometric mean, one-sided 95 % upper bound, BCa 90 %), heavy unless noted:
+
+| Ratio | GMR | Upper | BCa 90 % |
+|---|---|---|---|
+| Makespan K60/F, heavy | 0.6725 | 0.6959 | [0.6508, 0.6965] |
+| Makespan K60/F, light | 0.9616 | 0.9792 | [0.9459, 0.9800] |
+| Makespan K\*cf/S\* | 1.0278 | 1.0568 | [0.9995, 1.0552] |
+| K60/S\* | 0.9806 | 1.0078 | [0.9540, 1.0070] |
+| KH/K60 | 1.0356 | 1.0529 | [1.0189, 1.0528] |
+| K\*/S\* | 0.9740 | 0.9997 | [0.9487, 0.9982] |
+| K\*cf/Scf | 0.9784 | 1.0040 | [0.9531, 1.0028] |
+
+K\*cf/Scf equals H3's K\*cf/S\* because Scf chose, in every block, the arm S\* chose for its level.
+
+Each fixed semaphore's regret against S\*, mean time to verdict (GMR, BCa 90 %), 40 blocks per level:
+
+| Level | S1 | S2 | S3 | F |
+|---|---|---|---|---|
+| 0 MiB | 1.065 [1.0291, 1.1016] | 1 (S\*) | 1.1399 [1.0989, 1.1971] | 1.729 [1.6631, 1.801] |
+| 1536 MiB | 1.013 [0.9445, 1.0664] | 1 (S\*) | 1.2965 [1.2297, 1.3816] | 2.2017 [2.0866, 2.298] |
+| 3072 MiB | 1 (S\*) | 1.0553 [1.0134, 1.1179] | 1.4085 [1.3102, 1.5238] | 2.3946 [2.3051, 2.4908] |
+
+**Sensitivity** (6 valid blocks each). Spread arrivals, mean time to verdict: F 43.1 s, S1 30.8,
+S2 26.7, S3 34.5, K60 28.7; over K60, F 1.4532 [1.2004, 1.7144], S1 1.0719 [0.9895, 1.1683], S2
+0.9308 [0.8451, 1.0766], S3 1.1913 [1.0424, 1.4227]. Cold start: KC/K60 1.1574 [1.0763, 1.3374].
+
+**Order effects** (heavy; mean log primary over the block's geometric mean, BCa 90 %). By position,
+every interval holds 0 except position 4, −0.0449 [−0.0800, −0.0025], and position 6, 0.0682
+[0.0195, 0.1236]. By the arm before, after F −0.1412 [−0.1618, −0.1179] and after S1 0.0915
+[0.0368, 0.1522]; the others hold 0. A set after F is never F, the slowest arm, which pulls that row
+down by construction.
+
+**Covariates**, from the set records: medians at the sets' start, and the thermal samples during
+the sets that read state 1 ("fair"; none read higher; every set started at nominal).
+
+| Mix, level | Memory in use (MiB), F / S1 / S2 / S3 / K60 / K67 / KH | 1-minute load, same order | Thermal "fair", same order |
+|---|---|---|---|
+| heavy, 0 | 4477 / 4298.5 / 4407.5 / 4474.5 / 4335 / 4370.5 / 4335.5 | 5.90 / 7.05 / 6.52 / 6.31 / 6.94 / 6.79 / 6.59 | 243/515, 144/471, 122/400, 124/405, 139/441, 120/449, 124/460 |
+| heavy, 1536 | 5157 / 5182.5 / 5240 / 5219.5 / 5168.5 / 5284 / 5290.5 | 5.48 / 6.98 / 6.92 / 5.90 / 7.04 / 6.83 / 6.11 | 383/651, 164/478, 143/427, 194/467, 128/448, 128/448, 140/492 |
+| heavy, 3072 | 6003 / 5985.5 / 5958.5 / 5809 / 6094.5 / 6165.5 / 5995.5 | 6.11 / 5.81 / 5.92 / 5.57 / 6.03 / 5.83 / 5.66 | 494/752, 166/496, 192/463, 264/532, 144/465, 173/474, 169/482 |
+| light, K60 / F | 6872 / 6868.5 | 10.74 / 10.58 | 14/408, 12/420 |
+
+839 of the 840 heavy main sets and all 120 light ones are flagged `high_load`; none is flagged
+`hot_start`.
+
+**The ballast.** Its resident size, read before each set, was below 90 % of its level in 80 of the
+560 ballasted heavy sets (74 at 3072 MiB, 6 at 1536), in 38 blocks, never in a block's first set,
+and down to 7 MiB.
+
+### Deviations
+
+**A declared secondary analysis, not pre-registered.** While the heavy main sets ran, the owner
+posted on the pull request a secondary analysis of the same five hypotheses: Holm's step-down at
+family-wise α = 0.05 in place of the fixed chain, on the same records, statistics and oracles,
+each hypothesis entering with one p-value (H1 the largest of its three, H4 the larger of its two;
+H5, for each N, six times its smallest p capped at 1, then the largest over N; H3 and H2 their
+single p; H2 left out when the light pressure rule voids it). The primary analysis is unchanged
+and comes first. Its disclosure, quoted:
+
+> This was decided on 2026-10-23 after a descriptive look at the valid heavy main blocks 1-106
+> (per-arm means, ratios and win counts, computed outside `run6.py`, no test run), prompted by a
+> question during the run. That look showed H4's swap comparison unlikely to reach p < 0.05. The
+> light mix, the sensitivity runs and every final test had not been computed. Nothing else
+> changes: not n, the stopping, the oracles, the metrics, the records or the code.
+
+`evidence/holm6.py` reads `summary.json` only and writes `run6/holm.json` and `run6/holm.txt`.
+Secondary analysis, not pre-registered (declared deviation), over k = 5:
+
+| Rank | Hypothesis | p | Holm threshold | Holm decision | Primary chain |
+|---|---|---|---|---|---|
+| 1 | H1 | 3.9·10⁻³¹ | 0.01 | rejected | rejected |
+| 2 | H2 | 0.0002 | 0.0125 | rejected | exploratory |
+| 3 | H3 | 0.0006 | 0.0167 | rejected | exploratory |
+| 4 | H4 | 0.1094 | 0.025 | not rejected | not rejected |
+| 5 | H5 | 0.2879 | 0.05 | not rejected | exploratory |
+
+**Where the two differ.** The primary analysis rejects H1 only and leaves H5, H3 and H2
+exploratory. The secondary analysis also rejects H3 and H2. It agrees that H4 is not rejected,
+and it does not reject H5: N = 1's smallest p, 0.048, times six is 0.288. The H3 and H2 p-values
+are `summary.json`'s, rounded to four decimals; no Holm decision is near its threshold.
+
+### Figures
+
+- [`f1-timeline.svg`](overload/run6/f1-timeline.svg): the gates of the block whose ln K\*cf/S\* is
+  nearest the median.
+- [`f3-paired.svg`](overload/run6/f3-paired.svg): per block, ln K\*cf/S\* and ln K60/F.
+- [`f4-pareto-0.svg`](overload/run6/f4-pareto-0.svg),
+  [`f4-pareto-1536.svg`](overload/run6/f4-pareto-1536.svg),
+  [`f4-pareto-3072.svg`](overload/run6/f4-pareto-3072.svg): per level, each arm's mean time to
+  verdict against its warn seconds.
+- [`f5-regret.svg`](overload/run6/f5-regret.svg): each fixed arm's regret against S\* per level.
+- [`f6-ecdf.svg`](overload/run6/f6-ecdf.svg): time to verdict per agent, pooled over the heavy
+  blocks.
+- [`f7-light.svg`](overload/run6/f7-light.svg): light K60/F per block.
+
+### What it shows
+
+**The pre-registered verdict.** On this laptop and the memory-heavy mix, coreslot at its default
+share with needs it learned itself (K60) is free under pressure against running everything at
+once: its mean time to verdict is 0.47 of F's, and it had fewer warn seconds in every block and
+less swap in every block that differed (C1). It is not shown to be safer than the speed-optimal
+semaphore chosen in hindsight (C4): it had fewer warn seconds in 9 blocks and none more, but
+the two differed in swap in only 6 of 120 blocks (K\*cf lower in 5, higher in 1), p = 0.109. The chain stops there, so robustness (C5), the
+time margin against the best semaphore (C3) and the cost without pressure (C2) support no claim.
+
+**The secondary analysis** (not pre-registered, declared after a look at blocks 1-106, see
+Deviations) would also reject H3 and H2. Read with that label, inferences:
+
+- *Against the best semaphore, time.* K\*cf was within 3 % of S\* (H3's bound 1.004), but the
+  per-level bounds exceed 1.03 at 0 and 1536 MiB, so the margin is not shown at every level.
+- *Without pressure.* K60 matched F on the light mix (H2's ratio 0.9985, bound 1.0123): within
+  3 % and 5 %, not shown within 1 %.
+- *Robustness.* S1 is a fair alternative on this mix: no warn second in any heavy set, no swap,
+  and its time not shown more than 3 % above K60's at any level. S2 and S3 lose to K60 on warn
+  seconds or time at some level.
+
+Measured, outside the tests: K60 had no false failure in 780 runs of a counted gate, where every
+semaphore and F failed the FastAPI suite in 3 to 14 of 120 heavy sets; and coreslot's makespan
+was 0.67 of F's on the heavy mix but 1.03 of the best semaphore's (BCa [0.9995, 1.0552]), the
+stated cost.
+
+### Threats to validity
+
+- **Underpowered.** The pilot asked for 150 heavy blocks and 69 light ones; the run had 120 and 60.
+- **The oracle.** S\* is chosen in hindsight on the tested blocks, which favours the semaphore; at
+  this stand it kept pressure near zero, so H4 had few differing blocks to count.
+- **The deviation.** The secondary analysis was declared after a descriptive look at H4's swap
+  comparison; its H3 and H2 rejections are reported as secondary for that reason.
+- **The ballast.** In 80 of 560 ballasted sets the ballast's resident size read below 90 % of its
+  level before the set, so those sets ran with less background than their level names. Inference:
+  the sets before them pushed part of it out of memory (never in a block's first set; 22 of the 80
+  followed F).
+- **The background.** The owner's applications stayed open; 839 of 840 heavy and all light sets
+  started with a 1-minute load above 3, and the light mix ran under a median load of 10.6 against
+  the heavy mix's 6.3. Thermal state reached "fair" in up to 66 % of a cell's samples (heavy F at
+  3072 MiB) and never higher.
+- **Order.** Positions 4 and 6 and the set after S1 show order effects whose intervals exclude 0;
+  each arm's position is shuffled per block, so they add noise rather than favour an arm.
+- **Rounding.** `summary.json` rounds the t tests' p to four decimals; the Holm column uses those.
+- **One machine, two nights, one build:** the measured coreslot is the head of an open pull
+  request, not a release.
+
+### What it does not show
+
+Linux, or a machine with more memory. Other mixes, or more agents than four. That coreslot is
+safer than the best semaphore chosen in hindsight, or that any fixed N is worse than coreslot at
+some level, by the pre-registered analysis. A semaphore tuned without hindsight beyond the
+cross-fitted Scf.
+
+### Reproduce
+
+```sh
+python3 evidence/run6.py summary evidence/overload/run6   # summary.json and summary.txt from the records
+python3 evidence/run6.py figures evidence/overload/run6   # the figures
+python3 evidence/holm6.py evidence/overload/run6          # holm.json and holm.txt from summary.json
+```
+
+The records were taken with the commands of the pre-registration's "Reproduce", with the main
+heavy 1 120 and light 1 60. The measured binary was built at `ebac0a7` as stated under "Stand".
