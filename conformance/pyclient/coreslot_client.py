@@ -2385,8 +2385,12 @@ def _parse_run(args: list[str]) -> _RunOptions:
 
 def _needs_from(opts: _RunOptions) -> dict[str, tuple[int, int]]:
     if not opts.needs:  # §21: a command that cannot use n would leave every token but one idle
-        wide = "cpu" in placeholder_resources(opts.command, opts.subst)
-        return {"cpu": (1, DEFAULT_MAX if wide else 1)}
+        if "cpu" not in placeholder_resources(opts.command, opts.subst):
+            return {"cpu": (1, 1)}
+        try:  # §21: never more workers than CPUs; an unreadable count leaves DEFAULT_MAX
+            return {"cpu": (1, min(DEFAULT_MAX, machine_cpus()))}
+        except StateError:
+            return {"cpu": (1, DEFAULT_MAX)}
     raw: dict[str, tuple[int, int]] = {}
     for text in opts.needs:
         name, pair = parse_need_arg(text)

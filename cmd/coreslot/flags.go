@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -46,7 +47,8 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
                         is one size, mem=3G or mem=768M. A labelled run takes the cpu and mem
                         it leaves out from the label's entry in needs.toml, beside the
                         configuration; with neither --need nor cpu there, the default applies
-                        (default cpu=1..16 when COMMAND has a cpu placeholder, else cpu=1..1)
+                        (default cpu=1..16, at most the CPU count, when COMMAND has a cpu
+                        placeholder, else cpu=1..1)
   --label L             a name for the request, shown by status and kept in the run log, so
                         never a secret; it names the request's entry in needs.toml, without a
                         final @N or @- (default none)
@@ -184,17 +186,24 @@ func (o *runOptions) validRequest(need map[string]spec.Range, given bool) (spec.
 	return req, req.Validate()
 }
 
-// defaultNeed is the request of a run without --need: cpu=1..spec.DefaultMax when the command
-// takes a cpu placeholder (`{n}` or `{n:cpu}`, inside an argument too with --subst), and cpu=1..1
-// otherwise. A command that cannot learn n would leave every token beyond its first idle while
-// others wait for them; one that declares it uses n can put a range to work.
+// defaultNeed is the request of a run without --need: cpu=1..min(spec.DefaultMax, the machine's
+// CPU count) when the command takes a cpu placeholder (`{n}` or `{n:cpu}`, inside an argument too
+// with --subst), and cpu=1..1 otherwise. A command that cannot learn n would leave every token
+// beyond its first idle while others wait for them; one that declares it uses n can put a range to
+// work, but never more workers than the machine has CPUs, which a cpu budget above 100 % allows.
 func defaultNeed(argv []string, inside bool) map[string]spec.Range {
 	hi := 1
 	if slices.Contains(placeholderResources(argv, inside), "cpu") {
 		hi = spec.DefaultMax
+		if n, err := machineCPUs(); err == nil && n > 0 {
+			hi = min(hi, n)
+		}
 	}
 	return map[string]spec.Range{"cpu": {Min: 1, Max: hi}}
 }
+
+// machineCPUs is the machine's CPU count; tests replace it.
+var machineCPUs = config.MachineCPUs
 
 func usagef(format string, args ...any) error {
 	return &spec.UsageError{Msg: fmt.Sprintf(format, args...)}

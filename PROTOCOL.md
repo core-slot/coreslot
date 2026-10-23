@@ -429,7 +429,9 @@ A file that cannot be parsed is left as it is.
 
 > **Implementation note.** The Go CLI reads the entry of a run's `--label` for each resource its
 > `--need` leaves out, `cpu` and `mem`; `coreslot suggest --write` writes `cpu`, `mem` and
-> `evidence` from the run log (section 20) and keeps pinned entries and every other key.
+> `evidence` from the run log (section 20) and keeps pinned entries and every other key. Its `mem`
+> rests on the window's largest peak; when that run's cpu grant is above the `cpu` max it suggests,
+> the evidence names the grant.
 
 ## 6. Tokens and descriptor ownership
 
@@ -1263,12 +1265,15 @@ The examples use the `coreslot` CLI, which is not part of the protocol: `coreslo
 [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
 [--no-wait] [--strict] [--independent] [--light] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
 `N..N`, `RES=MIN..` means `MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage
-error, and every form keeps the bounds of section 7.3. With no `--need` the request is `cpu=1..16`
-when COMMAND carries a `cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside
-one with `--subst`; the escape `{{n}}` is not one), and `cpu=1..1` otherwise: a command that
-cannot learn its grant would leave every token beyond its first idle. `--need mem=SIZE` takes one
-size, a size string of section 5.2 above 0 and never a range, and asks for that many 128 MiB tokens
-rounded up as a fixed range, at most 256. A labelled run takes each of `cpu` and `mem` that its
+error, and every form keeps the bounds of section 7.3. With no `--need` the request is `cpu=1..1`
+unless COMMAND carries a `cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside
+one with `--subst`; the escape `{{n}}` is not one), and then `cpu=1..M`, where M is 16 or the
+machine's CPU count (section 5.2) if that is smaller; a CLI that cannot read the count uses 16
+here rather than failing the run. A command that cannot learn its grant would leave every token
+beyond its first idle, and one that can never starts more workers than the machine has CPUs,
+which a cpu size above 100 % would otherwise grant. `--need mem=SIZE` takes one size, a size
+string of section 5.2 above 0 and never a range, and asks for that many 128 MiB tokens rounded up
+as a fixed range, at most 256. A labelled run takes each of `cpu` and `mem` that its
 `--need` leaves out from the needs file's entry for its label (section 5.4), and only a run with no
 `--need` and no `cpu` from that entry gets the default `cpu` above. The effective request caps
 the max at the size (section 12.2), so `cpu=1..16` on a budget of 8 takes at most 8. A run log's
