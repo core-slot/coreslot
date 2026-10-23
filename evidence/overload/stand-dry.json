@@ -1,0 +1,20 @@
+{
+ "dry": true,
+ "coreslot": "~/bench.noindex/bin/coreslot",
+ "state_dir": "~/bench.noindex/state-dry",
+ "cpu": 10,
+ "window_s": 2,
+ "cooldown_s": 2,
+ "max_cooldown_s": 10,
+ "tune": {"S": [1], "K": [["140%", "60%"]], "reps": 1},
+ "agents": {
+  "A1": [{"gate": "dry-alloc", "label": "bench:dry-alloc", "cwd": "~/bench.noindex", "heavy": true,
+          "fail_pattern": "^FAILED ",
+          "argv": ["python3", "-c", "import time; b = b'x' * (300 << 20); time.sleep(2)"]}],
+  "A2": [{"gate": "dry-sleep", "label": "bench:dry-sleep", "cwd": "~/bench.noindex", "heavy": false,
+          "argv": ["sleep", "1"]},
+         {"gate": "dry-alloc", "label": "bench:dry-alloc", "cwd": "~/bench.noindex", "heavy": true,
+          "fail_pattern": "^FAILED ",
+          "argv": ["python3", "-c", "import time; b = b'x' * (300 << 20); time.sleep(2)"]}]
+ }
+}

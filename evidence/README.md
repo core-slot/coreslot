@@ -15,6 +15,10 @@ Index of the evidence scripts:
   host locks" below.
 - `acceptance.py`: three test gates and a CI job with and without coreslot, in "Product
   acceptance" below.
+- `overload.py` with `overload/`: four agents whose gates overload memory and CPU, free, behind a
+  semaphore and under coreslot, in "Acceptance run 3" below.
+- `run4.py` with `overload/run4.sh` and `overload/run4/`: the same stand with needs coreslot
+  learned itself, against no admission and a tuned semaphore, in "Acceptance run 4" below.
 
 ## Waiter benchmark (the release gate)
 
@@ -607,3 +611,427 @@ python3 evidence/acceptance.py run gates.json out 1 12 --order abba --cooldown 6
 trees of other projects. Write one for your own jobs, following the shape in the script's
 docstring, and give it a state directory of its own, so the run is a separate budget and its run
 log holds only these jobs.
+
+## Acceptance run 3: agents whose gates overload memory and CPU (`overload.py`)
+
+**Status: pre-registered.** This section was committed before the first measured block; the
+results are appended below it, whatever they are. The analysis is `overload.py summary`, which is
+not changed after the first block.
+
+**Question.** Several coding agents on one laptop start their verification gates within a few
+seconds of each other. Does a coreslot budget, with needs learned from each gate's measured use,
+keep the laptop out of memory pressure while returning verdicts sooner than running everything
+at once, and sooner than the do-it-yourself fix of a two-slot semaphore?
+
+### Stand
+
+Every workload is public and pinned; `evidence/overload/setup.sh` builds the stand under
+`~/bench.noindex` (excluded from Spotlight and Time Machine) and coreslot from this checkout.
+
+| Agent | Repository at its pin | Chain of gates |
+|---|---|---|
+| A1, A2 | microsoft/vscode 1.142.0 (`d956e8a`), `npm ci`, Electron 43.7.7 types | `npm run typecheck-client` (TypeScript 7.0.2) |
+| A3 | fastapi/fastapi 0.156.2 (`44cc742`), `uv sync --frozen --group tests --all-extras` | `ruff check fastapi tests`, then `pytest -n {n}` |
+| A4 | sqlalchemy/sqlalchemy rel_2_1_5 (`4fbf72c`), pytest 9.1.1, pytest-xdist 3.8.0 | `pytest -n {n} test/orm` (SQLite) |
+
+`evidence/overload/stand.json` holds the exact argv. Agents arrive at offsets drawn from
+U(0, 5 s), once per block, the same for the block's three sets: subagents are started together,
+as the reports behind this run describe (anthropics/claude-code#101193, jakebromberg/ship-dag#108).
+
+**Host.** MacBook Air `Mac16,12`, Apple M4, 10 cores (4 performance), 16 GiB, macOS 27.0.1
+(26A434), on AC, Low Power Mode off, no other heavy work started during the run; the owner's
+desktop applications stay open and are part of the machine as it is used. Node 24.10.0, npm
+11.6.0, uv 0.11.19, Python 3.13.0, Go 1.27.1.
+
+### Calibration: the learned needs
+
+`overload.py calibrate stand.json evidence/overload/run3 2` ran each gate alone twice without
+coreslot (`run3/calibration.jsonl`) and derived the needs by the rule in the script: memory
+ceil(1.2 × the peak of the gate's whole process tree, sampled every second, or of its largest
+process if higher); cpu ceil(1.2 × cores used), as a range from 2 for a gate that takes `{n}`.
+The budget is the 10 logical CPUs and the memory available before calibration, 9 GiB.
+
+| Gate | Wall (s) | Cores used | Peak tree (GiB) | Largest process (GiB) | Need |
+|---|---|---|---|---|---|
+| vscode-typecheck | 9.2, 9.2 | 5.04, 4.86 | 7.88, 7.49 | 7.86, 7.45 | cpu=7, mem=10 (clamped to 9) |
+| fastapi-ruff | 1.0, 1.0 | 0.03, 0.05 | 0.00, 0.00 | 0.02, 0.02 | cpu=1, mem=1 |
+| fastapi-tests | 31.7, 31.6 | 5.28, 5.55 | 2.69, 2.64 | 0.27, 0.27 | cpu=2..7, mem=4 |
+| sqlalchemy-orm-tests | 28.9, 31.1 | 8.44, 8.84 | 2.47, 2.44 | 0.28, 0.23 | cpu=2..10, mem=3 |
+
+Every gate passed both runs, so a failure of any gate in a set is a false failure. The pytest
+gates show why the needs come from the tree: coreslot's run log records `max_rss_kib`, the
+largest single process (0.27 GiB), which would under-declare these gates' memory about tenfold.
+
+### Arms, order and stopping
+
+- **F** — no admission: every gate starts when its agent reaches it; `{n}` is `auto`.
+- **S** — a counting semaphore of two slots around the heavy gates (the type checks and the test
+  suites); the lint runs free; `{n}` is `auto`.
+- **K** — every gate through `coreslot run` with its learned need; `{n}` is the cpu grant.
+
+Six blocks (1 to 6), each running F, S and K once in an order drawn from the seed `run3` and the
+block number. Before each set the runner waits 20 s and then until the thermal state is nominal
+and a single-core probe is within 5% of its first reading, at most 60 s. Each set records every
+gate's start, end and exit, and once a second the memory pressure level, swap, the swapouts
+counter and the load, with the thermal state every fifth second.
+
+A pilot block (block 0, seed `pilot`, `evidence/overload/pilot`) ran before this section was
+written, to check the runner; it is kept and never pooled with the measured blocks.
+
+### Hypotheses and the criterion, declared before the run
+
+1. **No critical memory pressure under coreslot:** K spends 0 s at the critical level
+   (`kern.memorystatus_vm_pressure_level` 4) in every one of the six sets.
+2. **Sooner verdicts than free running:** K's mean time to verdict (each agent's chain end minus
+   its arrival, averaged over the four agents) is below F's in 6 of 6 blocks (one-sided sign test
+   p = 0.016).
+3. **Sooner verdicts than the semaphore:** the same against S, in 6 of 6 blocks.
+4. **No false failure** in K.
+
+Run 3 passes when 1, 2 and 4 hold; 3 is reported pass or fail on its own. Reported beside them
+and not part of the criterion: makespan (expected to be longer under K, which runs one type check
+at a time), seconds at warn or worse, swapouts, and the hottest thermal state per arm.
+
+### Reproduce
+
+```sh
+evidence/overload/setup.sh
+python3 evidence/overload.py calibrate evidence/overload/stand.json out 2
+python3 evidence/overload.py run evidence/overload/stand.json out 1 6 --seed run3 \
+  --cooldown 20 --probe-tolerance 0.05 --max-cooldown 60
+python3 evidence/overload.py summary out
+```
+
+### Results (2026-10-20, blocks 1-6, coreslot `de142c7`)
+
+Run 3 **failed** its declared criterion: hypothesis 2 held in 5 of 6 blocks, not 6. Hypotheses 1
+and 4 held; hypothesis 3 failed. `overload.py summary evidence/overload/run3` printed:
+
+```text
+blocks: [1, 2, 3, 4, 5, 6]
+medians over blocks; critical(s) and thermal are the maximum over blocks
+arm  mean-verdict(s)  makespan(s)  warn+(s)  critical(s)  swapouts  thermal  false-failures
+F             62.35        78.35      15.5            0   49130.0        1               2
+S             43.25         63.6       0.0            0       0.0        1               1
+K    43.150000000000006        84.25       0.0            0       0.0        1               0
+K/F mean_verdict_s: per block [0.509, 0.685, 0.598, 0.682, 0.765, 1.037]; K better in 5 of 6; one-sided sign test p = 0.1094
+K/F makespan_s: per block [0.801, 1.07, 1.048, 0.851, 1.167, 1.162]; K better in 2 of 6; one-sided sign test p = 0.8906
+K/S mean_verdict_s: per block [0.847, 0.94, 0.722, 0.995, 1.226, 1.483]; K better in 4 of 6; one-sided sign test p = 0.3438
+K/S makespan_s: per block [1.234, 1.304, 1.101, 1.103, 1.331, 1.478]; K better in 0 of 6; one-sided sign test p = 1.0000
+```
+
+Per block (seconds; swapouts in 16 KiB pages):
+
+| Block | Order | F: verdict / makespan | S: verdict / makespan | K: verdict / makespan | Warn+ s (F, S, K) | Swapouts (F, S, K) | Failed |
+|---|---|---|---|---|---|---|---|
+| 1 | FSK | 85.9 / 100.1 | 51.6 / 65.0 | 43.7 / 80.2 | 44, 0, 0 | 323692, 0, 0 | F: fastapi-tests |
+| 2 | FKS | 59.0 / 75.8 | 43.0 / 62.2 | 40.4 / 81.1 | 14, 0, 0 | 61112, 0, 0 | none |
+| 3 | FSK | 60.9 / 83.4 | 50.4 / 79.4 | 36.4 / 87.4 | 14, 9, 0 | 37148, 0, 0 | S: fastapi-tests |
+| 4 | SFK | 62.5 / 78.1 | 42.8 / 60.3 | 42.6 / 66.5 | 17, 0, 0 | 0, 0, 0 | F: fastapi-tests |
+| 5 | SFK | 63.1 / 78.6 | 39.4 / 68.9 | 48.3 / 91.7 | 20, 0, 0 | 111112, 0, 0 | none |
+| 6 | FKS | 62.2 / 76.7 | 43.5 / 60.3 | 64.5 / 89.1 | 9, 0, 0 | 0, 0, 0 | none |
+
+**What it shows.**
+
+- Against running everything at once, coreslot removed the memory pressure and the false
+  failures: F reached the warn level in every block (9 to 44 s) and swapped in four, and its
+  FastAPI suite failed in two blocks although it passed both calibration runs; K never left the
+  normal level, never swapped and never failed. Its mean time to verdict was 32% lower by the
+  median per-block ratio (0.6835), lower in 5 of 6 blocks, which is not the significance the run
+  declared.
+- Against the two-slot semaphore, coreslot was not better. The medians of the mean time to
+  verdict tie (43.15 s against 43.25 s, K lower in 4 of 6 blocks) and the semaphore's makespan
+  was shorter in every block (coreslot's makespan over the semaphore's: median per-block ratio
+  1.269). The semaphore let memory reach
+  warn once (block 3, 9 s) and its FastAPI suite failed in that block.
+- No arm reached the critical level, so hypothesis 1 holds without separating the arms; the warn
+  level and the swapouts separate them.
+
+**Why coreslot lost time, read from the timelines in `run3/results.jsonl`.** In block 3 the
+one-second lint waited 39 s: SQLAlchemy's suite, granted all 10 cpu tokens by its learned range
+`2..10`, held the head of the line. In block 6 both type checks waited for memory behind the test
+suites: each needs 10 GiB, clamped to the whole 9 GiB budget, so it waits until every other
+holder is gone. Three rules of this run made the budget conservative: the elastic maximum learned
+from a gate run alone on all cores; a memory budget from the memory available before calibration,
+while the free arm ran this mix with up to about 20 GiB of demand and reached only warn; and a
+strict FIFO with no room for a small request beside a large holder.
+
+**Threats to validity.**
+
+- Six blocks; the arm order drawn from the seed never put K first, so K always started after
+  another arm had heated the fanless machine (every arm reached thermal state 1, fair).
+- The runner kept only the stderr of a failed gate, and pytest reports to stdout, so the failing
+  FastAPI tests are not named; that they passed both calibration runs is all that makes them
+  false failures.
+- One machine, one mix, the owner's desktop applications open throughout.
+
+**What it does not show.** Any other machine or mix, Linux, a budget tuned past the calibration
+rule, or arrivals spread wider than 5 s. The exploratory runs that led to this design are not
+pooled with it.
+
+## Acceptance run 4: needs coreslot learned itself, against a tuned semaphore (`run4.py`)
+
+**Status: pre-registered.** This section was committed before the first tuning set; the tuning
+result is committed before the first verdict block, and the results are appended below, whatever
+they are. The analysis is `run4.py summary`, which is not changed after this commit.
+
+**Question.** On one 16 GiB laptop whose agents' gates overload memory and CPU, does coreslot with
+needs it learned itself beat running everything at once, and come close to a semaphore whose slot
+count was tuned for this mix?
+
+### Stand
+
+Run 3's stand, unchanged: microsoft/vscode 1.142.0 (`d956e8a`, `typecheck-client`, two agents),
+fastapi/fastapi 0.156.2 (`44cc742`, ruff, then pytest), sqlalchemy/sqlalchemy rel_2_1_5
+(`4fbf72c`, pytest `test/orm`), built by `evidence/overload/setup.sh` on the same host. coreslot is
+built at `9ca499c`, the head of an open pull request (memory admission, the run log's memory peak,
+`stats` and `suggest`), not a release. `evidence/overload/stand4.json` holds the exact argv: run
+3's, with `-rfE` added to the pytest gates so that failing tests are named, a label
+`bench:<gate>` per gate, and a pattern that picks a gate's failure lines from its output.
+
+### Arms
+
+- **F** — no admission: every gate starts when its agent reaches it; `{n}` is `auto`.
+- **S** — a counting semaphore of N slots around the heavy gates (the type checks and the test
+  suites); the lint runs free; `{n}` is `auto`; N tuned.
+- **K** — every gate as `coreslot run --label bench:<gate> -- <argv>`, with no `--need`: the needs
+  file supplies it. The needs file is the one `coreslot suggest --write` produced in the learning
+  phase; the cpu and mem shares of the budget are tuned.
+
+### Learning
+
+`run4.py learn` starts from an empty state directory of its own, with `cpu = "140%"` and
+`mem = "60%"`. Every gate runs alone under coreslot (round 1), `coreslot suggest --write` writes
+the needs file, every gate runs alone again on its learned needs (round 2), and `suggest --write`
+runs again. Then every gate runs alone once without coreslot, in its F form: that run is the gate's
+baseline for false failures. The needs file is copied to `run4/needs.toml` and frozen; before each
+K set it is copied into the state directory, and its hash is checked after the set.
+
+### Tuning, on sets not used for the verdict
+
+Six configurations, three sets each, with arrival offsets drawn from the seed
+`run4-tune-<configuration>-<repetition>`: S with N = 2 and N = 3 (N = 4 is F, since the stand has
+four heavy gates), and K with cpu `"140%"` and `"200%"`, each at mem `"60%"` and `"80%"`.
+
+- **S_best** is the N with the lower median of the mean time to verdict; a tie goes to the smaller
+  N.
+- **K_best** is the configuration with the lowest median of the mean time to verdict among those
+  with zero seconds of critical memory pressure and zero false failures over their three sets. When
+  none qualifies, it is the one with the fewest critical seconds, then the fewest false failures,
+  then the lowest median. Ties go to the lower mem share, then the lower cpu share.
+
+The tuning result, `run4/tuning.json`, is committed before the first verdict block.
+
+### Verdict design
+
+Twelve valid blocks, each of three sets: F, S_best and K_best. Block b runs the arms in the order
+`perms[(b - 1) mod 6]` of the fixed list FSK, SKF, KFS, FKS, KSF, SFK, so each arm runs first in
+four blocks and in each position four times. Agents arrive at offsets drawn from U(0, 5 s) with the
+seed `run4-<b>`, the same for the block's three sets. Before each set the runner waits 20 s and then
+until the thermal state is nominal and a single-core probe is within 10% of the reading taken at the
+start of the phase, at most 120 s, and records whether the Mac is on AC power and the 1-minute load.
+
+A set is invalid only for a runner error, battery power, or a gap of more than 10 s between its
+once-a-second samples (the Mac slept). A block with an invalid set is re-run at the end under the
+next block number, with the same order and offsets (`run4.py verdict 13 13 --as-block B`); at most
+four re-runs. The sample size is fixed: `run4.py summary` refuses to analyse before the twelfth
+valid block. If the cap is spent with fewer than twelve valid blocks, the run is reported as
+incomplete with its descriptive numbers and **no test and no decision**. A set that started after
+the cooldown gave up is flagged `hot_start`, and one that started with a 1-minute load above 3
+`high_load`; flagged sets stay valid and are reported.
+
+### Hypotheses, declared before the run
+
+One-sided, per block, with an exact sign test over the twelve valid blocks at α = 0.05, so a
+hypothesis passes with at least 10 wins of 12. A tie counts as not a win, and the count stays 12.
+
+- **H1.** K's mean time to verdict (each agent's chain end minus its arrival, averaged over the four
+  agents) is below F's.
+- **H2.** K's seconds at warn-or-worse memory pressure (`kern.memorystatus_vm_pressure_level` ≥ 2)
+  are below F's.
+- **H3.** K's mean time to verdict is below 1.10 × S's.
+
+**False failures.** A failure of a gate that passed its alone baseline. A gate that failed its
+baseline stays in the mix and is excluded from the count.
+
+**Reported without a test.** The makespan ratios, the seconds at critical pressure, swapouts, false
+failures, the names of failing tests, and K's `waited_free_s`. Only coreslot measures waiting while
+memory was free: it counts every second a run waited while the kernel's headroom covered its memory
+need, whatever the wait was for, so it is an upper bound on the waiting that memory admission
+caused.
+
+### Decision
+
+- H1 and H3 pass: develop the one-machine scenario further and publish it as the headline.
+- H1 passes and H3 fails: coreslot beats no admission but not a tuned semaphore; the next step is
+  chosen from `waited_free_s`.
+- H1 fails: it is reported, and the project's memory scenario is not shown.
+- **Live-memory admission is worth designing** if K's `waited_free_s` is at least 5 s and at least
+  10% of K's summed waiting in 6 or more of the 12 blocks.
+
+### Disclosure
+
+The results name the machine, the OS and every version, and give the background at each set's
+start as totals only: memory in use (active, wired and compressed pages), the 1-minute load and the
+process count. No process names are recorded: the owner's applications stay private. Every set is
+reported, invalid and flagged ones included; the raw records (`run4/learn.jsonl`, `tune.jsonl`,
+`results.jsonl` with each K set's run-log lines) are committed with the results, together with the
+threats to validity.
+
+### Reproduce
+
+```sh
+evidence/overload/setup.sh
+evidence/overload/run4.sh            # learn, tune, verdict 1 12, summary, figures
+evidence/overload/run4.sh verdict 13 13 --as-block 5   # a re-run of an invalid block 5
+evidence/overload/run4.sh summary
+```
+
+`evidence/overload/run4.sh --dry` runs the same phases on `stand-dry.json`, two agents whose gates
+allocate 300 MiB for 2 s or sleep 1 s, with one configuration per arm and one block, to check the
+runner in a few minutes; its output is not evidence.
+
+### Results (2026-10-21, blocks 1-12, coreslot `9ca499c`)
+
+Run 4 is **complete**: twelve valid blocks, no invalid set, no re-run. H1 and H2 passed, H3
+failed. By the pre-registered decision: **coreslot beats no admission but not a tuned semaphore;
+the next step is chosen from `waited_free_s`**, and by its rule **live-memory admission is worth
+designing**. Every number below is quoted from, or computed from, the committed records in
+`run4/` (`summary.json`, printed as `summary.txt`; `results.jsonl`, `tune.jsonl`, `tuning.json`,
+`learn.jsonl`, `needs.toml`), except the machine facts, read on the host with `sw_vers` and
+`sysctl` when the results were written.
+
+**Machine.** MacBook Air (Mac16,12), Apple M4, 10 cores, 16 GiB, macOS 27.0.1 (26A434), on AC
+power throughout; coreslot built with Go 1.27.1, `CGO_ENABLED=0`; the runner on Python 3.13.0.
+The owner's applications stayed open: at the start of the 36 verdict sets, memory in use (active +
+wired + compressed) was 5379-7223 MiB (median 6008), the 1-minute load 3.15-16.84 (median 7.18) and
+the process count 449-530 (median 483.5). The stand was not rebuilt since run 3 (its three
+repository pins were checked before learning), so its tool versions are run 3's, listed above.
+
+**Timeline.** The pre-registration was pushed at 08:53:59 UTC; learning started at 08:55:22,
+tuning at 08:59:10; the verdict parameters were pushed at 09:33:02 and the first verdict set
+started at 09:33:48, the last at 10:56:23.
+
+**Learning.** Every gate passed alone in both rounds under coreslot and in its F-form baseline, so
+every gate counts for false failures. `coreslot suggest --write` wrote (`run4/needs.toml`):
+
+| Gate | cpu | mem | Evidence line it wrote |
+|---|---|---|---|
+| `vscode-typecheck` | `5` | `8576M` | 2 runs 2026-10-21: max 4.8 cores, 2 of 2 saturated, peak 8.3 GiB (footprint) at 11s |
+| `fastapi-ruff` | `1` | `128M` | 2 runs 2026-10-21: max 0.6 cores, 0 of 2 saturated, peak 22 MiB (max_rss) |
+| `fastapi-tests` | `1..6` | `3456M` | 2 runs 2026-10-21: max 5.5 cores, 0 of 2 saturated, peak 3.3 GiB (footprint) at 11s |
+| `sqlalchemy-orm-tests` | `1..10` | `3200M` | 2 runs 2026-10-21: max 9.0 cores, 1 of 2 saturated, peak 3 GiB (footprint) at 27s |
+
+With the 60 % budget (76 tokens of 128 MiB: 9728 of 16384 MiB), the type check's 8576 MiB leaves 1152 MiB beside it, so while a
+type check runs only the lint fits next to it.
+
+**Tuning** (`run4/tuning.json`, 18 sets, all valid): S with N = 2 had a median mean time to verdict
+of 44.9 s against 64.6 s for N = 3, so S_best is N = 2. The four K configurations had medians of
+34.5 s (cpu `140%`, mem `60%`), 37.0 s (`140%`, `80%`), 37.9 s (`200%`, `60%`) and 34.7 s
+(`200%`, `80%`); none had a critical second or a false failure, so K_best is cpu `140%`, mem
+`60%`, the defaults. S with N = 3 had one false failure. Every tuning set, as `tune.jsonl`
+records it (warn+ counts one-second samples; the background is taken at the set's start; every
+tuning set is flagged `high_load`, all are valid):
+
+| Configuration | Set | Mean verdict (s) | Makespan (s) | Warn+ (samples) | Critical | Failed | Flags | Memory in use (MiB) | load1 | Processes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| S2 | 1 | 44.9 | 68.1 | 31 | 0 | none | high_load | 9042 | 4.79 | 518 |
+| S3 | 1 | 47.6 | 59.1 | 26 | 0 | none | high_load | 8698 | 10.44 | 494 |
+| K-140%-60% | 1 | 37.0 | 64.7 | 0 | 0 | none | high_load | 7414 | 16.03 | 472 |
+| K-140%-80% | 1 | 37.0 | 61.7 | 4 | 0 | none | high_load | 7244 | 10.96 | 471 |
+| K-200%-60% | 1 | 45.0 | 73.0 | 0 | 0 | none | high_load | 7275 | 9.64 | 467 |
+| K-200%-80% | 1 | 39.9 | 64.1 | 3 | 0 | none | high_load | 7290 | 5.93 | 470 |
+| S2 | 2 | 55.7 | 77.4 | 34 | 0 | none | high_load | 7395 | 9.37 | 470 |
+| S3 | 2 | 67.7 | 85.3 | 45 | 0 | none | high_load | 6102 | 9.38 | 445 |
+| K-140%-60% | 2 | 30.8 | 57.2 | 0 | 0 | none | high_load | 6672 | 7.36 | 468 |
+| K-140%-80% | 2 | 37.6 | 63.5 | 0 | 0 | none | high_load | 6243 | 7.13 | 474 |
+| K-200%-60% | 2 | 37.9 | 64.8 | 0 | 0 | none | high_load | 6167 | 5.01 | 469 |
+| K-200%-80% | 2 | 31.8 | 48.3 | 0 | 0 | none | high_load | 6860 | 3.98 | 511 |
+| S2 | 3 | 35.7 | 55.9 | 0 | 0 | none | high_load | 5358 | 6.14 | 511 |
+| S3 | 3 | 64.6 | 85.2 | 43 | 0 | fastapi-tests | high_load | 6537 | 7.2 | 515 |
+| K-140%-60% | 3 | 34.5 | 65.2 | 0 | 0 | none | high_load | 6097 | 6.19 | 489 |
+| K-140%-80% | 3 | 32.8 | 58.2 | 0 | 0 | none | high_load | 6767 | 4.2 | 511 |
+| K-200%-60% | 3 | 34.0 | 66.0 | 0 | 0 | none | high_load | 6307 | 5.07 | 505 |
+| K-200%-80% | 3 | 34.7 | 59.8 | 0 | 0 | none | high_load | 5816 | 4.15 | 507 |
+
+At the start of the tuning sets memory in use was 5358-9042 MiB (median 6719.5), the 1-minute load
+3.98-16.03 (median 6.66) and the process count 445-518 (median 481.5).
+
+**Medians over the twelve valid blocks:**
+
+| Arm | Mean time to verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | Swapout (MiB) | False failures (median, total) | `waited_free_s` |
+|---|---|---|---|---|---|---|---|
+| F | 84.45 | 99.1 | 58.0 | 0.0 | 8224.0 | 0, 3 | - |
+| S (N = 2) | 34.45 | 52.85 | 0.0 | 0.0 | 0.0 | 0, 0 | - |
+| K | 35.3 | 63.1 | 0.0 | 0.0 | 0.0 | 0, 0 | 36.45 |
+
+**The tests** (one-sided exact sign test over 12 blocks, α = 0.05; a tie is not a win):
+
+- **H1, passed:** K's mean time to verdict was below F's in 12 of 12 blocks, p = 0.0002. The
+  per-block ratio K/F ran from 0.371 to 0.555 (median 0.4305).
+- **H2, passed:** K's seconds at warn-or-worse pressure were below F's in 12 of 12 blocks,
+  p = 0.0002: K had no such sample, F a median of 58. The runner counts one-second samples, which
+  lay about 1.1 s apart in F's sets, so the time itself was about a tenth longer.
+- **H3, failed:** K's mean time to verdict was below 1.10 × S's in 7 of 12 blocks, p = 0.3872.
+  The per-block ratio K/S ran from 0.81 to 1.314 (median 1.0065).
+
+**Reported without a test.**
+
+- *Makespan:* K/F per block 0.505-0.826 (median 0.6365); K/S 0.887-1.313 (median 1.1415), so K
+  finished the whole mix later than the two-slot semaphore in 9 of 12 blocks.
+- *Critical pressure:* 0 s in every set of every arm. *Swapouts:* F a median of 8224 MiB per set;
+  S 0 except 24.2, 38.0 and 23.2 MiB in blocks 1, 9 and 12; K 0 except 4.2 MiB in block 12.
+- *False failures:* 3, all in F and all in FastAPI's suite, agent A3, in blocks 3, 7 and 11; none
+  in S or K. The failing tests: in blocks 3 and 11,
+  `ERROR tests/test_tutorial/test_static_files/test_tutorial001.py::test_openapi_schema`; in block
+  7, `FAILED tests/test_tutorial/test_static_files/test_tutorial001.py::test_static_files` and the
+  same `ERROR` line.
+- *K's `waited_free_s`* per block, beside K's summed waiting: 37.6 of 90.5 s, 49.4 of 76.5, 11.5 of
+  49.6, 3.8 of 64.6, 10.8 of 69.6, 46.3 of 102.4, 35.3 of 99.4, 43.4 of 75.5, 5.8 of 64.6, 34.3 of
+  91.4, 40.6 of 94.4, 51.4 of 78.4 (blocks 1-12; median 36.45 s). It reached at least 5 s and at
+  least 10 % of K's waiting in 10 of 12 blocks, the pre-registered rule for designing live-memory
+  admission. It is an upper bound: it counts every second a run waited while the kernel's headroom
+  covered its memory need, whatever the wait was for, including waits for cpu tokens.
+- *Flags:* every one of the 36 verdict sets is flagged `high_load` (the 1-minute load at its start
+  was above 3); the F set of block 2 is also
+  flagged `hot_start` (the cooldown gave up). Flagged sets stay valid, as pre-registered. The
+  thermal state read nominal at every set's start; during the sets it reached state 1 ("fair") in
+  all 36 verdict sets, in 145 of F's 217 thermal samples, 56 of S's 129 and 53 of K's 146, and never
+  went above it.
+
+Figures: [`run4/ratios.svg`](overload/run4/ratios.svg) (per-block K/F and K/S ratios) and
+[`run4/timeline.svg`](overload/run4/timeline.svg) (block 1, the lower of the two blocks around
+the median K/F ratio: 0.429, against block 11's 0.432; each arm's gates per agent over time, with
+the memory-pressure level).
+
+**What it shows.** On this laptop and this mix, coreslot with needs it learned from two alone runs
+per gate had no sample at warn-or-worse pressure where running everything at once had a median of
+58, swapped 4.2 MiB in one set where it swapped a median of 8224 MiB, had no false failure where it
+had 3 (a count, not tested), and cut the mean time to verdict to less than half (median ratio
+0.4305). It did not
+come within 10 % of a semaphore whose slot count was tuned for this mix: their mean times to
+verdict were close (median ratio 1.0065), but K's makespan was longer. The type check's
+learned need takes 8576 of the 9728 MiB budget, so a test suite cannot start beside it, and K's
+runs spent a median of 36.45 s per block waiting while the kernel reported their memory need free
+(an upper bound); by the pre-registered rule live-memory admission is worth designing, and the
+next step is chosen from `waited_free_s`. Of the four static shares tuned, none had a lower median
+than the default, on three sets each.
+
+**Threats to validity.** One machine, one mix and one day. A fanless laptop throttles: the cooldown
+and the probe bound it, and the thermal state read nominal at every set's start, but it reached
+"fair" during all 36 verdict sets, in a larger share of F's samples (145 of 217) than of S's (56 of
+129) or K's (53 of 146), which weighs against F; and sets ran under a 1-minute load above 3. The owner's applications were open (totals above). The learned needs come from alone runs, two
+per gate. Three tuning sets per configuration choose the configuration but prove nothing about it.
+The 1 s sampler can miss a short peak, bounded below by the largest single process's `max_rss`.
+`waited_free_s` is an upper bound, as stated. S's slot count was tuned on this exact mix, which a
+user of a semaphore would have to do by hand; K's needs were learned without tuning, and its shares
+were tuned among four configurations whose medians lay within 3.4 s.
+
+**What it does not show.** Several machines, Linux, other mixes, or any mix where a tuned slot
+count is not known in advance.
+
+**Reproduce.** `evidence/overload/setup.sh`, then `evidence/overload/run4.sh` (learn, tune,
+verdict 1 12, summary, figures); `run4.sh summary` recomputes the summary from the committed
+records. `setup.sh` builds coreslot without `CGO_ENABLED=0`; the measured binary was built with
+`CGO_ENABLED=0 go build -o ~/bench.noindex/bin/coreslot ./cmd/coreslot` from this branch, whose Go
+code is that of `9ca499c`.

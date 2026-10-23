@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "skipped_lines": 0,
+  "labels": [
+    {
+      "label": "bench:fastapi-ruff",
+      "runs": 2,
+      "window_runs": 2,
+      "first_ns": 1792572933984993000,
+      "last_ns": 1792572996988116000,
+      "cores_used": [
+        0.6326211864579322,
+        0.6442771208721626
+      ],
+      "saturated": 0,
+      "mem_peak_kib": 21584,
+      "mem_peak_source": "max_rss",
+      "peak_after_s": null,
+      "waited_s": 0.006180125,
+      "waited_free_s": 0,
+      "suggestion": {
+        "cpu": "1",
+        "mem": "128M",
+        "evidence": "2 runs 2026-10-21: max 0.6 cores, 0 of 2 saturated, peak 22 MiB (max_rss)"
+      },
+      "current": {
+        "cpu": "1",
+        "mem": "128M",
+        "cpu_per_worker": false,
+        "pinned": false
+      }
+    },
+    {
+      "label": "bench:fastapi-tests",
+      "runs": 2,
+      "window_runs": 2,
+      "first_ns": 1792572934050976000,
+      "last_ns": 1792572997042333000,
+      "cores_used": [
+        5.482081917224032,
+        2.886375890066383
+      ],
+      "saturated": 0,
+      "mem_peak_kib": 3442912,
+      "mem_peak_source": "footprint",
+      "peak_after_s": 11.006643625,
+      "waited_s": 0.0062435830000000005,
+      "waited_free_s": 0,
+      "suggestion": {
+        "cpu": "1..6",
+        "mem": "3456M",
+        "evidence": "2 runs 2026-10-21: max 5.5 cores, 0 of 2 saturated, peak 3.3 GiB (footprint) at 11s"
+      },
+      "current": {
+        "cpu": "1..6",
+        "mem": "3456M",
+        "cpu_per_worker": false,
+        "pinned": false
+      }
+    },
+    {
+      "label": "bench:sqlalchemy-orm-tests",
+      "runs": 2,
+      "window_runs": 2,
+      "first_ns": 1792572957246693000,
+      "last_ns": 1792573017770916000,
+      "cores_used": [
+        9.017991397183124,
+        8.946351263470737
+      ],
+      "saturated": 1,
+      "mem_peak_kib": 3191745,
+      "mem_peak_source": "footprint",
+      "peak_after_s": 27.001675042,
+      "waited_s": 0.00675125,
+      "waited_free_s": 0,
+      "suggestion": {
+        "cpu": "1..10",
+        "mem": "3200M",
+        "evidence": "2 runs 2026-10-21: max 9.0 cores, 1 of 2 saturated, peak 3 GiB (footprint) at 27s"
+      },
+      "current": {
+        "cpu": "1..10",
+        "mem": "3200M",
+        "cpu_per_worker": false,
+        "pinned": false
+      }
+    },
+    {
+      "label": "bench:vscode-typecheck",
+      "runs": 2,
+      "window_runs": 2,
+      "first_ns": 1792572922611305000,
+      "last_ns": 1792572985969085000,
+      "cores_used": [
+        4.472471457460278,
+        4.816439634551689
+      ],
+      "saturated": 2,
+      "mem_peak_kib": 8738120,
+      "mem_peak_source": "footprint",
+      "peak_after_s": 11.001556792,
+      "waited_s": 0.007627791,
+      "waited_free_s": 0,
+      "suggestion": {
+        "cpu": "5",
+        "mem": "8576M",
+        "evidence": "2 runs 2026-10-21: max 4.8 cores, 2 of 2 saturated, peak 8.3 GiB (footprint) at 11s"
+      },
+      "current": {
+        "cpu": "5",
+        "mem": "8576M",
+        "cpu_per_worker": false,
+        "pinned": false
+      }
+    }
+  ]
+}

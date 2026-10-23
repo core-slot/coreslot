@@ -1,0 +1,163 @@
+{
+ "blocks": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12
+ ],
+ "reruns": [],
+ "per_arm": {
+  "F": {
+   "mean_verdict_s": 84.45,
+   "makespan_s": 99.1,
+   "warn_s": 58.0,
+   "critical_s": 0.0,
+   "swapout_mib": 8224.0,
+   "false_failures": 0.0,
+   "false_failures_total": 3
+  },
+  "S": {
+   "mean_verdict_s": 34.45,
+   "makespan_s": 52.85,
+   "warn_s": 0.0,
+   "critical_s": 0.0,
+   "swapout_mib": 0.0,
+   "false_failures": 0.0,
+   "false_failures_total": 0
+  },
+  "K": {
+   "mean_verdict_s": 35.3,
+   "makespan_s": 63.1,
+   "warn_s": 0.0,
+   "critical_s": 0.0,
+   "swapout_mib": 0.0,
+   "false_failures": 0.0,
+   "false_failures_total": 0,
+   "waited_free_s": 36.45
+  }
+ },
+ "ratios": {
+  "K/F mean_verdict_s": [
+   0.429,
+   0.518,
+   0.394,
+   0.555,
+   0.376,
+   0.45,
+   0.488,
+   0.427,
+   0.453,
+   0.391,
+   0.432,
+   0.371
+  ],
+  "K/F makespan_s": [
+   0.638,
+   0.826,
+   0.549,
+   0.687,
+   0.505,
+   0.643,
+   0.648,
+   0.699,
+   0.579,
+   0.594,
+   0.635,
+   0.599
+  ],
+  "K/S mean_verdict_s": [
+   0.989,
+   1.003,
+   1.01,
+   1.166,
+   0.865,
+   1.264,
+   1.121,
+   0.966,
+   0.81,
+   1.305,
+   1.314,
+   0.823
+  ],
+  "K/S makespan_s": [
+   1.186,
+   1.277,
+   0.996,
+   1.027,
+   0.906,
+   1.262,
+   1.246,
+   1.097,
+   0.887,
+   1.313,
+   1.279,
+   1.09
+  ]
+ },
+ "tests": {
+  "H1": {
+   "wins": 12,
+   "n": 12,
+   "p": 0.0002,
+   "pass": true
+  },
+  "H2": {
+   "wins": 12,
+   "n": 12,
+   "p": 0.0002,
+   "pass": true
+  },
+  "H3": {
+   "wins": 7,
+   "n": 12,
+   "p": 0.3872,
+   "pass": false
+  }
+ },
+ "decision": [
+  "H1 passes, H3 fails: coreslot beats no admission but not a tuned semaphore; the next step is chosen from waited_free_s.",
+  "Live-memory admission is worth designing: waited_free_s >= 5 s and >= 10% of K's waiting in 10 of 12 blocks."
+ ],
+ "incomplete": null,
+ "tuning": {
+  "S": {
+   "N": 2
+  },
+  "K": {
+   "cpu": "140%",
+   "mem": "60%"
+  },
+  "medians": {
+   "S2": 44.9,
+   "S3": 64.6,
+   "K-140%-60%": 34.5,
+   "K-140%-80%": 37.0,
+   "K-200%-60%": 37.9,
+   "K-200%-80%": 34.7
+  },
+  "critical_s": {
+   "S2": 0,
+   "S3": 0,
+   "K-140%-60%": 0,
+   "K-140%-80%": 0,
+   "K-200%-60%": 0,
+   "K-200%-80%": 0
+  },
+  "false_failures": {
+   "S2": 0,
+   "S3": 1,
+   "K-140%-60%": 0,
+   "K-140%-80%": 0,
+   "K-200%-60%": 0,
+   "K-200%-80%": 0
+  }
+ }
+}

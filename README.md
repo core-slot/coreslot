@@ -325,10 +325,19 @@ On a real mix coreslot cost no measurable time, and it has not yet been shown to
 test suites and a lint job started together on a busy 14-core Mac, twelve times with coreslot and
 twelve without, alternating: the last job finished after a median of 539 s with it and 536 s without
 (ratio 1.007; the bound declared before the runs was 1.05), and no job failed. That is a tie, not a
-speed-up: on that mix the suites needed about 6 to 9 of the 14 cores, and a mix that the suites
-themselves overload is not measured yet. An earlier attempt, with one token per pytest worker,
-lost at 1.144, which is why a request asks for the cores a command keeps busy
-([choosing a range](#choosing-a-range)).
+speed-up: on that mix the suites needed about 6 to 9 of the 14 cores. An earlier attempt, with one
+token per pytest worker, lost at 1.144, which is why a request asks for the cores a command keeps
+busy ([choosing a range](#choosing-a-range)).
+
+On a mix that overloads memory and CPU, coreslot with needs it learned itself beat running
+everything at once, and did not meet its declared bound against a semaphore whose slot count was
+tuned for that mix. Four agents' type checks, lint and test suites on a 16 GiB, 10-core laptop, twelve
+counterbalanced blocks: coreslot cut the mean time to verdict to a median 0.4305 of running
+everything at once (12 of 12 blocks), with no memory pressure where running everything at once
+had a median of 58 one-second samples at warn pressure and swapped 8 GiB per set, and no false failure where it had 3; against
+the tuned two-slot semaphore the median ratio was 1.0065 and the declared bound of 1.10 held in only
+7 of 12 blocks
+([acceptance run 4](evidence/README.md#acceptance-run-4-needs-coreslot-learned-itself-against-a-tuned-semaphore-run4py)).
 
 [`evidence/README.md`](evidence/README.md) has the scripts, the setup and every run, of the
 [waiter benchmark](evidence/README.md#waiter-benchmark-the-release-gate) and of the

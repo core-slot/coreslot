@@ -1,0 +1,72 @@
+# Acceptance run 4: summary
+
+Tuning: S N = 2; K cpu = 140%, mem = 60%.
+
+Valid blocks used: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]; re-runs: [].
+
+Medians over the valid blocks (false failures also as a total):
+
+| Arm | Mean verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | Swapout (MiB) | False failures (median, total) | waited_free_s |
+|---|---|---|---|---|---|---|---|
+| F | 84.45 | 99.1 | 58.0 | 0.0 | 8224.0 | 0.0, 3 | - |
+| S | 34.45 | 52.85 | 0.0 | 0.0 | 0.0 | 0.0, 0 | - |
+| K | 35.3 | 63.1 | 0.0 | 0.0 | 0.0 | 0.0, 0 | 36.45 |
+
+Per-block ratios (valid blocks):
+
+- K/F mean_verdict_s: [0.429, 0.518, 0.394, 0.555, 0.376, 0.45, 0.488, 0.427, 0.453, 0.391, 0.432, 0.371]
+- K/F makespan_s: [0.638, 0.826, 0.549, 0.687, 0.505, 0.643, 0.648, 0.699, 0.579, 0.594, 0.635, 0.599]
+- K/S mean_verdict_s: [0.989, 1.003, 1.01, 1.166, 0.865, 1.264, 1.121, 0.966, 0.81, 1.305, 1.314, 0.823]
+- K/S makespan_s: [1.186, 1.277, 0.996, 1.027, 0.906, 1.262, 1.246, 1.097, 0.887, 1.313, 1.279, 1.09]
+
+Every verdict set:
+
+| Block | As block | Order | Arm | Mean verdict (s) | Makespan (s) | Warn+ (s) | Critical (s) | Failed | Flags | Valid |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 |  | FSK | F | 87.5 | 98.8 | 63 | 0 | none | high_load | yes |
+| 1 |  | FSK | S | 37.9 | 53.1 | 0 | 0 | none | high_load | yes |
+| 1 |  | FSK | K | 37.5 | 63.0 | 0 | 0 | none | high_load | yes |
+| 2 |  | SKF | S | 34.1 | 49.5 | 0 | 0 | none | high_load | yes |
+| 2 |  | SKF | K | 34.2 | 63.2 | 0 | 0 | none | high_load | yes |
+| 2 |  | SKF | F | 66.0 | 76.5 | 46 | 0 | none | hot_start, high_load | yes |
+| 3 |  | KFS | K | 30.9 | 49.4 | 0 | 0 | none | high_load | yes |
+| 3 |  | KFS | F | 78.5 | 90.0 | 58 | 0 | fastapi-tests | high_load | yes |
+| 3 |  | KFS | S | 30.6 | 49.6 | 0 | 0 | none | high_load | yes |
+| 4 |  | FKS | F | 60.7 | 72.3 | 37 | 0 | none | high_load | yes |
+| 4 |  | FKS | K | 33.7 | 49.7 | 0 | 0 | none | high_load | yes |
+| 4 |  | FKS | S | 28.9 | 48.4 | 0 | 0 | none | high_load | yes |
+| 5 |  | KSF | K | 36.0 | 53.2 | 0 | 0 | none | high_load | yes |
+| 5 |  | KSF | S | 41.6 | 58.7 | 10 | 0 | none | high_load | yes |
+| 5 |  | KSF | F | 95.7 | 105.3 | 65 | 0 | none | high_load | yes |
+| 6 |  | SFK | S | 32.2 | 52.6 | 0 | 0 | none | high_load | yes |
+| 6 |  | SFK | F | 90.5 | 103.3 | 62 | 0 | none | high_load | yes |
+| 6 |  | SFK | K | 40.7 | 66.4 | 0 | 0 | none | high_load | yes |
+| 7 |  | FSK | F | 81.4 | 99.4 | 55 | 0 | fastapi-tests | high_load | yes |
+| 7 |  | FSK | S | 35.4 | 51.7 | 0 | 0 | none | high_load | yes |
+| 7 |  | FSK | K | 39.7 | 64.4 | 0 | 0 | none | high_load | yes |
+| 8 |  | SKF | S | 34.8 | 56.9 | 0 | 0 | none | high_load | yes |
+| 8 |  | SKF | K | 33.6 | 62.4 | 0 | 0 | none | high_load | yes |
+| 8 |  | SKF | F | 78.7 | 89.3 | 51 | 0 | none | high_load | yes |
+| 9 |  | KFS | K | 34.6 | 50.3 | 0 | 0 | none | high_load | yes |
+| 9 |  | KFS | F | 76.3 | 86.8 | 49 | 0 | none | high_load | yes |
+| 9 |  | KFS | S | 42.7 | 56.7 | 5 | 0 | none | high_load | yes |
+| 10 |  | FKS | F | 101.7 | 120.9 | 68 | 0 | none | high_load | yes |
+| 10 |  | FKS | K | 39.8 | 71.8 | 0 | 0 | none | high_load | yes |
+| 10 |  | FKS | S | 30.5 | 54.7 | 0 | 0 | none | high_load | yes |
+| 11 |  | KSF | K | 38.5 | 66.9 | 0 | 0 | none | high_load | yes |
+| 11 |  | KSF | S | 29.3 | 52.3 | 0 | 0 | none | high_load | yes |
+| 11 |  | KSF | F | 89.2 | 105.4 | 60 | 0 | fastapi-tests | high_load | yes |
+| 12 |  | SFK | S | 41.9 | 60.3 | 0 | 0 | none | high_load | yes |
+| 12 |  | SFK | F | 93.1 | 109.7 | 58 | 0 | none | high_load | yes |
+| 12 |  | SFK | K | 34.5 | 65.7 | 0 | 0 | none | high_load | yes |
+
+Tests (one-sided exact sign test, alpha 0.05):
+
+- H1 (K's mean time to verdict below F's): 12 of 12, p = 0.0002, pass
+- H2 (K's seconds at warn-or-worse below F's): 12 of 12, p = 0.0002, pass
+- H3 (K's mean time to verdict below 1.10 x S's): 7 of 12, p = 0.3872, fail
+
+Decision:
+
+- H1 passes, H3 fails: coreslot beats no admission but not a tuned semaphore; the next step is chosen from waited_free_s.
+- Live-memory admission is worth designing: waited_free_s >= 5 s and >= 10% of K's waiting in 10 of 12 blocks.
