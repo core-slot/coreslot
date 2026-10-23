@@ -8,6 +8,12 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-23
+
+Memory becomes a budgeted resource beside cores, and coreslot learns what each labelled command
+needs from its own runs. The defaults change for every client on a machine, so upgrade them
+together (see **Changed**). The on-disk protocol stays at format 1.
+
 ### Added
 
 - `coreslot run --light` runs a command too light to budget, such as a download, at once outside
@@ -109,5 +115,6 @@ The module path is `github.com/core-slot/coreslot`; an install from the earlier 
 - Release archives with checksums and a build-provenance attestation for every archive, and a
   Homebrew formula template that builds from source.
 
-[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/core-slot/coreslot/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/core-slot/coreslot/releases/tag/v0.1.0
