@@ -50,7 +50,11 @@ class Stand(unittest.TestCase):
         # mutation: append "--dist loadgroup" to fastapi-ruff too -> the stands differ -> red
         s4 = json.loads(text(os.path.join(HERE, "overload", "stand4.json")))
         s7 = json.loads(text(os.path.join(HERE, "overload", "stand7.json")))
-        self.assertEqual(s7.pop("wide_agents"), {})
+        wide = s7.pop("wide_agents")
+        # a label learns one needs entry, so a wide gate that shares one is the heavy gate itself
+        heavy = {g["label"]: g for gates in s7["agents"].values() for g in gates}
+        for g in (g for gates in wide.values() for g in gates):
+            self.assertEqual(g, heavy.get(g["label"], g))
         tests = next(g for g in s7["agents"]["A3"] if g["gate"] == "fastapi-tests")
         self.assertEqual(tests["argv"][-2:], ["--dist", "loadgroup"])
         back = copy.deepcopy(s7)

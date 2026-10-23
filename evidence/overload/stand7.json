@@ -22,5 +22,25 @@
           "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
                    "-n", "{n}", "test/orm"]}]
  },
- "wide_agents": {}
+ "wide_agents": {
+  "W1": [{"gate": "sqlalchemy-orm-tests", "label": "bench:sqlalchemy-orm-tests",
+          "cwd": "~/bench.noindex/sqlalchemy", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/orm"]}],
+  "W2": [{"gate": "sqlalchemy-sql-tests", "label": "bench:sqlalchemy-sql-tests",
+          "cwd": "~/bench.noindex/sqlalchemy-sql", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/sql", "test/dialect"]}],
+  "W3": [{"gate": "sqlalchemy-engine-tests", "label": "bench:sqlalchemy-engine-tests",
+          "cwd": "~/bench.noindex/sqlalchemy-engine", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/engine", "test/ext"]}],
+  "W4": [{"gate": "fastapi-tests", "label": "bench:fastapi-tests", "cwd": "~/bench.noindex/fastapi",
+          "heavy": true, "free_n": "auto", "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "--dist", "loadgroup"]}]
+ }
 }
