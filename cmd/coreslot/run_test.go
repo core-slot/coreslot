@@ -872,9 +872,9 @@ func TestRunNeedFormsGrantAndLog(t *testing.T) {
 		logged string
 	}{
 		{"default, no placeholder", append(append([]string{"--"}, report...), "x"), "1 x", "map[cpu:[1 1]]"},
-		{"default, {n}", append(append([]string{"--"}, report...), "{n}"), "8 8", "map[cpu:[1 16]]"},
+		{"default, {n}", append(append([]string{"--"}, report...), "{n}"), "8 8", fmt.Sprintf("map[cpu:[1 %d]]", coldMax())},
 		{"default, {{n}}", append(append([]string{"--"}, report...), "{{n}}"), "1 {n}", "map[cpu:[1 1]]"},
-		{"default, --subst -j{n}", append(append([]string{"--subst", "--"}, report...), "-j{n}"), "8 -j8", "map[cpu:[1 16]]"},
+		{"default, --subst -j{n}", append(append([]string{"--subst", "--"}, report...), "-j{n}"), "8 -j8", fmt.Sprintf("map[cpu:[1 %d]]", coldMax())},
 		{"cpu=4..", append(append([]string{"--need", "cpu=4..", "--"}, report...), "x"), "8 x", "map[cpu:[4 16]]"},
 		{"cpu=..2", append(append([]string{"--need", "cpu=..2", "--"}, report...), "x"), "2 x", "map[cpu:[1 2]]"},
 	} {

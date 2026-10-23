@@ -313,6 +313,17 @@ class NeedGrammarTests(unittest.TestCase):
             with self.assertRaises(cc.UsageError, msg=text):
                 self.needs("--need", text, "--", "true")
 
+    def test_default_max_is_capped_at_the_cpus(self):
+        """§21: the default range's max is the CPU count when below 16; an unreadable count leaves 16.
+        Mutation: drop the cap, and the 4-CPU case fails."""
+        def unreadable():
+            raise cc.StateError("cpus", "cannot read")
+        for cpus, want in ((lambda: 4, (1, 4)), (lambda: 64, (1, 16)), (unreadable, (1, 16))):
+            with unittest.mock.patch.object(cc, "machine_cpus", cpus):
+                self.assertEqual(self.needs("--", "pytest", "-n", "{n}"), {"cpu": want})
+                self.assertEqual(self.needs("--", "true"), {"cpu": (1, 1)})
+
+    @unittest.mock.patch.object(cc, "machine_cpus", lambda: 64)
     def test_default_depends_on_a_cpu_placeholder(self):
         one, wide = {"cpu": (1, 1)}, {"cpu": (1, 16)}
         for args, want in ((["--", "sh", "-c", "echo $CORESLOT_GRANTED_CPU"], one),
@@ -1193,10 +1204,11 @@ class LauncherTests(Base):
     def test_need_forms_grant_and_log(self):
         self.config("[resources]\ncpu = 8\n")
         report = ["sh", "-c", 'echo "$CORESLOT_GRANTED_CPU $1"', "sh"]
+        cold = min(cc.DEFAULT_MAX, cc.machine_cpus())  # the default max on this machine
         for args, out, logged in ((["--", *report, "x"], "1 x", [1, 1]),
-                                  (["--", *report, "{n}"], "8 8", [1, 16]),
+                                  (["--", *report, "{n}"], "8 8", [1, cold]),
                                   (["--", *report, "{{n}}"], "1 {n}", [1, 1]),
-                                  (["--subst", "--", *report, "-j{n}"], "8 -j8", [1, 16]),
+                                  (["--subst", "--", *report, "-j{n}"], "8 -j8", [1, cold]),
                                   (["--need", "cpu=4..", "--", *report, "x"], "8 x", [4, 16]),
                                   (["--need", "cpu=..2", "--", *report, "x"], "2 x", [1, 2])):
             p = self.cli("run", *args, stdout=subprocess.PIPE)

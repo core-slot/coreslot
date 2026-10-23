@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"testing"
 
+	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -13,6 +15,9 @@ import (
 // defaultNeed return cpu=1..1 always, and every placeholder case reddens; make it ignore inside,
 // and the --subst cases do.
 func TestRunDefaultNeed(t *testing.T) {
+	saved := machineCPUs
+	t.Cleanup(func() { machineCPUs = saved })
+	machineCPUs = func() (int, error) { return 64, nil }
 	one := map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
 	wide := map[string]spec.Range{"cpu": {Min: 1, Max: 16}}
 	cases := []struct {
@@ -44,6 +49,47 @@ func TestRunDefaultNeed(t *testing.T) {
 		}
 		if !maps.Equal(o.need, c.want) {
 			t.Errorf("%s: parseRun(%q) need = %v, want %v", c.name, c.args, o.need, c.want)
+		}
+	}
+}
+
+// coldMax is the max of this machine's default cpu range for a command with a cpu placeholder:
+// what a test that runs the real binary, or the real machineCPUs, expects.
+func coldMax() int {
+	if n, err := config.MachineCPUs(); err == nil && n > 0 {
+		return min(spec.DefaultMax, n)
+	}
+	return spec.DefaultMax
+}
+
+// The default range's max is the machine's CPU count when that is below 16, so that a cold run
+// never starts more workers than there are CPUs; a count it cannot read leaves 16. Mutation: drop
+// the cap, and the 4-CPU case reddens; cap without the error check, and the unreadable case does.
+func TestRunDefaultNeedCappedAtCPUs(t *testing.T) {
+	saved := machineCPUs
+	t.Cleanup(func() { machineCPUs = saved })
+	cases := []struct {
+		name string
+		cpus int
+		err  error
+		max  int
+	}{
+		{"4 CPUs", 4, nil, 4},
+		{"64 CPUs", 64, nil, 16},
+		{"unreadable", 0, errors.New("sysctl failed"), 16},
+	}
+	for _, c := range cases {
+		machineCPUs = func() (int, error) { return c.cpus, c.err }
+		o, err := parseRun([]string{"--", "pytest", "-n", "{n}"}, IO{}, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if want := (spec.Range{Min: 1, Max: c.max}); o.need["cpu"] != want {
+			t.Errorf("%s: need cpu %v, want %v", c.name, o.need["cpu"], want)
+		}
+		o, _ = parseRun([]string{"--", "true"}, IO{}, nil)
+		if want := (spec.Range{Min: 1, Max: 1}); o.need["cpu"] != want {
+			t.Errorf("%s, no placeholder: need cpu %v, want %v", c.name, o.need["cpu"], want)
 		}
 	}
 }
@@ -84,7 +130,7 @@ func TestNeedTextShowsTheNormalizedRange(t *testing.T) {
 	}{
 		{[]string{"--need", "cpu=4..", "--", "true"}, "cpu 4..16"},
 		{[]string{"--need", "cpu=..2", "--need", "pg-local=1", "--", "true"}, "cpu 1..2, pg-local 1..1"},
-		{[]string{"--", "echo", "{n}"}, "cpu 1..16"},
+		{[]string{"--", "echo", "{n}"}, fmt.Sprintf("cpu 1..%d", coldMax())},
 		{[]string{"--", "true"}, "cpu 1..1"},
 	} {
 		o, err := parseRun(c.args, IO{}, nil)

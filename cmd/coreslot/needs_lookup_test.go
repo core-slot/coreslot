@@ -66,7 +66,7 @@ func TestNeedsEntryReplacesDefaultCPU(t *testing.T) {
 func TestNeedsEntryMemOnlyKeepsDefault(t *testing.T) {
 	lookup, _ := lookupOf(t, "[needs.\"a\"]\nmem = \"2G\"\n")
 	wantNeed(t, []string{"--label", "a", "--", "echo", "{n}"}, lookup,
-		map[string]spec.Range{"cpu": {Min: 1, Max: 16}, "mem": {Min: 16, Max: 16}})
+		map[string]spec.Range{"cpu": {Min: 1, Max: coldMax()}, "mem": {Min: 16, Max: 16}})
 }
 
 // A worker suffix finds the base label's entry. Mutation: look up the label as given → red.
