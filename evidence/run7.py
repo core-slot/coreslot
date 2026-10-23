@@ -56,11 +56,21 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            a power at 72 blocks per level below 0.5) and whether P is feasible (at most 2 of the
            pilot's P sets timed out), to OUT/pilot_check.json; main runs only when its "go" is
            true. Exits 2 while the pilot is short, or once a main record exists.
-  summary  from OUT/main-*.jsonl, OUT/sens-*.jsonl and OUT/pilot_check.json: P1 by
-           intersection-union, then the secondary family by Holm at 0.05, and the reported
-           estimates; to OUT/summary.json and OUT/summary.txt.
+  summary  from OUT/main-*.jsonl, OUT/sens-spread.jsonl and OUT/pilot_check.json: the first 72
+           heavy blocks of each level valid over K60, S1 and S2, and the first 40 light and 30
+           wide valid blocks (a mix's `--as-block` re-runs count up to 10 % of its n). P1 by
+           intersection-union at 0.05: T1, S2 slower than K60 at loaded (paired t on the log
+           ratio); T2, K60's swap traffic below S2's at loaded (signed-rank); T3, S1 slower than
+           K60 at quiet. Only once P1 is rejected, the secondary family by Holm at 0.05: H-P, K60
+           within 3 % of P at loaded over the blocks where P is valid (untested when P is
+           infeasible); H-L, light K60 within 3 % of F (untested past one pilot F set under
+           pressure); H-Z, K60's heavy sets with more than 64 MiB swapped out below 3 %; H-W,
+           wide S2 slower than K60. Then the reported estimates; to OUT/summary.json and
+           OUT/summary.txt. Exits 2 without pilot_check.json, or while a mix lacks n valid
+           blocks and has re-runs left; with them spent, its tests are untested.
 """
 import argparse
+import collections
 import contextlib
 import glob
 import json
@@ -82,6 +92,7 @@ import ballast  # noqa: E402  (Ballast)
 import overload  # noqa: E402  (load, Sampler, headroom_mib)
 import run4  # noqa: E402  (cs, fresh_state, write_config, checked_state, pacing, ...)
 import run6  # noqa: E402  (measured, write_learn_state, check_needs, apps_meta, mix_cfg, ...)
+import stats6  # noqa: E402
 import stats7  # noqa: E402
 
 HEAVY_ARMS = ("K60", "S1", "S2", "P")
@@ -701,6 +712,253 @@ def pilot_check(out):
     print(json.dumps(res, indent=1))
 
 
+# --- summary ----------------------------------------------------------------------------------
+
+SECONDARY = ("H-P", "H-L", "H-Z", "H-W")
+NOT_TESTED = "not tested (P1 not rejected)"
+SHORT = "its mix is short of n, re-runs spent"
+
+
+def finite_t(t):
+    return {k: run6.finite(v) for k, v in t.items()}
+
+
+def paired(r):
+    """Whether the mem grants of the set's runs summed above its static mem size at some instant;
+    a run holds its grant from its start (time_ns) plus its wait, for ran_s."""
+    events = []
+    for line in r["runlog"]:
+        start = line["time_ns"] / 1e9 + (line.get("waited_s") or 0)
+        mem = (line.get("grant") or {}).get("mem", 0)
+        events += [(start, 1, mem), (start + (line.get("ran_s") or 0), 0, -mem)]
+    held = 0
+    for _, _, mem in sorted(events):  # at one instant an end comes before a start
+        held += mem
+        if held > r["static"]["mem"]:
+            return True
+    return False
+
+
+def pairing_count(sets):
+    return sum(paired(r) for r in sets)
+
+
+def p1_test(heavy):
+    """P1 by intersection-union: T1 and T2 on the loaded blocks, T3 on the quiet ones."""
+    lv = by_level7(heavy)
+    d1, d3 = ln_ratios(lv["loaded"], "S2", "K60"), ln_ratios(lv["quiet"], "S1", "K60")
+    t1, t3 = stats6.paired_lower(d1, 0), stats6.paired_lower(d3, 0)
+    t2 = stats7.wilcoxon_less(traffic_diffs(lv["loaded"], "K60", "S2"))
+    res = stats7.iut({"T1": t1["p"], "T2": t2["p"], "T3": t3["p"]}, ALPHA)
+    res.update(T1={"blocks": list(lv["loaded"]), "t": finite_t(t1), "estimate": run6.estimate(d1)},
+               T2={"blocks": list(lv["loaded"]), **t2},
+               T3={"blocks": list(lv["quiet"]), "t": finite_t(t3), "estimate": run6.estimate(d3)})
+    return res
+
+
+def secondary_tests(heavy, recs, light, wide, check):
+    """name -> its test with its p, or {"untested": why}; a mix given as None is short."""
+    loaded, res = by_level7(heavy)["loaded"], {}
+    if check.get("p_feasible") is False:
+        res["H-P"] = {"untested": "P is infeasible"}
+    else:
+        pv = {b: dict(loaded[b], P=r) for b, r in p_sets(loaded, recs).items() if r["valid"]}
+        d = ln_ratios(pv, "K60", "P")
+        t = stats6.paired_upper(d, MARGIN)
+        res["H-P"] = {"blocks": list(pv), "t": finite_t(t), "estimate": run6.estimate(d),
+                      "p": t["p"]}
+    if light is None or check["light_pressure_sets"] > 1:
+        res["H-L"] = {"untested": SHORT if light is None
+                      else "more than one light pilot F set under pressure"}
+    else:
+        d = ln_ratios(light, "K60", "F")
+        t = stats6.paired_upper(d, MARGIN)
+        res["H-L"] = {"blocks": list(light), "t": finite_t(t), "estimate": run6.estimate(d),
+                      "p": t["p"]}
+    events = [b for b, sets in heavy.items()
+              if run6.swapout_bytes(sets["K60"]) > SWAP_EVENT_MIB * 2**20]
+    k, n = len(events), len(heavy)
+    res["H-Z"] = {"events": events, "k": k, "n": n, "p": stats7.binom_upper_p(k, n, SWAP_EVENT_P0),
+                  "ci95": [run6.finite(x) for x in stats6.clopper_pearson(k, n)] if n else None}
+    if wide is None:
+        res["H-W"] = {"untested": SHORT}
+    else:
+        d = ln_ratios(wide, "S2", "K60")
+        t = stats6.paired_lower(d, 0)
+        res["H-W"] = {"blocks": list(wide), "t": finite_t(t), "estimate": run6.estimate(d),
+                      "p": t["p"]}
+    return res
+
+
+def holm_rows(tests, p1):
+    """Holm at ALPHA over the secondary family, only once P1 is rejected."""
+    if not p1["rejected"]:
+        return [{"name": n, "status": NOT_TESTED} for n in SECONDARY]
+    rows = stats7.holm({n: tests[n].get("p") for n in SECONDARY}, ALPHA)
+    for r in rows:
+        r["status"] = ("untested" if not r["tested"]
+                       else "rejected" if r["rejected"] else "not rejected")
+    return rows
+
+
+def per_arm7(blocks, arms, out):
+    """run6.per_arm, with each arm's swap traffic."""
+    res = run6.per_arm(blocks, arms, out)
+    for a in res:
+        res[a]["swap_traffic_pages"] = run6.ci(swap_traffic_pages(sets[a])
+                                               for sets in blocks.values())
+    return res
+
+
+def k60_vs_p(blocks, pb):
+    """K60's swap traffic against P's, over the blocks with a valid P set."""
+    bs = [b for b in blocks if b in pb]
+    k = [swap_traffic_pages(blocks[b]["K60"]) for b in bs]
+    p = [swap_traffic_pages(pb[b]["P"]) for b in bs]
+    return {"n": len(bs), "K60_lower": sum(x < y for x, y in zip(k, p)),
+            "P_lower": sum(x > y for x, y in zip(k, p)),
+            "K60": run6.ci(k) if k else None, "P": run6.ci(p) if p else None}
+
+
+def s_star(blocks):
+    """S* in hindsight: the S arm with the lowest mean primary over the blocks, and K60/S*."""
+    if not blocks:
+        return None
+    s = run6.lowest(blocks, list(blocks), ("S1", "S2"))
+    return {"S*": s, "K60/S*": run6.estimate(ln_ratios(blocks, "K60", s))}
+
+
+def spread(out):
+    blocks = run6.first(run6.valid_blocks(run6.records(out, "sens", "spread"), SPREAD_ARMS),
+                        SPREAD_BLOCKS)
+    return {"blocks": list(blocks),
+            "means": {a: round(statistics.fmean(sets[a]["mean_verdict_s"]
+                                                for sets in blocks.values()), 1)
+                      for a in SPREAD_ARMS} if blocks else {},
+            "S2/K60": run6.estimate(ln_ratios(blocks, "S2", "K60"))}
+
+
+def flag_counts(out):
+    """Per main or sensitivity file, over every set recorded: each flag's count and the invalid
+    sets' reasons."""
+    res = {}
+    for path in sorted(glob.glob(os.path.join(out, "main-*.jsonl"))
+                       + glob.glob(os.path.join(out, "sens-*.jsonl"))):
+        recs = run4.read_jsonl(path)
+        res[os.path.basename(path)[:-len(".jsonl")]] = {
+            "sets": len(recs),
+            "flags": dict(sorted(collections.Counter(f for r in recs for f in r["flags"]).items())),
+            "invalid": dict(sorted(collections.Counter(x for r in recs
+                                                       for x in r["invalid"]).items()))}
+    return res
+
+
+def per_hour(blocks):
+    """UTC hour of `started` -> arm -> its sets' count and mean primary."""
+    hours = {}
+    for sets in blocks.values():
+        for a, r in sets.items():
+            h = datetime.fromisoformat(r["started"]).astimezone(timezone.utc)
+            hours.setdefault(h.strftime("%Y-%m-%dT%H"), {}).setdefault(a, []).append(
+                r["mean_verdict_s"])
+    return {h: {a: {"n": len(v), "mean_verdict_s": round(statistics.fmean(v), 1)}
+                for a, v in sorted(arms.items())} for h, arms in sorted(hours.items())}
+
+
+def reported(heavy, recs, light, wide, out):
+    lv = by_level7(heavy)
+    pb = {b: {"P": r} for b, r in p_sets(heavy, recs).items() if r["valid"]}
+
+    def k60_sets(blocks):
+        return {"paired": pairing_count(sets["K60"] for sets in blocks.values()),
+                "n": len(blocks)}
+    return {"per_arm": {"heavy": {lvl: {**per_arm7(bs, P1_ARMS, out),
+                                        **per_arm7({b: pb[b] for b in bs if b in pb}, ("P",), out)}
+                                  for lvl, bs in lv.items()},
+                        "light": per_arm7(light, LIGHT_ARMS, out),
+                        "wide": per_arm7(wide, WIDE_ARMS, out)},
+            "K60_vs_P_swap_traffic": {lvl: k60_vs_p(bs, pb) for lvl, bs in lv.items()},
+            "S*_in_hindsight": {lvl: s_star(bs) for lvl, bs in lv.items()},
+            "spread": spread(out),
+            "pairing": {**{f"heavy {lvl}": k60_sets(bs) for lvl, bs in lv.items()},
+                        "light": k60_sets(light), "wide": k60_sets(wide)},
+            "flags": flag_counts(out),
+            "order": run6.order_effects(heavy),
+            "per_hour": per_hour(heavy)}
+
+
+def summary_text(s):
+    p1 = s["P1"]
+    lines = ["Acceptance run 7: summary", "",
+             f"Blocks used: heavy quiet {s['blocks']['heavy']['quiet']}",
+             f"  heavy loaded {s['blocks']['heavy']['loaded']}",
+             f"  light {s['blocks']['light']}", f"  wide {s['blocks']['wide']}",
+             f"Re-runs: {s['reruns']}; ignored past 10 % of n: {s['reruns_ignored']}",
+             f"Sets coreslot failed, each primary the block's slowest: {s['coreslot_failed']}",
+             f"P feasible: {s['pilot']['p_feasible']}; light pilot F sets under pressure:"
+             f" {s['pilot']['light_pressure_sets']}", ""]
+    if s["incomplete"]:
+        lines += [s["incomplete"], ""]
+    lines.append("P1 (intersection-union, alpha 0.05): " + (
+        "untested" if "untested" in p1 else "rejected" if p1["rejected"] else "not rejected"))
+    for name, c in p1.get("components", {}).items():
+        lines.append(f"  {name}: p {c['p']:.4g}, {'rejected' if c['rejected'] else 'not rejected'}")
+    lines.append("Secondary family (Holm, alpha 0.05):")
+    for r in s["secondary"]:
+        lines.append(f"  {r['name']}: {r['status']}" + (
+            f"; p {r['p']:.4g}, threshold {r['threshold']:.4g}" if r.get("p") is not None else ""))
+    lines += ["", "Reported, untested:", json.dumps(s["reported"], indent=1), ""]
+    return "\n".join(lines)
+
+
+def summary(out):
+    path = os.path.join(out, "pilot_check.json")
+    if not os.path.exists(path):
+        refuse(f"{path} is missing; run pilot-check first")
+    with open(path) as f:
+        check = json.load(f)
+    mixes = {"heavy": (P1_ARMS, 2 * N_LEVEL), "light": (LIGHT_ARMS, N_LIGHT),
+             "wide": (WIDE_ARMS, N_WIDE)}
+    recs, used, spent, ignored, full = {}, {}, {}, {}, {}
+    for mix, (arms, n) in mixes.items():
+        recs[mix], ignored[mix] = run6.capped(run6.records(out, "main", mix), n // 10)
+        blocks = run6.valid_blocks(recs[mix], arms)
+        if mix == "heavy":  # the first N_LEVEL of each level
+            levels = [run6.first(bs, N_LEVEL) for bs in by_level7(blocks).values()]
+            used[mix] = dict(sorted(b for bs in levels for b in bs.items()))
+            full[mix] = all(len(bs) >= N_LEVEL for bs in levels)
+        else:
+            used[mix], full[mix] = run6.first(blocks, n), len(blocks) >= n
+        spent[mix] = run6.reruns(recs[mix])
+        if not full[mix] and len(spent[mix]) < n // 10:
+            refuse(f"main {mix}: {len(used[mix])} of {n} valid blocks, {len(spent[mix])} of"
+                   f" {n // 10} re-runs; no summary yet")
+    heavy, light, wide = used["heavy"], used["light"], used["wide"]
+    if full["heavy"]:
+        p1 = p1_test(heavy)
+        tests = secondary_tests(heavy, recs["heavy"], light if full["light"] else None,
+                                wide if full["wide"] else None, check)
+    else:
+        p1, tests = {"rejected": False, "untested": SHORT}, {}
+    short = [m for m in full if not full[m]]
+    s = {"pilot": {k: check.get(k) for k in ("p_feasible", "light_pressure_sets")},
+         "blocks": {"heavy": {lvl: list(bs) for lvl, bs in by_level7(heavy).items()},
+                    "light": list(light), "wide": list(wide)},
+         "reruns": spent, "reruns_ignored": ignored,
+         "coreslot_failed": {m: [f"{b} {a}" for b, sets in bs.items() for a, r in sets.items()
+                                 if r.get("coreslot_failed")] for m, bs in used.items()},
+         "incomplete": f"incomplete: {' and '.join(short)} short of n with the re-runs spent;"
+                       " its tests untested" if short else None,
+         "P1": p1, "secondary": holm_rows(tests, p1), "tests": tests,
+         "reported": reported(heavy, recs["heavy"], light, wide, out)}
+    with open(os.path.join(out, "summary.json"), "w") as f:
+        json.dump(s, f, indent=1)
+    text = summary_text(s)
+    with open(os.path.join(out, "summary.txt"), "w") as f:
+        f.write(text)
+    print(text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -720,6 +978,8 @@ def main():
     args = ap.parse_args()
     if args.cmd == "pilot-check":
         return pilot_check(args.out)
+    if args.cmd == "summary":
+        return summary(args.out)
     cfg = load(args.stand)
 
     def interrupted(*_):

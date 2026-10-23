@@ -840,5 +840,111 @@ class PilotCheck(unittest.TestCase):
         self.assertTrue(self.check()["go"])
 
 
+class Summary7(unittest.TestCase):
+    """summary at 6 heavy blocks per level, 4 light and 4 wide, so 1 heavy re-run counts."""
+
+    def setUp(self):
+        self.out = tempfile.mkdtemp()
+        p = mock.patch.multiple(run7, N_LEVEL=6, N_LIGHT=4, N_WIDE=4)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def write_main(self, heavy=range(1, 13), kw=lambda b: {}, arms=run7.HEAVY_ARMS,
+                   p_feasible=True):
+        with open(os.path.join(self.out, "pilot_check.json"), "w") as f:
+            json.dump({"go": True, "p_feasible": p_feasible, "light_pressure_sets": 0}, f)
+        for b in heavy:
+            append(self.out, "main-heavy.jsonl",
+                   [r for r in heavy_block7(b, "main", **kw(b)) if r["arm"] in arms])
+        for b in range(1, 5):
+            append(self.out, "main-light.jsonl", light_block7(b, "main"))
+            append(self.out, "main-wide.jsonl", wide_block7(b, "main"))
+
+    def summary(self):
+        with mock.patch("sys.stdout"):
+            run7.summary(self.out)
+        with open(os.path.join(self.out, "summary.json")) as f:
+            return json.load(f)
+
+    def test_summary_iut_all_three(self):
+        # mutations: count a swap event at 64 KiB, not MiB -> every K60 set is one -> red; T2 on
+        # the quiet blocks -> no swap traffic, P1 not rejected -> red
+        self.write_main(kw=lambda b: {"swap": {"K60": 5000}} if b == 1 else {})
+        s = self.summary()
+        self.assertTrue(s["P1"]["rejected"])
+        self.assertEqual({t: c["rejected"] for t, c in s["P1"]["components"].items()},
+                         {"T1": True, "T2": True, "T3": True})
+        self.assertEqual(s["P1"]["T2"]["wins"], 6)
+        rows = s["secondary"]
+        self.assertEqual(sorted(r["name"] for r in rows), sorted(run7.SECONDARY))
+        self.assertEqual([r["threshold"] for r in rows], [0.05 / 4, 0.05 / 3, 0.05 / 2, 0.05])
+        hz = next(r for r in rows if r["name"] == "H-Z")
+        self.assertEqual((s["tests"]["H-Z"]["k"], s["tests"]["H-Z"]["n"]), (1, 12))
+        self.assertEqual(hz["p"], stats7.binom_upper_p(1, 12, 0.03))
+        self.assertEqual(hz["status"], "not rejected")
+        hw = next(r for r in rows if r["name"] == "H-W")
+        self.assertEqual((hw["tested"], hw["status"]), (True, "rejected"))
+        self.assertEqual(s["tests"]["H-P"]["blocks"], s["blocks"]["heavy"]["loaded"])
+        self.assertIn("P1 (intersection-union", text(os.path.join(self.out, "summary.txt")))
+
+    def test_summary_iut_one_fails(self):
+        # mutation: run Holm whatever P1 gave -> the rows carry thresholds -> red
+        self.write_main(kw=lambda b: {"swap": {"S2": 10}})
+        s = self.summary()
+        self.assertEqual({t: c["rejected"] for t, c in s["P1"]["components"].items()},
+                         {"T1": True, "T2": False, "T3": True})
+        self.assertFalse(s["P1"]["rejected"])
+        self.assertEqual(s["P1"]["T2"]["p"], 1.0)
+        self.assertEqual(s["secondary"], [{"name": n, "status": "not tested (P1 not rejected)"}
+                                          for n in run7.SECONDARY])
+
+    def test_summary_p_infeasible(self):
+        # mutation: leave H-P out of Holm when untested -> m 3 -> red
+        self.write_main(arms=run7.P1_ARMS, p_feasible=False)
+        s = self.summary()
+        self.assertTrue(s["P1"]["rejected"])
+        rows = s["secondary"]
+        self.assertEqual(len(rows), 4)
+        hp = next(r for r in rows if r["name"] == "H-P")
+        self.assertEqual((hp["p"], hp["tested"], hp["rejected"], hp["status"]),
+                         (None, False, False, "untested"))
+        self.assertEqual(rows[-1], hp)
+        self.assertEqual(rows[0]["threshold"], 0.05 / 4)
+        self.assertIn("untested", s["tests"]["H-P"])
+
+    def refused(self):
+        with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
+            self.summary()
+        return cm.exception.code
+
+    def test_summary_refuses_short(self):
+        # mutations: `<=` for `<` in the re-run check -> with the one re-run spent it still exits
+        # 2 -> red; drop the pilot_check.json refusal -> FileNotFoundError, not exit 2 -> red
+        self.assertEqual(self.refused(), 2)
+        self.write_main(kw=lambda b: {"invalid": {"K60": ["battery"]}} if b == 11 else {})
+        self.assertEqual(self.refused(), 2)
+        append(self.out, "main-heavy.jsonl",
+               heavy_block7(13, "main", invalid={"S1": ["battery"]}, as_block=11))
+        s = self.summary()
+        self.assertEqual(s["reruns"]["heavy"], [13])
+        self.assertEqual(len(s["blocks"]["heavy"]["quiet"]), 5)
+        self.assertIn("untested", s["P1"])
+        self.assertFalse(s["P1"]["rejected"])
+        self.assertTrue(s["incomplete"])
+
+    def test_pairing_count(self):
+        # mutations: hold a grant from the run's start, not after its wait -> set b overlaps ->
+        # red; `>=` for `>` against the static size -> set c counts -> red
+        def k60(*runs):
+            r = fake_set("K60", 1, "quiet", 100, phase="main")
+            r["runlog"] = [{"label": "bench:x", "time_ns": t * 10**9, "waited_s": w, "ran_s": ran,
+                            "grant": {"cpu": 4, "mem": mem}} for t, w, ran, mem in runs]
+            return r
+        a = k60((0, 0.0, 10, 41), (2, 1.0, 10, 41))  # 82 tokens held over [3, 10]
+        b = k60((0, 0.0, 5, 41), (3, 2.0, 5, 41))  # the second holds from 5, as the first ends
+        c = k60((0, 0.0, 10, 40), (2, 0.0, 10, 36))  # 76, not above the static 76
+        self.assertEqual(run7.pairing_count([a, b, c]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
