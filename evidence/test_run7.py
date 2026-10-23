@@ -1,16 +1,21 @@
 """Tests of run7.py: python3 -m unittest evidence/test_run7.py"""
+import contextlib
 import copy
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import acceptance  # noqa: E402
+import overload  # noqa: E402
 import run4  # noqa: E402
 import run6  # noqa: E402
 import run7  # noqa: E402
@@ -177,6 +182,283 @@ class Learn(unittest.TestCase):
         self.assertEqual(set(self.cooldowns), {run7.LEARN_COOLDOWN_S})
         runs = [i for i, c in enumerate(self.calls) if c[0] == "run"]
         self.assertTrue(all(self.calls[i - 1] == ("cool",) for i in runs))
+
+
+class FakeTime:
+    """run7's clock: it advances only when slept on."""
+
+    def __init__(self):
+        self.now, self.slept = 1000.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def time(self):
+        return self.now
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.now += s
+
+
+class Level(unittest.TestCase):
+    """level() with the clock, the headroom and the ballast faked."""
+
+    def setUp(self):
+        self.clock, self.headroom, self.ballasts, self.rss = FakeTime(), [9000], [], None
+        test = self
+
+        class Ballast:
+            def __init__(self, mib):
+                self.mib, self.released = mib, False
+                test.ballasts.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.released = True
+
+            def rss_mib(self):
+                return self.mib if test.rss is None else test.rss
+
+        def headroom():
+            return self.headroom.pop(0) if len(self.headroom) > 1 else self.headroom[0]
+        for target, name, fake in ((run7, "time", self.clock), (run7.ballast, "Ballast", Ballast),
+                                   (run7.overload, "headroom_mib", headroom)):
+            p = mock.patch.object(target, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def level(self, name):
+        with run7.level(name) as rec:
+            return rec
+
+    def test_quiet_waits_then_flags(self):
+        # mutation: drop the quiet_short flag -> no flag after the wait -> red
+        with mock.patch.object(run7, "QUIET_WAIT_S", 2):
+            rec = self.level("quiet")
+        self.assertEqual(rec, {"level": "quiet", "headroom_before_mib": 9000, "ballast_mib": 0,
+                               "ballast_rss_mib": None, "flags": ["quiet_short"]})
+        self.assertEqual(self.clock.slept, [1.0, 1.0])
+        self.assertEqual(self.ballasts, [])
+
+    def test_quiet_passes(self):
+        # mutation: compare with LOADED_HEADROOM_MIB -> 9000 passes at once -> red
+        self.headroom = [9000, 11000]
+        rec = self.level("quiet")
+        self.assertEqual((rec["flags"], self.clock.slept), ([], [1.0]))
+        self.headroom = [run7.QUIET_HEADROOM_MIB]
+        self.assertEqual(self.level("quiet")["flags"], [])
+        self.assertEqual(self.clock.slept, [1.0])
+
+    def test_loaded_sizes_clamps_and_releases(self):
+        # mutations: drop the cap -> 12000 MiB at 20000 -> red; drop the floor at 0 -> -1000 -> red
+        for headroom, size in ((12000, 4000), (20000, run7.BALLAST_CAP_MIB), (7000, 0)):
+            self.headroom = [headroom]
+            rec = self.level("loaded")
+            self.assertEqual((rec["ballast_mib"], self.ballasts[-1].mib), (size, size))
+            self.assertEqual((rec["headroom_before_mib"], rec["flags"]), (headroom, []))
+            self.assertTrue(self.ballasts[-1].released)
+        self.headroom = [12000]
+        with self.assertRaises(RuntimeError):
+            with run7.level("loaded"):
+                raise RuntimeError("the set failed")
+        self.assertTrue(self.ballasts[-1].released)
+        # mutation: skip the residency wait -> a ballast short of its size is not flagged -> red
+        self.rss, slept = 100, len(self.clock.slept)
+        rec = self.level("loaded")
+        self.assertEqual((rec["ballast_rss_mib"], rec["flags"]), (100, ["ballast_short"]))
+        self.assertEqual(sum(self.clock.slept[slept:]), run7.RESIDENCY_WAIT_S)
+
+    def test_level_off_two_sided(self):
+        # mutation: one-sided loaded (only above the target) -> 7400 not off -> red
+        for headroom, level, off in ((8600, "loaded", True), (7400, "loaded", True),
+                                     (8300, "loaded", False), (10000, "quiet", True),
+                                     (13000, "quiet", False)):
+            self.assertEqual(run7.level_off(headroom, level), off, (headroom, level))
+
+
+class Processes(unittest.TestCase):
+    def test_parse_ps_time(self):
+        # the first two as this Mac's `ps -A -o time=` printed them; minutes run past 59, and
+        # H:MM:SS is ps's other form
+        for line, secs in (("   0:42.12", 42.12), ("  27:16.95", 1636.95), ("8:03.69", 483.69),
+                           ("125:00.00", 7500.0), ("1:02:03", 3723.0)):
+            self.assertAlmostEqual(run7.parse_ps_time(line), secs, places=6)
+
+    def test_background_cpu_new_and_reused(self):
+        # mutations: skip pids absent before -> 2 cores -> red; no clamp -> pid 11 counts -97 s
+        # -> red; ignore own_pids -> pid 12 counts 8 s -> red
+        before = {10: (1, 5.0), 11: (1, 100.0), 12: (1, 1.0)}
+        after = {10: (1, 7.0), 11: (1, 3.0), 12: (1, 9.0), 13: (1, 4.0)}
+        self.assertEqual(run7.background_cpu_cores(before, after, {12}, 2.0), 3.0)
+
+
+class RunSet7(unittest.TestCase):
+    """run_set7 with the machine, the level, the sampler and the gates faked; P's sem calls go to
+    a fake Popen that creates sem's semaphore files and runs until done or killed."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.cfg, self.path = stand(self.root), os.path.join(self.root, "sets.jsonl")
+        self.cfg["agents"] = {"A1": [dict(gate("tc"), argv=["tc", "-n", "{n}"], free_n="3")],
+                              "A2": [gate("lint", False), gate("tc")]}
+        self.events, self.popens, self.killed = [], [], []
+        self.gate_s, self.gate_raises, self.headroom = 0, False, 11000
+        test = self
+
+        class Popen:
+            def __init__(self, argv, **kw):
+                self.argv, self.env, self.returncode = argv, kw["env"], None
+                self.pid, self.done = 9000 + len(test.popens), threading.Event()
+                test.popens.append(self)
+                sems = os.path.join(self.env["PARALLEL_HOME"], "semaphores")
+                os.makedirs(os.path.join(sems, f"id-{argv[3]}"), exist_ok=True)
+                open(os.path.join(sems, f"id-{argv[3]}.lock"), "w").close()
+
+            def communicate(self):
+                test.events.append(("gate", self.argv[-1]))
+                if test.gate_raises:
+                    raise RuntimeError("sem failed")
+                self.returncode = -15 if self.done.wait(test.gate_s) else 0
+                return "", None
+
+        class Sampler:
+            def __init__(self):
+                self.samples, self.stop = [], mock.Mock()
+
+            def start(self):
+                pass
+
+            def join(self):
+                pass
+
+        @contextlib.contextmanager
+        def level(name):
+            self.events.append(("level", name))
+            yield {"level": name, "headroom_before_mib": 9000, "ballast_mib": 0,
+                   "ballast_rss_mib": None, "flags": []}
+
+        def kill_tree(pid):
+            self.killed.append(pid)
+            next(p for p in self.popens if p.pid == pid).done.set()
+
+        def run_one(cfg, g, arm):
+            self.events.append(("gate", g["gate"]))
+            return 0, ""
+
+        def cooldown(*a):
+            self.events.append(("cooldown",))
+            return {"cooldown_gave_up": False}
+
+        def headroom():
+            self.events.append(("t0",))
+            return self.headroom
+        for target, name, fake in (
+                (run4, "ROOT", self.root), (run4, "run_one", run_one),
+                (run4, "on_ac", lambda: True),
+                (run4, "background", lambda: (16384, {"load1": 0.0})),
+                (run4, "budget_empty", lambda cfg: True),
+                (acceptance, "cooldown", cooldown), (acceptance, "runlog_lines", lambda cfg: []),
+                (overload, "Sampler", Sampler), (overload, "headroom_mib", headroom),
+                (run7.subprocess, "Popen", Popen), (run7, "level", level),
+                (run7, "kill_tree", kill_tree), (run7, "ps_snapshot", lambda: {})):
+            p = mock.patch.object(target, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_set(self, arm, meta=None, path=None, **kw):
+        with mock.patch("sys.stdout"):
+            return run7.run_set7(self.cfg, path or self.path, arm=arm,
+                                 offsets={"A1": 0, "A2": 0}, meta=meta or {}, baseline=1.0,
+                                 level_name="quiet", **kw)
+
+    def semaphores(self):
+        return os.listdir(os.path.join(self.root, "parallel-home", "semaphores"))
+
+    def test_p_argv_env_and_cleanup(self):
+        # mutations: run P's light gates through sem too -> three sem calls -> red; drop the
+        # semaphore cleanup -> its directory and lock stay -> red
+        rec = self.run_set("P")
+        self.assertTrue(rec["valid"], rec["invalid"])
+        prefix = ["sem", "--will-cite", "--id", rec["set_id"], "--memsuspend", "9G", "-j", "4",
+                  "--fg"]
+        self.assertEqual(sorted(p.argv for p in self.popens),
+                         [prefix + ["tc"], prefix + ["tc", "-n", "3"]])
+        for p in self.popens:
+            self.assertEqual(p.env["PARALLEL_HOME"], os.path.join(self.root, "parallel-home"))
+        self.assertIn(("gate", "lint"), self.events)
+        self.assertEqual(self.semaphores(), [])
+        self.gate_raises = True
+        rec = self.run_set("P")
+        self.assertFalse(rec["valid"])
+        self.assertTrue(rec["invalid"][0].startswith("runner_error"), rec["invalid"])
+        self.assertEqual(self.semaphores(), [])
+        # mutation: clean up after the record instead of in a finally -> a failed write leaves it
+        self.gate_raises = False
+        with self.assertRaises(OSError):
+            self.run_set("P", path=self.root)
+        self.assertEqual(self.semaphores(), [])
+
+    def test_set_timeout_invalidates_and_kills(self):
+        # mutation: on expiry only stop_live -> sem's calls are never killed -> the set waits
+        # out its gates and is valid -> red
+        self.gate_s = 30
+        t = time.monotonic()
+        with mock.patch.object(run7, "SET_TIMEOUT_S", 1):
+            rec = self.run_set("P")
+        self.assertLess(time.monotonic() - t, 10)
+        self.assertEqual((rec["valid"], rec["invalid"]), (False, ["set_timeout"]))
+        self.assertEqual(sorted(self.killed), sorted(p.pid for p in self.popens))
+        self.assertEqual(len(self.killed), 2)
+
+    def test_set_timeout_env_only_when_dry(self):
+        # mutation: honour RUN7_SET_TIMEOUT_S on any stand -> a real run can be cut short -> red
+        with mock.patch.dict(os.environ, {"RUN7_SET_TIMEOUT_S": "1"}):
+            self.assertEqual(run7.set_timeout({}), run7.SET_TIMEOUT_S)
+            self.assertEqual(run7.set_timeout({"dry": True}), 1.0)
+        self.assertEqual(run7.set_timeout({"dry": True}), run7.SET_TIMEOUT_S)
+
+    def test_order_cooldown_level_t0(self):
+        # mutation: read the headroom at t0 before the level -> t0 precedes level -> red
+        self.headroom = 9000
+        rec = self.run_set("F")
+        self.assertEqual(self.events[:3], [("cooldown",), ("level", "quiet"), ("t0",)])
+        self.assertEqual(self.events[3][0], "gate")
+        self.assertEqual((rec["headroom_t0_mib"], rec["level"]), (9000, "quiet"))
+        self.assertEqual(rec["flags"], ["level_off"])
+
+    def test_provenance_meta(self):
+        # mutation: tree_dirty from rev-parse's exit -> a modified file reads clean -> red
+        binary = os.path.join(self.root, "coreslot")
+        with open(binary, "wb") as f:
+            f.write(b"binary")
+        self.cfg["coreslot"] = binary
+        out = os.path.join(self.root, "out")
+        os.makedirs(out)
+        with open(os.path.join(out, "pilot_check.json"), "w") as f:
+            f.write('{"go": true}')
+        status, calls = [" M evidence/run7.py\n"], []
+
+        def output(*argv):
+            calls.append(argv)
+            if "rev-parse" in argv:
+                return "abc123\n"
+            return status[0] if "status" in argv else "GNU parallel 20260922\nCopyright\n"
+        with mock.patch.object(run7, "output", output):
+            prov = run7.provenance(self.cfg, out, "pilot")
+            status[0] = ""
+            clean = run7.provenance(self.cfg, out, "main")
+        rec = self.run_set("F", meta=prov)
+        self.assertEqual({k: rec[k] for k in prov},
+                         {"binary_sha256": hashlib.sha256(b"binary").hexdigest(),
+                          "evidence_head": "abc123", "tree_dirty": True,
+                          "parallel_version": "GNU parallel 20260922"})
+        self.assertFalse(clean["tree_dirty"])
+        self.assertEqual(clean["pilot_check_sha256"],
+                         hashlib.sha256(b'{"go": true}').hexdigest())
+        self.assertIn(("git", "-C", run7.REPO, "status", "--porcelain", "--", "evidence"), calls)
 
 
 if __name__ == "__main__":
