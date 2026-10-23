@@ -73,10 +73,12 @@ def load(path):
     return cfg
 
 
-def vm_counter(name):
+def vm_counters(*names):
+    """The named vm_stat counters from one vm_stat call, each None when missing."""
     r = subprocess.run(["vm_stat"], capture_output=True, text=True)
-    m = re.search(rf"^{name}:\s+(\d+)", r.stdout, re.M)
-    return int(m.group(1)) if m else None
+    ms = [re.search(rf"^{name}:\s+(\d+)", r.stdout, re.M) for name in names]
+    return [int(m.group(1)) if m else None for m in ms]
+
 
 
 def available_mib():
@@ -111,8 +113,8 @@ def headroom_mib():
     return sum(int(v) for v in vals[1:]) * int(vals[0]) >> 20
 
 
-def tree_rss_kib(root):
-    """Resident KiB of root and all its descendants, from one ps listing."""
+def tree_kib(root):
+    """pid -> resident KiB of root and each of its descendants, from one ps listing."""
     r = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True, text=True)
     kids, rss = {}, {}
     for line in r.stdout.splitlines():
@@ -121,17 +123,22 @@ def tree_rss_kib(root):
             pid, ppid, kib = int(p[0]), int(p[1]), int(p[2])
             kids.setdefault(ppid, []).append(pid)
             rss[pid] = kib
-    total, todo = 0, [root]
+    tree, todo = {}, [root]
     while todo:
         pid = todo.pop()
-        total += rss.get(pid, 0)
+        tree[pid] = rss.get(pid, 0)
         todo.extend(kids.get(pid, []))
-    return total
+    return tree
+
+
+def tree_rss_kib(root):
+    return sum(tree_kib(root).values())
 
 
 class Sampler(threading.Thread):
-    """Once a second: memory pressure, swap in use, the swapouts counter, the 1-min load and the
-    headroom; every fifth second also the thermal state (0 nominal .. 3 critical)."""
+    """Once a second: memory pressure, swap in use, the swapouts, swapins and pageins counters,
+    the 1-min load and the headroom; every fifth second also the thermal state (0 nominal ..
+    3 critical)."""
 
     def __init__(self):
         super().__init__(daemon=True)
@@ -140,8 +147,10 @@ class Sampler(threading.Thread):
     def run(self):
         i = 0
         while not self.stop.is_set():
+            swapouts, swapins, pageins = vm_counters("Swapouts", "Swapins", "Pageins")
             s = {"t": round(time.time(), 1), "pressure": pressure(),
-                 "swap_mib": acceptance.swap_used_mib(), "swapouts": vm_counter("Swapouts"),
+                 "swap_mib": acceptance.swap_used_mib(), "swapouts": swapouts,
+                 "swapins": swapins, "pageins": pageins,
                  "load1": round(os.getloadavg()[0], 2), "headroom_mib": headroom_mib()}
             if i % 5 == 0:
                 s["thermal"] = acceptance.thermal()

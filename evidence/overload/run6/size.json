@@ -1,0 +1,12 @@
+{
+ "underpowered": true,
+ "sigma_hat_heavy": 0.11503351663070835,
+ "sigma_heavy": 0.1441929614206608,
+ "n_heavy_unclamped": 150,
+ "n_heavy": 120,
+ "sigma_hat_light": 0.07740853974558205,
+ "sigma_light": 0.09703056041481349,
+ "n_light_unclamped": 69,
+ "n_light": 60,
+ "light_pressure_sets": 0
+}

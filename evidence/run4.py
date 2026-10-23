@@ -60,7 +60,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acceptance  # noqa: E402  (probe, cooldown, runlog_lines, sign_test)
-import overload  # noqa: E402  (load, Sampler, vm_counter)
+import overload  # noqa: E402  (load, Sampler)
 
 ROOT = os.path.expanduser("~/bench.noindex")
 DEFAULT_DIRS = ("~/Library/Application Support/coreslot", "~/.local/state/coreslot")
@@ -168,6 +168,9 @@ def run_gate(argv, **kw):
         _live.add(p)
     try:
         out, _ = p.communicate()
+    except BaseException:  # interrupted in the thread that waits for it (learn's): stop it
+        stop_live()
+        raise
     finally:
         with _live_lock:
             _live.discard(p)
@@ -238,7 +241,9 @@ def offsets_for(cfg, seed):
 
 
 def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None, needs=None):
-    """Runs one set of arm and appends its record to path."""
+    """Runs one set of arm and appends its record to path. An arm starting with S holds each
+    heavy gate on one of `slots` slots; a K arm copies needs into the state directory, or with
+    needs None removes the needs file there, a cold start."""
     cd = acceptance.cooldown(pacing(cfg), baseline)
     ac = on_ac()
     page, bg = background()
@@ -246,8 +251,11 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
     if arm.startswith("K"):
         write_config(cfg, kshare["cpu"], kshare["mem"], kshare.get("live"))
         dst = os.path.join(checked_state(cfg), "needs.toml")
-        shutil.copyfile(needs, dst)
-        want = sha256(needs)
+        if needs:
+            shutil.copyfile(needs, dst)
+        elif os.path.lexists(dst):
+            os.remove(dst)
+        want = sha256(needs) if needs else None
         if not budget_empty(cfg):
             sys.exit(f"run4: {meta}: the budget is not empty")
     runlog0 = len(acceptance.runlog_lines(cfg))
@@ -259,7 +267,7 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
         try:
             time.sleep(offsets[name])
             for g in chain:
-                held = arm == "S" and g["heavy"]
+                held = arm.startswith("S") and g["heavy"]
                 if held:
                     sem.acquire()
                 s = time.time()
@@ -270,8 +278,9 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
                         sem.release()
                 e = time.time()
                 with lock:
-                    gates.append({"agent": name, "gate": g["gate"], "start": round(s - t0, 1),
-                                  "end": round(e - t0, 1), "exit": code})
+                    gates.append({"agent": name, "gate": g["gate"], "label": g.get("label"),
+                                  "start": round(s - t0, 1), "end": round(e - t0, 1),
+                                  "exit": code})
                     if code:
                         failures.append({"agent": name, "gate": g["gate"],
                                          "lines": fail_lines(g, out)})
@@ -295,7 +304,7 @@ def run_set(cfg, path, *, arm, offsets, meta, baseline, slots=None, kshare=None,
     finally:
         sampler.stop.set()
         sampler.join()
-    if arm.startswith("K") and sha256(dst) != want:
+    if arm.startswith("K") and (sha256(dst) if os.path.exists(dst) else None) != want:
         errors.append("the needs file changed during the set")
     verdict = {n: round(max(g["end"] for g in gates if g["agent"] == n) - offsets[n], 1)
                for n in cfg["agents"] if any(g["agent"] == n for g in gates)}
@@ -457,9 +466,14 @@ def critical_s(r):
     return sum((s["pressure"] or 1) >= 4 for s in r["samples"])
 
 
+def counter(r, key):
+    """The rise of a sampled counter over the set."""
+    c = [s[key] for s in r["samples"] if s.get(key) is not None]
+    return c[-1] - c[0] if len(c) > 1 else 0
+
+
 def swapout_mib(r):
-    c = [s["swapouts"] for s in r["samples"] if s.get("swapouts") is not None]
-    return round((c[-1] - c[0]) * r.get("page_bytes", 16384) / 2**20, 1) if len(c) > 1 else 0
+    return round(counter(r, "swapouts") * r.get("page_bytes", 16384) / 2**20, 1)
 
 
 def waited_s(r):
@@ -640,7 +654,7 @@ def timeline_svg(block, sets, order, agents):
     w, l, r, row, gap = 760, 90, 20, 18, 34
     end = max(max(g["end"] for g in s["gates"]) for s in sets.values()) or 1
     x = (lambda t: l + t / end * (w - l - r))
-    h = 40 + len(ARMS) * (len(agents) * row + 12 + gap) + 30
+    h = 40 + len(order) * (len(agents) * row + 12 + gap) + 30
     body = [f'<text x="{l}" y="18" fill="{INK}">Block {block}: gates per agent over time;'
             ' the band is memory pressure</text>']
     y0 = 40
