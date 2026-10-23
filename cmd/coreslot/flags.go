@@ -47,7 +47,8 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
                         is one size, mem=3G or mem=768M. A labelled run takes the cpu and mem
                         it leaves out from the label's entry in needs.toml, beside the
                         configuration; with neither --need nor cpu there, the default applies
-                        (default cpu=1..16 when COMMAND has a cpu placeholder, else cpu=1..1)
+                        (default cpu=1..16, at most the CPU count, when COMMAND has a cpu
+                        placeholder, else cpu=1..1)
   --label L             a name for the request, shown by status and kept in the run log, so
                         never a secret; it names the request's entry in needs.toml, without a
                         final @N or @- (default none)

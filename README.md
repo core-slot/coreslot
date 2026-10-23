@@ -164,11 +164,11 @@ nothing idles. A grant is fixed for the run's lifetime: it does not grow when to
 later.
 
 Without `--need` (and without `cpu` in its [needs file](#memory) entry), a run whose command has
-`{n}` (or `{n:cpu}`, or one inside an argument with `--subst`) asks for `cpu=1..16`, and any other
-run for `cpu=1..1`: a command that cannot learn its
-grant would hold tokens it leaves idle. A command that parallelizes itself without `{n}`, such as
-`go test ./...` or `cargo build`, should say `--need cpu=1..16` (or `cpu=1..`) so that it is
-counted honestly.
+`{n}` (or `{n:cpu}`, or one inside an argument with `--subst`) asks for `cpu=1..16`, or up to the
+machine's CPU count when it has fewer, and any other run for `cpu=1..1`: a command that cannot
+learn its grant would hold tokens it leaves idle. A command that parallelizes itself without
+`{n}`, such as `go test ./...` or `cargo build`, should say `--need cpu=1..16` (or `cpu=1..`) so
+that it is counted honestly.
 
 ### Memory
 
@@ -198,8 +198,10 @@ mem = "3G"
 coreslot measures every run: the run log records the memory peak of the command and all its
 descendants, sampled every second. `coreslot stats` shows, per label, what its last 5 runs used;
 `coreslot suggest` prints the entries they suggest (the most cores and the largest peak among
-them), and `coreslot suggest --write` writes them into `needs.toml` with their evidence, leaving an
-entry marked `pinned = true` as it is. After a run whose peak outgrew its memory need by more than
+them; when that peak was taken with more cpu than it suggests, its evidence says so, since a
+command with `{n}` uses memory per worker and the peak may be smaller at the new grant), and
+`coreslot suggest --write` writes them into `needs.toml` with their evidence, leaving an entry
+marked `pinned = true` as it is. After a run whose peak outgrew its memory need by more than
 one token, or passed 1 GiB with none, coreslot says so on stderr, for example
 `coreslot: gate:unit peaked at 2.5 GiB on a 2 GiB mem grant; coreslot suggest --write --label
 gate:unit`.

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -104,6 +105,12 @@ func TestInteropPythonAndGo(t *testing.T) {
 		e := State(t)
 		e.WriteConfig(cpuConfig(8))
 		report := []string{"--", "sh", "-c", `echo "$CORESLOT_GRANTED_CPU $1"`, "sh"}
+		// The default {n} range's max is the CPU count below 16, or 16 when it cannot be read.
+		cold := spec.DefaultMax
+		if c, err := config.MachineCPUs(); err == nil && c > 0 {
+			cold = min(cold, c)
+		}
+		n, wide := min(8, cold), fmt.Sprintf("map[cpu:[1 %d]]", cold)
 		cases := []struct {
 			flags  []string
 			arg    string
@@ -112,11 +119,11 @@ func TestInteropPythonAndGo(t *testing.T) {
 			logged string
 		}{
 			{nil, "x", "1 x", 0, "map[cpu:[1 1]]"},
-			{nil, "{n}", "8 8", 0, "map[cpu:[1 16]]"},
-			{nil, "{n:cpu}", "8 8", 0, "map[cpu:[1 16]]"},
+			{nil, "{n}", fmt.Sprintf("%d %d", n, n), 0, wide},
+			{nil, "{n:cpu}", fmt.Sprintf("%d %d", n, n), 0, wide},
 			{nil, "{{n}}", "1 {n}", 0, "map[cpu:[1 1]]"},
 			{nil, "-j{n}", "1 -j{n}", 0, "map[cpu:[1 1]]"},
-			{[]string{"--subst"}, "-j{n}", "8 -j8", 0, "map[cpu:[1 16]]"},
+			{[]string{"--subst"}, "-j{n}", fmt.Sprintf("%d -j%d", n, n), 0, wide},
 			{[]string{"--need", "cpu=4.."}, "x", "8 x", 0, "map[cpu:[4 16]]"},
 			{[]string{"--need", "cpu=20.."}, "x", "8 x", 0, "map[cpu:[20 20]]"},
 			{[]string{"--need", "cpu=..2"}, "x", "2 x", 0, "map[cpu:[1 2]]"},

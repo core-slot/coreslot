@@ -33,6 +33,7 @@ type Stats struct {
 	MemPeakKiB    int64             // the window's largest peak, 0 when no run has one
 	MemPeakSource string            // that peak's measure
 	PeakAfterS    *float64          // when that peak was read, nil when unknown
+	PeakCPU       int               // that run's cpu grant when above the suggested cpu max, else 0
 	WaitedS       float64           // summed over the window
 	WaitedFreeS   float64           // summed over the window; a run without it adds 0
 	Suggest       Suggestion
@@ -78,9 +79,6 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 		if r.WaitedFreeS != nil {
 			s.WaitedFreeS += *r.WaitedFreeS
 		}
-		if r.MemPeakKiB != nil && *r.MemPeakKiB > s.MemPeakKiB {
-			s.MemPeakKiB, s.MemPeakSource, s.PeakAfterS = *r.MemPeakKiB, r.MemPeakSource, r.PeakAfterS
-		}
 		if r.CPUUserS == nil || r.CPUSysS == nil || r.RanS <= 0 {
 			continue
 		}
@@ -99,10 +97,26 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 		}
 		s.Suggest.CPU = &cpu
 	}
+	s.memPeak(window)
 	const tokenKiB = spec.MemTokenMiB * 1024
 	s.Suggest.MemMiB = (s.MemPeakKiB + tokenKiB - 1) / tokenKiB * spec.MemTokenMiB
 	s.Suggest.Reason = s.reason(maxCores)
 	return s
+}
+
+// memPeak sets the window's largest peak, and in PeakCPU the cpu grant of its run when that is above
+// the suggested cpu max: a command that takes {n} uses memory per worker, so such a peak may not hold
+// at the grant the label will get, and the evidence says so rather than guessing that grant.
+func (s *Stats) memPeak(window []store.RunRecord) {
+	for _, r := range window {
+		if r.MemPeakKiB != nil && *r.MemPeakKiB > s.MemPeakKiB {
+			s.MemPeakKiB, s.MemPeakSource, s.PeakAfterS = *r.MemPeakKiB, r.MemPeakSource, r.PeakAfterS
+			s.PeakCPU = 0
+			if g := r.Grant["cpu"]; s.Suggest.CPU != nil && g > s.Suggest.CPU.Max {
+				s.PeakCPU = g
+			}
+		}
+	}
 }
 
 // reason is the evidence for the suggestion, such as "5 runs 2026-10-20..21: max 5.6 cores, 0 of
@@ -120,6 +134,9 @@ func (s Stats) reason(maxCores float64) string {
 		}
 		if s.PeakAfterS != nil {
 			peak += fmt.Sprintf(" at %.0fs", *s.PeakAfterS)
+		}
+		if s.PeakCPU > 0 {
+			peak += fmt.Sprintf(" with cpu %d", s.PeakCPU)
 		}
 		parts = append(parts, peak)
 	}

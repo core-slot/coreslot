@@ -8,6 +8,16 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A run without `--need` whose command has a cpu placeholder asks for `cpu=1..16` only up to the
+  machine's CPU count, so on a 10-CPU Mac with the `"140%"` default it no longer starts 14 workers.
+  The Python client follows.
+- `coreslot suggest` says in its evidence when the peak its `mem` rests on was taken with a cpu
+  grant above the cpu it suggests (`peak 3.1 GiB (footprint) at 8s with cpu 14`): a command with
+  `{n}` uses memory per worker, so the label's runs at the new grant may need less, and a later
+  `suggest --write` over them writes it.
+
 ## [0.2.0] - 2026-10-23
 
 Memory becomes a budgeted resource beside cores, and coreslot learns what each labelled command

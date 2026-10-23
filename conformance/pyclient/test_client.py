@@ -1204,11 +1204,15 @@ class LauncherTests(Base):
     def test_need_forms_grant_and_log(self):
         self.config("[resources]\ncpu = 8\n")
         report = ["sh", "-c", 'echo "$CORESLOT_GRANTED_CPU $1"', "sh"]
-        cold = min(cc.DEFAULT_MAX, cc.machine_cpus())  # the default max on this machine
+        try:  # the default max on this machine, DEFAULT_MAX where the count cannot be read
+            cold = min(cc.DEFAULT_MAX, cc.machine_cpus())
+        except cc.StateError:
+            cold = cc.DEFAULT_MAX
+        n = min(8, cold)
         for args, out, logged in ((["--", *report, "x"], "1 x", [1, 1]),
-                                  (["--", *report, "{n}"], "8 8", [1, cold]),
+                                  (["--", *report, "{n}"], f"{n} {n}", [1, cold]),
                                   (["--", *report, "{{n}}"], "1 {n}", [1, 1]),
-                                  (["--subst", "--", *report, "-j{n}"], "8 -j8", [1, cold]),
+                                  (["--subst", "--", *report, "-j{n}"], f"{n} -j{n}", [1, cold]),
                                   (["--need", "cpu=4..", "--", *report, "x"], "8 x", [4, 16]),
                                   (["--need", "cpu=..2", "--", *report, "x"], "2 x", [1, 2])):
             p = self.cli("run", *args, stdout=subprocess.PIPE)

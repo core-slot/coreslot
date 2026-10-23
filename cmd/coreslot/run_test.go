@@ -861,10 +861,12 @@ func TestRunAppendsOneLogLine(t *testing.T) {
 
 // On an 8-token budget a run gets what its request, as normalized, allows, and its run log
 // records that normalized request: the default without a placeholder takes 1, the default with
-// {n} and a one-sided min both take the whole budget, and a one-sided max caps the grant.
+// {n} takes the budget up to the machine's CPU count, a one-sided min takes the whole budget, and a
+// one-sided max caps the grant.
 // Mutation: drop the default rule in parseRun, and the {n} case gets 1 and logs [1 1].
 func TestRunNeedFormsGrantAndLog(t *testing.T) {
 	report := []string{"sh", "-c", `echo "$CORESLOT_GRANTED_CPU $1"`, "sh"}
+	cold, n := coldMax(), min(8, coldMax())
 	for _, c := range []struct {
 		name   string
 		args   []string
@@ -872,9 +874,9 @@ func TestRunNeedFormsGrantAndLog(t *testing.T) {
 		logged string
 	}{
 		{"default, no placeholder", append(append([]string{"--"}, report...), "x"), "1 x", "map[cpu:[1 1]]"},
-		{"default, {n}", append(append([]string{"--"}, report...), "{n}"), "8 8", fmt.Sprintf("map[cpu:[1 %d]]", coldMax())},
+		{"default, {n}", append(append([]string{"--"}, report...), "{n}"), fmt.Sprintf("%d %d", n, n), fmt.Sprintf("map[cpu:[1 %d]]", cold)},
 		{"default, {{n}}", append(append([]string{"--"}, report...), "{{n}}"), "1 {n}", "map[cpu:[1 1]]"},
-		{"default, --subst -j{n}", append(append([]string{"--subst", "--"}, report...), "-j{n}"), "8 -j8", fmt.Sprintf("map[cpu:[1 %d]]", coldMax())},
+		{"default, --subst -j{n}", append(append([]string{"--subst", "--"}, report...), "-j{n}"), fmt.Sprintf("%d -j%d", n, n), fmt.Sprintf("map[cpu:[1 %d]]", cold)},
 		{"cpu=4..", append(append([]string{"--need", "cpu=4..", "--"}, report...), "x"), "8 x", "map[cpu:[4 16]]"},
 		{"cpu=..2", append(append([]string{"--need", "cpu=..2", "--"}, report...), "x"), "2 x", "map[cpu:[1 2]]"},
 	} {

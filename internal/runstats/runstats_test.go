@@ -4,6 +4,7 @@ package runstats
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/spec"
@@ -72,6 +73,34 @@ func TestMemIsMaxRoundedUp(t *testing.T) {
 	s = only(t, Summarize([]store.RunRecord{run("x", 1, 1, spec.Range{Min: 1, Max: 1}, 1)}, 16))
 	if s.Suggest.MemMiB != 0 || s.MemPeakKiB != 0 {
 		t.Errorf("no peak recorded, yet mem %d MiB, peak %d KiB", s.Suggest.MemMiB, s.MemPeakKiB)
+	}
+}
+
+// When the window's largest peak was taken with a cpu grant above the suggested cpu max, mem still
+// rests on it, and the evidence names that grant: a pytest run granted 14 workers peaks at 3.1 GiB,
+// one granted 6 at 1.4 GiB, and the suggestion is cpu 1..6, so the reader learns the peak may not
+// hold at the grant the label will get. Mutation: drop the grant from the evidence, and the first
+// case reddens; name it whatever the grant, and the second does.
+func TestEvidenceNamesALargerGrant(t *testing.T) {
+	cold := run("x", 1, 5.6, spec.Range{Min: 1, Max: 14}, 14)
+	cold.MemPeakKiB = gib(3.1)
+	warm := run("x", 2, 5.2, spec.Range{Min: 1, Max: 6}, 6)
+	warm.MemPeakKiB = gib(1.4)
+	s := only(t, Summarize([]store.RunRecord{cold, warm}, 14))
+	if c := s.Suggest.CPU; c == nil || *c != (spec.Range{Min: 1, Max: 6}) {
+		t.Fatalf("cpu %v, want 1..6", c)
+	}
+	if s.Suggest.MemMiB != 3200 || s.MemPeakKiB != *gib(3.1) {
+		t.Errorf("mem %d MiB, peak %d KiB; want 3200 and %d, the window's largest", s.Suggest.MemMiB, s.MemPeakKiB, *gib(3.1))
+	}
+	if !strings.Contains(s.Suggest.Reason, "with cpu 14") {
+		t.Errorf("reason %q does not say the peak was taken with cpu 14", s.Suggest.Reason)
+	}
+
+	cold.MemPeakKiB = gib(1.0)
+	s = only(t, Summarize([]store.RunRecord{cold, warm}, 14))
+	if strings.Contains(s.Suggest.Reason, "with cpu") {
+		t.Errorf("reason %q names a grant, though the peak came from a run granted 6", s.Suggest.Reason)
 	}
 }
 

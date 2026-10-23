@@ -64,7 +64,8 @@ func coldMax() int {
 
 // The default range's max is the machine's CPU count when that is below 16, so that a cold run
 // never starts more workers than there are CPUs; a count it cannot read leaves 16. Mutation: drop
-// the cap, and the 4-CPU case reddens; cap without the error check, and the unreadable case does.
+// the cap, and the 4-CPU case reddens; cap on any count, a failed read's 0 included, and the
+// unreadable case does.
 func TestRunDefaultNeedCappedAtCPUs(t *testing.T) {
 	saved := machineCPUs
 	t.Cleanup(func() { machineCPUs = saved })
