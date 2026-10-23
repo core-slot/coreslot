@@ -1,0 +1,154 @@
+{
+ "blocks": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12
+ ],
+ "reruns": [],
+ "per_arm": {
+  "KS": {
+   "mean_verdict_s": 37.8,
+   "makespan_s": 66.1,
+   "warn_s": 0.0,
+   "critical_s": 0.0,
+   "false_failures_total": 0,
+   "waited_free_s": 27.65
+  },
+  "KL": {
+   "mean_verdict_s": 37.150000000000006,
+   "makespan_s": 66.65,
+   "warn_s": 0.0,
+   "critical_s": 0.0,
+   "false_failures_total": 0,
+   "waited_free_s": 29.3
+  },
+  "S": {
+   "mean_verdict_s": 37.1,
+   "makespan_s": 62.4,
+   "warn_s": 6.0,
+   "critical_s": 0.0,
+   "false_failures_total": 0
+  }
+ },
+ "ratios": {
+  "KL/KS mean_verdict_s": [
+   0.799,
+   1.0,
+   0.992,
+   0.984,
+   1.006,
+   1.141,
+   1.014,
+   0.944,
+   0.894,
+   1.054,
+   1.054,
+   0.96
+  ],
+  "KL/KS makespan_s": [
+   0.801,
+   1.0,
+   1.006,
+   1.022,
+   1.006,
+   1.077,
+   1.016,
+   0.929,
+   0.912,
+   1.034,
+   1.112,
+   0.98
+  ],
+  "KL/S mean_verdict_s": [
+   0.476,
+   0.97,
+   1.2,
+   1.072,
+   0.986,
+   1.373,
+   0.802,
+   0.52,
+   0.815,
+   0.683,
+   1.096,
+   1.184
+  ],
+  "KL/S makespan_s": [
+   0.611,
+   1.091,
+   1.264,
+   1.211,
+   1.139,
+   1.289,
+   0.808,
+   0.633,
+   0.842,
+   0.88,
+   1.189,
+   1.194
+  ]
+ },
+ "decomposition": {
+  "KS": {
+   "M": 465.1,
+   "MC": 236.2,
+   "C": 0.0,
+   "HM": 149.4,
+   "HMC": 64.8,
+   "HC": 0.0,
+   "latency": 63.2,
+   "above_static": 0
+  },
+  "KL": {
+   "M": 439.4,
+   "MC": 237.9,
+   "C": 0.0,
+   "HM": 147.0,
+   "HMC": 64.9,
+   "HC": 0.0,
+   "latency": 71.6,
+   "above_static": 0
+  }
+ },
+ "tests": {
+  "mechanism": {
+   "wins": 2,
+   "n": 12,
+   "p": 0.9968,
+   "pass": false
+  },
+  "price": {
+   "warn_diffs_s": [
+    -14,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "warn_diff_median_s": 0.0,
+   "critical_s": 0,
+   "false_failures": 0,
+   "pass": true
+  }
+ },
+ "outcome": [
+  "Mechanism fails: the live size does not remove the waits on this machine."
+ ],
+ "incomplete": null
+}
