@@ -461,5 +461,187 @@ class RunSet7(unittest.TestCase):
         self.assertIn(("git", "-C", run7.REPO, "status", "--porcelain", "--", "evidence"), calls)
 
 
+class Design(unittest.TestCase):
+    def test_level_for_pairs(self):
+        # mutations: seed the level by block -> a pair can repeat a level -> red; no shuffle ->
+        # every pair starts quiet -> red
+        firsts = set()
+        for phase in ("pilot", "main"):
+            for pair in range(12):
+                levels = [run7.level_for(phase, 2 * pair + i) for i in (1, 2)]
+                self.assertEqual(sorted(levels), sorted(run7.LEVELS), (phase, pair))
+                firsts.add(levels[0])
+        self.assertEqual(firsts, set(run7.LEVELS))
+        for b in range(1, 7):
+            self.assertEqual(sorted(run7.order_for("main", "heavy", b, run7.HEAVY_ARMS)),
+                             sorted(run7.HEAVY_ARMS))
+        self.assertNotEqual(run7.order_for("main", "heavy", 1, run7.HEAVY_ARMS),
+                            run7.order_for("main", "heavy", 2, run7.HEAVY_ARMS))
+
+
+class Verdict7(unittest.TestCase):
+    """verdict with run_set7, the session's probes, git and parallel faked."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.cfg, self.out = stand(self.root), os.path.join(self.root, "out")
+        self.cfg["agents"].update({"A3": [gate("ruff", False), gate("tests")],
+                                   "A4": [gate("orm")]})
+        self.cfg["coreslot"] = os.path.join(self.root, "coreslot")
+        with open(self.cfg["coreslot"], "wb") as f:
+            f.write(b"binary")
+        os.makedirs(self.out)
+        for name in ("needs.toml", "learn.jsonl"):
+            with open(os.path.join(self.out, name), "w") as f:
+                f.write(f"# {name}\n")
+        run7.seal(self.out)
+        self.calls, self.status, self.sem = [], "", "/usr/local/bin/sem"
+
+        def run_set7(cfg, path, **kw):
+            self.calls.append({"cfg": cfg, "path": path, **kw})
+
+        def output(*argv):
+            if "rev-parse" in argv:
+                return "abc123\n"
+            return self.status if "status" in argv else "GNU parallel 20260922\n"
+        for target, name, fake in (
+                (run4, "ROOT", self.root), (run7, "run_set7", run_set7),
+                (run7, "output", output), (run7.shutil, "which", lambda cmd: self.sem),
+                (run7, "static_sizes7", lambda cfg: {"cpu": 14, "mem": 76}),
+                (run6, "running_apps", lambda: ["Terminal"]),
+                (run6, "coreslot_version", lambda cfg: "coreslot 0.0.0-test"),
+                (acceptance, "probe", lambda: 1.0)):
+            p = mock.patch.object(target, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def pilot_check(self, **kw):
+        with open(os.path.join(self.out, "pilot_check.json"), "w") as f:
+            json.dump(kw, f)
+
+    def record(self, phase, mix, block, arms, valid=True, as_block=None):
+        with open(os.path.join(self.out, f"{phase}-{mix}.jsonl"), "a") as f:
+            for arm in arms:
+                f.write(json.dumps({"block": block, "arm": arm, "valid": valid,
+                                    "as_block": as_block}) + "\n")
+
+    def verdict(self, *args, **kw):
+        with mock.patch("sys.stdout"):
+            run7.verdict(self.cfg, self.out, *args, **kw)
+
+    def refused(self, *args, **kw):
+        with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
+            self.verdict(*args, **kw)
+        return cm.exception.code
+
+    def test_verdict_resumes_and_skips(self):
+        # mutation: level_for(phase, first) for level_for(phase, src) -> block 6 runs at block
+        # 5's level, which differs inside a pair -> red
+        self.pilot_check(go=True, p_feasible=True)
+        arms = run7.HEAVY_ARMS
+        self.record("main", "heavy", 4, arms)
+        o5, o6 = (run7.order_for("main", "heavy", b, arms) for b in (5, 6))
+        self.record("main", "heavy", 5, o5[:2])
+        self.verdict("main", "heavy", 4, 6)
+        self.assertEqual([(c["meta"]["block"], c["arm"]) for c in self.calls],
+                         [(5, a) for a in o5[2:]] + [(6, a) for a in o6])
+        self.assertEqual([c["level_name"] for c in self.calls],
+                         [run7.level_for("main", 5)] * 2 + [run7.level_for("main", 6)] * 4)
+        self.assertNotEqual(run7.level_for("main", 5), run7.level_for("main", 6))
+        c = self.calls[0]
+        self.assertEqual(c["path"], os.path.join(self.out, "main-heavy.jsonl"))
+        self.assertEqual(c["offsets"], run4.offsets_for(self.cfg, "run7-main-heavy-5"))
+        m = c["meta"]
+        self.assertEqual((m["level_name"], m["position"], m["prev_arm"], m["mix_agents"]),
+                         (c["level_name"], 2, o5[1], ["A1", "A2", "A3", "A4"]))
+        self.assertEqual((m["coreslot_version"], m["evidence_head"], m["tree_dirty"]),
+                         ("coreslot 0.0.0-test", "abc123", False))
+        self.assertEqual(m["pilot_check_sha256"],
+                         run4.sha256(os.path.join(self.out, "pilot_check.json")))
+        self.assertNotIn("Terminal", json.dumps(m))
+        k = next(c for c in self.calls if c["arm"] == "K60")
+        self.assertEqual((k["needs"], k["meta"]["static"]),
+                         (os.path.join(self.out, "needs.toml"), {"cpu": 14, "mem": 76}))
+        self.assertEqual(next(c for c in self.calls if c["arm"] == "S2")["slots"], 2)
+        # mutation: drop the skip of recorded (block, arm) -> block 4 runs again -> red
+        for c in self.calls:
+            self.record("main", "heavy", c["meta"]["block"], [c["arm"]])
+        n = len(self.calls)
+        self.verdict("main", "heavy", 4, 6)
+        self.assertEqual(len(self.calls), n)
+        # run 6's --as-block: block 4's order, level and offsets under block 13
+        self.record("main", "heavy", 4, ["P"], valid=False)
+        self.verdict("main", "heavy", 13, 13, as_block=4)
+        rerun = self.calls[n:]
+        self.assertEqual([c["arm"] for c in rerun], run7.order_for("main", "heavy", 4, arms))
+        for c in rerun:
+            self.assertEqual((c["meta"]["block"], c["meta"]["as_block"], c["level_name"]),
+                             (13, 4, run7.level_for("main", 4)))
+            self.assertEqual(c["offsets"], run4.offsets_for(self.cfg, "run7-main-heavy-4"))
+        self.assertEqual(self.refused("main", "heavy", 14, 14, as_block=5), 2)
+
+    def test_verdict_refusals(self):
+        # mutations: refuse a dirty tree only for main -> the pilot runs -> red; check go by the
+        # file's presence -> go false runs -> red; refuse a missing sem for every mix -> the
+        # light mix is refused -> red
+        self.sem = None
+        self.assertEqual(self.refused("pilot", "heavy", 1, 1), 2)
+        self.verdict("pilot", "light", 1, 1)
+        self.assertEqual(sorted(c["arm"] for c in self.calls), sorted(run7.LIGHT_ARMS))
+        self.sem, self.status = "/usr/local/bin/sem", " M evidence/run7.py\n"
+        self.assertEqual(self.refused("pilot", "heavy", 1, 1), 2)
+        self.status = ""
+        self.assertEqual(self.refused("main", "heavy", 1, 1), 2)
+        self.pilot_check(go=False, p_feasible=True)
+        self.assertEqual(self.refused("main", "heavy", 1, 1), 2)
+        self.assertEqual(self.refused("sens", "heavy", 1, 1), 2)
+        self.assertEqual(len(self.calls), len(run7.LIGHT_ARMS))
+        self.pilot_check(go=True, p_feasible=True)
+        with open(os.path.join(self.out, "needs.toml"), "a") as f:
+            f.write("# changed\n")
+        self.assertEqual(self.refused("main", "heavy", 1, 1), 2)
+        self.assertEqual(len(self.calls), len(run7.LIGHT_ARMS))
+
+    def test_verdict_drops_p_when_infeasible(self):
+        # mutation: keep P whatever pilot_check.json says -> four arms, and no sem -> red
+        self.pilot_check(p_feasible=False, go=True)
+        self.sem = None
+        self.verdict("main", "heavy", 1, 1)
+        self.assertEqual([c["arm"] for c in self.calls],
+                         run7.order_for("main", "heavy", 1, run7.P1_ARMS))
+
+    def test_mix_agents(self):
+        # mutations: run the wide mix on the stand's agents -> A1-A4 -> red; let it run with no
+        # wide agents -> empty sets recorded -> red
+        self.verdict("pilot", "wide", 1, 1)
+        self.verdict("pilot", "light", 1, 1)
+        self.verdict("sens", "spread", 1, 1)
+        got = [(c["meta"]["mix"], c["arm"], list(c["cfg"]["agents"]), c["level_name"])
+               for c in self.calls]
+        self.assertEqual(sorted(got), sorted(
+            [("wide", a, ["W1", "W2"], "quiet") for a in run7.WIDE_ARMS]
+            + [("light", a, ["A3", "A4"], "quiet") for a in run7.LIGHT_ARMS]
+            + [("spread", a, ["A1", "A2", "A3", "A4"], "quiet") for a in run7.SPREAD_ARMS]))
+        self.assertEqual(self.calls[0]["meta"]["mix_agents"], ["W1", "W2"])
+        self.assertEqual({c["cfg"]["window_s"] for c in self.calls if c["meta"]["mix"] == "spread"},
+                         {run7.SPREAD_WINDOW_S})
+        self.cfg["wide_agents"] = {}
+        self.assertEqual(self.refused("pilot", "wide", 2, 2), 2)
+
+
+class Static(unittest.TestCase):
+    def test_static_sizes7_writes_one_share(self):
+        # mutation: write run 6's two mem shares -> two writes -> red
+        root, writes = tempfile.mkdtemp(), []
+
+        def cs(cfg, *args, **kw):
+            status = {"resources": {"cpu": {"size": 14}, "mem": {"size": 76}}}
+            return subprocess.CompletedProcess(args, 0, json.dumps(status), "")
+        with mock.patch.object(run4, "ROOT", root), mock.patch.object(run4, "cs", cs), \
+                mock.patch.object(run4, "write_config",
+                                  lambda cfg, cpu, mem: writes.append((cpu, mem))):
+            self.assertEqual(run7.static_sizes7(stand(root)), {"cpu": 14, "mem": 76})
+        self.assertEqual(writes, [("140%", "60%")])
+
 if __name__ == "__main__":
     unittest.main()

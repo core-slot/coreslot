@@ -32,9 +32,23 @@ spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet level only.
            by (gate, form, pass, run). Once a relearn record exists, pass 1 and its suggest are
            never run again. Refuses with exit 2 once any pilot, main or sensitivity record exists.
   verdict  blocks FIRST..LAST of PHASE (pilot or main for the heavy, light and wide mixes; sens
-           for spread) and MIX, each block's arms in a seeded order, each set after a cooldown,
-           at its level, under a timeout of 600 s; appends one record per set to
-           OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded.
+           for spread) and MIX, each block's arms in the order order_for gives it, offsets from
+           the seed run7-<phase>-<mix>-<block>. A heavy block's level comes from level_for
+           (blocks 1-2, 3-4, ... each hold both levels); the other mixes run at quiet. Each set:
+           a cooldown, with the other processes' CPU over it (bg_cpu_cores); the level, quiet
+           waiting up to QUIET_WAIT_S for QUIET_HEADROOM_MIB of headroom, loaded holding a
+           ballast that brings the headroom down to LOADED_HEADROOM_MIB; the headroom at t0;
+           then the agents, under a timeout of 600 s (a dry stand may lower it with
+           RUN7_SET_TIMEOUT_S), past which every gate is stopped, P's sem calls are killed down
+           to their jobs' process groups and the set is invalid with set_timeout. A missed
+           level is flagged, never fatal. P leaves the heavy mix once OUT/pilot_check.json says
+           it is infeasible. Exit 2 when P is to run and sem is not on PATH, when the evidence
+           tree has uncommitted changes (pilot, main), when main lacks a pilot_check.json whose
+           "go" is true, or when the files OUT/needs.sha256 names do not match it. --as-block
+           and --primer as in run 6. Each record carries the coreslot binary's SHA-256, the
+           evidence tree's HEAD and tree_dirty, the first line of `parallel --version` and, for
+           main, pilot_check.json's SHA-256, all read once per command. Appends one record per
+           set to OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded.
   pilot-check
            from the pilot's first valid blocks: the futility check of P1's three components and
            whether P is feasible, to OUT/pilot_check.json; main runs only when its "go" is true.
@@ -48,6 +62,7 @@ import glob
 import json
 import math
 import os
+import random
 import shutil
 import signal
 import statistics
@@ -62,7 +77,7 @@ import acceptance  # noqa: E402  (probe, cooldown, runlog_lines)
 import ballast  # noqa: E402  (Ballast)
 import overload  # noqa: E402  (load, Sampler, headroom_mib)
 import run4  # noqa: E402  (cs, fresh_state, write_config, checked_state, pacing, ...)
-import run6  # noqa: E402  (measured, write_learn_state)
+import run6  # noqa: E402  (measured, write_learn_state, check_needs, apps_meta, mix_cfg, ...)
 
 HEAVY_ARMS = ("K60", "S1", "S2", "P")
 P1_ARMS = ("K60", "S1", "S2")
@@ -497,19 +512,128 @@ def run_set7(cfg, path, *, arm, offsets, meta, baseline, level_name, slots=None,
             os.remove(lockdir + ".lock")
 
 
+# --- verdict ----------------------------------------------------------------------------------
+
+MIXES = {"heavy": HEAVY_ARMS, "light": LIGHT_ARMS, "wide": WIDE_ARMS, "spread": SPREAD_ARMS}
+
+
+def level_for(phase, block):
+    """A heavy block's level: blocks 1-2, 3-4, ... each hold both levels, in a seeded order."""
+    levels = list(LEVELS)
+    random.Random(f"run7-level-{phase}-{(block - 1) // 2}").shuffle(levels)
+    return levels[(block - 1) % 2]
+
+
+def order_for(phase, mix, block, arms):
+    arms = list(arms)
+    random.Random(f"run7-order-{phase}-{mix}-{block}").shuffle(arms)
+    return arms
+
+
+def static_sizes7(cfg):
+    """The cpu and mem sizes `coreslot status --json` reports under K_SHARE, in tokens."""
+    os.makedirs(run4.checked_state(cfg), mode=0o700, exist_ok=True)
+    run4.write_config(cfg, K_SHARE["cpu"], K_SHARE["mem"])
+    r = run4.cs(cfg, "status", "--json", capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(f"run7: status --json exited {r.returncode}")
+    res = json.loads(r.stdout)["resources"]
+    return {"cpu": res["cpu"]["size"], "mem": res["mem"]["size"]}
+
+
+def mix_cfg7(cfg, mix):
+    return dict(cfg, agents=cfg["wide_agents"]) if mix == "wide" else run6.mix_cfg(cfg, mix)
+
+
+def arm_kw7(out, arm):
+    """run_set7's keyword arguments for arm."""
+    if arm.startswith("S"):
+        return {"slots": int(arm[1:])}
+    return {"needs": os.path.join(out, "needs.toml")} if arm == "K60" else {}
+
+
+def refuse(why):
+    print(f"run7: {why}", file=sys.stderr)
+    sys.exit(2)
+
+
+def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
+    if (phase == "sens") != (mix == "spread"):
+        refuse(f"mix {mix} does not belong to phase {phase}")
+    path = os.path.join(out, "pilot_check.json")
+    check = None
+    if os.path.exists(path):
+        with open(path) as f:
+            check = json.load(f)
+    if phase == "main" and not (check or {}).get("go"):
+        refuse(f"main runs only after a pilot check whose go is true, in {path}")
+    arms = [a for a in MIXES[mix] if not (a == "P" and (check or {}).get("p_feasible") is False)]
+    if "P" in arms and not shutil.which("sem"):
+        refuse("arm P needs GNU sem on PATH")
+    run6.check_needs(out)
+    path = os.path.join(out, f"{phase}-{mix}.jsonl")
+    recs = run4.read_jsonl(path)
+    if as_block and (as_block in run6.reruns(recs) or
+                     not any(r["block"] == as_block and not r["valid"] for r in recs)):
+        refuse(f"block {as_block} is a re-run or has no invalid set")
+    done = {(r["block"], r["arm"]) for r in recs}
+    blocks = [(b, [a for a in order_for(phase, mix, as_block or b, arms) if (b, a) not in done])
+              for b in range(first, last + 1)]
+    blocks = [(b, pending) for b, pending in blocks if pending]
+    if not blocks:
+        return
+    prov = provenance(cfg, out, phase)
+    if prov["tree_dirty"] and phase != "sens":
+        refuse("the evidence tree has uncommitted changes")
+    scfg = mix_cfg7(cfg, mix)
+    if not scfg["agents"]:
+        refuse(f"the stand has no agents for the {mix} mix")
+    apps, static, baseline = run6.apps_meta(out), static_sizes7(cfg), acceptance.probe()
+    version = run6.coreslot_version(cfg)
+    needs_sha = run4.sha256(os.path.join(out, "needs.toml"))
+    for i, (b, pending) in enumerate(blocks):
+        src = as_block or b
+        order = order_for(phase, mix, src, arms)
+        level_name = level_for(phase, src) if mix == "heavy" else "quiet"
+        offsets = run4.offsets_for(scfg, f"run7-{phase}-{mix}-{src}")
+        sets = [("K60", None, os.path.join(out, "primer.jsonl"))] if primer and i == 0 else []
+        sets += [(arm, order.index(arm), path) for arm in pending]
+        for arm, pos, dst in sets:
+            meta = {"phase": phase, "mix": mix, "block": b, "as_block": as_block,
+                    "order": " ".join(order), "level_name": level_name, "position": pos,
+                    "prev_arm": order[pos - 1] if pos else None, "mix_agents": list(scfg["agents"]),
+                    **apps, "coreslot_version": version,
+                    "needs_sha256": needs_sha if arm == "K60" else None,
+                    "static": static if arm == "K60" else None, **prov}
+            run_set7(scfg, dst, arm=arm, offsets=offsets, meta=meta, baseline=baseline,
+                     level_name=level_name, **arm_kw7(out, arm))
+
+
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("learn")
-    p.add_argument("stand")
-    p.add_argument("out")
+    for name in ("learn", "verdict"):
+        p = sub.add_parser(name)
+        p.add_argument("stand")
+        p.add_argument("out")
+        if name == "verdict":
+            p.add_argument("phase", choices=("pilot", "main", "sens"))
+            p.add_argument("mix", choices=tuple(MIXES))
+            p.add_argument("first", type=int)
+            p.add_argument("last", type=int)
+            p.add_argument("--as-block", type=int, default=None)
+            p.add_argument("--primer", action="store_true")
     args = ap.parse_args()
     cfg = load(args.stand)
 
     def interrupted(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, interrupted)
-    learn(cfg, args.out)
+    if args.cmd == "learn":
+        learn(cfg, args.out)
+    else:
+        verdict(cfg, args.out, args.phase, args.mix, args.first, args.last, args.as_block,
+                args.primer)
 
 
 if __name__ == "__main__":
