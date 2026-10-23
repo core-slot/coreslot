@@ -77,5 +77,45 @@ class Binomial(unittest.TestCase):
         self.assertEqual(stats7.binom_upper_p(0, 0, 0.03), 1.0)
 
 
+class Rules(unittest.TestCase):
+    def test_iut_needs_all(self):
+        r = stats7.iut({"a": 0.01, "b": 0.2}, 0.05)
+        self.assertFalse(r["rejected"])
+        self.assertTrue(r["components"]["a"]["rejected"])
+        self.assertFalse(r["components"]["b"]["rejected"])
+        self.assertTrue(stats7.iut({"a": 0.01, "b": 0.04}, 0.05)["rejected"])
+
+    def test_holm_order_and_stop(self):
+        rows = stats7.holm({"x": 0.001, "y": 0.04, "z": 0.02}, 0.05)
+        self.assertEqual([r["name"] for r in rows], ["x", "z", "y"])
+        for r, t in zip(rows, (0.05 / 3, 0.025, 0.05)):
+            self.assertAlmostEqual(r["threshold"], t, places=12)
+            self.assertTrue(r["rejected"] and r["tested"])
+        rows = stats7.holm({"x": 0.001, "y": 0.06, "z": 0.02}, 0.05)
+        self.assertEqual([r["name"] for r in rows], ["x", "z", "y"])
+        self.assertEqual([r["rejected"] for r in rows], [True, True, False])
+        rows = stats7.holm({"x": 0.001, "y": None, "z": 0.02}, 0.05)
+        by = {r["name"]: r for r in rows}
+        self.assertEqual([r["name"] for r in rows], ["x", "z", "y"])
+        self.assertTrue(by["x"]["rejected"] and by["z"]["rejected"])
+        self.assertFalse(by["y"]["rejected"] or by["y"]["tested"])
+        self.assertIsNone(by["y"]["p"])
+        self.assertAlmostEqual(by["y"]["threshold"], 0.05, places=12)
+
+
+class Power(unittest.TestCase):
+    def test_sign_power(self):
+        self.assertAlmostEqual(stats7.sign_power(5, 1.0, 0.05), 1.0, places=12)
+        self.assertEqual(stats7.sign_power(4, 1.0, 0.05), 0.0)
+        smallest = next(m for m in range(1, 200) if stats7.sign_power(m, 0.8, 0.05) >= 0.93)
+        self.assertEqual(smallest, 26)
+
+    def test_t_power(self):
+        self.assertAlmostEqual(stats7.t_power(60, 0.084, 0.183, 0.05), 0.972, delta=0.002)
+        self.assertAlmostEqual(stats7.t_power(72, 0.043, 0.098, 0.05), 0.981, delta=0.002)
+        self.assertEqual(stats7.t_power(60, -0.01, 0.183, 0.05), 0.0)
+        self.assertEqual(stats7.t_power(60, 0.05, 0.0, 0.05), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

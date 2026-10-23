@@ -53,3 +53,41 @@ def binom_upper_p(k, n, p0):
     if n == 0 or k >= n:
         return 1.0
     return sum(math.comb(n, i) * p0 ** i * (1 - p0) ** (n - i) for i in range(k + 1))
+
+
+def iut(ps, alpha):
+    """The intersection-union test: the joint null is rejected only when every component's p is
+    below alpha."""
+    comps = {name: {"p": p, "rejected": p < alpha} for name, p in ps.items()}
+    return {"rejected": all(c["rejected"] for c in comps.values()), "components": comps}
+
+
+def holm(ps, alpha):
+    """Holm's step-down over ps in ascending p, with thresholds alpha / (m - i). A None p is
+    untested: it counts in m as p = 1 and is never rejected. After one failure none is rejected."""
+    order = sorted(ps, key=lambda name: 1.0 if ps[name] is None else ps[name])
+    rows, going = [], True
+    for i, name in enumerate(order):
+        threshold = alpha / (len(order) - i)
+        tested = ps[name] is not None
+        going = going and tested and ps[name] < threshold
+        rows.append({"name": name, "p": ps[name], "threshold": threshold, "rejected": going,
+                     "tested": tested})
+    return rows
+
+
+def sign_power(m, win_rate, alpha):
+    """The power of the exact one-sided sign test of m untied pairs at that win rate: the critical
+    count is the smallest c with P(X >= c | m, 0.5) <= alpha."""
+    def upper(c, q):
+        return sum(math.comb(m, k) * q ** k * (1 - q) ** (m - k) for k in range(c, m + 1))
+    c = next(c for c in range(m + 2) if upper(c, 0.5) <= alpha)
+    return upper(c, win_rate)
+
+
+def t_power(n, mean, sd, alpha):
+    """The normal-approximation power of a one-sided paired t test of mean > 0."""
+    if mean <= 0 or sd == 0:
+        return 0.0
+    nd = NormalDist()
+    return nd.cdf(mean / (sd / math.sqrt(n)) - nd.inv_cdf(1 - alpha))
