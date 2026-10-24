@@ -1,4 +1,5 @@
 """Tests of run7.py: python3 -m unittest evidence/test_run7.py"""
+import _thread
 import contextlib
 import copy
 import hashlib
@@ -349,6 +350,7 @@ class RunSet7(unittest.TestCase):
                               "A2": [gate("lint", False), gate("tc")]}
         self.events, self.popens, self.killed = [], [], []
         self.gate_s, self.gate_raises, self.headroom = 0, False, 11000
+        self.interrupt_on = None  # a gate during which the runner gets Ctrl-C
         test = self
 
         class Popen:
@@ -365,6 +367,9 @@ class RunSet7(unittest.TestCase):
                 test.events.append(("gate", self.argv[-1]))
                 if test.gate_raises:
                     raise RuntimeError("sem failed")
+                if self.argv[0] == test.interrupt_on:
+                    time.sleep(0.2)  # the watchdog is waiting on the agents by now
+                    _thread.interrupt_main()
                 self.returncode = -15 if self.done.wait(test.gate_s) else 0
                 return "", None
 
@@ -460,6 +465,16 @@ class RunSet7(unittest.TestCase):
             self.assertEqual((rec["valid"], rec["invalid"]), (False, ["set_timeout"]))
             self.assertEqual(sorted(p.argv[0] for p in self.popens), ["lint", tc])
             self.assertEqual(sorted(self.killed), sorted(p.pid for p in self.popens))
+
+    def test_interrupt_starts_no_gate(self):
+        # mutation: on Ctrl-C kill without setting the stop flag -> A2 starts tc once lint is
+        # killed, and nothing kills it -> red
+        self.gate_s, self.interrupt_on = 30, "lint"
+        with mock.patch.object(run4, "run_one", RUN_ONE), self.assertRaises(KeyboardInterrupt):
+            self.run_set("F")
+        time.sleep(0.5)  # time enough for A2 to start its next gate
+        self.assertEqual(sorted(p.argv for p in self.popens), [["lint"], ["tc", "-n", "3"]])
+        self.assertEqual(sorted(self.killed), sorted(p.pid for p in self.popens))
 
     def test_k60_needs_and_runlog(self):
         # mutations: drop the needs copy, or the check that it is unchanged -> red; skip the
@@ -1098,6 +1113,20 @@ class Summary7(unittest.TestCase):
         append(self.out, "main-wide.jsonl", wide_block7(4, "main"))
         self.assertEqual(self.summary(dropped=True)["blocks"]["wide"], [1, 2, 3])
         self.assertEqual(self.refused(), 2)
+
+    def test_summary_dropped_keeps_the_rerun_cap(self):
+        # mutation: the wide cap from the dropped n (3 // 10 = 0) -> re-run 4 ignored -> red
+        p = mock.patch.multiple(run7, N_WIDE=10, N_WIDE_DROPPED=3)
+        p.start()
+        self.addCleanup(p.stop)
+        self.write_main(wide=())
+        bad = wide_block7(2, "main")
+        bad[0].update(valid=False, invalid=["battery"])
+        rerun = [dict(r, as_block=2) for r in wide_block7(4, "main")]
+        append(self.out, "main-wide.jsonl", wide_block7(1, "main") + bad
+               + wide_block7(3, "main") + rerun)
+        s = self.summary(dropped=True)
+        self.assertEqual((s["blocks"]["wide"], s["reruns_ignored"]["wide"]), ([1, 2, 3], []))
 
     def test_summary_refuses_short(self):
         # mutations: `<=` for `<` in the re-run check -> with the one re-run spent it still exits

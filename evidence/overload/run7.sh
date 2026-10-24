@@ -8,8 +8,9 @@
 # step, pilot-check, which the operator runs and reads before any main block. learn and verdict
 # continue where an interrupted run stopped, so re-issuing the same command resumes it. A phase
 # given by name runs alone, for instance `run7.sh verdict main heavy 1 144` or
-# `run7.sh verdict main heavy 145 145 --as-block 5` for a re-run block. pilot-check and summary
-# take OUT only: `run7.sh pilot-check`, `run7.sh summary`.
+# `run7.sh verdict main heavy 145 145 --as-block 5` for a re-run block. pilot-check takes OUT
+# only, `run7.sh pilot-check`; summary takes OUT and, once the drop past 32 h is declared,
+# --dropped: `run7.sh summary` or `run7.sh summary --dropped`.
 #
 # STAND defaults to evidence/overload/stand7.json and OUT to evidence/overload/run7. --dry uses
 # stand-dry.json and OUT ~/bench.noindex/run7-dry, and with no phase runs one block of each mix

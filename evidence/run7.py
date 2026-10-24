@@ -42,18 +42,18 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            then the agents, under a timeout of 600 s (a dry stand may lower it with
            RUN7_SET_TIMEOUT_S), past which no gate starts, every live gate is killed down to its
            jobs' process groups (SIGTERM, SIGKILL after 5 s) and the set is invalid with
-           set_timeout. A missed
-           level is flagged, never fatal. P leaves the heavy mix once OUT/pilot_check.json says
-           it is infeasible. Exit 2 when P is to run and sem is not on PATH, when the evidence
-           tree has uncommitted changes or the coreslot binary's SHA-256 is not the stand's
-           coreslot_sha256 (pilot, main; a dry stand skips both), when main lacks a
-           pilot_check.json whose "go" is true, or when the files OUT/needs.sha256 names do not
-           match it. A command with nothing left to run exits 0 first. --as-block and --primer
-           as in run 6, except that --as-block refuses a block whose only invalid set is P's
-           (its P1 sets stand; H-P uses the blocks where P is valid). Each record carries the coreslot binary's SHA-256, the
-           evidence tree's HEAD and tree_dirty, the first line of `parallel --version` and, for
-           main, pilot_check.json's SHA-256, all read once per command. Appends one record per
-           set to OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded.
+           set_timeout; an interrupt stops the agents the same way. A missed level is flagged, never
+           fatal. P leaves the heavy mix once OUT/pilot_check.json says it is infeasible. Exit 2
+           when P is to run and sem is not on PATH, when the evidence tree has uncommitted changes
+           or the coreslot binary's SHA-256 is not the stand's coreslot_sha256 (pilot, main; a dry
+           stand skips both), when main lacks a pilot_check.json whose "go" is true, or when the
+           files OUT/needs.sha256 names do not match it. A command with nothing left to run exits 0
+           first. --as-block and --primer as in run 6, except that --as-block refuses a block whose
+           only invalid set is P's (its P1 sets stand; H-P uses the blocks where P is valid). Each
+           record carries the coreslot binary's SHA-256, the evidence tree's HEAD and tree_dirty,
+           the first line of `parallel --version` and, for main, pilot_check.json's SHA-256, all
+           read once per command. Appends one record per set to OUT/<phase>-<mix>.jsonl, skipping
+           each (block, arm) already recorded.
   pilot-check
            from the pilot's first 12 heavy blocks valid over K60, S1 and S2 (P's validity never
            drops one), its first 12 light and 6 wide valid blocks, each mix counting at most 3
@@ -72,9 +72,9 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            pressure); H-Z, K60's heavy sets with more than 64 MiB swapped out below 3 %; H-W,
            wide S2 slower than K60. Then the reported estimates, with K60 against P at loaded
            (signed-rank on swap traffic, sign test on warn seconds); to OUT/summary.json and
-           OUT/summary.txt. Exits 2 without pilot_check.json, or while a mix lacks n valid
-           blocks and has re-runs left; with them spent, its tests are untested. --dropped
-           declares the drop past 32 h: the spread run may be absent and the wide n is 24.
+           OUT/summary.txt. Exits 2 without pilot_check.json, or while a mix lacks n valid blocks
+           and has re-runs left; with them spent, its tests are untested. --dropped declares the
+           drop past 32 h: wide n 24, its re-run cap still 3; spread optional.
 """
 import argparse
 import collections
@@ -454,6 +454,7 @@ def run_agents(cfg, arm, offsets, slots, set_id, timeout):
                     stop()  # again on each pass: a gate may have started just before expiry
                 t.join(0.5)
     except KeyboardInterrupt:
+        expired.set()  # as on a timeout: no agent starts a gate after the kill
         stop()
         raise
     finally:
@@ -936,11 +937,13 @@ def summary(out, dropped=False):
         refuse(f"{path} is missing; run pilot-check first")
     with open(path) as f:
         check = json.load(f)
-    mixes = {"heavy": (P1_ARMS, 2 * N_LEVEL), "light": (LIGHT_ARMS, N_LIGHT),
-             "wide": (WIDE_ARMS, N_WIDE_DROPPED if dropped else N_WIDE)}
+    # the drop changes only the wide n: its re-runs were spent under the cap of N_WIDE
+    mixes = {"heavy": (P1_ARMS, 2 * N_LEVEL, 2 * N_LEVEL // 10),
+             "light": (LIGHT_ARMS, N_LIGHT, N_LIGHT // 10),
+             "wide": (WIDE_ARMS, N_WIDE_DROPPED if dropped else N_WIDE, N_WIDE // 10)}
     recs, used, spent, ignored, full = {}, {}, {}, {}, {}
-    for mix, (arms, n) in mixes.items():
-        recs[mix], ignored[mix] = run6.capped(run6.records(out, "main", mix), n // 10)
+    for mix, (arms, n, cap) in mixes.items():
+        recs[mix], ignored[mix] = run6.capped(run6.records(out, "main", mix), cap)
         blocks = run6.valid_blocks(recs[mix], arms)
         if mix == "heavy":  # the first N_LEVEL of each level
             levels = [run6.first(bs, N_LEVEL) for bs in by_level7(blocks).values()]
@@ -949,9 +952,9 @@ def summary(out, dropped=False):
         else:
             used[mix], full[mix] = run6.first(blocks, n), len(blocks) >= n
         spent[mix] = run6.reruns(recs[mix])
-        if not full[mix] and len(spent[mix]) < n // 10:
+        if not full[mix] and len(spent[mix]) < cap:
             refuse(f"main {mix}: {len(used[mix])} of {n} valid blocks, {len(spent[mix])} of"
-                   f" {n // 10} re-runs; no summary yet")
+                   f" {cap} re-runs; no summary yet")
     heavy, light, wide = used["heavy"], used["light"], used["wide"]
     if full["heavy"]:
         p1 = p1_test(heavy)
