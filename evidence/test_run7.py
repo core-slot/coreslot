@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import signal
 import subprocess
 import statistics
 import sys
@@ -40,6 +41,7 @@ def stand(root):
             "wide_agents": {"W1": [gate("build")], "W2": [gate("tc")]}}
 
 
+RUN_ONE = run4.run_one
 GATES = ("tc", "lint", "build")
 PASS1 = [("run", g, form) for g in GATES for form in ["K"] * 6 + ["F"] * 3]
 RELEARN = [("run", g, "K") for g in GATES for _ in range(5)]
@@ -311,6 +313,27 @@ class Processes(unittest.TestCase):
         after = {10: (1, 7.0), 11: (1, 3.0), 12: (1, 9.0), 13: (1, 4.0)}
         self.assertEqual(run7.background_cpu_cores(before, after, {12}, 2.0), 3.0)
 
+    def test_kill_tree_real_children(self):
+        # mutations: drop the SIGKILL -> the child ignoring SIGTERM lives on -> red; drop the
+        # exclusion of the runner's own group -> it is signalled -> red
+        plain = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        stubborn = subprocess.Popen(["sh", "-c", "trap '' TERM; sleep 60"],
+                                    start_new_session=True)
+        ours = subprocess.Popen(["sleep", "60"])  # in the runner's own process group
+        for p in (plain, stubborn, ours):
+            self.addCleanup(p.wait)
+            self.addCleanup(p.kill)
+        sent, killpg = [], os.killpg
+
+        def guarded(group, sig):  # records every signal, and never sends one to our own group
+            sent.append(group)
+            if group != os.getpgrp():
+                killpg(group, sig)
+        with mock.patch.object(run7.os, "killpg", guarded):
+            run7.kill_tree([plain.pid, stubborn.pid, ours.pid])
+        self.assertEqual((plain.wait(2), stubborn.wait(2)), (-signal.SIGTERM, -signal.SIGKILL))
+        self.assertNotIn(os.getpgrp(), sent)
+
 
 class RunSet7(unittest.TestCase):
     """run_set7 with the machine, the level, the sampler and the gates faked; P's sem calls go to
@@ -330,9 +353,10 @@ class RunSet7(unittest.TestCase):
                 self.argv, self.env, self.returncode = argv, kw["env"], None
                 self.pid, self.done = 9000 + len(test.popens), threading.Event()
                 test.popens.append(self)
-                sems = os.path.join(self.env["PARALLEL_HOME"], "semaphores")
-                os.makedirs(os.path.join(sems, f"id-{argv[3]}"), exist_ok=True)
-                open(os.path.join(sems, f"id-{argv[3]}.lock"), "w").close()
+                if argv[0] == "sem":
+                    sems = os.path.join(self.env["PARALLEL_HOME"], "semaphores")
+                    os.makedirs(os.path.join(sems, f"id-{argv[3]}"), exist_ok=True)
+                    open(os.path.join(sems, f"id-{argv[3]}.lock"), "w").close()
 
             def communicate(self):
                 test.events.append(("gate", self.argv[-1]))
@@ -357,9 +381,10 @@ class RunSet7(unittest.TestCase):
             yield {"level": name, "headroom_before_mib": 9000, "ballast_mib": 0,
                    "ballast_rss_mib": None, "flags": []}
 
-        def kill_tree(pid):
-            self.killed.append(pid)
-            next(p for p in self.popens if p.pid == pid).done.set()
+        def kill_tree(pids):
+            for pid in pids:
+                self.killed.append(pid)
+                next(p for p in self.popens if p.pid == pid).done.set()
 
         def run_one(cfg, g, arm):
             self.events.append(("gate", g["gate"]))
@@ -419,16 +444,19 @@ class RunSet7(unittest.TestCase):
         self.assertEqual(self.semaphores(), [])
 
     def test_set_timeout_invalidates_and_kills(self):
-        # mutation: on expiry only stop_live -> sem's calls are never killed -> the set waits
-        # out its gates and is valid -> red
+        # mutations: on expiry kill only P's sem calls -> F's gates run on -> red; drop the
+        # expiry check before a gate -> A2's tc starts after lint is killed -> red
         self.gate_s = 30
-        t = time.monotonic()
-        with mock.patch.object(run7, "SET_TIMEOUT_S", 1):
-            rec = self.run_set("P")
-        self.assertLess(time.monotonic() - t, 10)
-        self.assertEqual((rec["valid"], rec["invalid"]), (False, ["set_timeout"]))
-        self.assertEqual(sorted(self.killed), sorted(p.pid for p in self.popens))
-        self.assertEqual(len(self.killed), 2)
+        for arm, tc in (("P", "sem"), ("F", "tc")):
+            self.popens.clear(), self.killed.clear()
+            t = time.monotonic()
+            with mock.patch.object(run7, "SET_TIMEOUT_S", 1), \
+                    mock.patch.object(run4, "run_one", RUN_ONE):
+                rec = self.run_set(arm)
+            self.assertLess(time.monotonic() - t, 10)
+            self.assertEqual((rec["valid"], rec["invalid"]), (False, ["set_timeout"]))
+            self.assertEqual(sorted(p.argv[0] for p in self.popens), ["lint", tc])
+            self.assertEqual(sorted(self.killed), sorted(p.pid for p in self.popens))
 
     def test_set_timeout_env_only_when_dry(self):
         # mutation: honour RUN7_SET_TIMEOUT_S on any stand -> a real run can be cut short -> red

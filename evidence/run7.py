@@ -40,8 +40,9 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            waiting up to QUIET_WAIT_S for QUIET_HEADROOM_MIB of headroom, loaded holding a
            ballast that brings the headroom down to LOADED_HEADROOM_MIB; the headroom at t0;
            then the agents, under a timeout of 600 s (a dry stand may lower it with
-           RUN7_SET_TIMEOUT_S), past which every gate is stopped, P's sem calls are killed down
-           to their jobs' process groups and the set is invalid with set_timeout. A missed
+           RUN7_SET_TIMEOUT_S), past which no gate starts, every live gate is killed down to its
+           jobs' process groups (SIGTERM, SIGKILL after 5 s) and the set is invalid with
+           set_timeout. A missed
            level is flagged, never fatal. P leaves the heavy mix once OUT/pilot_check.json says
            it is infeasible. Exit 2 when P is to run and sem is not on PATH, when the evidence
            tree has uncommitted changes or the coreslot binary's SHA-256 is not the stand's
@@ -227,7 +228,6 @@ def learn(cfg, out):
 # --- sets -------------------------------------------------------------------------------------
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_p_live, _p_lock = set(), threading.Lock()  # P's sem calls, for kill_tree on a timeout
 
 
 @contextlib.contextmanager
@@ -319,11 +319,11 @@ def _killpg(group, sig):
         return False
 
 
-def kill_tree(pid):
-    """SIGTERM, then SIGKILL after 5 s, to the process group of every descendant of pid, then to
-    pid's own: sem starts its job in a group of its own. Never the runner's own group."""
-    groups = []
-    for p in descendants(ps_snapshot(), pid) + [pid]:
+def kill_tree(pids):
+    """SIGTERM, then SIGKILL after 5 s, to the process group of every descendant of each pid and
+    to the pid's own: sem starts its job in a group of its own. Never the runner's own group."""
+    snap, groups = ps_snapshot(), []
+    for p in [d for pid in pids for d in descendants(snap, pid) + [pid]]:
         try:
             g = os.getpgid(p)
         except ProcessLookupError:
@@ -339,29 +339,15 @@ def kill_tree(pid):
         _killpg(g, signal.SIGKILL)
 
 
-def run_p(argv, **kw):
-    """run4.run_gate for P's sem call, registered while it runs so the set can kill_tree it."""
-    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, text=True, errors="replace",
-                         start_new_session=True, **kw)
-    with _p_lock:
-        _p_live.add(p)
-    try:
-        out, _ = p.communicate()
-    finally:
-        with _p_lock:
-            _p_live.discard(p)
-    return p.returncode, out
-
-
 def run_one7(cfg, gate, arm, set_id, env):
     """run4.run_one, except that P runs each heavy gate through GNU sem, with env added."""
     if arm != "P" or not gate["heavy"]:
         return run4.run_one(cfg, gate, arm)
     argv = [gate.get("free_n", "auto") if a == "{n}" else a for a in gate["argv"]]
-    return run_p(["sem", "--will-cite", "--id", set_id, "--memsuspend", P_MEMSUSPEND, "-j",
-                  str(P_JOBS), "--fg", *argv], cwd=gate["cwd"],
-                 env=dict(os.environ, **gate.get("env", {}), **env))
+    r = run4.run_gate(["sem", "--will-cite", "--id", set_id, "--memsuspend", P_MEMSUSPEND, "-j",
+                       str(P_JOBS), "--fg", *argv], cwd=gate["cwd"],
+                      env=dict(os.environ, **gate.get("env", {}), **env))
+    return r.returncode, r.stdout
 
 
 def parallel_home(cfg):
@@ -408,8 +394,8 @@ def provenance(cfg, out, phase):
 
 def run_agents(cfg, arm, offsets, slots, set_id, timeout):
     """run4.run_set's agents, each gate through run_one7, under a watchdog: past timeout s it
-    stops every gate and kills P's sem calls down to their jobs. Returns (gates, failures,
-    errors, samples, t0, timed_out)."""
+    kill_trees every live gate and starts no other. Returns (gates, failures, errors, samples,
+    t0, timed_out)."""
     env = {"PARALLEL_HOME": parallel_home(cfg)}
     sem = threading.Semaphore(slots or 1)
     gates, failures, errors, lock, expired = [], [], [], threading.Lock(), threading.Event()
@@ -444,13 +430,12 @@ def run_agents(cfg, arm, offsets, slots, set_id, timeout):
 
     killed = set()
 
-    def stop():
-        run4.stop_live()
-        with _p_lock:
-            todo = [p for p in _p_live if p.pid not in killed]
-        for p in todo:
-            killed.add(p.pid)
-            kill_tree(p.pid)
+    def stop():  # every gate runs through run4.run_gate, so run4._live holds them all
+        with run4._live_lock:
+            todo = [p.pid for p in run4._live if p.pid not in killed]
+        killed.update(todo)
+        if todo:
+            kill_tree(todo)
 
     sampler = overload.Sampler()
     sampler.start()
