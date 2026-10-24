@@ -8,6 +8,11 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-24
+
+A patch: a command with a cpu placeholder no longer asks for more cpu than the machine has, and
+`suggest` says when the peak behind a `mem` need was taken at a wider cpu grant.
+
 ### Changed
 
 - A run without `--need` whose command has a cpu placeholder asks for `cpu=1..16` only up to the
@@ -125,6 +130,7 @@ The module path is `github.com/core-slot/coreslot`; an install from the earlier 
 - Release archives with checksums and a build-provenance attestation for every archive, and a
   Homebrew formula template that builds from source.
 
-[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/core-slot/coreslot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/core-slot/coreslot/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/core-slot/coreslot/releases/tag/v0.1.0
