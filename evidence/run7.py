@@ -69,7 +69,8 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            within 3 % of P at loaded over the blocks where P is valid (untested when P is
            infeasible); H-L, light K60 within 3 % of F (untested past one pilot F set under
            pressure); H-Z, K60's heavy sets with more than 64 MiB swapped out below 3 %; H-W,
-           wide S2 slower than K60. Then the reported estimates; to OUT/summary.json and
+           wide S2 slower than K60. Then the reported estimates, with K60 against P at loaded
+           (signed-rank on swap traffic, sign test on warn seconds); to OUT/summary.json and
            OUT/summary.txt. Exits 2 without pilot_check.json, or while a mix lacks n valid
            blocks and has re-runs left; with them spent, its tests are untested. --dropped
            declares the drop past 32 h: the spread run may be absent and the wide n is 24.
@@ -807,13 +808,12 @@ def per_arm7(blocks, arms, out):
 
 
 def k60_vs_p(blocks, pb):
-    """K60's swap traffic against P's, over the blocks with a valid P set."""
-    bs = [b for b in blocks if b in pb]
-    k = [swap_traffic_pages(blocks[b]["K60"]) for b in bs]
-    p = [swap_traffic_pages(pb[b]["P"]) for b in bs]
-    return {"n": len(bs), "K60_lower": sum(x < y for x, y in zip(k, p)),
-            "P_lower": sum(x > y for x, y in zip(k, p)),
-            "K60": run6.ci(k) if k else None, "P": run6.ci(p) if p else None}
+    """K60 against P over the blocks with a valid P set, outside the Holm family: the signed-rank
+    test of K60's swap traffic below P's, and the sign test of its warn seconds below P's."""
+    bs = {b: dict(sets, P=pb[b]["P"]) for b, sets in blocks.items() if b in pb}
+    return {"blocks": list(bs), "swap_traffic": stats7.wilcoxon_less(traffic_diffs(bs, "K60", "P")),
+            "warn_s": run6.sign([run6.worse(sets["K60"], run4.warn_s) for sets in bs.values()],
+                                [run4.warn_s(sets["P"]) for sets in bs.values()])}
 
 
 def s_star(blocks):
@@ -873,7 +873,7 @@ def reported(heavy, recs, light, wide, out):
                                   for lvl, bs in lv.items()},
                         "light": per_arm7(light, LIGHT_ARMS, out),
                         "wide": per_arm7(wide, WIDE_ARMS, out)},
-            "K60_vs_P_swap_traffic": {lvl: k60_vs_p(bs, pb) for lvl, bs in lv.items()},
+            "K60_vs_P": k60_vs_p(lv["loaded"], pb),
             "S*_in_hindsight": {lvl: s_star(bs) for lvl, bs in lv.items()},
             "spread": spread(out),
             "pairing": {**{f"heavy {lvl}": k60_sets(bs) for lvl, bs in lv.items()},

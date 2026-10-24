@@ -805,13 +805,15 @@ def fake_set(arm, block, level, mean, swapouts=0, swapins=0, warn=0, invalid=Non
             "static": {"cpu": 14, "mem": 76} if arm == "K60" else None}
 
 
-def heavy_block7(block, phase="pilot", times=None, swap=None, invalid=None, as_block=None):
+def heavy_block7(block, phase="pilot", times=None, swap=None, invalid=None, as_block=None,
+                 warn=None):
     """A heavy block's four sets at its level: HEAVY7 with noise, scaled by `times`, SWAP7 with
-    `swap` overriding an arm's swapouts, `invalid` an arm's reasons."""
+    `swap` overriding an arm's swapouts, `invalid` an arm's reasons, `warn` its warn seconds."""
     level = run7.level_for(phase, as_block or block)
     t, sw = times or {}, dict(SWAP7[level], **(swap or {}))
     return [fake_set(a, block, level, round(HEAVY7[level][a] * t.get(a, 1) * noise(block, a), 2),
-                     sw[a], 0, 0, (invalid or {}).get(a), phase, "heavy", as_block)
+                     sw[a], 0, (warn or {}).get(a, 0), (invalid or {}).get(a), phase, "heavy",
+                     as_block)
             for a in run7.HEAVY_ARMS]
 
 
@@ -1031,6 +1033,17 @@ class Summary7(unittest.TestCase):
                 d = [math.log(sets[b]["K60"] / sets[b][den]) for b in t["blocks"]]
                 self.assertEqual(t["t"], run7.finite_t(stats6.paired_upper(d, run7.MARGIN)))
                 self.assertEqual(t["p"] < 0.05, rejects, (name, k60, t["p"]))
+
+    def test_summary_k60_against_p(self):
+        # mutations: compare over the quiet blocks -> no traffic, no warn -> red; P - K60 for
+        # K60 - P -> p 1 -> red; keep the block whose P set is invalid -> red
+        loaded = [b for b in range(1, 13) if run7.level_for("main", b) == "loaded"]
+        self.write_main(kw=lambda b: {"invalid": {"P": ["battery"]}} if b == loaded[0] else {
+            "warn": {"K60": 3} if b == loaded[1] else {"P": 3}})
+        k = self.summary()["reported"]["K60_vs_P"]
+        self.assertEqual(k["blocks"], loaded[1:])
+        self.assertEqual(k["swap_traffic"], stats7.wilcoxon_less([10 - 300] * 5))
+        self.assertEqual(k["warn_s"], {"wins": 4, "losses": 1, "p": 6 / 32})
 
     def test_summary_p_infeasible(self):
         # mutation: leave H-P out of Holm when untested -> m 3 -> red
