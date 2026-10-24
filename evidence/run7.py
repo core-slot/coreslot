@@ -30,7 +30,8 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            The first call starts a fresh state directory and records it in OUT/learn-state.json;
            a later call reuses it, never resetting it, and makes only the runs learn.jsonl lacks
            by (gate, form, pass, run). Once a relearn record exists, pass 1 and its suggest are
-           never run again. Refuses with exit 2 once any pilot, main or sensitivity record exists.
+           never run again. Once OUT/needs.sha256 exists, it does nothing and exits 0. Refuses
+           with exit 2 once any pilot, main or sensitivity record exists.
   verdict  blocks FIRST..LAST of PHASE (pilot or main for the heavy, light and wide mixes; sens
            for spread) and MIX, each block's arms in the order order_for gives it, offsets from
            the seed run7-<phase>-<mix>-<block>. A heavy block's level comes from level_for
@@ -166,6 +167,9 @@ def suggest(cfg, out, name):
 
 
 def learn(cfg, out):
+    if os.path.exists(os.path.join(out, "needs.sha256")):
+        print("run7: the needs are sealed in OUT/needs.sha256; learn has nothing to do")
+        return
     for pattern in run6.RECORDS:
         if glob.glob(os.path.join(out, pattern)):
             print(f"run7: learn would change the needs {pattern} used", file=sys.stderr)

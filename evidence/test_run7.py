@@ -162,12 +162,20 @@ class Learn(unittest.TestCase):
                                                             for n in range(1, 6)])
 
     def test_learn_resumes_after_suggest2(self):
+        # mutations: run suggest #1 once relearn is complete -> needs-pass1.toml written -> red;
+        # let a sealed learn run -> suggest and seal again -> red
         self.write_learn(self.pass1_records()
                          + [(g, "K", "relearn", n) for g in GATES for n in range(1, 6)])
         self.learn()
-        self.assertEqual(self.runs(), [])
-        self.assertLessEqual(self.calls.count(("suggest",)), 1)
-        self.assertEqual(self.cooldowns, [])
+        self.assertEqual((self.runs(), self.cooldowns, self.calls), ([], [], [("suggest",)]))
+        self.assertFalse(os.path.exists(os.path.join(self.out, "needs-pass1.toml")))
+        sealed = text(os.path.join(self.out, "needs.sha256"))
+        self.assertIn("needs.toml", sealed)
+        with open(os.path.join(self.out, "learn.jsonl"), "a") as f:  # a stray run, after the seal
+            f.write(json.dumps({"gate": "tc", "form": "K", "pass": "relearn", "run": 6}) + "\n")
+        self.learn()
+        self.assertEqual(self.calls, [("suggest",)])
+        self.assertEqual(text(os.path.join(self.out, "needs.sha256")), sealed)
 
     def test_learn_refuses_after_pilot(self):
         # mutation: drop the sens pattern from the refusal -> learn runs -> red
