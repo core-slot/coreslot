@@ -1,6 +1,6 @@
 {
  "coreslot": "~/bench.noindex/bin/coreslot",
- "coreslot_sha256": null,
+ "coreslot_sha256": "82f7181c5b82163a53c9a4d89630d4262fe53d225dfcfef52452cabaa3aed575",
  "state_dir": "~/bench.noindex/state",
  "cpu": 10,
  "window_s": 5,
