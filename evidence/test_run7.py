@@ -51,6 +51,7 @@ class Stand(unittest.TestCase):
         s4 = json.loads(text(os.path.join(HERE, "overload", "stand4.json")))
         s7 = json.loads(text(os.path.join(HERE, "overload", "stand7.json")))
         wide = s7.pop("wide_agents")
+        s7.pop("coreslot_sha256")  # the release binary's, filled in before the pilot
         # a label learns one needs entry, so a wide gate that shares one is the heavy gate itself
         heavy = {g["label"]: g for gates in s7["agents"].values() for g in gates}
         for g in (g for gates in wide.values() for g in gates):
@@ -525,6 +526,7 @@ class Verdict7(unittest.TestCase):
         self.cfg["coreslot"] = os.path.join(self.root, "coreslot")
         with open(self.cfg["coreslot"], "wb") as f:
             f.write(b"binary")
+        self.cfg["coreslot_sha256"] = hashlib.sha256(b"binary").hexdigest()
         os.makedirs(self.out)
         for name in ("needs.toml", "learn.jsonl"):
             with open(os.path.join(self.out, name), "w") as f:
@@ -636,11 +638,32 @@ class Verdict7(unittest.TestCase):
         self.assertEqual(self.refused("main", "heavy", 1, 1), 2)
         self.assertEqual(self.refused("sens", "heavy", 1, 1), 2)
         self.assertEqual(len(self.calls), len(run7.LIGHT_ARMS))
+        # mutation: refuse a missing sem before the nothing-to-do return -> exit 2 -> red
+        self.record("pilot", "heavy", 1, run7.HEAVY_ARMS)
+        self.sem = None
+        self.verdict("pilot", "heavy", 1, 1)
+        self.sem = "/usr/local/bin/sem"
         self.pilot_check(go=True, p_feasible=True)
         with open(os.path.join(self.out, "needs.toml"), "a") as f:
             f.write("# changed\n")
         self.assertEqual(self.refused("main", "heavy", 1, 1), 2)
         self.assertEqual(len(self.calls), len(run7.LIGHT_ARMS))
+
+    def test_verdict_pins_the_binary(self):
+        # mutations: skip the binary check for main -> a rebuilt binary runs main -> red; check
+        # it on a dry stand too -> the dry run is refused -> red
+        self.pilot_check(go=True, p_feasible=True)
+        for phase in ("pilot", "main"):
+            for pinned in (None, hashlib.sha256(b"rebuilt").hexdigest()):
+                self.cfg["coreslot_sha256"] = pinned
+                self.assertEqual(self.refused(phase, "light", 1, 1), 2, (phase, pinned))
+        self.cfg.pop("coreslot_sha256")
+        self.assertEqual(self.refused("pilot", "light", 1, 1), 2)
+        self.assertEqual(self.calls, [])
+        # mutation: refuse a dirty tree on a dry stand -> red; drop tree_dirty there -> red
+        self.cfg["dry"], self.status = True, " M evidence/run7.py\n"
+        self.verdict("pilot", "light", 1, 1)
+        self.assertEqual([c["meta"]["tree_dirty"] for c in self.calls], [True, True])
 
     def test_verdict_drops_p_when_infeasible(self):
         # mutation: keep P whatever pilot_check.json says -> four arms, and no sem -> red

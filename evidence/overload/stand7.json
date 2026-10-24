@@ -1,5 +1,6 @@
 {
  "coreslot": "~/bench.noindex/bin/coreslot",
+ "coreslot_sha256": null,
  "state_dir": "~/bench.noindex/state",
  "cpu": 10,
  "window_s": 5,

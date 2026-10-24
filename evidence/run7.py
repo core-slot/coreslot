@@ -44,8 +44,10 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            to their jobs' process groups and the set is invalid with set_timeout. A missed
            level is flagged, never fatal. P leaves the heavy mix once OUT/pilot_check.json says
            it is infeasible. Exit 2 when P is to run and sem is not on PATH, when the evidence
-           tree has uncommitted changes (pilot, main), when main lacks a pilot_check.json whose
-           "go" is true, or when the files OUT/needs.sha256 names do not match it. --as-block
+           tree has uncommitted changes or the coreslot binary's SHA-256 is not the stand's
+           coreslot_sha256 (pilot, main; a dry stand skips both), when main lacks a
+           pilot_check.json whose "go" is true, or when the files OUT/needs.sha256 names do not
+           match it. A command with nothing left to run exits 0 first. --as-block
            and --primer as in run 6. Each record carries the coreslot binary's SHA-256, the
            evidence tree's HEAD and tree_dirty, the first line of `parallel --version` and, for
            main, pilot_check.json's SHA-256, all read once per command. Appends one record per
@@ -594,8 +596,6 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
     if phase == "main" and not (check or {}).get("go"):
         refuse(f"main runs only after a pilot check whose go is true, in {path}")
     arms = [a for a in MIXES[mix] if not (a == "P" and (check or {}).get("p_feasible") is False)]
-    if "P" in arms and not shutil.which("sem"):
-        refuse("arm P needs GNU sem on PATH")
     run6.check_needs(out)
     path = os.path.join(out, f"{phase}-{mix}.jsonl")
     recs = run4.read_jsonl(path)
@@ -609,9 +609,14 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
     blocks = [(b, pending) for b, pending in blocks if pending]
     if not blocks:
         return
+    if "P" in arms and not shutil.which("sem"):
+        refuse("arm P needs GNU sem on PATH")
     prov = provenance(cfg, out, phase)
-    if prov["tree_dirty"] and phase != "sens":
-        refuse("the evidence tree has uncommitted changes")
+    if phase != "sens" and not cfg.get("dry"):  # a dry run's records are not evidence
+        if prov["tree_dirty"]:
+            refuse("the evidence tree has uncommitted changes")
+        if cfg.get("coreslot_sha256") != prov["binary_sha256"]:  # e.g. setup.sh rebuilt it
+            refuse(f"{cfg['coreslot']} is not the binary the stand's coreslot_sha256 pins")
     scfg = mix_cfg7(cfg, mix)
     if not scfg["agents"]:
         refuse(f"the stand has no agents for the {mix} mix")
