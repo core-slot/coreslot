@@ -1899,7 +1899,9 @@ the machine is quiet; those cells are shown descriptively and are not part of th
 `evidence/overload/stand7.json`: run 4's stand, with one change. FastAPI's suite runs with
 `--dist loadgroup`, as its own `scripts/test.sh` runs it. FastAPI marks the tests that write to a
 shared working directory with an `xdist_group`, and the mark has effect only under that flag;
-without it those tests race, which caused all 50 false failures of run 6.
+without it those tests race. All 50 false failures of run 6 were FastAPI's, in three files that
+write to that directory; that the flag also removes them under contention is an inference the
+pilot must show.
 
 - **The heavy mix:** run 4's four agents. A1 and A2 each run the VS Code type check; A3 runs
   FastAPI's ruff, then its pytest suite; A4 runs SQLAlchemy's pytest `test/orm`.
@@ -1910,10 +1912,15 @@ without it those tests race, which caused all 50 false failures of run 6.
   same commit (`setup.sh` makes them), so no two gates running at once write into one tree.
   Their peak footprints alone sum to about 56 of the 76 tokens of mem `"60%"`.
 
-coreslot is the release `v0.2.1` (to be cut; its archive's SHA-256 and `coreslot version` are
-filled here before the pilot), installed from the release archive, not built locally. Every set
-records the binary's SHA-256. Every coreslot call goes through the stand's own state directory;
-the owner's budget and configuration are never touched.
+coreslot is the release `v0.2.1`, installed from its archive, not built locally: the archive
+`coreslot_0.2.1_darwin_arm64.tar.gz` matches the release's `checksums.txt`
+(`4235018e0de9b8712831ec93aeb1cde3c079d015a27808d5a825d92fd6464803`) and its build-provenance
+attestation verifies; `coreslot version` prints `coreslot 0.2.1 (protocol formats: 1)`. The
+binary's SHA-256, `82f7181c5b82163a53c9a4d89630d4262fe53d225dfcfef52452cabaa3aed575`, is pinned in
+`stand7.json` as `coreslot_sha256`: a pilot or main command refuses to start when the stand's
+binary has another (for instance after `setup.sh`, which builds coreslot into the same path).
+Every set records the binary's SHA-256. Every coreslot call goes through the stand's own state
+directory; the owner's budget and configuration are never touched.
 
 GNU parallel is 20260922 from Homebrew. It runs with `PARALLEL_HOME` under the stand's directory,
 so the runner never touches the user's `~/.parallel`.
@@ -1985,9 +1992,11 @@ seed `run7-level-<phase>-<(block - 1) div 2>`. The light, wide and spread mixes 
 **Arrivals.** Offsets from U(0, 5 s), U(0, 30 s) in the spread run, with the seed
 `run7-<phase>-<mix>-<b>`, the same for every set of the block.
 
-**A set timeout.** A set still running after 600 s is stopped: every gate is stopped, each P
-`sem` is killed down to its job's own process group, and the set is invalid with the reason
-`set_timeout`. Each set removes its own semaphore directory under `PARALLEL_HOME` when it ends.
+**A set timeout.** A set still running after 600 s is stopped: no further gate starts, every live
+gate of any arm, each P `sem` with its job included, is killed down to its process groups
+(SIGTERM, then SIGKILL after 5 s; never the runner's own group), and the set is invalid with the
+reason `set_timeout`. Each set removes its own semaphore directory under `PARALLEL_HOME` when it
+ends.
 
 **The primer.** Each session's first command starts with `--primer`: one K60 set of its first
 block, recorded to `run7/primer.jsonl` only.
@@ -2019,8 +2028,9 @@ The needs it wrote (filled here before the pilot):
 
 **The frozen files.** `run7/needs.sha256` holds the SHA-256 of `needs.toml` and `learn.jsonl`
 (filled here). Every verdict command exits before its first set unless they match. `learn`
-refuses once any pilot, main or sensitivity record exists; an interrupted `learn` resumes inside
-either pass and never re-runs the first `suggest` once the relearn pass has started.
+refuses once any pilot, main or sensitivity record exists without them; once they exist, `learn`
+does nothing (no run, no `suggest`, no reseal). An interrupted `learn` resumes inside either pass
+and never re-runs the first `suggest` once the relearn pass has started.
 
 ### Metrics
 
@@ -2030,7 +2040,9 @@ either pass and never re-runs the first `suggest` once the relearn pass has star
   seconds are tie-heavy.
 - **Pressure:** warn seconds (`kern.memorystatus_vm_pressure_level` ≥ 2) and critical seconds
   (≥ 4).
-- **Makespan, false failures, slowdown,** as in run 6.
+- **Makespan and false failures,** as in run 6.
+- **Slowdown:** a gate's own execution over its alone reference, K's the median `ran_s` of its 5
+  relearn runs (at the granted width), F's and S's the median wall time of its 3 F-form runs.
 
 ### The pilot: a futility check, not a size rule
 
@@ -2095,13 +2107,16 @@ tested counts in Holm's m with p = 1 and is never rejected:
   (p = 0.068).
 - **H-W:** on wide blocks, the mean of ln(S2/K60) is above 0 (paired t).
 
-If P1 is not rejected, each secondary row reads "not tested (P1 not rejected)".
+If P1 is not rejected, each secondary row reads "not tested (P1 not rejected)"; if P1 is untested
+(a short heavy mix), "not tested (P1 untested)".
 
 **Reported without a test:**
 
 - per arm, level and mix: the mean primary, the median makespan, warn and critical seconds, swap
   traffic, and false failures with exact 95 % intervals;
-- K60 against P's swap traffic and pressure;
+- K60 against P, on loaded blocks where P is valid: a Wilcoxon signed-rank test of K60 − P swap
+  traffic (below 0) and a sign test of K60 against P on warn seconds (ties dropped), each with
+  its p, outside the Holm family;
 - K60/S\* per level, S\* the best of S1 and S2 in hindsight, labelled as such;
 - the spread run, the first 12 valid blocks;
 - the pairing count: K60 sets in which the mem grants of overlapping runs summed above the static
@@ -2115,12 +2130,15 @@ If P1 is not rejected, each secondary row reads "not tested (P1 not rejected)".
 - **A valid set,** as in run 6, and also not timed out. Flags never invalidate.
 - **Re-runs.** A block with an invalid set is re-run at the end under the next block number with
   its level, order and offsets (`--as-block`); at most 10 % of n count (14 heavy, 4 light,
-  3 wide), 3 per mix in the pilot. `summary` refuses while a mix is short and re-runs are left;
+  3 wide, 2 under the declared drop), 3 per mix in the pilot. A heavy block whose only invalid
+  set is P's is not re-run (`--as-block` refuses it): its P1 sets stand, and H-P uses the blocks
+  where P is valid. `summary` refuses while a mix is short and re-runs are left;
   with them spent, the mix is reported as incomplete and its tests are untested.
 - **Provenance.** Every record carries the binary's SHA-256, the evidence tree's commit, whether
   that tree had uncommitted changes, the first line of `parallel --version` and, for main
-  records, the SHA-256 of `pilot_check.json`. A pilot or main command refuses to start on a tree
-  with uncommitted changes under `evidence/` (its own output directory aside).
+  records, the SHA-256 of `pilot_check.json`. A pilot or main command on the run's stand refuses
+  to start on a tree with uncommitted changes under `evidence/` (its own output directory aside);
+  a dry stand only records the state.
 
 ### Sessions and the time budget
 
@@ -2141,7 +2159,8 @@ At run 6's 1.96 min per heavy set and 1.2 min per light set, the budget is:
 | Learn, with relearn and cooldowns | ≈ 1 |
 
 About 27-30 h with the quiet waits. **If the run passes 32 h,** the spread run is dropped first,
-then the wide blocks above the first 24. P1's arms and n are never cut.
+then the wide blocks above the first 24, declared to the analysis with `run7.sh summary
+--dropped` (recorded as `"dropped": true`). P1's arms and n are never cut.
 
 **No analysis mid-run.** Nobody runs `summary`, or reads a main record's primary, until the main
 phase is complete. This is a convention the analyst keeps, stated here, not a control the code
@@ -2158,14 +2177,15 @@ These are decided now, before the data:
    fair alternative. coreslot's case narrows to "faster than a lock when the machine is quiet and
    safer than `sem -j2` when it is not", and that narrow claim is what is published. Development
    continues only if the wide mix, reported descriptively, shows the same frozen S2 losing too.
-3. **P1 rejected; H-P not rejected, or K60's swap traffic and pressure (reported) are not below
-   P's:** `sem --memsuspend` already does much of the job. Development continues only for what P
+3. **P1 rejected; H-P not rejected, or K60 not shown below P on both reported safety rows**
+   (the swap-traffic signed-rank test and the warn-seconds sign test, each at p < 0.05):
+   `sem --memsuspend` already does much of the job. Development continues only for what P
    lacks (learned needs, cross-agent and cross-tool admission), and that is said publicly.
 4. **H-L not rejected or its upper bound above 1.03:** coreslot taxes the common case. It is fixed
    before any publication, whatever P1 says.
-5. **P1 and H-P rejected, with K60's swap traffic and pressure below P's:** development continues.
-   The headline is "no tuning: keeps up with `sem -j2` and a lock across load, as fast as
-   `sem --memsuspend`, and free when idle", within the rows that were rejected.
+5. **P1 and H-P rejected, with both reported safety rows against P at p < 0.05:** development
+   continues. The headline is "no tuning: keeps up with `sem -j2` and a lock across load, as
+   fast as `sem --memsuspend`, and free when idle", within the rows that were rejected.
 
 If P is infeasible, outcomes 3 and 5 read "P is infeasible on macOS" in place of H-P.
 
@@ -2182,6 +2202,8 @@ Before the first pilot set:
 
 ```sh
 evidence/overload/setup.sh
+# then install the v0.2.1 release binary into ~/bench.noindex/bin/coreslot (setup.sh builds one
+# there, which the pin refuses)
 nohup evidence/overload/run7.sh > ~/bench.noindex/run7.log 2>&1 &  # learn, then the pilot
 evidence/overload/run7.sh pilot-check                              # run7/pilot_check.json
 evidence/overload/run7.sh verdict main heavy 1 144 --primer        # only after "go": true
