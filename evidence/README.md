@@ -1858,16 +1858,14 @@ heavy 1 120 and light 1 60. The measured binary was built at `ebac0a7` as stated
 
 ## Acceptance run 7: no fixed slot count keeps up across load (`run7.py`)
 
-**Status: draft, not yet the pre-registration.** This section is reviewed with the runner in a
-draft pull request. It becomes the pre-registration only when it is committed with its last
-values filled (the two headroom levels, the binary's SHA-256, the frozen needs) and anchored as
-described under "The anchor", before the first pilot set. Until then it may change, and nothing
-below is evidence.
-
-When it is committed, the code that defines the records, the metrics and the analysis is frozen
-at that commit: `run7.py`, `stats7.py`, `overload/run7.sh`, `overload/stand7.json`, and the frozen
-run-4/6 helpers it imports (`run4.py`, `run6.py`, `stats6.py`, `ballast.py`, `overload.py`,
-`acceptance.py`). The results are appended below, whatever they are.
+**Status: pre-registered.** This section, the runner and the frozen inputs (the needs file and the
+learn records, with their SHA-256) were committed and pushed before the first pilot set, and
+anchored as described under "The anchor". The results are appended below, whatever they are.
+The analysis is `run7.py pilot-check` and `run7.py summary`. The code that defines the records,
+the metrics and the analysis is frozen at the pre-registration commit: `run7.py`, `stats7.py`,
+`overload/run7.sh`, `overload/stand7.json`, and the run-4/6 helpers it imports (`run4.py`,
+`run6.py`, `stats6.py`, `ballast.py`, `overload.py`, `acceptance.py`); none of them is changed
+after it.
 
 **Question.** On one 16 GiB laptop, is there a slot count a user can set once for parallel test
 gates that keeps up with coreslot both when the machine is quiet and when it is loaded?
