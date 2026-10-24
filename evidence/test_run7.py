@@ -245,8 +245,10 @@ class Level(unittest.TestCase):
 
         def headroom():
             return self.headroom.pop(0) if len(self.headroom) > 1 else self.headroom[0]
+        # the fakes' headrooms sit around a quiet floor of 10500; the probe sets the real one
         for target, name, fake in ((run7, "time", self.clock), (run7.ballast, "Ballast", Ballast),
-                                   (run7.overload, "headroom_mib", headroom)):
+                                   (run7.overload, "headroom_mib", headroom),
+                                   (run7, "QUIET_HEADROOM_MIB", 10500)):
             p = mock.patch.object(target, name, fake)
             p.start()
             self.addCleanup(p.stop)
@@ -294,11 +296,12 @@ class Level(unittest.TestCase):
 
     def test_level_off_two_sided(self):
         # mutations: one-sided loaded (only above the target) -> 7400 not off -> red; `>=` for
-        # `>` -> 8512 off -> red; `<=` for `<` -> 10500 off -> red
+        # `>` -> 8512 off -> red; `<=` for `<` -> the floor itself off -> red
+        q = run7.QUIET_HEADROOM_MIB
         for headroom, level, off in ((8600, "loaded", True), (7400, "loaded", True),
                                      (8300, "loaded", False), (8512, "loaded", False),
-                                     (7488, "loaded", False), (10000, "quiet", True),
-                                     (10500, "quiet", False), (13000, "quiet", False)):
+                                     (7488, "loaded", False), (q - 500, "quiet", True),
+                                     (q, "quiet", False), (q + 2500, "quiet", False)):
             self.assertEqual(run7.level_off(headroom, level), off, (headroom, level))
 
 
@@ -346,6 +349,9 @@ class RunSet7(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.cfg, self.path = stand(self.root), os.path.join(self.root, "sets.jsonl")
+        p = mock.patch.object(run7, "QUIET_HEADROOM_MIB", 10500)  # as in Level
+        p.start()
+        self.addCleanup(p.stop)
         self.cfg["agents"] = {"A1": [dict(gate("tc"), argv=["tc", "-n", "{n}"], free_n="3")],
                               "A2": [gate("lint", False), gate("tc")]}
         self.events, self.popens, self.killed = [], [], []

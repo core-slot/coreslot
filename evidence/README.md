@@ -1937,9 +1937,8 @@ so the runner never touches the user's `~/.parallel`.
   `{n}` as `auto`. That is a separate `sem` per agent, sharing one semaphore id per set. Each `sem`
   suspends only its own job, and starts it only when free plus inactive memory is at least 9 GiB.
   At `-j 4` the slot count never binds on four agents, so P's only admission is memory. P is what
-  a user who types `sem --memsuspend` gets. The exploratory probe before the pilot measured
-  whether P's jobs start and how often they are stopped and continued (filled here before the
-  pilot).
+  a user who types `sem --memsuspend` gets. In the exploratory probe (below) its gates started
+  and were stopped and continued at quiet, and never started at loaded.
 - **F:** no admission; every gate starts when its agent reaches it; `{n}` is `auto`.
 
 Which arms run where:
@@ -1958,23 +1957,42 @@ sizes `coreslot status --json` reports and the needs file's SHA-256.
 
 The levels are defined on coreslot's own headroom metric (free + speculative + purgeable +
 file-backed pages), not on memory in use: after the gates run, "in use" counts gigabytes of file
-cache the kernel reclaims at once. On this Mac the headroom swings between about 6 and 11 GiB with
-the system's state, so each set first brings it to its level:
+cache the kernel reclaims at once. On this Mac the headroom swings with the system's state, from
+about 6 to 11 GiB over a day and between 2 and 10 GiB within a set, so each set first brings it
+to its level:
 
 - **Quiet:** no ballast. The set waits, up to 120 s, for a headroom of at least
-  `QUIET_HEADROOM_MIB` (10500 MiB, set by the probe: filled here before the pilot), and starts
-  flagged `quiet_short` if it is still below. At about 10.3 GiB coreslot's live size can pair a
-  test suite with the type check; at 8.1-8.4 GiB it could not, in 0 of 8 exploratory trials.
+  `QUIET_HEADROOM_MIB` (9000 MiB), and starts flagged `quiet_short` if it is still below. With
+  the light application set the headroom returns to 9.1-9.6 GiB within about 30 s of a set's
+  end and rarely passes 10 GiB, so the floor is set where the quiet wait ends (see "The
+  exploratory probe" below). At that level the live size pairs the type check with a suite only
+  when the headroom happens to allow it, so no hypothesis rests on pairing; T3 rests on run 6's
+  effect without it, and the pairing count is reported.
 - **Loaded:** a ballast of clamp(headroom − `LOADED_HEADROOM_MIB`, 0, 6144) MiB, so the headroom
-  comes down to `LOADED_HEADROOM_MIB` (8000 MiB, set by the probe: filled here before the pilot),
-  where run 6's S2 pressured. The ballast is `ballast.py`'s, filled from `os.urandom`, touched
-  once a second, and exits with the runner. The set starts when it is 95 % resident, waiting up to
-  60 s, and is flagged `ballast_short` otherwise.
+  comes down to `LOADED_HEADROOM_MIB` (8000 MiB), where run 6's S2 pressured. The ballast is
+  `ballast.py`'s, filled from `os.urandom`, touched once a second, and exits with the runner. The
+  set starts when it is 95 % resident, waiting up to 60 s, and is flagged `ballast_short` otherwise.
 - **At t0**, after the level is reached, the set records the headroom, and flags `level_off`
   when it is off its level: for quiet, below the floor; for loaded, more than 512 MiB from the
   target in either direction.
 
 Flags never invalidate a set; their counts are reported, and a reader can see each one per set.
+
+**The exploratory probe** (2026-10-24, not evidence): with the light application set, the v0.2.1
+release and these needs, one heavy block at each level with all four arms and one wide block, in
+a separate output directory that enters no analysis.
+
+- **Levels:** the loaded sets held a ballast of 0.7-1.5 GiB and started at a headroom of
+  7.84-8.04 GiB; the quiet sets started at 9.11-9.48 GiB, every one after the full 120 s wait for
+  the former floor of 10500 MiB. That floor would have added about 2 min to each of some 500
+  quiet sets, so it was lowered to 9000 MiB before any pilot set.
+- **Pairing:** both loaded K60 sets held the type check and FastAPI's suite at once (86 tokens of
+  mem grants against the static 76); the quiet K60 set did not.
+- **P:** at quiet, P's set ran in 32.9 s, and `sem` stopped each type check once, for about a
+  second, while the headroom was at 4.7 and 2.2 GiB. At loaded, no `sem` started its gate in
+  600 s: the set timed out. Whether P is feasible is left to the pilot's rule below.
+- **Set times,** start to start: about 75 s per loaded heavy set, about 1.5 min per wide set
+  besides the quiet wait.
 
 **The order of work in a set:** the cooldown (run 4's pacing: at least 20 s, then until the
 thermal state is nominal and a single-core probe is within 10 % of the session's baseline, at most
@@ -2173,20 +2191,21 @@ closed. It is launched detached (`nohup`), so the session that starts it can clo
 not use the Mac during the run. The application set at each verdict command's start is logged as
 a count and a SHA-256 of the names; the names stay on the machine.
 
-At run 6's 1.96 min per heavy set and 1.2 min per light set, the budget is:
+At the probe's set times (about 1.4 min per heavy set, 1.1 per light, 1.7 per wide, and 10 min
+for a P set that times out), the budget is:
 
 | Part | Hours |
 |---|---|
-| Heavy: 144 blocks × 4 sets | ≈ 18.8 |
-| Light: 40 × 2 | ≈ 1.6 |
-| Wide: 30 × 3 at about 1.5 min | ≈ 2.3 |
-| Spread: 12 × 2 | ≈ 0.5 |
-| Pilot | ≈ 2.4 |
-| Learn, with relearn and cooldowns | ≈ 1 |
+| Learn, with relearn and cooldowns (done) | 0.85 |
+| Pilot: 12 heavy, 12 light, 6 wide blocks, with up to 6 P timeouts | ≈ 3 |
+| Heavy: 144 blocks × 3 sets, or × 4 if P is feasible | ≈ 10-14 |
+| Light: 40 × 2 | ≈ 1.5 |
+| Wide: 30 × 3 | ≈ 2.6 |
+| Spread: 12 × 2 | ≈ 0.6 |
 
-About 27-30 h with the quiet waits. **If the run passes 32 h,** the spread run is dropped first,
-then the wide blocks above the first 24, declared to the analysis with `run7.sh summary
---dropped` (recorded as `"dropped": true`). P1's arms and n are never cut.
+About 18-22 h, and at most about 27-30 h at run 6's slower set times. **If the run passes 32 h,**
+the spread run is dropped first, then the wide blocks above the first 24, declared to the analysis
+with `run7.sh summary --dropped` (recorded as `"dropped": true`). P1's arms and n are never cut.
 
 **No analysis mid-run.** Nobody runs `summary`, or reads a main record's primary, until the main
 phase is complete. This is a convention the analyst keeps, stated here, not a control the code
@@ -2220,9 +2239,13 @@ If P is infeasible, outcomes 3 and 5 read "P is infeasible on macOS" in place of
 Before the first pilot set:
 
 - the pre-registration commit, which holds this section with its values filled;
-- an OSF registration made from that commit's text (its URL filled here);
-- a comment on the pull request carrying the commit's SHA and this section's SHA-256;
-- a tag on that commit.
+- a tag on that commit, `run7-preregistration`;
+- an OSF registration made from that commit's text;
+- a comment on the pull request carrying the commit's SHA, this section's SHA-256 and the OSF
+  registration's URL.
+
+The registration's URL is added to this section afterwards, in a commit that changes nothing
+else.
 
 ### Reproduce
 
