@@ -126,7 +126,6 @@ N_LIGHT = 40
 N_WIDE = 30
 N_WIDE_DROPPED = 24  # the wide n once the pre-registered drop past 32 h is declared
 SPREAD_BLOCKS = 12
-SPREAD_WINDOW_S = 30
 ALPHA = 0.05
 MARGIN = math.log(1.03)
 SWAP_EVENT_MIB = 64

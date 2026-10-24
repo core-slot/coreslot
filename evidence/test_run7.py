@@ -686,8 +686,6 @@ class Verdict7(unittest.TestCase):
             + [("light", a, ["A3", "A4"], "quiet") for a in run7.LIGHT_ARMS]
             + [("spread", a, ["A1", "A2", "A3", "A4"], "quiet") for a in run7.SPREAD_ARMS]))
         self.assertEqual(self.calls[0]["meta"]["mix_agents"], ["W1", "W2"])
-        self.assertEqual({c["cfg"]["window_s"] for c in self.calls if c["meta"]["mix"] == "spread"},
-                         {run7.SPREAD_WINDOW_S})
         self.cfg["wide_agents"] = {}
         self.assertEqual(self.refused("pilot", "wide", 2, 2), 2)
 
