@@ -2267,3 +2267,51 @@ evidence/overload/run7.sh summary
 
 Re-issuing an interrupted command resumes it. `evidence/overload/run7.sh --dry` runs learn and one
 block of each mix on `stand-dry.json`, to check the runner; its output is not evidence.
+
+### Results (2026-10-24, coreslot v0.2.1): stopped at the pilot
+
+Run 7 **stopped at the pilot**, as its futility rule requires: `pilot-check` returned `"go": false`
+with T3 futile, and P infeasible. No main block was run. The pilot ran from 03:40 to 06:17 UTC:
+12 heavy blocks (6 per level), 12 light and 6 wide, every set valid except four P sets that timed
+out; no set was flagged. Its records are `run7/pilot-*.jsonl` and `run7/primer.jsonl`, and the
+check is `run7/pilot_check.json`. The pilot enters no hypothesis test; the numbers below are
+descriptive, over 6 blocks per level.
+
+**The check.**
+
+| Component | Pilot | Power at n = 72 | |
+|---|---|---|---|
+| T1, loaded ln(S2/K60) | mean 0.207, SD 0.203 | 1.00 | |
+| T2, loaded swap traffic, K60 against S2 | 5 wins, 1 loss | 1.00 | |
+| T3, quiet ln(S1/K60) | mean 0.005, SD 0.034 | 0.32 | futile |
+| P | 4 of 12 heavy P sets timed out (all at loaded) | | infeasible |
+
+The light pilot's F sets had no warn-or-worse sample.
+
+**Mean time to verdict, per level** (seconds, mean over the level's 6 blocks; geometric mean ratio
+against K60):
+
+| Level | Headroom at t0 | K60 | S1 | S2 | P |
+|---|---|---|---|---|---|
+| Loaded | 7.86-7.95 GiB | 33.1 | 32.2 (0.97) | 40.9 (1.23) | 2 of 6 sets ran |
+| Quiet | 9.62-11.80 GiB | 27.9 | 28.0 (1.00) | 34.4 (1.20) | 38.4 |
+
+Warn seconds over the level's 6 sets: loaded K60 9, S1 2, S2 68; quiet K60 0, S1 0, S2 28. The
+light mix's K60 against F was 0.94; the wide mix's S2 against K60 was 0.94, and F against K60
+1.05. K60 held the type check and FastAPI's suite at once (86 mem tokens against the static 76)
+in 4 of its 12 heavy sets, two at each level.
+
+**What it means, by the outcomes declared before the data.** The pilot can only stop the run, so
+P1 is not tested; its stop falls on outcome 2, "P1 not rejected only through T3". On this machine
+and mix, a machine-wide lock of one slot (S1) kept pace with coreslot at both levels, while
+`sem -j2` lost at both, by about a fifth of the time to verdict and with most of the memory
+pressure. The likely mechanism: at the quiet level's headroom of 9.6-11.8 GiB the live size
+rarely had room to run a suite beside the type check (it needs about 11 GiB with the relearned
+2 GiB FastAPI need), so coreslot mostly ran one heavy gate at a time, as the lock does. The same
+outcome makes further development of the one-machine product conditional on the wide mix showing
+the frozen S2 losing too; in the pilot's six wide blocks S2 was faster than K60 in every one.
+`sem --memsuspend 9G` started no gate within 600 s in 4 of its 6 loaded sets, so it is reported
+as infeasible on this machine under load, not tuned.
+
+**Deviations.** None. The stop is the procedure's own: a `"go"` of false stops the run, and no
+main phase follows it.
