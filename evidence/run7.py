@@ -48,8 +48,9 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            tree has uncommitted changes or the coreslot binary's SHA-256 is not the stand's
            coreslot_sha256 (pilot, main; a dry stand skips both), when main lacks a
            pilot_check.json whose "go" is true, or when the files OUT/needs.sha256 names do not
-           match it. A command with nothing left to run exits 0 first. --as-block
-           and --primer as in run 6. Each record carries the coreslot binary's SHA-256, the
+           match it. A command with nothing left to run exits 0 first. --as-block and --primer
+           as in run 6, except that --as-block refuses a block whose only invalid set is P's
+           (its P1 sets stand; H-P uses the blocks where P is valid). Each record carries the coreslot binary's SHA-256, the
            evidence tree's HEAD and tree_dirty, the first line of `parallel --version` and, for
            main, pilot_check.json's SHA-256, all read once per command. Appends one record per
            set to OUT/<phase>-<mix>.jsonl, skipping each (block, arm) already recorded.
