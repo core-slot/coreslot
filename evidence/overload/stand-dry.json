@@ -17,5 +17,12 @@
          {"gate": "dry-alloc", "label": "bench:dry-alloc", "cwd": "~/bench.noindex", "heavy": true,
           "fail_pattern": "^FAILED ",
           "argv": ["python3", "-c", "import time; b = b'x' * (300 << 20); time.sleep(2)"]}]
+ },
+ "wide_agents": {
+  "W1": [{"gate": "dry-alloc", "label": "bench:dry-alloc", "cwd": "~/bench.noindex", "heavy": true,
+          "fail_pattern": "^FAILED ",
+          "argv": ["python3", "-c", "import time; b = b'x' * (300 << 20); time.sleep(2)"]}],
+  "W2": [{"gate": "dry-sleep", "label": "bench:dry-sleep", "cwd": "~/bench.noindex", "heavy": false,
+          "argv": ["sleep", "1"]}]
  }
 }

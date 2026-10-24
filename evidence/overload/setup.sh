@@ -49,6 +49,14 @@ fetch https://github.com/fastapi/fastapi.git "$FASTAPI_TAG" "$FASTAPI_SHA" "$ROO
 fetch https://github.com/sqlalchemy/sqlalchemy.git "$SQLALCHEMY_TAG" "$SQLALCHEMY_SHA" "$ROOT/sqlalchemy"
 (cd "$ROOT/sqlalchemy" && uv venv --quiet --allow-existing --python 3.13 .venv &&
 	uv pip install --quiet --python .venv/bin/python -e . pytest==9.1.1 pytest-xdist==3.8.0)
+# Run 7's wide mix runs two more SQLAlchemy suites at once with the ORM tests; each gets its own
+# checkout at the same commit, so that no two gates running at once write into one working tree
+# (pytest writes bytecode caches there).
+for dir in sqlalchemy-sql sqlalchemy-engine; do
+	fetch https://github.com/sqlalchemy/sqlalchemy.git "$SQLALCHEMY_TAG" "$SQLALCHEMY_SHA" "$ROOT/$dir"
+	(cd "$ROOT/$dir" && uv venv --quiet --allow-existing --python 3.13 .venv &&
+		uv pip install --quiet --python .venv/bin/python -e . pytest==9.1.1 pytest-xdist==3.8.0)
+done
 
 # coreslot itself, built from the checkout this script is in.
 mkdir -p "$ROOT/bin"

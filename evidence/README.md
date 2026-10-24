@@ -1855,3 +1855,463 @@ python3 evidence/holm6.py evidence/overload/run6          # holm.json, holm.txt:
 
 The records were taken with the commands of the pre-registration's "Reproduce", with the main
 heavy 1 120 and light 1 60. The measured binary was built at `ebac0a7` as stated under "Stand".
+
+## Acceptance run 7: no fixed slot count keeps up across load (`run7.py`)
+
+**Status: pre-registered.** This section, the runner and the frozen inputs (the needs file and the
+learn records, with their SHA-256) were committed and pushed before the first pilot set, and
+anchored as described under "The anchor". The results are appended below, whatever they are.
+The analysis is `run7.py pilot-check` and `run7.py summary`. The code that defines the records,
+the metrics and the analysis is frozen at the pre-registration commit: `run7.py`, `stats7.py`,
+`overload/run7.sh`, `overload/stand7.json`, and the run-4/6 helpers it imports (`run4.py`,
+`run6.py`, `stats6.py`, `ballast.py`, `overload.py`, `acceptance.py`); none of them is changed
+after it.
+
+**Question.** On one 16 GiB laptop, is there a slot count a user can set once for parallel test
+gates that keeps up with coreslot both when the machine is quiet and when it is loaded?
+
+### The claim, as tested
+
+**P1: no fixed slot count keeps up across load.** A counting semaphore is tuned once, on prior
+data, at the condition where it does best, and frozen:
+
+- `sem -j2` (**S2**), the best slot count on a quiet machine in run 6, loses to coreslot under
+  load, on time (**T1**) and on swap traffic (**T2**);
+- a machine-wide lock of one slot (**S1**), the safe choice under load, loses to coreslot on a
+  quiet machine (**T3**).
+
+P1 is rejected only when all three are. Per level, S2 can be marginally faster than coreslot when
+the machine is quiet; those cells are shown descriptively and are not part of the claim.
+
+**The secondary family**, tested only if P1 is rejected:
+
+- **H-P:** coreslot is at most 3 % slower than GNU `parallel`'s `sem --memsuspend` under load;
+- **H-L:** coreslot costs at most 3 % on a mix without memory pressure;
+- **H-Z:** coreslot's sets swap out more than 64 MiB rarely (below 3 %);
+- **H-W:** S2 serialises a wide mix that fits in memory, so it is slower than coreslot there too.
+
+**Stated cost, no claim.** The makespan, reported with its interval, as in run 6.
+
+### Stand
+
+`evidence/overload/stand7.json`: run 4's stand, with one change. FastAPI's suite runs with
+`--dist loadgroup`, as its own `scripts/test.sh` runs it. FastAPI marks the tests that write to a
+shared working directory with an `xdist_group`, and the mark has effect only under that flag;
+without it those tests race. All 50 false failures of run 6 were FastAPI's, in three files that
+write to that directory; that the flag also removes them under contention is an inference the
+pilot must show.
+
+- **The heavy mix:** run 4's four agents. A1 and A2 each run the VS Code type check; A3 runs
+  FastAPI's ruff, then its pytest suite; A4 runs SQLAlchemy's pytest `test/orm`.
+- **The light mix:** agents A3 and A4, no type check.
+- **The wide mix:** four agents whose suites fit in memory together, one heavy gate each, at the
+  stand's pinned commits. W1 runs SQLAlchemy's `test/orm`, W2 its `test/sql test/dialect`, W3
+  its `test/engine test/ext`, W4 FastAPI's suite. W2 and W3 run in their own checkouts at the
+  same commit (`setup.sh` makes them), so no two gates running at once write into one tree.
+  Their peak footprints alone sum to about 56 of the 76 tokens of mem `"60%"`.
+
+coreslot is the release `v0.2.1`, installed from its archive, not built locally: the archive
+`coreslot_0.2.1_darwin_arm64.tar.gz` matches the release's `checksums.txt`
+(`4235018e0de9b8712831ec93aeb1cde3c079d015a27808d5a825d92fd6464803`) and its build-provenance
+attestation verifies; `coreslot version` prints `coreslot 0.2.1 (protocol formats: 1)`. The
+binary's SHA-256, `82f7181c5b82163a53c9a4d89630d4262fe53d225dfcfef52452cabaa3aed575`, is pinned in
+`stand7.json` as `coreslot_sha256`: a pilot or main command refuses to start when the stand's
+binary has another (for instance after `setup.sh`, which builds coreslot into the same path).
+Every set records the binary's SHA-256. Every coreslot call goes through the stand's own state
+directory; the owner's budget and configuration are never touched.
+
+GNU parallel is 20260922 from Homebrew. It runs with `PARALLEL_HOME` under the stand's directory,
+so the runner never touches the user's `~/.parallel`.
+
+### Arms
+
+- **K60:** every gate as `coreslot run --label bench:<gate> -- <argv>`, cpu `"140%"`, mem `"60%"`,
+  and the learned `run7/needs.toml`. The live memory rule is on, the product default. `{n}` is
+  the cpu coreslot grants the gate.
+- **S1, S2:** an in-process counting semaphore of 1 or 2 slots around the heavy gates, with the
+  lint free; `{n}` is `auto`. This is more favourable to S1 than a `flock(1)` around every
+  gate, which would serialise the lint too.
+- **P:** each heavy gate as `sem --will-cite --id <set> --memsuspend 9G -j 4 --fg <argv>`, with
+  `{n}` as `auto`. That is a separate `sem` per agent, sharing one semaphore id per set. Each `sem`
+  suspends only its own job, and starts it only when free plus inactive memory is at least 9 GiB.
+  At `-j 4` the slot count never binds on four agents, so P's only admission is memory. P is what
+  a user who types `sem --memsuspend` gets. In the exploratory probe (below) its gates started
+  and were stopped and continued at quiet, and never started at loaded.
+- **F:** no admission; every gate starts when its agent reaches it; `{n}` is `auto`.
+
+Which arms run where:
+
+| Phase | Mix | Arms | Arrivals | Level |
+|---|---|---|---|---|
+| pilot, main | heavy | K60, S1, S2, P | U(0, 5 s) | quiet or loaded |
+| pilot, main | light | K60, F | U(0, 5 s) | quiet |
+| pilot, main | wide | K60, S2, F | U(0, 5 s) | quiet |
+| sensitivity | spread | K60, S2 | U(0, 30 s) | quiet |
+
+With 128 MiB tokens, mem `"60%"` is 76 tokens and cpu `"140%"` 14 tokens. Each K60 set records the
+sizes `coreslot status --json` reports and the needs file's SHA-256.
+
+### Background levels, on coreslot's headroom
+
+The levels are defined on coreslot's own headroom metric (free + speculative + purgeable +
+file-backed pages), not on memory in use: after the gates run, "in use" counts gigabytes of file
+cache the kernel reclaims at once. On this Mac the headroom swings with the system's state, from
+about 6 to 11 GiB over a day and between 2 and 10 GiB within a set, so each set first brings it
+to its level:
+
+- **Quiet:** no ballast. The set waits, up to 120 s, for a headroom of at least
+  `QUIET_HEADROOM_MIB` (9000 MiB), and starts flagged `quiet_short` if it is still below. With
+  the light application set the headroom returns to 9.1-9.6 GiB within about 30 s of a set's
+  end and rarely passes 10 GiB, so the floor is set where the quiet wait ends (see "The
+  exploratory probe" below). At that level the live size pairs the type check with a suite only
+  when the headroom happens to allow it, so no hypothesis rests on pairing; T3 rests on run 6's
+  effect without it, and the pairing count is reported.
+- **Loaded:** a ballast of clamp(headroom − `LOADED_HEADROOM_MIB`, 0, 6144) MiB, so the headroom
+  comes down to `LOADED_HEADROOM_MIB` (8000 MiB), where run 6's S2 pressured. The ballast is
+  `ballast.py`'s, filled from `os.urandom`, touched once a second, and exits with the runner. The
+  set starts when it is 95 % resident, waiting up to 60 s, and is flagged `ballast_short` otherwise.
+- **At t0**, after the level is reached, the set records the headroom, and flags `level_off`
+  when it is off its level: for quiet, below the floor; for loaded, more than 512 MiB from the
+  target in either direction.
+
+Flags never invalidate a set; their counts are reported, and a reader can see each one per set.
+
+**The exploratory probe** (2026-10-24, not evidence): with the light application set, the v0.2.1
+release and these needs, one heavy block at each level with all four arms and one wide block, in
+a separate output directory that enters no analysis.
+
+- **Levels:** the loaded sets held a ballast of 0.7-1.5 GiB and started at a headroom of
+  7.84-8.04 GiB; the quiet sets started at 9.11-9.48 GiB, every one after the full 120 s wait for
+  the former floor of 10500 MiB. That floor would have added about 2 min to each of some 500
+  quiet sets, so it was lowered to 9000 MiB before any pilot set.
+- **Pairing:** both loaded K60 sets held the type check and FastAPI's suite at once (86 tokens of
+  mem grants against the static 76); the quiet K60 set did not.
+- **P:** at quiet, P's set ran in 32.9 s, and `sem` stopped each type check once, for about a
+  second, while the headroom was at 4.7 and 2.2 GiB. At loaded, no `sem` started its gate in
+  600 s: the set timed out. Whether P is feasible is left to the pilot's rule below.
+- **Set times,** start to start: about 75 s per loaded heavy set, about 1.5 min per wide set
+  besides the quiet wait.
+
+**The order of work in a set:** the cooldown (run 4's pacing: at least 20 s, then until the
+thermal state is nominal and a single-core probe is within 10 % of the session's baseline, at most
+120 s), then the level, then t0 and the agents. A set whose cooldown gave up is flagged
+`hot_start`. Over the cooldown the runner sums the CPU time of processes outside the stand with
+`ps`, and flags `busy_background` above 1.5 cores; it replaces run 6's `high_load`, which mostly
+measured the stand's own previous set.
+
+**The level schedule.** Blocks 1-2, 3-4, … each hold both levels, in an order shuffled with the
+seed `run7-level-<phase>-<(block - 1) div 2>`. The light, wide and spread mixes run at quiet only.
+
+**The order schedule.** Block b runs its arms in an order shuffled with the seed
+`run7-order-<phase>-<mix>-<b>`; each set records its position and the arm before it.
+
+**Arrivals.** Offsets from U(0, 5 s), U(0, 30 s) in the spread run, with the seed
+`run7-<phase>-<mix>-<b>`, the same for every set of the block.
+
+**A set timeout.** A set still running after 600 s is stopped: no further gate starts, every live
+gate of any arm, each P `sem` with its job included, is killed down to its process groups
+(SIGTERM, then SIGKILL after 5 s; never the runner's own group), and the set is invalid with the
+reason `set_timeout`. Each set removes its own semaphore directory under `PARALLEL_HOME` when it
+ends.
+
+**The primer.** Each session's first command starts with `--primer`: one K60 set of its first
+block, recorded to `run7/primer.jsonl` only.
+
+### Learning, frozen before the pilot
+
+`run7.py learn` starts from an empty state directory with cpu `"140%"` and mem `"60%"`, and runs
+every gate of the heavy and wide mixes alone, each run after a cooldown of at least 20 s:
+
+1. **6 runs in its K form** (under coreslot) and **3 in its F form** (its argv with `{n}` as
+   `auto`), as in run 6.
+2. `coreslot suggest --write`, kept as `run7/needs-pass1.toml`.
+3. **The relearn pass:** 5 more K-form runs per gate under that entry.
+4. `suggest --write` again, copied to `run7/needs.toml`.
+
+**Why relearn.** `suggest` takes each label's largest peak over its last 5 runs. In pass 1 the
+first K run of a suite runs cold, with the whole default range of `{n}`, and later ones at the
+width the first entry grants; a peak taken at a wider grant than the gate will get inflates its
+mem need, and the inflated need is what keeps the live size from pairing a suite with the type
+check. After the relearn pass the window holds only runs at the granted width. A user reaches the
+same state in ordinary use: the run log rolls over to runs at the granted width after a few runs
+of each gate, and `suggest`'s evidence line names a peak taken at a larger cpu grant.
+
+Every gate passed all of its 6 K-form, 3 F-form and 5 relearn runs. The second `suggest --write`
+wrote (`run7/needs.toml`, 2026-10-24, on the v0.2.1 release):
+
+| Gate | cpu | mem | tokens | Evidence line it wrote |
+|---|---|---|---|---|
+| `vscode-typecheck` | `6` | `8960M` | 70 | 5 runs 2026-10-24: max 5.4 cores, 5 of 5 saturated, peak 8.7 GiB (footprint) at 8s |
+| `fastapi-ruff` | `3` | `128M` | 1 | 5 runs 2026-10-24: max 2.0 cores, 3 of 5 saturated, peak 21 MiB (max_rss) |
+| `fastapi-tests` | `1..7` | `2G` | 16 | 5 runs 2026-10-24: max 6.6 cores, 5 of 5 saturated, peak 2 GiB (footprint) at 12s with cpu 8 |
+| `sqlalchemy-orm-tests` | `1..9` | `2G` | 16 | 5 runs 2026-10-24: max 8.7 cores, 5 of 5 saturated, peak 2 GiB (footprint) at 18s |
+| `sqlalchemy-sql-tests` | `1..4` | `1536M` | 12 | 5 runs 2026-10-24: max 3.8 cores, 0 of 5 saturated, peak 1.5 GiB (footprint) at 13s with cpu 6 |
+| `sqlalchemy-engine-tests` | `1` | `640M` | 5 | 5 runs 2026-10-24: max 0.6 cores, 0 of 5 saturated, peak 523 MiB (footprint) at 27s with cpu 3 |
+
+The relearn pass lowered every suite's mem against the first pass (`run7/needs-pass1.toml`):
+FastAPI's from 2560M to 2G, the ORM suite's from 2304M to 2G, `test/sql test/dialect`'s from
+2432M to 1536M and `test/engine test/ext`'s from 1280M to 640M. It also narrowed the cpu of
+`test/engine test/ext` from `1..3` to `1`: at a grant of 3 its K runs used 0.6 cores and took
+about 30 s, against about 17 s at the full width of the first pass. That is the product's own
+learned state, kept as it is.
+
+**Expected before the data.** Under these needs, mem `"60%"` leaves 6 tokens beside a type check,
+so the static size admits only the lint and `test/engine test/ext` beside it; a suite pairs with
+it only through the live size, when the headroom allows. In the light mix the two suites need
+32 tokens together and run at once. The wide mix needs 49 tokens, so K60 admits all four agents
+at once and shares the 14 cpu tokens among them.
+
+**The frozen files.** `run7/needs.sha256` holds the SHA-256 of the needs file and of the learn
+records:
+
+```
+b74f7f1699e7b01c7d3531ba39fdda9a01b33e18bcff23a1d49526f8a780b2a8  needs.toml
+40b6a43f3176ac9d20674817c731d9094b47f1bd7c2bfa543d37bfecab91c05e  learn.jsonl
+```
+
+Every verdict command exits before its first set unless they match. `learn`
+refuses once any pilot, main or sensitivity record exists without them; once they exist, `learn`
+does nothing (no run, no `suggest`, no reseal). An interrupted `learn` resumes inside either pass
+and never re-runs the first `suggest` once the relearn pass has started.
+
+### Metrics
+
+- **Primary: the mean time to verdict.** Each agent's chain end minus its arrival, averaged over
+  the mix's agents.
+- **Swap traffic:** the swapout plus swapin pages over the set. It is continuous where warn
+  seconds are tie-heavy.
+- **Pressure:** warn seconds (`kern.memorystatus_vm_pressure_level` ≥ 2) and critical seconds
+  (≥ 4).
+- **Makespan and false failures,** as in run 6.
+- **Slowdown:** a gate's own execution over its alone reference, K's the median `ran_s` of its 5
+  relearn runs (at the granted width), F's and S's the median wall time of its 3 F-form runs.
+
+### The pilot: a futility check, not a size rule
+
+The pilot runs 12 heavy blocks (6 per level), 12 light and 6 wide, with the main phase's rules;
+it enters no hypothesis test. `run7.py pilot-check` reads the first 12 valid heavy blocks (valid
+over K60, S1 and S2), the first 12 light and the first 6 wide, at most 3 re-runs each, and writes
+`run7/pilot_check.json`:
+
+- **T1 and T3:** the pilot's mean and SD of the block's ln-ratio, and the power a one-sided paired
+  t test would have at n = 72 with them (normal approximation).
+- **T2:** the pilot's wins and losses of K60 against S2 on swap traffic, and the power of an
+  exact one-sided sign test over round(72 × the share of untied pairs) pairs at the pilot's win
+  rate.
+- **Futile:** a component whose mean is at most 0, whose wins are at most its losses, or whose
+  power at n = 72 is below 0.5. A pilot with no untied T2 pair is futile on T2.
+- **P's feasibility:** P is infeasible when more than 2 of the 12 pilot heavy P sets timed out.
+  An infeasible P is dropped from the main heavy blocks and reported as infeasible on macOS, not
+  tuned, and H-P is untested.
+- **The light mix's pressure count:** the light pilot's F sets with a warn-or-worse sample.
+- **Go** only when no component is futile. A "go" of false stops the run; the owner decides what
+  follows, and that decision is recorded as a deviation.
+
+`verdict main` refuses without a `pilot_check.json` whose "go" is true, and every main record
+carries that file's SHA-256. `pilot-check` refuses while the pilot is short and once any main
+record exists.
+
+**Why n is fixed.** n = 72 blocks per level is fixed now, before the pilot, rather than taken from
+it. The pilot can only stop the run, never resize it, so the sample size depends on no look at the
+data. At run 6's effects blunted by 0.85 standard errors (T1: mean 0.084, SD 0.183; T3: mean
+0.043, SD 0.098), n = 72 gives T1 a power of 0.988 and T3 0.981. T2 with 43 untied pairs of 72
+(run 6's discordance, about 0.6) has a power of 0.993 at a win rate of 0.8 and 0.949 at 0.75. The
+sign test's power is not monotone in the number of pairs, so it is stated at these counts only.
+
+### Hypotheses, declared before the run
+
+The main phase runs 144 heavy blocks (72 per level), 40 light and 30 wide. `run7.py summary` reads
+only the main records, never the pilot's. Every test is one-sided at α = 0.05, on the first n
+valid blocks of each mix and level.
+
+**P1, an intersection-union test** (Berger 1982), so no α is split:
+
+- **T1:** on loaded blocks, the mean of ln(S2/K60) is above 0 (paired t).
+- **T2:** on loaded blocks, K60's swap traffic is below S2's (Wilcoxon signed-rank on K60 − S2,
+  zeros dropped, average ranks for ties; exact for up to 25 nonzero pairs, else the normal
+  approximation with the tie correction and a continuity correction of 0.5).
+- **T3:** on quiet blocks, the mean of ln(S1/K60) is above 0 (paired t).
+
+P1 is rejected when all three have p < 0.05. A heavy block counts when K60, S1 and S2 are valid;
+an invalid P set never drops it.
+
+**The secondary family**, tested only if P1 is rejected, by Holm at 0.05. A member that is not
+tested counts in Holm's m with p = 1 and is never rejected:
+
+- **H-P:** on loaded blocks where P is valid too, the mean of ln(K60/P) is below ln(1.03) (paired
+  t): time non-inferiority only. Swap traffic and pressure against P are reported, not tested.
+  Untested when P is infeasible.
+- **H-L:** on light blocks, the mean of ln(K60/F) is below ln(1.03) (paired t). Untested when more
+  than one light pilot F set had a warn-or-worse sample: the claim is about a mix without
+  pressure.
+- **H-Z:** among K60's heavy sets, k swapped out more than 64 MiB; the exact binomial
+  P(X ≤ k | n, 0.03) is below 0.05. Over 144 sets, 0 events rejects (p = 0.012) and 1 does not
+  (p = 0.068).
+- **H-W:** on wide blocks, the mean of ln(S2/K60) is above 0 (paired t).
+
+If P1 is not rejected, each secondary row reads "not tested (P1 not rejected)"; if P1 is untested
+(a short heavy mix), "not tested (P1 untested)".
+
+**Reported without a test:**
+
+- per arm, level and mix: the mean primary, the median makespan, warn and critical seconds, swap
+  traffic, and false failures with exact 95 % intervals;
+- K60 against P, on loaded blocks where P is valid: a Wilcoxon signed-rank test of K60 − P swap
+  traffic (below 0) and a sign test of K60 against P on warn seconds (ties dropped), each with
+  its p, outside the Holm family;
+- K60/S\* per level, S\* the best of S1 and S2 in hindsight, labelled as such;
+- the spread run, the first 12 valid blocks;
+- the pairing count: K60 sets in which the mem grants of overlapping runs summed above the static
+  size, from each set's run-log lines;
+- the count of every flag, and the invalid sets by reason;
+- order effects (position and the arm before);
+- the primary per hour of the session, from each set's start.
+
+### Validity, re-runs and an incomplete run
+
+- **A valid set,** as in run 6, and also not timed out. Flags never invalidate.
+- **Re-runs.** A block with an invalid set is re-run at the end under the next block number with
+  its level, order and offsets (`--as-block`); at most 10 % of n count (14 heavy, 4 light,
+  3 wide, also under the declared drop), 3 per mix in the pilot. A heavy block whose only invalid
+  set is P's is not re-run (`--as-block` refuses it): its P1 sets stand, and H-P uses the blocks
+  where P is valid. `summary` refuses while a mix is short and re-runs are left;
+  with them spent, the mix is reported as incomplete and its tests are untested.
+- **Provenance.** Every record carries the binary's SHA-256, the evidence tree's commit, whether
+  that tree had uncommitted changes, the first line of `parallel --version` and, for main
+  records, the SHA-256 of `pilot_check.json`. A pilot or main command on the run's stand refuses
+  to start on a tree with uncommitted changes under `evidence/` (its own output directory aside);
+  a dry stand only records the state.
+
+### Sessions and the time budget
+
+The run starts with a light, fixed set of applications: Finder and Claude, with everything heavy
+closed. It is launched detached (`nohup`), so the session that starts it can close; the owner does
+not use the Mac during the run. The application set at each verdict command's start is logged as
+a count and a SHA-256 of the names; the names stay on the machine.
+
+At the probe's set times (about 1.4 min per heavy set, 1.1 per light, 1.7 per wide, and 10 min
+for a P set that times out), the budget is:
+
+| Part | Hours |
+|---|---|
+| Learn, with relearn and cooldowns (done) | 0.85 |
+| Pilot: 12 heavy, 12 light, 6 wide blocks, with up to 6 P timeouts | ≈ 3 |
+| Heavy: 144 blocks × 3 sets, or × 4 if P is feasible | ≈ 10-14 |
+| Light: 40 × 2 | ≈ 1.5 |
+| Wide: 30 × 3 | ≈ 2.6 |
+| Spread: 12 × 2 | ≈ 0.6 |
+
+About 18-22 h, and at most about 27-30 h at run 6's slower set times. **If the run passes 32 h,**
+the spread run is dropped first, then the wide blocks above the first 24, declared to the analysis
+with `run7.sh summary --dropped` (recorded as `"dropped": true`). P1's arms and n are never cut.
+
+**No analysis mid-run.** Nobody runs `summary`, or reads a main record's primary, until the main
+phase is complete. This is a convention the analyst keeps, stated here, not a control the code
+enforces.
+
+### What each outcome means
+
+These are decided now, before the data:
+
+1. **P1 not rejected, with T1's geometric mean ratio at most 1.03 or T2's wins at most its
+   losses:** a semaphore tuned once is as good as coreslot on this machine, even under load. The
+   one-machine product is dropped, or narrowed to a documented recipe for `sem` and `flock`.
+2. **P1 not rejected only through T3** (S1 within noise of K60 at quiet): a machine-wide lock is a
+   fair alternative. coreslot's case narrows to "faster than a lock when the machine is quiet and
+   safer than `sem -j2` when it is not", and that narrow claim is what is published. Development
+   continues only if the wide mix, reported descriptively, shows the same frozen S2 losing too.
+3. **P1 rejected; H-P not rejected, or K60 not shown below P on both reported safety rows**
+   (the swap-traffic signed-rank test and the warn-seconds sign test, each at p < 0.05):
+   `sem --memsuspend` already does much of the job. Development continues only for what P
+   lacks (learned needs, cross-agent and cross-tool admission), and that is said publicly.
+4. **H-L not rejected or its upper bound above 1.03:** coreslot taxes the common case. It is fixed
+   before any publication, whatever P1 says.
+5. **P1 and H-P rejected, with both reported safety rows against P at p < 0.05:** development
+   continues. The headline is "no tuning: keeps up with `sem -j2` and a lock across load, as
+   fast as `sem --memsuspend`, and free when idle", within the rows that were rejected.
+
+If P is infeasible, outcomes 3 and 5 read "P is infeasible on macOS" in place of H-P.
+
+### The anchor
+
+Before the first pilot set:
+
+- the pre-registration commit, which holds this section with its values filled;
+- a tag on that commit, `run7-preregistration`;
+- an OSF registration made from that commit's text;
+- a comment on the pull request carrying the commit's SHA, this section's SHA-256 and the OSF
+  registration's URL.
+
+The registration's URL is added to this section afterwards, in a commit that changes nothing
+else.
+
+- OSF registration: https://osf.io/px5mr
+- The comment on the pull request:
+  https://github.com/core-slot/coreslot/pull/28#issuecomment-6379397725
+
+### Reproduce
+
+```sh
+evidence/overload/setup.sh
+# then install the v0.2.1 release binary into ~/bench.noindex/bin/coreslot (setup.sh builds one
+# there, which the pin refuses)
+nohup evidence/overload/run7.sh > ~/bench.noindex/run7.log 2>&1 &  # learn, then the pilot
+evidence/overload/run7.sh pilot-check                              # run7/pilot_check.json
+evidence/overload/run7.sh verdict main heavy 1 144 --primer        # only after "go": true
+evidence/overload/run7.sh verdict main light 1 40 --primer
+evidence/overload/run7.sh verdict main wide 1 30 --primer
+evidence/overload/run7.sh verdict main heavy 145 145 --as-block 5  # a re-run of an invalid block 5
+evidence/overload/run7.sh verdict sens spread 1 12 --primer
+evidence/overload/run7.sh summary
+```
+
+Re-issuing an interrupted command resumes it. `evidence/overload/run7.sh --dry` runs learn and one
+block of each mix on `stand-dry.json`, to check the runner; its output is not evidence.
+
+### Results (2026-10-24, coreslot v0.2.1): stopped at the pilot
+
+Run 7 **stopped at the pilot**, as its futility rule requires: `pilot-check` returned `"go": false`
+with T3 futile, and P infeasible. No main block was run. The pilot ran from 03:40 to 06:17 UTC:
+12 heavy blocks (6 per level), 12 light and 6 wide, every set valid except four P sets that timed
+out; no set was flagged. Its records are `run7/pilot-*.jsonl` and `run7/primer.jsonl`, and the
+check is `run7/pilot_check.json`. The pilot enters no hypothesis test; the numbers below are
+descriptive, over 6 blocks per level.
+
+**The check.**
+
+| Component | Pilot | Power at n = 72 | |
+|---|---|---|---|
+| T1, loaded ln(S2/K60) | mean 0.207, SD 0.203 | 1.00 | |
+| T2, loaded swap traffic, K60 against S2 | 5 wins, 1 loss | 1.00 | |
+| T3, quiet ln(S1/K60) | mean 0.005, SD 0.034 | 0.32 | futile |
+| P | 4 of 12 heavy P sets timed out (all at loaded) | | infeasible |
+
+The light pilot's F sets had no warn-or-worse sample.
+
+**Mean time to verdict, per level** (seconds, mean over the level's 6 blocks; geometric mean ratio
+against K60):
+
+| Level | Headroom at t0 | K60 | S1 | S2 | P |
+|---|---|---|---|---|---|
+| Loaded | 7.86-7.95 GiB | 33.1 | 32.2 (0.97) | 40.9 (1.23) | 2 of 6 sets ran |
+| Quiet | 9.62-11.80 GiB | 27.9 | 28.0 (1.00) | 34.4 (1.20) | 38.4 |
+
+Warn seconds over the level's 6 sets: loaded K60 9, S1 2, S2 68; quiet K60 0, S1 0, S2 28. The
+light mix's K60 against F was 0.94; the wide mix's S2 against K60 was 0.94, and F against K60
+1.05. K60 held the type check and FastAPI's suite at once (86 mem tokens against the static 76)
+in 4 of its 12 heavy sets, two at each level.
+
+**What it means, by the outcomes declared before the data.** The pilot can only stop the run, so
+P1 is not tested; its stop falls on outcome 2, "P1 not rejected only through T3". On this machine
+and mix, a machine-wide lock of one slot (S1) kept pace with coreslot at both levels, while
+`sem -j2` lost at both, by about a fifth of the time to verdict and with most of the memory
+pressure. The likely mechanism: at the quiet level's headroom of 9.6-11.8 GiB the live size
+rarely had room to run a suite beside the type check (it needs about 11 GiB with the relearned
+2 GiB FastAPI need), so coreslot mostly ran one heavy gate at a time, as the lock does. The same
+outcome makes further development of the one-machine product conditional on the wide mix showing
+the frozen S2 losing too; in the pilot's six wide blocks S2 was faster than K60 in every one.
+`sem --memsuspend 9G` started no gate within 600 s in 4 of its 6 loaded sets, so it is reported
+as infeasible on this machine under load, not tuned.
+
+**Deviations.** None. The stop is the procedure's own: a `"go"` of false stops the run, and no
+main phase follows it.
