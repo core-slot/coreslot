@@ -593,9 +593,10 @@ def verdict(cfg, out, phase, mix, first, last, as_block=None, primer=False):
     run6.check_needs(out)
     path = os.path.join(out, f"{phase}-{mix}.jsonl")
     recs = run4.read_jsonl(path)
-    if as_block and (as_block in run6.reruns(recs) or
-                     not any(r["block"] == as_block and not r["valid"] for r in recs)):
-        refuse(f"block {as_block} is a re-run or has no invalid set")
+    # a block whose only invalid set is P's keeps its P1 sets, so a re-run would only spend the cap
+    if as_block and (as_block in run6.reruns(recs) or not {
+            r["arm"] for r in recs if r["block"] == as_block and not r["valid"]} - {"P"}):
+        refuse(f"block {as_block} is a re-run or has no invalid set but P's")
     done = {(r["block"], r["arm"]) for r in recs}
     blocks = [(b, [a for a in order_for(phase, mix, as_block or b, arms) if (b, a) not in done])
               for b in range(first, last + 1)]

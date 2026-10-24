@@ -596,8 +596,13 @@ class Verdict7(unittest.TestCase):
         n = len(self.calls)
         self.verdict("main", "heavy", 4, 6)
         self.assertEqual(len(self.calls), n)
-        # run 6's --as-block: block 4's order, level and offsets under block 13
+        # mutation: re-run a block whose only invalid set is P's -> it runs -> red (P1 never reads
+        # the re-run, and it spends the cap)
         self.record("main", "heavy", 4, ["P"], valid=False)
+        self.assertEqual(self.refused("main", "heavy", 13, 13, as_block=4), 2)
+        self.assertEqual(len(self.calls), n)
+        # run 6's --as-block: block 4's order, level and offsets under block 13
+        self.record("main", "heavy", 4, ["S1"], valid=False)
         self.verdict("main", "heavy", 13, 13, as_block=4)
         rerun = self.calls[n:]
         self.assertEqual([c["arm"] for c in rerun], run7.order_for("main", "heavy", 4, arms))
