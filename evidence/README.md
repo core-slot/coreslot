@@ -2020,14 +2020,40 @@ check. After the relearn pass the window holds only runs at the granted width. A
 same state in ordinary use: the run log rolls over to runs at the granted width after a few runs
 of each gate, and `suggest`'s evidence line names a peak taken at a larger cpu grant.
 
-The needs it wrote (filled here before the pilot):
+Every gate passed all of its 6 K-form, 3 F-form and 5 relearn runs. The second `suggest --write`
+wrote (`run7/needs.toml`, 2026-10-24, on the v0.2.1 release):
 
-| Gate | cpu | mem | tokens | Evidence line |
+| Gate | cpu | mem | tokens | Evidence line it wrote |
 |---|---|---|---|---|
-| (filled from `run7/needs.toml`) | | | | |
+| `vscode-typecheck` | `6` | `8960M` | 70 | 5 runs 2026-10-24: max 5.4 cores, 5 of 5 saturated, peak 8.7 GiB (footprint) at 8s |
+| `fastapi-ruff` | `3` | `128M` | 1 | 5 runs 2026-10-24: max 2.0 cores, 3 of 5 saturated, peak 21 MiB (max_rss) |
+| `fastapi-tests` | `1..7` | `2G` | 16 | 5 runs 2026-10-24: max 6.6 cores, 5 of 5 saturated, peak 2 GiB (footprint) at 12s with cpu 8 |
+| `sqlalchemy-orm-tests` | `1..9` | `2G` | 16 | 5 runs 2026-10-24: max 8.7 cores, 5 of 5 saturated, peak 2 GiB (footprint) at 18s |
+| `sqlalchemy-sql-tests` | `1..4` | `1536M` | 12 | 5 runs 2026-10-24: max 3.8 cores, 0 of 5 saturated, peak 1.5 GiB (footprint) at 13s with cpu 6 |
+| `sqlalchemy-engine-tests` | `1` | `640M` | 5 | 5 runs 2026-10-24: max 0.6 cores, 0 of 5 saturated, peak 523 MiB (footprint) at 27s with cpu 3 |
 
-**The frozen files.** `run7/needs.sha256` holds the SHA-256 of `needs.toml` and `learn.jsonl`
-(filled here). Every verdict command exits before its first set unless they match. `learn`
+The relearn pass lowered every suite's mem against the first pass (`run7/needs-pass1.toml`):
+FastAPI's from 2560M to 2G, the ORM suite's from 2304M to 2G, `test/sql test/dialect`'s from
+2432M to 1536M and `test/engine test/ext`'s from 1280M to 640M. It also narrowed the cpu of
+`test/engine test/ext` from `1..3` to `1`: at a grant of 3 its K runs used 0.6 cores and took
+about 30 s, against about 17 s at the full width of the first pass. That is the product's own
+learned state, kept as it is.
+
+**Expected before the data.** Under these needs, mem `"60%"` leaves 6 tokens beside a type check,
+so the static size admits only the lint and `test/engine test/ext` beside it; a suite pairs with
+it only through the live size, when the headroom allows. In the light mix the two suites need
+32 tokens together and run at once. The wide mix needs 49 tokens, so K60 admits all four agents
+at once and shares the 14 cpu tokens among them.
+
+**The frozen files.** `run7/needs.sha256` holds the SHA-256 of the needs file and of the learn
+records:
+
+```
+b74f7f1699e7b01c7d3531ba39fdda9a01b33e18bcff23a1d49526f8a780b2a8  needs.toml
+40b6a43f3176ac9d20674817c731d9094b47f1bd7c2bfa543d37bfecab91c05e  learn.jsonl
+```
+
+Every verdict command exits before its first set unless they match. `learn`
 refuses once any pilot, main or sensitivity record exists without them; once they exist, `learn`
 does nothing (no run, no `suggest`, no reseal). An interrupted `learn` resumes inside either pass
 and never re-runs the first `suggest` once the relearn pass has started.
