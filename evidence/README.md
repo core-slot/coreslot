@@ -2130,7 +2130,7 @@ If P1 is not rejected, each secondary row reads "not tested (P1 not rejected)"; 
 - **A valid set,** as in run 6, and also not timed out. Flags never invalidate.
 - **Re-runs.** A block with an invalid set is re-run at the end under the next block number with
   its level, order and offsets (`--as-block`); at most 10 % of n count (14 heavy, 4 light,
-  3 wide, 2 under the declared drop), 3 per mix in the pilot. A heavy block whose only invalid
+  3 wide, also under the declared drop), 3 per mix in the pilot. A heavy block whose only invalid
   set is P's is not re-run (`--as-block` refuses it): its P1 sets stand, and H-P uses the blocks
   where P is valid. `summary` refuses while a mix is short and re-runs are left;
   with them spent, the mix is reported as incomplete and its tests are untested.
