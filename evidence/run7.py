@@ -798,12 +798,34 @@ def holm_rows(tests, p1):
     return rows
 
 
+def alone7(out):
+    """(gate, form) -> the median alone run time: K's ran_s over the 5 relearn runs, at the granted
+    width, and F's wall time over pass 1's F runs."""
+    runs = {}
+    for r in run4.read_jsonl(os.path.join(out, "learn.jsonl")):
+        t = r.get("ran_s") if r["pass"] == "relearn" else r["wall_s"] if r["form"] == "F" else None
+        if t is not None:
+            runs.setdefault((r["gate"], r["form"]), []).append(t)
+    return {k: statistics.median(v) for k, v in runs.items()}
+
+
 def per_arm7(blocks, arms, out):
-    """run6.per_arm, with each arm's swap traffic."""
-    res = run6.per_arm(blocks, arms, out)
+    """run6.per_arm, with each arm's swap traffic and its slowdowns over alone7's references."""
+    res, alone = run6.per_arm(blocks, arms, out), alone7(out)
     for a in res:
         res[a]["swap_traffic_pages"] = run6.ci(swap_traffic_pages(sets[a])
                                                for sets in blocks.values())
+        slow = {}
+        for sets in blocks.values():
+            mine = {}
+            for g, line in run6.gate_lines(sets[a]):  # run6.per_arm's ratio, per gate and set
+                base = alone.get((g["gate"], "K" if a.startswith("K") else "F"))
+                ran = (line or {}).get("ran_s") if a.startswith("K") else g["end"] - g["start"]
+                if base and ran is not None:
+                    mine.setdefault(g["gate"], []).append(ran / base)
+            for g, v in mine.items():
+                slow.setdefault(g, []).append(statistics.fmean(v))
+        res[a]["slowdown"] = {g: run6.ci(v) for g, v in slow.items()}
     return res
 
 

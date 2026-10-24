@@ -1045,6 +1045,23 @@ class Summary7(unittest.TestCase):
         self.assertEqual(k["swap_traffic"], stats7.wilcoxon_less([10 - 300] * 5))
         self.assertEqual(k["warn_s"], {"wins": 4, "losses": 1, "p": 6 / 32})
 
+    def test_slowdown_references(self):
+        # mutations: run 6's alone medians (pass-1 K runs pooled, relearn run 1 dropped) -> the
+        # K reference moves off 20 -> red; F from relearn -> no F reference -> red
+        self.write_main()
+        learn = [{"gate": "tc", "form": "K", "pass": "learn", "run": n, "ran_s": 1000,
+                  "wall_s": 1000} for n in range(1, 7)]
+        learn += [{"gate": "tc", "form": "K", "pass": "relearn", "run": n, "ran_s": t,
+                   "wall_s": 1000} for n, t in zip(range(1, 6), (20, 20, 20, 50, 50))]
+        learn += [{"gate": "tc", "form": "F", "pass": "learn", "run": n, "wall_s": 100,
+                   "exit": 0} for n in range(1, 4)]
+        append(self.out, "learn.jsonl", learn)
+        light = self.summary()["reported"]["per_arm"]["light"]
+        recs = run4.read_jsonl(os.path.join(self.out, "main-light.jsonl"))
+        for arm, ref in (("K60", 20), ("F", 100)):
+            want = statistics.median(r["mean_verdict_s"] / ref for r in recs if r["arm"] == arm)
+            self.assertAlmostEqual(light[arm]["slowdown"]["tc"]["median"], want, places=12)
+
     def test_summary_p_infeasible(self):
         # mutation: leave H-P out of Holm when untested -> m 3 -> red
         self.write_main(arms=run7.P1_ARMS, p_feasible=False)
