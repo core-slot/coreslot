@@ -2245,6 +2245,10 @@ Before the first pilot set:
 The registration's URL is added to this section afterwards, in a commit that changes nothing
 else.
 
+- OSF registration: https://osf.io/px5mr
+- The comment on the pull request:
+  https://github.com/core-slot/coreslot/pull/28#issuecomment-6379397725
+
 ### Reproduce
 
 ```sh
