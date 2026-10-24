@@ -1096,6 +1096,8 @@ class Summary7(unittest.TestCase):
         self.assertIn("untested", s["P1"])
         self.assertFalse(s["P1"]["rejected"])
         self.assertTrue(s["incomplete"])
+        # mutation: label every row "(P1 not rejected)" -> red
+        self.assertEqual({r["status"] for r in s["secondary"]}, {"not tested (P1 untested)"})
 
     def test_pairing_count(self):
         # mutations: hold a grant from the run's start, not after its wait -> set b overlaps ->

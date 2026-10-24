@@ -712,7 +712,6 @@ def pilot_check(out):
 # --- summary ----------------------------------------------------------------------------------
 
 SECONDARY = ("H-P", "H-L", "H-Z", "H-W")
-NOT_TESTED = "not tested (P1 not rejected)"
 SHORT = "its mix is short of n, re-runs spent"
 
 
@@ -790,7 +789,8 @@ def secondary_tests(heavy, recs, light, wide, check):
 def holm_rows(tests, p1):
     """Holm at ALPHA over the secondary family, only once P1 is rejected."""
     if not p1["rejected"]:
-        return [{"name": n, "status": NOT_TESTED} for n in SECONDARY]
+        why = "P1 untested" if "untested" in p1 else "P1 not rejected"
+        return [{"name": n, "status": f"not tested ({why})"} for n in SECONDARY]
     rows = stats7.holm({n: tests[n].get("p") for n in SECONDARY}, ALPHA)
     for r in rows:
         r["status"] = ("untested" if not r["tested"]
