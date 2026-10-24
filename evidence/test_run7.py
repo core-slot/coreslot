@@ -23,6 +23,7 @@ import overload  # noqa: E402
 import run4  # noqa: E402
 import run6  # noqa: E402
 import run7  # noqa: E402
+import stats6  # noqa: E402
 import stats7  # noqa: E402
 
 
@@ -291,10 +292,12 @@ class Level(unittest.TestCase):
         self.assertEqual(sum(self.clock.slept[slept:]), run7.RESIDENCY_WAIT_S)
 
     def test_level_off_two_sided(self):
-        # mutation: one-sided loaded (only above the target) -> 7400 not off -> red
+        # mutations: one-sided loaded (only above the target) -> 7400 not off -> red; `>=` for
+        # `>` -> 8512 off -> red; `<=` for `<` -> 10500 off -> red
         for headroom, level, off in ((8600, "loaded", True), (7400, "loaded", True),
-                                     (8300, "loaded", False), (10000, "quiet", True),
-                                     (13000, "quiet", False)):
+                                     (8300, "loaded", False), (8512, "loaded", False),
+                                     (7488, "loaded", False), (10000, "quiet", True),
+                                     (10500, "quiet", False), (13000, "quiet", False)):
             self.assertEqual(run7.level_off(headroom, level), off, (headroom, level))
 
 
@@ -457,6 +460,36 @@ class RunSet7(unittest.TestCase):
             self.assertEqual((rec["valid"], rec["invalid"]), (False, ["set_timeout"]))
             self.assertEqual(sorted(p.argv[0] for p in self.popens), ["lint", tc])
             self.assertEqual(sorted(self.killed), sorted(p.pid for p in self.popens))
+
+    def test_k60_needs_and_runlog(self):
+        # mutations: drop the needs copy, or the check that it is unchanged -> red; skip the
+        # run-log collection -> no lines, waited_free_s 0 -> red
+        needs, state = os.path.join(self.root, "needs.toml"), self.cfg["state_dir"]
+        os.makedirs(state)
+        with open(needs, "w") as f:
+            f.write("[needs]\n")
+        lines = ['{"label": "an earlier set"}']
+
+        def run_one(cfg, g, arm):
+            lines.append(json.dumps({"label": g["label"], "waited_free_s": 1.5}))
+            return 0, ""
+
+        def changing(cfg, g, arm):
+            with open(os.path.join(state, "needs.toml"), "a") as f:
+                f.write("# changed\n")
+            return run_one(cfg, g, arm)
+        with mock.patch.object(acceptance, "runlog_lines", lambda cfg: list(lines)):
+            with mock.patch.object(run4, "run_one", run_one):
+                rec = self.run_set("K60", needs=needs)
+            self.assertTrue(rec["valid"], rec["invalid"])
+            self.assertEqual(text(os.path.join(state, "needs.toml")), "[needs]\n")
+            self.assertEqual(sorted(l["label"] for l in rec["runlog"]),
+                             ["bench:lint", "bench:tc", "bench:tc"])
+            self.assertEqual(rec["waited_free_s"], 4.5)
+            with mock.patch.object(run4, "run_one", changing):
+                rec = self.run_set("K60", needs=needs)
+        self.assertFalse(rec["valid"])
+        self.assertIn("the needs file changed during the set", rec["invalid"][0])
 
     def test_set_timeout_env_only_when_dry(self):
         # mutation: honour RUN7_SET_TIMEOUT_S on any stand -> a real run can be cut short -> red
@@ -851,12 +884,30 @@ class PilotCheck(unittest.TestCase):
         self.assertEqual((c["futile"], c["go"]), ([], True))
 
     def test_pilot_check_futile_t3(self):
-        # mutation: judge T3 on the loaded blocks -> S1 is slower there, T3 not futile -> red
+        # mutations: judge T3 on the loaded blocks -> S1 is slower there, T3 not futile -> red;
+        # drop the mean <= 0 clause -> with full power T3 is not futile -> red
         quiet = pilot_levels()["quiet"]
         self.write_pilot(kw=lambda b: {"times": {"S1": 0.75}} if b in quiet else {})
-        c = self.check()
+        with mock.patch.object(stats7, "t_power", lambda *a: 1.0):
+            c = self.check()
         self.assertLessEqual(c["T3"]["mean"], 0)
         self.assertEqual((c["futile"], c["go"]), (["T3"], False))
+
+    def test_pilot_check_futile_on_power(self):
+        # mutation: drop the power clause -> T1 and T3, with positive means, not futile -> red
+        self.write_pilot()
+        with mock.patch.object(stats7, "t_power", lambda *a: 0.4):
+            c = self.check()
+        self.assertGreater(min(c["T1"]["mean"], c["T3"]["mean"]), 0)
+        self.assertEqual((c["futile"], c["go"]), (["T1", "T3"], False))
+
+    def test_pilot_check_futile_t2_on_losses(self):
+        # mutation: drop the wins <= losses clause -> with full power T2 is not futile -> red
+        self.write_pilot(kw=lambda b: {"swap": {"K60": 500}})  # above S2's 400
+        with mock.patch.object(stats7, "sign_power", lambda *a: 1.0):
+            c = self.check()
+        self.assertEqual((c["T2"]["wins"], c["T2"]["losses"], c["T2"]["cp_at_n"]), (0, 6, 1.0))
+        self.assertEqual((c["futile"], c["go"]), (["T2"], False))
 
     def test_p_invalid_does_not_drop_p1_block(self):
         # mutation: valid_blocks over HEAVY_ARMS -> no heavy block is valid -> refused -> red
@@ -916,14 +967,14 @@ class Summary7(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def write_main(self, heavy=range(1, 13), kw=lambda b: {}, arms=run7.HEAVY_ARMS,
-                   p_feasible=True, wide=range(1, 5)):
+                   p_feasible=True, wide=range(1, 5), light_k60=1.0):
         with open(os.path.join(self.out, "pilot_check.json"), "w") as f:
             json.dump({"go": True, "p_feasible": p_feasible, "light_pressure_sets": 0}, f)
         for b in heavy:
             append(self.out, "main-heavy.jsonl",
                    [r for r in heavy_block7(b, "main", **kw(b)) if r["arm"] in arms])
         for b in range(1, 5):
-            append(self.out, "main-light.jsonl", light_block7(b, "main"))
+            append(self.out, "main-light.jsonl", light_block7(b, "main", light_k60))
         for b in wide:
             append(self.out, "main-wide.jsonl", wide_block7(b, "main"))
 
@@ -964,6 +1015,22 @@ class Summary7(unittest.TestCase):
         self.assertEqual(s["P1"]["T2"]["p"], 1.0)
         self.assertEqual(s["secondary"], [{"name": n, "status": "not tested (P1 not rejected)"}
                                           for n in run7.SECONDARY])
+
+    def test_summary_h_p_h_l_direction_and_margin(self):
+        # mutations: paired_lower for paired_upper in H-P or H-L -> a slower K60 rejects -> red;
+        # MARGIN 0 in H-P -> its t moves -> red
+        for k60, rejects in ((0.9, True), (1.1, False)):
+            self.out = tempfile.mkdtemp()
+            self.write_main(kw=lambda b: {"times": {"K60": k60}}, light_k60=k60)
+            s = self.summary()
+            for name, mix, den in (("H-P", "heavy", "P"), ("H-L", "light", "F")):
+                t = s["tests"][name]
+                sets = {}
+                for r in run4.read_jsonl(os.path.join(self.out, f"main-{mix}.jsonl")):
+                    sets.setdefault(r["block"], {})[r["arm"]] = r["mean_verdict_s"]
+                d = [math.log(sets[b]["K60"] / sets[b][den]) for b in t["blocks"]]
+                self.assertEqual(t["t"], run7.finite_t(stats6.paired_upper(d, run7.MARGIN)))
+                self.assertEqual(t["p"] < 0.05, rejects, (name, k60, t["p"]))
 
     def test_summary_p_infeasible(self):
         # mutation: leave H-P out of Holm when untested -> m 3 -> red
