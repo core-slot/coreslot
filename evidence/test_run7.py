@@ -859,7 +859,7 @@ class Summary7(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def write_main(self, heavy=range(1, 13), kw=lambda b: {}, arms=run7.HEAVY_ARMS,
-                   p_feasible=True):
+                   p_feasible=True, wide=range(1, 5)):
         with open(os.path.join(self.out, "pilot_check.json"), "w") as f:
             json.dump({"go": True, "p_feasible": p_feasible, "light_pressure_sets": 0}, f)
         for b in heavy:
@@ -867,11 +867,12 @@ class Summary7(unittest.TestCase):
                    [r for r in heavy_block7(b, "main", **kw(b)) if r["arm"] in arms])
         for b in range(1, 5):
             append(self.out, "main-light.jsonl", light_block7(b, "main"))
+        for b in wide:
             append(self.out, "main-wide.jsonl", wide_block7(b, "main"))
 
-    def summary(self):
+    def summary(self, **kw):
         with mock.patch("sys.stdout"):
-            run7.summary(self.out)
+            run7.summary(self.out, **kw)
         with open(os.path.join(self.out, "summary.json")) as f:
             return json.load(f)
 
@@ -902,7 +903,7 @@ class Summary7(unittest.TestCase):
         s = self.summary()
         self.assertEqual({t: c["rejected"] for t, c in s["P1"]["components"].items()},
                          {"T1": True, "T2": False, "T3": True})
-        self.assertFalse(s["P1"]["rejected"])
+        self.assertFalse(s["P1"]["rejected"] or s["dropped"])
         self.assertEqual(s["P1"]["T2"]["p"], 1.0)
         self.assertEqual(s["secondary"], [{"name": n, "status": "not tested (P1 not rejected)"}
                                           for n in run7.SECONDARY])
@@ -921,10 +922,28 @@ class Summary7(unittest.TestCase):
         self.assertEqual(rows[0]["threshold"], 0.05 / 4)
         self.assertIn("untested", s["tests"]["H-P"])
 
-    def refused(self):
+    def refused(self, **kw):
         with self.assertRaises(SystemExit) as cm, mock.patch("sys.stderr"):
-            self.summary()
+            self.summary(**kw)
         return cm.exception.code
+
+    def test_summary_dropped(self):
+        # mutations: ignore --dropped -> 3 of 4 wide blocks, no re-run spent -> refused -> red;
+        # keep the wide n with the flag -> the fourth block is used -> red
+        p = mock.patch.multiple(run7, N_WIDE=10, N_WIDE_DROPPED=3)  # one wide re-run left
+        p.start()
+        self.addCleanup(p.stop)
+        self.write_main(wide=range(1, 4))
+        self.assertEqual(self.refused(), 2)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "summary.json")))
+        s = self.summary(dropped=True)
+        self.assertEqual((s["dropped"], s["blocks"]["wide"], s["incomplete"]),
+                         (True, [1, 2, 3], None))
+        self.assertEqual(s["tests"]["H-W"]["blocks"], [1, 2, 3])
+        self.assertEqual(s["reported"]["spread"]["blocks"], [])
+        append(self.out, "main-wide.jsonl", wide_block7(4, "main"))
+        self.assertEqual(self.summary(dropped=True)["blocks"]["wide"], [1, 2, 3])
+        self.assertEqual(self.refused(), 2)
 
     def test_summary_refuses_short(self):
         # mutations: `<=` for `<` in the re-run check -> with the one re-run spent it still exits

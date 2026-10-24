@@ -6,7 +6,7 @@ usage:
   run7.py learn STAND OUT
   run7.py verdict STAND OUT PHASE MIX FIRST LAST [--as-block B] [--primer]
   run7.py pilot-check OUT
-  run7.py summary OUT
+  run7.py summary OUT [--dropped]
 
 STAND is overload/stand7.json: run 4's stand with FastAPI's tests under `--dist loadgroup`, and
 "wide_agents", the agents of the wide mix. Every coreslot call goes through run4.cs() with the
@@ -67,7 +67,8 @@ agents) and spread (K60, S2, arrivals U(0, 30 s)), the last three at the quiet l
            pressure); H-Z, K60's heavy sets with more than 64 MiB swapped out below 3 %; H-W,
            wide S2 slower than K60. Then the reported estimates; to OUT/summary.json and
            OUT/summary.txt. Exits 2 without pilot_check.json, or while a mix lacks n valid
-           blocks and has re-runs left; with them spent, its tests are untested.
+           blocks and has re-runs left; with them spent, its tests are untested. --dropped
+           declares the drop past 32 h: the spread run may be absent and the wide n is 24.
 """
 import argparse
 import collections
@@ -120,6 +121,7 @@ PILOT_BLOCKS = {"heavy": 12, "light": 12, "wide": 6}
 N_LEVEL = 72  # heavy blocks per level
 N_LIGHT = 40
 N_WIDE = 30
+N_WIDE_DROPPED = 24  # the wide n once the pre-registered drop past 32 h is declared
 SPREAD_BLOCKS = 12
 SPREAD_WINDOW_S = 30
 ALPHA = 0.05
@@ -912,14 +914,14 @@ def summary_text(s):
     return "\n".join(lines)
 
 
-def summary(out):
+def summary(out, dropped=False):
     path = os.path.join(out, "pilot_check.json")
     if not os.path.exists(path):
         refuse(f"{path} is missing; run pilot-check first")
     with open(path) as f:
         check = json.load(f)
     mixes = {"heavy": (P1_ARMS, 2 * N_LEVEL), "light": (LIGHT_ARMS, N_LIGHT),
-             "wide": (WIDE_ARMS, N_WIDE)}
+             "wide": (WIDE_ARMS, N_WIDE_DROPPED if dropped else N_WIDE)}
     recs, used, spent, ignored, full = {}, {}, {}, {}, {}
     for mix, (arms, n) in mixes.items():
         recs[mix], ignored[mix] = run6.capped(run6.records(out, "main", mix), n // 10)
@@ -942,7 +944,8 @@ def summary(out):
     else:
         p1, tests = {"rejected": False, "untested": SHORT}, {}
     short = [m for m in full if not full[m]]
-    s = {"pilot": {k: check.get(k) for k in ("p_feasible", "light_pressure_sets")},
+    s = {"dropped": dropped,
+         "pilot": {k: check.get(k) for k in ("p_feasible", "light_pressure_sets")},
          "blocks": {"heavy": {lvl: list(bs) for lvl, bs in by_level7(heavy).items()},
                     "light": list(light), "wide": list(wide)},
          "reruns": spent, "reruns_ignored": ignored,
@@ -974,13 +977,15 @@ def main():
             p.add_argument("last", type=int)
             p.add_argument("--as-block", type=int, default=None)
             p.add_argument("--primer", action="store_true")
-    for name in ("pilot-check", "summary"):
-        sub.add_parser(name).add_argument("out")
+    sub.add_parser("pilot-check").add_argument("out")
+    p = sub.add_parser("summary")
+    p.add_argument("out")
+    p.add_argument("--dropped", action="store_true")
     args = ap.parse_args()
     if args.cmd == "pilot-check":
         return pilot_check(args.out)
     if args.cmd == "summary":
-        return summary(args.out)
+        return summary(args.out, args.dropped)
     cfg = load(args.stand)
 
     def interrupted(*_):
