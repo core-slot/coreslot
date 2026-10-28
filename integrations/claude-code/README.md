@@ -106,17 +106,20 @@ into a command line unquoted.
 
 It is a nudge, not enforcement. It passes a command silently when it is not sure:
 
-- a command it cannot split with certainty: `$(...)`, backticks, heredocs, subshells, braces,
-  unbalanced quotes, line continuations, comments;
+- a command it cannot split with certainty: `$(...)`, backticks, heredocs, subshells, a `{` or
+  `}` anywhere, even quoted (`${...}`, coreslot's own `{n}`), `[[`, unbalanced quotes, line
+  continuations, comments;
 - a command whose program word is not a shape's (`ssh host go test ./...`, `env go test ./...`,
   anything already starting with `coreslot`);
-- a command it already refused for the same session and agent: sent again unchanged, it runs
-  outside the budget. The refusal says so, so an agent you told to run something bare can;
+- a command it already refused for the same session and agent: from then on that session and
+  agent run it outside the budget every time they send it unchanged, not just the first retry.
+  The refusal says so, so an agent you told to run something bare can;
 - any failure of its own, such as an unreadable shape file.
 
 Inside `&&`, `;` and `|` chains it offers the prefix at every heavy segment and leaves every other
-byte as it was. It remembers refusals for seven days in `~/.local/state/coreslot-claude-code/`, as
-SHA-256 digests of the command, never the command.
+byte as it was. It remembers refusals in `~/.local/state/coreslot-claude-code/`, one file per
+session and agent of SHA-256 digests of the commands, never the commands; the next refusal deletes
+every file whose last refusal is more than seven days old.
 
 Two things to know about a waiting command:
 

@@ -5,7 +5,9 @@ Each invariant test names, in its docstring, the mutation of `coreslot_hook.py` 
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -13,6 +15,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 HOOK = Path(__file__).resolve().parents[1] / "hooks" / "coreslot_hook.py"
 _spec = importlib.util.spec_from_file_location("coreslot_hook", HOOK)
@@ -67,6 +71,16 @@ class Splitting(unittest.TestCase):
                 segments = hook.split_segments(raw)
                 self.assertIsNotNone(segments)
                 self.assertEqual([raw[s.start:s.end].strip().decode() for s in segments], pieces)
+
+    def test_gives_up_on_braces_and_double_brackets_even_quoted(self) -> None:
+        """Mutation: drop the `{`, `}` and `[[` check -> each of these gets an offer that changes
+        what the command does: a wrap inside a string, a `[[` split in two, a `{n}` coreslot
+        substitutes."""
+        for command in ['echo "${x:-"a;go test ./...;b"}"', "[[ -n x && xcodebuild ]]",
+                        "go test ./... -args '{n}'", "go test ./... \\{n\\}",
+                        'make -j4 "{n:mem}"', "cargo test -- '{n:cpu}'"]:
+            with self.subTest(command=command):
+                self.assertIsNone(offered(command))
 
     def test_offsets_are_utf8_bytes(self) -> None:
         """Offsets count UTF-8 bytes, so a multi-byte character before the segment keeps its place."""
@@ -191,6 +205,19 @@ class Responding(unittest.TestCase):
 
 
 class Process(unittest.TestCase):
+    def test_main_refuses_only_when_coreslot_is_on_path(self) -> None:
+        """Mutation: invert main's `shutil.which(...) is not None` -> neither case holds."""
+        home = Path(tempfile.mkdtemp())
+        for found, refused in [("/usr/local/bin/coreslot", True), (None, False)]:
+            with self.subTest(found=found):
+                out = io.StringIO()
+                with mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir=str(home))), \
+                        mock.patch("shutil.which", return_value=found), \
+                        mock.patch("sys.stdin", io.StringIO(payload("go test ./...", session=str(found)))), \
+                        contextlib.redirect_stdout(out):
+                    self.assertEqual(hook.main(), 0)
+                self.assertEqual("coreslot run --label go-test -- go test ./..." in out.getvalue(), refused)
+
     def test_the_script_exits_0_and_prints_only_a_refusal(self) -> None:
         bin_dir = Path(tempfile.mkdtemp())
         fake = bin_dir / "coreslot"

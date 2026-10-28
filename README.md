@@ -21,19 +21,18 @@ brew install core-slot/tap/coreslot
 
 ```sh
 coreslot run --need cpu=2..16 --subst -- make -j{n}  # waits for 2 cores, runs with up to 16
-coreslot run --label gate:unit -- pytest -n 12       # the label's needs, learned from its runs
+coreslot run --label gate:unit -- pytest -n 12       # needs from `coreslot suggest --write`, else cpu=1
 coreslot status                                      # who holds what, who waits
 ```
 
 ![Mean time to verdict of four agents' gates on a 16 GB, 10-core laptop: everything at once 74.6 s, semaphores of 3, 2 and 1 slots 45.6, 35.9 and 36.0 s, coreslot 34.3 s](docs/img/overload-run6.svg)
 
 Four agents' type checks, lints and test suites on one laptop reached their verdicts in less than
-half the time of running everything at once (0.47 and 0.43 of it in two pre-registered runs of
-120 and 12 blocks), with next to no swap and no false failures. Against a semaphore whose slot
-count was tuned by hand for that mix it came out about even, without any tuning: it learned each
-gate's needs from a few of its own runs, while the best slot count changed with the machine's
-background load. It is not faster than a well-tuned semaphore; [Performance](#performance) has
-the details and the caveats.
+half the time of running everything at once, in two pre-registered runs (a geometric mean of 0.47
+over run 6's 120 blocks, a median of 0.43 over run 4's 12), with next to no swap and no false
+failures. Against a semaphore whose slot count fits the mix it came out about even, and no run
+shows it more robust than one. It is not faster than a well-tuned semaphore;
+[Performance](#performance) has the details and the caveats.
 
 There is no daemon: the budget is a directory of token files and `flock(2)` locks, so a killed
 client never leaks its share, and any client written from [`PROTOCOL.md`](PROTOCOL.md) shares the
@@ -487,12 +486,13 @@ coreslot at its default shares cut the mean time to verdict to 0.47 of running e
 pressure in all 120 blocks and no false failure in 600 gate runs, where every semaphore and running
 everything at once failed FastAPI's suite 3 to 14 times. Against the best semaphore picked in
 hindsight per background level it was within a few percent either way (0.98), a ratio the
-pre-registered chain left untested; the best slot count was 2 at two levels and 1 at the third.
-A later pilot on the same laptop
+pre-registered chain left untested, as it left robustness: no fixed slot count was shown worse
+than coreslot at any level, and the run calls one slot a fair alternative on this mix. A later
+pilot on the same laptop
 ([run 7](evidence/README.md#acceptance-run-7-no-fixed-slot-count-keeps-up-across-load-run7py))
-found a one-slot lock keeping pace with coreslot at both levels it tried, while two slots lost by
-about a fifth: a semaphore whose count fits the mix is as good, and coreslot's case is not having
-to find that count.
+found a one-slot lock keeping pace with coreslot at both levels it tried; two slots lost by about
+a fifth there, and won all 6 blocks of a wide mix that fits in memory. A semaphore whose count
+fits the mix is as good as coreslot.
 
 [`evidence/README.md`](evidence/README.md) has the scripts, the setup and every run, of the
 [waiter benchmark](evidence/README.md#waiter-benchmark-the-release-gate) and of the

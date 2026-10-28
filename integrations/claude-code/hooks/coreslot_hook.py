@@ -12,17 +12,19 @@ It is a nudge, not containment: a rephrased command escapes it. So it passes, si
 it is not sure:
 
 - `coreslot` is not on `PATH`;
-- the command cannot be split with certainty (`$(`, backticks, heredocs, subshells, braces,
-  unbalanced quotes, line continuations, `#` comments), or no segment matches a shape (a
-  command that already starts with `coreslot` matches none);
-- the same command was refused before for the same session and agent: an identical retry runs
-  outside the budget, so a user who asks for a bare run gets one;
+- the command cannot be split with certainty (`$(`, backticks, heredocs, subshells, `{` or `}`
+  even quoted, `[[`, unbalanced quotes, line continuations, `#` comments), or no segment
+  matches a shape (a command that already starts with `coreslot` matches none);
+- the same command was refused before for the same session and agent: from then on it passes
+  every time that session and agent send it, outside the budget, for as long as the record is
+  kept (below), so a user who asks for a bare run gets one;
 - anything of its own goes wrong.
 
 The shapes come from `~/.config/coreslot/claude-code-shapes.json` when that file exists, else
-from `shapes.json` beside this file. The refusals are remembered for seven days in
+from `shapes.json` beside this file. The refusals are remembered in
 `~/.local/state/coreslot-claude-code/`, one file per session and agent holding the SHA-256 of
-each refused command, never the command. The home directory comes from the password database, as
+each refused command, never the command; the next refusal deletes every file whose last
+refusal is more than seven days old. The home directory comes from the password database, as
 coreslot's own does. The exit status is always 0, and the hook prints nothing but a refusal.
 Python 3.9 or newer, standard library only.
 """
@@ -127,7 +129,13 @@ def split_segments(command: bytes) -> list[Segment] | None:
     A segment runs from just after one separator to the start of the next. Blank segments (a
     trailing `&` or `;`, an empty line) are dropped; one anywhere else is a syntax error and
     gives None.
+
+    A `{` or `}` anywhere, even quoted, gives None: `${...}` nests quotes this splitter does not
+    model, and an argument that is exactly `{n}` changes meaning under `coreslot run`. So does
+    `[[` anywhere, whose `&&` and `||` do not separate commands.
     """
+    if any(token in command for token in (b"{", b"}", b"[[")):
+        return None
     raw: list[tuple[int, int, bytes | None, bytes | None]] = []
     start, before = 0, None
     at_word_start = True
@@ -154,7 +162,7 @@ def split_segments(command: bytes) -> list[Segment] | None:
             if i + 1 >= n or command[i + 1] == 0x0A:
                 return None
             i, at_word_start = i + 2, False
-        elif c in b"`(){}":
+        elif c in b"`()":
             return None
         elif c == 0x24 and command[i + 1 : i + 2] == b"'":  # $'...' quoting
             return None
