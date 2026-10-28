@@ -11,7 +11,8 @@ All notable changes to this project are recorded here. The format follows
 ## [0.3.0] - 2026-10-28
 
 A command's worker count is no longer its cpu reservation, long batch runs give way to the rest,
-and orphaned commands stop holding the budget. The on-disk protocol stays at format 1.
+a run no longer waits behind a head short of a resource it does not ask for, and orphaned commands
+stop holding the budget. The on-disk protocol stays at format 1.
 
 ### Upgrading to v0.3.0
 
@@ -63,6 +64,12 @@ differently.
 
 ### Changed
 
+- Minimums before extras, within the front window: a waiter among the first 4 tickets of the
+  queue is admitted ahead of live tickets when its request fits in what their minimums leave free.
+  A cpu-only run no longer waits behind a head that waits for memory or for a slot of another
+  resource; it never takes what a ticket ahead is short of, and a ticket ahead whose body cannot
+  be read stops it from passing. An older client on the same machine conforms and may see such a
+  waiter admitted first.
 - `[memory] live` defaults to `false` (see **Upgrading**): two acceptance runs measured no
   throughput gain from admitting `mem` above the configured size, and one measured swap under load.
 - `{n}` and `{n:cpu}` are the worker count for a per-worker request.
