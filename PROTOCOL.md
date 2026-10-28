@@ -810,8 +810,10 @@ the minimum and extra passes of section 12.1 step 6 are made against that reduce
 same sizes) of that resource in its `need`; a ticket that does not name the resource contributes
 nothing, and neither does a resource that is not declared. Every ticket ahead counts except one
 the election passes over as STALLED, dead or canceled; a ticket the waiter has never observed
-counts as live. An entry ahead whose name matches the ticket grammar but whose body cannot be read
-or is malformed, or that is a stray (section 4.2), makes the waiter not pass. This fails closed,
+counts as live. A waiter whose `mem` is sized from the live size (section 5.2) does not pass: the
+minimums ahead are counted against the configured size. An entry ahead whose name matches the
+ticket grammar but whose body cannot be read or is malformed, or that is a stray (section 4.2),
+makes the waiter not pass. This fails closed,
 unlike the election, where such an entry takes no place in the queue (section 7.2): the waiter
 goes on waiting and is elected as before. The decision is made inside the section (section 12.1
 step 5); a waiter MAY make the same check outside the section first, to enter only when it would

@@ -618,6 +618,9 @@ func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
 	}
 	waitFor(t, 10*time.Second, "the command's shell to die", gone(t, sh))
 	waitFor(t, 10*time.Second, "the grandchild to die", gone(t, gc))
+	// coreslot holds the tokens too, and its threads may still be exiting after its single-threaded
+	// command tree is gone: its descriptors are closed once it is reaped.
+	_ = cmd.Wait()
 	tokensFree(t, dir, 2)
 }
 

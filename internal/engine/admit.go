@@ -78,7 +78,9 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	if len(ahead) > 0 {
-		if front >= FrontWindow || malformed {
+		// A passer sized from the live size of mem does not pass: the minimums ahead are counted
+		// against the configured size, which the live size would let it take from.
+		if front >= FrontWindow || malformed || live {
 			return nil, nil
 		}
 		if take, ok = state.PlanBehind(eff, sizes, locked, ahead); !ok {
