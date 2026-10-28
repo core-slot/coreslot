@@ -343,6 +343,14 @@ func passThroughHelper(mode string) int {
 		err = passThroughGrandchild()
 	case "reused":
 		err = passThroughReused()
+	case "fds":
+		// Report every open descriptor from 3 to 600 with its inode, one line each.
+		for fd := 3; fd <= 600; fd++ {
+			var st unix.Stat_t
+			if unix.Fstat(fd, &st) == nil {
+				fmt.Println("fd", fd, uint64(st.Dev), uint64(st.Ino))
+			}
+		}
 	default:
 		if h := moreHelpers[mode]; h != nil {
 			err = h()
