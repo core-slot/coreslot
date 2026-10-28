@@ -134,6 +134,15 @@ class PowerPlan(unittest.TestCase):
         c["batch"]["comps"] = c["batch"]["comps"][:1]  # one component: target 0.80, n 25
         self.assertEqual(plan(20, c)["n"]["batch"], 25)
 
+    def test_f_batch_named_in_drop_order_is_kept(self):
+        # mutation: let a drop_order entry that names the batch cell drop it -> red
+        p = stats8.power_plan(
+            grid(), primary=("trace-quiet", "trace-loaded"), batch="batch",
+            drop_order=("batch", "heavy-loaded"), cap_h=12.5, power_min=0.80, lo=2, hi=200,
+            alpha=0.05)
+        self.assertEqual(p["dropped"], ["heavy-loaded"])
+        self.assertEqual(p["n"]["batch"], 39)
+
     def test_e_dropping_trace_loaded_changes_m(self):
         # mutation: keep m = len(primary) after a primary cell is dropped -> red
         p = plan(5.5)

@@ -88,6 +88,12 @@ class Stand(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertEqual(refused(self, run8.trace_agents, dict(self.cfg, **change)), 2)
 
+    def test_trace_refuses_more_gates_than_twelve(self):
+        # mutation: refuse only fewer than 12 (`<` for `!=`) -> 13 gates dealt, one dropped -> red
+        more = dict(self.cfg["gates_by_class"], unit=6)
+        self.assertEqual(sum(more.values()), 13)
+        self.assertEqual(refused(self, run8.trace_agents, dict(self.cfg, gates_by_class=more)), 2)
+
     def test_batch_agents_offsets_and_delay(self):
         # mutations: random offsets in the batch cell -> red; let a non-dry stand set
         # batch_delay_s -> no exit -> red; ignore it on a dry stand -> 60 -> red
@@ -773,6 +779,19 @@ class Summary8(unittest.TestCase):
                 ({"gates": lambda b, a: failed if a == "KP" else []}, "time", "not rejected")):
             rows = self.summary(**kw)["H-PRE"]["rows"]
             self.assertEqual(({r["name"]: r["status"] for r in rows}[leg], len(rows)), (status, 3))
+
+    def test_h_pre_cost_margin_is_ln_1_25(self):
+        # mutation: ln(1 + 4 * BATCH_COST_MARGIN) for the cost leg -> 1.30 slower is rejected -> red
+        for ratio, status in ((1.30, "not rejected"), (1.20, "rejected")):
+            rows = self.summary(batch_s=lambda b, a: 100.0 * ratio if a == "KP" else 100.0)[
+                "H-PRE"]["rows"]
+            self.assertEqual({r["name"]: r["status"] for r in rows}["cost"], status, ratio)
+
+    def test_primary_margin_is_ln_1_03(self):
+        # mutation: the primary tested against 2 * MARGIN -> K 4.5 % slower is rejected -> red
+        s = self.summary(t=lambda b, a: 104.5 if a == "K" else 100.0)
+        self.assertFalse(s["primary"]["rejected"])
+        self.assertTrue(all(c["p"] >= run8.ALPHA for c in s["primary"]["cells"].values()))
 
     def test_h_pre_skipped_untested_and_refusals(self):
         # mutations: the skip reason dropped -> red; the pilot's batch drop ignored -> red; a
