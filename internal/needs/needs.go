@@ -56,6 +56,8 @@ type Entry struct {
 	Pinned       bool    // the entry is the user's, and is never rewritten from measurements
 	CPUPerWorker float64 // cpu tokens one worker takes (cpu_per_worker); then CPU is the worker width
 	Observed     bool    // false when the entry says observed = false: its work runs outside the process tree
+	// Preemptible is the entry's preemptible key, nil when the entry has none.
+	Preemptible *bool
 }
 
 // Request is the cpu tokens a run of the entry asks for and the workers it may start, for an entry
@@ -185,6 +187,13 @@ func (f File) Lookup(label string) (Entry, bool, error) {
 			return bad("observed", errors.New("want a boolean"))
 		}
 		e.Observed = b
+	}
+	if v, ok := tbl["preemptible"]; ok {
+		b, ok := v.(bool)
+		if !ok {
+			return bad("preemptible", errors.New("want a boolean"))
+		}
+		e.Preemptible = &b
 	}
 	if v, ok := tbl["cpu_per_worker"]; ok {
 		var c float64

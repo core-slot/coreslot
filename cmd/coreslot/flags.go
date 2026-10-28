@@ -29,6 +29,7 @@ type runOptions struct {
 	strict      bool
 	independent bool
 	light       bool
+	preemptible *bool // --preemptible, else the needs entry's key; nil when neither says
 	subst       bool
 	refusalCode int
 	argv        []string
@@ -41,8 +42,8 @@ type runOptions struct {
 }
 
 const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D]
-       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--light] [--subst]
-       [--refusal-code N] -- COMMAND...`
+       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--light] [--preemptible]
+       [--subst] [--refusal-code N] -- COMMAND...`
 
 // runHelp is what `coreslot run --help` prints: the synopsis, then each flag with its default.
 const runHelp = runUsage + `
@@ -70,6 +71,8 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
   --independent         queue as a request of its own, even inside another run's grant
   --light               run at once outside the budget with MIN of each resource, for a
                         command that keeps well under one core busy (a download, a stream)
+  --preemptible         run the command at a lower priority (nice 10) for the whole run
+                        (default the label's needs.toml entry, else off)
   --subst               replace placeholders inside arguments too, as in make -j{n}
   --refusal-code N      exit status of a refusal, 1 to 255 (default 75)
 
@@ -108,6 +111,7 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	fs.BoolVar(&o.strict, "strict", false, "refuse instead of failing open")
 	fs.BoolVar(&o.independent, "independent", false, "ignore an inherited grant and queue")
 	fs.BoolVar(&o.light, "light", false, "run at once outside the budget")
+	preemptible := fs.Bool("preemptible", false, "run the command at a lower priority")
 	fs.BoolVar(&o.subst, "subst", false, "replace placeholders inside arguments too")
 	fs.IntVar(&o.refusalCode, "refusal-code", exitRefusal, "exit status of a refusal")
 	if err := fs.Parse(args); err != nil {
@@ -121,6 +125,9 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "priority" {
 			o.prioritySet = true
+		}
+		if f.Name == "preemptible" {
+			o.preemptible = preemptible
 		}
 		if slices.Contains([]string{"priority", "timeout", "on-timeout", "no-wait"}, f.Name) {
 			waitFlags = append(waitFlags, "--"+f.Name)
@@ -165,6 +172,9 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 				t := spec.MemTokensCeil(e.MemMiB)
 				withEntry["mem"] = spec.Range{Min: t, Max: t}
 			}
+			if o.preemptible == nil {
+				o.preemptible = e.Preemptible
+			}
 		}
 	}
 	req, err := o.validRequest(withEntry, len(needArgs) > 0)
@@ -195,6 +205,9 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	}
 	return o, nil
 }
+
+// marked reports whether the run is preemptible: --preemptible or the entry's key said true.
+func (o runOptions) marked() bool { return o.preemptible != nil && *o.preemptible }
 
 // validRequest is the validated request for need, which takes defaultNeed's cpu when it has none and
 // no --need was given.

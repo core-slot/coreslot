@@ -211,3 +211,37 @@ func TestNeedsLookupUnreadable(t *testing.T) {
 		t.Errorf("notices %q, want one \"needs file …: …; ignoring it\"", *notices)
 	}
 }
+
+// The mark is the flag's value when given, else the entry's, else unset. Mutation: let the entry
+// override the flag → the "=false" case red; ignore the entry → the entry case red; read the
+// flag as always true → the "=false" case red.
+func TestPreemptibleMark(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"on\"]\npreemptible = true\n[needs.\"off\"]\npreemptible = false\n[needs.\"none\"]\ncpu = 2\n")
+	for _, c := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"flag", []string{"--preemptible", "--", "true"}, true},
+		{"flag false beats an entry marked true", []string{"--preemptible=false", "--label", "on", "--", "true"}, false},
+		{"flag beats an entry marked false", []string{"--preemptible", "--label", "off", "--", "true"}, true},
+		{"entry true", []string{"--label", "on", "--", "true"}, true},
+		{"entry true under a worker count", []string{"--label", "on@4", "--", "true"}, true},
+		{"entry false", []string{"--label", "off", "--", "true"}, false},
+		{"entry without the key", []string{"--label", "none", "--", "true"}, false},
+		{"neither", []string{"--", "true"}, false},
+	} {
+		o, err := parseRun(c.args, IO{}, lookup)
+		if err != nil {
+			t.Errorf("%s: parseRun(%q): %v", c.name, c.args, err)
+			continue
+		}
+		if got := o.marked(); got != c.want {
+			t.Errorf("%s: marked() = %v, want %v", c.name, got, c.want)
+		}
+	}
+	o, err := parseRun([]string{"--", "true"}, IO{}, lookup)
+	if err != nil || o.preemptible != nil {
+		t.Errorf("without a flag or a label, preemptible = %v (%v), want unset", o.preemptible, err)
+	}
+}
