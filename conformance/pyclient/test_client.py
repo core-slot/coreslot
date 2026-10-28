@@ -1040,6 +1040,8 @@ class CancelTests(Base):
     def test_cancellation_cli_exits_with_refusal_code(self):
         self.config("[resources]\ncpu = 1\n")
         self.lock(os.path.join(self.S, "res", "cpu", "0"))
+        # A young temporary is no ticket: a listing shows one while a client publishes (§21.1).
+        self.write(os.path.join(self.S, "queue", ".tmp-0000000001-000001"), b"")
         p = self.cli("run", "--need", "cpu=1", "--", "true", stderr=subprocess.DEVNULL)
         self.wait_for(lambda: len(self.ls("queue")) == 1, what="ticket")
         [name] = self.ls("queue")

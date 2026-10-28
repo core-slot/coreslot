@@ -22,6 +22,7 @@ import (
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
+	"golang.org/x/sys/unix"
 )
 
 // Bounds of the traces. I5 lets up to 4 stopped tickets at the front block the queue for about
@@ -243,10 +244,20 @@ func TestStateDirWithSpace(t *testing.T) {
 			bins.child, "hold", e.MarkDir, "py")
 		e.WaitTicket("py")
 
-		// The Python client cancels a Go run's ticket in the same directory.
-		v := e.Run("victim", "--need", "cpu=1")
+		// The Python client cancels a Go run's ticket in the same directory. The run, held after a
+		// refresh until the request is published, then finds the admission section busy: it
+		// withdraws and leaves its ticket dead for a reconciliation (PROTOCOL.md section 13.2).
+		v := e.Pausing("ticket.refreshed").Run("victim", "--need", "cpu=1")
 		tk := e.WaitTicket("victim")
+		v.WaitReached("ticket.refreshed")
 		e.StartCommand(py, client, "cancel", tk.ID).ExitCode(0)
+		leave := holdSection(e)
+		v.Release("ticket.refreshed")
+		e.Eventually(startWait, "the canceled ticket is dead", func() bool {
+			tk, ok := e.Ticket("victim")
+			return ok && tk.Dead
+		})
+		leave()
 		v.ExitCode(exitRefusal)
 
 		e.ReleaseChild("go")
@@ -268,6 +279,21 @@ func TestStateDirWithSpace(t *testing.T) {
 	if code := d.Wait(); code != 0 {
 		t.Errorf("doctor exited %d in the directory with a space; stdout:\n%s\nstderr:\n%s", code, d.Stdout(), d.Stderr())
 	}
+}
+
+// holdSection enters the admission section as a client does, by an exclusive lock on admit.lock,
+// and returns the function that leaves it.
+func holdSection(e Env) (leave func()) {
+	e.t.Helper()
+	f, err := os.OpenFile(filepath.Join(e.Dir, store.AdmitLock), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		f.Close()
+		e.t.Fatal(err)
+	}
+	return func() { f.Close() }
 }
 
 // With no configuration file at all the budget is cpu = 140% and mem = 60%, there is no degraded
