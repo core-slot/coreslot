@@ -8,6 +8,75 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-28
+
+A command's worker count is no longer its cpu reservation, long batch runs give way to the rest,
+and orphaned commands stop holding the budget. The on-disk protocol stays at format 1.
+
+### Upgrading to v0.3.0
+
+Two defaults change:
+
+- The live size of `mem` is off. `mem` is sized from the configuration alone, as before v0.2.0;
+  `[memory] live = true` in the configuration turns the live size back on.
+- Long, large runs are demoted automatically: a run that queues with a cpu request of at least half
+  the cpu budget, whose label has at least 5 recorded runs with a median of 10 minutes or more, is
+  admitted with one cpu token and runs at nice 10 (see **Added**). `preemptible = false` in the
+  label's `needs.toml` entry opts it out; set it for runs with wall-clock deadlines (test timeouts,
+  browser or end-to-end tests, agent tool timeouts).
+
+An older client on the same machine still sizes `mem` live unless `live = false`, and ignores the
+new `needs.toml` keys; [the compatibility policy](docs/compatibility.md) says what it does
+differently.
+
+### Added
+
+- `cpu_per_worker = c` in a `needs.toml` entry: each worker of the labelled command takes `c` cpu
+  tokens. With a final worker count in the label (`gate:unit@12`) the request is `⌈c × 12⌉`
+  tokens; without one, the entry's `cpu` is the worker width and `{n}` is the number of workers
+  the grant pays for, never 0. `--need cpu=…` still wins, and `CORESLOT_GRANTED_CPU` stays the
+  token count.
+- `observed = false` in a `needs.toml` entry, for a label whose work runs outside its process tree
+  (a container, another host): `suggest` keeps that entry as written. Without it, a label whose
+  runs of a minute or more averaged under 0.05 cores gets a hint in `suggest`'s evidence instead of
+  a lowered need.
+- Preemptible runs: `coreslot run --preemptible` (`--preemptible=false` unmarks) or
+  `preemptible = true` in the label's entry admits a batch run with its full `mem` and one cpu
+  token, and runs its command's process group at nice 10. `{n}` keeps the width of the request; the
+  run log records the request as `need`, the real grant, and a `preemptible` key with the reason
+  (`flag`, `entry` or `auto: …`), which `status` also shows on the hold. The first automatic
+  demotion of a label prints one line about runs with wall-clock deadlines.
+- `coreslot run --same-group` keeps the command in coreslot's own process group, so a caller that
+  kills that group, SIGKILL included, reaches the whole command tree. As in a terminal, a signal
+  sent to coreslot's pid alone then reaches only the command's pid, or none: signal the group.
+- The run log's optional `workers` key: the value a cpu placeholder took, else the label's worker
+  count.
+- `status` marks a hold whose owner exited while a descendant still holds the grant
+  (`owner exited, held by a descendant`; `"owner_exited"` in `status --json`, schema 1), and
+  `doctor` notes it without counting a problem.
+- `stats --json` adds `suggestion.cores_per_worker`.
+
+### Changed
+
+- `[memory] live` defaults to `false` (see **Upgrading**): two acceptance runs measured no
+  throughput gain from admitting `mem` above the configured size, and one measured swap under load.
+- `{n}` and `{n:cpu}` are the worker count for a per-worker request.
+- `coreslot suggest` learns cores per worker, the p90 of cores ÷ workers rounded up to 0.05, and
+  writes `cpu_per_worker` into a per-worker entry, never `cpu`. A range entry whose runs record
+  `workers` is no longer narrowed on every learn, which drove a latency-bound suite from 10 workers
+  to 1; its evidence suggests `cpu_per_worker` instead. A saturated run raises the per-worker cost
+  through its own measurement, with no separate raise, so learning no longer oscillates. Runs
+  without `workers` are suggested as before.
+- `suggest` leaves preemptible runs out of its saturation count, and the post-run cpu hint skips
+  them.
+
+### Fixed
+
+- A command whose caller killed coreslot's process group no longer lives on with the grant's tokens
+  locked, under `--same-group`.
+- The root package's test binary marks inherited descriptors close-on-exec, so its helper processes
+  never carry an outer run's grant.
+
 ## [0.2.1] - 2026-10-24
 
 A patch: a command with a cpu placeholder no longer asks for more cpu than the machine has, and
@@ -130,7 +199,8 @@ The module path is `github.com/core-slot/coreslot`; an install from the earlier 
 - Release archives with checksums and a build-provenance attestation for every archive, and a
   Homebrew formula template that builds from source.
 
-[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/core-slot/coreslot/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/core-slot/coreslot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/core-slot/coreslot/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/core-slot/coreslot/releases/tag/v0.1.0

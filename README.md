@@ -60,6 +60,32 @@ xattr -d com.apple.quarantine ./coreslot
 
 `coreslot version` prints the version and the protocol formats it implements.
 
+### Upgrading to v0.3.0
+
+Two defaults change:
+
+- The live size of `mem` is off: memory is sized from the configuration alone, and a `mem` need
+  above that size waits instead of being admitted from the memory the kernel can still hand out.
+  To turn it back on:
+
+  ```toml
+  [memory]
+  live = true
+  ```
+
+- Long, large runs are [preemptible](#choosing-a-range) by themselves: a run that asks for at least
+  half the cpu budget, whose label's runs take 10 minutes or more, is admitted with one cpu token
+  and runs at nice 10. For a label with wall-clock deadlines (test timeouts, browser or end-to-end
+  tests, agent tool timeouts), opt out in its `needs.toml` entry:
+
+  ```toml
+  [needs."gate:e2e"]
+  preemptible = false
+  ```
+
+Upgrade every client on a machine together; [the compatibility policy](docs/compatibility.md) says
+what an older one does differently.
+
 ## Quick start
 
 Run a test gate, asking for the cores it keeps busy rather than one per worker. A pytest worker
