@@ -196,9 +196,10 @@ or at its `--timeout` under `--on-timeout run`) ignores the mark.
 A run that nothing marked becomes preemptible by itself when it queues for admission (not
 `--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
 half the cpu size, and its label (without a worker count) has at least 5 recorded runs with a
-median of 10 minutes or more, in both generations of the run log. No history, no demotion, and a
-label whose runs of a minute or more averaged under 0.05 cores is left alone, since its work looks
-to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
+median of 10 minutes or more, in both generations of the run log. A run that was itself demoted
+counts only when it took under 10 minutes, since its demotion may be what made it long. No
+history, no demotion, and a label whose runs of a minute or more averaged under 0.05 cores is left
+alone, since its work looks to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
 that runs with wall-clock deadlines can fail when demoted; `preemptible = false` in the entry opts
 out. An entry that says `observed = false` is never demoted by itself either.
 
