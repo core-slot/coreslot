@@ -45,6 +45,14 @@ def offending_strings(node, path=()):
     return found
 
 
+def entering(doc):
+    """The short-gate classes the entry criterion admits, from the profiles' own shares."""
+    mix = doc["mix"]
+    return sorted(c for c, per in doc["classes"].items() if c != "long_batch" and any(
+        p and (p.get("share_of_short_gate_" + by) or 0) >= mix["entry_share"]
+        for p in per.values() for by in mix["entry_by"]))
+
+
 class Profiles(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -53,7 +61,7 @@ class Profiles(unittest.TestCase):
     def test_top_level(self):
         d = self.doc
         self.assertEqual(set(d), TOP_KEYS)
-        self.assertEqual(d["schema"], "coreslot-run8-profiles/1")
+        self.assertEqual(d["schema"], "coreslot-run8-profiles/2")
         self.assertEqual(d["memory_source"], "max_rss_kib")
 
     def test_machine_keys(self):
@@ -110,8 +118,8 @@ class Profiles(unittest.TestCase):
         self.assertEqual([t for _, t in offending_strings(d)], ["py_unit:x"])
         # the schema id is allowed only where the schema id goes
         d = copy.deepcopy(self.doc)
-        d["memory_source"] = "coreslot-run8-profiles/1"
-        self.assertEqual([t for _, t in offending_strings(d)], ["coreslot-run8-profiles/1"])
+        d["memory_source"] = "coreslot-run8-profiles/2"
+        self.assertEqual([t for _, t in offending_strings(d)], ["coreslot-run8-profiles/2"])
 
     def test_mix_is_consistent(self):
         d, mix = self.doc, self.doc["mix"]
@@ -137,6 +145,28 @@ class Profiles(unittest.TestCase):
         self.assertLessEqual(lo, hi)
         self.assertLessEqual(hi, d["machines"]["air"]["cpus"])
         self.assertIn(lb["behind_class"], mix["classes"])
+
+    def test_entry_follows_the_criterion(self):
+        # a short-gate class enters when, on either machine, its share of the short-gate runs or of
+        # their wall time reaches half of one of the mix's gates
+        self.assertEqual(entering(self.doc), self.doc["mix"]["classes"])
+        mix = self.doc["mix"]
+        self.assertEqual(mix["entry_share"], round(1 / (2 * mix["agents"] * mix["gates_per_agent"]), 3))
+        self.assertTrue(mix["entry_by"] and set(mix["entry_by"]) <= {"runs", "wall"}, mix["entry_by"])
+        for machine, share in mix["uncovered_share"].items():
+            left = [p[machine]["share_of_short_gate_wall"] for c, p in self.doc["classes"].items()
+                    if c not in mix["classes"] and c != "long_batch" and p.get(machine)]
+            self.assertAlmostEqual(share, sum(left), delta=0.002, msg=machine)
+
+    def test_entry_check_can_fail(self):
+        # mutation: a class under the share on both measures and machines, or one listed without
+        # reaching it -> red
+        d = copy.deepcopy(self.doc)
+        for p in d["classes"]["other"].values():
+            if p:
+                p["share_of_short_gate_runs"] = p["share_of_short_gate_wall"] = 0.01
+        self.assertNotIn("other", entering(d))
+        self.assertNotEqual(entering(d), d["mix"]["classes"])
 
     def test_concurrency_shares_sum_to_one(self):
         for machine, per in self.doc["concurrency"].items():
