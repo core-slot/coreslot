@@ -177,7 +177,7 @@ func currentText(f needs.File, label string) string {
 	if e.CPU != nil {
 		parts = append(parts, fmt.Sprintf("cpu = %q", cpuText(*e.CPU)))
 	}
-	if e.PerWorker {
+	if e.CPUPerWorker > 0 {
 		parts = append(parts, "cpu per worker")
 	}
 	if e.MemMiB > 0 {
@@ -256,7 +256,7 @@ func writeStatsJSON(io IO, l learned) error {
 		case err != nil:
 			j.Current = &jsonCurrent{Error: err.Error()}
 		case ok:
-			j.Current = &jsonCurrent{CPUPerWorker: e.PerWorker, Pinned: e.Pinned}
+			j.Current = &jsonCurrent{CPUPerWorker: e.CPUPerWorker > 0, Pinned: e.Pinned}
 			if e.CPU != nil {
 				j.Current.CPU = new(cpuText(*e.CPU))
 			}
@@ -300,7 +300,7 @@ func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
 			sg.kept = "nothing measured, kept"
 		default:
 			sg.set = map[string]any{"evidence": s.Suggest.Reason}
-			if s.Suggest.CPU != nil && !e.PerWorker {
+			if s.Suggest.CPU != nil && e.CPUPerWorker == 0 {
 				sg.set["cpu"] = cpuText(*s.Suggest.CPU)
 			}
 			if s.Suggest.MemMiB > 0 {
