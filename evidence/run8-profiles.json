@@ -1,5 +1,5 @@
 {
- "schema": "coreslot-run8-profiles/1",
+ "schema": "coreslot-run8-profiles/2",
  "memory_source": "max_rss_kib",
  "machines": {
   "air": {
@@ -693,26 +693,34 @@
   }
  },
  "mix": {
-  "entry_share": 0.1,
+  "entry_share": 0.042,
+  "entry_by": [
+   "runs",
+   "wall"
+  ],
   "short_max_class_share": 0.1,
   "short_runs_enter": false,
   "classes": [
    "go_test",
    "mutation",
+   "other",
    "py_db",
-   "py_unit"
+   "py_unit",
+   "typecheck"
   ],
   "uncovered_share": {
-   "air": 0.016,
-   "pro": 0.162
+   "air": 0,
+   "pro": 0
   },
   "agents": 4,
   "gates_per_agent": 3,
   "gates_by_class": {
-   "go_test": 3,
-   "mutation": 2,
+   "go_test": 2,
+   "mutation": 1,
+   "other": 1,
    "py_db": 2,
-   "py_unit": 5
+   "py_unit": 4,
+   "typecheck": 2
   },
   "targets": {
    "go_test": {
@@ -757,6 +765,27 @@
      "mem_mib": 146.859
     }
    },
+   "other": {
+    "reference": "pro",
+    "runs": 55,
+    "wall_s": [
+     33.074,
+     599.999
+    ],
+    "cores": [
+     0.998,
+     3.82
+    ],
+    "mem_mib": [
+     23.672,
+     2530.094
+    ],
+    "p50": {
+     "wall_s": 98.955,
+     "cores": 1.996,
+     "mem_mib": 373.453
+    }
+   },
    "py_db": {
     "reference": "pro",
     "runs": 585,
@@ -783,7 +812,7 @@
     "runs": 87,
     "wall_s": [
      33.802,
-     668.878
+     599.999
     ],
     "cores": [
      0.986,
@@ -798,7 +827,33 @@
      "cores": 2.305,
      "mem_mib": 465.375
     }
+   },
+   "typecheck": {
+    "reference": "pro",
+    "runs": 213,
+    "wall_s": [
+     13.267,
+     25.862
+    ],
+    "cores": [
+     1.002,
+     1.822
+    ],
+    "mem_mib": [
+     2054.812,
+     3424.688
+    ],
+    "p50": {
+     "wall_s": 17.689,
+     "cores": 1.572,
+     "mem_mib": 2739.75
+    }
    }
+  },
+  "auto_preempt": {
+   "cpu_tokens_min": 7,
+   "runs_min": 5,
+   "median_s_min": 600
   },
   "repeat_max_ratio": 1.15,
   "long_batch": {
