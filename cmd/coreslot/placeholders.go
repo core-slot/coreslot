@@ -107,8 +107,10 @@ func substitute(argv []string, grant map[string]int, inside bool, perWorker floa
 }
 
 // cpuPlaceholder is the value of the cpu placeholders: the grant's tokens, or for a per-worker
-// request (perWorker, the tokens one worker takes, above 0) the number of workers they pay for,
-// kept inside width. It is never 0: a grant below perWorker times width.Min gives width.Min.
+// request (perWorker, the tokens one worker takes, above 0) the largest number of workers they
+// pay for, at most width.Max. A grant below perWorker times width.Min (the budget clamped the
+// request, a parent passed less through, or the label's @K fixed the width) gives the workers it
+// pays for, below width.Min, and never 0: a grant below one worker gives 1.
 func cpuPlaceholder(grantCPU int, perWorker float64, width spec.Range) int {
 	if perWorker <= 0 {
 		return grantCPU
@@ -116,5 +118,5 @@ func cpuPlaceholder(grantCPU int, perWorker float64, width spec.Range) int {
 	// The epsilon keeps a quotient that float arithmetic leaves a hair below a whole number
 	// (4 / 0.4) from rounding down to the previous.
 	workers := int(math.Floor(float64(grantCPU)/perWorker + 1e-9))
-	return min(width.Max, max(width.Min, workers))
+	return max(1, min(width.Max, workers))
 }

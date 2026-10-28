@@ -64,32 +64,39 @@ func TestSubstituteMemMiB(t *testing.T) {
 	}
 }
 
-// {n} is the worker count where the request is per worker: the grant divided by cpu_per_worker,
-// kept inside the width, and the grant itself where it is not. Mutation: substitute the grant for
-// a per-worker request → 5, 1 and 3, red; drop the lower clamp → 1, red; drop the upper clamp →
-// 15, red; drop the epsilon → 9, red.
+// {n} is the worker count where the request is per worker: the most workers the grant pays for
+// at cpu_per_worker each, at most the width's max and at least 1, and the grant itself where it
+// is not. A grant below the width's min (clamped by the budget, or a nested run's from its
+// parent) gives the workers it pays for, never the min. Mutation: substitute the grant for a
+// per-worker request → 5, 1 and 3, red; clamp to the width's min → 16, 6, 12 and 2, red; drop
+// the floor of 1 → 0, red; drop the upper clamp → 15, red; drop the epsilon → 9, red.
 func TestSubstituteWorkers(t *testing.T) {
 	saved := machineCPUs
 	t.Cleanup(func() { machineCPUs = saved })
 	machineCPUs = func() (int, error) { return 64, nil }
 	argv := []string{"x", "{n}"}
-	width := spec.Range{Min: 2, Max: 12}
+	w := spec.Range{Min: 2, Max: 12}
 	cases := []struct {
 		name      string
 		grant     int
 		perWorker float64
+		width     spec.Range
 		want      string
 	}{
-		{"grant buys the width's last worker", 5, 0.4, "12"},
-		{"grant buys more workers than the width", 6, 0.4, "12"},
-		{"grant below the width", 1, 0.4, "2"},
-		{"grant inside the width", 3, 0.4, "7"},
-		{"float quotient on a whole number", 4, 0.4, "10"},
-		{"not per worker", 3, 0, "3"},
+		{"grant buys the width's last worker", 5, 0.4, w, "12"},
+		{"grant buys more workers than the width", 6, 0.4, w, "12"},
+		{"grant buys the width's first worker", 1, 0.4, w, "2"},
+		{"grant inside the width", 3, 0.4, w, "7"},
+		{"float quotient on a whole number", 4, 0.4, w, "10"},
+		{"not per worker", 3, 0, w, "3"},
+		{"budget clamped an @16 request", 8, 1, spec.Range{Min: 16, Max: 16}, "8"},
+		{"budget clamped a range request", 8, 2, spec.Range{Min: 6, Max: 10}, "4"},
+		{"nested grant below an @12 request", 2, 0.35, spec.Range{Min: 12, Max: 12}, "5"},
+		{"grant below one worker", 1, 1.5, w, "1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := substitute(argv, map[string]int{"cpu": c.grant}, false, c.perWorker, width)
+			got := substitute(argv, map[string]int{"cpu": c.grant}, false, c.perWorker, c.width)
 			if want := []string{"x", c.want}; !slices.Equal(got, want) {
 				t.Errorf("substitute = %q, want %q", got, want)
 			}
