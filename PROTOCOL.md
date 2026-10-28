@@ -477,7 +477,8 @@ A file that cannot be parsed is left as it is.
 > runs of at least 60 s averaged under 0.05 cores is excluded. On a label's first demotion the CLI
 > prints one line about runs with wall-clock deadlines and `preemptible = false`. The CLI sets
 > nice 10 on the command's process group right after starting it (in terminal mode, where the
-> group is the shell's job, on the command's pid only), fills `{n}` from the request's cpu max, so
+> group is the shell's job, and under `run --same-group`, where it is the CLI's own, on the
+> command's pid only), fills `{n}` from the request's cpu max, so
 > a `make -j{n}` keeps its width, and records the reason in the `preemptible` key of the hold
 > (section 7.4) and of the run log. `coreslot suggest --write` writes `cpu` (or `cpu_per_worker` for
 > an entry that has it, never both), `mem` and `evidence` from the run log (section 20) and keeps
@@ -710,7 +711,8 @@ run-log append happen outside it.
   closed the descriptor that took it, but not while it sleeps between tries to enter the section;
   a library never installs signal handlers. `SIGSTOP` cannot be ignored: a process stopped inside
   the section blocks every admission on the machine until it continues or dies. This is the one
-  exception to I5. The CLI's stop is deferred, not lost: in non-terminal mode it forwards
+  exception to I5. The CLI's stop is deferred, not lost: in non-terminal mode without
+  `run --same-group` it forwards
   `SIGTSTP` to its command's process group and then stops itself, once it holds no momentary
   lock, and forwards `SIGCONT` to that group when it is continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
