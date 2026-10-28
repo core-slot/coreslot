@@ -1257,6 +1257,31 @@ func TestLightPreemptibleIsUnmarked(t *testing.T) {
 	}
 }
 
+// A marked run that queues and then runs at its timeout (--on-timeout run) is not admitted, so
+// it runs as an unmarked one: the min of its request for {n} and CORESLOT_GRANTED_CPU, and no
+// preemptible reason in its record. Mutation: drop the reset of the mark in notAdmitted → {n} is
+// the max, 2, and the record says flag, red.
+func TestTimeoutPreemptibleIsUnmarked(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		t.Fatalf("setup run: %d %q", r.code, r.stderr)
+	}
+	holdToken(t, dir, "cpu", 0)
+	holdToken(t, dir, "cpu", 1)
+	before := len(runLog(t, dir))
+	r := cli(t, baseEnv(dir), "run", "--preemptible", "--need", "cpu=1..2", "--timeout", "1s", "--on-timeout", "run",
+		"--", "sh", "-c", `echo "$1 $CORESLOT_GRANTED_CPU"`, "sh", "{n}")
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if got := strings.TrimSpace(r.stdout); got != "1 1" {
+		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 1 1", got)
+	}
+	if lines := runLog(t, dir); len(lines) != before+1 || lines[len(lines)-1]["preemptible"] != nil {
+		t.Errorf("run log %v: want one more line, without a preemptible key", lines)
+	}
+}
+
 // A preemptible run's record keeps the unshrunk request as need, the real grant, and the reason
 // as preemptible: "entry" for a needs entry's mark. Mutation: log the shrunk request as need →
 // [1 1], red; drop the key, or give an entry's mark another reason → red.

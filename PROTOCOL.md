@@ -440,9 +440,9 @@ is `max(1, ⌈c × K⌉)` cpu tokens. Without `@K`, the entry's `cpu`, if presen
 `a..b` (`"N"` is `N..N`; default `1..` the machine's CPU count, section 5.2); the request is
 `max(1, ⌈c × a⌉)..max(1, ⌈c × b⌉)` cpu tokens, at most 256 each. A cpu placeholder (section 17)
 becomes `max(1, min(b, ⌊G / c⌋))` for a cpu grant of G tokens: K, or the width's workers the grant
-pays for, and fewer than `a` only when the grant was clamped (section 12.2) or narrowed to a parent's
-(section 18). A cpu need given by the caller
-(`--need cpu=…`) wins over the entry, and a cpu placeholder is then the token count.
+pays for, and fewer than `a` only when the grant was clamped (section 12.2), narrowed to a
+parent's (section 18), or capped at 256 tokens. A cpu need given by the caller (`--need cpu=…`)
+wins over the entry, and a cpu placeholder is then the token count.
 `CORESLOT_GRANTED_CPU` (section 17) is always the token count.
 
 `observed = false` says that the label's work runs outside its process tree (in a container or on
@@ -458,9 +458,10 @@ rule (the implementation note below); `preemptible = false` opts the label out o
 run keeps its full `mem`: its cpu is not reserved, and its memory stays budgeted. This changes only
 how the client sizes its request and starts its command. The ticket and the hold carry the shrunk
 request (`cpu` `1..1`) and the one token granted, nothing is lent, rewritten or acquired again, and
-invariants I1 to I7 (section 3) hold as for any request. The mark applies only to a request that
-queues for admission: a run that passes through on a parent's grant (section 18), runs at once
-outside the budget, or fails open runs as an unmarked one would.
+invariants I1 to I7 (section 3) hold as for any request. The mark applies only to a request the
+queue admits: a run that passes through on a parent's grant (section 18), runs at once outside
+the budget, fails open, or leaves the queue at its timeout to run unbudgeted runs as an unmarked
+one would.
 
 A writer replaces the file whole under `flock(LOCK_EX)` on `needs.toml.lock` beside the file it
 replaces (the file a symbolic link names, so that every link shares one lock): it writes a
@@ -1204,9 +1205,10 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
 grant both run with 8. A parent that wants concurrent children partitions its grant itself.
 
-A preemptible parent (section 5.4) holds one cpu token, so a pass-through under it runs with one
-cpu token and a cpu placeholder of 1, whatever its request; the parent's own placeholders keep its
-request's width.
+A preemptible parent (section 5.4) that names `cpu` holds one cpu token, so a pass-through under
+it runs with one cpu token, and its cpu placeholder is what one token gives (1, or the workers one
+token pays for under a `cpu_per_worker` entry), whatever its request; the parent's own
+placeholders keep its request's width.
 
 > **Implementation note.** The Go library applies these rules to `Client.Enqueue`, with
 > `Options.Independent` as its `--independent`: rules 1 and 2 admit the request at once, and a

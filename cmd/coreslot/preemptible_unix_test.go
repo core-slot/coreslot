@@ -154,6 +154,22 @@ func TestAutoPreemptibleEndToEnd(t *testing.T) {
 	}
 }
 
+// A label whose entry says observed = false is not demoted, although its history qualifies: the
+// entry's key reaches the rule through the run's options. Mutation: drop the copy of the entry's
+// observed key in parseRun → the run is demoted, red.
+func TestAutoPreemptibleSkipsUnobservedEntry(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 14\n")
+	writeNeeds(t, dir, "[needs.\"box\"]\ncpu = \"1..12\"\nobserved = false\n")
+	writeRunLog(t, dir, store.RunLog, longRuns("box", 14, 5))
+	if r := cli(t, baseEnv(dir), "run", "--label", "box", "--", "true"); r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := runLog(t, dir)
+	if last := lines[len(lines)-1]; last["preemptible"] != nil || last["grant"].(map[string]any)["cpu"] == float64(1) {
+		t.Errorf("record %v: want no preemptible reason and the full grant", last)
+	}
+}
+
 // status shows a preemptible hold's reason, in the text and in --json, and leaves it out for any
 // other hold. Mutation: drop the key from the hold body → red.
 func TestStatusShowsPreemptible(t *testing.T) {

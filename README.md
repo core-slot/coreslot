@@ -190,8 +190,8 @@ design and pays in time only: mark batch work, not tests with timers, network or
 keeps the width of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the
 real grant, 1, and the run log records the request as `need`, the grant, and a `preemptible` key
 with the reason (`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold. A run
-that does not queue (inside another run's grant, `--light`, or outside an unusable budget) ignores
-the mark.
+that the queue does not admit (inside another run's grant, `--light`, outside an unusable budget,
+or at its `--timeout` under `--on-timeout run`) ignores the mark.
 
 A run that nothing marked becomes preemptible by itself when it queues for admission (not
 `--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
@@ -208,7 +208,8 @@ within one autogroup (one session, on by default) or cpu cgroup, so the demotion
 session's work only where autogroup is off. And a command whose work runs outside its process
 tree, such as a Docker container, has nothing in that tree to lower, and the mark frees tokens
 that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested inside
-its command gets 1 cpu and `{n}` = 1; `preemptible = false` on the outer label avoids it.
+its command gets 1 cpu, and `{n}` is what one token gives; `preemptible = false` on the outer
+label avoids it.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
 budget that admits `a` and makes `b` wait leaves `a` blocked on the full pipe until `b` reads it:

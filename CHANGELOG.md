@@ -45,7 +45,7 @@ differently.
 - Preemptible runs: `coreslot run --preemptible` (`--preemptible=false` unmarks) or
   `preemptible = true` in the label's entry admits a batch run with its full `mem` and one cpu
   token, and runs its command at nice 10 (its whole process group, except in a terminal or under
-  `--same-group`). The mark applies only to a run that queues for admission, and a
+  `--same-group`). The mark applies only to a run the queue admits, and a
   `coreslot run` nested inside a preemptible one gets its one cpu token. `{n}` keeps the
   width of the request; the run log records the request as `need`, the real grant, and a
   `preemptible` key with the reason (`flag`, `entry` or `auto: …`), which `status` also shows on
