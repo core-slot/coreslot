@@ -49,4 +49,4 @@ func stopSelf() {
 func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss, true }
 
 // clampPriority leaves cmd as it is: on Linux, lowerPriority's nice demotes a preemptible command.
-func clampPriority(*exec.Cmd) {}
+func clampPriority(*exec.Cmd) string { return "" }

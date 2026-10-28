@@ -90,11 +90,14 @@ type child struct {
 func (r *run) runChild(c child) int {
 	argv := substitute(r.o.argv, r.o.placeholderGrant(c.grant), r.o.subst, r.o.cpuPerWorker, r.o.workers)
 	cmd := exec.Command(argv[0], argv[1:]...)
-	if r.o.marked() {
-		clampPriority(cmd)
-	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
 	cmd.Env = c.env
+	preemptible := r.o.reason()
+	if r.o.marked() {
+		if why := clampPriority(cmd); why != "" {
+			preemptible += "; unclamped: " + why
+		}
+	}
 	if slices.ContainsFunc(c.files, func(f *os.File) bool { return f != nil }) {
 		cmd.ExtraFiles = c.files
 	}
@@ -141,7 +144,7 @@ func (r *run) runChild(c child) int {
 		TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
 		UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
-		Nested: c.nested, Preemptible: r.o.reason(),
+		Nested: c.nested, Preemptible: preemptible,
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
 	if g, ok := r.o.placeholderGrant(c.grant)["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {

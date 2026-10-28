@@ -186,17 +186,21 @@ whatever its cpu request, and with its full memory, and its command runs at a lo
 whole run. On Linux and the BSDs coreslot sets nice 10 on the command's process group right after
 the start, so every process of the command and everything it forks later has it. macOS ignores nice
 for every ordinary thread, so there coreslot starts the command through
-`/usr/sbin/taskpolicy -c utility`: a utility QoS clamp that every thread and every process of the command inherits from its
-first instruction. The command keeps its pid, sees its resolved path as `argv[0]`, and its disk I/O
-gets a lower tier too, as any utility work does. Other runs are admitted because the cpu tokens it
-leaves are free, and the scheduler gives them the cores first; the batch run takes the whole machine
-only when nothing else wants it. Its cpu is not reserved, so it over-commits cpu by design and pays
-in time only: mark batch work, not tests with timers, network or a database. `{n}` keeps the width
-of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the real grant, 1, and
-the run log records the request as `need`, the grant, and a `preemptible` key with the reason
-(`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold. A run that the queue does
-not admit (inside another run's grant, `--light`, outside an unusable budget, or at its `--timeout`
-under `--on-timeout run`) ignores the mark.
+`/usr/sbin/taskpolicy -c utility`: a utility QoS clamp that every thread and every process of the
+command inherits from its first instruction. The command keeps its pid, sees its resolved path as
+`argv[0]`, and its disk I/O gets a lower tier too, as any utility work does. taskpolicy is a
+restricted binary, whose start drops every `DYLD_*` variable, so a command whose environment has one
+runs unclamped, and the run log's reason says so (`flag; unclamped: DYLD_* in the environment`). A
+path that is not an executable file runs unwrapped too and fails with coreslot's 126 or 127; a
+script whose `#!` interpreter is missing still fails with taskpolicy's own status and message. Other
+runs are admitted because the cpu tokens it leaves are free, and the scheduler gives them the cores
+first; the batch run takes the whole machine only when nothing else wants it. Its cpu is not
+reserved, so it over-commits cpu by design and pays in time only: mark batch work, not tests with
+timers, network or a database. `{n}` keeps the width of the request you wrote (`cpu = "1..8"` gives
+8), `CORESLOT_GRANTED_CPU` is the real grant, 1, and the run log records the request as `need`, the
+grant, and a `preemptible` key with the reason (`flag`, `entry` or `auto: ...`); `status` shows the
+reason on the hold. A run that the queue does not admit (inside another run's grant, `--light`,
+outside an unusable budget, or at its `--timeout` under `--on-timeout run`) ignores the mark.
 
 A run that nothing marked becomes preemptible by itself when it queues for admission (not
 `--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least

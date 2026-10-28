@@ -13,13 +13,15 @@ All notable changes to this project are recorded here. The format follows
 - The automatic preemptible rule no longer keeps a label demoted on the strength of the runs its
   demotion lengthened: a demoted run counts toward the label's median only when it ran for under
   10 minutes.
-- A preemptible run was not demoted on macOS: v0.3.0's demotion there was a no-op. It set nice 10
-  on the command, and macOS ignores nice for every thread with a QoS class, which every ordinary
-  thread has, so the command kept its full priority (base priority 31) and ran with one cpu token
-  beside other runs at the same priority. On macOS coreslot now starts a preemptible command through
+- A preemptible run was not demoted on macOS: v0.3.0's demotion there was a no-op. It set nice 10 on
+  the command, and macOS ignores nice for every thread with a QoS class, which every ordinary thread
+  has, so the command kept its full priority (base priority 31) and ran with one cpu token beside
+  other runs at the same priority. On macOS coreslot now starts a preemptible command through
   `/usr/sbin/taskpolicy -c utility`, a utility QoS clamp that every thread and every process of the
   command inherits (base priority 20). The command keeps its pid and its descriptors, sees its
-  resolved path as `argv[0]`, and its disk I/O gets a lower tier too. Linux keeps nice 10.
+  resolved path as `argv[0]`, and its disk I/O gets a lower tier too. A command whose environment
+  has a `DYLD_*` variable, which taskpolicy's start would drop, runs unclamped, and the run log's
+  `preemptible` reason ends in `; unclamped: DYLD_* in the environment`. Linux keeps nice 10.
 
 ## [0.3.0] - 2026-10-28
 

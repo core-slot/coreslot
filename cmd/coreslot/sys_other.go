@@ -35,4 +35,4 @@ func maxRSSKiB(maxrss int64) (kib int64, known bool) {
 }
 
 // clampPriority leaves cmd as it is: on this platform, lowerPriority's nice demotes a preemptible command.
-func clampPriority(*exec.Cmd) {}
+func clampPriority(*exec.Cmd) string { return "" }

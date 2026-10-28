@@ -46,6 +46,11 @@ func TestMain(m *testing.M) {
 	if h := os.Getenv(helperEnv); h != "" {
 		os.Exit(runHelper(h, os.Args[1:]))
 	}
+	// A helper named in argv[1] (helper:NAME) sees the environment coreslot gave its command,
+	// where CORESLOT_CLI_TEST_HELPER would make coreslot itself the helper.
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "helper:") {
+		os.Exit(runHelper(strings.TrimPrefix(os.Args[1], "helper:"), os.Args[2:]))
+	}
 	if os.Getenv(asMainEnv) != "" {
 		main()
 	}
@@ -86,6 +91,9 @@ const helperDeadline = 2 * time.Minute
 // runHelper runs one helper command of the tests.
 func runHelper(name string, args []string) int {
 	switch name {
+	case "getenv":
+		fmt.Println(os.Getenv(args[0]))
+		return 0
 	case "fds":
 		// Report the CORESLOT_* environment and every open descriptor from 3 to 600 with its
 		// inode, one line each.
@@ -1221,7 +1229,10 @@ func TestRunPreemptibleClampsQoSOnMacOS(t *testing.T) {
 		t.Skip("the QoS clamp is macOS's; elsewhere nice demotes the command")
 	}
 	_, own := psTable(t, "pri")
-	caller := own[os.Getpid()]
+	caller, ok := own[os.Getpid()]
+	if !ok {
+		t.Fatalf("ps lists no priority for this process, %d", os.Getpid())
+	}
 	if caller <= 20 {
 		t.Skipf("this process already runs at priority %d: the clamp would show nothing", caller)
 	}
@@ -1253,6 +1264,49 @@ func TestPreemptibleStartsThroughTaskpolicy(t *testing.T) {
 		if f := strings.Fields(r.stdout); r.code != 0 || len(f) == 0 || f[0] != c.want {
 			t.Errorf("%v: exit %d, the command's args %q (stderr %q), want argv[0] %s", c.args, r.code, r.stdout, r.stderr, c.want)
 		}
+	}
+}
+
+// A preemptible command that is not an executable file fails with coreslot's own status, as an
+// unmarked one does: 127 for a missing path, 126 for a file without the execute bit. Mutation:
+// wrap a path command that coreslot has not resolved to an executable → on macOS the status is
+// taskpolicy's, red.
+func TestPreemptiblePathCommandErrors(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	plain := filepath.Join(t.TempDir(), "plain")
+	if err := os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		path string
+		code int
+	}{
+		{filepath.Join(t.TempDir(), "missing"), 127},
+		{plain, 126},
+	} {
+		r := cli(t, baseEnv(dir), "run", "--preemptible", "--", c.path)
+		if r.code != c.code || !strings.Contains(r.stderr, "cannot run") {
+			t.Errorf("%s: exit %d, stderr %q; want %d and coreslot's cannot run", c.path, r.code, r.stderr, c.code)
+		}
+	}
+}
+
+// A preemptible command keeps a DYLD_* variable of its environment. On macOS taskpolicy's start
+// would drop it, so the command runs unclamped and the run log's reason says why. Mutation: wrap
+// it anyway → the command sees no variable, red.
+func TestPreemptibleKeepsDYLD(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	r := cli(t, append(baseEnv(dir), "DYLD_CORESLOT_TEST=kept"), "run", "--preemptible", "--",
+		cliBinary(t), "helper:getenv", "DYLD_CORESLOT_TEST")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "kept" {
+		t.Errorf("exit %d, stdout %q, stderr %q; want the variable kept", r.code, r.stdout, r.stderr)
+	}
+	want := "flag"
+	if runtime.GOOS == "darwin" {
+		want = "flag; unclamped: DYLD_* in the environment"
+	}
+	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["preemptible"] != want {
+		t.Errorf("run log %v, want preemptible %q", lines, want)
 	}
 }
 
