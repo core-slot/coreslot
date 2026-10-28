@@ -770,7 +770,7 @@
     "runs": 55,
     "wall_s": [
      33.074,
-     700.79
+     599.999
     ],
     "cores": [
      0.998,
@@ -812,7 +812,7 @@
     "runs": 87,
     "wall_s": [
      33.802,
-     668.878
+     599.999
     ],
     "cores": [
      0.986,
@@ -849,6 +849,11 @@
      "mem_mib": 2739.75
     }
    }
+  },
+  "auto_preempt": {
+   "cpu_tokens_min": 7,
+   "runs_min": 5,
+   "median_s_min": 600
   },
   "repeat_max_ratio": 1.15,
   "long_batch": {

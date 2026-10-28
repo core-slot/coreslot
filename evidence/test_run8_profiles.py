@@ -168,6 +168,15 @@ class Profiles(unittest.TestCase):
         self.assertNotIn("other", entering(d))
         self.assertNotEqual(entering(d), d["mix"]["classes"])
 
+    def test_no_trace_stand_in_can_be_preempted_automatically(self):
+        # coreslot v0.3.0 demotes a label with cpu max >= 7 tokens over >= 5 runs at a median of
+        # >= 600 s; every trace band ends below that median, and only the batch reaches it
+        rule = self.doc["mix"]["auto_preempt"]
+        self.assertEqual(rule, {"cpu_tokens_min": 7, "runs_min": 5, "median_s_min": 600})
+        for c, t in self.doc["mix"]["targets"].items():
+            self.assertLess(t["wall_s"][1], rule["median_s_min"], c)
+        self.assertGreaterEqual(self.doc["mix"]["long_batch"]["standin"]["wall_s_min"], rule["median_s_min"])
+
     def test_concurrency_shares_sum_to_one(self):
         for machine, per in self.doc["concurrency"].items():
             for field in ("demand", "running"):
