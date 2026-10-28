@@ -307,9 +307,9 @@ func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
 			sg.kept = "nothing measured, kept"
 		default:
 			sg.set = map[string]any{"evidence": s.Suggest.Reason}
-			switch c := s.CPUPerWorkerFor(e.CPUPerWorker); {
-			case e.CPUPerWorker > 0 && c > 0:
-				sg.set["cpu_per_worker"] = c // its cpu is the worker width, kept
+			switch {
+			case e.CPUPerWorker > 0 && s.Suggest.CPUPerWorker > 0:
+				sg.set["cpu_per_worker"] = s.Suggest.CPUPerWorker // its cpu is the worker width, kept
 			case s.Suggest.CPU != nil && e.CPUPerWorker == 0:
 				sg.set["cpu"] = cpuText(*s.Suggest.CPU)
 			}

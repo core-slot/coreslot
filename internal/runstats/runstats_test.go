@@ -5,9 +5,7 @@ package runstats
 import (
 	"bytes"
 	"encoding/json"
-	"math"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -33,11 +31,8 @@ func run(label string, i int64, cores float64, need spec.Range, grant int) store
 		Need: map[string]spec.Range{"cpu": need}, Grant: map[string]int{"cpu": grant}}
 }
 
-// per is r run with workers workers.
-func per(r store.RunRecord, workers int) store.RunRecord {
-	r.Workers = &workers
-	return r
-}
+// per is r with a worker count.
+func per(r store.RunRecord, workers int) store.RunRecord { r.Workers = &workers; return r }
 
 func only(t *testing.T, stats []Stats) Stats {
 	t.Helper()
@@ -187,69 +182,46 @@ func TestWaitedFreeSummed(t *testing.T) {
 	}
 }
 
-// Runs that carry workers give cores per worker: the p90 of 1.0 / 4 and 3.1 / 12, rounded up to
-// a multiple of 0.05, is 0.3. An unsaturated range keeps its max, since a command whose {n}
-// follows the grant uses fewer cores when granted fewer, and the evidence names cpu_per_worker.
-// Mutation: take the smallest instead of the p90, or round to the nearest 0.05 → 0.25, red;
-// narrow the range to the cores used → 1..4, red.
-func TestSuggestPerWorkerFromWorkers(t *testing.T) {
-	s := only(t, Summarize([]store.RunRecord{per(run("x", 1, 1.0, spec.Range{Min: 1, Max: 16}, 4), 4),
-		per(run("x", 2, 3.1, spec.Range{Min: 1, Max: 16}, 12), 12)}, 16))
-	if s.Suggest.CPUPerWorker != 0.3 {
-		t.Errorf("cpu per worker %v, want 0.3", s.Suggest.CPUPerWorker)
-	}
-	if c := s.Suggest.CPU; c == nil || *c != (spec.Range{Min: 1, Max: 16}) {
-		t.Errorf("cpu %v, want 1..16 kept", c)
-	}
-	if !strings.Contains(s.Suggest.Reason, "set cpu_per_worker = 0.3") {
-		t.Errorf("reason %q does not suggest cpu_per_worker = 0.3", s.Suggest.Reason)
+// wantPerWorker fails unless s suggests cpu and c cores per worker, with evidence naming
+// cpu_per_worker exactly when c is above 0.
+func wantPerWorker(t *testing.T, s Stats, c float64, cpu spec.Range) {
+	t.Helper()
+	got := s.Suggest
+	if got.CPUPerWorker != c || got.CPU == nil || *got.CPU != cpu || strings.Contains(got.Reason, "cpu_per_worker") != (c > 0) {
+		t.Errorf("cpu per worker %v, cpu %v, reason %q; want %v and %v", got.CPUPerWorker, got.CPU, got.Reason, c, cpu)
 	}
 }
 
-// Learning from runs whose worker count follows the learned value settles: a latency-bound suite
-// using 0.27 cores per worker, granted 3 tokens over a width of 1..10, learns c1 from c0 = 0.5
-// and c2 from c1, and c2 is within 0.05 of c1. The worker count is what {n} gives at the current
-// c (cpuPlaceholder). Mutation: learn from cores per grant token instead of per worker → c1 0.55,
-// c2 0.45, red.
+// The p90 of 1.0 / 4 and 3.1 / 12 cores per worker, rounded up to 0.05, is 0.3; an unsaturated
+// range keeps its max (its {n} follows the grant). Mutation: round to the nearest 0.05, or narrow
+// the range → red.
+func TestSuggestPerWorkerFromWorkers(t *testing.T) {
+	s := only(t, Summarize([]store.RunRecord{per(run("x", 1, 1.0, spec.Range{Min: 1, Max: 16}, 4), 4),
+		per(run("x", 2, 3.1, spec.Range{Min: 1, Max: 16}, 12), 12)}, 16))
+	wantPerWorker(t, s, 0.3, spec.Range{Min: 1, Max: 16})
+}
+
+// 0.27 cores per worker on 3 tokens over a width of 1..10, the workers being what {n} gives at c:
+// c1 learned from 0.5 and c2 from c1 are within 0.05. Mutation: divide by the grant → red.
 func TestSuggestPerWorkerNoSwing(t *testing.T) {
-	const usage, grant = 0.27, 3
-	width := spec.Range{Min: 1, Max: 10}
 	learnFrom := func(c float64) float64 {
-		workers := min(width.Max, max(width.Min, int(math.Floor(grant/c+1e-9))))
+		workers := min(10, max(1, int(3/c+1e-9)))
 		var runs []store.RunRecord
 		for i := range int64(WindowRuns) {
-			need := spec.Range{Min: 1, Max: int(math.Ceil(c * float64(width.Max)))}
-			runs = append(runs, per(run("x", i, float64(workers)*usage, need, grant), workers))
+			runs = append(runs, per(run("x", i, float64(workers)*0.27, spec.Range{Min: 1, Max: 5}, 3), workers))
 		}
-		return only(t, Summarize(runs, 16)).CPUPerWorkerFor(c)
+		return only(t, Summarize(runs, 16)).Suggest.CPUPerWorker
 	}
 	c1 := learnFrom(0.5)
-	if c2 := learnFrom(c1); c1 <= 0 || math.Abs(c2-c1) > 0.05+1e-9 {
+	if c2 := learnFrom(c1); c1 <= 0 || c2-c1 > 0.05+1e-9 || c1-c2 > 0.05+1e-9 {
 		t.Errorf("c1 %v, c2 %v; want them within 0.05", c1, c2)
 	}
 }
 
-// A per-worker entry whose window has a run that used 0.8 of its grant or more gets a c at least
-// 0.05 above its current one, since its workers may have wanted more than they were paid for; an
-// entry that is not per worker, or an unsaturated window, gets the learned c. Mutation: drop the
-// raise → 0.4 for a current 0.4, red.
-func TestSuggestPerWorkerSaturated(t *testing.T) {
-	for _, tc := range []struct{ cores, current, want float64 }{
-		{3.6, 0, 0.4}, {3.6, 0.3, 0.4}, {3.6, 0.4, 0.45}, {3.6, 0.5, 0.55}, {2.0, 0.4, 0.2},
-	} {
-		s := only(t, Summarize([]store.RunRecord{per(run("x", 1, tc.cores, spec.Range{Min: 1, Max: 4}, 4), 10)}, 16))
-		if got := s.CPUPerWorkerFor(tc.current); got != tc.want {
-			t.Errorf("%v cores on 4 tokens, current %v: cpu per worker %v, want %v", tc.cores, tc.current, got, tc.want)
-		}
-	}
-}
-
-// Run 7's learn pass of sqlalchemy-engine-tests, a suite whose {n} width is its cpu grant: ten
-// workers granted 10 tokens used 2.4 to 2.7 cores. It learns 0.26 to 0.3 cores per worker and
-// keeps the width 1..10, which the old rule narrowed to 1..3. Mutation: narrow the range → 1..3,
-// red.
+// Run 7's learn pass of sqlalchemy-engine-tests (10 workers, 2.4 to 2.7 cores) learns 0.3 and
+// keeps 1..10, which the old rule narrowed to 1..3. Mutation: narrow the range → red.
 func TestSuggestRun7Fixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "evidence", "overload", "run7", "learn.jsonl"))
+	data, err := os.ReadFile("../../evidence/overload/run7/learn.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,38 +233,20 @@ func TestSuggestRun7Fixture(t *testing.T) {
 			Cores            float64
 			RanS             float64 `json:"ran_s"`
 		}
-		if err := json.Unmarshal(line, &e); err != nil {
-			t.Fatal(err)
+		if json.Unmarshal(line, &e) == nil && e.Gate == "sqlalchemy-engine-tests" && e.Pass == "learn" && e.Form == "K" {
+			r := per(run("bench:sqlalchemy-engine-tests", 0, 0, spec.Range{Min: 1, Max: 10}, 10), 10)
+			r.TimeNS, r.RanS, r.CPUUserS = e.Started.UnixNano(), e.RanS, f(e.Cores*e.RanS)
+			runs = append(runs, r)
 		}
-		if e.Gate != "sqlalchemy-engine-tests" || e.Pass != "learn" || e.Form != "K" {
-			continue
-		}
-		runs = append(runs, store.RunRecord{TimeNS: e.Started.UnixNano(), Label: "bench:sqlalchemy-engine-tests",
-			RanS: e.RanS, CPUUserS: f(e.Cores * e.RanS), CPUSysS: f(0), Workers: new(10),
-			Need: map[string]spec.Range{"cpu": {Min: 1, Max: 10}}, Grant: map[string]int{"cpu": 10}})
 	}
 	if len(runs) != 6 {
 		t.Fatalf("%d fixture runs, want 6", len(runs))
 	}
-	s := only(t, Summarize(runs, 16))
-	if c := s.Suggest.CPUPerWorker; c < 0.26 || c > 0.3 {
-		t.Errorf("cpu per worker %v, want 0.26..0.3", c)
-	}
-	if c := s.Suggest.CPU; c == nil || *c != (spec.Range{Min: 1, Max: 10}) {
-		t.Errorf("cpu %v, want 1..10 kept", c)
-	}
-	t.Logf("learned cpu_per_worker = %v; %s", s.Suggest.CPUPerWorker, s.Suggest.Reason)
+	wantPerWorker(t, only(t, Summarize(runs, 16)), 0.3, spec.Range{Min: 1, Max: 10})
 }
 
-// A range need whose runs carry no workers (a go test ./... that parallelises itself) still
-// narrows to the cores used, and says nothing per worker. Mutation: keep the max of every range →
-// 1..16, red.
+// Without workers (a go test ./... that parallelises itself) a range still narrows to the cores
+// used. Mutation: keep the max of every range → red.
 func TestSuggestStillNarrowsWithoutPlaceholder(t *testing.T) {
-	s := only(t, Summarize([]store.RunRecord{run("x", 1, 3, spec.Range{Min: 1, Max: 16}, 16)}, 16))
-	if c := s.Suggest.CPU; c == nil || *c != (spec.Range{Min: 1, Max: 3}) {
-		t.Errorf("cpu %v, want 1..3", c)
-	}
-	if s.Suggest.CPUPerWorker != 0 || strings.Contains(s.Suggest.Reason, "per worker") {
-		t.Errorf("cpu per worker %v, reason %q; want none", s.Suggest.CPUPerWorker, s.Suggest.Reason)
-	}
+	wantPerWorker(t, only(t, Summarize([]store.RunRecord{run("x", 1, 3, spec.Range{Min: 1, Max: 16}, 16)}, 16)), 0, spec.Range{Min: 1, Max: 3})
 }

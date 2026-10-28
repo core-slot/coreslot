@@ -145,34 +145,33 @@ gate = "fastapi"
 	}
 }
 
-// A per-worker entry gets cpu_per_worker rewritten from the runs that carry workers (3 cores over
-// 8 workers: 0.4), never cpu, and keeps its width and every other key.
+// suggestWorkers runs suggest --write over a worker:tests entry, whose one run used 3 cores over
+// 8 workers on 3 tokens (saturated, 0.4 per worker), and returns the entry as written.
+func suggestWorkers(t *testing.T, entry string) map[string]any {
+	t.Helper()
+	dir := statsDir(t)
+	writeNeeds(t, dir, "[needs.\"worker:tests\"]\n"+entry)
+	r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "worker:tests@8")
+	got := readNeeds(t, filepath.Join(dir, "needs.toml"))
+	if r.code != 0 || !strings.Contains(r.stdout, "cpu_per_worker = 0.4") || len(got) != 1 {
+		t.Fatalf("suggest --write exited %d, wrote %v: %s%s", r.code, got, r.stdout, r.stderr)
+	}
+	return got["worker:tests"]
+}
+
+// A per-worker entry gets cpu_per_worker rewritten, never cpu, and keeps every other key.
 // Mutation: write cpu over a per-worker entry, or keep its old cpu_per_worker → red.
 func TestSuggestWritePerWorker(t *testing.T) {
-	for _, tc := range []struct {
-		entry string
-		cpu   any
-	}{
-		{"cpu_per_worker = 2\n", nil},
-		{"cpu_per_worker = 2\ncpu = \"1..16\"\ngate = \"w\"\n", "1..16"},
-	} {
-		dir := statsDir(t)
-		writeNeeds(t, dir, "[needs.\"worker:tests\"]\n"+tc.entry)
-		r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "worker:tests@8")
-		if r.code != 0 || !strings.Contains(r.stdout, "cpu_per_worker = 0.4") {
-			t.Fatalf("suggest --write exited %d: %s%s", r.code, r.stdout, r.stderr)
-		}
-		got := readNeeds(t, filepath.Join(dir, "needs.toml"))
-		w := got["worker:tests"]
-		if w["cpu_per_worker"] != 0.4 || w["cpu"] != tc.cpu || w["mem"] != "1536M" || w["evidence"] == nil {
-			t.Errorf("%q: worker:tests entry %v", tc.entry, w)
-		}
-		if tc.cpu != nil && w["gate"] != "w" {
-			t.Errorf("%q: gate dropped: %v", tc.entry, w)
-		}
-		if len(got) != 1 {
-			t.Errorf("--label wrote other entries: %v", got)
-		}
+	if w := suggestWorkers(t, "cpu_per_worker = 2\ngate = \"w\"\n"); w["cpu_per_worker"] != 0.4 || w["cpu"] != nil || w["gate"] != "w" || w["mem"] != "1536M" || w["evidence"] == nil {
+		t.Errorf("worker:tests entry %v", w)
+	}
+}
+
+// A saturated per-worker run keeps its width and raises c through its own cores per worker:
+// CPU-bound workers lift an entry's 0.25 to 0.4. Mutation: write cpu over it → red.
+func TestSuggestPerWorkerSaturated(t *testing.T) {
+	if w := suggestWorkers(t, "cpu_per_worker = 0.25\ncpu = \"1..10\"\n"); w["cpu_per_worker"] != 0.4 || w["cpu"] != "1..10" || !strings.Contains(w["evidence"].(string), "1 of 1 saturated") {
+		t.Errorf("worker:tests entry %v", w)
 	}
 }
 

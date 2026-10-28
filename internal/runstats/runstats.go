@@ -96,8 +96,12 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 		}
 	}
 	if len(perWorker) > 0 {
+		// The p90, rounded up to a multiple of 0.05; the epsilon keeps a product that float
+		// arithmetic leaves a hair above a multiple from rounding up to the next. coreslot never
+		// caps a run's cores, so workers that want more than their share show it here.
 		slices.Sort(perWorker)
-		s.Suggest.CPUPerWorker = perWorkerStep(perWorker[int(math.Ceil(0.9*float64(len(perWorker))))-1])
+		p90 := perWorker[int(math.Ceil(0.9*float64(len(perWorker))))-1]
+		s.Suggest.CPUPerWorker = max(math.Ceil(p90*20-1e-9)/20, 0.05)
 	}
 	if len(s.CoresUsed) > 0 {
 		x := min(max(int(math.Ceil(maxCores)), 1), max(cpuSize, 1), spec.MaxPerResource)
@@ -117,22 +121,6 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 	s.Suggest.MemMiB = (s.MemPeakKiB + tokenKiB - 1) / tokenKiB * spec.MemTokenMiB
 	s.Suggest.Reason = s.reason(maxCores)
 	return s
-}
-
-// CPUPerWorkerFor is the cpu_per_worker to write over an entry whose current one is current, 0
-// when the entry is not per worker: the learned one, and for a per-worker entry with a saturated
-// window run at least current + 0.05, since its workers may have wanted more than they were paid.
-func (s Stats) CPUPerWorkerFor(current float64) float64 {
-	if current > 0 && s.Saturated > 0 {
-		return max(s.Suggest.CPUPerWorker, perWorkerStep(current+0.05))
-	}
-	return s.Suggest.CPUPerWorker
-}
-
-// perWorkerStep is x rounded up to a multiple of 0.05, at least 0.05; the epsilon keeps a product
-// that float arithmetic leaves a hair above a multiple from rounding up to the next.
-func perWorkerStep(x float64) float64 {
-	return max(math.Ceil(x*20-1e-9)/20, 0.05)
 }
 
 // memPeak sets the window's largest peak, and in PeakCPU the cpu grant of its run when that is above
@@ -158,7 +146,7 @@ func (s Stats) reason(maxCores float64) string {
 	if len(s.CoresUsed) > 0 {
 		parts = append(parts, fmt.Sprintf("max %.1f cores, %d of %d saturated", maxCores, s.Saturated, len(s.CoresUsed)))
 	}
-	if s.Suggest.CPUPerWorker > 0 && s.Saturated == 0 {
+	if s.Suggest.CPUPerWorker > 0 {
 		parts = append(parts, fmt.Sprintf("%[1]g cores per worker: set cpu_per_worker = %[1]g", s.Suggest.CPUPerWorker))
 	}
 	if s.MemPeakKiB > 0 {
