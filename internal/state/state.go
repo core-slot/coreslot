@@ -87,6 +87,22 @@ func Plan(eff map[string]spec.Range, sizes, locked map[string]int) (take map[str
 	return fill(eff, free, mins), true
 }
 
+// PlanBehind sizes the admission of a waiter with live tickets ahead of it (the exception to I4
+// beside the front window, PROTOCOL.md section 10.3): Plan with every minimum of every ticket of
+// ahead, each the effective range of its need (Effective against the same sizes), added to the
+// locked count of each resource of eff, so that the plan, its extra pass included, leaves those
+// minimums free. A resource eff does not request imposes nothing. With ahead empty it is Plan.
+func PlanBehind(eff map[string]spec.Range, sizes, locked map[string]int, ahead []map[string]spec.Range) (take map[string]int, ok bool) {
+	reserved := make(map[string]int, len(eff))
+	for name := range eff {
+		reserved[name] = locked[name]
+		for _, a := range ahead {
+			reserved[name] += a[name].Min
+		}
+	}
+	return Plan(eff, sizes, reserved)
+}
+
 // AdoptPlan sizes an adoption (PROTOCOL.md section 12.4), which has no minimum: the minimum pass
 // takes min(min, free) of each resource (free = size - locked, never below 0), and the extra
 // pass takes further tokens up to min(max, free) per resource, in ascending resource name,

@@ -85,8 +85,9 @@ func TestConsecutiveStoppedTickets(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "cpu=1") // the head, stopped
-	startHelper(t, "enqueue", dir, "cpu=1") // the next, stopped
+	// Each needs every cpu, so s cannot pass them while they are live (PROTOCOL.md section 10.3).
+	startHelper(t, "enqueue", dir, "cpu=8") // the head, stopped
+	startHelper(t, "enqueue", dir, "cpu=8") // the next, stopped
 	s := enqueue(t, e, need("cpu=1"))
 	if p := position(t, step(t, s)); p != 3 {
 		t.Fatalf("position %d behind two fresh tickets, want 3", p)
@@ -111,7 +112,7 @@ func TestStoppedHeadPassedByEverySuccessor(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "cpu=1") // the head, stopped
+	startHelper(t, "enqueue", dir, "cpu=8") // the head, stopped; needs every cpu, so none passes it
 	ws := []*Ticket{enqueue(t, e, need("cpu=1")), enqueue(t, e, need("cpu=1")), enqueue(t, e, need("cpu=1"))}
 	admitted := map[int]int{} // waiter -> second
 	for sec := 0; sec <= 11 && len(admitted) < len(ws); sec++ {
@@ -196,9 +197,10 @@ func drive(t *testing.T, clk *fakeClock, tk *Ticket, d time.Duration, before fun
 	return at
 }
 
-// A waiter that is not the head, Stepped when its work is due (as Wait does), does all of its
-// work once per second: one Step, one refresh, one cancel check, one gen read and one election
-// examining one ticket. It never probes the holds: they are listed only on request.
+// A waiter that is not the head, outside the front window, Stepped when its work is due (as
+// Wait does), does all of its work once per second: one Step, one refresh, one cancel check, one
+// gen read and one election examining one ticket and watching the rest of the front window. It
+// never probes the holds, which are listed only on request, and never enters the section.
 func TestNonHeadWorksOncePerSecond(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -206,7 +208,10 @@ func TestNonHeadWorksOncePerSecond(t *testing.T) {
 	if !isAdmitted(step(t, enqueue(t, e, need("cpu=1")))) { // a live hold
 		t.Fatal("not admitted on a free budget")
 	}
-	ahead := enqueue(t, e, need("cpu=1")) // never stepped; kept fresh below
+	var ahead []*Ticket // the front window: never stepped, kept fresh below
+	for i := 0; i < FrontWindow; i++ {
+		ahead = append(ahead, enqueue(t, e, need("cpu=1")))
+	}
 	w := enqueue(t, e, need("cpu=1"))
 	refreshes := 0
 	defaultPoint := point
@@ -217,18 +222,22 @@ func TestNonHeadWorksOncePerSecond(t *testing.T) {
 	}
 	t.Cleanup(func() { point = defaultPoint })
 	work := countWaitWork(t)
+	enters, tryEnters := countEntries(t)
 	const secs = 30
 	at := drive(t, clk, w, secs*time.Second, func() {
-		if err := ahead.refresh(clk.clock().Monotonic()); err != nil {
-			t.Fatal(err)
+		for _, a := range ahead {
+			if err := a.refresh(clk.clock().Monotonic()); err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
-	refreshes -= len(at) // ahead's
+	refreshes -= len(at) * len(ahead) // ahead's
 	// The first Step comes right after the enqueue, which refreshed: it does not refresh again.
 	if len(at) != secs || refreshes != secs-1 || work.cancelChecks != secs || work.genReads != secs ||
-		work.probes != secs || work.lstats != secs || work.holdProbes != 0 {
-		t.Fatalf("in %d s: %d Steps, %d refreshes, %d cancel checks, %d gen reads, %d mtime reads, %d probes, %d hold probes; want %d of each (refreshes one fewer, hold probes 0)",
-			secs, len(at), refreshes, work.cancelChecks, work.genReads, work.lstats, work.probes, work.holdProbes, secs)
+		work.probes != secs || work.lstats != FrontWindow*secs || work.holdProbes != 0 || *enters+*tryEnters != 0 {
+		t.Fatalf("in %d s: %d Steps, %d refreshes, %d cancel checks, %d gen reads, %d mtime reads, %d probes, %d hold probes, %d section entries; want %d of each (refreshes one fewer, mtime reads %d times as many, hold probes and entries 0)",
+			secs, len(at), refreshes, work.cancelChecks, work.genReads, work.lstats, work.probes, work.holdProbes,
+			*enters+*tryEnters, secs, FrontWindow)
 	}
 	for i := 1; i < len(at); i++ {
 		if gap := at[i] - at[i-1]; gap != ElectEvery {
@@ -310,7 +319,7 @@ func TestHoldersOnlyOnRequest(t *testing.T) {
 	if !isAdmitted(step(t, enqueue(t, e, need("cpu=1")))) { // a live hold
 		t.Fatal("not admitted on a free budget")
 	}
-	ahead := enqueue(t, e, need("cpu=1"))
+	ahead := enqueue(t, e, need("cpu=8")) // w cannot pass it (PROTOCOL.md section 10.3)
 	w := enqueue(t, e, need("cpu=1"))
 	work := countWaitWork(t)
 	for i := 0; i < 5; i++ {
@@ -343,7 +352,7 @@ func TestElectionPassesDeadAndStalledUpToTheFirstLive(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	live := startHelper(t, "enqueue", dir, "cpu=1") // farthest ahead, refreshed on command
+	live := startHelper(t, "enqueue", dir, "cpu=8") // farthest ahead, refreshed on command; s cannot pass it
 	dead := startHelper(t, "enqueue", dir, "cpu=1") // killed: dead at once
 	startHelper(t, "enqueue", dir, "cpu=1")         // nearest ahead, stopped: STALLED after 10 s
 	s := enqueue(t, e, need("cpu=1"))

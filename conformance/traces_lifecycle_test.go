@@ -867,3 +867,63 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		v.ExitCode(0)
 	})
 }
+
+// TestShortRunPassesMemoryWaiters: two runs wait at the front of the queue for memory another run
+// holds, and a 50 ms run third in the queue, naming cpu alone, is admitted at once behind every
+// minimum ahead (PROTOCOL.md section 10.3): its extra pass leaves the cpu both waiters need, so
+// it is granted 2 of the 4 cpus. Once the memory is released the head is admitted as it would be
+// without the rule, and the run behind it too. Under [memory] live = true the short run, which
+// names no mem, is admitted the same way, though its memory is in no reservation: that caveat is
+// accepted and pinned here. Every client runs with no live headroom, so the waiters wait for the
+// static size.
+//
+// Mutations: no passing outside the head leaves C queued while X holds the memory; Plan in place
+// of state.PlanBehind grants C all 4 cpus.
+func TestShortRunPassesMemoryWaiters(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		t.Run(fmt.Sprintf("live = %v", live), func(t *testing.T) {
+			e := State(t)
+			e.WriteConfig(fmt.Sprintf("[resources]\ncpu = 4\nmem = \"1G\"\n\n[memory]\nlive = %v\n", live))
+			// run starts `coreslot run` of argv (a helper child that holds until released when
+			// argv is nil) needing each of needs.
+			run := func(name string, needs []string, argv ...string) *Proc {
+				if argv == nil {
+					argv = []string{bins.child, "hold", e.MarkDir, name}
+				}
+				args := []string{"/usr/bin/env", "CORESLOT_TESTHOOK_HEADROOM_MIB=0", bins.coreslot, "run", "--label", name}
+				for _, n := range needs {
+					args = append(args, "--need", n)
+				}
+				p := e.StartCommand(append(append(args, "--"), argv...)...)
+				p.name = name
+				return p
+			}
+			waiter := []string{"cpu=1", "mem=512M"}
+			x := run("X", []string{"mem=1G"})
+			e.WaitHold("X", startWait)
+			a := run("A", waiter)
+			e.WaitTicket("A")
+			b := run("B", waiter)
+			e.WaitTicket("B")
+
+			start := time.Now()
+			c := run("C", []string{"cpu=1..4"}, "sh", "-c", `echo $CORESLOT_GRANTED_CPU; sleep 0.05`)
+			c.ExitCode(0)
+			t.Logf("C ran %v after it started, behind A and B", time.Since(start))
+			if got := strings.TrimSpace(c.Stdout()); got != "2" {
+				t.Fatalf("C was granted %s cpus, want 2: the cpu minimums of A and B stay free", got)
+			}
+			noHold(t, e, "A", "X still holds every mem token")
+			noHold(t, e, "B", "X still holds every mem token")
+
+			e.ReleaseChild("X")
+			x.ExitCode(0)
+			e.WaitHold("A", startWait)
+			e.WaitHold("B", startWait)
+			for name, p := range map[string]*Proc{"A": a, "B": b} {
+				e.ReleaseChild(name)
+				p.ExitCode(0)
+			}
+		})
+	}
+}

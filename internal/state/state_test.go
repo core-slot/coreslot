@@ -240,6 +240,59 @@ func TestPlanAllResourcesMustFit(t *testing.T) {
 	}
 }
 
+// A waiter behind live tickets plans against free less every minimum of every ticket ahead, not
+// only the minimums of the resources the head is short of; its extra pass stops there too.
+//
+// Mutation: PlanBehind subtracting only the minimums of the resources the head is short of (free
+// below its minimum) admits the cpu 5 waiter.
+func TestPlanBehindSubtractsEveryMinimum(t *testing.T) {
+	sizes := map[string]int{"cpu": 14, "mem": 76}
+	locked := map[string]int{"mem": 10}
+	head := map[string]spec.Range{"cpu": {Min: 10, Max: 10}, "mem": {Min: 70, Max: 70}} // short of mem only
+	ahead := []map[string]spec.Range{head}
+	if _, ok := Plan(head, sizes, locked); ok {
+		t.Fatal("the head fits: the case does not test a head short of memory")
+	}
+	take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, sizes, locked, ahead)
+	if !ok || take["cpu"] != 1 {
+		t.Errorf("cpu 1 behind the head: take = %v ok = %v, want cpu 1", take, ok)
+	}
+	if take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 5, Max: 5}}, sizes, locked, ahead); ok {
+		t.Errorf("cpu 5 with 14 free behind the head's cpu minimum of 10: take = %v, want not ok", take)
+	}
+	if take, ok := PlanBehind(map[string]spec.Range{"mem": {Min: 10, Max: 10}}, sizes, locked, ahead); ok {
+		t.Errorf("mem 10 behind a head short of mem: take = %v, want not ok", take)
+	}
+	// The extra pass leaves the minimums ahead free: 1..14 takes the 4 above the head's 10.
+	if take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 1, Max: 14}}, sizes, locked, ahead); !ok || take["cpu"] != 4 {
+		t.Errorf("cpu 1..14 behind the head: take = %v ok = %v, want cpu 4", take, ok)
+	}
+	// With nothing ahead it is Plan.
+	eff := map[string]spec.Range{"cpu": {Min: 5, Max: 14}, "mem": {Min: 10, Max: 70}}
+	want, _ := Plan(eff, sizes, locked)
+	if take, ok := PlanBehind(eff, sizes, locked, nil); !ok || !reflect.DeepEqual(take, want) {
+		t.Errorf("nothing ahead: take = %v ok = %v, want Plan's %v", take, ok, want)
+	}
+}
+
+// The rule's reach: a waiter passes a head short of a resource the waiter does not name (a
+// database slot another run holds), never one short of a resource it names.
+//
+// Mutation: PlanBehind refusing a waiter when any resource a ticket ahead names has free below
+// that ticket's minimum refuses the cpu-only waiter.
+func TestPlanBehindPassesAHeadShortOfAnotherResource(t *testing.T) {
+	sizes := map[string]int{"cpu": 14, "pg-local": 1}
+	locked := map[string]int{"pg-local": 1} // held by another run
+	ahead := []map[string]spec.Range{{"cpu": {Min: 2, Max: 2}, "pg-local": {Min: 1, Max: 1}}}
+	if take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, sizes, locked, ahead); !ok || take["cpu"] != 1 {
+		t.Errorf("cpu 1 behind a head waiting for pg-local: take = %v ok = %v, want cpu 1", take, ok)
+	}
+	both := map[string]spec.Range{"cpu": {Min: 1, Max: 1}, "pg-local": {Min: 1, Max: 1}}
+	if take, ok := PlanBehind(both, sizes, locked, ahead); ok {
+		t.Errorf("cpu 1 and pg-local 1 behind a head waiting for pg-local: take = %v, want not ok", take)
+	}
+}
+
 func TestPlanCapsGrantAt512(t *testing.T) {
 	// PROTOCOL.md section 12.1: every minimum first, then extra in ascending resource name while
 	// the grant holds fewer than 512 tokens.
