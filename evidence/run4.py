@@ -186,6 +186,11 @@ def stop_live():
                 pass
 
 
+def f_argv(gate):
+    """The gate's argv with an element that is exactly "{n}" replaced by free_n, as coreslot replaces a whole argument."""
+    return [gate.get("free_n", "auto") if a == "{n}" else a for a in gate["argv"]]
+
+
 def run_one(cfg, gate, arm):
     """Runs one gate in the arm's form and returns (exit, output); every arm starting with K is
     a coreslot arm."""
@@ -193,8 +198,7 @@ def run_one(cfg, gate, arm):
         r = cs(cfg, "run", "--label", gate["label"], "--", *gate["argv"], runner=run_gate,
                cwd=gate["cwd"], env=gate.get("env", {}))
     else:
-        argv = [gate.get("free_n", "auto") if a == "{n}" else a for a in gate["argv"]]
-        r = run_gate(argv, cwd=gate["cwd"], env=dict(os.environ, **gate.get("env", {})))
+        r = run_gate(f_argv(gate), cwd=gate["cwd"], env=dict(os.environ, **gate.get("env", {})))
     return r.returncode, r.stdout
 
 
