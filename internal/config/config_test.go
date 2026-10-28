@@ -196,8 +196,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-// TestMemoryTable pins [memory] live: on unless the file turns it off. Mutation: defaulting
-// LiveMem to false reddens the missing file.
+// TestMemoryTable pins [memory] live: off unless the file turns it on. Mutation: defaulting
+// LiveMem to true reddens the missing file.
 func TestMemoryTable(t *testing.T) {
 	for what, path := range map[string]string{
 		"missing file":     filepath.Join(t.TempDir(), "absent", "config.toml"),
@@ -208,11 +208,18 @@ func TestMemoryTable(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
-		if !c.LiveMem {
-			t.Errorf("%s: LiveMem = false, want true", what)
+		if c.LiveMem {
+			t.Errorf("%s: LiveMem = true, want false", what)
 		}
 	}
-	c, err := Load(writeConfig(t, "[memory]\nlive = false\n"))
+	c, err := Load(writeConfig(t, "[memory]\nlive = true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.LiveMem {
+		t.Error("live = true not honoured")
+	}
+	c, err = Load(writeConfig(t, "[memory]\nlive = false\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

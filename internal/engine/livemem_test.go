@@ -42,7 +42,8 @@ func setLiveMem(t *testing.T, headroomMiB, useKiB int64) *int {
 	return reads
 }
 
-const liveCfg = "[resources]\nmem = \"1G\"\n" // 8 mem tokens
+const staticCfg = "[resources]\nmem = \"1G\"\n"       // 8 mem tokens
+const liveCfg = staticCfg + "[memory]\nlive = true\n" // the live size is off unless turned on
 
 // treeNeed is a request for spec whose hold claims this process's tree.
 func treeNeed(spec string) spec.Request {
@@ -81,7 +82,7 @@ func TestLiveNotReadWhenStaticSuffices(t *testing.T) {
 
 // [memory] live = false keeps the static size. Mutation: attemptSizes ignoring LiveMem.
 func TestLiveOffByConfig(t *testing.T) {
-	dir := newStateDir(t, liveCfg+"[memory]\nlive = false\n")
+	dir := newStateDir(t, staticCfg+"[memory]\nlive = false\n")
 	e := newEngine(t, dir, newFakeClock())
 	setLiveMem(t, 4096, -1)
 	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))

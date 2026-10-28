@@ -177,8 +177,8 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 	return s
 }
 
-// configBody is the configuration declaring sizes. mem is written in MiB: a bare integer would
-// be GiB.
+// configBody is the configuration declaring sizes, with the live memory size on. mem is written
+// in MiB: a bare integer would be GiB.
 func configBody(sizes map[string]int) string {
 	var b strings.Builder
 	b.WriteString("[resources]\n")
@@ -189,6 +189,7 @@ func configBody(sizes map[string]int) string {
 		}
 		fmt.Fprintf(&b, "%s = %d\n", r, sizes[r])
 	}
+	b.WriteString("[memory]\nlive = true\n")
 	return b.String()
 }
 
