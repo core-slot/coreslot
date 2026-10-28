@@ -34,10 +34,9 @@ import time
 
 
 def gates(stand):
-    """(class, gate) for the pick of each class, its candidates, then the batch."""
-    out = [(c, g) for c, g in stand["classes"].items()]
-    out += [(c, g) for c, gs in stand.get("candidates", {}).items() for g in gs]
-    return out + [("long_batch", stand["batch"])]
+    """(class, gate) for each class's pick, then its candidates; the batch is long_batch's pick."""
+    picks = dict(stand["classes"], long_batch=stand["batch"])
+    return [(c, g) for c, p in picks.items() for g in [p, *stand.get("candidates", {}).get(c, [])]]
 
 
 def expand(gate, agent="A1"):

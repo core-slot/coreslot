@@ -46,6 +46,18 @@ class Bounds(unittest.TestCase):
         self.assertFalse(standins8.batch_bounds(fig(1000, 9.0, 3000, 4100), RULE, 1.15, 9000)["peak_mib"])
 
 
+class Gates(unittest.TestCase):
+    def test_each_pick_comes_before_its_candidates_and_the_batch_is_long_batchs_pick(self):
+        stand = {"classes": {"py_db": {"gate": "p"}}, "batch": {"gate": "b"},
+                 "candidates": {"long_batch": [{"gate": "b2"}], "py_db": [{"gate": "p2"}]}}
+        self.assertEqual([(c, g["gate"]) for c, g in standins8.gates(stand)],
+                         [("py_db", "p"), ("py_db", "p2"), ("long_batch", "b"), ("long_batch", "b2")])
+
+    def test_agent_and_worker_count_are_substituted(self):
+        cwd, argv = standins8.expand({"cwd": "/r/{agent}/x", "free_n": 3, "argv": ["-n", "{n}", "a {n}"]})
+        self.assertEqual((cwd, argv), ("/r/A1/x", ["-n", "3", "a 3"]))
+
+
 class Figures(unittest.TestCase):
     def test_warm_up_run_is_excluded_from_the_medians(self):
         self.assertEqual(standins8.figures(recs("g", 20, 22, 21, run0=90), "g")["wall_s"], 21)
