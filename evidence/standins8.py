@@ -32,6 +32,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import run4  # noqa: E402  (f_argv)
+
 
 def gates(stand):
     """(class, gate) for each class's pick, then its candidates; the batch is long_batch's pick."""
@@ -40,9 +43,11 @@ def gates(stand):
 
 
 def expand(gate, agent="A1"):
-    n = str(gate.get("free_n", ""))
-    return (os.path.expanduser(gate["cwd"].replace("{agent}", agent)),
-            [a.replace("{n}", n) for a in gate["argv"]])
+    """(cwd with "{agent}" replaced, argv as run 8's runner forms it: an integer free_n as text,
+    then run4.f_argv)."""
+    if "free_n" in gate:
+        gate = dict(gate, free_n=str(gate["free_n"]))
+    return os.path.expanduser(gate["cwd"].replace("{agent}", agent)), run4.f_argv(gate)
 
 
 def sh(*argv):

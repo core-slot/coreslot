@@ -1,4 +1,5 @@
 """Tests of standins8.py: python3 -m unittest evidence/test_standins8.py"""
+import json
 import os
 import sys
 import unittest
@@ -53,9 +54,58 @@ class Gates(unittest.TestCase):
         self.assertEqual([(c, g["gate"]) for c, g in standins8.gates(stand)],
                          [("py_db", "p"), ("py_db", "p2"), ("long_batch", "b"), ("long_batch", "b2")])
 
-    def test_agent_and_worker_count_are_substituted(self):
+    def test_worker_count_replaces_only_a_whole_argv_element(self):
         cwd, argv = standins8.expand({"cwd": "/r/{agent}/x", "free_n": 3, "argv": ["-n", "{n}", "a {n}"]})
-        self.assertEqual((cwd, argv), ("/r/A1/x", ["-n", "3", "a 3"]))
+        self.assertEqual((cwd, argv), ("/r/A1/x", ["-n", "3", "a {n}"]))
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+STAND8 = os.path.join(HERE, "overload", "stand8.json")
+PROFILES8 = os.environ.get("RUN8_PROFILES", os.path.join(HERE, "run8-profiles.json"))
+
+
+class Stand8(unittest.TestCase):
+    """The real stand file: run 8's runner and coreslot replace "{n}" only as a whole argument."""
+
+    def setUp(self):
+        with open(STAND8) as f:
+            self.stand = json.load(f)
+
+    def all_gates(self):
+        s = self.stand
+        yield from s["classes"].values()
+        for gs in s.get("candidates", {}).values():
+            yield from gs
+        yield s["batch"]
+        for key in ("agents", "wide_agents"):
+            for gs in s.get(key, {}).values():
+                yield from gs
+
+    def test_worker_count_is_only_ever_a_whole_argv_element(self):
+        for g in self.all_gates():
+            for a in g["argv"]:
+                self.assertTrue(a == "{n}" or "{n}" not in a, (g["gate"], a))
+
+    def test_labels_and_class_counts(self):
+        s = self.stand
+        picks = [*s["classes"].values(), s["batch"]]
+        labels = [g["label"] for g in picks]
+        self.assertEqual(len(labels), len(set(labels)), labels)
+        picks = dict(s["classes"], long_batch=s["batch"])
+        for cls, gs in s.get("candidates", {}).items():
+            for g in gs:
+                self.assertEqual(g["label"], picks[cls]["label"], (cls, g["gate"]))
+        self.assertEqual(sum(s["gates_by_class"].values()), 12)
+        self.assertEqual(set(s["gates_by_class"]), set(s["classes"]))
+        self.assertIn(s["behind_class"], s["classes"])
+
+    @unittest.skipUnless(os.path.exists(PROFILES8), f"{PROFILES8} is not in this tree (it arrives with "
+                         "the run 8 profiles change; RUN8_PROFILES=<path> points the test at a copy)")
+    def test_mix_matches_the_profiles(self):
+        with open(PROFILES8) as f:
+            mix = json.load(f)["mix"]
+        self.assertEqual(self.stand["gates_by_class"], mix["gates_by_class"])
+        self.assertEqual(self.stand["behind_class"], mix["long_batch"]["behind_class"])
 
 
 class Figures(unittest.TestCase):
