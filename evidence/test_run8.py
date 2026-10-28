@@ -482,6 +482,14 @@ class Verdict8(unittest.TestCase):
         self.verdict("pilot", "trace-quiet", 1, 1)
         self.assertEqual(len(self.calls), 5)
 
+    def test_r8_skip_is_not_sticky(self):
+        # mutation: ignore batch-skipped.json once the probe says supported -> sets -> red
+        self.supported = False
+        self.verdict("pilot", "batch", 1, 1)
+        self.supported = True
+        self.assertEqual(refused(self, self.verdict, "pilot", "batch", 1, 1), 2)
+        self.assertEqual(self.calls, [])
+
     def test_refusals(self):
         # mutations: refuse a dirty tree only for main -> the pilot runs -> red; refuse it for the
         # probe too -> red; check go without power.json -> main runs -> red; skip the binary pin
@@ -526,6 +534,31 @@ class Verdict8(unittest.TestCase):
         with open(os.path.join(self.out, "needs.toml"), "a") as f:
             f.write("# changed\n")
         self.assertEqual(refused(self, self.verdict, "main", "heavy-loaded", 1, 1), 2)
+
+
+class PreemptibleSupported(unittest.TestCase):
+    def test_argv_and_the_three_outcomes(self):
+        # mutations: probe another argv or the stand's state directory -> red; ignore the exit
+        # code's value (any non-zero is unsupported) -> exit 1 answers False -> red; exit 64 refused
+        # -> red
+        root = tempfile.mkdtemp()
+        cfg, calls = stand(root), []
+        for code, want in ((0, True), (64, False), (1, 2)):
+            def cs(cfg, *args, **kw):
+                calls.append((cfg["state_dir"], args, kw))
+                return subprocess.CompletedProcess(args, code, "", "bad state\nmore\n")
+            with self.subTest(code=code), mock.patch.object(run4, "ROOT", root), \
+                    mock.patch.object(run4, "cs", cs):
+                got = refused(self, run8.preemptible_supported, cfg) if want == 2 else \
+                    run8.preemptible_supported(cfg)
+                self.assertEqual(got, want)
+        self.assertEqual(calls[0], (cfg["state_dir"] + "-preemptible-probe",
+                                    ("run", "--preemptible=false", "--", "true"),
+                                    {"capture_output": True, "text": True}))
+        with mock.patch.object(run4, "ROOT", root), mock.patch.object(run4, "cs", cs), \
+                mock.patch("sys.stderr") as err, self.assertRaises(SystemExit):
+            run8.preemptible_supported(cfg)
+        self.assertIn("exit 1: bad state", "".join(c.args[0] for c in err.write.call_args_list))
 
 
 class Learn8(unittest.TestCase):
@@ -699,7 +732,8 @@ class Power8(unittest.TestCase):
         p = self.power()
         self.assertEqual(p["left_out"], {"batch": "the treatment check failed in every probe KP"
                                                   " set: no run-log line of the batch label"})
-        self.assertEqual(p["batch_treatment"], [{"block": b, "treatment": bad} for b in range(1, 5)])
+        self.assertEqual(p["batch_treatment"], [{"block": b, "treatment": bad}
+                                                for b in range(1, 5)])
         # mutation: leave the cell out when any KP set failed (all for any) -> red
         os.remove(os.path.join(self.out, "power.json"))
         write8(self.probe, "probe", "batch", range(5, 7))

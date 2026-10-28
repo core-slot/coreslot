@@ -38,8 +38,8 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            every gate of the agents, the wide agents and the classes, a class gate's "{agent}" as
            the first agent; before it, the batch gate's LEARN_BATCH_K runs in its K form in pass
            "learn", none in F, none in relearn, each record with its run-log line's
-           "preemptible" value (None without one). When the binary lacks --preemptible (R8 below) the
-           batch gate is skipped. Resumes and refuses as run 7's learn; refuses as well once any
+           "preemptible" value (None without one). When the binary lacks --preemptible (R8
+           below) the batch gate is skipped. Resumes and refuses as run 7's learn; refuses as well once any
            probe record exists.
   verdict  blocks FIRST..LAST of PHASE (probe, pilot or main) and CELL, each block's arms in the
            order order_for gives it (seed run8-order-<phase>-<cell>-<block>), offsets from the seed
@@ -53,11 +53,12 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            "short_mean_verdict_s" (the mean over the behind agents of their last gate's end minus
            their offset) and "batch_s" (the batch gate's end minus its start); a P gate also
            carries "submitted". The batch cell, when `coreslot run --preemptible=false -- true`
-           fails, writes OUT/batch-skipped.json once and exits 0. Exit 2 when P is to run and
-           parallel is not on PATH; on pilot and main of a non-dry stand when the evidence tree
-           has uncommitted changes or the binary is not the stand's coreslot_sha256; when pilot
-           or main lacks OUT/power.json, or main a pilot_check.json whose "go" is true; when the
-           needs files do not match OUT/needs.sha256. A cell not in power.json's "n" (dropped or
+           exits 64 (a usage error: no such flag), writes OUT/batch-skipped.json once and exits
+           0; any exit but 0 and 64, or batch-skipped.json while it exits 0, exits 2. Exit 2
+           when P is to run and parallel is not on PATH; on pilot and main of a non-dry stand
+           when the evidence tree has uncommitted changes or the binary is not the stand's
+           coreslot_sha256; when pilot or main lacks OUT/power.json, or main a pilot_check.json
+           whose "go" is true; when the needs files do not match OUT/needs.sha256. A cell not in power.json's "n" (dropped or
            left out), and the batch cell's main when pilot_check.json's "batch_futile" is true,
            exit 0 without a set. P leaves a heavy cell's main when pilot_check.json's
            "p_feasible"[cell] is false. --as-block and --primer as run 7's.
@@ -225,12 +226,17 @@ def batch_label(cfg):
 # --- learn ------------------------------------------------------------------------------------
 
 def preemptible_supported(cfg):
-    """Whether `coreslot run --preemptible=false -- true` exits 0, in a scratch state directory
-    beside the stand's, so its run-log line never reaches learn's suggest."""
+    """Whether `coreslot run --preemptible=false -- true`, in a scratch state directory beside
+    the stand's (so its run-log line never reaches learn's suggest), exits 0; exit 64, coreslot's
+    usage error (what an unknown flag gives), is unsupported, and any other exit refuses."""
     scratch = dict(cfg, state_dir=cfg["state_dir"] + "-preemptible-probe")
     run4.fresh_state(scratch)
-    return run4.cs(scratch, "run", "--preemptible=false", "--", "true",
-                   capture_output=True, text=True).returncode == 0
+    r = run4.cs(scratch, "run", "--preemptible=false", "--", "true", capture_output=True,
+                text=True)
+    if r.returncode not in (0, 64):
+        refuse(f"cannot tell whether {cfg['coreslot']} supports --preemptible: exit"
+               f" {r.returncode}: {(r.stderr.splitlines() or [''])[0]}")
+    return r.returncode == 0
 
 
 def learn_batch(cfg, out, recs):
@@ -601,8 +607,11 @@ def verdict(cfg, out, phase, cell, first, last, as_block=None, primer=False):
     if phase == "main" and check.get("p_feasible", {}).get(cell) is False:
         arms = tuple(a for a in arms if a != "P")
     run6.check_needs(out)
-    if cell == "batch" and not preemptible_supported(cfg):
-        path = os.path.join(out, "batch-skipped.json")
+    supported, path = cell != "batch" or preemptible_supported(cfg), os.path.join(
+        out, "batch-skipped.json")
+    if cell == "batch" and supported and os.path.exists(path):
+        refuse("the binary changed since the batch cell was skipped")
+    if not supported:
         if not os.path.exists(path):
             with open(path, "w") as f:
                 json.dump({"reason": "the coreslot binary lacks --preemptible",
@@ -725,11 +734,12 @@ def power(probe_out, out):
     for cell, (_, _, arms) in CELLS.items():
         recs, blocks = cell_blocks(probe_out, "probe", cell)
         if cell == "batch" and not skipped:
-            kp = res["batch_treatment"] = [{"block": r["block"], "treatment": r.get("treatment", [])}
-                                           for r in recs if r["arm"] == "KP"]
+            kp = res["batch_treatment"] = [{"block": r["block"], "treatment": r.get(
+                "treatment", [])} for r in recs if r["arm"] == "KP"]
             if all(r["treatment"] for r in kp):
-                skipped = {"reason": "the treatment check failed in every probe KP set: " + "; ".join(
-                    sorted({p for r in kp for p in r["treatment"]}))}
+                problems = sorted({p for r in kp for p in r["treatment"]})
+                skipped = {"reason": "the treatment check failed in every probe KP set: "
+                           + "; ".join(problems)}
         if cell == "batch" and (skipped or len(blocks) < 2):
             res["left_out"][cell] = (skipped or {}).get("reason",
                                                         f"{len(blocks)} valid probe blocks")
