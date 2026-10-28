@@ -690,6 +690,15 @@ class Power8(unittest.TestCase):
         sets = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-quiet.jsonl"))
         self.assertAlmostEqual(p["set_s"]["heavy-quiet"],
                                sum(r["makespan_s"] + 5 for r in sets) / 4, places=9)
+        # mutation: a held set counted by its finished gates' makespan -> red
+        os.remove(os.path.join(self.probe, "probe-heavy-loaded.jsonl"))
+        write8(self.probe, "probe", "heavy-loaded", range(1, 5), timeout_s=lambda b, a: 600,
+               invalid=lambda b, a: ["set_timeout"] if a == "P" else [])
+        shutil.rmtree(self.out)
+        os.mkdir(self.out)
+        sets = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-loaded.jsonl"))
+        self.assertAlmostEqual(self.power()["set_s"]["heavy-loaded"], sum(
+            (600 if r["arm"] == "P" else r["makespan_s"]) + 5 for r in sets) / 4, places=9)
         self.assertEqual((p["over_cap"], p["cap_h"], p["dropped"]), (False, 30, []))
 
     def test_drop_order_and_refusals(self):
@@ -784,6 +793,12 @@ class PilotCheck8(unittest.TestCase):
             self.assertEqual((c["p_timeouts"]["heavy-quiet"], c["p_feasible"], c["go"]),
                              (len(bs), {"heavy-quiet": feasible}, True))
             self.assertEqual(c["blocks"]["heavy-quiet"], list(range(1, 11)))
+        # mutation: the count not pro rata -> a dry check's 2 timeouts in 2 blocks feasible -> red
+        for bs, feasible in (((), True), ((1,), False)):
+            self.setUp()
+            c = self.check(blocks=(1, 2), dry=lambda b, a: True,
+                           invalid=lambda b, a: ["set_timeout"] if a == "P" and b in bs else [])
+            self.assertEqual(c["p_feasible"], {"heavy-quiet": feasible})
         self.setUp()
         self.assertEqual(refused(self, self.check, blocks=range(1, 10)), 2)
         for cell in self.CELLS:
@@ -941,7 +956,7 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
     SH = os.path.join(HERE, "overload", "run8.sh")
     ENV = {"STUB_BATT": "AC Power", "STUB_INDEX": "Indexing disabled.", "STUB_PGREP": "1 /bin/node -k=hunter2",
            "STUB_UPDATE": "Automatic checking for updates is turned on", "STUB_CHECK": "", "STUB_DOWNLOAD": "0",
-           "STUB_INSTALL": "0"}
+           "STUB_INSTALL": "0", "STUB_VM": ""}
     CELLS = "trace-quiet trace-loaded heavy-quiet heavy-loaded wide-quiet batch".split()
 
     def setUp(self):
@@ -951,7 +966,8 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
         os.mkdir(self.out)
         listing = 'echo "PID Status Label"; echo "- 0 com.apple.x"; echo "- 0 com.example.agent"'
         for tool, body in {"pmset": "$STUB_BATT", "mdutil": "$STUB_INDEX", "softwareupdate": "$STUB_UPDATE",
-                           "pgrep": "$STUB_PGREP", "caffeinate": "", "launchctl": listing,
+                           "pgrep": 'case $2 in *Virtualization*) echo "$STUB_VM" ;; *) echo "$STUB_PGREP" ;; esac',
+                           "caffeinate": "", "launchctl": listing,
                            "defaults": 'case $3 in *Check*) echo "$STUB_CHECK" ;; *Download) echo "$STUB_DOWNLOAD" ;; '
                                        '*) echo "$STUB_INSTALL" ;; esac'}.items():
             body = f'echo "{body}"' if body.startswith("$") else body
@@ -982,18 +998,21 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
         # mutations: no AC check, or it run after python -> red; the indexing or the update
         # check dropped, the update check read from softwareupdate --schedule or from
         # AutomaticCheckEnabled, either update key unchecked, or either check enforced on a dry
-        # run -> red; caffeinate without -w, or pgrep's full command lines logged, or the
+        # run -> red; a running VM not refused, or refused on a dry run -> red; caffeinate without -w, or pgrep's full command lines logged, or the
         # apple agents listed -> red
         batt, off, on = {"STUB_BATT": "Battery Power"}, {"STUB_INDEX": "Indexing enabled."}, {"STUB_DOWNLOAD": "1"}
+        vm = {"STUB_VM": "47376 /System/Library/Frameworks/x/com.apple.Virtualization.VirtualMachine"}
         for args, env, rc in (((), batt, 2), (("--dry",), batt, 2), (("learn",), off, 2), (("verdict",), on, 2),
                               (("learn",), {"STUB_INSTALL": "1"}, 2), (("learn",), {"STUB_INSTALL": ""}, 2),
+                              (("verdict",), vm, 2), (("--dry", "learn"), vm, 0),
                               (("--dry", "verdict"), {**off, **on}, 0), (("preflight",), {}, 0), (("learn",), {}, 0)):
             code, err, py, _ = self.sh(*args, **env)
             self.assertEqual((code, bool(py), "run8: " in err), (rc, rc == 0 and args[-1] != "preflight", rc == 2), args)
         log = text(os.path.join(self.out, "preflight.log"))
         self.assertTrue("1 node" in log and "hunter2" not in log and "com.example.agent" in log
                         and "com.apple.x" not in log and "Indexing enabled" in log
-                        and "AutomaticCheckEnabled: ; AutomaticDownload: 1" in log, log)
+                        and "AutomaticCheckEnabled: ; AutomaticDownload: 1" in log
+                        and "virtual machines: 47376 com.apple.Virtualization.VirtualMachine" in log, log)
         self.assertIn("caffeinate -dimsu -w ", "\n".join(self.sh("preflight")[3]))
 
     def test_dispatch_and_default_paths(self):

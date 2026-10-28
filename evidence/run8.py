@@ -48,7 +48,8 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            with RUN8_SET_TIMEOUT_S), past which every live gate, P's parallel and its jobs are
            killed and the set is invalid with set_timeout. The record is run 7's plus "cell",
            "dry", the run log of every arm, each sample's parallel_free_mib (vm_stat's free and
-           inactive pages), "treatment" (treatment(); non-empty makes the set invalid with
+           inactive pages, the figure parallel's --memsuspend checks) and "parallel_free_t0_mib"
+           (the same at t0), "timeout_s" (the set's timeout), "treatment" (treatment(); non-empty makes the set invalid with
            "treatment"), "derived_needs_sha256" (the batch cell's K), and in the batch cell
            "short_mean_verdict_s" (the mean over the behind agents of their last gate's end minus
            their offset) and "batch_s" (the batch gate's end minus its start); a P gate also
@@ -66,7 +67,8 @@ finished job, writes its joblog line and re-checks its memory only when it reads
   power    from PROBE_OUT's valid probe blocks (P never decides one): per trace cell S* (the
            fixed count with the lowest mean) and d = ln(K/S*), per batch comparison its log
            ratio and its batch_s KP/K against ln(1 + BATCH_COST_MARGIN), each with its mean, sd,
-           k and sigma (stats6.sigma_upper at 0.80); each cell's set seconds; stats8.power_plan's
+           k and sigma (stats6.sigma_upper at 0.80); each cell's set seconds (a set_timeout set
+           counts its timeout_s, a held P set included); stats8.power_plan's
            n (the batch cell's at most BATCH_N_MAX), drops (DROP_ORDER), hours (pilot and main
            blocks) and joint power, with "over_cap", and "batch_treatment" (each probe KP set's
            treatment problems), to OUT/power.json. A skipped batch cell, one whose every probe KP
@@ -77,7 +79,8 @@ finished job, writes its joblog line and re-checks its memory only when it reads
   pilot-check
            from the first PILOT_BLOCKS valid pilot blocks of each cell power.json keeps (re-runs
            capped at PILOT_RERUNS; a dry cell's blocks present): stats8.futile at alpha 0.10 per
-           comparison, P's timeouts and feasibility per heavy cell, "go", "batch_futile" and the
+           comparison, P's timeouts and feasibility per heavy cell (at most P_INFEASIBLE_TIMEOUTS
+           per PILOT_BLOCKS blocks taken, pro rata), "go", "batch_futile" and the
            declared "outcome", to OUT/pilot_check.json. A cell with fewer than 2 blocks is
            untested; "go" is false when a primary cell is futile or untested. Exit 2 without
            power.json, once a main record exists, or while a non-dry
@@ -145,7 +148,7 @@ BATCH_N_MAX = 20  # (probe) the batch cell's n is clamped to [PILOT_BLOCKS, BATC
 BATCH_DELAY_S = 60  # (probe)
 P_MEMSUSPEND = "4.5G"
 P_JOBS = 4
-P_INFEASIBLE_TIMEOUTS = 2
+P_INFEASIBLE_TIMEOUTS = 2  # of PILOT_BLOCKS, pro rata over the blocks a pilot check takes
 SET_TIMEOUT_S = {"trace": 3600, "heavy": 600, "wide": 600, "batch": 10800}  # (probe)
 TRACE_AGENTS, TRACE_GATES = 4, 3
 BEHIND_RUNS = 3
@@ -540,9 +543,9 @@ def run_set8(cfg, path, *, cell, arm, offsets, meta, baseline, slots=None, needs
                 sys.exit(f"run8: {meta}: the budget is not empty")
         runlog0 = len(acceptance.runlog_lines(cfg))
         with run7.level(level_name) as lvl:
-            h0 = overload.headroom_mib()
+            h0, pf0, limit = overload.headroom_mib(), parallel_free_mib(), set_timeout(cfg, mix)
             gates, failures, errors, samples, t0, timed_out = run_agents(
-                cfg, arm, offsets, slots, set_timeout(cfg, mix), queue_dir)
+                cfg, arm, offsets, slots, limit, queue_dir)
         if arm.startswith("K") and (open(dst).read() if os.path.exists(dst) else None) != needs:
             errors.append("the needs file changed during the set")
         verdict = {n: round(max(g["end"] for g in gates if g["agent"] == n) - offsets[n], 1)
@@ -559,6 +562,7 @@ def run_set8(cfg, path, *, cell, arm, offsets, meta, baseline, slots=None, needs
                "probe_baseline_s": baseline, **cd, "ac": ac, "background": bg,
                "page_bytes": page, "bg_cpu_cores": bg_cpu,
                **{k: v for k, v in lvl.items() if k != "flags"}, "headroom_t0_mib": h0,
+               "parallel_free_t0_mib": pf0, "timeout_s": limit,
                "flags": flags, "valid": not reasons, "invalid": reasons, "treatment": problems,
                "offsets": offsets, "gates": sorted(gates, key=lambda g: (g["agent"], g["start"])),
                "failures": failures, "verdict_s": verdict,
@@ -764,7 +768,8 @@ def power(probe_out, out):
             "sigma": stats6.sigma_upper(statistics.stdev(d), len(d), 0.80)}
             for name, (d, bound) in comps.items()}
         res["set_s"][cell] = sum(statistics.fmean(t) for a in arms if (t := [
-            (r["makespan_s"] or 0) + r["cooldown_s"] for r in recs if r["arm"] == a]))
+            (r["timeout_s"] if "set_timeout" in r["invalid"] else r["makespan_s"] or 0)
+            + r["cooldown_s"] for r in recs if r["arm"] == a]))
         cells[cell] = {"set_s": res["set_s"][cell],
                        "comps": [(c["mean"], c["sigma"], c["bound"]) for c in comps.values()]}
     res.update(stats8.power_plan(cells, primary=PRIMARY, batch="batch", drop_order=DROP_ORDER,
@@ -795,7 +800,8 @@ def pilot_check(out):
             taken = {s["K"]["block"] for s in blocks.values()}
             k = sum("set_timeout" in r["invalid"] for r in recs
                     if r["arm"] == "P" and r["block"] in taken)
-            res["p_timeouts"][cell], res["p_feasible"][cell] = k, k <= P_INFEASIBLE_TIMEOUTS
+            res["p_timeouts"][cell] = k
+            res["p_feasible"][cell] = k * PILOT_BLOCKS <= P_INFEASIBLE_TIMEOUTS * len(taken)
         if len(blocks) < 2:
             res["untested"][cell] = DRY_SHORT if dry else SHORT
             continue

@@ -10,7 +10,9 @@
 # macOS may download or install updates in the background: AutomaticDownload or
 # AutomaticallyInstallMacOSUpdates in /Library/Preferences/com.apple.SoftwareUpdate not 0. The
 # periodic check is recorded only (its key, which macOS 27 drops from the file, and
-# `softwareupdate --schedule`, which no longer reflects it). A dry run records them and goes on.
+# `softwareupdate --schedule`, which no longer reflects it). It also refuses while a virtual
+# machine runs (Docker Desktop's backend or any Virtualization.framework VM): its memory keeps
+# the levels and P's --memsuspend from being reached. A dry run records them and goes on.
 #
 # With no phase: preflight, learn while OUT/needs.sha256 is missing, then the pilot of every
 # cell power.json plans (`verdict pilot CELL 1 10`, the first with --primer; a cell it dropped
@@ -67,6 +69,8 @@ preflight() {
 	check=$(defaults read $prefs AutomaticCheckEnabled 2>&1 || true)
 	download=$(defaults read $prefs AutomaticDownload 2>&1 || true)
 	install=$(defaults read $prefs AutomaticallyInstallMacOSUpdates 2>&1 || true)
+	vm=$(pgrep -lf 'Virtualization\.VirtualMachine|com\.docker\.backend' |
+		awk '{ n = split($2, p, "/"); printf "%s%s %s", sep, $1, p[n]; sep = ", " }' || true)
 	mkdir -p "$OUT"
 	{
 		date -u
@@ -77,6 +81,7 @@ preflight() {
 		echo "software update: $update"
 		echo "AutomaticCheckEnabled: $check; AutomaticDownload: $download"
 		echo "AutomaticallyInstallMacOSUpdates: $install"
+		echo "virtual machines: $vm"
 		echo "background agents:"
 		launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true
 		pgrep -lf 'go |pytest|node|docker|Code Helper|claude' |
@@ -86,6 +91,7 @@ preflight() {
 	case $index in *"Indexing disabled"*) ;; *) refuse "Spotlight indexing is on; mdutil -a -i off" ;; esac
 	[ "$download" = 0 ] && [ "$install" = 0 ] || refuse "macOS may download or install updates; sudo defaults write \
 $prefs AutomaticDownload -bool false; sudo defaults write $prefs AutomaticallyInstallMacOSUpdates -bool false"
+	[ -z "$vm" ] || refuse "a virtual machine is running ($vm); quit Docker Desktop and any other VM"
 }
 
 if [ $# -gt 0 ]; then
