@@ -5,9 +5,12 @@
 #
 # Before learn and verdict, and alone as `run8.sh preflight`, it checks the machine: it holds
 # caffeinate for its own life, refuses (exit 2) on battery power, and appends the Spotlight and
-# software-update settings, the background agents still running (names only), the date, uptime
-# and swap to OUT/preflight.log. A real run also refuses while Spotlight indexing is on or while
-# macOS may download or install updates in the background: AutomaticDownload or
+# software-update settings, the date, uptime, swap, power source and VMs to OUT/preflight.log,
+# with counts only of what else runs: the launchd agents not com.apple, and the processes per
+# workload pattern (go, pytest, node, docker, claude). Their names (agent labels, pid and
+# executable) go to preflight-<OUT's name>.log in ${RUN8_PRIVATE:-~/bench.noindex/run8-private},
+# outside the repository: OUT is published. A real run also refuses while Spotlight indexing
+# is on or while macOS may download or install updates in the background: AutomaticDownload or
 # AutomaticallyInstallMacOSUpdates in /Library/Preferences/com.apple.SoftwareUpdate not 0. The
 # periodic check is recorded only (its key, which macOS 27 drops from the file, and
 # `softwareupdate --schedule`, which no longer reflects it). It also refuses while a virtual
@@ -71,7 +74,10 @@ preflight() {
 	install=$(defaults read $prefs AutomaticallyInstallMacOSUpdates 2>&1 || true)
 	vm=$(pgrep -lf 'Virtualization\.VirtualMachine|com\.docker\.backend' |
 		awk '{ n = split($2, p, "/"); printf "%s%s %s", sep, $1, p[n]; sep = ", " }' || true)
-	mkdir -p "$OUT"
+	agents=$(launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true)
+	work=$(pgrep -lf 'go |pytest|node|docker|Code Helper|claude' || true)
+	private=${RUN8_PRIVATE:-$HOME/bench.noindex/run8-private}
+	mkdir -p "$OUT" "$private"
 	{
 		date -u
 		uptime || true
@@ -82,11 +88,18 @@ preflight() {
 		echo "AutomaticCheckEnabled: $check; AutomaticDownload: $download"
 		echo "AutomaticallyInstallMacOSUpdates: $install"
 		echo "virtual machines: $vm"
-		echo "background agents:"
-		launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true
-		pgrep -lf 'go |pytest|node|docker|Code Helper|claude' |
-			awk '{ n = split($2, p, "/"); print $1, p[n] }' || true
+		echo "background agents not com.apple: $(printf '%s' "$agents" | grep -c . || true)"
+		printf '%s\n' "$work" | awk 'BEGIN { k = split("go ,pytest,node,docker,claude", w, ",") }
+			{ for (i = 1; i <= k; i++) if (index($0, w[i])) { c[i]++; break } }
+			END { printf "workload processes:"; for (i = 1; i <= k; i++) {
+				sub(/ $/, "", w[i]); printf "%s %s %d", (i > 1 ? "," : ""), w[i], c[i] }; print "" }'
 	} >>"$OUT/preflight.log"
+	{
+		date -u
+		echo "background agents:"
+		printf '%s\n' "$agents"
+		printf '%s\n' "$work" | awk 'NF { n = split($2, p, "/"); print $1, p[n] }'
+	} >>"$private/preflight-$(basename "$OUT").log"
 	[ -n "$dry" ] && return
 	case $index in *"Indexing disabled"*) ;; *) refuse "Spotlight indexing is on; mdutil -a -i off" ;; esac
 	[ "$download" = 0 ] && [ "$install" = 0 ] || refuse "macOS may download or install updates; sudo defaults write \
