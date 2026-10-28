@@ -487,9 +487,11 @@ A file that cannot be parsed is left as it is.
 > wall-clock deadlines and `preemptible = false`. The CLI sets
 > nice 10 on the command's process group right after starting it (in terminal mode, where the
 > group is the shell's job, and under `run --same-group`, where it is the CLI's own, on the
-> command's pid only), fills `{n}` from the request's cpu max, so
-> a `make -j{n}` keeps its width, and records the reason in the `preemptible` key of the hold
-> (section 7.4) and of the run log. `coreslot suggest --write` writes `cpu` (or `cpu_per_worker` for
+> command's pid only); on macOS, which ignores nice for every thread with a QoS class, it also
+> starts the command under a utility QoS clamp (`taskpolicy -c utility`), unless the clamp would
+> change the command's environment or its failure status. It fills `{n}` from the
+> request's cpu max, so a `make -j{n}` keeps its width, and records the reason in the
+> `preemptible` key of the hold (section 7.4) and of the run log. `coreslot suggest --write` writes `cpu` (or `cpu_per_worker` for
 > an entry that has it, never both), `mem` and `evidence` from the run log (section 20) and keeps
 > pinned entries and every other key; it learns `cpu_per_worker` as the p90 of cores ÷ `workers`
 > over the window, rounded up to 0.05; it writes nothing for an entry with `observed = false`, and
@@ -1321,7 +1323,7 @@ writes no line. The object carries:
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
 | `workers` | integer | optional; the command's worker count: the value a cpu placeholder took (section 17), else the label's final `@K`; absent when the command had neither |
-| `preemptible` | string | optional; why the run was admitted as preemptible: `flag`, `entry`, or the automatic rule's reason (`auto: median 14m >= 10m, cpu 12 >= 7`); absent for any other run |
+| `preemptible` | string | optional; why the run was admitted as preemptible: `flag`, `entry`, or the automatic rule's reason (`auto: median 14m >= 10m, cpu 12 >= 7`), followed by `; unclamped: ` and why when a client could not lower the command's priority; absent for any other run |
 
 The usage keys `cpu_user_s`, `cpu_sys_s` and `max_rss_kib` are OPTIONAL. A writer MUST omit a key
 whose value it does not know rather than write a zero: a run whose command could not be started

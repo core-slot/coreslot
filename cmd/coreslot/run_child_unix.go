@@ -92,6 +92,12 @@ func (r *run) runChild(c child) int {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
 	cmd.Env = c.env
+	preemptible := r.o.reason()
+	if r.o.marked() {
+		if why := clampPriority(cmd); why != "" {
+			preemptible += "; unclamped: " + why
+		}
+	}
 	if slices.ContainsFunc(c.files, func(f *os.File) bool { return f != nil }) {
 		cmd.ExtraFiles = c.files
 	}
@@ -138,7 +144,7 @@ func (r *run) runChild(c child) int {
 		TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
 		UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
-		Nested: c.nested, Preemptible: r.o.reason(),
+		Nested: c.nested, Preemptible: preemptible,
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
 	if g, ok := r.o.placeholderGrant(c.grant)["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {
@@ -185,8 +191,10 @@ const preemptibleNice = 10
 // the command leads its own group (prepareChild), and PRIO_PGRP reaches every member and every
 // later fork, all threads of each on Linux. In terminal mode the group is the shell's job, and
 // with --same-group it is coreslot's, so only the command's own process is lowered (PRIO_PROCESS),
-// and a process it forked before this call is missed. The error is ignored: the only expected failures are a command that already
-// exited and a caller already niced above 10, whose priority must not be raised.
+// and a process it forked before this call is missed. macOS ignores nice for every thread with a
+// QoS class, which is every ordinary thread there: clampPriority demotes the command on macOS.
+// The error is ignored: the only expected failures are a command that already exited and a caller
+// already niced above 10, whose priority must not be raised.
 func lowerPriority(pid int, terminal bool) {
 	which := syscall.PRIO_PGRP
 	if terminal {
