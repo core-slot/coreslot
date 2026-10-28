@@ -162,6 +162,26 @@ func TestNestedClampsAboveHeld(t *testing.T) {
 	}
 }
 
+// A pass-through is never admitted through the queue, so a preemptible entry leaves it as an
+// unmarked run: {n} and CORESLOT_GRANTED_CPU are what the parent holds, and its record has no
+// preemptible reason. Mutation: let the mark apply outside the queue (reason ignores queued) →
+// "16 1" and the reason entry, red.
+func TestNestedPreemptibleIsUnmarked(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 8\n")
+	writeNeeds(t, dir, "[needs.\"x\"]\ncpu = \"1..16\"\npreemptible = true\n")
+	r := outer(t, dir, []string{"cpu=4"}, `"$BIN" run --label x -- sh -c 'echo "$1 $CORESLOT_GRANTED_CPU"' sh {n}`)
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if got := strings.TrimSpace(r.stdout); got != "4 4" {
+		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 4 4", got)
+	}
+	lines := nestedLines(t, dir)
+	if len(lines) != 1 || fmt.Sprint(lines[0]["grant"]) != "map[cpu:4]" || lines[0]["preemptible"] != nil {
+		t.Errorf("nested run-log lines %v: want one with cpu 4 and no preemptible key", lines)
+	}
+}
+
 func TestNestedUndeclaredInParent(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 8\npg-local = 2\n")
 	r := outer(t, dir, []string{"cpu=2"}, `"$BIN" run --need pg-local=1 -- sh -c 'echo $CORESLOT_GRANTED_PG_LOCAL $CORESLOT_GRANTED_CPU'`)

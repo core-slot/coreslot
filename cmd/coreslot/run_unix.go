@@ -99,6 +99,8 @@ func (r *run) ordinary() int {
 	if err != nil {
 		return r.failOpen(e, err)
 	}
+	r.autoPreempt(e)
+	r.o.queued = true // from here the preemptible mark applies, until the queue lets the run go
 	req := r.o.request(prio)
 	if mem, ok := req.Need["mem"]; ok {
 		r.freeWait = &freeMeter{needMiB: int64(mem.Min) * spec.MemTokenMiB, headroom: memsample.Headroom}
@@ -150,8 +152,11 @@ func (r *run) ordinary() int {
 	return r.admitted(e, g)
 }
 
-// notAdmitted handles a wait that ended without a grant.
+// notAdmitted handles a wait that ended without a grant. The run is never admitted through the
+// queue now, so the preemptible mark no longer applies: a timeout or fail-open run takes min of
+// each resource of its unshrunk request, as an unmarked run does.
 func (r *run) notAdmitted(e *engine.Engine, t *engine.Ticket, err error) int {
+	r.o.queued = false
 	switch {
 	case errors.Is(err, engine.ErrCanceled):
 		return r.refuse("the request was cancelled")

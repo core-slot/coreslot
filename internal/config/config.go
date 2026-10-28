@@ -22,7 +22,7 @@ type Config struct {
 	Resources      map[string]SizeExpr // declared resources; cpu is "140%" and mem "60%" unless declared
 	Priorities     map[string]int      // label prefix -> priority
 	WindowsWarning bool                // [platform] windows_warning, default true
-	LiveMem        bool                // [memory] live, default true
+	LiveMem        bool                // [memory] live, default false
 }
 
 // Error reports a configuration that cannot be read or is invalid: a state error. Err is the
@@ -165,7 +165,7 @@ func defaults() Config {
 		Resources:      map[string]SizeExpr{"cpu": defaultCPU, "mem": defaultMem},
 		Priorities:     map[string]int{},
 		WindowsWarning: true,
-		LiveMem:        true,
+		LiveMem:        false,
 	}
 }
 

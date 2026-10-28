@@ -96,18 +96,19 @@ type Ticket struct {
 	obs        state.Observer
 	gen        store.Gen
 	haveGen    bool
-	ahead      []aheadEntry           // ascending: the nearest ticket ahead is the last
-	ticketOK   map[string]bool        // ticket name -> body well-formed (bodies never change)
-	holdBodies map[string]*HolderInfo // hold name -> parsed body, nil when malformed
+	ahead      []aheadEntry                     // ascending: the nearest ticket ahead is the last
+	badAhead   bool                             // the last rescan found a malformed ticket ahead
+	ticketNeed map[string]map[string]spec.Range // ticket name -> body's need, nil when malformed
+	holdBodies map[string]*HolderInfo           // hold name -> parsed body, nil when malformed
 
 	nextElection time.Duration
 	backoff      time.Duration
-	attempts     int // admission attempts made, for tests
+	attempts     int // admission attempts made as the head, for tests
 	last         Waiting
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
-	return &Ticket{e: e, req: req, ticketOK: map[string]bool{}, holdBodies: map[string]*HolderInfo{},
+	return &Ticket{e: e, req: req, ticketNeed: map[string]map[string]spec.Range{}, holdBodies: map[string]*HolderInfo{},
 		last: Waiting{Position: 1}}
 }
 
@@ -135,12 +136,13 @@ func (t *Ticket) TokenOnly() bool {
 // this ticket, and, once per second, read gen (rescanning queue/ when it changed) and hold the
 // election, which examines the tickets ahead from the nearest up to the first live, non-STALLED
 // one; the head tries admission with backoff from 0.25 s up to 0.5 s, repeating the election
-// before each attempt. It returns Waiting or Admitted, or ErrCanceled once a cancel request
-// was found or the ticket was withdrawn. Section entries wait at most RefreshEvery/4, so a
-// caller that calls Step in a loop keeps refreshing at least every RefreshEvery (see
-// RefreshEvery). A caller that calls Step again after Due has no more work per Step than the
-// protocol's: a waiter that is not the head Steps once per second. ctx bounds the section
-// entries.
+// before each attempt, and a waiter in the front window makes a single attempt per election to
+// pass the live tickets ahead (PROTOCOL.md section 10.3). It returns Waiting or Admitted, or
+// ErrCanceled once a cancel request was found or the ticket was withdrawn. Section entries wait
+// at most RefreshEvery/4, so a caller that calls Step in a loop keeps refreshing at least every
+// RefreshEvery (see RefreshEvery). A caller that calls Step again after Due has no more work per
+// Step than the protocol's: a waiter that is not the head Steps once per second. ctx bounds the
+// section entries.
 func (t *Ticket) Step(ctx context.Context) (StepResult, error) {
 	return t.step(ctx, false)
 }
@@ -221,18 +223,24 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	if !head {
 		t.backoff = 0
 		t.nextElection = now + ElectEvery
-		return t.last, nil
+		// A waiter in the front window with no malformed ticket ahead may pass the live tickets
+		// ahead (PROTOCOL.md section 10.3): a single attempt per election, decided in the section.
+		if len(t.ahead) >= FrontWindow || t.badAhead {
+			return t.last, nil
+		}
 	}
 	// Refresh again before an entry that may wait, so the entry cannot stretch the gap.
-	if !single {
+	if head && !single {
 		if now := t.e.clock.Monotonic(); now-t.lastRefreshMono >= RefreshEvery/4 {
 			if err := t.refresh(now); err != nil {
 				return t.settledOr(err)
 			}
 		}
 	}
-	t.attempts++
-	g, err := t.admit(ctx, single)
+	if head {
+		t.attempts++
+	}
+	g, err := t.admit(ctx, single || !head)
 	if err != nil {
 		return t.settledOr(err)
 	}
@@ -241,6 +249,9 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	}
 	if t.mode == modeTokenOnly {
 		return t.last, nil // the format changed under the ticket: token-only from the next Step
+	}
+	if !head {
+		return t.last, nil
 	}
 	if t.backoff == 0 {
 		t.backoff = HeadFirstBackoff
@@ -413,9 +424,10 @@ func (t *Ticket) watchFront(stop int, now time.Duration) error {
 
 // rescan re-lists the names in queue/ (the listing alone: no entry's metadata is read, so its
 // cost is the directory read). Tickets ahead of this one whose bodies are well-formed are kept
-// for the election; malformed ones take no place in the queue (PROTOCOL.md section 7.2), and a
-// stray entry is found out when the election examines it. Bodies never change once published,
-// so each is read once, when its name is first seen.
+// for the election; malformed ones take no place in the queue (PROTOCOL.md section 7.2), but
+// one ahead keeps this waiter from passing (badAhead). A stray entry is found out when the
+// election examines it. Bodies never change once published, so each is read once, when its
+// name is first seen.
 func (t *Ticket) rescan() error {
 	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
@@ -423,23 +435,25 @@ func (t *Ticket) rescan() error {
 	}
 	present := make(map[string]bool, len(entries))
 	var ahead []aheadEntry
+	bad := false
 	for _, en := range entries {
 		present[en.Name] = true
 		k := state.Key(en.ID)
 		if !k.Less(t.key) {
 			continue
 		}
-		ok, err := t.wellFormed(en.Name)
+		need, malformed, err := t.ticketBody(en.Name)
 		if err != nil {
 			return err
 		}
-		if ok {
+		bad = bad || malformed
+		if need != nil {
 			ahead = append(ahead, aheadEntry{name: en.Name, key: k})
 		}
 	}
-	for name := range t.ticketOK {
+	for name := range t.ticketNeed {
 		if !present[name] {
-			delete(t.ticketOK, name)
+			delete(t.ticketNeed, name)
 		}
 	}
 	for _, a := range t.ahead {
@@ -456,30 +470,33 @@ func (t *Ticket) rescan() error {
 		}
 		return 0
 	})
-	t.ahead = ahead
+	t.ahead, t.badAhead = ahead, bad
 	return nil
 }
 
-// wellFormed reports whether the body of the ticket name in queue/ is well-formed, reading it
-// only when the name is first seen: bodies never change once published, so the answer is kept in
-// ticketOK. A stray entry under the name counts as malformed and is never trusted (PROTOCOL.md
-// section 4.2). A ticket gone before its body was read is not well-formed, and that answer is not
-// kept.
-func (t *Ticket) wellFormed(name string) (bool, error) {
-	if ok, known := t.ticketOK[name]; known {
-		return ok, nil
+// ticketBody returns the need of the body of the ticket name in queue/, reading it only when the
+// name is first seen: bodies never change once published, so the answer is kept in ticketNeed.
+// need is nil when the body is malformed (malformed is then true) or the ticket was gone before
+// its body was read (that answer is not kept). A stray entry under the name counts as malformed
+// and is never trusted (PROTOCOL.md section 4.2).
+func (t *Ticket) ticketBody(name string) (need map[string]spec.Range, malformed bool, err error) {
+	if need, known := t.ticketNeed[name]; known {
+		return need, need == nil, nil
 	}
 	body, err := t.e.readBody(store.QueueDir, name)
 	if gone(err) {
-		return false, nil
+		return nil, false, nil
 	}
 	if err != nil && !stray(err) {
-		return false, err
+		return nil, false, err
 	}
-	_, derr := wire.DecodeTicket(body)
-	ok := err == nil && derr == nil
-	t.ticketOK[name] = ok
-	return ok, nil
+	if err == nil {
+		if tk, derr := wire.DecodeTicket(body); derr == nil {
+			need = tk.Need // never nil once decoded
+		}
+	}
+	t.ticketNeed[name] = need
+	return need, need == nil, nil
 }
 
 // Holders lists holds/ and returns the live holds (a lock probe each); malformed holds are
@@ -549,5 +566,5 @@ func holderInfo(en store.Entry, body []byte) *HolderInfo {
 	}
 	return &HolderInfo{Name: en.Name, Label: h.Label, PID: en.ID.PID, StartNS: int64(en.ID.OrderKey),
 		Grant: grant, Unbudgeted: h.Unbudgeted, UnbudgetedResources: h.UnbudgetedResources,
-		Clamped: h.Clamped, Adopted: h.Adopted, Tree: h.Tree}
+		Clamped: h.Clamped, Adopted: h.Adopted, Tree: h.Tree, Preemptible: h.Preemptible}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
@@ -87,7 +88,7 @@ type child struct {
 // under the run, I1) has written nothing into the directory: the run says so and appends no
 // run-log line, and still returns the command's status.
 func (r *run) runChild(c child) int {
-	argv := substitute(r.o.argv, c.grant, r.o.subst)
+	argv := substitute(r.o.argv, r.o.placeholderGrant(c.grant), r.o.subst, r.o.cpuPerWorker, r.o.workers)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
 	cmd.Env = c.env
@@ -105,7 +106,8 @@ func (r *run) runChild(c child) int {
 		code, _ := classify(&interruptError{Sig: sig})
 		return code
 	}
-	terminal := terminalMode(r.io.Stdin)
+	// --same-group takes the terminal-mode branch: the command stays in coreslot's group.
+	terminal := r.o.sameGroup || terminalMode(r.io.Stdin)
 	prepareChild(cmd, terminal)
 	started := time.Now()
 	status := 0
@@ -120,6 +122,9 @@ func (r *run) runChild(c child) int {
 		r.notice("cannot run %s: %s", text(argv[0]), text(err.Error()))
 		status = code
 	} else {
+		if r.o.marked() {
+			lowerPriority(cmd.Process.Pid, terminal)
+		}
 		sampler := startPeakSampler(cmd.Process.Pid, memSampleEvery, memsample.Tree)
 		status = superviseChild(cmd, terminal)
 		peakKiB, peakAfterS, sampled = sampler.stop()
@@ -133,15 +138,21 @@ func (r *run) runChild(c child) int {
 		TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
 		UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
-		Nested: c.nested,
+		Nested: c.nested, Preemptible: r.o.reason(),
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	if g, ok := r.o.placeholderGrant(c.grant)["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {
+		rec.Workers = new(cpuPlaceholder(g, r.o.cpuPerWorker, r.o.workers))
+	} else if k := needs.WorkersFromLabel(r.o.label); k > 0 {
+		rec.Workers = &k
+	}
 	setMemPeak(&rec, peakKiB, peakAfterS, sampled)
 	if r.freeWait != nil {
 		free := r.freeWait.total().Seconds()
 		rec.WaitedFreeS = &free
 	}
-	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil {
+	// A preemptible run uses more cores than its one token by design: the hint would say to raise it.
+	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil && !r.o.marked() {
 		if h := usageHint(r.o.label, tokens, *rec.CPUUserS+*rec.CPUSysS, rec.RanS); h != "" {
 			r.notice("%s", h)
 		}
@@ -164,6 +175,24 @@ func (r *run) runChild(c child) int {
 		}
 	}
 	return status
+}
+
+// preemptibleNice is the nice value of a preemptible run's command.
+const preemptibleNice = 10
+
+// lowerPriority sets nice 10 on the command just started as pid. It runs after the start because
+// Go has no hook between fork and exec and SysProcAttr has no nice field. Outside terminal mode
+// the command leads its own group (prepareChild), and PRIO_PGRP reaches every member and every
+// later fork, all threads of each on Linux. In terminal mode the group is the shell's job, and
+// with --same-group it is coreslot's, so only the command's own process is lowered (PRIO_PROCESS),
+// and a process it forked before this call is missed. The error is ignored: the only expected failures are a command that already
+// exited and a caller already niced above 10, whose priority must not be raised.
+func lowerPriority(pid int, terminal bool) {
+	which := syscall.PRIO_PGRP
+	if terminal {
+		which = syscall.PRIO_PROCESS
+	}
+	_ = syscall.Setpriority(which, pid, preemptibleNice)
 }
 
 // recordUsage copies the command's CPU time and peak resident set size from its wait4 rusage

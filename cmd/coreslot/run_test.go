@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -895,6 +896,33 @@ func TestRunNeedFormsGrantAndLog(t *testing.T) {
 	}
 }
 
+// The run log's workers is the value the cpu placeholder took, else the label's @K, else absent;
+// for a per-worker entry, the workers {n} gave, not the tokens. Mutation: record the cpu grant for
+// every placeholder → the per-worker row logs 3, red.
+func TestRunLogsWorkers(t *testing.T) {
+	echo := []string{"--", "sh", "-c", `echo "$1"`, "sh", "{n}"}
+	for _, c := range []struct {
+		args []string
+		want string // "" for the {n} the command printed
+	}{
+		{[]string{"--label", "x", "--need", "cpu=3", "--", "true"}, "<nil>"},
+		{[]string{"--label", "x@5", "--need", "cpu=3", "--", "true"}, "5"},
+		{append([]string{"--label", "x@5", "--need", "cpu=3"}, echo...), ""},
+		{append([]string{"--label", "pw"}, echo...), ""},
+	} {
+		dir := stateDir(t, "[resources]\ncpu = 8\n")
+		writeNeeds(t, dir, "[needs.\"pw\"]\ncpu_per_worker = 0.5\ncpu = \"2..6\"\n")
+		r := cli(t, baseEnv(dir), append([]string{"run"}, c.args...)...)
+		lines := runLog(t, dir)
+		if r.code != 0 || len(lines) != 1 {
+			t.Fatalf("%q: exit %d, %d log lines (stderr %q)", c.args, r.code, len(lines), r.stderr)
+		}
+		if got, want := fmt.Sprint(lines[0]["workers"]), cmp.Or(c.want, strings.TrimSpace(r.stdout)); got != want {
+			t.Errorf("%q: workers %s, want %s", c.args, got, want)
+		}
+	}
+}
+
 // What the burn helper makes resident and how much CPU time it uses.
 const (
 	burnBytes = 64 << 20
@@ -1101,6 +1129,176 @@ func TestRunHoldHasTree(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+// niceTable is every process's pid, parent pid and nice, from one ps snapshot.
+func niceTable(t *testing.T) (ppid, nice map[int]int) {
+	t.Helper()
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,ni=").Output()
+	if err != nil {
+		t.Fatalf("ps: %v", err)
+	}
+	ppid, nice = map[int]int{}, map[int]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		parent, err2 := strconv.Atoi(f[1])
+		ni, err3 := strconv.Atoi(f[2])
+		if err1 == nil && err2 == nil && err3 == nil {
+			ppid[pid], nice[pid] = parent, ni
+		}
+	}
+	return ppid, nice
+}
+
+// sleepsNice runs `coreslot run args... -- sh -c 'sleep 5 | sleep 5'`, waits until both sleeps
+// exist under the sh the run started, and returns their nice values once they have held for a
+// moment, with the run stopped.
+func sleepsNice(t *testing.T, args ...string) []int {
+	t.Helper()
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	cmd := cliCmd(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "sh", "-c", "sleep 5 | sleep 5")...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM) // reaches the command's group
+		_ = cmd.Wait()
+	}()
+	var sleeps []int
+	find := func() bool {
+		ppid, _ := niceTable(t)
+		sleeps = sleeps[:0]
+		for pid, parent := range ppid {
+			if ppid[parent] == cmd.Process.Pid {
+				sleeps = append(sleeps, pid)
+			}
+		}
+		return len(sleeps) == 2
+	}
+	waitFor(t, 30*time.Second, "both sleeps running under the run", find)
+	time.Sleep(200 * time.Millisecond) // a late change of priority would have landed by now
+	_, nice := niceTable(t)
+	return []int{nice[sleeps[0]], nice[sleeps[1]]}
+}
+
+// A preemptible run's command group runs at nice 10, every member of it, a pipeline's stages
+// included; a run without the mark leaves the caller's nice. The test runs without a terminal, so
+// this is the group form. Mutation: drop the Setpriority call and the marked case reddens; apply
+// it to every run and the unmarked case does.
+func TestRunPreemptibleLowersTheCommandGroup(t *testing.T) {
+	_, own := niceTable(t)
+	caller := own[os.Getpid()]
+	if caller >= 10 {
+		t.Skipf("this process already runs at nice %d: nice 10 would show nothing", caller)
+	}
+	if got := sleepsNice(t, "--preemptible"); got[0] != 10 || got[1] != 10 {
+		t.Errorf("--preemptible: the sleeps run at nice %v, want 10 and 10", got)
+	}
+	if got := sleepsNice(t); got[0] != caller || got[1] != caller {
+		t.Errorf("no mark: the sleeps run at nice %v, want the caller's %d", got, caller)
+	}
+}
+
+// A preemptible run's {n} keeps the width of its unshrunk request while the hold lists one cpu
+// token, CORESLOT_GRANTED_CPU is that one token, and the record's workers is the width; a
+// per-worker entry prints its worker count. Mutation: fill the placeholders from the grant → the
+// range row prints 1, red; record the grant as workers → the range row's workers is 1, red.
+func TestPreemptiblePlaceholdersUnshrunk(t *testing.T) {
+	const script = `echo "$1"; echo "$CORESLOT_GRANTED_CPU"; cat "$CORESLOT_STATE_DIR"/holds/*`
+	for _, c := range []struct {
+		name  string
+		label string
+		want  string // {n}, and the record's workers
+	}{
+		{"range", "x", "8"},
+		{"per worker", "pw@6", "6"},
+	} {
+		dir := stateDir(t, "[resources]\ncpu = 8\n")
+		writeNeeds(t, dir, "[needs.\"x\"]\ncpu = \"1..8\"\n[needs.\"pw\"]\ncpu_per_worker = 0.4\n")
+		r := cli(t, baseEnv(dir), "run", "--preemptible", "--label", c.label, "--", "sh", "-c", script, "sh", "{n}")
+		out := strings.SplitN(r.stdout, "\n", 3)
+		if r.code != 0 || len(out) != 3 {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q", c.name, r.code, r.stdout, r.stderr)
+		}
+		var hold struct{ Grant map[string][]int }
+		if err := json.Unmarshal([]byte(out[2]), &hold); err != nil {
+			t.Fatalf("%s: hold body %q: %v", c.name, out[2], err)
+		}
+		if out[0] != c.want || out[1] != "1" || len(hold.Grant["cpu"]) != 1 {
+			t.Errorf("%s: {n} %q, CORESLOT_GRANTED_CPU %q, hold cpu %v; want %s, 1 and one token", c.name, out[0], out[1], hold.Grant["cpu"], c.want)
+		}
+		if lines := runLog(t, dir); len(lines) != 1 || fmt.Sprint(lines[0]["workers"]) != c.want {
+			t.Errorf("%s: run log %v, want workers %s", c.name, lines, c.want)
+		}
+	}
+}
+
+// A --light run is never admitted through the queue, so --preemptible leaves it as an unmarked
+// run: {n} and CORESLOT_GRANTED_CPU are its request's min, and its record has no preemptible
+// reason. Mutation: let the mark apply outside the queue (reason ignores queued) → "8 1" and the
+// reason flag, red.
+func TestLightPreemptibleIsUnmarked(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 8\n")
+	r := cli(t, baseEnv(dir), "run", "--light", "--preemptible", "--need", "cpu=2..8", "--",
+		"sh", "-c", `echo "$1 $CORESLOT_GRANTED_CPU"`, "sh", "{n}")
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if got := strings.TrimSpace(r.stdout); got != "2 2" {
+		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 2 2", got)
+	}
+	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["preemptible"] != nil {
+		t.Errorf("run log %v: want one line without a preemptible key", lines)
+	}
+}
+
+// A marked run that queues and then runs at its timeout (--on-timeout run) is not admitted, so
+// it runs as an unmarked one: the min of its request for {n} and CORESLOT_GRANTED_CPU, and no
+// preemptible reason in its record. Mutation: drop the reset of the mark in notAdmitted → {n} is
+// the max, 2, and the record says flag, red.
+func TestTimeoutPreemptibleIsUnmarked(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		t.Fatalf("setup run: %d %q", r.code, r.stderr)
+	}
+	holdToken(t, dir, "cpu", 0)
+	holdToken(t, dir, "cpu", 1)
+	before := len(runLog(t, dir))
+	r := cli(t, baseEnv(dir), "run", "--preemptible", "--need", "cpu=1..2", "--timeout", "1s", "--on-timeout", "run",
+		"--", "sh", "-c", `echo "$1 $CORESLOT_GRANTED_CPU"`, "sh", "{n}")
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if got := strings.TrimSpace(r.stdout); got != "1 1" {
+		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 1 1", got)
+	}
+	if lines := runLog(t, dir); len(lines) != before+1 || lines[len(lines)-1]["preemptible"] != nil {
+		t.Errorf("run log %v: want one more line, without a preemptible key", lines)
+	}
+}
+
+// A preemptible run's record keeps the unshrunk request as need, the real grant, and the reason
+// as preemptible: "entry" for a needs entry's mark. Mutation: log the shrunk request as need →
+// [1 1], red; drop the key, or give an entry's mark another reason → red.
+func TestPreemptibleRunRecord(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 12\n")
+	writeNeeds(t, dir, "[needs.\"e\"]\ncpu = \"2..12\"\npreemptible = true\n")
+	if r := cli(t, baseEnv(dir), "run", "--label", "e", "--", "true"); r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := runLog(t, dir)
+	if len(lines) != 1 {
+		t.Fatalf("%d log lines, want 1", len(lines))
+	}
+	need := fmt.Sprint(lines[0]["need"].(map[string]any)["cpu"])
+	grant := lines[0]["grant"].(map[string]any)["cpu"]
+	if need != "[2 12]" || grant != float64(1) || lines[0]["preemptible"] != "entry" {
+		t.Errorf("need %s, grant %v, preemptible %v; want [2 12], 1 and entry", need, grant, lines[0]["preemptible"])
 	}
 }
 

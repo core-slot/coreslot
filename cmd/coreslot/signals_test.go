@@ -573,3 +573,136 @@ func TestSectionHooksDeferStop(t *testing.T) {
 	}
 	waitFor(t, 10*time.Second, "the run after continuing", exists(after))
 }
+
+// ---------------------------------------------------------------- --same-group
+
+// sameGroupTree starts coreslot over a shell that runs a grandchild (an `exec sleep` of an inner
+// shell, in the foreground so that it keeps the default signal dispositions) and returns the pids
+// of coreslot, the shell and the grandchild. The command has no terminal. Every process of the
+// tree is killed when the test ends.
+func sameGroupTree(t *testing.T, dir string, sameGroup bool, attrs *syscall.SysProcAttr) (cmd *exec.Cmd, sh, gc int) {
+	t.Helper()
+	tmp := t.TempDir()
+	shFile, gcFile := filepath.Join(tmp, "sh"), filepath.Join(tmp, "gc")
+	args := []string{"run"}
+	if sameGroup {
+		args = append(args, "--same-group")
+	}
+	args = append(args, "--need", "cpu=2", "--", "sh", "-c",
+		`echo $$ > "$0"; sh -c 'echo $$ > "$0"; exec sleep 300' "$1"; :`, shFile, gcFile)
+	cmd = cliCmd(t, baseEnv(dir), args...)
+	cmd.SysProcAttr = attrs
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Wait() })
+	sh, _ = readPID(t, shFile)
+	gc, _ = readPID(t, gcFile)
+	killGroupOf(t, sh)
+	killGroupOf(t, gc)
+	t.Cleanup(func() { _ = unix.Kill(gc, unix.SIGKILL); _ = unix.Kill(sh, unix.SIGKILL) })
+	return cmd, sh, gc
+}
+
+// A caller that stops a run by SIGKILLing its process group, from a session without a terminal,
+// reaches the whole command tree with --same-group and frees the grant's tokens: the command
+// stays in coreslot's group, which SIGKILL reaches although coreslot cannot relay it.
+func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	cmd, sh, gc := sameGroupTree(t, dir, true, &syscall.SysProcAttr{Setsid: true})
+	if pg, _ := unix.Getpgid(sh); pg != cmd.Process.Pid {
+		t.Errorf("the command's group is %d, want coreslot's %d", pg, cmd.Process.Pid)
+	}
+	if err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 10*time.Second, "the command's shell to die", gone(t, sh))
+	waitFor(t, 10*time.Second, "the grandchild to die", gone(t, gc))
+	// coreslot holds the tokens too, and its threads may still be exiting after its single-threaded
+	// command tree is gone: its descriptors are closed once it is reaped.
+	_ = cmd.Wait()
+	tokensFree(t, dir, 2)
+}
+
+// A caller that SIGKILLs coreslot's group without --same-group leaves the command running in its
+// own group, holding the grant's inherited descriptors: status shows the hold as owned by an
+// exited process and held by a descendant, and doctor notes it without counting a problem.
+func TestOwnerExitedHoldHeldByDescendant(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	cmd, _, gc := sameGroupTree(t, dir, false, &syscall.SysProcAttr{Setsid: true})
+	if err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if procState(t, gc) == "" {
+		t.Fatal("the grandchild died with coreslot's group")
+	}
+	const marker = "  owner exited, held by a descendant"
+	if out := cli(t, baseEnv(dir), "status").stdout; !strings.Contains(out, fmt.Sprintf("pid %d  cpu 2  held ", cmd.Process.Pid)) ||
+		!strings.Contains(out, marker+"\n") {
+		t.Errorf("status lacks the hold of pid %d with %q:\n%s", cmd.Process.Pid, marker, out)
+	}
+	holds := statusDoc(t, dir, 0)["holds"].([]any)
+	if len(holds) != 1 || holds[0].(map[string]any)["owner_exited"] != true {
+		t.Errorf("status --json holds %v, want one with owner_exited true", holds)
+	}
+	r := cli(t, baseEnv(dir), "doctor")
+	want := fmt.Sprintf("\nnote: a hold whose owner exited is held by a descendant ((no label), pid %d); its tokens free when that process exits\n", cmd.Process.Pid)
+	if r.code != 0 || !strings.Contains(r.stdout, want) || !strings.Contains(r.stdout, "no problems found") {
+		t.Errorf("doctor exited %d, want 0 with %q and no problems:\n%s", r.code, strings.TrimSpace(want), r.stdout)
+	}
+}
+
+// SIGINT and SIGTERM sent to coreslot's pid alone, with a grandchild running. Without
+// --same-group the command has a group of its own and the signal reaches all of it: the shell and
+// the grandchild die, and coreslot exits 128+sig. With it the command shares coreslot's group, so
+// the run behaves as in terminal mode: SIGINT is dropped, and SIGTERM reaches the command's pid
+// only, so the grandchild lives on (the caller is expected to signal the group instead).
+func TestSignalToWrapperPIDWithGrandchild(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		sameGroup bool
+		sig       syscall.Signal
+	}{
+		{"group SIGINT", false, syscall.SIGINT},
+		{"group SIGTERM", false, syscall.SIGTERM},
+		{"same-group SIGINT", true, syscall.SIGINT},
+		{"same-group SIGTERM", true, syscall.SIGTERM},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := stateDir(t, "[resources]\ncpu = 2\n")
+			cmd, sh, gc := sameGroupTree(t, dir, c.sameGroup, &syscall.SysProcAttr{Setpgid: true})
+			if err := unix.Kill(cmd.Process.Pid, c.sig); err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case c.sameGroup && c.sig == syscall.SIGINT:
+				time.Sleep(time.Second)
+				for name, pid := range map[string]int{"coreslot": cmd.Process.Pid, "shell": sh, "grandchild": gc} {
+					if procState(t, pid) == "" {
+						t.Errorf("the %s died of a SIGINT sent to coreslot's pid, which is dropped", name)
+					}
+				}
+				return
+			case c.sameGroup:
+				waitFor(t, 10*time.Second, "the shell to die", gone(t, sh))
+				if procState(t, gc) == "" {
+					t.Errorf("the grandchild died, but only the command's pid is signalled")
+				}
+			default:
+				waitFor(t, 10*time.Second, "the shell to die", gone(t, sh))
+				waitFor(t, 10*time.Second, "the grandchild to die", gone(t, gc))
+			}
+			done := make(chan struct{})
+			go func() { _ = cmd.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatalf("coreslot did not exit within 30 s of %v", c.sig)
+			}
+			if got := exitStatus(cmd.ProcessState); got != 128+int(c.sig) {
+				t.Errorf("coreslot exited %d, want %d", got, 128+int(c.sig))
+			}
+		})
+	}
+}

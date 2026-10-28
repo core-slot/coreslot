@@ -22,10 +22,10 @@ func TestUsageHint(t *testing.T) {
 		cpuS, ranS float64
 		want       string // "" for no hint
 	}{
-		{"a stream on 8 tokens", "dna:annotate@-", 8, 0.15 * 4142, 4142,
-			"dna:annotate@- used 0.15 of 8 cpu over 1h09m02s; --light runs a command this light without waiting"},
-		{"a tool on 8 tokens", "dna:annotate@-", 8, 1.15 * 4074, 4074,
-			"dna:annotate@- used 1.15 of 8 cpu over 1h07m54s; --need cpu=2 would fit"},
+		{"a stream on 8 tokens", "batch:annotate@-", 8, 0.15 * 4142, 4142,
+			"batch:annotate@- used 0.15 of 8 cpu over 1h09m02s; --light runs a command this light without waiting"},
+		{"a tool on 8 tokens", "batch:annotate@-", 8, 1.15 * 4074, 4074,
+			"batch:annotate@- used 1.15 of 8 cpu over 1h07m54s; --need cpu=2 would fit"},
 		{"a run that fits", "", 8, 6 * 600, 600, ""},
 		{"exactly half fits", "", 8, 4 * 600, 600, ""},
 		{"a short run says nothing", "", 8, 0.1 * 30, 30, ""},

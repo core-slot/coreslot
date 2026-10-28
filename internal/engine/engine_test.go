@@ -472,7 +472,8 @@ func TestStoppedHeadIsPassedOver(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	h := startHelper(t, "enqueue", dir, "cpu=1") // enqueues and never refreshes
+	// It enqueues and never refreshes; it needs every cpu, so the successor cannot pass it.
+	h := startHelper(t, "enqueue", dir, "cpu=8")
 	s := enqueue(t, e, need("cpu=1"))
 
 	if p := position(t, step(t, s)); p != 2 {
@@ -500,7 +501,7 @@ func TestWaiterAbsenceIsNotWatched(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "cpu=1") // enqueues and never refreshes
+	startHelper(t, "enqueue", dir, "cpu=8") // never refreshes; needs every cpu, so s cannot pass it
 	s := enqueue(t, e, need("cpu=1"))
 
 	if p := position(t, step(t, s)); p != 2 {
@@ -564,7 +565,7 @@ func TestDeadTicketPassedOverImmediately(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	h := startHelper(t, "enqueue", dir, "cpu=1")
+	h := startHelper(t, "enqueue", dir, "cpu=8") // needs every cpu: s cannot pass it while it lives
 	s := enqueue(t, e, need("cpu=1"))
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d, want 2", p)
@@ -865,8 +866,10 @@ func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
 	step(t, ahead)                // refreshes, so tk sees it live and stays behind it
 	enters, tryEnters := countEntries(t)
 	step(t, tk)
-	if *enters != 0 || *tryEnters != 1 {
-		t.Errorf("the Step after the gap entered %d times blocking, %d times single-attempt; want 0 and 1",
+	// Two single attempts: the resume bump's, and tk's attempt to pass the live ticket ahead of it
+	// from the front window (PROTOCOL.md section 10.3), which finds the section busy too.
+	if *enters != 0 || *tryEnters != 2 {
+		t.Errorf("the Step after the gap entered %d times blocking, %d times single-attempt; want 0 and 2",
 			*enters, *tryEnters)
 	}
 	fi, err := os.Stat(filepath.Join(dir, store.QueueDir, tk.Name()))

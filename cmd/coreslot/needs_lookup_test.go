@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -73,6 +74,41 @@ func TestNeedsEntryMemOnlyKeepsDefault(t *testing.T) {
 func TestNeedsWorkerSuffix(t *testing.T) {
 	lookup, _ := lookupOf(t, "[needs.\"x\"]\ncpu = 3\n")
 	wantNeed(t, []string{"--label", "x@10", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 3, Max: 3}})
+}
+
+// A per-worker entry sizes the request: tokens are c per worker, and the run keeps c and the
+// width for {n}. An explicit --need cpu wins and leaves both zero. Mutation: take the width as
+// the token count → cpu 8..8, red; set c under --need → c 0.4, red.
+func TestNeedsPerWorkerEntrySizesRequest(t *testing.T) {
+	saved := machineCPUs
+	t.Cleanup(func() { machineCPUs = saved })
+	machineCPUs = func() (int, error) { return 64, nil }
+	lookup, _ := lookupOf(t, "[needs.\"x\"]\ncpu_per_worker = 0.4\n")
+	o := wantNeed(t, []string{"--label", "x@8", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 4, Max: 4}})
+	if o.cpuPerWorker != 0.4 || o.workers != (spec.Range{Min: 8, Max: 8}) {
+		t.Errorf("cpuPerWorker %v, workers %v; want 0.4 and 8..8", o.cpuPerWorker, o.workers)
+	}
+	o = wantNeed(t, []string{"--label", "x", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 1, Max: 26}})
+	if o.cpuPerWorker != 0.4 || o.workers != (spec.Range{Min: 1, Max: 64}) {
+		t.Errorf("no @K: cpuPerWorker %v, workers %v; want 0.4 and 1..64", o.cpuPerWorker, o.workers)
+	}
+	o = wantNeed(t, []string{"--label", "x@8", "--need", "cpu=3", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 3, Max: 3}})
+	if o.cpuPerWorker != 0 || o.workers != (spec.Range{}) {
+		t.Errorf("--need cpu: cpuPerWorker %v, workers %v; want zero", o.cpuPerWorker, o.workers)
+	}
+}
+
+// A per-worker entry without a width, on a machine whose CPU count is unknown, gets the default
+// width as defaultNeed does. Mutation: pass the failed count (0) on → workers 1..1, red.
+func TestNeedsPerWorkerUnknownCPUCount(t *testing.T) {
+	saved := machineCPUs
+	t.Cleanup(func() { machineCPUs = saved })
+	machineCPUs = func() (int, error) { return 0, errors.New("no count") }
+	lookup, _ := lookupOf(t, "[needs.\"x\"]\ncpu_per_worker = 0.5\n")
+	o := wantNeed(t, []string{"--label", "x", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 1, Max: 8}})
+	if o.workers != (spec.Range{Min: 1, Max: spec.DefaultMax}) {
+		t.Errorf("workers %v, want 1..%d", o.workers, spec.DefaultMax)
+	}
 }
 
 // An unlabelled run never reads the needs file. Mutation: drop the label check → red.
@@ -173,5 +209,72 @@ func TestNeedsLookupUnreadable(t *testing.T) {
 	}
 	if len(*notices) != 1 || !strings.HasPrefix((*notices)[0], "needs file ") || !strings.HasSuffix((*notices)[0], "; ignoring it") {
 		t.Errorf("notices %q, want one \"needs file …: …; ignoring it\"", *notices)
+	}
+}
+
+// The mark is the flag's value when given, else the entry's, else unset; TestPreemptibleRequestsOneCPU
+// has the other cases. Mutation: let an entry marked false clear the flag's mark → the first row
+// red; look the entry up under the label with its @N → the worker count row red.
+func TestPreemptibleMark(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"on\"]\npreemptible = true\n[needs.\"off\"]\npreemptible = false\n")
+	for _, c := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"flag beats an entry marked false", []string{"--preemptible", "--label", "off", "--", "true"}, true},
+		{"entry true under a worker count", []string{"--label", "on@4", "--", "true"}, true},
+	} {
+		o, err := parseRun(c.args, IO{}, lookup)
+		if err != nil {
+			t.Errorf("%s: parseRun(%q): %v", c.name, c.args, err)
+			continue
+		}
+		o.queued = true // the mark applies to a run that queues
+		if got := o.marked(); got != c.want {
+			t.Errorf("%s: marked() = %v, want %v", c.name, got, c.want)
+		}
+	}
+	o, err := parseRun([]string{"--", "true"}, IO{}, lookup)
+	if err != nil || o.preemptible != nil {
+		t.Errorf("without a flag or a label, preemptible = %v (%v), want unset", o.preemptible, err)
+	}
+}
+
+// A preemptible run asks the budget for one cpu token whatever its cpu request, and keeps its
+// mem; the unshrunk request stays in need, for the placeholders and the run log. Mutation: shrink
+// mem too → every mem check red; skip the shrink for the flag → the flag row red; shrink an
+// unmarked run → the last three rows red.
+func TestPreemptibleRequestsOneCPU(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"fix\"]\ncpu = \"14\"\nmem = \"2G\"\npreemptible = true\n"+
+		"[needs.\"range\"]\ncpu = \"4..14\"\nmem = \"2G\"\npreemptible = true\n"+
+		"[needs.\"off\"]\ncpu = \"14\"\nmem = \"2G\"\npreemptible = false\n"+
+		"[needs.\"plain\"]\ncpu = \"14\"\nmem = \"2G\"\n")
+	memTokens := spec.MemTokensCeil(2048)
+	for _, c := range []struct {
+		name     string
+		args     []string
+		cpu, ask spec.Range // the request admission sees, and the one the run keeps
+	}{
+		{"entry, fixed", []string{"--label", "fix"}, spec.Range{Min: 1, Max: 1}, spec.Range{Min: 14, Max: 14}},
+		{"entry, range", []string{"--label", "range"}, spec.Range{Min: 1, Max: 1}, spec.Range{Min: 4, Max: 14}},
+		{"flag", []string{"--preemptible", "--label", "plain"}, spec.Range{Min: 1, Max: 1}, spec.Range{Min: 14, Max: 14}},
+		{"flag false beats the entry", []string{"--preemptible=false", "--label", "fix"}, spec.Range{Min: 14, Max: 14}, spec.Range{Min: 14, Max: 14}},
+		{"entry false", []string{"--label", "off"}, spec.Range{Min: 14, Max: 14}, spec.Range{Min: 14, Max: 14}},
+		{"no mark", []string{"--label", "plain"}, spec.Range{Min: 14, Max: 14}, spec.Range{Min: 14, Max: 14}},
+	} {
+		o, err := parseRun(append(c.args, "--", "true"), IO{}, lookup)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		o.queued = true // the mark applies to a run that queues
+		req := o.request(0).Need
+		if req["cpu"] != c.cpu || req["mem"] != (spec.Range{Min: memTokens, Max: memTokens}) {
+			t.Errorf("%s: the request is %v, want cpu %v and mem %d", c.name, req, c.cpu, memTokens)
+		}
+		if o.need["cpu"] != c.ask || o.minGrant()["cpu"] != c.cpu.Min {
+			t.Errorf("%s: the run keeps cpu %v and minGrant cpu %d, want %v and %d", c.name, o.need["cpu"], o.minGrant()["cpu"], c.ask, c.cpu.Min)
+		}
 	}
 }

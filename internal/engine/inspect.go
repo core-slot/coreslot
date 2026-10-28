@@ -7,10 +7,14 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
+
+// listProcs reads the process table for Snapshot's owner check; tests replace it.
+var listProcs = memsample.Listing
 
 // Free returns resource's size minus its locked tokens now (PROTOCOL.md section 12.1 step 4),
 // never below 0. It counts by probing every existing token file outside the section
@@ -169,6 +173,13 @@ func (e *Engine) Snapshot() (Report, error) {
 			r.DeadHolds = append(r.DeadHolds, en.Name)
 		} else {
 			r.Holds = append(r.Holds, *info)
+		}
+	}
+	// A live hold's lock outlives its owner only in a descendant that inherited the grant's
+	// descriptors. An unreadable process table reports nothing: unknown is not exited.
+	if procs, ok := listProcs(); ok {
+		for i, h := range r.Holds {
+			r.Holds[i].OwnerExited = !memsample.Alive(procs, h.PID, h.StartNS)
 		}
 	}
 

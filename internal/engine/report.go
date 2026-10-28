@@ -13,7 +13,12 @@ type HolderInfo struct {
 	UnbudgetedResources []string
 	Clamped             map[string]int // resource -> requested min, for clamped resources
 	Adopted             bool
-	Tree                bool // the process tree at PID carries the grant's work; status does not show it
+	Tree                bool   // the process tree at PID carries the grant's work; status does not show it
+	Preemptible         string // why the run is preemptible, "" when it is not; escape it before printing
+	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
+	// still held, so a descendant that inherited the grant's descriptors holds the tokens. Only
+	// Snapshot sets it, and only when the process table can be read.
+	OwnerExited bool
 }
 
 // TicketInfo describes one queue entry in a snapshot.

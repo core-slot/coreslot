@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
@@ -153,7 +154,8 @@ func TestUndeclaredResourceIsUnbudgeted(t *testing.T) {
 	}
 }
 
-// I4, no backfill: a waiter behind a blocked head takes nothing, through Step or Poll.
+// I4: a waiter behind a blocked head whose minimum is every cpu takes nothing, through Step or
+// Poll: passing the head (PROTOCOL.md section 10.3) never takes what the head is short of.
 func TestOnlyHeadTakesTokens(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -184,6 +186,151 @@ func TestOnlyHeadTakesTokens(t *testing.T) {
 	}
 	if behind.attempts != 0 {
 		t.Errorf("the waiter behind tried admission %d times", behind.attempts)
+	}
+}
+
+// passConfig declares a database slot beside the cpus: a head waiting for the slot, which a
+// helper holds, leaves cpus free that a waiter naming no slot may take behind its minimums.
+const passConfig = "[resources]\ncpu = 8\npg-local = 1\n"
+
+// A waiter in the front window that fits behind every minimum ahead is admitted while the live
+// head keeps waiting, and its extra pass leaves those minimums free; one outside the front window
+// does not even enter the section. The head is admitted as soon as its slot frees.
+//
+// Mutations: dropping the front-window check outside the section makes W enter the section from
+// position 5; Plan in place of state.PlanBehind grants W all 8 cpus, and the head then waits on.
+func TestPasserAdmittedInFrontWindow(t *testing.T) {
+	dir := newStateDir(t, passConfig)
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	slot := startHelper(t, "lock", dir, tokenPaths(dir, "pg-local", 0, 0))
+	var heads []*Ticket
+	for i := 0; i < FrontWindow; i++ {
+		heads = append(heads, enqueue(t, e, need("cpu=1,pg-local=1")))
+	}
+	w := enqueue(t, e, need("cpu=1..8"))
+	second := func() StepResult {
+		t.Helper()
+		for i, h := range heads {
+			if r := step(t, h); isAdmitted(r) {
+				t.Fatalf("ticket %d, waiting for the slot, was admitted", i)
+			}
+		}
+		enters, tryEnters := countEntries(t)
+		r := step(t, w)
+		if !isAdmitted(r) && (*enters != 0 || *tryEnters != 0) && len(heads) >= FrontWindow {
+			t.Fatalf("W, outside the front window, entered the section (%d, %d times)", *enters, *tryEnters)
+		}
+		clk.advance(time.Second)
+		return r
+	}
+	for sec := 0; sec < 3; sec++ {
+		if r := second(); isAdmitted(r) {
+			t.Fatalf("%d s: W admitted from position %d, outside the front window", sec, FrontWindow+1)
+		}
+	}
+	if err := heads[FrontWindow-1].Withdraw(); err != nil {
+		t.Fatal(err)
+	}
+	heads = heads[:FrontWindow-1]
+	g := admitted(t, second())
+	if got := g.Grant()["cpu"]; got != 8-len(heads) {
+		t.Fatalf("W was granted %d cpus, want %d: every cpu minimum ahead stays free", got, 8-len(heads))
+	}
+	slot.stop()
+	if r := step(t, heads[0]); !isAdmitted(r) {
+		t.Fatalf("the head was not admitted once its slot freed: %#v", r)
+	}
+}
+
+// writeTicket publishes body as a ticket at the front of the queue, without bumping gen, and
+// keeps it locked by a helper, as a live client's ticket is.
+func writeTicket(t *testing.T, dir, body string) (path string, h *helper) {
+	t.Helper()
+	path = filepath.Join(dir, store.QueueDir, wire.TicketName(wire.ID{OrderKey: 1, PID: 1, Seq: 1}, ""))
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, startHelper(t, "lock", dir, path)
+}
+
+// A ticket ahead whose body is malformed makes the waiter not pass, where it would fit behind the
+// live head: inside the section when it appeared after the waiter's last rescan, and without
+// entering the section once a rescan found it. Removed, it no longer blocks.
+//
+// Mutations: the in-section check ignoring malformed bodies admits W on the first Step after the
+// cpus free; rescan forgetting malformed names makes W enter the section after the gen bump.
+func TestMalformedTicketAheadBlocksPassing(t *testing.T) {
+	dir := newStateDir(t, passConfig)
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	startHelper(t, "lock", dir, tokenPaths(dir, "pg-local", 0, 0))
+	busy := startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 6)) // 1 cpu free: the head's minimum
+	head := enqueue(t, e, need("cpu=1,pg-local=1"))
+	w := enqueue(t, e, need("cpu=1"))
+	second := func() (r StepResult, entries int) {
+		t.Helper()
+		step(t, head)
+		enters, tryEnters := countEntries(t)
+		r = step(t, w)
+		clk.advance(time.Second)
+		return r, *enters + *tryEnters
+	}
+	if r, _ := second(); isAdmitted(r) {
+		t.Fatal("W admitted with no cpu free beyond the head's minimum")
+	}
+	path, bad := writeTicket(t, dir, "{}")
+	busy.stop()
+	for sec := 0; sec < 3; sec++ {
+		r, entries := second()
+		if isAdmitted(r) {
+			t.Fatalf("%d s: W passed the head with a malformed ticket ahead (unseen at its rescan)", sec)
+		}
+		if entries != 1 {
+			t.Fatalf("%d s: W entered the section %d times, want 1 (the check inside it decides)", sec, entries)
+		}
+	}
+	enqueue(t, e, need("cpu=1")) // bumps gen: W rescans and finds the malformed name
+	for sec := 0; sec < 3; sec++ {
+		if r, entries := second(); isAdmitted(r) || entries != 0 {
+			t.Fatalf("%d s: behind a malformed ticket W was admitted (%v) or entered the section %d times, want neither",
+				sec, isAdmitted(r), entries)
+		}
+	}
+	bad.stop()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	enqueue(t, e, need("cpu=1")) // bumps gen
+	if r, _ := second(); !isAdmitted(r) {
+		t.Fatalf("the malformed ticket removed: W was not admitted behind the head (%#v)", r)
+	}
+}
+
+// A STALLED ticket ahead does not count: its minimum is not subtracted. The stopped ticket S needs
+// every cpu, so W cannot pass while S is live; once S is STALLED, W passes the live head L.
+//
+// Mutation: counting STALLED tickets in the minimums ahead leaves W waiting.
+func TestStalledTicketAheadIsIgnoredByPasser(t *testing.T) {
+	dir := newStateDir(t, passConfig)
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	startHelper(t, "lock", dir, tokenPaths(dir, "pg-local", 0, 0))
+	startHelper(t, "enqueue", dir, "cpu=8") // S: the real clock sorts it ahead of L, stopped
+	l := enqueue(t, e, need("cpu=1,pg-local=1"))
+	w := enqueue(t, e, need("cpu=1"))
+	for sec := 0; sec <= 10; sec++ {
+		if r := step(t, l); isAdmitted(r) {
+			t.Fatalf("%d s: L, waiting for the slot, was admitted", sec)
+		}
+		r := step(t, w)
+		if sec < 10 && isAdmitted(r) {
+			t.Fatalf("%d s: W passed the live S, whose minimum is every cpu", sec)
+		}
+		if sec == 10 && !isAdmitted(r) {
+			t.Fatalf("10 s: S is STALLED, yet W did not pass L (%#v)", r)
+		}
+		clk.advance(time.Second)
 	}
 }
 
@@ -521,6 +668,41 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	}
 	if r.Format != 1 || !r.FormatUnderstood {
 		t.Errorf("format %d understood %v", r.Format, r.FormatUnderstood)
+	}
+}
+
+// A live hold's owner exited when the process listing lacks its pid, or the process there started
+// more than a second after the hold (the pid was reused); a listing that cannot be read reports
+// nothing. Mutations: OwnerExited set from the pid's presence alone reddens "pid reused"; set
+// regardless of the listing's ok reddens "listing unread".
+func TestSnapshotOwnerExited(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, nil)
+	admitted(t, step(t, enqueue(t, e, need("cpu=2"))))
+	r, err := e.Snapshot()
+	if err != nil || len(r.Holds) != 1 {
+		t.Fatalf("holds %+v, %v; want one", r.Holds, err)
+	}
+	h := r.Holds[0]
+	saved := listProcs
+	t.Cleanup(func() { listProcs = saved })
+	for _, c := range []struct {
+		name  string
+		procs map[int]memsample.Proc
+		ok    bool
+		want  bool
+	}{
+		{"alive", map[int]memsample.Proc{h.PID: {StartNS: h.StartNS - int64(time.Hour)}}, true, false},
+		{"alive within the slack", map[int]memsample.Proc{h.PID: {StartNS: h.StartNS + int64(time.Second)}}, true, false},
+		{"pid absent", map[int]memsample.Proc{}, true, true},
+		{"pid reused", map[int]memsample.Proc{h.PID: {StartNS: h.StartNS + int64(2*time.Second)}}, true, true},
+		{"listing unread", nil, false, false},
+	} {
+		listProcs = func() (map[int]memsample.Proc, bool) { return c.procs, c.ok }
+		r, err := e.Snapshot()
+		if err != nil || len(r.Holds) != 1 || r.Holds[0].OwnerExited != c.want {
+			t.Errorf("%s: holds %+v, %v; want OwnerExited %v", c.name, r.Holds, err, c.want)
+		}
 	}
 }
 

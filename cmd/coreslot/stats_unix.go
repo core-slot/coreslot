@@ -156,6 +156,9 @@ func suggestionText(sg runstats.Suggestion) string {
 	if sg.CPU != nil {
 		parts = append(parts, fmt.Sprintf("cpu = %q", cpuText(*sg.CPU)))
 	}
+	if sg.CPUPerWorker > 0 {
+		parts = append(parts, fmt.Sprintf("cpu_per_worker = %g", sg.CPUPerWorker))
+	}
 	if sg.MemMiB > 0 {
 		parts = append(parts, fmt.Sprintf("mem = %q", spec.NeedText(sg.MemMiB)))
 	}
@@ -177,14 +180,17 @@ func currentText(f needs.File, label string) string {
 	if e.CPU != nil {
 		parts = append(parts, fmt.Sprintf("cpu = %q", cpuText(*e.CPU)))
 	}
-	if e.PerWorker {
-		parts = append(parts, "cpu per worker")
+	if e.CPUPerWorker > 0 {
+		parts = append(parts, fmt.Sprintf("cpu_per_worker = %g", e.CPUPerWorker))
 	}
 	if e.MemMiB > 0 {
 		parts = append(parts, fmt.Sprintf("mem = %q (%s)", spec.NeedText(e.MemMiB), spec.FormatMiB(e.MemMiB)))
 	}
 	if e.Pinned {
 		parts = append(parts, "pinned")
+	}
+	if !e.Observed {
+		parts = append(parts, "observed = false")
 	}
 	if len(parts) == 0 {
 		return "an entry that sets nothing"
@@ -218,9 +224,10 @@ type jsonLabelStats struct {
 }
 
 type jsonSuggestion struct {
-	CPU      *string `json:"cpu"`
-	Mem      *string `json:"mem"`
-	Evidence string  `json:"evidence"`
+	CPU            *string  `json:"cpu"`
+	Mem            *string  `json:"mem"`
+	CoresPerWorker *float64 `json:"cores_per_worker"` // null when no run carries workers
+	Evidence       string   `json:"evidence"`
 }
 
 type jsonCurrent struct {
@@ -251,12 +258,15 @@ func writeStatsJSON(io IO, l learned) error {
 		if s.Suggest.MemMiB > 0 {
 			j.Suggestion.Mem = new(spec.NeedText(s.Suggest.MemMiB))
 		}
+		if s.Suggest.CPUPerWorker > 0 {
+			j.Suggestion.CoresPerWorker = &s.Suggest.CPUPerWorker
+		}
 		e, ok, err := l.needs.Lookup(s.Label)
 		switch {
 		case err != nil:
 			j.Current = &jsonCurrent{Error: err.Error()}
 		case ok:
-			j.Current = &jsonCurrent{CPUPerWorker: e.PerWorker, Pinned: e.Pinned}
+			j.Current = &jsonCurrent{CPUPerWorker: e.CPUPerWorker > 0, Pinned: e.Pinned}
 			if e.CPU != nil {
 				j.Current.CPU = new(cpuText(*e.CPU))
 			}
@@ -284,23 +294,29 @@ type suggestion struct {
 	kept  string // why the entry is kept as it is, when set is nil
 }
 
-// suggestions decides, per label, the keys to set: mem, cpu unless f's entry gives cpu per
-// worker, and the evidence. A pinned entry, or one that does not parse, is kept.
+// suggestions decides, per label, the keys to set: mem, the evidence, and cpu_per_worker for an
+// entry of f that has it, else cpu. A pinned entry, one with observed = false, or one that does not
+// parse, is kept; a label that looks unobserved gets only its evidence.
 func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
 	var out []suggestion
 	for _, s := range stats {
 		sg := suggestion{label: s.Label}
-		e, _, err := f.Lookup(s.Label)
+		e, ok, err := f.Lookup(s.Label)
 		switch {
 		case err != nil:
 			sg.kept = "kept, its entry does not parse: " + err.Error()
 		case e.Pinned:
 			sg.kept = "pinned, kept"
-		case s.Suggest.CPU == nil && s.Suggest.MemMiB == 0:
+		case ok && !e.Observed:
+			sg.kept = "observed = false: its work runs outside the process tree, kept"
+		case s.Suggest.CPU == nil && s.Suggest.MemMiB == 0 && !s.Unobserved:
 			sg.kept = "nothing measured, kept"
 		default:
 			sg.set = map[string]any{"evidence": s.Suggest.Reason}
-			if s.Suggest.CPU != nil && !e.PerWorker {
+			switch {
+			case e.CPUPerWorker > 0 && s.Suggest.CPUPerWorker > 0:
+				sg.set["cpu_per_worker"] = s.Suggest.CPUPerWorker // its cpu is the worker width, kept
+			case s.Suggest.CPU != nil && e.CPUPerWorker == 0:
 				sg.set["cpu"] = cpuText(*s.Suggest.CPU)
 			}
 			if s.Suggest.MemMiB > 0 {
@@ -368,12 +384,12 @@ func suggestCommand(args []string, io IO) int {
 			continue
 		}
 		var parts []string
-		for _, k := range []string{"cpu", "mem"} {
+		for _, k := range []string{"cpu", "cpu_per_worker", "mem"} {
 			if v, ok := sg.set[k]; ok {
-				parts = append(parts, fmt.Sprintf("%s = %q", k, v))
+				parts = append(parts, fmt.Sprintf("%s = %#v", k, v)) // a string quoted, a number bare
 			}
 		}
-		fmt.Fprintf(io.Stdout, "%s: wrote %s and its evidence\n", text(sg.label), strings.Join(parts, ", "))
+		fmt.Fprintf(io.Stdout, "%s: wrote %s\n", text(sg.label), strings.Join(append(parts, "its evidence"), " and "))
 	}
 	return 0
 }

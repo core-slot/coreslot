@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +56,7 @@ func TestStatsText(t *testing.T) {
 	}
 }
 
-// Mutation: leave skipped_lines at 0.
+// Mutation: leave skipped_lines at 0, or cores_per_worker null.
 func TestStatsJSON(t *testing.T) {
 	r := cli(t, baseEnv(statsDir(t)), "stats", "--json")
 	if r.code != 0 {
@@ -67,8 +68,9 @@ func TestStatsJSON(t *testing.T) {
 		Labels       []struct {
 			Label      string `json:"label"`
 			Suggestion struct {
-				CPU *string `json:"cpu"`
-				Mem *string `json:"mem"`
+				CPU            *string  `json:"cpu"`
+				Mem            *string  `json:"mem"`
+				CoresPerWorker *float64 `json:"cores_per_worker"`
 			} `json:"suggestion"`
 		} `json:"labels"`
 	}
@@ -81,6 +83,9 @@ func TestStatsJSON(t *testing.T) {
 	l := doc.Labels[0]
 	if l.Label != "fastapi:tests" || l.Suggestion.Mem == nil || *l.Suggestion.Mem != "2816M" || l.Suggestion.CPU == nil || *l.Suggestion.CPU != "1..6" {
 		t.Errorf("labels[0] = %+v:\n%s", l, r.stdout)
+	}
+	if c := doc.Labels[2].Suggestion.CoresPerWorker; l.Suggestion.CoresPerWorker != nil || c == nil || *c != 0.4 {
+		t.Errorf("cores_per_worker %v and %v, want null and 0.4:\n%s", l.Suggestion.CoresPerWorker, c, r.stdout)
 	}
 }
 
@@ -141,20 +146,27 @@ gate = "fastapi"
 	}
 }
 
-// Mutation: set cpu whatever the entry says.
-func TestSuggestWriteRespectsCPUPerWorker(t *testing.T) {
+// suggestWorkers runs suggest --write over a worker:tests entry, whose one run used 3 cores over
+// 8 workers on 3 tokens (saturated, 0.4 per worker), and returns the entry as written.
+func suggestWorkers(t *testing.T, entry string) map[string]any {
+	t.Helper()
 	dir := statsDir(t)
-	path := filepath.Join(dir, "needs.toml")
-	writeNeeds(t, dir, "[needs.\"worker:tests\"]\ncpu_per_worker = 2\n")
-	if r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "worker:tests@8"); r.code != 0 {
-		t.Fatalf("suggest --write exited %d: %s", r.code, r.stderr)
+	writeNeeds(t, dir, "[needs.\"worker:tests\"]\n"+entry)
+	r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "worker:tests@8")
+	got := readNeeds(t, filepath.Join(dir, "needs.toml"))
+	if r.code != 0 || !strings.Contains(r.stdout, "cpu_per_worker = 0.4") || len(got) != 1 {
+		t.Fatalf("suggest --write exited %d, wrote %v: %s%s", r.code, got, r.stdout, r.stderr)
 	}
-	got := readNeeds(t, path)
-	if w := got["worker:tests"]; w["cpu"] != nil || w["mem"] != "1536M" || w["cpu_per_worker"] != int64(2) || w["evidence"] == nil {
+	return got["worker:tests"]
+}
+
+// A per-worker entry gets cpu_per_worker rewritten, never cpu, and keeps every other key; the
+// evidence counts the saturated run. Mutation: write cpu over a per-worker entry, keep its old
+// cpu_per_worker, or drop the saturated count from the evidence → red.
+func TestSuggestWritePerWorker(t *testing.T) {
+	if w := suggestWorkers(t, "cpu_per_worker = 2\ngate = \"w\"\n"); w["cpu_per_worker"] != 0.4 || w["cpu"] != nil || w["gate"] != "w" || w["mem"] != "1536M" ||
+		!strings.Contains(fmt.Sprint(w["evidence"]), "1 of 1 saturated") {
 		t.Errorf("worker:tests entry %v", w)
-	}
-	if len(got) != 1 {
-		t.Errorf("--label wrote other entries: %v", got)
 	}
 }
 
@@ -186,5 +198,52 @@ func TestStatsMalformedNeedsIsANotice(t *testing.T) {
 	}
 	if r := cli(t, baseEnv(dir), "stats"); !strings.Contains(r.stdout, "current  none") {
 		t.Errorf("stats over a malformed needs file:\n%s", r.stdout)
+	}
+}
+
+// unobservedDir is a state directory whose log has three 120 s runs of ci:box at 0.001 cores and
+// three of ci:busy at 0.5, each with a 1 GiB peak.
+func unobservedDir(t *testing.T, entries string) string {
+	t.Helper()
+	dir, log := statsDir(t), ""
+	writeNeeds(t, dir, entries)
+	for _, c := range []struct {
+		label string
+		cpu   float64
+	}{{"ci:box", 0.12}, {"ci:busy", 60}} {
+		log += strings.Repeat(fmt.Sprintf(`{"time_ns":1792590000000000000,"label":%q,"need":{"cpu":[2,2]},"grant":{"cpu":2},"ran_s":120,"cpu_user_s":%g,"cpu_sys_s":0,"mem_peak_kib":1048576,"fail_open":""}`+"\n", c.label, c.cpu), 3)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "log", "runs.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err == nil {
+		_, err = f.WriteString(log)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// An entry with observed = false is kept as written: no cpu or mem from its near-zero cores.
+// Mutation: ignore observed → the entry gets cpu = "1" and evidence.
+func TestSuggestKeepsUnobservedEntry(t *testing.T) {
+	dir := unobservedDir(t, "[needs.\"ci:box\"]\ncpu = 2\nmem = \"4G\"\nobserved = false\n")
+	r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "ci:box")
+	if e := readNeeds(t, filepath.Join(dir, "needs.toml"))["ci:box"]; r.code != 0 || e["cpu"] != int64(2) || e["mem"] != "4G" || e["evidence"] != nil ||
+		!strings.Contains(r.stdout, "observed = false: its work runs outside the process tree, kept") {
+		t.Errorf("exit %d, entry %v:\n%s%s", r.code, e, r.stdout, r.stderr)
+	}
+}
+
+// Runs of 120 s under 0.05 cores lower nothing and carry the hint; 0.5 cores is learned, no hint.
+// Mutation: drop the hint, or lower cpu anyway → red.
+func TestSuggestHintsUnobservedWork(t *testing.T) {
+	dir := unobservedDir(t, "[needs.\"ci:box\"]\ncpu = 2\nmem = \"4G\"\n")
+	r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "ci:box")
+	r2 := cli(t, baseEnv(dir), "suggest", "--write", "--label", "ci:busy")
+	got := readNeeds(t, filepath.Join(dir, "needs.toml"))
+	box, busy := got["ci:box"], got["ci:busy"]
+	if r.code != 0 || r2.code != 0 || box["cpu"] != int64(2) || box["mem"] != "4G" || !strings.Contains(fmt.Sprint(box["evidence"]), "set observed = false or pin") ||
+		busy["cpu"] != "1" || strings.Contains(fmt.Sprint(busy["evidence"]), "observed") {
+		t.Errorf("ci:box %v, ci:busy %v:\n%s%s", box, busy, r.stderr, r2.stderr)
 	}
 }

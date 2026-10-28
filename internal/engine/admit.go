@@ -19,11 +19,11 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// admit is the head's admission attempt (PROTOCOL.md section 12.1 steps 1 to 7, with the
-// re-election of step 5). It returns
-// the grant when admitted, nil with no error when the head must keep waiting (the section was
-// busy, not enough is free, or a non-queued taker won a race), and ErrCanceled when a cancel
-// request was published before this section.
+// admit is the admission attempt of the head, or of a waiter in the front window that may pass
+// the live tickets ahead (PROTOCOL.md section 12.1 steps 1 to 7, with the re-election of step 5,
+// which decides which of the two it is). It returns the grant when admitted, nil with no error
+// when the ticket must keep waiting (the section was busy, not enough is free, or a non-queued
+// taker won a race), and ErrCanceled when a cancel request was published before this section.
 func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	point("admit.before-enter")
 	sec, entered, err := t.e.enter(ctx, single)
@@ -70,9 +70,22 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if !ok {
 		return nil, nil
 	}
-	// 5. The re-election: a ticket published ahead of this one since its election wins.
-	if ok, err := t.reelect(); err != nil || !ok {
+	// 5. The re-election: a ticket published ahead of this one since its election wins, unless
+	// this one may pass it: from the front window, with every body ahead well-formed, behind
+	// every minimum ahead (section 10.3).
+	ahead, front, malformed, err := t.reelect(sizes)
+	if err != nil {
 		return nil, err
+	}
+	if len(ahead) > 0 {
+		// A passer sized from the live size of mem does not pass: the minimums ahead are counted
+		// against the configured size, which the live size would let it take from.
+		if front >= FrontWindow || malformed || live {
+			return nil, nil
+		}
+		if take, ok = state.PlanBehind(eff, sizes, locked, ahead); !ok {
+			return nil, nil
+		}
 	}
 	point("admit.planned")
 	ts, ok, err := takeTwoPasses(sec, eff, take, sizes)
@@ -108,27 +121,35 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
-// lists the names in queue/ again and reports whether every well-formed ticket ahead of this one
-// is dead, gone or STALLED for this observer, reading the mtime (lstat) of only those tickets.
-// A ticket this observer has never watched, such as one published after the election, counts as
-// live; the next election then rescans whatever gen says, so a ticket published without a gen
-// bump is watched from then on and cannot keep the head out for longer than a stall.
-func (t *Ticket) reelect() (ok bool, err error) {
+// lists the names in queue/ again and returns, in ahead, the effective need (state.Effective
+// against sizes) of every live ticket ahead of this one: well-formed and neither gone, dead nor
+// STALLED for this observer, reading the mtime (lstat) of only well-formed tickets. A ticket
+// this observer has never watched, such as one published after the election, counts as live;
+// the next election then rescans whatever gen says, so a ticket published without a gen bump is
+// watched from then on and cannot keep the head out for longer than a stall. front counts the
+// well-formed tickets ahead that are not gone, and malformed reports one ahead whose body is
+// malformed or that a stray entry replaced. It stops once a live ticket is found with front at
+// FrontWindow: the ticket can then neither be the head nor pass.
+func (t *Ticket) reelect(sizes map[string]int) (ahead []map[string]spec.Range, front int, malformed bool, err error) {
 	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
-		return false, err
+		return nil, 0, false, err
 	}
 	now := t.e.clock.Monotonic()
 	for _, en := range entries {
+		if len(ahead) > 0 && front >= FrontWindow {
+			break
+		}
 		k := state.Key(en.ID)
 		if !k.Less(t.key) {
 			continue
 		}
-		well, err := t.wellFormed(en.Name)
+		need, bad, err := t.ticketBody(en.Name)
 		if err != nil {
-			return false, err
+			return nil, 0, false, err
 		}
-		if !well {
+		malformed = malformed || bad
+		if need == nil {
 			continue
 		}
 		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.Name))
@@ -136,25 +157,35 @@ func (t *Ticket) reelect() (ok bool, err error) {
 			continue
 		}
 		if err != nil {
-			return false, err
+			return nil, 0, false, err
 		}
 		dead, err := probe(t.e.st, store.QueueDir, en.Name)
-		if gone(err) || stray(err) || (err == nil && dead) {
+		if stray(err) {
+			malformed = true
+			continue
+		}
+		if gone(err) {
 			continue
 		}
 		if err != nil {
-			return false, err
+			return nil, 0, false, err
+		}
+		front++ // a dead ticket not yet removed takes a place in the front window
+		if dead {
+			continue
 		}
 		if _, seen := t.obs.Seen(k); !seen {
 			t.haveGen = false // rescan at the next election, so that it is watched from then on
-			return false, nil // first seen inside the section: live
+		} else {
+			t.obs.Observe(k, fi.ModTime().UnixNano(), now)
+			if t.obs.Stalled(k, now) {
+				continue
+			}
 		}
-		t.obs.Observe(k, fi.ModTime().UnixNano(), now)
-		if !t.obs.Stalled(k, now) {
-			return false, nil
-		}
+		eff, _, _ := state.Effective(need, sizes)
+		ahead = append(ahead, eff)
 	}
-	return true, nil
+	return ahead, front, malformed, nil
 }
 
 // countLocked counts the locked tokens of every resource of eff at every index (PROTOCOL.md
@@ -267,7 +298,8 @@ func (g *Grant) publishHold(sec *store.Section, req spec.Request, adopted bool) 
 	g.adopted = adopted
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
-		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted, Tree: req.Tree && !adopted}
+		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted, Tree: req.Tree && !adopted,
+		Preemptible: req.Preemptible}
 	f, name, err := sec.PublishHold(h, os.Getpid(), g.e.seq())
 	if err != nil {
 		return err

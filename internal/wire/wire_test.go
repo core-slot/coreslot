@@ -853,3 +853,29 @@ func TestHoldTreeKey(t *testing.T) {
 		t.Errorf("hold body = %s, want it to end %s", b, want)
 	}
 }
+
+// TestHoldPreemptibleKey pins the optional preemptible key: written only when set, and a value
+// that is not a string reads as empty and leaves the body well-formed. Mutation: dropping omitempty from the
+// key reddens the exact-encoding tests, whose bodies carry none.
+func TestHoldPreemptibleKey(t *testing.T) {
+	const okHold = `{"label":"x","grant":{"cpu":[0]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
+	for body, want := range map[string]string{
+		okHold[:len(okHold)-1] + `,"preemptible":"flag"}`: "flag",
+		okHold[:len(okHold)-1] + `,"preemptible":true}`:   "",
+	} {
+		h, err := DecodeHold([]byte(body))
+		if err != nil {
+			t.Fatalf("DecodeHold(%s): %v", body, err)
+		}
+		if h.Preemptible != want {
+			t.Errorf("DecodeHold(%s).Preemptible = %q, want %q", body, h.Preemptible, want)
+		}
+	}
+	b, err := Encode(Hold{Label: "x", StartNS: 5, Preemptible: "entry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `,"adopted":false,"preemptible":"entry"}`; !strings.HasSuffix(string(b), want) {
+		t.Errorf("hold body = %s, want it to end %s", b, want)
+	}
+}

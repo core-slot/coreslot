@@ -60,6 +60,32 @@ xattr -d com.apple.quarantine ./coreslot
 
 `coreslot version` prints the version and the protocol formats it implements.
 
+### Upgrading to v0.3.0
+
+Two defaults change:
+
+- The live size of `mem` is off: memory is sized from the configuration alone, and a `mem` need
+  above that size waits instead of being admitted from the memory the kernel can still hand out.
+  To turn it back on:
+
+  ```toml
+  [memory]
+  live = true
+  ```
+
+- Long, large runs are [preemptible](#choosing-a-range) by themselves: a run that asks for at least
+  half the cpu budget, whose label's runs take 10 minutes or more, is admitted with one cpu token
+  and runs at nice 10. For a label with wall-clock deadlines (test timeouts, browser or end-to-end
+  tests, agent tool timeouts), opt out in its `needs.toml` entry:
+
+  ```toml
+  [needs."gate:e2e"]
+  preemptible = false
+  ```
+
+Upgrade every client on a machine together; [the compatibility policy](docs/compatibility.md) says
+what an older one does differently.
+
 ## Quick start
 
 Run a test gate, asking for the cores it keeps busy rather than one per worker. A pytest worker
@@ -71,7 +97,8 @@ coreslot run --need cpu=6 --label gate:unit -- pytest -n 12
 ```
 
 When the workers are CPU-bound, let the grant set their number instead; an argument that is
-exactly `{n}` becomes the number of cores granted:
+exactly `{n}` becomes the number of cores granted (for an entry that sizes its request per worker,
+the number of workers instead; [see below](#memory)):
 
 ```sh
 coreslot run --need cpu=4..12 --label gate:unit -- pytest -n {n}
@@ -113,6 +140,13 @@ each other: two siblings started together under an 8-core grant both run with 8.
 wants concurrent children partitions its grant itself. `--independent` queues as an unrelated
 request instead. The Go library applies the same rule ([below](#go-library)).
 
+**Stop a run by killing its process group.** Without a terminal, `run` starts its command in a
+process group of its own and relays signals to it, which a SIGKILL of coreslot's group cannot do:
+the command would live on with the grant's tokens. `coreslot run --same-group` keeps the command in
+coreslot's group, so a `killpg` reaches the whole tree. A SIGINT or SIGQUIT sent to coreslot's pid
+alone is then dropped and a SIGTERM or SIGHUP reaches only the command's pid, as in a terminal:
+signal the group, not coreslot's pid.
+
 The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource,
 memory in MiB) and inherits the descriptors that hold its grant
 ([`PROTOCOL.md` section 17](PROTOCOL.md#17-descriptor-and-environment-contract)). The tokens stay
@@ -145,6 +179,38 @@ and the run log still records what it used, so the line above says when a light 
 on its tokens is pointed at `--light`. A nested run inside a light run passes through unbudgeted,
 as inside any run outside the budget.
 
+`coreslot run --preemptible` (or `preemptible = true` in the label's `needs.toml` entry;
+`--preemptible=false` overrides the entry) marks a batch run. It is admitted with one cpu token
+whatever its cpu request, and with its full memory, and its command runs at a lower priority, nice
+10, for the whole run: coreslot sets it on the command's process group right after the start, so
+every process of the command and everything it forks later has it. Other runs are admitted because
+the cpu tokens it leaves are free, and the scheduler gives them the cores first; the batch run takes the
+whole machine only when nothing else wants it. Its cpu is not reserved, so it over-commits cpu by
+design and pays in time only: mark batch work, not tests with timers, network or a database. `{n}`
+keeps the width of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the
+real grant, 1, and the run log records the request as `need`, the grant, and a `preemptible` key
+with the reason (`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold. A run
+that the queue does not admit (inside another run's grant, `--light`, outside an unusable budget,
+or at its `--timeout` under `--on-timeout run`) ignores the mark.
+
+A run that nothing marked becomes preemptible by itself when it queues for admission (not
+`--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
+half the cpu size, and its label (without a worker count) has at least 5 recorded runs with a
+median of 10 minutes or more, in both generations of the run log. No history, no demotion, and a
+label whose runs of a minute or more averaged under 0.05 cores is left alone, since its work looks
+to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
+that runs with wall-clock deadlines can fail when demoted; `preemptible = false` in the entry opts
+out. An entry that says `observed = false` is never demoted by itself either.
+
+Four limits. In terminal mode the group is the shell's job, so only the command's own process is
+lowered, and processes it forked before that are missed. On Linux, nice compares processes only
+within one autogroup (one session, on by default) or cpu cgroup, so the demotion reaches another
+session's work only where autogroup is off. And a command whose work runs outside its process
+tree, such as a Docker container, has nothing in that tree to lower, and the mark frees tokens
+that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested inside
+its command gets 1 cpu, and `{n}` is what one token gives; `preemptible = false` on the outer
+label avoids it.
+
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
 budget that admits `a` and makes `b` wait leaves `a` blocked on the full pipe until `b` reads it:
 the two wait on each other until a `--timeout`. Write `coreslot run --need cpu=2 -- sh -c 'a | b'`,
@@ -155,8 +221,9 @@ parallelism stops paying, which you find by measuring. `cpu=4..` means `4..16` a
 `1..8`; a `max` above the budget simply takes at most the budget.
 
 Keep `min` small. A request waits until `min` tokens are free at once, and while it waits at the
-head of the queue nobody behind it is admitted
-([`PROTOCOL.md` section 12.1](PROTOCOL.md#121-steps), step 5), so tokens freed in the meantime
+head of the queue nobody behind it is admitted on the resources it waits for
+([`PROTOCOL.md` section 12.1](PROTOCOL.md#121-steps), step 5; a run among the first 4 may pass it
+only within what every minimum ahead leaves free, section 10.3), so tokens freed in the meantime
 stay idle until `min` of them have accumulated. On 8 tokens, a queue of five requests of fixed
 sizes 1, 8, 1, 8, 1 runs one after another, with 7 tokens idle during every 1-token run. With the
 8-token requests written `4..8`, the first starts at once with 7 beside the 1-token run, and
@@ -186,8 +253,8 @@ counted against it, and nothing limits what a command uses.
 
 Rather than a `--need` on every run, keep each label's needs in `needs.toml`, beside the
 configuration (`~/.config/coreslot/needs.toml`). A labelled run takes from its entry each resource
-its `--need` leaves out; a final worker count in the label is ignored, so `gate:unit@12` uses the
-entry of `gate:unit`:
+its `--need` leaves out; a final worker count in the label does not change which entry applies,
+so `gate:unit@12` uses the entry of `gate:unit`:
 
 ```toml
 [needs."gate:unit"]
@@ -195,13 +262,36 @@ cpu = "4"
 mem = "3G"
 ```
 
+An entry can instead say how many cores one worker keeps busy, with `cpu_per_worker`, and let the
+number of workers set the request:
+
+```toml
+[needs."gate:unit"]
+cpu_per_worker = 0.35
+cpu = "4..24"   # the worker width, not tokens; the default is 1 to the CPU count
+mem = "3G"
+```
+
+With `@K` in the label (`gate:unit@12`) the request is `ceil(c × K)` tokens, here 5, and `{n}` is
+`K`. Without it, `cpu` is the worker width `a..b`: the request is `ceil(c × a)..ceil(c × b)`
+tokens, here 2 to 9, and `{n}` is `max(1, min(b, floor(grant / c)))`, the workers the grant pays
+for, which is below `a` (or `K`) only when the budget clamped the request or a parent run holds
+less. A `--need cpu=…` on the command line wins over the entry, and `{n}` is then the token count.
+`CORESLOT_GRANTED_CPU` stays the token count either way, so a script that read it as a worker
+count should read `{n}` instead.
+
 coreslot measures every run: the run log records the memory peak of the command and all its
 descendants, sampled every second. `coreslot stats` shows, per label, what its last 5 runs used;
 `coreslot suggest` prints the entries they suggest (the most cores and the largest peak among
 them; when that peak was taken with more cpu than it suggests, its evidence says so, since a
 command with `{n}` uses memory per worker and the peak may be smaller at the new grant), and
 `coreslot suggest --write` writes them into `needs.toml` with their evidence, leaving an entry
-marked `pinned = true` as it is. After a run whose peak outgrew its memory need by more than
+marked `pinned = true` as it is. A run records `workers` when its command took a cpu placeholder
+or its label carried `@K`; `suggest` then learns the cores one worker keeps busy (the p90 of cores
+÷ workers over the window, rounded up to 0.05) and writes it as `cpu_per_worker` into an entry
+that has one, never touching its `cpu`. For a range entry (`cpu = "1..16"`) whose runs carry
+`workers`, it no longer narrows the max to the cores used when no run saturated its grant, and its
+evidence suggests `cpu_per_worker`. After a run whose peak outgrew its memory need by more than
 one token, or passed 1 GiB with none, coreslot says so on stderr, for example
 `coreslot: gate:unit peaked at 2.5 GiB on a 2 GiB mem grant; coreslot suggest --write --label
 gate:unit`.
@@ -262,6 +352,12 @@ Containers take part through a client on the host. On Docker Desktop for macOS a
 holds on a bind-mounted file is not visible inside the container
 ([`evidence/probe-docker-flock.sh`](evidence/probe-docker-flock.sh), recorded in
 [`evidence/README.md`](evidence/README.md)).
+
+The run log counts the command's process tree, so a run whose work happens in a container or on
+another host looks idle to it. `coreslot suggest` does not lower the cpu and mem of a label whose
+last runs of at least 60 s averaged under 0.05 cores: its evidence says the work may run outside
+the process tree, and the run is never refused. Put `observed = false` in the entry to say so, and
+`suggest` keeps that entry's cpu and mem as they are.
 
 ## Go library
 

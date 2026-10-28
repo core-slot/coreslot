@@ -6,6 +6,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/spec"
 )
@@ -42,7 +43,8 @@ func setLiveMem(t *testing.T, headroomMiB, useKiB int64) *int {
 	return reads
 }
 
-const liveCfg = "[resources]\nmem = \"1G\"\n" // 8 mem tokens
+const staticCfg = "[resources]\nmem = \"1G\"\n"       // 8 mem tokens
+const liveCfg = staticCfg + "[memory]\nlive = true\n" // the live size is off unless turned on
 
 // treeNeed is a request for spec whose hold claims this process's tree.
 func treeNeed(spec string) spec.Request {
@@ -81,12 +83,39 @@ func TestLiveNotReadWhenStaticSuffices(t *testing.T) {
 
 // [memory] live = false keeps the static size. Mutation: attemptSizes ignoring LiveMem.
 func TestLiveOffByConfig(t *testing.T) {
-	dir := newStateDir(t, liveCfg+"[memory]\nlive = false\n")
+	dir := newStateDir(t, staticCfg+"[memory]\nlive = false\n")
 	e := newEngine(t, dir, newFakeClock())
 	setLiveMem(t, 4096, -1)
 	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
 	if r := step(t, enqueue(t, e, need("mem=2G"))); isAdmitted(r) {
 		t.Fatal("mem=2G admitted with live = false and the static size held")
+	}
+}
+
+// A waiter whose fixed mem need only the live size would admit does not pass a live ticket ahead
+// that is short of mem on the configured size: H waits for 4 of the 2 tokens A leaves, and P's 3
+// would come from the headroom, taking what H waits for. Withdrawn, H no longer holds P back.
+// Mutation: drop the live test from the passer's checks in admit, and P is admitted past H.
+func TestLivePasserDoesNotPass(t *testing.T) {
+	dir := newStateDir(t, liveCfg)
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	setLiveMem(t, 4096, -1)
+	admitted(t, step(t, enqueue(t, e, need("mem=768M"))))
+	h := enqueue(t, e, spec.Request{Need: map[string]spec.Range{"mem": {Min: 4, Max: 8}}})
+	p := enqueue(t, e, need("mem=384M"))
+	if r := step(t, h); isAdmitted(r) {
+		t.Fatal("H admitted with 2 mem tokens free")
+	}
+	if r := step(t, p); isAdmitted(r) {
+		t.Fatal("P admitted past H from the live size")
+	}
+	if err := h.Withdraw(); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Second)
+	if g := admitted(t, step(t, p)); !g.LiveMem() {
+		t.Errorf("P, alone, granted %v without the live size", g.Grant())
 	}
 }
 

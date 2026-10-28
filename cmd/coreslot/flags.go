@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -27,15 +28,26 @@ type runOptions struct {
 	noWait      bool
 	strict      bool
 	independent bool
+	sameGroup   bool // --same-group: the command stays in coreslot's process group
 	light       bool
+	preemptible *bool  // --preemptible, else the needs entry's key; nil when neither says
+	preemptWhy  string // why the run is preemptible: "flag", "entry" or the automatic rule's reason; "" if not
+	queued      bool   // the run queues for its grant: only then does preemptWhy apply (reason)
 	subst       bool
 	refusalCode int
 	argv        []string
+
+	// cpuPerWorker and workers are the label's cpu_per_worker and the worker width its entry
+	// gave the cpu request; both are zero when cpu came from --need, from an entry without
+	// cpu_per_worker, or from no entry.
+	cpuPerWorker float64
+	workers      spec.Range
+	unobserved   bool // the label's entry says observed = false: its work runs outside the process tree
 }
 
 const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D]
-       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--light] [--subst]
-       [--refusal-code N] -- COMMAND...`
+       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--same-group]
+       [--light] [--preemptible] [--subst] [--refusal-code N] -- COMMAND...`
 
 // runHelp is what `coreslot run --help` prints: the synopsis, then each flag with its default.
 const runHelp = runUsage + `
@@ -61,8 +73,17 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
   --strict              refuse instead of running unbudgeted when the state directory or the
                         configuration cannot be used
   --independent         queue as a request of its own, even inside another run's grant
+  --same-group          keep COMMAND in coreslot's own process group instead of a group of its
+                        own, so that a caller that kills coreslot's group (SIGKILL included)
+                        reaches the whole command tree. As in a terminal, a SIGINT or SIGQUIT
+                        sent to coreslot's pid alone is then dropped and a SIGTERM or SIGHUP
+                        reaches only COMMAND's pid: signal the group, not coreslot's pid. No
+                        effect on Windows
   --light               run at once outside the budget with MIN of each resource, for a
                         command that keeps well under one core busy (a download, a stream)
+  --preemptible         admit with one cpu token and run the command at a lower priority
+                        (nice 10) for the whole run (default the label's needs.toml entry,
+                        else a long run of a large request is made so by itself)
   --subst               replace placeholders inside arguments too, as in make -j{n}
   --refusal-code N      exit status of a refusal, 1 to 255 (default 75)
 
@@ -100,7 +121,9 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	fs.BoolVar(&o.noWait, "no-wait", false, "refuse unless admitted at once")
 	fs.BoolVar(&o.strict, "strict", false, "refuse instead of failing open")
 	fs.BoolVar(&o.independent, "independent", false, "ignore an inherited grant and queue")
+	fs.BoolVar(&o.sameGroup, "same-group", false, "keep the command in coreslot's process group")
 	fs.BoolVar(&o.light, "light", false, "run at once outside the budget")
+	preemptible := fs.Bool("preemptible", false, "run the command at a lower priority")
 	fs.BoolVar(&o.subst, "subst", false, "replace placeholders inside arguments too")
 	fs.IntVar(&o.refusalCode, "refusal-code", exitRefusal, "exit status of a refusal")
 	if err := fs.Parse(args); err != nil {
@@ -114,6 +137,12 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "priority" {
 			o.prioritySet = true
+		}
+		if f.Name == "preemptible" {
+			o.preemptible = preemptible
+			if *preemptible {
+				o.preemptWhy = "flag"
+			}
 		}
 		if slices.Contains([]string{"priority", "timeout", "on-timeout", "no-wait"}, f.Name) {
 			waitFlags = append(waitFlags, "--"+f.Name)
@@ -136,15 +165,35 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	}
 	withEntry := maps.Clone(need)
 	var setAside func(error)
+	var perWorker float64
+	var workers spec.Range
+	var unobserved bool
 	if o.label != "" && lookup != nil {
 		if e, ok, ignore := lookup(o.label); ok {
 			setAside = ignore
-			if _, given := need["cpu"]; !given && e.CPU != nil {
-				withEntry["cpu"] = *e.CPU
+			if _, given := need["cpu"]; !given {
+				switch {
+				case e.CPUPerWorker > 0:
+					cpus, err := machineCPUs()
+					if err != nil || cpus <= 0 {
+						cpus = spec.DefaultMax // as defaultNeed does when the count is unknown
+					}
+					withEntry["cpu"], workers = e.Request(needs.WorkersFromLabel(o.label), cpus)
+					perWorker = e.CPUPerWorker
+				case e.CPU != nil:
+					withEntry["cpu"] = *e.CPU
+				}
 			}
 			if _, given := need["mem"]; !given && e.MemMiB > 0 {
 				t := spec.MemTokensCeil(e.MemMiB)
 				withEntry["mem"] = spec.Range{Min: t, Max: t}
+			}
+			unobserved = !e.Observed
+			if o.preemptible == nil {
+				o.preemptible = e.Preemptible
+				if e.Preemptible != nil && *e.Preemptible {
+					o.preemptWhy = "entry"
+				}
 			}
 		}
 	}
@@ -153,12 +202,14 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 		if bare, berr := o.validRequest(need, len(needArgs) > 0); berr == nil {
 			setAside(err)
 			req, err = bare, nil
+			perWorker, workers, unobserved = 0, spec.Range{}, false
 		}
 	}
 	if err != nil {
 		return o, err
 	}
 	o.need = req.Need
+	o.cpuPerWorker, o.workers, o.unobserved = perWorker, workers, unobserved
 	switch {
 	case o.onTimeout != "fail" && o.onTimeout != "run":
 		return o, usagef("--on-timeout %q: want run or fail", o.onTimeout)
@@ -173,6 +224,47 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 		}
 	}
 	return o, nil
+}
+
+// reason is why the run is preemptible, "" when it is not. The mark applies only to a run the
+// budget admits through the queue (queued): a nested, --light, fail-open, timeout or Windows run
+// is never admitted, so a mark would only narrow its grant to one cpu token while widening its
+// placeholders to the request's max; such a run behaves as an unmarked one.
+func (o runOptions) reason() string {
+	if !o.queued {
+		return ""
+	}
+	return o.preemptWhy
+}
+
+// marked reports whether the run is preemptible: --preemptible, the entry's key or the automatic
+// rule said so, and the run queues.
+func (o runOptions) marked() bool { return o.reason() != "" }
+
+// admitNeed is the request the budget sees. A preemptible run asks for one cpu token whatever its
+// cpu request: it runs at nice 10 and gets idle cores anyway, so a larger minimum buys nothing.
+// Its mem is never touched. o.need stays the unshrunk request, which the placeholders and the run
+// log use.
+func (o runOptions) admitNeed() map[string]spec.Range {
+	if _, ok := o.need["cpu"]; !ok || !o.marked() {
+		return o.need
+	}
+	need := maps.Clone(o.need)
+	need["cpu"] = spec.Range{Min: 1, Max: 1}
+	return need
+}
+
+// placeholderGrant is grant as the placeholders see it: a preemptible run's cpu is its unshrunk
+// request's max, so that a `make -j{n}` keeps the width it was written for while the run holds
+// one token.
+func (o runOptions) placeholderGrant(grant map[string]int) map[string]int {
+	cpu, ok := o.need["cpu"]
+	if !ok || !o.marked() {
+		return grant
+	}
+	g := maps.Clone(grant)
+	g["cpu"] = cpu.Max
+	return g
 }
 
 // validRequest is the validated request for need, which takes defaultNeed's cpu when it has none and
@@ -213,7 +305,7 @@ func usagef(format string, args ...any) error {
 // configuration's [priorities] unless --priority was given. Its hold says that the run's process
 // tree carries the work.
 func (o runOptions) request(priority int) spec.Request {
-	return spec.Request{Label: o.label, Priority: priority, Need: o.need, Tree: true}
+	return spec.Request{Label: o.label, Priority: priority, Need: o.admitNeed(), Tree: true, Preemptible: o.reason()}
 }
 
 // sortedNeed lists the requested resources in ascending name order.
@@ -227,7 +319,7 @@ func (o runOptions) sortedNeed() []string {
 }
 
 // needText is the request in the form of the waiting line: `cpu 4..12, pg-local 1..1`.
-func (o runOptions) needText() string { return needText(o.need) }
+func (o runOptions) needText() string { return needText(o.admitNeed()) }
 
 // needText is a request as the waiting line and status show it: `cpu 4..12, gpu 1..1`, with a
 // fixed mem need as one size, `mem 3 GiB`.
@@ -247,7 +339,7 @@ func needText(need map[string]spec.Range) string {
 // minGrant is each requested resource's min: the grant of a run without a budget.
 func (o runOptions) minGrant() map[string]int {
 	g := make(map[string]int, len(o.need))
-	for name, r := range o.need {
+	for name, r := range o.admitNeed() {
 		g[name] = r.Min
 	}
 	return g
