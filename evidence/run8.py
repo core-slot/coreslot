@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+"""Acceptance run 8: coreslot against fixed slot counts, GNU parallel's --memsuspend on one shared
+queue and running everything at once, over a traced agent mix, run 7's heavy and wide mixes and a
+long batch with short gates queued behind it.
+
+usage:
+  run8.py learn STAND OUT
+  run8.py verdict STAND OUT PHASE CELL FIRST LAST [--as-block B] [--primer]
+  run8.py power PROBE_OUT OUT
+  run8.py pilot-check OUT
+  run8.py summary OUT
+
+STAND is run 7's stand (run7.py's docstring) with "agent_names", the four agents' names;
+"classes", class -> the gate standing in for that class of the traced batch run; "gates_by_class",
+class -> how many of the trace mix's 12 gates it holds; "batch", the long batch gate; and
+"behind_class", the class of the short gates queued behind it. A class or batch gate's cwd may hold
+"{agent}", replaced by the name of the agent that runs it. Every coreslot call goes through run4.cs()
+with the stand's state directory; GNU parallel runs with PARALLEL_HOME=<state_dir>/../parallel-home.
+
+The cells (CELLS): trace-quiet and trace-loaded (K, S1, S2, S3, F on the trace mix), heavy-quiet
+and heavy-loaded (K, S1, S2, P on the stand's agents), wide-quiet (K, S1, S2, F on the wide agents)
+and batch (KP, K, S1, F), each at its own level (run7.level). The trace mix: the gates of
+gates_by_class, in sorted class order, shuffled with the seed "run8-mix" and dealt 3 to each of the
+four agents in agent_names order, the same in every arm, block and phase. The batch mix: the first
+agent runs the batch gate once at offset 0, the other three run the behind class's gate 3 times
+each, all from offset BATCH_DELAY_S (a dry stand may set "batch_delay_s"); no random offsets.
+
+The arms: K runs every gate under coreslot with cpu = "140%", mem = "60%" and OUT/needs.toml; KP
+the same, the batch label preemptible by coreslot's automatic rule on its learned entry; the batch
+cell's K the same with `preemptible = false` inserted into the batch label's entry (k_needs). S1,
+S2 and S3 hold each heavy gate on one of 1, 2 or 3 slots of an in-process counting semaphore, the
+light gates free; F runs every gate when its agent reaches it. P submits each heavy gate as one
+job line to the set's one `parallel --memsuspend 4.5G -j 4 --joblog` and waits for its joblog
+line, the light gates free; a no-op line every TICK_S keeps parallel reading, because it reaps a
+finished job, writes its joblog line and re-checks its memory only when it reads its input.
+
+  learn    run 7's learn (6 K-form and 3 F-form runs, suggest, 5 relearn runs, suggest, seal) over
+           every gate of the agents, the wide agents and the classes, a class gate's "{agent}" as
+           the first agent; before it, the batch gate's LEARN_BATCH_K runs in its K form in pass
+           "learn", none in F, none in relearn. When the binary lacks --preemptible (R8 below) the
+           batch gate is skipped. Resumes and refuses as run 7's learn; refuses as well once any
+           probe record exists.
+  verdict  blocks FIRST..LAST of PHASE (probe, pilot or main) and CELL, each block's arms in the
+           order order_for gives it (seed run8-order-<phase>-<cell>-<block>), offsets from the seed
+           run8-<phase>-<cell>-<block>. Each set as run 7's: cooldown, level, headroom at t0, the
+           agents under a timeout of SET_TIMEOUT_S of the cell's mix (a dry stand may lower it
+           with RUN8_SET_TIMEOUT_S), past which every live gate, P's parallel and its jobs are
+           killed and the set is invalid with set_timeout. The record is run 7's plus "cell",
+           "dry", the run log of every arm, each sample's parallel_free_mib (vm_stat's free and
+           inactive pages), "treatment" (treatment(); non-empty makes the set invalid with
+           "treatment"), "derived_needs_sha256" (the batch cell's K), and in the batch cell
+           "short_mean_verdict_s" (the mean over the behind agents of their last gate's end minus
+           their offset) and "batch_s" (the batch gate's end minus its start); a P gate also
+           carries "submitted". The batch cell, when `coreslot run --preemptible=false -- true`
+           fails, writes OUT/batch-skipped.json once and exits 0. Exit 2 when P is to run and
+           parallel is not on PATH; on pilot and main of a non-dry stand when the evidence tree
+           has uncommitted changes or the binary is not the stand's coreslot_sha256; when main
+           lacks OUT/power.json or a pilot_check.json whose "go" is true, or its cell is in
+           power.json's "dropped" (the batch cell also when pilot_check.json's "batch_futile" is
+           true); when the needs files do not match OUT/needs.sha256. P leaves a heavy cell's main
+           when pilot_check.json's "p_feasible"[cell] is false. --as-block and --primer as run 7's.
+  power    from PROBE_OUT's probe records: each cell's n and the hours, to OUT/power.json.
+  pilot-check
+           from the pilot's first PILOT_BLOCKS valid blocks per cell: futility, P's feasibility
+           and "go", to OUT/pilot_check.json.
+  summary  from the main records, power.json and pilot_check.json: the primary, secondary and
+           H-PRE families and the reported estimates, to OUT/summary.json and OUT/summary.txt.
+"""
+import argparse
+import contextlib
+import glob
+import hashlib
+import json
+import math
+import os
+import random
+import re
+import shlex
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import acceptance  # noqa: E402  (probe, cooldown, runlog_lines)
+import overload  # noqa: E402  (Sampler, headroom_mib)
+import run4  # noqa: E402  (cs, run_one, write_config, offsets_for, ...)
+import run6  # noqa: E402  (measured, check_needs, write_learn_state, apps_meta, reruns, ...)
+import run7  # noqa: E402  (learn, level, provenance, kill_tree, parallel_home, ...)
+
+CELLS = {"trace-quiet": ("trace", "quiet", ("K", "S1", "S2", "S3", "F")),
+         "trace-loaded": ("trace", "loaded", ("K", "S1", "S2", "S3", "F")),
+         "heavy-quiet": ("heavy", "quiet", ("K", "S1", "S2", "P")),
+         "heavy-loaded": ("heavy", "loaded", ("K", "S1", "S2", "P")),
+         "wide-quiet": ("wide", "quiet", ("K", "S1", "S2", "F")),
+         "batch": ("batch", "quiet", ("KP", "K", "S1", "F"))}
+PHASES = ("probe", "pilot", "main")
+RECORDS = tuple(f"{p}-*.jsonl" for p in PHASES)
+K_SHARE = run7.K_SHARE
+QUIET_HEADROOM_MIB = run7.QUIET_HEADROOM_MIB  # (probe) the levels are run7.level's
+LOADED_HEADROOM_MIB = run7.LOADED_HEADROOM_MIB  # (probe)
+ALPHA = 0.05
+MARGIN = math.log(1.03)
+PILOT_BLOCKS = 10
+PILOT_RERUNS = 3
+POWER_MIN = 0.80
+DESCRIPTIVE_BELOW = 0.5
+CAP_H = 30  # (probe)
+N_MAX = 200
+BATCH_DELAY_S = 60  # (probe)
+P_MEMSUSPEND = "4.5G"
+P_JOBS = 4
+P_INFEASIBLE_TIMEOUTS = 2
+SET_TIMEOUT_S = {"trace": 3600, "heavy": 600, "wide": 600, "batch": 10800}  # (probe)
+TRACE_AGENTS, TRACE_GATES = 4, 3
+BEHIND_RUNS = 3
+LEARN_BATCH_K = 5  # the automatic rule's minimum run count
+TICK_S = 0.25  # P's no-op line; a joblog end is late by at most about this much
+
+
+def refuse(why):
+    print(f"run8: {why}", file=sys.stderr)
+    sys.exit(2)
+
+
+# --- the stand --------------------------------------------------------------------------------
+
+def load(path):
+    """run7.load, with the class and batch gates' cwd expanded and an integer free_n as text."""
+    cfg = run7.load(path)
+    for g in [*cfg.get("classes", {}).values(), *([cfg["batch"]] if "batch" in cfg else [])]:
+        g["cwd"] = os.path.expanduser(g["cwd"])
+        if "free_n" in g:
+            g["free_n"] = str(g["free_n"])
+    return cfg
+
+
+def agent_names(cfg):
+    names = cfg.get("agent_names", [])
+    if len(names) < TRACE_AGENTS:
+        refuse(f"the stand names {len(names)} agents, not {TRACE_AGENTS}")
+    return names[:TRACE_AGENTS]
+
+
+def placed(g, name):
+    """The gate as agent name runs it: "{agent}" in its cwd replaced by name."""
+    return dict(g, cwd=g["cwd"].replace("{agent}", name))
+
+
+def trace_agents(cfg):
+    """The trace mix: [class's gate x count] in sorted class order, shuffled with the seed
+    "run8-mix" and dealt TRACE_GATES to each agent in agent_names order."""
+    classes, counts = cfg.get("classes", {}), cfg.get("gates_by_class", {})
+    if sorted(set(counts) - set(classes)) or sum(counts.values()) != TRACE_AGENTS * TRACE_GATES:
+        refuse(f"gates_by_class must sum to {TRACE_AGENTS * TRACE_GATES} over the classes")
+    deck = [classes[c] for c in sorted(counts) for _ in range(counts[c])]
+    random.Random("run8-mix").shuffle(deck)
+    return {n: [placed(g, n) for g in deck[TRACE_GATES * i:TRACE_GATES * (i + 1)]]
+            for i, n in enumerate(agent_names(cfg))}
+
+
+def batch_delay(cfg):
+    if "batch_delay_s" in cfg and not cfg.get("dry"):
+        refuse("only a dry stand may set batch_delay_s")
+    return cfg.get("batch_delay_s", BATCH_DELAY_S)
+
+
+def batch_agents(cfg):
+    """The batch mix: the first agent runs the batch gate, the others BEHIND_RUNS of the behind
+    class's gate each."""
+    first, *behind = agent_names(cfg)
+    gate = cfg["classes"][cfg["behind_class"]]
+    return {first: [placed(cfg["batch"], first)],
+            **{n: [placed(gate, n)] * BEHIND_RUNS for n in behind}}
+
+
+def cell_cfg(cfg, cell):
+    """The stand with the cell's mix as its agents; the batch mix's cfg names its batch agent."""
+    mix = CELLS[cell][0]
+    if mix == "trace":
+        return dict(cfg, agents=trace_agents(cfg))
+    if mix == "batch":
+        batch_delay(cfg)
+        return dict(cfg, agents=batch_agents(cfg), batch_agent=agent_names(cfg)[0])
+    return run7.mix_cfg7(cfg, mix)
+
+
+def offsets8(scfg, cell, seed):
+    if CELLS[cell][0] != "batch":
+        return run4.offsets_for(scfg, seed)
+    return {n: 0 if n == scfg["batch_agent"] else batch_delay(scfg) for n in scfg["agents"]}
+
+
+def batch_label(cfg):
+    return (cfg.get("batch") or {}).get("label")
+
+
+# --- learn ------------------------------------------------------------------------------------
+
+def preemptible_supported(cfg):
+    """Whether `coreslot run --preemptible=false -- true` exits 0, in a scratch state directory
+    beside the stand's, so its run-log line never reaches learn's suggest."""
+    scratch = dict(cfg, state_dir=cfg["state_dir"] + "-preemptible-probe")
+    run4.fresh_state(scratch)
+    return run4.cs(scratch, "run", "--preemptible=false", "--", "true",
+                   capture_output=True, text=True).returncode == 0
+
+
+def learn_batch(cfg, out, recs):
+    """The batch gate's LEARN_BATCH_K K-form runs, pass "learn", recorded as run7.learn does."""
+    g, path = placed(cfg["batch"], agent_names(cfg)[0]), os.path.join(out, "learn.jsonl")
+    done = {r["run"] for r in recs if (r["gate"], r["form"], r["pass"]) == (g["gate"], "K", "learn")}
+    todo = [n for n in range(1, LEARN_BATCH_K + 1) if n not in done]
+    if not todo:
+        return
+    if not preemptible_supported(cfg):
+        print("run8: the coreslot binary lacks --preemptible; learn skips the batch gate")
+        return
+    pacing, baseline = run4.pacing(cfg), acceptance.probe()
+    pacing.cooldown = max(pacing.cooldown, run7.LEARN_COOLDOWN_S)
+    for n in todo:
+        acceptance.cooldown(pacing, baseline)
+        started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        log0 = len(acceptance.runlog_lines(cfg))
+        code, output, peak, cores, wall = run6.measured(cfg, g, "K")
+        new = acceptance.runlog_lines(cfg)[log0:]
+        rec = {"started": started, "gate": g["gate"], "label": g["label"], "form": "K",
+               "pass": "learn", "run": n, "exit": code, "wall_s": wall, "peak_kib": peak,
+               "cores": cores, "failures": run4.fail_lines(g, output) if code else [],
+               "ran_s": json.loads(new[-1]).get("ran_s") if new else None}
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        print(json.dumps(rec), flush=True)
+
+
+def learn(cfg, out):
+    if os.path.exists(os.path.join(out, "needs.sha256")):
+        print("run8: the needs are sealed in OUT/needs.sha256; learn has nothing to do")
+        return
+    for pattern in RECORDS:
+        if glob.glob(os.path.join(out, pattern)):
+            refuse(f"learn would change the needs {pattern} used")
+    os.makedirs(out, exist_ok=True)
+    state = os.path.join(out, "learn-state.json")
+    if os.path.exists(state):
+        with open(state) as f:
+            if json.load(f)["state_dir"] != run4.scrub(cfg["state_dir"]):
+                refuse("learn started in another state directory")
+    else:
+        run4.fresh_state(cfg)
+        run6.write_learn_state(cfg, out)
+    run4.write_config(cfg, K_SHARE["cpu"], K_SHARE["mem"])
+    recs = run4.read_jsonl(os.path.join(out, "learn.jsonl"))
+    if cfg.get("batch") and not any(r["pass"] == "relearn" for r in recs):
+        learn_batch(cfg, out, recs)
+    first = agent_names(cfg)[0]
+    classes = {f"class:{c}": [placed(g, first)] for c, g in sorted(cfg.get("classes", {}).items())}
+    run7.learn(dict(cfg, agents={**cfg["agents"], **classes}), out)
+
+
+# --- the treatment check and the batch cell's K needs -----------------------------------------
+
+def treatment(cell, arm, runlog, batch_label):
+    """The problems with a set's treatment, from its run-log lines: (a) a preemptible key on any
+    label but the batch label; (b) one on the batch label in any arm but KP; (c) in the batch
+    cell's KP, no batch-label line, or one whose preemptible reason is not the automatic
+    rule's ("auto: ...")."""
+    problems = []
+    for line in runlog:
+        if "preemptible" not in line:
+            continue
+        if line.get("label") != batch_label:
+            problems.append(f"preemptible on {line.get('label')}")
+        elif arm != "KP":
+            problems.append(f"preemptible on the batch label in {arm}")
+    if cell == "batch" and arm == "KP":
+        mine = [l for l in runlog if l.get("label") == batch_label]
+        if not mine:
+            problems.append("no run-log line of the batch label")
+        problems += [f"the batch label's preemptible reason is {l.get('preemptible')!r}"
+                     for l in mine if not str(l.get("preemptible") or "").startswith("auto: ")]
+    return problems
+
+
+def k_needs(text, label):
+    """needs.toml's text with `    preemptible = false` right after the label's table header;
+    ValueError when the header is not there exactly once or the entry has a preemptible key."""
+    header = f'  [needs."{label}"]'
+    lines = text.splitlines(keepends=True)
+    at = [i for i, l in enumerate(lines) if l.rstrip("\n") == header]
+    if len(at) != 1:
+        raise ValueError(f"{header.strip()} appears {len(at)} times in needs.toml")
+    for l in lines[at[0] + 1:]:
+        if l.lstrip().startswith("["):
+            break
+        if l.split("=")[0].strip() == "preemptible":
+            raise ValueError(f"{header.strip()} already has a preemptible key")
+    lines.insert(at[0] + 1, "    preemptible = false\n")
+    return "".join(lines)
+
+
+# --- sets -------------------------------------------------------------------------------------
+
+def parallel_free_mib():
+    """parallel's own free figure: vm_stat's free and inactive pages, in MiB."""
+    r = subprocess.run(["vm_stat"], capture_output=True, text=True)
+    m = re.search(r"page size of (\d+) bytes", r.stdout)
+    pages = re.findall(r"^Pages (?:free|inactive):\s+(\d+)", r.stdout, re.M)
+    return sum(map(int, pages)) * int(m.group(1)) >> 20 if m and len(pages) == 2 else None
+
+
+class FreeSamples(list):
+    """overload.Sampler's samples, each with parallel_free_mib added as it is taken."""
+
+    def append(self, s):
+        super().append(dict(s, parallel_free_mib=parallel_free_mib()))
+
+
+def sampler():
+    s = overload.Sampler()
+    s.samples = FreeSamples()
+    return s
+
+
+class Queue:
+    """P's one `parallel` per set, reading job lines on its stdin; its joblog in directory d."""
+
+    def __init__(self, cfg, d):
+        os.makedirs(d, exist_ok=True)
+        self.dir, self.joblog, self.seq = d, os.path.join(d, "joblog"), 0
+        self.lock, self.done = threading.Lock(), threading.Event()
+        self.proc = subprocess.Popen(
+            ["parallel", "--will-cite", "--memsuspend", P_MEMSUSPEND, "-j", str(P_JOBS),
+             "--joblog", self.joblog], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, text=True, start_new_session=True,
+            env=dict(os.environ, PARALLEL_HOME=run7.parallel_home(cfg), PARALLEL_SHELL="/bin/sh"))
+        with run4._live_lock:  # so the watchdog's stop() kills it and its jobs
+            run4._live.add(self.proc)
+        threading.Thread(target=self.tick, daemon=True).start()
+
+    def submit(self, line_for):
+        """Writes line_for(seq) as job seq, parallel's Seq: the input line's number."""
+        with self.lock:
+            self.proc.stdin.write(line_for(self.seq + 1) + "\n")
+            self.proc.stdin.flush()
+            self.seq += 1
+            return self.seq
+
+    def tick(self):
+        while not self.done.wait(TICK_S):
+            with contextlib.suppress(OSError, ValueError):
+                self.submit(lambda n: ":")
+
+    def line(self, seq):
+        with contextlib.suppress(FileNotFoundError), open(self.joblog) as f:
+            for l in f:
+                p = l.rstrip("\n").split("\t")
+                if p[0] == str(seq) and len(p) >= 9:
+                    return p
+        return None
+
+    def run(self, g, expired):
+        """Submits gate g as one job and waits for its joblog line: (exit, output, start, end,
+        submitted), exit -signal when a signal ended it; None when the set expired first."""
+        argv = [g.get("free_n", "auto") if a == "{n}" else a for a in g["argv"]]
+        env = [f"{k}={v}" for k, v in g.get("env", {}).items()]
+        out = os.path.join(self.dir, "job-{}.out")
+        submitted = time.time()
+        seq = self.submit(lambda n: f"cd {shlex.quote(g['cwd'])} && "
+                          + shlex.join(["env", *env, *argv] if env else argv)
+                          + f" > {shlex.quote(out.format(n))} 2>&1")
+        while (p := self.line(seq)) is None:
+            if self.proc.poll() is not None and (p := self.line(seq)) is None:
+                if expired.is_set():
+                    return None
+                raise RuntimeError(f"parallel exited {self.proc.returncode} before job {seq}")
+            time.sleep(0.1)
+        start, sig, output = float(p[2]), int(p[7]), ""
+        with contextlib.suppress(FileNotFoundError), open(out.format(seq), errors="replace") as f:
+            output = f.read()
+        return -sig if sig else int(p[6]), output, start, start + float(p[3]), submitted
+
+    def close(self):
+        self.done.set()
+        with self.lock, contextlib.suppress(OSError, ValueError):
+            self.proc.stdin.close()
+        try:
+            self.proc.wait(30)
+        except subprocess.TimeoutExpired:
+            run7.kill_tree([self.proc.pid])
+        with run4._live_lock:
+            run4._live.discard(self.proc)
+
+
+def set_timeout(cfg, mix):
+    """SET_TIMEOUT_S of the mix; only a dry stand may lower it with RUN8_SET_TIMEOUT_S."""
+    v = os.environ.get("RUN8_SET_TIMEOUT_S")
+    return float(v) if cfg.get("dry") and v else SET_TIMEOUT_S[mix]
+
+
+def run_agents(cfg, arm, offsets, slots, timeout, queue_dir):
+    """run7.run_agents, P's heavy gates through one Queue in queue_dir, the samples with
+    parallel_free_mib. Returns (gates, failures, errors, samples, t0, timed_out)."""
+    sem = threading.Semaphore(slots or 1)
+    gates, failures, errors, lock, expired = [], [], [], threading.Lock(), threading.Event()
+    queue = Queue(cfg, queue_dir) if arm == "P" else None
+    t0 = time.time()
+
+    def agent(name, chain):
+        try:
+            time.sleep(offsets[name])
+            for g in chain:
+                held = arm.startswith("S") and g["heavy"]
+                if held:
+                    sem.acquire()
+                try:
+                    if expired.is_set():
+                        return
+                    s, extra = time.time(), {}
+                    if queue and g["heavy"]:
+                        job = queue.run(g, expired)
+                        if job is None:
+                            return
+                        code, out, s, e, sub = job
+                        extra = {"submitted": round(sub - t0, 1)}
+                    else:
+                        code, out = run4.run_one(cfg, g, arm)
+                        e = time.time()
+                finally:
+                    if held:
+                        sem.release()
+                with lock:
+                    gates.append({"agent": name, "gate": g["gate"], "label": g.get("label"),
+                                  "start": round(s - t0, 1), "end": round(e - t0, 1),
+                                  "exit": code, **extra})
+                    if code:
+                        failures.append({"agent": name, "gate": g["gate"],
+                                         "lines": run4.fail_lines(g, out)})
+        except Exception as exc:  # a runner error invalidates the set, not the run
+            with lock:
+                errors.append(run4.scrub(f"{name}: {exc!r}"))
+
+    killed = set()
+
+    def stop():  # every gate and P's parallel are in run4._live
+        with run4._live_lock:
+            todo = [p.pid for p in run4._live if p.pid not in killed]
+        killed.update(todo)
+        if todo:
+            run7.kill_tree(todo)
+
+    smp = sampler()
+    smp.start()
+    threads = [threading.Thread(target=agent, args=(n, c), daemon=True)
+               for n, c in cfg["agents"].items()]
+    for t in threads:
+        t.start()
+    deadline = time.monotonic() + timeout
+    try:
+        for t in threads:
+            while t.is_alive():
+                if expired.is_set() or time.monotonic() > deadline:
+                    expired.set()
+                    stop()
+                t.join(0.5)
+    except KeyboardInterrupt:
+        expired.set()
+        stop()
+        raise
+    finally:
+        if queue:
+            queue.close()
+        smp.stop.set()
+        smp.join()
+    return gates, failures, errors, smp.samples, t0, expired.is_set()
+
+
+def run_set8(cfg, path, *, cell, arm, offsets, meta, baseline, slots=None, needs=None):
+    """Runs one set of arm in cell, appends its record to path and returns it: run_set7's record
+    with the run log of every arm, the treatment check, and the batch cell's two times. A K arm
+    writes the needs text into the state directory."""
+    mix, level_name = CELLS[cell][:2]
+    set_id = f"run8-{os.getpid()}-{time.time_ns()}"
+    queue_dir = os.path.join(run7.parallel_home(cfg), f"queue-{set_id}")
+    try:
+        snap0, c0 = run7.ps_snapshot(), time.monotonic()
+        cd = acceptance.cooldown(run4.pacing(cfg), baseline)
+        snap1, cooled = run7.ps_snapshot(), time.monotonic() - c0
+        own = {os.getpid(), *run7.descendants(snap1, os.getpid())}
+        bg_cpu = run7.background_cpu_cores(snap0, snap1, own, cooled)
+        ac = run4.on_ac()
+        page, bg = run4.background()
+        if arm.startswith("K"):
+            run4.write_config(cfg, K_SHARE["cpu"], K_SHARE["mem"])
+            dst = os.path.join(run4.checked_state(cfg), "needs.toml")
+            with open(dst, "w") as f:
+                f.write(needs)
+            if not run4.budget_empty(cfg):
+                sys.exit(f"run8: {meta}: the budget is not empty")
+        runlog0 = len(acceptance.runlog_lines(cfg))
+        with run7.level(level_name) as lvl:
+            h0 = overload.headroom_mib()
+            gates, failures, errors, samples, t0, timed_out = run_agents(
+                cfg, arm, offsets, slots, set_timeout(cfg, mix), queue_dir)
+        if arm.startswith("K") and (open(dst).read() if os.path.exists(dst) else None) != needs:
+            errors.append("the needs file changed during the set")
+        verdict = {n: round(max(g["end"] for g in gates if g["agent"] == n) - offsets[n], 1)
+                   for n in cfg["agents"] if any(g["agent"] == n for g in gates)}
+        runlog = [json.loads(l) for l in acceptance.runlog_lines(cfg)[runlog0:]]
+        problems = treatment(cell, arm, runlog, batch_label(cfg))
+        flags = (["hot_start"] if cd["cooldown_gave_up"] else []) + lvl["flags"] + (
+            ["level_off"] if run7.level_off(h0, level_name) else []) + (
+            ["busy_background"] if bg_cpu > run7.BG_CPU_FLAG_CORES else [])
+        reasons = run4.invalid_reasons(samples, ac, "; ".join(errors)) + (
+            ["set_timeout"] if timed_out else []) + (["treatment"] if problems else [])
+        rec = {**meta, "arm": arm, "set_id": set_id,
+               "started": datetime.fromtimestamp(t0, timezone.utc).isoformat(),
+               "probe_baseline_s": baseline, **cd, "ac": ac, "background": bg,
+               "page_bytes": page, "bg_cpu_cores": bg_cpu,
+               **{k: v for k, v in lvl.items() if k != "flags"}, "headroom_t0_mib": h0,
+               "flags": flags, "valid": not reasons, "invalid": reasons, "treatment": problems,
+               "offsets": offsets, "gates": sorted(gates, key=lambda g: (g["agent"], g["start"])),
+               "failures": failures, "verdict_s": verdict,
+               "mean_verdict_s": round(statistics.mean(verdict.values()), 1) if verdict else None,
+               "makespan_s": round(max(g["end"] for g in gates), 1) if gates else None,
+               "waited_free_s": round(sum(l.get("waited_free_s") or 0 for l in runlog), 1)
+               if arm.startswith("K") else None,
+               "samples": samples, "runlog": runlog}
+        if mix == "batch":
+            behind = [v for n, v in verdict.items() if n != cfg["batch_agent"]]
+            batch = [g for g in gates if g["agent"] == cfg["batch_agent"]]
+            rec["short_mean_verdict_s"] = round(statistics.mean(behind), 1) if behind else None
+            rec["batch_s"] = round(batch[0]["end"] - batch[0]["start"], 1) if batch else None
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        print(f"{meta.get('block')} {cell} {arm}: mean verdict {rec['mean_verdict_s']} s,"
+              f" makespan {rec['makespan_s']} s, warn+ {run4.warn_s(rec)} s, failed"
+              f" {[x['gate'] for x in failures]}, flags {flags}, valid {rec['valid']}"
+              f" {reasons or ''} {problems or ''}", flush=True)
+        return rec
+    finally:
+        shutil.rmtree(queue_dir, ignore_errors=True)
+
+
+# --- verdict ----------------------------------------------------------------------------------
+
+def order_for(phase, cell, block, arms):
+    arms = list(arms)
+    random.Random(f"run8-order-{phase}-{cell}-{block}").shuffle(arms)
+    return arms
+
+
+def read_json(path):
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def verdict(cfg, out, phase, cell, first, last, as_block=None, primer=False):
+    mix, level_name, arms = CELLS[cell]
+    check = read_json(os.path.join(out, "pilot_check.json")) or {}
+    power = read_json(os.path.join(out, "power.json"))
+    if phase == "main":
+        if not check.get("go") or power is None:
+            refuse("main runs only after power.json and a pilot check whose go is true")
+        if cell in power.get("dropped", []) or (cell == "batch" and check.get("batch_futile")):
+            refuse(f"main runs without the {cell} cell")
+        if check.get("p_feasible", {}).get(cell) is False:
+            arms = tuple(a for a in arms if a != "P")
+    run6.check_needs(out)
+    if cell == "batch" and not preemptible_supported(cfg):
+        path = os.path.join(out, "batch-skipped.json")
+        if not os.path.exists(path):
+            with open(path, "w") as f:
+                json.dump({"reason": "the coreslot binary lacks --preemptible",
+                           "binary_sha256": run4.sha256(cfg["coreslot"])}, f, indent=1)
+        print("run8: the coreslot binary lacks --preemptible; the batch cell is skipped")
+        return
+    path = os.path.join(out, f"{phase}-{cell}.jsonl")
+    recs = run4.read_jsonl(path)
+    if as_block and (as_block in run6.reruns(recs) or not {
+            r["arm"] for r in recs if r["block"] == as_block and not r["valid"]} - {"P"}):
+        refuse(f"block {as_block} is a re-run or has no invalid set but P's")
+    done = {(r["block"], r["arm"]) for r in recs}
+    blocks = [(b, [a for a in order_for(phase, cell, as_block or b, arms) if (b, a) not in done])
+              for b in range(first, last + 1)]
+    blocks = [(b, pending) for b, pending in blocks if pending]
+    if not blocks:
+        return
+    if "P" in arms and not shutil.which("parallel"):
+        refuse("arm P needs GNU parallel on PATH")
+    prov = run7.provenance(cfg, out, phase)
+    if phase == "main":
+        prov["power_sha256"] = run4.sha256(os.path.join(out, "power.json"))
+    if phase != "probe" and not cfg.get("dry"):  # a dry run's records are not evidence
+        if prov["tree_dirty"]:
+            refuse("the evidence tree has uncommitted changes")
+        if cfg.get("coreslot_sha256") != prov["binary_sha256"]:
+            refuse(f"{cfg['coreslot']} is not the binary the stand's coreslot_sha256 pins")
+    scfg = cell_cfg(cfg, cell)
+    with open(os.path.join(out, "needs.toml")) as f:
+        sealed = f.read()
+    try:
+        derived = k_needs(sealed, batch_label(cfg)) if cell == "batch" else None
+    except ValueError as e:
+        refuse(str(e))
+    apps, static, baseline = run6.apps_meta(out), run7.static_sizes7(cfg), acceptance.probe()
+    version = run6.coreslot_version(cfg)
+    needs_sha = run4.sha256(os.path.join(out, "needs.toml"))
+    for i, (b, pending) in enumerate(blocks):
+        src = as_block or b
+        order = order_for(phase, cell, src, arms)
+        offsets = offsets8(scfg, cell, f"run8-{phase}-{cell}-{src}")
+        sets = [("K", None, os.path.join(out, "primer.jsonl"))] if primer and i == 0 else []
+        sets += [(arm, order.index(arm), path) for arm in pending]
+        for arm, pos, dst in sets:
+            k = arm.startswith("K")
+            needs = derived if arm == "K" and derived else sealed if k else None
+            meta = {"phase": phase, "cell": cell, "mix": mix, "block": b, "as_block": as_block,
+                    "order": " ".join(order), "level_name": level_name, "position": pos,
+                    "prev_arm": order[pos - 1] if pos else None, "mix_agents": list(scfg["agents"]),
+                    "dry": bool(cfg.get("dry")), **apps, "coreslot_version": version,
+                    "needs_sha256": needs_sha if k else None,
+                    "derived_needs_sha256": hashlib.sha256(needs.encode()).hexdigest()
+                    if k and needs is derived else None,
+                    "static": static if k else None, **prov}
+            run_set8(scfg, dst, cell=cell, arm=arm, offsets=offsets, meta=meta,
+                     baseline=baseline, slots=int(arm[1:]) if arm.startswith("S") else None,
+                     needs=needs)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("learn", "verdict"):
+        p = sub.add_parser(name)
+        p.add_argument("stand")
+        p.add_argument("out")
+        if name == "verdict":
+            p.add_argument("phase", choices=PHASES)
+            p.add_argument("cell", choices=tuple(CELLS))
+            p.add_argument("first", type=int)
+            p.add_argument("last", type=int)
+            p.add_argument("--as-block", type=int, default=None)
+            p.add_argument("--primer", action="store_true")
+    args = ap.parse_args()
+    cfg = load(args.stand)
+
+    def interrupted(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
+    if args.cmd == "learn":
+        learn(cfg, args.out)
+    else:
+        verdict(cfg, args.out, args.phase, args.cell, args.first, args.last, args.as_block,
+                args.primer)
+
+
+if __name__ == "__main__":
+    main()
