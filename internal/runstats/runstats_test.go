@@ -3,9 +3,13 @@
 package runstats
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
@@ -26,6 +30,9 @@ func run(label string, i int64, cores float64, need spec.Range, grant int) store
 	return store.RunRecord{TimeNS: t0 + i*1e9, Label: label, RanS: 10, CPUUserS: f(cores * 10), CPUSysS: f(0),
 		Need: map[string]spec.Range{"cpu": need}, Grant: map[string]int{"cpu": grant}}
 }
+
+// per is r with a worker count.
+func per(r store.RunRecord, workers int) store.RunRecord { r.Workers = &workers; return r }
 
 func only(t *testing.T, stats []Stats) Stats {
 	t.Helper()
@@ -173,4 +180,73 @@ func TestWaitedFreeSummed(t *testing.T) {
 	if s.WaitedFreeS != 7 || s.WaitedS != 12 {
 		t.Errorf("waited %v, waited while free %v; want 12 and 7", s.WaitedS, s.WaitedFreeS)
 	}
+}
+
+// wantPerWorker fails unless s suggests cpu and c cores per worker, with evidence naming
+// cpu_per_worker exactly when c is above 0.
+func wantPerWorker(t *testing.T, s Stats, c float64, cpu spec.Range) {
+	t.Helper()
+	got := s.Suggest
+	if got.CPUPerWorker != c || got.CPU == nil || *got.CPU != cpu || strings.Contains(got.Reason, "cpu_per_worker") != (c > 0) {
+		t.Errorf("cpu per worker %v, cpu %v, reason %q; want %v and %v", got.CPUPerWorker, got.CPU, got.Reason, c, cpu)
+	}
+}
+
+// The p90 of 1.0 / 4 and 3.1 / 12 cores per worker, rounded up to 0.05, is 0.3; an unsaturated
+// range keeps its max (its {n} follows the grant). Mutation: round to the nearest 0.05, or narrow
+// the range → red.
+func TestSuggestPerWorkerFromWorkers(t *testing.T) {
+	s := only(t, Summarize([]store.RunRecord{per(run("x", 1, 1.0, spec.Range{Min: 1, Max: 16}, 4), 4),
+		per(run("x", 2, 3.1, spec.Range{Min: 1, Max: 16}, 12), 12)}, 16))
+	wantPerWorker(t, s, 0.3, spec.Range{Min: 1, Max: 16})
+}
+
+// 0.27 cores per worker on 3 tokens over a width of 1..10, the workers being what {n} gives at c:
+// c1 learned from 0.5 and c2 from c1 are within 0.05. Mutation: divide by the grant → red.
+func TestSuggestPerWorkerNoSwing(t *testing.T) {
+	learnFrom := func(c float64) float64 {
+		workers := min(10, max(1, int(3/c+1e-9)))
+		var runs []store.RunRecord
+		for i := range int64(WindowRuns) {
+			runs = append(runs, per(run("x", i, float64(workers)*0.27, spec.Range{Min: 1, Max: 5}, 3), workers))
+		}
+		return only(t, Summarize(runs, 16)).Suggest.CPUPerWorker
+	}
+	c1 := learnFrom(0.5)
+	if c2 := learnFrom(c1); c1 <= 0 || c2-c1 > 0.05+1e-9 || c1-c2 > 0.05+1e-9 {
+		t.Errorf("c1 %v, c2 %v; want them within 0.05", c1, c2)
+	}
+}
+
+// Run 7's learn pass of sqlalchemy-engine-tests (10 workers, 2.4 to 2.7 cores) learns 0.3 and
+// keeps 1..10, which the old rule narrowed to 1..3. Mutation: narrow the range → red.
+func TestSuggestRun7Fixture(t *testing.T) {
+	data, err := os.ReadFile("../../evidence/overload/run7/learn.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []store.RunRecord
+	for line := range bytes.Lines(data) {
+		var e struct {
+			Started          time.Time
+			Gate, Pass, Form string
+			Cores            float64
+			RanS             float64 `json:"ran_s"`
+		}
+		if json.Unmarshal(line, &e) == nil && e.Gate == "sqlalchemy-engine-tests" && e.Pass == "learn" && e.Form == "K" {
+			r := per(run("bench:sqlalchemy-engine-tests", 0, 0, spec.Range{Min: 1, Max: 10}, 10), 10)
+			r.TimeNS, r.RanS, r.CPUUserS = e.Started.UnixNano(), e.RanS, f(e.Cores*e.RanS)
+			runs = append(runs, r)
+		}
+	}
+	if len(runs) != 6 {
+		t.Fatalf("%d fixture runs, want 6", len(runs))
+	}
+	wantPerWorker(t, only(t, Summarize(runs, 16)), 0.3, spec.Range{Min: 1, Max: 10})
+}
+
+// Without workers (a go test ./... that parallelises itself) a range still narrows to the cores
+// used. Mutation: keep the max of every range → red.
+func TestSuggestStillNarrowsWithoutPlaceholder(t *testing.T) {
+	wantPerWorker(t, only(t, Summarize([]store.RunRecord{run("x", 1, 3, spec.Range{Min: 1, Max: 16}, 16)}, 16)), 0, spec.Range{Min: 1, Max: 3})
 }

@@ -71,7 +71,8 @@ coreslot run --need cpu=6 --label gate:unit -- pytest -n 12
 ```
 
 When the workers are CPU-bound, let the grant set their number instead; an argument that is
-exactly `{n}` becomes the number of cores granted:
+exactly `{n}` becomes the number of cores granted (for an entry that sizes its request per worker,
+the number of workers instead; [see below](#memory)):
 
 ```sh
 coreslot run --need cpu=4..12 --label gate:unit -- pytest -n {n}
@@ -186,8 +187,8 @@ counted against it, and nothing limits what a command uses.
 
 Rather than a `--need` on every run, keep each label's needs in `needs.toml`, beside the
 configuration (`~/.config/coreslot/needs.toml`). A labelled run takes from its entry each resource
-its `--need` leaves out; a final worker count in the label is ignored, so `gate:unit@12` uses the
-entry of `gate:unit`:
+its `--need` leaves out; a final worker count in the label does not change which entry applies,
+so `gate:unit@12` uses the entry of `gate:unit`:
 
 ```toml
 [needs."gate:unit"]
@@ -195,13 +196,35 @@ cpu = "4"
 mem = "3G"
 ```
 
+An entry can instead say how many cores one worker keeps busy, with `cpu_per_worker`, and let the
+number of workers set the request:
+
+```toml
+[needs."gate:unit"]
+cpu_per_worker = 0.35
+cpu = "4..24"   # the worker width, not tokens; the default is 1 to the CPU count
+mem = "3G"
+```
+
+With `@K` in the label (`gate:unit@12`) the request is `ceil(c × K)` tokens, here 5, and `{n}` is
+`K`. Without it, `cpu` is the worker width `a..b`: the request is `ceil(c × a)..ceil(c × b)`
+tokens, here 2 to 9, and `{n}` is `min(b, max(a, floor(grant / c)))`, the workers the grant pays
+for. A `--need cpu=…` on the command line wins over the entry, and `{n}` is then the token count.
+`CORESLOT_GRANTED_CPU` stays the token count either way, so a script that read it as a worker
+count should read `{n}` instead.
+
 coreslot measures every run: the run log records the memory peak of the command and all its
 descendants, sampled every second. `coreslot stats` shows, per label, what its last 5 runs used;
 `coreslot suggest` prints the entries they suggest (the most cores and the largest peak among
 them; when that peak was taken with more cpu than it suggests, its evidence says so, since a
 command with `{n}` uses memory per worker and the peak may be smaller at the new grant), and
 `coreslot suggest --write` writes them into `needs.toml` with their evidence, leaving an entry
-marked `pinned = true` as it is. After a run whose peak outgrew its memory need by more than
+marked `pinned = true` as it is. A run records `workers` when its command took a cpu placeholder
+or its label carried `@K`; `suggest` then learns the cores one worker keeps busy (the p90 of cores
+÷ workers over the window, rounded up to 0.05) and writes it as `cpu_per_worker` into an entry
+that has one, never touching its `cpu`. For a range entry (`cpu = "1..16"`) whose runs carry
+`workers`, it no longer narrows the max to the cores used when no run saturated its grant, and its
+evidence suggests `cpu_per_worker`. After a run whose peak outgrew its memory need by more than
 one token, or passed 1 GiB with none, coreslot says so on stderr, for example
 `coreslot: gate:unit peaked at 2.5 GiB on a 2 GiB mem grant; coreslot suggest --write --label
 gate:unit`.
@@ -262,6 +285,12 @@ Containers take part through a client on the host. On Docker Desktop for macOS a
 holds on a bind-mounted file is not visible inside the container
 ([`evidence/probe-docker-flock.sh`](evidence/probe-docker-flock.sh), recorded in
 [`evidence/README.md`](evidence/README.md)).
+
+The run log counts the command's process tree, so a run whose work happens in a container or on
+another host looks idle to it. `coreslot suggest` does not lower the cpu and mem of a label whose
+last runs of at least 60 s averaged under 0.05 cores: its evidence says the work may run outside
+the process tree, and the run is never refused. Put `observed = false` in the entry to say so, and
+`suggest` keeps that entry's cpu and mem as they are.
 
 ## Go library
 

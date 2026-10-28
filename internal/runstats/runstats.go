@@ -21,6 +21,10 @@ const (
 	WindowRuns = 5
 	// saturatedShare is the share of its cpu grant a run must use to count as saturated.
 	saturatedShare = 0.8
+	// unobservedMinRanS and unobservedCores bound Unobserved: runs of at least that many seconds
+	// that averaged fewer cores.
+	unobservedMinRanS = 60
+	unobservedCores   = 0.05
 )
 
 // Stats is what the run log says about one base label (needs.BaseLabel).
@@ -34,17 +38,20 @@ type Stats struct {
 	MemPeakSource string            // that peak's measure
 	PeakAfterS    *float64          // when that peak was read, nil when unknown
 	PeakCPU       int               // that run's cpu grant when above the suggested cpu max, else 0
+	Unobserved    bool              // Unobserved(Window): the suggestion lowers nothing
 	WaitedS       float64           // summed over the window
 	WaitedFreeS   float64           // summed over the window; a run without it adds 0
 	Suggest       Suggestion
 }
 
 // Suggestion is what the window suggests for the label's needs entry. CPU is nil and MemMiB 0
-// when no window run measured them.
+// when no window run measured them; CPUPerWorker, the cores one worker uses, is 0 when no
+// measured window run carries workers.
 type Suggestion struct {
-	CPU    *spec.Range
-	MemMiB int64
-	Reason string
+	CPU          *spec.Range
+	MemMiB       int64
+	CPUPerWorker float64
+	Reason       string
 }
 
 // counted reports whether r says what its label needs: labelled, not a pass-through, not run
@@ -71,9 +78,24 @@ func Summarize(runs []store.RunRecord, cpuSize int) []Stats {
 	return out
 }
 
+// Unobserved reports whether runs, one label's, did their work outside their process tree, in a
+// container or on another host: at least one has run for a minute with its CPU time measured, and
+// those runs averaged under 0.05 cores.
+func Unobserved(runs []store.RunRecord) bool {
+	sum, n := 0.0, 0
+	for _, r := range runs {
+		if r.RanS >= unobservedMinRanS && r.CPUUserS != nil && r.CPUSysS != nil {
+			sum += (*r.CPUUserS + *r.CPUSysS) / r.RanS
+			n++
+		}
+	}
+	return n > 0 && sum/float64(n) < unobservedCores
+}
+
 func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats {
 	s := Stats{Label: label, Runs: n, Window: window}
 	maxCores := 0.0
+	var perWorker []float64
 	for _, r := range window {
 		s.WaitedS += r.WaitedS
 		if r.WaitedFreeS != nil {
@@ -85,15 +107,31 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 		cores := (*r.CPUUserS + *r.CPUSysS) / r.RanS
 		s.CoresUsed = append(s.CoresUsed, cores)
 		maxCores = max(maxCores, cores)
+		if r.Workers != nil && *r.Workers > 0 {
+			perWorker = append(perWorker, cores/float64(*r.Workers))
+		}
 		if g := r.Grant["cpu"]; g > 0 && cores >= saturatedShare*float64(g) {
 			s.Saturated++
 		}
+	}
+	if len(perWorker) > 0 {
+		// The p90, rounded up to a multiple of 0.05; the epsilon keeps a product that float
+		// arithmetic leaves a hair above a multiple from rounding up to the next. coreslot never
+		// caps a run's cores, so workers that want more than their share show it here.
+		slices.Sort(perWorker)
+		p90 := perWorker[int(math.Ceil(0.9*float64(len(perWorker))))-1]
+		s.Suggest.CPUPerWorker = max(math.Ceil(p90*20-1e-9)/20, 0.05)
 	}
 	if len(s.CoresUsed) > 0 {
 		x := min(max(int(math.Ceil(maxCores)), 1), max(cpuSize, 1), spec.MaxPerResource)
 		cpu := spec.Range{Min: x, Max: x}
 		if last := window[len(window)-1].Need["cpu"]; last.Min < last.Max {
 			cpu.Min = 1
+			if s.Suggest.CPUPerWorker > 0 && s.Saturated == 0 {
+				// Its workers follow the grant, so it uses fewer cores when granted fewer: narrowing
+				// the max to the cores used would narrow it again on every learn.
+				cpu.Max = last.Max
+			}
 		}
 		s.Suggest.CPU = &cpu
 	}
@@ -101,6 +139,10 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 	const tokenKiB = spec.MemTokenMiB * 1024
 	s.Suggest.MemMiB = (s.MemPeakKiB + tokenKiB - 1) / tokenKiB * spec.MemTokenMiB
 	s.Suggest.Reason = s.reason(maxCores)
+	if s.Unobserved = Unobserved(window); s.Unobserved {
+		s.Suggest.CPU, s.Suggest.MemMiB, s.Suggest.CPUPerWorker = nil, 0, 0
+		s.Suggest.Reason += ", its work may run outside the process tree, in a container or on another host; set observed = false or pin the entry"
+	}
 	return s
 }
 
@@ -126,6 +168,9 @@ func (s Stats) reason(maxCores float64) string {
 		span(s.Window[0].TimeNS, s.Window[len(s.Window)-1].TimeNS))}
 	if len(s.CoresUsed) > 0 {
 		parts = append(parts, fmt.Sprintf("max %.1f cores, %d of %d saturated", maxCores, s.Saturated, len(s.CoresUsed)))
+	}
+	if s.Suggest.CPUPerWorker > 0 {
+		parts = append(parts, fmt.Sprintf("%[1]g cores per worker: set cpu_per_worker = %[1]g", s.Suggest.CPUPerWorker))
 	}
 	if s.MemPeakKiB > 0 {
 		peak := "peak " + spec.FormatMiB((s.MemPeakKiB+1023)/1024)

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -73,6 +74,41 @@ func TestNeedsEntryMemOnlyKeepsDefault(t *testing.T) {
 func TestNeedsWorkerSuffix(t *testing.T) {
 	lookup, _ := lookupOf(t, "[needs.\"x\"]\ncpu = 3\n")
 	wantNeed(t, []string{"--label", "x@10", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 3, Max: 3}})
+}
+
+// A per-worker entry sizes the request: tokens are c per worker, and the run keeps c and the
+// width for {n}. An explicit --need cpu wins and leaves both zero. Mutation: take the width as
+// the token count → cpu 8..8, red; set c under --need → c 0.4, red.
+func TestNeedsPerWorkerEntrySizesRequest(t *testing.T) {
+	saved := machineCPUs
+	t.Cleanup(func() { machineCPUs = saved })
+	machineCPUs = func() (int, error) { return 64, nil }
+	lookup, _ := lookupOf(t, "[needs.\"x\"]\ncpu_per_worker = 0.4\n")
+	o := wantNeed(t, []string{"--label", "x@8", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 4, Max: 4}})
+	if o.cpuPerWorker != 0.4 || o.workers != (spec.Range{Min: 8, Max: 8}) {
+		t.Errorf("cpuPerWorker %v, workers %v; want 0.4 and 8..8", o.cpuPerWorker, o.workers)
+	}
+	o = wantNeed(t, []string{"--label", "x", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 1, Max: 26}})
+	if o.cpuPerWorker != 0.4 || o.workers != (spec.Range{Min: 1, Max: 64}) {
+		t.Errorf("no @K: cpuPerWorker %v, workers %v; want 0.4 and 1..64", o.cpuPerWorker, o.workers)
+	}
+	o = wantNeed(t, []string{"--label", "x@8", "--need", "cpu=3", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 3, Max: 3}})
+	if o.cpuPerWorker != 0 || o.workers != (spec.Range{}) {
+		t.Errorf("--need cpu: cpuPerWorker %v, workers %v; want zero", o.cpuPerWorker, o.workers)
+	}
+}
+
+// A per-worker entry without a width, on a machine whose CPU count is unknown, gets the default
+// width as defaultNeed does. Mutation: pass the failed count (0) on → workers 1..1, red.
+func TestNeedsPerWorkerUnknownCPUCount(t *testing.T) {
+	saved := machineCPUs
+	t.Cleanup(func() { machineCPUs = saved })
+	machineCPUs = func() (int, error) { return 0, errors.New("no count") }
+	lookup, _ := lookupOf(t, "[needs.\"x\"]\ncpu_per_worker = 0.5\n")
+	o := wantNeed(t, []string{"--label", "x", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 1, Max: 8}})
+	if o.workers != (spec.Range{Min: 1, Max: spec.DefaultMax}) {
+		t.Errorf("workers %v, want 1..%d", o.workers, spec.DefaultMax)
+	}
 }
 
 // An unlabelled run never reads the needs file. Mutation: drop the label check → red.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
@@ -87,7 +88,7 @@ type child struct {
 // under the run, I1) has written nothing into the directory: the run says so and appends no
 // run-log line, and still returns the command's status.
 func (r *run) runChild(c child) int {
-	argv := substitute(r.o.argv, c.grant, r.o.subst)
+	argv := substitute(r.o.argv, c.grant, r.o.subst, r.o.cpuPerWorker, r.o.workers)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
 	cmd.Env = c.env
@@ -136,6 +137,11 @@ func (r *run) runChild(c child) int {
 		Nested: c.nested,
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	if g, ok := c.grant["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {
+		rec.Workers = new(cpuPlaceholder(g, r.o.cpuPerWorker, r.o.workers))
+	} else if k := needs.WorkersFromLabel(r.o.label); k > 0 {
+		rec.Workers = &k
+	}
 	setMemPeak(&rec, peakKiB, peakAfterS, sampled)
 	if r.freeWait != nil {
 		free := r.freeWait.total().Seconds()

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -31,6 +32,12 @@ type runOptions struct {
 	subst       bool
 	refusalCode int
 	argv        []string
+
+	// cpuPerWorker and workers are the label's cpu_per_worker and the worker width its entry
+	// gave the cpu request; both are zero when cpu came from --need, from an entry without
+	// cpu_per_worker, or from no entry.
+	cpuPerWorker float64
+	workers      spec.Range
 }
 
 const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D]
@@ -136,11 +143,23 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	}
 	withEntry := maps.Clone(need)
 	var setAside func(error)
+	var perWorker float64
+	var workers spec.Range
 	if o.label != "" && lookup != nil {
 		if e, ok, ignore := lookup(o.label); ok {
 			setAside = ignore
-			if _, given := need["cpu"]; !given && e.CPU != nil {
-				withEntry["cpu"] = *e.CPU
+			if _, given := need["cpu"]; !given {
+				switch {
+				case e.CPUPerWorker > 0:
+					cpus, err := machineCPUs()
+					if err != nil || cpus <= 0 {
+						cpus = spec.DefaultMax // as defaultNeed does when the count is unknown
+					}
+					withEntry["cpu"], workers = e.Request(needs.WorkersFromLabel(o.label), cpus)
+					perWorker = e.CPUPerWorker
+				case e.CPU != nil:
+					withEntry["cpu"] = *e.CPU
+				}
 			}
 			if _, given := need["mem"]; !given && e.MemMiB > 0 {
 				t := spec.MemTokensCeil(e.MemMiB)
@@ -153,12 +172,14 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 		if bare, berr := o.validRequest(need, len(needArgs) > 0); berr == nil {
 			setAside(err)
 			req, err = bare, nil
+			perWorker, workers = 0, spec.Range{}
 		}
 	}
 	if err != nil {
 		return o, err
 	}
 	o.need = req.Need
+	o.cpuPerWorker, o.workers = perWorker, workers
 	switch {
 	case o.onTimeout != "fail" && o.onTimeout != "run":
 		return o, usagef("--on-timeout %q: want run or fail", o.onTimeout)

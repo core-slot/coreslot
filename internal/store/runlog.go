@@ -54,6 +54,9 @@ type RunRecord struct {
 	MemPeakSource string
 	PeakAfterS    *float64
 	WaitedFreeS   *float64
+	// Workers is the command's worker count: the value its cpu placeholder took, or the label's
+	// @K. It is nil when the command had neither, and is then not encoded.
+	Workers *int
 }
 
 type runJSON struct {
@@ -72,6 +75,7 @@ type runJSON struct {
 	MemPeakSource       string            `json:"mem_peak_source,omitempty"`
 	PeakAfterS          *float64          `json:"peak_after_s,omitempty"`
 	WaitedFreeS         *float64          `json:"waited_free_s,omitempty"`
+	Workers             *int              `json:"workers,omitempty"`
 	Exit                int               `json:"exit"`
 	Load1               float64           `json:"load1"`
 	FailOpen            string            `json:"fail_open"`
@@ -87,7 +91,8 @@ func (r RunRecord) wire() runJSON {
 		Clamped: r.Clamped, UnbudgetedResources: r.UnbudgetedResources, WaitedS: r.WaitedS,
 		RanS: r.RanS, CPUUserS: r.CPUUserS, CPUSysS: r.CPUSysS, MaxRSSKiB: r.MaxRSSKiB,
 		MemPeakKiB: r.MemPeakKiB, MemPeakSource: r.MemPeakSource, PeakAfterS: r.PeakAfterS,
-		WaitedFreeS: r.WaitedFreeS, Exit: r.Exit, Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
+		WaitedFreeS: r.WaitedFreeS, Workers: r.Workers, Exit: r.Exit, Load1: r.Load1, FailOpen: r.FailOpen,
+		Nested: r.Nested}
 	if j.Grant == nil {
 		j.Grant = map[string]int{}
 	}
@@ -110,7 +115,8 @@ func (j runJSON) record() RunRecord {
 		Clamped: j.Clamped, UnbudgetedResources: j.UnbudgetedResources, WaitedS: j.WaitedS,
 		RanS: j.RanS, CPUUserS: j.CPUUserS, CPUSysS: j.CPUSysS, MaxRSSKiB: j.MaxRSSKiB,
 		MemPeakKiB: j.MemPeakKiB, MemPeakSource: j.MemPeakSource, PeakAfterS: j.PeakAfterS,
-		WaitedFreeS: j.WaitedFreeS, Exit: j.Exit, Load1: j.Load1, FailOpen: j.FailOpen, Nested: j.Nested}
+		WaitedFreeS: j.WaitedFreeS, Workers: j.Workers, Exit: j.Exit, Load1: j.Load1, FailOpen: j.FailOpen,
+		Nested: j.Nested}
 }
 
 // ReadRuns reads the run log, the rotated generation (log/runs.1.jsonl) first and then
