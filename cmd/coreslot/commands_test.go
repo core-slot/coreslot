@@ -215,11 +215,11 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("holds = %v", holds)
 	}
 	h := holds[0].(map[string]any)
-	const holdKeys = "adopted clamped grant held_for_s label name pid start_ns unbudgeted unbudgeted_resources"
+	const holdKeys = "adopted clamped grant held_for_s label name owner_exited pid start_ns unbudgeted unbudgeted_resources"
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}
-	if h["label"] != "gate" || h["adopted"] != true || h["grant"].(map[string]any)["cpu"] != float64(3) || h["pid"] != float64(os.Getpid()) {
+	if h["label"] != "gate" || h["adopted"] != true || h["owner_exited"] != false || h["grant"].(map[string]any)["cpu"] != float64(3) || h["pid"] != float64(os.Getpid()) {
 		t.Errorf("hold = %v", h)
 	}
 

@@ -260,6 +260,12 @@ func doctorReport(loc location, io IO) int {
 		if n := len(rep.DeadHolds); n > 0 {
 			line("note: %d dead %s awaiting reconciliation", n, plural(int64(n), "hold", "holds"))
 		}
+		for _, h := range rep.Holds {
+			if h.OwnerExited { // a designed state, not a problem: the command keeps its inherited grant
+				line("note: a hold whose owner exited is held by a descendant (%s, pid %d); its tokens free when that process exits",
+					labelText(h.Label), h.PID)
+			}
+		}
 		if ignored := ignoredText(rep.Ignored); ignored != "" {
 			line("note: ignored entries (malformed or stray, never trusted or removed): %s", ignored)
 		}

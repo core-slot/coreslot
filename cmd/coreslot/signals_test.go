@@ -626,6 +626,35 @@ func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
 	}
 }
 
+// A caller that SIGKILLs coreslot's group without --same-group leaves the command running in its
+// own group, holding the grant's inherited descriptors: status shows the hold as owned by an
+// exited process and held by a descendant, and doctor notes it without counting a problem.
+func TestOwnerExitedHoldHeldByDescendant(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	cmd, _, gc := sameGroupTree(t, dir, false, &syscall.SysProcAttr{Setsid: true})
+	if err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if procState(t, gc) == "" {
+		t.Fatal("the grandchild died with coreslot's group")
+	}
+	const marker = "  owner exited, held by a descendant"
+	if out := cli(t, baseEnv(dir), "status").stdout; !strings.Contains(out, fmt.Sprintf("pid %d  cpu 2  held ", cmd.Process.Pid)) ||
+		!strings.Contains(out, marker+"\n") {
+		t.Errorf("status lacks the hold of pid %d with %q:\n%s", cmd.Process.Pid, marker, out)
+	}
+	holds := statusDoc(t, dir, 0)["holds"].([]any)
+	if len(holds) != 1 || holds[0].(map[string]any)["owner_exited"] != true {
+		t.Errorf("status --json holds %v, want one with owner_exited true", holds)
+	}
+	r := cli(t, baseEnv(dir), "doctor")
+	want := fmt.Sprintf("\nnote: a hold whose owner exited is held by a descendant ((no label), pid %d); its tokens free when that process exits\n", cmd.Process.Pid)
+	if r.code != 0 || !strings.Contains(r.stdout, want) || !strings.Contains(r.stdout, "no problems found") {
+		t.Errorf("doctor exited %d, want 0 with %q and no problems:\n%s", r.code, strings.TrimSpace(want), r.stdout)
+	}
+}
+
 // SIGINT and SIGTERM sent to coreslot's pid alone, with a grandchild running. Without
 // --same-group the command has a group of its own and the signal reaches all of it: the shell and
 // the grandchild die, and coreslot exits 128+sig. With it the command shares coreslot's group, so
