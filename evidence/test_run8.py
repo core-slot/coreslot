@@ -137,16 +137,17 @@ class Treatment(unittest.TestCase):
     B = "bench:batch"
 
     def t(self, cell, arm, *lines, pri="expected"):
-        pri = run8.BATCH_PRI.get(arm) if pri == "expected" else pri
+        pri = {"KP": 31, "KPU": 20}.get(arm) if pri == "expected" else pri
         return run8.treatment(cell, arm, [dict(l) for l in lines], self.B, pri)
 
     def test_d_the_batch_gate_pri(self):
-        # mutations: KPU checked against KP's PRI (or the constant ignored) -> 20 refused, or 31
-        # passes -> red; a missing reading passes -> red; KPU outside the (b) rule -> red
-        self.assertEqual(run8.BATCH_PRI, {"KP": 31, "KPU": 20})
+        # mutations: KPU's bound on KP or exact values (decayed 14 in KPU, or 24 in KP, refused)
+        # -> red; `<` for `<=` -> 20 in KPU refused -> red; a missing reading passes -> red; KPU
+        # outside the (b) rule -> red
+        self.assertEqual((run8.BATCH_PRI, run8.UTILITY_PRI), (("KP", "KPU"), 20))
         auto = {"label": self.B, "preemptible": "auto: median 14m >= 10m, cpu 12 >= 7"}
-        for arm, pri, n in (("KPU", 20, 0), ("KPU", 31, 1), ("KP", 31, 0), ("KP", 20, 1),
-                            ("KPU", None, 1)):
+        for arm, pri, n in (("KPU", 20, 0), ("KPU", 14, 0), ("KPU", 21, 1), ("KP", 31, 0),
+                            ("KP", 24, 0), ("KP", 20, 1), ("KPU", None, 1), ("KP", None, 1)):
             self.assertEqual(len(self.t("batch", arm, auto, pri=pri)), n, (arm, pri))
         self.assertEqual(self.t("batch", "KPU", {"label": "bench:c-unit"}),
                          ["no run-log line of the batch label"])
@@ -413,6 +414,21 @@ class RunSet8(unittest.TestCase):
         self.assertEqual([g["cpu_s"] for g in rec["gates"]], [0.5] * 3)
         rec = self.run_set("F")
         self.assertEqual((rec["therm_start"], rec["therm_end"]), (None, None))
+
+    def test_batch_pri_reads_threads_below_coreslot(self):
+        # mutations: coreslot's own process read (its 31 wins in KPU) -> red; min for max -> red;
+        # the "T" suffix not stripped -> no reading -> red
+        out = "USER PID TT %CPU STAT PRI STIME UTIME COMMAND\nm 11 ?? 9.0 R 20T 0:01 0:09 zstd 20T\n" \
+              "  11  8.0 R 18T 0:01 0:08 18T\n"
+        live = [mock.Mock(pid=10, args=["c", "run", "--label", "bench:batch", "--", "x"])]
+        seen = []
+        with mock.patch.object(run4, "_live", live), \
+                mock.patch.object(run7, "ps_snapshot", lambda: {}), \
+                mock.patch.object(run7, "descendants", lambda snap, pid: [11] if pid == 10 else []), \
+                mock.patch.object(run8.subprocess, "run", lambda argv, **kw: seen.append(argv) or
+                                  subprocess.CompletedProcess(argv, 0, out, "")):
+            self.assertEqual(run8.batch_pri("bench:batch"), 20)
+        self.assertEqual(seen, [["ps", "-M", "-o", "pri=", "-p", "11"]])
 
     def test_kpu_argv_and_batch_pri(self):
         # mutations: taskpolicy on KP's batch gate, on KPU's behind gate, or outside coreslot

@@ -29,8 +29,10 @@ The arms: K runs every gate under coreslot with cpu = "140%", mem = "60%" and OU
 the same, the batch label preemptible by coreslot's automatic rule on its learned entry; KPU is KP
 with the batch gate's command run as `TASKPOLICY <argv>` inside `coreslot run`, v0.3.1's darwin
 treatment on v0.3.0 (whose nice 10 leaves macOS's PRI at 31); each KP and KPU set records
-"batch_pri", the lowest `ps -o pri=` over the batch gate's process tree BATCH_PRI_AT_S after t0
-(None without a reading), and the treatment check wants BATCH_PRI[arm]. The batch
+"batch_pri", the highest thread PRI (`ps -M`) over the batch command's processes, coreslot's own
+left out, BATCH_PRI_AT_S after t0 (None without a reading), and the treatment check wants it at
+most UTILITY_PRI in KPU (the utility class caps every thread there; load only lowers a PRI) and
+above it in KP. The batch
 cell's K the same with `preemptible = false` inserted into the batch label's entry (k_needs). S1,
 S2 and S3 hold each heavy gate on one of 1, 2 or 3 slots of an in-process counting semaphore, the
 light gates free; F runs every gate when its agent reaches it. P submits each heavy gate as one
@@ -156,7 +158,8 @@ CELLS = {"trace-quiet": ("trace", "quiet", ("K", "S1", "S2", "S3", "F")),
          "batch": ("batch", "quiet", ("KP", "KPU", "K", "S1", "F"))}
 PRE = {"H-PRE": "KP", "H-PRE-U": "KPU"}  # each preemptive treatment's family
 TASKPOLICY = ("/usr/sbin/taskpolicy", "-c", "utility", "--")
-BATCH_PRI = {"KP": 31, "KPU": 20}  # macOS's PRI under nice 10 (unchanged) and under taskpolicy
+BATCH_PRI = ("KP", "KPU")  # the arms whose batch gate's PRI is read and checked
+UTILITY_PRI = 20  # macOS's PRI cap for the utility class; nice 10 leaves a thread at 31
 BATCH_PRI_AT_S = 30
 PHASES = ("probe", "pilot", "main")
 RECORDS = tuple(f"{p}-*.jsonl" for p in PHASES)
@@ -344,7 +347,8 @@ def treatment(cell, arm, runlog, batch_label, batch_pri=None):
     """The problems with a set's treatment, from its run-log lines: (a) a preemptible key on any
     label but the batch label; (b) one on the batch label in any arm but KP and KPU; (c) in the
     batch cell's KP or KPU, no batch-label line, one whose preemptible reason is not the
-    automatic rule's ("auto: ..."), or a batch_pri other than BATCH_PRI[arm]."""
+    automatic rule's ("auto: ..."), or a batch_pri above UTILITY_PRI in KPU, or not above it
+    in KP (or no reading)."""
     problems = []
     for line in runlog:
         if "preemptible" not in line:
@@ -359,21 +363,24 @@ def treatment(cell, arm, runlog, batch_label, batch_pri=None):
             problems.append("no run-log line of the batch label")
         problems += [f"the batch label's preemptible reason is {l.get('preemptible')!r}"
                      for l in mine if not str(l.get("preemptible") or "").startswith("auto: ")]
-        if batch_pri != BATCH_PRI[arm]:
-            problems.append(f"the batch gate's PRI is {batch_pri}, not {BATCH_PRI[arm]}")
+        if batch_pri is None or (batch_pri <= UTILITY_PRI) != (arm == "KPU"):
+            problems.append(f"the batch gate's PRI is {batch_pri} in {arm}")
     return problems
 
 
 def batch_pri(label):
-    """The lowest `ps -o pri=` over the process tree of each live gate run with label; None
-    without a reading."""
+    """The highest thread PRI (`ps -M -o pri=`: every row ends in it, e.g. "31T") over the
+    descendants of each live gate run with label, the `coreslot run` process itself left out;
+    None without a reading."""
     with run4._live_lock:
         pids = [p.pid for p in run4._live if label in (p.args or ())]
-    tree = [d for p in pids for d in [p, *run7.descendants(run7.ps_snapshot(), p)]]
-    r = subprocess.run(["ps", "-o", "pri=", "-p", ",".join(map(str, tree))],
+    snap = run7.ps_snapshot()
+    tree = [d for p in pids for d in run7.descendants(snap, p)]
+    r = subprocess.run(["ps", "-M", "-o", "pri=", "-p", ",".join(map(str, tree))],
                        capture_output=True, text=True) if tree else None
-    pris = [int(x) for x in r.stdout.split() if x.isdigit()] if r else []
-    return min(pris, default=None)
+    pris = [int(m.group(1)) for line in (r.stdout.splitlines() if r else [])
+            if (m := re.match(r"(\d+)[A-Z]*$", (line.split() or [""])[-1]))]
+    return max(pris, default=None)
 
 
 def k_needs(text, label):
