@@ -925,8 +925,9 @@ Inside the section the head:
    and waits. A ticket the head has never observed, such as one published after its election,
    counts as live.
 
-   A waiter that entered the section to pass under section 10.3's rule takes these steps as the
-   head does, except that at the re-election, instead of leaving when a live ticket is ahead, it
+   A waiter that entered the section to pass under section 10.3's rule, and a head whose
+   re-election finds a live ticket ahead (one published since its election), take these steps as
+   the head does, except that at the re-election, instead of leaving when a live ticket is ahead, it
    checks on the fresh listing that its own ticket is in the front window, reads the `need` of
    every ticket ahead that counts, and leaves and waits if its ticket is not in the window or if
    any entry ahead makes it not pass (section 10.3). Otherwise it reduces each resource's `free`

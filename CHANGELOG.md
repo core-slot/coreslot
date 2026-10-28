@@ -11,8 +11,8 @@ All notable changes to this project are recorded here. The format follows
 ## [0.3.0] - 2026-10-28
 
 A command's worker count is no longer its cpu reservation, long batch runs give way to the rest,
-a run no longer waits behind a head short of a resource it does not ask for, and orphaned commands
-stop holding the budget. The on-disk protocol stays at format 1.
+a run near the front of the queue no longer waits behind a head short of a resource it does not
+ask for, and orphaned commands stop holding the budget. The on-disk protocol stays at format 1.
 
 ### Upgrading to v0.3.0
 

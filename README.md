@@ -221,8 +221,9 @@ parallelism stops paying, which you find by measuring. `cpu=4..` means `4..16` a
 `1..8`; a `max` above the budget simply takes at most the budget.
 
 Keep `min` small. A request waits until `min` tokens are free at once, and while it waits at the
-head of the queue nobody behind it is admitted
-([`PROTOCOL.md` section 12.1](PROTOCOL.md#121-steps), step 5), so tokens freed in the meantime
+head of the queue nobody behind it is admitted on the resources it waits for
+([`PROTOCOL.md` section 12.1](PROTOCOL.md#121-steps), step 5; a run among the first 4 may pass it
+only within what every minimum ahead leaves free, section 10.3), so tokens freed in the meantime
 stay idle until `min` of them have accumulated. On 8 tokens, a queue of five requests of fixed
 sizes 1, 8, 1, 8, 1 runs one after another, with 7 tokens idle during every 1-token run. With the
 8-token requests written `4..8`, the first starts at once with 7 beside the 1-token run, and
