@@ -419,34 +419,33 @@ pinned = true       # the user's entry: never rewritten from measurements
 evidence = "5 runs 2026-10-20..21: max 3.4 cores, 0 of 5 saturated, peak 2.7 GiB (footprint) at 22s"
 
 [needs."gate:pytest"]
-cpu_per_worker = 0.3  # cores per worker: the cpu need scales with the worker count
-cpu = "2..10"         # with cpu_per_worker, the worker width, not a token count
+cpu_per_worker = 0.3  # cpu tokens per worker; then cpu, if present, is the worker width
+cpu = "2..10"         # the worker width, not a token count
 preemptible = false   # not demoted by the automatic rule; absent, the rule decides
 
 [needs."gate:docker"]
 cpu = "8"
 mem = "6G"
-observed = false      # its work runs outside the run's process tree: never learned from the log
+observed = false      # the label's work runs outside its process tree; default true
 ```
 
 Each key of `[needs]` is a label without a final worker count: a label ending in `@` followed by
 digits or by `-` (`gate:unit@12`, `gate:unit@-`) finds the entry of what precedes the `@`, and a
 label that is empty without it finds none. A key the reader does not know is ignored.
 
-`cpu_per_worker`, a number above 0 (any other value is an entry that cannot be read), says the
-label's cpu need is per worker, `c` cores each. When the label ends in `@` followed by digits, those
-digits are the worker count `K` its caller gives, and a client that reads the entry requests
-`max(1, ⌈c × K⌉)` cpu tokens as a fixed range. Otherwise the entry's `cpu`, when present, is the
-worker width `"a..b"` rather than a token count (`"N"` is `N..N`), and absent it is `1..` the
-machine's CPU count (section 5.2); the client requests `max(1, ⌈c × a⌉)..max(1, ⌈c × b⌉)` tokens
-and, granted `g`, runs `min(b, max(a, ⌊g / c⌋))` workers. A `cpu` need the caller names wins over
-the entry, as it does over a `cpu` key. The granted count of cpu tokens (`CORESLOT_GRANTED_CPU`,
-section 17) stays the token count; only the worker count is derived from it.
+`cpu_per_worker = c`, a number above 0 (any other value is an entry that cannot be read), says
+that each worker of the labelled command takes `c` cpu tokens. When the label carries a final
+worker count `@K` (digits; `@-` carries none), the request is `max(1, ⌈c × K⌉)` cpu tokens and a
+cpu placeholder (section 17) becomes K. Without `@K`, the entry's `cpu`, if present, is the worker
+width `a..b` (`"N"` is `N..N`; default `1..` the machine's CPU count, section 5.2); the request is
+`max(1, ⌈c × a⌉)..max(1, ⌈c × b⌉)` cpu tokens, at most 256 each, and a cpu placeholder becomes
+`min(b, max(a, ⌊G / c⌋))` for a cpu grant of G tokens. A cpu need given by the caller
+(`--need cpu=…`) wins over the entry, and a cpu placeholder is then the token count.
+`CORESLOT_GRANTED_CPU` (section 17) is always the token count.
 
-`observed`, a boolean, default `true`. `false` says the label's work runs outside the run's process
-tree (in a container, on another host), so the usage the run log records (section 20) is not its
-own: a client that learns entries from the run log never lowers the entry's `cpu` or `mem` from
-measurements, keeps the entry and says so in its `evidence`.
+`observed = false` says that the label's work runs outside its process tree (in a container or on
+another host), so a writer that learns entries from the run log (section 20) does not learn its
+`cpu`, `mem` or `cpu_per_worker`, and keeps the entry as written. Absent, it is `true`.
 
 `preemptible`, a boolean: `true` marks the label's runs preemptible, `false` keeps them from being
 made preemptible automatically, and when it is absent the client's automatic rule decides (the
@@ -475,14 +474,15 @@ A file that cannot be parsed is left as it is.
 > of at least 60 s averaged under 0.05 cores. The CLI sets
 > nice 10 on the command's process group right after starting it, fills `{n}` from the request
 > before it shrinks, so a `make -j{n}` keeps its width, and records the reason in the run log's
-> `preemptible` key. `coreslot suggest --write` writes `cpu`, `mem` and `evidence` from the run
-> log (section 20) and keeps pinned entries and every other key. For a `cpu_per_worker` entry it
-> writes `cpu_per_worker`, never `cpu`, learning cores per worker as the p90 of cores ÷ `workers`
-> over the window, rounded up to 0.05. It keeps an `observed = false` entry's weights. A label
-> whose runs of at least 60 s averaged under 0.05 cores may run its work outside its process tree:
-> `suggest` does not lower its weights and names `observed = false` in its evidence. Its `mem`
-> rests on the window's largest peak; when that run's cpu grant is above the `cpu` max it suggests,
-> the evidence names the grant.
+> `preemptible` key. `coreslot suggest --write` writes `cpu` (or `cpu_per_worker` for an entry
+> that has it, never both), `mem` and `evidence` from the run log (section 20) and keeps pinned
+> entries and every other key; it learns `cpu_per_worker` as the p90 of cores ÷ `workers` over the
+> window, rounded up to 0.05; it writes nothing for an entry with `observed = false`, and only
+> `evidence` for a label whose runs of at least 60 s averaged under 0.05 cores, a hint that names
+> `observed = false`. A range entry without `cpu_per_worker` whose unsaturated runs carry `workers`
+> is no longer narrowed: the suggestion keeps its max, and its evidence suggests `cpu_per_worker`.
+> Its suggested `mem` rests on the window's largest peak; when that run's cpu grant is above the
+> `cpu` max it suggests, the evidence names the grant.
 
 ## 6. Tokens and descriptor ownership
 
@@ -1258,7 +1258,7 @@ writes no line. The object carries:
 | `load1` | number | one-minute load average at start |
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
-| `workers` | integer | optional; the worker count, when the writer knows it (below) |
+| `workers` | integer | optional; the command's worker count: the value a cpu placeholder took (section 17), else the label's final `@K`; absent when the command had neither |
 | `preemptible` | string | optional; present only for a preemptible run (section 5.4): the reason it is one (below) |
 
 The usage keys `cpu_user_s`, `cpu_sys_s` and `max_rss_kib` are OPTIONAL. A writer MUST omit a key
@@ -1289,8 +1289,8 @@ was at least its `mem` need, read at most once per second. It informs; no admiss
 `need` and `grant` stay in tokens, `mem`'s included.
 
 The keys `workers` and `preemptible` are OPTIONAL too, under the same rule. `workers` is the
-worker count the run's command was given: the label's final `@` digits (section 5.4), or the value
-the writer substituted for a cpu placeholder (section 17). `preemptible` gives the reason a
+worker count the run's command was given: the value the writer substituted for a cpu placeholder
+(section 17), else the label's final `@K` (section 5.4). `preemptible` gives the reason a
 preemptible run is one: `entry` for the needs file's key, `flag` for a mark on the command line, or
 the automatic rule's own text, such as `auto: median 14m >= 10m, cpu 12 >= 7`. For a preemptible
 run `need` is the request before it was cut to one cpu token, and `grant` what was granted, so
