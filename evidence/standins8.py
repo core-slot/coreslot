@@ -70,7 +70,8 @@ def measure(a):
     done = {(r["gate"], r["run"]) for r in load(path) if "gate" in r}
     record(path, {"kind": "quiet", "time_ns": time.time_ns(), "uptime": sh("uptime"),
                   "swapusage": sh("sysctl", "vm.swapusage"),
-                  "pgrep": sh("pgrep", "-lf", "go test|go build|pytest|zstd|mutmut|vitest|npm (run|test)|coreslot run")})
+                  "pgrep": sh("pgrep", "-lf", "go test|go build|pytest|zstd|mutmut|vitest|npm (run|test)|coreslot run|"
+                                     r"Virtualization\.VirtualMachine|com\.docker\.backend")})
     state = os.path.join(a.out, f"state-{time.time_ns()}")
     os.makedirs(state, mode=0o700)
     runlog = os.path.join(state, "log", "runs.jsonl")
