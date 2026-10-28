@@ -435,11 +435,13 @@ label that is empty without it finds none. A key the reader does not know is ign
 
 `cpu_per_worker = c`, a number above 0 (any other value is an entry that cannot be read), says
 that each worker of the labelled command takes `c` cpu tokens. When the label carries a final
-worker count `@K` (digits; `@-` carries none), the request is `max(1, ⌈c × K⌉)` cpu tokens and a
-cpu placeholder (section 17) becomes K. Without `@K`, the entry's `cpu`, if present, is the worker
-width `a..b` (`"N"` is `N..N`; default `1..` the machine's CPU count, section 5.2); the request is
-`max(1, ⌈c × a⌉)..max(1, ⌈c × b⌉)` cpu tokens, at most 256 each, and a cpu placeholder becomes
-`min(b, max(a, ⌊G / c⌋))` for a cpu grant of G tokens. A cpu need given by the caller
+worker count `@K` (digits; `@-` carries none), the worker width `a..b` is `K..K` and the request
+is `max(1, ⌈c × K⌉)` cpu tokens. Without `@K`, the entry's `cpu`, if present, is the worker width
+`a..b` (`"N"` is `N..N`; default `1..` the machine's CPU count, section 5.2); the request is
+`max(1, ⌈c × a⌉)..max(1, ⌈c × b⌉)` cpu tokens, at most 256 each. A cpu placeholder (section 17)
+becomes `max(1, min(b, ⌊G / c⌋))` for a cpu grant of G tokens: K, or the width's workers the grant
+pays for, and fewer than `a` only when the grant was clamped (section 12.2) or narrowed to a parent's
+(section 18). A cpu need given by the caller
 (`--need cpu=…`) wins over the entry, and a cpu placeholder is then the token count.
 `CORESLOT_GRANTED_CPU` (section 17) is always the token count.
 
@@ -456,7 +458,9 @@ rule (the implementation note below); `preemptible = false` opts the label out o
 run keeps its full `mem`: its cpu is not reserved, and its memory stays budgeted. This changes only
 how the client sizes its request and starts its command. The ticket and the hold carry the shrunk
 request (`cpu` `1..1`) and the one token granted, nothing is lent, rewritten or acquired again, and
-invariants I1 to I7 (section 3) hold as for any request.
+invariants I1 to I7 (section 3) hold as for any request. The mark applies only to a request that
+queues for admission: a run that passes through on a parent's grant (section 18), runs at once
+outside the budget, or fails open runs as an unmarked one would.
 
 A writer replaces the file whole under `flock(LOCK_EX)` on `needs.toml.lock` beside the file it
 replaces (the file a symbolic link names, so that every link shares one lock): it writes a
@@ -474,8 +478,9 @@ A file that cannot be parsed is left as it is.
 > not in terminal mode) when its cpu max is at least half the cpu size (`⌈size / 2⌉`) and its label
 > has at least 5 counted runs, across both run-log generations, with a median `ran_s` of at least
 > 600 s. The size is checked first, so the run log is read only for large requests. A label whose
-> runs of at least 60 s averaged under 0.05 cores is excluded. On a label's first demotion the CLI
-> prints one line about runs with wall-clock deadlines and `preemptible = false`. The CLI sets
+> runs of at least 60 s averaged under 0.05 cores is excluded, and so is an entry that says
+> `observed = false`. On a label's first demotion the CLI prints one line about runs with
+> wall-clock deadlines and `preemptible = false`. The CLI sets
 > nice 10 on the command's process group right after starting it (in terminal mode, where the
 > group is the shell's job, and under `run --same-group`, where it is the CLI's own, on the
 > command's pid only), fills `{n}` from the request's cpu max, so
@@ -928,7 +933,7 @@ For each requested declared resource of size `s` with request `min..max`:
 budget is 9.5 GiB; running alone with 9.5 GiB`; against a live size of 96, section 5.2,
 `coreslot: mem: requested 20 GiB, more than the budget and free memory allow; running alone with
 12 GiB`), and its
-`{n}` is the clamped grant. A `mem` need
+`{n}` is the clamped grant (for a `cpu_per_worker` entry, the workers it pays for, section 5.4). A `mem` need
 above 32 GiB, the 256 tokens a range may name (section 7.3), reserves 32 GiB.
 
 ### 12.3 After the command exits
@@ -1199,6 +1204,10 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
 grant both run with 8. A parent that wants concurrent children partitions its grant itself.
 
+A preemptible parent (section 5.4) holds one cpu token, so a pass-through under it runs with one
+cpu token and a cpu placeholder of 1, whatever its request; the parent's own placeholders keep its
+request's width.
+
 > **Implementation note.** The Go library applies these rules to `Client.Enqueue`, with
 > `Options.Independent` as its `--independent`: rules 1 and 2 admit the request at once, and a
 > context that does not validate is a refusal (`ErrRefused`). `Adopt` never passes through. The
@@ -1337,7 +1346,7 @@ any numbering conforms (section 7.1).
 
 The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
 [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
-[--no-wait] [--strict] [--independent] [--light] [--subst] [--refusal-code N]
+[--no-wait] [--strict] [--independent] [--same-group] [--light] [--subst] [--refusal-code N]
 [--preemptible[=false]] -- COMMAND...`. `RES=N` means `N..N`, `RES=MIN..` means
 `MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage error, and every form keeps
 the bounds of section 7.3. With no `--need` the request is `cpu=1..1` unless COMMAND carries a

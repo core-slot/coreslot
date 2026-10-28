@@ -189,7 +189,9 @@ whole machine only when nothing else wants it. Its cpu is not reserved, so it ov
 design and pays in time only: mark batch work, not tests with timers, network or a database. `{n}`
 keeps the width of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the
 real grant, 1, and the run log records the request as `need`, the grant, and a `preemptible` key
-with the reason (`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold.
+with the reason (`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold. A run
+that does not queue (inside another run's grant, `--light`, or outside an unusable budget) ignores
+the mark.
 
 A run that nothing marked becomes preemptible by itself when it queues for admission (not
 `--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
@@ -198,14 +200,15 @@ median of 10 minutes or more, in both generations of the run log. No history, no
 label whose runs of a minute or more averaged under 0.05 cores is left alone, since its work looks
 to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
 that runs with wall-clock deadlines can fail when demoted; `preemptible = false` in the entry opts
-out.
+out. An entry that says `observed = false` is never demoted by itself either.
 
-Three limits. In terminal mode the group is the shell's job, so only the command's own process is
+Four limits. In terminal mode the group is the shell's job, so only the command's own process is
 lowered, and processes it forked before that are missed. On Linux, nice compares processes only
 within one autogroup (one session, on by default) or cpu cgroup, so the demotion reaches another
 session's work only where autogroup is off. And a command whose work runs outside its process
 tree, such as a Docker container, has nothing in that tree to lower, and the mark frees tokens
-that work still uses.
+that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested inside
+its command gets 1 cpu and `{n}` = 1; `preemptible = false` on the outer label avoids it.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
 budget that admits `a` and makes `b` wait leaves `a` blocked on the full pipe until `b` reads it:
@@ -269,8 +272,9 @@ mem = "3G"
 
 With `@K` in the label (`gate:unit@12`) the request is `ceil(c × K)` tokens, here 5, and `{n}` is
 `K`. Without it, `cpu` is the worker width `a..b`: the request is `ceil(c × a)..ceil(c × b)`
-tokens, here 2 to 9, and `{n}` is `min(b, max(a, floor(grant / c)))`, the workers the grant pays
-for. A `--need cpu=…` on the command line wins over the entry, and `{n}` is then the token count.
+tokens, here 2 to 9, and `{n}` is `max(1, min(b, floor(grant / c)))`, the workers the grant pays
+for, which is below `a` (or `K`) only when the budget clamped the request or a parent run holds
+less. A `--need cpu=…` on the command line wins over the entry, and `{n}` is then the token count.
 `CORESLOT_GRANTED_CPU` stays the token count either way, so a script that read it as a worker
 count should read `{n}` instead.
 
