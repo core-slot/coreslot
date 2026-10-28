@@ -31,7 +31,8 @@ func longRuns(label string, minutes float64, n int) []store.RunRecord {
 // never opens the run log. Mutations: test the history before the size → the "max 6" row opens the
 // log, red; count 4 runs → the 4-run row red; compare the median with 540 s → the 9-minute row
 // red; take the mean or the minimum for the median → the skewed row red; drop the unobserved test, the terminal test or the mark test → their rows red; count
-// pass-through runs → the "pass-through" row red.
+// pass-through runs → the "pass-through" row red; drop the entry's observed = false test → the
+// check after the rows red.
 func TestAutoPreemptible(t *testing.T) {
 	long := longRuns("x", 14, 5)
 	unobserved := longRuns("x", 14, 5)
@@ -80,6 +81,12 @@ func TestAutoPreemptible(t *testing.T) {
 		if got != c.want || opened != c.wantOpen {
 			t.Errorf("%s: reason %q, run log read %v; want %q and %v", c.name, got, opened, c.want, c.wantOpen)
 		}
+	}
+	// An entry that says observed = false is left alone, before the run log is read, although its
+	// request and history would qualify.
+	if got, _ := autoPreemptible(runOptions{label: "x", unobserved: true, need: map[string]spec.Range{"cpu": {Min: 1, Max: 12}}}, false, 14,
+		func() ([]store.RunRecord, error) { t.Error("observed = false: the run log was read"); return long, nil }); got != "" {
+		t.Errorf("observed = false: reason %q, want none", got)
 	}
 	// A request that names no cpu has nothing to shrink.
 	if got, _ := autoPreemptible(runOptions{label: "x", need: map[string]spec.Range{"mem": {Min: 4, Max: 4}}}, false, 14,

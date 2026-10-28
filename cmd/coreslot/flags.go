@@ -42,6 +42,7 @@ type runOptions struct {
 	// cpu_per_worker, or from no entry.
 	cpuPerWorker float64
 	workers      spec.Range
+	unobserved   bool // the label's entry says observed = false: its work runs outside the process tree
 }
 
 const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D]
@@ -166,6 +167,7 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	var setAside func(error)
 	var perWorker float64
 	var workers spec.Range
+	var unobserved bool
 	if o.label != "" && lookup != nil {
 		if e, ok, ignore := lookup(o.label); ok {
 			setAside = ignore
@@ -186,6 +188,7 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 				t := spec.MemTokensCeil(e.MemMiB)
 				withEntry["mem"] = spec.Range{Min: t, Max: t}
 			}
+			unobserved = !e.Observed
 			if o.preemptible == nil {
 				o.preemptible = e.Preemptible
 				if e.Preemptible != nil && *e.Preemptible {
@@ -199,14 +202,14 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 		if bare, berr := o.validRequest(need, len(needArgs) > 0); berr == nil {
 			setAside(err)
 			req, err = bare, nil
-			perWorker, workers = 0, spec.Range{}
+			perWorker, workers, unobserved = 0, spec.Range{}, false
 		}
 	}
 	if err != nil {
 		return o, err
 	}
 	o.need = req.Need
-	o.cpuPerWorker, o.workers = perWorker, workers
+	o.cpuPerWorker, o.workers, o.unobserved = perWorker, workers, unobserved
 	switch {
 	case o.onTimeout != "fail" && o.onTimeout != "run":
 		return o, usagef("--on-timeout %q: want run or fail", o.onTimeout)

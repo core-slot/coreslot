@@ -24,16 +24,16 @@ const deadlineHint = "Runs with wall-clock deadlines (test timeouts, latency ass
 	"dev-server compile windows, agent tool timeouts) can fail when demoted; set `preemptible = false` for them."
 
 // autoPreemptible is the automatic rule for a run that queues: o is preemptible when neither the
-// flag nor the entry said anything, it has a label, it is not in terminal mode, its cpu request's
-// max is at least half cpuSize (a small claim gains nothing from shrinking) and its label has the
-// history. The size is tested first, so read, which returns the run log, is called only for a
+// flag nor the entry said anything, its entry does not say observed = false (its run log cannot
+// show the work), it has a label, it is not in terminal mode, its cpu request's max is at least
+// half cpuSize (a small claim gains nothing from shrinking) and its label has the history. The size is tested first, so read, which returns the run log, is called only for a
 // large request. reason is "" when the run is not demoted, else the text the record and status
 // show; first reports that no earlier record of the label has a preemptible reason. A run log
 // that cannot be read demotes nothing.
 func autoPreemptible(o runOptions, terminal bool, cpuSize int, read func() ([]store.RunRecord, error)) (reason string, first bool) {
 	cpu, ok := o.need["cpu"]
 	half := (cpuSize + 1) / 2
-	if o.preemptible != nil || o.label == "" || terminal || !ok || cpuSize < 1 || cpu.Max < half {
+	if o.preemptible != nil || o.unobserved || o.label == "" || terminal || !ok || cpuSize < 1 || cpu.Max < half {
 		return "", false
 	}
 	all, err := read()
