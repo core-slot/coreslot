@@ -8,6 +8,14 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A Claude Code plugin, `integrations/claude-code`: a `PreToolUse` hook that refuses a bare heavy
+  test or build command once (`go test ./...`, `cargo test`, `pytest -n`, `make -j`, ...) and
+  offers the same command back as `coreslot run --label <label> -- <command>`. The repository is
+  its marketplace: `/plugin marketplace add core-slot/coreslot`, then
+  `/plugin install coreslot@coreslot`.
+
 ### Fixed
 
 - The automatic preemptible rule no longer keeps a label demoted on the strength of the runs its

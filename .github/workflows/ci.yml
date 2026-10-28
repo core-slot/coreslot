@@ -121,6 +121,10 @@ jobs:
         working-directory: conformance/pyclient
         run: python3 -m unittest
 
+      - name: Claude Code hook
+        working-directory: integrations/claude-code
+        run: python3 -m unittest
+
       - name: Fuzz targets (30 s each)
         # Fuzzing runs once, on ubuntu-24.04 with the latest Go; the other cells only run the seed corpus via go test.
         if: matrix.os == 'ubuntu-24.04' && matrix.go == 'stable'
