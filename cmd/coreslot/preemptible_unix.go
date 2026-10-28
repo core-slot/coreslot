@@ -13,7 +13,8 @@ import (
 )
 
 // Bounds of the automatic preemptible rule: a label is demoted when it has at least autoMinRuns
-// counted runs whose median ran_s is at least autoMedianS seconds.
+// counted runs whose median ran_s is at least autoMedianS seconds, a demoted run counting only
+// when it ran for less than autoMedianS.
 const (
 	autoMinRuns = 5
 	autoMedianS = 600
@@ -42,12 +43,21 @@ func autoPreemptible(o runOptions, terminal bool, cpuSize int, read func() ([]st
 		return "", false
 	}
 	runs := runstats.LabelRuns(all, o.label)
-	if len(runs) < autoMinRuns || runstats.Unobserved(runs) {
+	if runstats.Unobserved(runs) {
 		return "", false
 	}
-	ran := make([]float64, len(runs))
-	for i, r := range runs {
-		ran[i] = r.RanS
+	// A demotion only lengthens a run: a demoted run under the bound would have been under it
+	// undemoted too and counts, while one at or over it says nothing of its own length and is left
+	// out. Counting it would keep a label demoted by the runs its demotion lengthened; leaving out
+	// every demoted run would keep a label demoted that got faster.
+	var ran []float64
+	for _, r := range runs {
+		if r.Preemptible == "" || r.RanS < autoMedianS {
+			ran = append(ran, r.RanS)
+		}
+	}
+	if len(ran) < autoMinRuns {
+		return "", false
 	}
 	slices.Sort(ran)
 	median := (ran[(len(ran)-1)/2] + ran[len(ran)/2]) / 2

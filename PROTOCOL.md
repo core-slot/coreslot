@@ -480,9 +480,10 @@ A file that cannot be parsed is left as it is.
 > automatic rule demotes a run that queues for admission (not `--light`, not inside another grant,
 > not in terminal mode) when its cpu max is at least half the cpu size (`⌈size / 2⌉`) and its label
 > has at least 5 counted runs, across both run-log generations, with a median `ran_s` of at least
-> 600 s. The size is checked first, so the run log is read only for large requests. A label whose
-> runs of at least 60 s averaged under 0.05 cores is excluded, and so is an entry that says
-> `observed = false`. On a label's first demotion the CLI prints one line about runs with
+> 600 s; a run its record shows as preemptible counts only when its `ran_s` is under 600 s, since
+> the demotion may be what lengthened it. The size is checked first, so the run log is read only
+> for large requests. A label whose runs of at least 60 s averaged under 0.05 cores is excluded,
+> and so is an entry that says `observed = false`. On a label's first demotion the CLI prints one line about runs with
 > wall-clock deadlines and `preemptible = false`. The CLI sets
 > nice 10 on the command's process group right after starting it (in terminal mode, where the
 > group is the shell's job, and under `run --same-group`, where it is the CLI's own, on the

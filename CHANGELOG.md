@@ -8,6 +8,12 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The automatic preemptible rule no longer keeps a label demoted on the strength of the runs its
+  demotion lengthened: a demoted run counts toward the label's median only when it ran for under
+  10 minutes.
+
 ## [0.3.0] - 2026-10-28
 
 A command's worker count is no longer its cpu reservation, long batch runs give way to the rest,

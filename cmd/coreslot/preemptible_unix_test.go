@@ -121,7 +121,7 @@ func TestAutoPreemptible(t *testing.T) {
 // an auto reason → red.
 func TestAutoPreemptibleHintOnce(t *testing.T) {
 	o := runOptions{label: "x", need: map[string]spec.Range{"cpu": {Min: 1, Max: 12}}}
-	runs := longRuns("x", 14, 5)
+	runs := longRuns("x", 14, 6)
 	runs[2].Preemptible = "entry"
 	if reason, first := autoPreemptible(o, false, 14, func() ([]store.RunRecord, error) { return runs, nil }); reason == "" || first {
 		t.Errorf("after an earlier entry: reason %q, first %v; want a reason and not the first", reason, first)
