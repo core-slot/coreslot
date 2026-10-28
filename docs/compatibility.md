@@ -106,6 +106,13 @@ change with a format, so a format change never creates a second budget
 - the token files `res/<name>/<i>`, held by `flock(LOCK_EX)`, released by closing, and counted by
   probing their locks.
 
+A change to how the queue is served need not touch the metadata either. From `v0.3.0` a waiter
+among the first 4 tickets of the queue may be admitted ahead of live tickets when its request fits
+in what their minimums leave free ([`PROTOCOL.md` section 10.3](../PROTOCOL.md#103-waiting-and-election)).
+That adds no key, file, name or layout, since every ticket already carries its `need`, so it is no
+format change. An older client on the same machine conforms: it may see a newer waiter behind it
+admitted first, and such a waiter never takes what the older client's minimum needs.
+
 A client that finds a format it does not implement runs in **token-only** mode ([`PROTOCOL.md`
 section 15.2](../PROTOCOL.md#152-token-only-mode)): under `admit.lock` it takes the minimum of each
 declared resource if that many tokens are free, publishes nothing (no ticket, hold, log line or
