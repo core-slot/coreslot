@@ -940,7 +940,7 @@ class Summary8(unittest.TestCase):
 class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a stub run8.py
     SH = os.path.join(HERE, "overload", "run8.sh")
     ENV = {"STUB_BATT": "AC Power", "STUB_INDEX": "Indexing disabled.", "STUB_PGREP": "1 /bin/node -k=hunter2",
-           "STUB_UPDATE": "Automatic check is turned off"}
+           "STUB_UPDATE": "Automatic checking for updates is turned on", "STUB_DEFAULTS": "0"}
     CELLS = "trace-quiet trace-loaded heavy-quiet heavy-loaded wide-quiet batch".split()
 
     def setUp(self):
@@ -950,7 +950,7 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
         os.mkdir(self.out)
         listing = 'echo "PID Status Label"; echo "- 0 com.apple.x"; echo "- 0 com.example.agent"'
         for tool, body in {"pmset": "$STUB_BATT", "mdutil": "$STUB_INDEX", "softwareupdate": "$STUB_UPDATE",
-                           "pgrep": "$STUB_PGREP", "caffeinate": "", "launchctl": listing}.items():
+                           "defaults": "$STUB_DEFAULTS", "pgrep": "$STUB_PGREP", "caffeinate": "", "launchctl": listing}.items():
             body = body if body.startswith("echo") or not body else f'echo "{body}"'
             with open(os.path.join(self.tmp, tool), "w") as f:
                 f.write(f'#!/bin/sh\necho "{tool} $*" >> "$LOG"\n{body}\n')
@@ -977,16 +977,19 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
 
     def test_preflight(self):
         # mutations: no AC check, or it run after python -> red; the indexing or the update
-        # check dropped, or enforced on a dry run -> red; caffeinate without -w, or pgrep's full
-        # command lines logged, or the apple agents listed -> red
-        batt, off, on = {"STUB_BATT": "Battery Power"}, {"STUB_INDEX": "Indexing enabled."}, {"STUB_UPDATE": "turned on"}
+        # check dropped, the update check read from softwareupdate --schedule, or either enforced
+        # on a dry run -> red; caffeinate without -w, or pgrep's full command lines logged, or the
+        # apple agents listed -> red
+        batt, off, on = {"STUB_BATT": "Battery Power"}, {"STUB_INDEX": "Indexing enabled."}, {"STUB_DEFAULTS": "1"}
         for args, env, rc in (((), batt, 2), (("--dry",), batt, 2), (("learn",), off, 2), (("verdict",), on, 2),
+                              (("learn",), {"STUB_DEFAULTS": ""}, 2),
                               (("--dry", "verdict"), {**off, **on}, 0), (("preflight",), {}, 0), (("learn",), {}, 0)):
             code, err, py, _ = self.sh(*args, **env)
             self.assertEqual((code, bool(py), "run8: " in err), (rc, rc == 0 and args[-1] != "preflight", rc == 2), args)
         log = text(os.path.join(self.out, "preflight.log"))
         self.assertTrue("1 node" in log and "hunter2" not in log and "com.example.agent" in log
-                        and "com.apple.x" not in log and "Indexing enabled" in log, log)
+                        and "com.apple.x" not in log and "Indexing enabled" in log
+                        and "AutomaticCheckEnabled: 1; AutomaticDownload: 1" in log, log)
         self.assertIn("caffeinate -dimsu -w ", "\n".join(self.sh("preflight")[3]))
 
     def test_dispatch_and_default_paths(self):

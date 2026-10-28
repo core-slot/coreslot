@@ -7,7 +7,9 @@
 # caffeinate for its own life, refuses (exit 2) on battery power, and appends the Spotlight and
 # software-update settings, the background agents still running (names only), the date, uptime
 # and swap to OUT/preflight.log. A real run also refuses while Spotlight indexing is on or the
-# automatic update check is on; a dry run records them and goes on.
+# automatic update check is on (AutomaticCheckEnabled in /Library/Preferences/com.apple.SoftwareUpdate
+# is not 0; `softwareupdate --schedule` no longer reflects it and is recorded only); a dry run
+# records them and goes on.
 #
 # With no phase: preflight, learn while OUT/needs.sha256 is missing, then the pilot of every
 # cell power.json plans (`verdict pilot CELL 1 10`, the first with --primer; a cell it dropped
@@ -60,6 +62,9 @@ preflight() {
 	case $batt in *"AC Power"*) ;; *) refuse "the machine is not on AC power" ;; esac
 	index=$(mdutil -s / 2>&1 || true)
 	update=$(softwareupdate --schedule 2>&1 || true)
+	prefs=/Library/Preferences/com.apple.SoftwareUpdate
+	check=$(defaults read $prefs AutomaticCheckEnabled 2>&1 || true)
+	download=$(defaults read $prefs AutomaticDownload 2>&1 || true)
 	mkdir -p "$OUT"
 	{
 		date -u
@@ -68,6 +73,7 @@ preflight() {
 		echo "$batt"
 		echo "spotlight: $index"
 		echo "software update: $update"
+		echo "AutomaticCheckEnabled: $check; AutomaticDownload: $download"
 		echo "background agents:"
 		launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true
 		pgrep -lf 'go |pytest|node|docker|Code Helper|claude' |
@@ -75,7 +81,7 @@ preflight() {
 	} >>"$OUT/preflight.log"
 	[ -n "$dry" ] && return
 	case $index in *"Indexing disabled"*) ;; *) refuse "Spotlight indexing is on; mdutil -a -i off" ;; esac
-	case $update in *"turned off"*) ;; *) refuse "the automatic update check is on; softwareupdate --schedule off" ;; esac
+	[ "$check" = 0 ] || refuse "the automatic update check is on; sudo defaults write $prefs AutomaticCheckEnabled -bool false"
 }
 
 if [ $# -gt 0 ]; then
