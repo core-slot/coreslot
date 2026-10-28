@@ -2345,3 +2345,450 @@ reasons, all visible in run 7's records:
 A user would recognise both defects. This is an override of run 7's rule, not a result of it.
 Corrected on 2026-10-28 (the pairing partner, the mechanism, P's scope, this deviation); the first
 version is in the repository's history.
+
+## Acceptance run 8: coreslot keeps up with the best fixed slot count (`run8.py`)
+
+**Status: draft, not registered.** No value below binds anyone until the registration commit
+replaces every slot in place. `[PROBE: ...]` is filled from the exploratory probe, `[OPEN: ...]`
+is a choice the owner still has to make, and `[CODE: ...]` is a code change the registration needs
+before the freeze. Where the code on `main` and this text differ, this text is the intended
+registration and the slot names the gap. The analysis is `run8.py pilot-check` and
+`run8.py summary`. At the registration commit the code that defines the records, the metrics and
+the analysis is frozen: `run8.py`, `stats8.py`, `overload/run8.sh`, `overload/stand8.json` and
+the helpers they import (`run4.py`, `run6.py`, `run7.py`, `stats6.py`, `stats7.py`,
+`ballast.py`, `overload.py`, `acceptance.py`). None of them is changed after it.
+
+**Question.** On one 16 GiB laptop running a mix of test gates like the ones its owner's agents
+run, does coreslot v0.3.0 keep up with the best fixed slot count, where that count is chosen
+afterwards and per condition? And does a long batch run that coreslot demotes let short gates
+through?
+
+### The claim, as tested
+
+**The primary claim, an intersection-union test over the trace-derived cells only**
+(`PRIMARY`: trace-quiet, trace-loaded). In each cell, K's time to verdict is non-inferior to the
+best fixed count chosen in hindsight, at a margin of 3 % (`MARGIN` = ln 1.03). The primary is
+rejected only when every kept trace cell rejects.
+
+**Best in hindsight, exactly as the code computes it** (`legs`, `run6.lowest`): S\* is the arm of
+S1, S2 and S3 whose arithmetic mean of `mean_verdict_s` is lowest over the cell's analysed blocks.
+Those are the same blocks the test then uses, with no cross-fitting, and a tie goes to the earlier
+arm. Choosing S\* in-sample favours the comparator: comparators are changed in hindsight only
+against coreslot.
+
+**The secondary family (Holm at α = 0.05).** It is tested on its own, whatever the primary's
+outcome (`summary_main` computes it in every case):
+
+- **H-S1, H-S2, H-S3:** each fixed count is slower than K, or less safe than K, in at least one
+  kept non-batch cell in which it runs. The legs are, per cell, "slower" (ln(S/K) above 0, plain
+  one-sided paired t) and "less safe" (K's swap traffic below S's, Wilcoxon signed-rank). The
+  union's p is Bonferroni over the tested legs (`stats8.union_p`).
+- **H-SAFE-trace, H-SAFE-heavy:** under load (trace-loaded, heavy-loaded), K's swap traffic is
+  below S2's (Wilcoxon). Each one is a member only while its cell is kept.
+- **Heavy and wide enter the secondary only through these legs.** They get no K-vs-best-fixed
+  test of their own. Run 7 showed the heavy mix as coreslot's worst case: there a one-slot lock is
+  near-optimal.
+- An untested member counts in Holm's m with p = 1 and is never rejected.
+
+**H-PRE, its own family at α = 0.05, Holm over three legs**, on the batch cell's arms KP, K, S1
+and F. A new feature's first measurement does not decide the main claim, and the main claim does
+not hide that feature's failure.
+
+| Leg | Claim | Test |
+|---|---|---|
+| time | KP's short-gate time to verdict is below K's and below S1's, and non-inferior (3 %) to F's | intersection of three paired t tests (p is the largest) |
+| cost | the batch run's duration under KP is at most `[OPEN: cost margin; code default BATCH_COST_MARGIN = 0.25]` over K's | paired t of ln(batch_s KP/K) against ln(1 + margin) |
+| safety | KP's warn seconds and swap-out are not above K's, within a tolerance of 5 s (`SAFETY_WARN_MARGIN_S`) and 64 MiB (`SAFETY_SWAP_MARGIN_MIB`) per block | intersection of two paired t tests of KP − K against the tolerance |
+
+The tolerances are a registered choice, not something the data shows. 64 MiB is the swap event
+that run 7 counted. The cost margin is the price of yielding, and it is stated in advance. The
+blinded report (below) gives no KP/K ratio, so the margin cannot be read from the probe. In the
+time and cost legs, a KP set that coreslot failed takes its block's slowest value. Its safety
+stays as measured.
+
+**The treatment is checked, not assumed** (`treatment`). Every set reads its own run-log lines.
+A `preemptible` key on any label other than the batch label, a `preemptible` key on the batch
+label in any arm other than KP, or (in the batch cell's KP) a batch line that is missing or whose
+reason is not the automatic rule's (`auto: …`) makes the set invalid with `treatment`. A trace
+label demoted mid-run (its contended median crossing 600 s) is such a failure, declared now.
+Before registration, the probe's KP sets must show the treatment (`batch_treatment` in
+`power.json`): `[PROBE: shown or not]`.
+
+**P is descriptive.** It is GNU parallel with `--memsuspend 4.5G -j 4`, in the heavy cells. Its
+effect sizes are reported and no family tests it.
+
+**Reported for every cell, rejected or not:** each arm against K (KP against K, S1 and F in the
+batch cell) as a geometric mean ratio with its one-sided 95 % upper bound and BCa 90 % interval,
+the batch's own KP/K, and each arm's warn seconds and swap traffic (median, mean, BCa 90 %).
+A cell that main did not run reports its pilot's effects, marked exploratory.
+
+### Cells, arms and mixes
+
+| Cell | Mix | Level | Arms | Role |
+|---|---|---|---|---|
+| trace-quiet | trace | quiet | K, S1, S2, S3, F | primary, secondary |
+| trace-loaded | trace | loaded | K, S1, S2, S3, F | primary, secondary, H-SAFE-trace |
+| heavy-quiet | heavy | quiet | K, S1, S2, P | secondary |
+| heavy-loaded | heavy | loaded | K, S1, S2, P | secondary, H-SAFE-heavy |
+| wide-quiet | wide | quiet | K, S1, S2, F | secondary |
+| batch | batch | quiet | KP, K, S1, F | H-PRE |
+
+- **K:** every gate as `coreslot run --label <label> -- <argv>`, with cpu `"140%"` (14 tokens),
+  mem `"60%"` (76 tokens of 128 MiB) and the sealed `needs.toml`. Live memory is off, which is
+  v0.3.0's default; the runner writes no `[memory]` table. `{n}` is the number of workers the
+  grant pays for.
+- **KP:** the batch cell's K, with the batch label made preemptible by coreslot's automatic rule
+  on its learned entry. The batch cell's **K** runs the same needs with `preemptible = false`
+  inserted into the batch label's entry (`k_needs`). Each K set there records that text's
+  SHA-256 (`derived_needs_sha256`).
+- **S1, S2, S3:** an in-process counting semaphore of 1, 2 or 3 slots around each heavy gate,
+  with light gates free. Every class gate is heavy. `{n}` is the gate's `free_n` (py_unit 2,
+  mutation 3; `auto` for run 7's gates).
+- **P:** one `parallel --will-cite --memsuspend 4.5G -j 4 --joblog` per set. Each heavy gate is
+  one job line, and a no-op line every `TICK_S` (0.25 s) keeps parallel reaping. Light gates run
+  free. At `-j 4` the slot count never binds on four agents. Run 7 instead ran one `sem` per agent
+  at 9G.
+- **F:** no admission. Every gate starts when its agent reaches it, in F form.
+
+**The trace mix** is derived from the owner's two machines' run logs. Its derivation rule was
+committed before any stand-in ran on this machine. It has 4 agents × 3 gates. `stand8.json`'s
+`gates_by_class` (py_unit 5, go_test 3, py_db 2, mutation 2) is dealt by `trace_agents`: the
+class deck is sorted, shuffled with the seed `run8-mix` and dealt 3 per agent in A1..A4 order. The
+deal is the same in every arm, block and phase.
+
+**The mix rule's revision 2** `[OPEN: lands with the stand-ins' update]`. A class enters when its
+share of short-gate runs or of short-gate wall time is at least 1/24 on either machine. That
+admits six classes, with gates per class py_unit 4, go_test 2, py_db 2, typecheck 2, mutation 1
+and other 1. Each class's stand-in runs on its own repository. Until it lands, `stand8.json` holds
+the four-class mix above.
+
+**The stand-ins, alone**, are committed in `run8/standins.jsonl`: medians of runs 1-3, F form.
+
+| Class | Gate | Alone s | Cores |
+|---|---|---|---|
+| py_unit | SQLAlchemy's suites, `-n {n}` | 98.2 | 1.74 |
+| go_test | raft's restore and transport tests, `-race` | 90.7 | 0.25 |
+| py_db | SQLAlchemy, serial | 44.4 | 0.99 |
+| mutation | mutmut over python-semver, `--max-children {n}` | 26.1 | 2.88 |
+| batch | `zstd -19 -T9` over 14 copies of the Linux 6.12 tarball | 999.8 | 8.28 |
+
+Each stand-in must sit within its class's band when run alone (`standins8.py check`).
+
+**The batch mix:** A1 runs the batch gate once at offset 0. A2-A4 each run the behind class's
+gate (py_unit) `BEHIND_RUNS` = 3 times, starting at `BATCH_DELAY_S` = 60 s. There are no random
+offsets. The automatic rule demotes a run that queues with a cpu request of at least half the cpu
+size, (14 + 1) / 2 = 7 tokens, on a label with at least 5 counted runs and a median `ran_s` of at
+least 600 s. Learn runs the batch gate exactly `LEARN_BATCH_K` = 5 times, so the run count has no
+slack: `[PROBE: the batch label's learned cpu entry and median]`.
+
+**The heavy and wide mixes** are run 7's (`agents` and `wide_agents`, unchanged).
+
+**Offsets** come from U(0, 5 s), seeded `run8-<phase>-<cell>-<block>` and the same for every set
+of the block. **The arm order** in each block is shuffled with the seed
+`run8-order-<phase>-<cell>-<block>`. Each set records its position and the arm before it.
+
+**The block order interleaves cells.** In the probe, each cell ran in its own stretch of the
+night, so cell is confounded with time of night. The pilot and main therefore run in rounds:
+
+- Round r runs block r of every kept cell that still needs one, one block each.
+- The cells within a round run in an order shuffled with the seed `run8-round-<phase>-<r>`.
+- Each block's arms keep their own order.
+- Re-runs follow the last round, in the same way.
+
+`[CODE: run8.sh runs each cell's blocks one after another (blocks()); main is one command per cell]`.
+
+**Levels** are run 7's, on coreslot's headroom metric. Quiet waits up to 120 s for 9000 MiB and is
+flagged `quiet_short` if it falls short. Loaded adds a ballast of clamp(headroom − 8000, 0,
+6144) MiB. `level_off` is set at t0 when the level is missed (loaded by more than ±512 MiB). Each
+cell has its own level, and no block holds two levels. The order of work inside a set, the flags
+(`hot_start`, `busy_background`, `ballast_short`) and the kill on timeout are run 7's. Flags
+never invalidate a set.
+
+**Set timeouts** (`SET_TIMEOUT_S`): trace 3,600 s, heavy and wide 600 s, batch 10,800 s. S1
+serialises the trace mix's 12 gates, and the sum of their alone medians is about 900 s:
+`[PROBE: the timeout margin observed, as the largest set's duration per cell over its timeout]`.
+
+### Metrics
+
+- **Time to verdict** (`mean_verdict_s`): each agent's last gate end minus its offset, averaged
+  over the mix's agents. In the batch cell, `short_mean_verdict_s` averages the behind agents
+  only, and `batch_s` is the batch gate's own end minus its start.
+- **Safety:** warn seconds (`kern.memorystatus_vm_pressure_level` ≥ 2, from 1 s samples),
+  swap-out MiB, and swap traffic (swap-out plus swap-in pages over the set).
+- **Recorded, not tested:** the makespan, `waited_free_s`, and for each P set, P's own free figure
+  `parallel_free_mib` (vm_stat's free plus inactive pages) on every sample.
+
+### Blinding, declared before any probe number
+
+**Power uses set times and pooled within-arm spreads only.** Per cell and arm, the SD of ln(time
+to verdict) is taken over the probe's valid blocks, and these SDs are pooled over the cell's arms
+with weights k − 1. The SD of a paired log difference is then sqrt(2) × that pooled SD. This
+ignores the positive within-block correlation, which makes it conservative. It is inflated to its
+one-sided 80 % upper confidence bound (`stats6.sigma_upper`), as the code does today, at the
+pooled degrees of freedom. The batch cell's cost leg uses the pooled SD of ln(batch_s) over KP and
+K.
+
+**The assumed true differences are fixed now, not read from the probe.** Non-inferiority legs
+(the primary, KP~F, and the cost leg) assume 0 against their bound. Superiority legs (KP<K and
+KP<S1) assume a difference of −ln 1.03.
+`[OPEN: the owner confirms the assumed effect for superiority legs and for H-PRE's time and cost legs]`.
+
+`stats8.power_plan` today takes the probe's point mean and SD of each comparison, and
+`power.json` carries those means and S\*:
+`[CODE: run8.py power computes the blinded inputs above and writes no arm mean, ratio or S*; until then nobody runs it on the probe]`.
+
+**Mix quality is judged only on these facts.** It is never judged on K-vs-S or K-vs-F
+differences.
+
+1. Does the mix overload the machine? This means more than 10 cores or more than 9 GiB wanted at
+   once in the F arm. It is computed from the F sets' gate intervals, each gate weighted by its
+   alone F-form cores and peak memory, because the 1 s samples carry no per-gate figures.
+2. The stand-ins' tolerance: each one alone, within its class's band.
+3. P's feasibility: the held P sets, and free plus inactive at t0 against 4,608 MiB.
+
+**Who computes, and what they report.** A fresh agent session that is neither the controller nor
+the owner reads the probe's records. It reports:
+
+- per cell, the block seconds (all arms) and the pooled within-arm SDs;
+- per menu option (below), n per cell, the power of each hypothesis and the joint power, and the
+  hours;
+- the three mix-quality facts;
+- the procedural facts the slots here need: the treatment, the timeout margin, and the binary
+  and needs SHA-256.
+
+It reports no arm mean, ratio, difference or per-arm time. Until the freeze, neither the
+controller nor the owner reads arm ratios from the probe. The probe's records are in the
+repository. This is a convention the analysts keep, stated here, as run 7 stated its "no analysis
+mid-run". It is not a control the code enforces.
+
+### Power and the time budget
+
+- **Power** is the normal approximation of the one-sided paired t test (`t_power_below`). It is
+  computed for the primary and for H-PRE's time and cost legs. The secondary and safety legs are
+  not powered.
+- **The primary:** each kept trace cell takes the smallest n in [`PILOT_BLOCKS` = 10, `N_MAX` =
+  200] at which its leg reaches `POWER_MIN`^(1/m) at α = 0.05, where `POWER_MIN` = 0.80 and m is
+  the number of primary cells kept. The joint power is the product over the kept cells. A
+  secondary cell takes the largest primary n.
+- **The batch cell** takes the smallest n in [10, `BATCH_N_MAX` = 20] at which each powered leg,
+  at α / 3, reaches 0.80^(1/c), where c is the number of its powered legs. Its hours are reserved
+  first, and it is never dropped.
+- **Hours.** Hours = Σ over kept cells of (`PILOT_BLOCKS` + n) × block seconds, and block seconds
+  = Σ over the cell's kept arms of the mean (makespan + cooldown + per-set overhead) measured in
+  the probe. The overhead is everything else between one set's t0 and the next: the level wait
+  and the record. A set that timed out counts at its timeout. The blinded report recomputes each
+  option's hours from the probe's set times by exactly this arithmetic.
+- **Small block counts.** At small k the SD estimate dominates the power. Three rules keep n
+  and power from being optimistic. n never falls below `PILOT_BLOCKS` (`n_for`'s lower bound),
+  whatever the power. The SD is inflated as declared above. The normal approximation is optimistic
+  at small n: at n = 10, t's one-sided 0.95 quantile is 1.833 against z's 1.645. So the
+  registration computes power with t at n − 1 degrees of freedom in place of z:
+  `[CODE: stats8.t_power_below uses the t quantile at n − 1 df; today it uses the normal quantile]`.
+- **H-PRE's safety leg is not powered.** The probe gives it no usable input, since warn seconds
+  and swap are mostly zero. It is tested at the n that the time and cost legs set, and no power
+  is claimed for it. If it is not rejected, it is reported as "not shown at this n", not as
+  harm.
+- **What the code counts today:** `power.json`'s `set_s` counts makespan + cooldown only, with no
+  overhead or quiet wait. `makespan_s` is the last *finished* gate's end, so a held P set's 600 s
+  is not counted:
+  `[CODE: power's set_s counts each set from its t0 to the next set's t0, a timed-out set at its timeout]`.
+
+### The menu of lengths and drops
+
+The owner picks one option after the blinded report. The pick is committed before the freeze.
+
+| Option | Rule | Model estimate |
+|---|---|---|
+| **A** | All cells and arms, at n from power, uncapped | ≈ 72 h |
+| **B** | Drop the S1 arm in every cell, at n from power, uncapped | ≈ 48 h |
+| **C** | The declared drop order under the 30 h cap (`CAP_H`) | ≈ 30 h |
+
+- **B removes** S1 from the hindsight set (S\* is the better of S2 and S3 in the trace cells),
+  H-S1 with its legs, and H-PRE's KP<S1 time leg. Its outcome against K is known from run 7:
+  `[CODE: run8.py supports dropping an arm from every cell, its legs and its power]`.
+- **C drops** cells in `DROP_ORDER`: heavy-loaded, then wide-quiet, then trace-loaded. The batch
+  cell is kept. If the cells are still too long after that, every non-batch n is scaled by one
+  common factor, rounded down, never below `PILOT_BLOCKS`. Dropping trace-loaded removes it from
+  the primary.
+- **Under A and B** no cell is dropped, and `CAP_H` is set at registration above the option's
+  hours.
+
+**The estimates come from a processor-sharing model of the mix, not from data.** They assume the
+current mix, a central cooldown, and the floor of 10 pilot + 10 main blocks per cell.
+
+- **A:** 69.3 h (66.9-81.1 over the cooldown's floor-to-cap range): batch 33.3 h, the two trace
+  cells 28.7 h, heavy and wide 7.4 h.
+- **B:** about 47.6 h. The trace cells take about 17.8 h, since S1 is about 38 % of a trace block.
+  The batch cell without S1 takes 22.4 h, and heavy and wide 7.4 h (the model does not split out
+  S1 there).
+- **C:** the batch cell alone, 33.3 h, already exceeds the cap. As estimated, C also needs S1
+  dropped from the batch cell and a batch stand-in at the mix rule's 780 s floor (18.9 h). Then it
+  runs trace-quiet only, without S1 (about 8.9 h), and heavy-quiet (about 1.5 h): about 29 h,
+  with trace-loaded, wide-quiet and heavy-loaded dropped.
+
+On `main`, `run8.py power` refuses when the batch cell alone exceeds `CAP_H`. The registration
+has it report the hours of each menu option instead of refusing:
+`[CODE: in progress: power reports each menu option's hours instead of refusing at CAP_H]`. The
+batch cell's floor, its arms and its stand-in's length are part of the owner's pick:
+`[OPEN: the menu option; for C, the batch cell's arms and stand-in]`.
+
+**Whatever is picked:**
+
+- n per cell is fixed before the pilot, never after, and is never re-estimated upwards.
+- If the power minimum (0.80 joint for the primary) is not met after the pick, the run goes ahead
+  at the power reached, and the primary stays a test reported with that power.
+- Below `DESCRIPTIVE_BELOW` = 0.5 joint power, the primary is reported as descriptive only, with
+  no rejection claimed. This is declared now.
+
+### The pilot: a futility check
+
+`run8.py pilot-check` reads the first `PILOT_BLOCKS` = 10 valid pilot blocks of each cell that
+`power.json` keeps, with re-runs capped at `PILOT_RERUNS` = 3. It writes `pilot_check.json`.
+
+- **Futile** (`stats8.futile`): a leg whose one-sided 90 % lower bound of mean(d) is at or above
+  its bound. The legs judged are the primary's K/S\* per trace cell and the batch cell's three
+  time legs. Heavy and wide have no futility leg.
+- **Go** is false when a primary cell is futile, or has fewer than 2 valid pilot blocks. The run
+  then stops: `summary` reports the pilot as exploratory, with every kept cell's effect sizes
+  and the futility legs, and no family is tested.
+- **A futile batch cell** leaves main without the batch cell, and H-PRE is reported futile at the
+  pilot.
+- **P's feasibility, per heavy cell:** P is infeasible when more than `P_INFEASIBLE_TIMEOUTS` = 2
+  of the P sets in its 10 pilot blocks timed out. The count is absolute and applies to the full
+  10 blocks: `pilot-check` refuses while a cell is short and re-runs are left. A heavy cell
+  still short of 10 with its re-runs spent counts over the blocks it has, so with fewer blocks
+  the same 2 timeouts allow a larger share:
+  `[OPEN: keep the absolute count there, or declare P infeasible in a heavy cell short of 10 pilot blocks]`.
+  An infeasible P leaves that cell's main and is reported as infeasible, not tuned.
+
+### P: what GNU parallel admits on macOS
+
+- The size stays 4.5G, which is 4,608 MiB: parallel's G is 2^30. P runs GNU parallel 20260922
+  from Homebrew, with `PARALLEL_HOME` under the stand's directory.
+- **The start gate.** On macOS, `--memsuspend` also gates job *starts*. No job, a no-op line
+  included, starts while vm_stat's free plus inactive memory is below the size. This is
+  undocumented (`start_more_jobs`, lines 4798-4804 of `parallel` 20260922; darwin's figure at
+  lines 8763-8769).
+- **Suspension.** While free plus inactive is below twice the size, parallel stops every running
+  job but the oldest few (lines 7973-8022). The man page documents only this part.
+- **Held or slow.** A P timeout is "held" when every sample's `parallel_free_mib` is below 4,608.
+  Otherwise it is "slow".
+- **The figure is not the levels' figure.** The levels act on coreslot's headroom. P's figure is
+  bounded by 16 GiB minus memory in use, and the ballast only lowers it. P's feasibility is
+  therefore set by the background, not by the level.
+- **Declared now:** if the probe's heavy P sets, taken at the background the run declares (below),
+  show free plus inactive at t0 below 4,608 MiB, P is declared infeasible at that background and
+  runs in no pilot or main set: `[CODE: a stand switch that leaves P out of the heavy cells]`. If
+  the probe ran at another background, the pilot's rule decides.
+- **Each P set reports** free plus inactive at t0, its minimum and its median, and the held label:
+  `[CODE: summary reports them; today the records hold the samples only]`.
+- **Scope.** Any P verdict reads "P at `--memsuspend 4.5G` with free plus inactive at t0 of
+  `[PROBE: A-B MiB]` on this machine". It is not a statement about GNU parallel in general.
+
+### Learning, frozen before the pilot
+
+`run8.py learn` runs run 7's learn from an empty state, with cpu `"140%"` and mem `"60%"`, over
+every gate of the heavy and wide mixes and every class gate: 6 K-form and 3 F-form runs, then
+`suggest --write` (`needs-pass1.toml`), then 5 relearn runs, then `suggest --write` again, which
+is sealed. Before these, the batch gate runs 5 times in its K form, in pass `learn` only. Each
+batch record carries its run-log line's `preemptible` value.
+
+The sealed files are `run8/needs.sha256`, holding `needs.toml` and `learn.jsonl`:
+`[PROBE: the two SHA-256, from the learn the run uses]`. Every verdict command exits before its
+first set unless they match. Learn refuses once any probe, pilot or main record exists.
+
+### Validity, re-runs and an incomplete run
+
+- **A valid set:** no runner error, on AC power, no gap over 10 s between samples, not timed out,
+  and a treatment check with no problem. Flags never invalidate.
+- **A block counts** when every arm but P has a valid set. A timeout in any of those arms drops
+  the block (run 7's convention). An invalid P set never drops a block. A K set that coreslot
+  failed stays in, with its block's slowest time.
+- **Re-runs:** a block with an invalid set is re-run at the end under the next block number
+  (`--as-block`). At most 10 % of n count in main, and `PILOT_RERUNS` = 3 per cell in the pilot.
+  A block whose only invalid set is P's is not re-run.
+- **A short cell:** `summary` refuses while a cell is short of n and re-runs are left. With the
+  re-runs spent, the cell is untested, and a primary cell untested leaves the primary untested.
+- **Provenance:** every record carries the binary's SHA-256, the evidence tree's commit and its
+  dirty state, and parallel's version. Main records also carry `power.json`'s SHA-256. Pilot and
+  main refuse on a dirty evidence tree, on a binary that is not `coreslot_sha256`, and without
+  `power.json`. Main also refuses without a `pilot_check.json` whose `go` is true.
+
+### Machine, binary and background
+
+- **The machine:** a MacBook Air M4 with 16 GiB and 10 CPUs, on AC power. The run is launched
+  detached, and the owner does not use the machine while it runs.
+- **The binary:** coreslot is the v0.3.0 release archive (`coreslot_0.3.0_darwin_arm64.tar.gz`),
+  matching the release's `checksums.txt` `[PROBE: the archive's SHA-256]`, installed, not built
+  locally. Its binary's SHA-256 is pinned in `stand8.json` as `coreslot_sha256`
+  `[PROBE: installed binary's SHA-256]`. On `main` it is `"unpinned"`.
+- **The background** the run measures under:
+  `[PROBE: application set, Docker Desktop's VM running or not]`. The application set at each verdict command's start is logged as a count and
+  a SHA-256 of the names.
+- **The preflight** (`run8.sh preflight`) holds caffeinate and refuses on battery and while
+  Spotlight indexing is on. It refuses unless `AutomaticDownload` and
+  `AutomaticallyInstallMacOSUpdates` in `/Library/Preferences/com.apple.SoftwareUpdate` are both
+  0. The periodic check (`softwareupdate --schedule`) is recorded only:
+  `[CODE: on branch evidence-run8-probe, not yet on main]`. It also refuses while a virtual
+  machine runs: `[CODE: not yet written]`.
+
+### Every change since run 7, and which arm it could favour
+
+These directions are reasoned, not measured.
+
+| Change | Class | Direction, and why |
+|---|---|---|
+| Worker width is not a cpu reservation: `cpu_per_worker`, `{n}` the workers a grant pays for, and `suggest` no longer narrows a range entry on every learn | product | Favours K in trace and wide: a gate holds fewer tokens per worker, so more gates run at once, and run 7's narrowing of a suite to one cpu is gone. It can hurt K in trace: K's `{n}` is the grant, wider than the S and F arms' `free_n`, so its py_unit and mutation do more CPU work per test |
+| Minimums before extras, within the front window | product | Favours K wherever a gate waited behind a head short of another resource (run 7's wide over-reservation). Neutral where one resource binds |
+| The live size of mem is off by default | product | Hurts K's time where run 7 paired the type check with a suite above the static 76 tokens (heavy). Favours K's safety where that pairing swapped. The static 9728 MiB is above the loaded headroom (8000 MiB), so K can admit claims above free memory at loaded |
+| Orphans and stale holds (`--same-group`, holds of a descendant) | product | Neutral: the stand's gates do not orphan, and a timed-out set is killed down to its process groups |
+| Preemptible runs, automatic by default | product | Favours KP in the batch cell, which is the treatment tested. Neutral elsewhere while no other label meets the rule; one that does fails its set |
+| Trace-derived cells, the new primary | stand and mix | Neutral by construction: the derivation rule came before any stand-in ran. Whether the mix overloads the machine is judged blind |
+| The mix rule's revision 2 `[OPEN: lands with the stand-ins' update]` | stand and mix | Neutral by intent. A memory-heavier class (typecheck) raises the chance of memory overload, where admission matters: favours K and the S arms over F |
+| No trace stand-in may meet the automatic preemptible rule (median ≥ 10 min over ≥ 5 runs, with a request max ≥ half the cpu budget) `[OPEN: lands in the mix rule]` | stand and mix | Neutral: it keeps the treatment on the batch label alone, so no trace set fails its treatment check through its own stand-in |
+| The S3 arm | stand and mix | Against K: one more comparator in the hindsight choice |
+| The batch cell and KP | stand and mix | No effect on the primary; it is its own family |
+| The preflight's update check re-anchored to the download and install keys `[CODE: on branch evidence-run8-probe, not yet on main]` | procedure | Neutral: it removes background downloads for every arm |
+| The refusal while a VM runs `[CODE: not yet written]` | procedure | Neutral across arms. It raises free memory, and with it P's start figure: favours P's feasibility |
+| Docker Desktop's VM ran during the probe's learn | procedure | Memory in use was higher, so learned peaks and P's free figure are lower than in a VM-free run. Lower mem needs admit more at once under K (faster, possibly less safe). The probe's P figure is pessimistic for P |
+| P's start gate at 4,608 MiB (`--memsuspend 4.5G`, one queue per set); run 7: 9G, one `sem` per agent | procedure | Favours P's feasibility: run 7's 9G started no gate in 4 of 6 loaded sets |
+| The 30 h cap, the drop order, power from the probe, blinded | procedure | Neutral by arm. Under C it can remove trace-loaded from the primary |
+| The primary's comparator set (best of S1-S3 per cell, in hindsight) and its intersection over the trace cells | analysis | Against K: the in-sample choice favours the comparator |
+| Holm families, and the secondary tested whatever the primary says | analysis | Neutral |
+| H-PRE in its own family, with its tolerances (5 s, 64 MiB) | analysis | Favours KP: a tolerance lets KP be slightly worse and still pass |
+
+`[OPEN: what each outcome means, decided before the data, as run 7 declared its outcomes]`
+
+### The anchor
+
+Before the first pilot set:
+
+- the registration commit, which holds this section with every slot filled;
+- a tag on that commit, `run8-preregistration`;
+- an OSF registration made from that commit's text, linked to run 7's https://osf.io/px5mr (the
+  owner makes it);
+- a comment on the pull request carrying the commit's SHA, this section's SHA-256 and the OSF
+  registration's URL.
+
+The registration's URL is added to this section afterwards, in a commit that changes nothing else.
+
+### Reproduce
+
+```sh
+evidence/overload/setup.sh
+# then install the v0.3.0 release binary into ~/bench.noindex/bin/coreslot (setup.sh builds one
+# there, which the pin refuses)
+evidence/overload/run8.sh preflight                    # the machine's checks, to OUT/preflight.log
+evidence/overload/run8.sh learn                        # learn, relearn, seal; resumes
+evidence/overload/run8.sh power PROBE_OUT              # OUT/power.json, before any pilot record
+# preflight, then the pilot of every kept cell:
+nohup evidence/overload/run8.sh > ~/bench.noindex/run8.log 2>&1 &
+evidence/overload/run8.sh pilot-check                  # OUT/pilot_check.json
+# only after "go": true, each kept cell at power.json's n, in rounds:
+evidence/overload/run8.sh verdict main trace-quiet 1 N --primer
+evidence/overload/run8.sh summary                      # OUT/summary.json and summary.txt
+```
+
+Re-issuing an interrupted command resumes it. `evidence/overload/run8.sh --dry` runs the whole
+pipeline at 2 blocks a phase on `stand-dry.json`, to check the runner. Its output is not evidence,
+and it never exercises the batch cell's positive KP path.
