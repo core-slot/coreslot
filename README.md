@@ -113,6 +113,13 @@ each other: two siblings started together under an 8-core grant both run with 8.
 wants concurrent children partitions its grant itself. `--independent` queues as an unrelated
 request instead. The Go library applies the same rule ([below](#go-library)).
 
+**Stop a run by killing its process group.** Without a terminal, `run` starts its command in a
+process group of its own and relays signals to it, which a SIGKILL of coreslot's group cannot do:
+the command would live on with the grant's tokens. `coreslot run --same-group` keeps the command in
+coreslot's group, so a `killpg` reaches the whole tree. A SIGINT or SIGQUIT sent to coreslot's pid
+alone is then dropped and a SIGTERM or SIGHUP reaches only the command's pid, as in a terminal:
+signal the group, not coreslot's pid.
+
 The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource,
 memory in MiB) and inherits the descriptors that hold its grant
 ([`PROTOCOL.md` section 17](PROTOCOL.md#17-descriptor-and-environment-contract)). The tokens stay

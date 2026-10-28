@@ -105,7 +105,7 @@ contract and may change in any release; parse `status --json` instead.
 
 | Surface | Supported |
 |---|---|
-| `run` | `--need RES=MIN..MAX` (or `RES=N`, `RES=MIN..`, `RES=..MAX`; `mem=SIZE` such as `mem=3G` or `mem=768M`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--light`, `--subst`, `--refusal-code`; placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` (`{n:mem}` in MiB) |
+| `run` | `--need RES=MIN..MAX` (or `RES=N`, `RES=MIN..`, `RES=..MAX`; `mem=SIZE` such as `mem=3G` or `mem=768M`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--same-group`, `--light`, `--subst`, `--refusal-code`; placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` (`{n:mem}` in MiB) |
 | `status` | `--json`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
 | `doctor` | `--clear`, `--reset` |

@@ -1249,7 +1249,7 @@ func TestHelpGoesToStdout(t *testing.T) {
 		"RES=..MAX means 1..MAX", "(default cpu=1..16, at most the CPU count, when COMMAND has a cpu",
 		"  --label L ", "  --priority P ", "else 0)", "  --timeout D ", "(default 0, no limit)",
 		"  --on-timeout run|fail ", "(default fail)", "  --no-wait ", "  --strict ", "  --independent ",
-		"  --subst ", "  --refusal-code N ", "(default 75)", "exactly {n}", "{n:RES}",
+		"  --same-group ", "signal the group, not coreslot's pid", "  --subst ", "  --refusal-code N ", "(default 75)", "exactly {n}", "{n:RES}",
 	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("run --help lacks %q:\n%s", want, help)

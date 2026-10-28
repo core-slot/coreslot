@@ -27,6 +27,7 @@ type runOptions struct {
 	noWait      bool
 	strict      bool
 	independent bool
+	sameGroup   bool // --same-group: the command stays in coreslot's process group
 	light       bool
 	subst       bool
 	refusalCode int
@@ -34,8 +35,8 @@ type runOptions struct {
 }
 
 const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D]
-       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--light] [--subst]
-       [--refusal-code N] -- COMMAND...`
+       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--same-group]
+       [--light] [--subst] [--refusal-code N] -- COMMAND...`
 
 // runHelp is what `coreslot run --help` prints: the synopsis, then each flag with its default.
 const runHelp = runUsage + `
@@ -61,6 +62,12 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
   --strict              refuse instead of running unbudgeted when the state directory or the
                         configuration cannot be used
   --independent         queue as a request of its own, even inside another run's grant
+  --same-group          keep COMMAND in coreslot's own process group instead of a group of its
+                        own, so that a caller that kills coreslot's group (SIGKILL included)
+                        reaches the whole command tree. As in a terminal, a SIGINT or SIGQUIT
+                        sent to coreslot's pid alone is then dropped and a SIGTERM or SIGHUP
+                        reaches only COMMAND's pid: signal the group, not coreslot's pid. No
+                        effect on Windows
   --light               run at once outside the budget with MIN of each resource, for a
                         command that keeps well under one core busy (a download, a stream)
   --subst               replace placeholders inside arguments too, as in make -j{n}
@@ -100,6 +107,7 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	fs.BoolVar(&o.noWait, "no-wait", false, "refuse unless admitted at once")
 	fs.BoolVar(&o.strict, "strict", false, "refuse instead of failing open")
 	fs.BoolVar(&o.independent, "independent", false, "ignore an inherited grant and queue")
+	fs.BoolVar(&o.sameGroup, "same-group", false, "keep the command in coreslot's process group")
 	fs.BoolVar(&o.light, "light", false, "run at once outside the budget")
 	fs.BoolVar(&o.subst, "subst", false, "replace placeholders inside arguments too")
 	fs.IntVar(&o.refusalCode, "refusal-code", exitRefusal, "exit status of a refusal")
