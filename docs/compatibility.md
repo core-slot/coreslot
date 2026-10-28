@@ -25,24 +25,26 @@ physical memory, `--need mem=4` 4 GiB and `CORESLOT_GRANTED_MEM` MiB. When `mem`
 client admits a fixed `mem` need above it from the memory the kernel can still hand out, unless
 `[memory] live = false`. An older client sizes `mem` from the configuration alone, so it waits while
 newer clients' live admissions hold more `mem` than its size, as after a shrink, and `status` may
-show `mem` with 0 free while newer clients are still admitted above it. When `[memory] live`
-became `false` by default (v0.3.0), the configuration's default changed, not the format: a v0.2.x
-client on the same machine reading a configuration without a `[memory]` table still computes the
-live size, so it may be admitted above the configured `mem` while v0.3.0 clients wait, as after a
-shrink. When the run log gained the keys `workers` and `preemptible`, and a preemptible run's
-`need` became its request before it was cut to one cpu token
-([`PROTOCOL.md` section 20](../PROTOCOL.md#20-run-log)), the keys were optional ones every reader
-ignores when it does not know them, so the format did not change; an older `suggest` reading the same log ignores `preemptible`
-and may count a preemptible run as saturated (12 cores on 1 token). When the needs file gained
-`cpu_per_worker` sizing, `observed` and `preemptible`
-([`PROTOCOL.md` section 5.4](../PROTOCOL.md#54-needs-file)), an older client, which ignores what
-it does not know there, requests an entry's `cpu` as tokens, a worker width included, never demotes
-a run, and its `suggest --write` may lower an `observed = false` entry's weights unless the entry
-is pinned. A preemptible run is no format change either: its ticket and hold carry the
-shrunk request, nothing is lent, rewritten or acquired again, and the lower priority its command
-runs at is not protocol state. `v1.0.0` freezes the format then current; frozen
+show `mem` with 0 free while newer clients are still admitted above it. `v1.0.0` freezes the format then current; frozen
 means that from then on a new format number, or a change of what one means, needs a new major
 version.
+
+Release v0.3.0 changed two defaults and added optional keys. When `[memory] live` became `false` by
+default, the configuration's default changed, not the format: a v0.2.x client on the same machine
+reading a configuration without a `[memory]` table still computes the live size, so it may be
+admitted above the configured `mem` while v0.3.0 clients wait, as after a shrink. When the run log
+gained the keys `workers` and `preemptible`, and a preemptible run's `need` became its request
+before it was cut to one cpu token ([`PROTOCOL.md` section 20](../PROTOCOL.md#20-run-log)), the keys
+were optional ones every reader ignores when it does not know them, so the format did not change; an
+older `suggest` reading the same log ignores `preemptible` and may count a preemptible run as
+saturated (12 cores on 1 token). When the needs file gained `cpu_per_worker` sizing, `observed` and
+`preemptible` ([`PROTOCOL.md` section 5.4](../PROTOCOL.md#54-needs-file)), an older client, which
+ignores what it does not know there, requests an entry's `cpu` as tokens, a worker width included,
+never demotes a run, and its `suggest --write` may lower an `observed = false` entry's weights
+unless the entry is pinned. A preemptible run, marked or made one by the client's automatic rule
+(the other default), is no format change either: its ticket and hold carry the shrunk request,
+nothing is lent, rewritten or acquired again, and the lower priority its command runs at is not
+protocol state.
 
 `v1.0.0` is not cut before the whole conformance suite passes at full length on macOS and on
 Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite is:

@@ -59,6 +59,7 @@ Every shared file, field, environment variable and transition of format 1, and w
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
 | run-log memory keys | field | [20](#20-run-log) |
+| run-log `workers` and `preemptible` keys | field | [20](#20-run-log) |
 | `CORESLOT_GRANTED_*` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_TOKEN_FDS` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
@@ -420,7 +421,7 @@ evidence = "5 runs 2026-10-20..21: max 3.4 cores, 0 of 5 saturated, peak 2.7 GiB
 [needs."gate:pytest"]
 cpu_per_worker = 0.3  # cores per worker: the cpu need scales with the worker count
 cpu = "2..10"         # with cpu_per_worker, the worker width, not a token count
-preemptible = false   # never preemptible; absent, the automatic rule decides
+preemptible = false   # not demoted by the automatic rule; absent, the rule decides
 
 [needs."gate:docker"]
 cpu = "8"
@@ -465,11 +466,13 @@ A file that cannot be parsed is left as it is.
 > **Implementation note.** The Go CLI reads the entry of a run's `--label` for each resource its
 > `--need` leaves out, `cpu` and `mem`, and fills `{n}` (section 17) with the worker count of a
 > `cpu_per_worker` entry, or with the token count when `--need` names `cpu`. A run is preemptible
-> when its entry says `preemptible = true` or `run --preemptible` marks it (`--preemptible=false`
-> and `preemptible = false` unmark it), and otherwise by the automatic rule: its cpu request's max
-> is at least half the cpu size, and the run log holds at least 5 runs of its label with a median
-> `ran_s` of at least 600 s. The rule never demotes a run in terminal mode, where a person is
-> watching, nor one of a label whose runs of at least 60 s averaged under 0.05 cores. The CLI sets
+> when its entry says `preemptible = true` or `run --preemptible` marks it, and the command line
+> wins over the entry, as `--need` does: `--preemptible` marks a run whose entry says `false`, and
+> `--preemptible=false` unmarks one whose entry says `true`. With neither a key nor a flag it is
+> preemptible by the automatic rule: its cpu request's max is at least half the cpu size, and the
+> run log holds at least 5 runs of its label with a median `ran_s` of at least 600 s. The rule
+> never demotes a run in terminal mode, where a person is watching, nor one of a label whose runs
+> of at least 60 s averaged under 0.05 cores. The CLI sets
 > nice 10 on the command's process group right after starting it, fills `{n}` from the request
 > before it shrinks, so a `make -j{n}` keeps its width, and records the reason in the run log's
 > `preemptible` key. `coreslot suggest --write` writes `cpu`, `mem` and `evidence` from the run
@@ -1146,7 +1149,9 @@ is passed on.
 > fd 3 or above.
 
 **Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
-`cpu` (or of `RES`), and `{n:mem}` by the `mem` grant in MiB, as `CORESLOT_GRANTED_MEM` gives it;
+`cpu` (or of `RES`), and `{n:mem}` by the `mem` grant in MiB, as `CORESLOT_GRANTED_MEM` gives it.
+A client that sized `cpu` from a `cpu_per_worker` entry fills `{n}` with the worker count instead
+(section 5.4), and a preemptible run fills it from its request before it shrank to one token.
 `{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with `--subst`, placeholders inside
 arguments are replaced too (`make -j{n}`). The grant of a resource run unbudgeted is the value of
 its `CORESLOT_GRANTED_<RES>`. A placeholder naming a resource the
@@ -1323,11 +1328,12 @@ any numbering conforms (section 7.1).
 
 The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
 [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
-[--no-wait] [--strict] [--independent] [--light] [--subst] [--refusal-code N] -- COMMAND...`. `RES=N` means
-`N..N`, `RES=MIN..` means `MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage
-error, and every form keeps the bounds of section 7.3. With no `--need` the request is `cpu=1..1`
-unless COMMAND carries a `cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside
-one with `--subst`; the escape `{{n}}` is not one), and then `cpu=1..M`, where M is 16 or the
+[--no-wait] [--strict] [--independent] [--light] [--subst] [--refusal-code N]
+[--preemptible[=false]] -- COMMAND...`. `RES=N` means `N..N`, `RES=MIN..` means
+`MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage error, and every form keeps
+the bounds of section 7.3. With no `--need` the request is `cpu=1..1` unless COMMAND carries a
+`cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside one with `--subst`; the
+escape `{{n}}` is not one), and then `cpu=1..M`, where M is 16 or the
 machine's CPU count (section 5.2) if that is smaller; a CLI that cannot read the count uses 16
 here rather than failing the run. A command that cannot learn its grant would leave every token
 beyond its first idle, and one that can never starts more workers than the machine has CPUs,
