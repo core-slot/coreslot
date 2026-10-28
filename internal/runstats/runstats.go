@@ -110,7 +110,8 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 		if r.Workers != nil && *r.Workers > 0 {
 			perWorker = append(perWorker, cores/float64(*r.Workers))
 		}
-		if g := r.Grant["cpu"]; g > 0 && cores >= saturatedShare*float64(g) {
+		// A preemptible run's cores say nothing about its one-token grant.
+		if g := r.Grant["cpu"]; g > 0 && r.Preemptible == "" && cores >= saturatedShare*float64(g) {
 			s.Saturated++
 		}
 	}

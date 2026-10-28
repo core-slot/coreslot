@@ -1204,6 +1204,71 @@ func TestRunPreemptibleLowersTheCommandGroup(t *testing.T) {
 	}
 }
 
+// A preemptible run's {n} keeps the width of its unshrunk request while the hold lists one cpu
+// token, CORESLOT_GRANTED_CPU is that one token, and the record's workers is the width; a
+// per-worker entry prints its worker count. Mutation: fill the placeholders from the grant → the
+// range row prints 1, red; record the grant as workers → the range row's workers is 1, red.
+func TestPreemptiblePlaceholdersUnshrunk(t *testing.T) {
+	const script = `echo "$1"; echo "$CORESLOT_GRANTED_CPU"; cat "$CORESLOT_STATE_DIR"/holds/*`
+	for _, c := range []struct {
+		name  string
+		label string
+		want  string // {n}, and the record's workers
+	}{
+		{"range", "x", "8"},
+		{"per worker", "pw@6", "6"},
+	} {
+		dir := stateDir(t, "[resources]\ncpu = 8\n")
+		writeNeeds(t, dir, "[needs.\"x\"]\ncpu = \"1..8\"\n[needs.\"pw\"]\ncpu_per_worker = 0.4\n")
+		r := cli(t, baseEnv(dir), "run", "--preemptible", "--label", c.label, "--", "sh", "-c", script, "sh", "{n}")
+		out := strings.SplitN(r.stdout, "\n", 3)
+		if r.code != 0 || len(out) != 3 {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q", c.name, r.code, r.stdout, r.stderr)
+		}
+		var hold struct{ Grant map[string][]int }
+		if err := json.Unmarshal([]byte(out[2]), &hold); err != nil {
+			t.Fatalf("%s: hold body %q: %v", c.name, out[2], err)
+		}
+		if out[0] != c.want || out[1] != "1" || len(hold.Grant["cpu"]) != 1 {
+			t.Errorf("%s: {n} %q, CORESLOT_GRANTED_CPU %q, hold cpu %v; want %s, 1 and one token", c.name, out[0], out[1], hold.Grant["cpu"], c.want)
+		}
+		if lines := runLog(t, dir); len(lines) != 1 || fmt.Sprint(lines[0]["workers"]) != c.want {
+			t.Errorf("%s: run log %v, want workers %s", c.name, lines, c.want)
+		}
+	}
+}
+
+// A preemptible run's record keeps the unshrunk request as need, the real grant, and the reason
+// as preemptible; a run without a mark has no such key. Mutation: log the shrunk request as need →
+// the first two rows red; drop the key → red.
+func TestPreemptibleRunRecord(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 12\n")
+	writeNeeds(t, dir, "[needs.\"e\"]\ncpu = \"2..12\"\npreemptible = true\n")
+	for _, args := range [][]string{
+		{"--preemptible", "--need", "cpu=1..12"},
+		{"--label", "e"},
+		{"--need", "cpu=1..12"},
+	} {
+		if r := cli(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "true")...); r.code != 0 {
+			t.Fatalf("%q: exit %d, stderr %q", args, r.code, r.stderr)
+		}
+	}
+	lines := runLog(t, dir)
+	if len(lines) != 3 {
+		t.Fatalf("%d log lines, want 3", len(lines))
+	}
+	for n, want := range []struct {
+		need   string
+		reason any
+	}{{"[1 12]", "flag"}, {"[2 12]", "entry"}, {"[1 12]", nil}} {
+		need := fmt.Sprint(lines[n]["need"].(map[string]any)["cpu"])
+		grant := lines[n]["grant"].(map[string]any)["cpu"]
+		if wantGrant := map[bool]any{true: float64(1), false: float64(12)}[want.reason != nil]; need != want.need || grant != wantGrant || lines[n]["preemptible"] != want.reason {
+			t.Errorf("run %d: need %s, grant %v, preemptible %v; want %s, %v and %v", n, need, grant, lines[n]["preemptible"], want.need, wantGrant, want.reason)
+		}
+	}
+}
+
 // A run's command gets the soft descriptor limit the run was started with plus 256, not 256 above
 // the limit the Go runtime raised the run's own to at start-up; a pass-through started by that
 // command gets 256 more again. Mutation: pass currentNofile() instead of the probed original to

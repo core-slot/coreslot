@@ -88,7 +88,7 @@ type child struct {
 // under the run, I1) has written nothing into the directory: the run says so and appends no
 // run-log line, and still returns the command's status.
 func (r *run) runChild(c child) int {
-	argv := substitute(r.o.argv, c.grant, r.o.subst, r.o.cpuPerWorker, r.o.workers)
+	argv := substitute(r.o.argv, r.o.placeholderGrant(c.grant), r.o.subst, r.o.cpuPerWorker, r.o.workers)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
 	cmd.Env = c.env
@@ -137,10 +137,10 @@ func (r *run) runChild(c child) int {
 		TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
 		UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
-		Nested: c.nested,
+		Nested: c.nested, Preemptible: r.o.preemptWhy,
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
-	if g, ok := c.grant["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {
+	if g, ok := r.o.placeholderGrant(c.grant)["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {
 		rec.Workers = new(cpuPlaceholder(g, r.o.cpuPerWorker, r.o.workers))
 	} else if k := needs.WorkersFromLabel(r.o.label); k > 0 {
 		rec.Workers = &k
@@ -150,7 +150,8 @@ func (r *run) runChild(c child) int {
 		free := r.freeWait.total().Seconds()
 		rec.WaitedFreeS = &free
 	}
-	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil {
+	// A preemptible run uses more cores than its one token by design: the hint would say to raise it.
+	if tokens, ok := c.hintTokens(); ok && rec.CPUUserS != nil && !r.o.marked() {
 		if h := usageHint(r.o.label, tokens, *rec.CPUUserS+*rec.CPUSysS, rec.RanS); h != "" {
 			r.notice("%s", h)
 		}

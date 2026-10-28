@@ -520,6 +520,7 @@ func TestReadRunsRoundTrip(t *testing.T) {
 		PeakAfterS:          &after,
 		WaitedFreeS:         &free,
 		Workers:             new(10),
+		Preemptible:         "auto: median 14m >= 10m, cpu 12 >= 7",
 	}
 	if err := s.AppendRun(want); err != nil {
 		t.Fatal(err)
@@ -530,5 +531,28 @@ func TestReadRunsRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runs[0], want) {
 		t.Errorf("read back\n%+v\nwant\n%+v", runs[0], want)
+	}
+}
+
+// The preemptible key is written only for a run with a reason, and read back. Mutation: encode it
+// without omitempty → a plain run's line has the key, red; drop it from the decoder → red.
+func TestRunLogPreemptibleKey(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	r := RunRecord{TimeNS: 1791720000000000000, Label: "x", Need: map[string]spec.Range{"cpu": {Min: 1, Max: 8}}, Grant: map[string]int{"cpu": 1}}
+	if err := s.AppendRun(r); err != nil {
+		t.Fatal(err)
+	}
+	r.Preemptible = "flag"
+	if err := s.AppendRun(r); err != nil {
+		t.Fatal(err)
+	}
+	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
+	if len(lines) != 2 || strings.Contains(lines[0], "preemptible") || !strings.Contains(lines[1], `"preemptible":"flag"`) {
+		t.Errorf("lines %q, want the key on the second only", lines)
+	}
+	runs, _, err := s.ReadRuns()
+	if err != nil || len(runs) != 2 || runs[0].Preemptible != "" || runs[1].Preemptible != "flag" {
+		t.Errorf("ReadRuns = %+v, %v; want the reason on the second only", runs, err)
 	}
 }

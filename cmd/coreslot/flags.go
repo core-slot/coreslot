@@ -29,7 +29,8 @@ type runOptions struct {
 	strict      bool
 	independent bool
 	light       bool
-	preemptible *bool // --preemptible, else the needs entry's key; nil when neither says
+	preemptible *bool  // --preemptible, else the needs entry's key; nil when neither says
+	preemptWhy  string // why the run is preemptible: "flag", "entry" or the automatic rule's reason; "" if not
 	subst       bool
 	refusalCode int
 	argv        []string
@@ -128,6 +129,9 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 		}
 		if f.Name == "preemptible" {
 			o.preemptible = preemptible
+			if *preemptible {
+				o.preemptWhy = "flag"
+			}
 		}
 		if slices.Contains([]string{"priority", "timeout", "on-timeout", "no-wait"}, f.Name) {
 			waitFlags = append(waitFlags, "--"+f.Name)
@@ -174,6 +178,9 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 			}
 			if o.preemptible == nil {
 				o.preemptible = e.Preemptible
+				if e.Preemptible != nil && *e.Preemptible {
+					o.preemptWhy = "entry"
+				}
 			}
 		}
 	}
@@ -206,8 +213,35 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	return o, nil
 }
 
-// marked reports whether the run is preemptible: --preemptible or the entry's key said true.
-func (o runOptions) marked() bool { return o.preemptible != nil && *o.preemptible }
+// marked reports whether the run is preemptible: --preemptible, the entry's key or the automatic
+// rule said so.
+func (o runOptions) marked() bool { return o.preemptWhy != "" }
+
+// admitNeed is the request the budget sees. A preemptible run asks for one cpu token whatever its
+// cpu request: it runs at nice 10 and gets idle cores anyway, so a larger minimum buys nothing.
+// Its mem is never touched. o.need stays the unshrunk request, which the placeholders and the run
+// log use.
+func (o runOptions) admitNeed() map[string]spec.Range {
+	if _, ok := o.need["cpu"]; !ok || !o.marked() {
+		return o.need
+	}
+	need := maps.Clone(o.need)
+	need["cpu"] = spec.Range{Min: 1, Max: 1}
+	return need
+}
+
+// placeholderGrant is grant as the placeholders see it: a preemptible run's cpu is its unshrunk
+// request's max, so that a `make -j{n}` keeps the width it was written for while the run holds
+// one token.
+func (o runOptions) placeholderGrant(grant map[string]int) map[string]int {
+	cpu, ok := o.need["cpu"]
+	if !ok || !o.marked() {
+		return grant
+	}
+	g := maps.Clone(grant)
+	g["cpu"] = cpu.Max
+	return g
+}
 
 // validRequest is the validated request for need, which takes defaultNeed's cpu when it has none and
 // no --need was given.
@@ -247,7 +281,7 @@ func usagef(format string, args ...any) error {
 // configuration's [priorities] unless --priority was given. Its hold says that the run's process
 // tree carries the work.
 func (o runOptions) request(priority int) spec.Request {
-	return spec.Request{Label: o.label, Priority: priority, Need: o.need, Tree: true}
+	return spec.Request{Label: o.label, Priority: priority, Need: o.admitNeed(), Tree: true}
 }
 
 // sortedNeed lists the requested resources in ascending name order.
@@ -261,7 +295,7 @@ func (o runOptions) sortedNeed() []string {
 }
 
 // needText is the request in the form of the waiting line: `cpu 4..12, pg-local 1..1`.
-func (o runOptions) needText() string { return needText(o.need) }
+func (o runOptions) needText() string { return needText(o.admitNeed()) }
 
 // needText is a request as the waiting line and status show it: `cpu 4..12, gpu 1..1`, with a
 // fixed mem need as one size, `mem 3 GiB`.
@@ -281,7 +315,7 @@ func needText(need map[string]spec.Range) string {
 // minGrant is each requested resource's min: the grant of a run without a budget.
 func (o runOptions) minGrant() map[string]int {
 	g := make(map[string]int, len(o.need))
-	for name, r := range o.need {
+	for name, r := range o.admitNeed() {
 		g[name] = r.Min
 	}
 	return g
