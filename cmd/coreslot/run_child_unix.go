@@ -14,6 +14,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
@@ -136,6 +137,11 @@ func (r *run) runChild(c child) int {
 		Nested: c.nested,
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	if g, ok := c.grant["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {
+		rec.Workers = new(cpuPlaceholder(g, r.o.cpuPerWorker, r.o.workers))
+	} else if k := needs.WorkersFromLabel(r.o.label); k > 0 {
+		rec.Workers = &k
+	}
 	setMemPeak(&rec, peakKiB, peakAfterS, sampled)
 	if r.freeWait != nil {
 		free := r.freeWait.total().Seconds()

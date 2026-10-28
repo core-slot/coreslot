@@ -519,6 +519,7 @@ func TestReadRunsRoundTrip(t *testing.T) {
 		MemPeakSource:       "footprint",
 		PeakAfterS:          &after,
 		WaitedFreeS:         &free,
+		Workers:             new(10),
 	}
 	if err := s.AppendRun(want); err != nil {
 		t.Fatal(err)

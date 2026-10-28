@@ -156,6 +156,9 @@ func suggestionText(sg runstats.Suggestion) string {
 	if sg.CPU != nil {
 		parts = append(parts, fmt.Sprintf("cpu = %q", cpuText(*sg.CPU)))
 	}
+	if sg.CPUPerWorker > 0 {
+		parts = append(parts, fmt.Sprintf("cpu_per_worker = %g", sg.CPUPerWorker))
+	}
 	if sg.MemMiB > 0 {
 		parts = append(parts, fmt.Sprintf("mem = %q", spec.NeedText(sg.MemMiB)))
 	}
@@ -178,7 +181,7 @@ func currentText(f needs.File, label string) string {
 		parts = append(parts, fmt.Sprintf("cpu = %q", cpuText(*e.CPU)))
 	}
 	if e.CPUPerWorker > 0 {
-		parts = append(parts, "cpu per worker")
+		parts = append(parts, fmt.Sprintf("cpu_per_worker = %g", e.CPUPerWorker))
 	}
 	if e.MemMiB > 0 {
 		parts = append(parts, fmt.Sprintf("mem = %q (%s)", spec.NeedText(e.MemMiB), spec.FormatMiB(e.MemMiB)))
@@ -218,9 +221,10 @@ type jsonLabelStats struct {
 }
 
 type jsonSuggestion struct {
-	CPU      *string `json:"cpu"`
-	Mem      *string `json:"mem"`
-	Evidence string  `json:"evidence"`
+	CPU            *string  `json:"cpu"`
+	Mem            *string  `json:"mem"`
+	CoresPerWorker *float64 `json:"cores_per_worker"` // null when no run carries workers
+	Evidence       string   `json:"evidence"`
 }
 
 type jsonCurrent struct {
@@ -250,6 +254,9 @@ func writeStatsJSON(io IO, l learned) error {
 		}
 		if s.Suggest.MemMiB > 0 {
 			j.Suggestion.Mem = new(spec.NeedText(s.Suggest.MemMiB))
+		}
+		if s.Suggest.CPUPerWorker > 0 {
+			j.Suggestion.CoresPerWorker = &s.Suggest.CPUPerWorker
 		}
 		e, ok, err := l.needs.Lookup(s.Label)
 		switch {
@@ -284,8 +291,8 @@ type suggestion struct {
 	kept  string // why the entry is kept as it is, when set is nil
 }
 
-// suggestions decides, per label, the keys to set: mem, cpu unless f's entry gives cpu per
-// worker, and the evidence. A pinned entry, or one that does not parse, is kept.
+// suggestions decides, per label, the keys to set: mem, the evidence, and cpu_per_worker for an
+// entry of f that has it, else cpu. A pinned entry, or one that does not parse, is kept.
 func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
 	var out []suggestion
 	for _, s := range stats {
@@ -300,7 +307,10 @@ func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
 			sg.kept = "nothing measured, kept"
 		default:
 			sg.set = map[string]any{"evidence": s.Suggest.Reason}
-			if s.Suggest.CPU != nil && e.CPUPerWorker == 0 {
+			switch c := s.CPUPerWorkerFor(e.CPUPerWorker); {
+			case e.CPUPerWorker > 0 && c > 0:
+				sg.set["cpu_per_worker"] = c // its cpu is the worker width, kept
+			case s.Suggest.CPU != nil && e.CPUPerWorker == 0:
 				sg.set["cpu"] = cpuText(*s.Suggest.CPU)
 			}
 			if s.Suggest.MemMiB > 0 {
@@ -368,9 +378,9 @@ func suggestCommand(args []string, io IO) int {
 			continue
 		}
 		var parts []string
-		for _, k := range []string{"cpu", "mem"} {
+		for _, k := range []string{"cpu", "cpu_per_worker", "mem"} {
 			if v, ok := sg.set[k]; ok {
-				parts = append(parts, fmt.Sprintf("%s = %q", k, v))
+				parts = append(parts, fmt.Sprintf("%s = %#v", k, v)) // a string quoted, a number bare
 			}
 		}
 		fmt.Fprintf(io.Stdout, "%s: wrote %s and its evidence\n", text(sg.label), strings.Join(parts, ", "))

@@ -55,7 +55,7 @@ func TestStatsText(t *testing.T) {
 	}
 }
 
-// Mutation: leave skipped_lines at 0.
+// Mutation: leave skipped_lines at 0, or cores_per_worker null.
 func TestStatsJSON(t *testing.T) {
 	r := cli(t, baseEnv(statsDir(t)), "stats", "--json")
 	if r.code != 0 {
@@ -67,8 +67,9 @@ func TestStatsJSON(t *testing.T) {
 		Labels       []struct {
 			Label      string `json:"label"`
 			Suggestion struct {
-				CPU *string `json:"cpu"`
-				Mem *string `json:"mem"`
+				CPU            *string  `json:"cpu"`
+				Mem            *string  `json:"mem"`
+				CoresPerWorker *float64 `json:"cores_per_worker"`
 			} `json:"suggestion"`
 		} `json:"labels"`
 	}
@@ -81,6 +82,9 @@ func TestStatsJSON(t *testing.T) {
 	l := doc.Labels[0]
 	if l.Label != "fastapi:tests" || l.Suggestion.Mem == nil || *l.Suggestion.Mem != "2816M" || l.Suggestion.CPU == nil || *l.Suggestion.CPU != "1..6" {
 		t.Errorf("labels[0] = %+v:\n%s", l, r.stdout)
+	}
+	if c := doc.Labels[2].Suggestion.CoresPerWorker; l.Suggestion.CoresPerWorker != nil || c == nil || *c != 0.4 {
+		t.Errorf("cores_per_worker %v and %v, want null and 0.4:\n%s", l.Suggestion.CoresPerWorker, c, r.stdout)
 	}
 }
 
@@ -141,20 +145,34 @@ gate = "fastapi"
 	}
 }
 
-// Mutation: set cpu whatever the entry says.
-func TestSuggestWriteRespectsCPUPerWorker(t *testing.T) {
-	dir := statsDir(t)
-	path := filepath.Join(dir, "needs.toml")
-	writeNeeds(t, dir, "[needs.\"worker:tests\"]\ncpu_per_worker = 2\n")
-	if r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "worker:tests@8"); r.code != 0 {
-		t.Fatalf("suggest --write exited %d: %s", r.code, r.stderr)
-	}
-	got := readNeeds(t, path)
-	if w := got["worker:tests"]; w["cpu"] != nil || w["mem"] != "1536M" || w["cpu_per_worker"] != int64(2) || w["evidence"] == nil {
-		t.Errorf("worker:tests entry %v", w)
-	}
-	if len(got) != 1 {
-		t.Errorf("--label wrote other entries: %v", got)
+// A per-worker entry gets cpu_per_worker rewritten from the runs that carry workers (3 cores over
+// 8 workers: 0.4), never cpu, and keeps its width and every other key.
+// Mutation: write cpu over a per-worker entry, or keep its old cpu_per_worker → red.
+func TestSuggestWritePerWorker(t *testing.T) {
+	for _, tc := range []struct {
+		entry string
+		cpu   any
+	}{
+		{"cpu_per_worker = 2\n", nil},
+		{"cpu_per_worker = 2\ncpu = \"1..16\"\ngate = \"w\"\n", "1..16"},
+	} {
+		dir := statsDir(t)
+		writeNeeds(t, dir, "[needs.\"worker:tests\"]\n"+tc.entry)
+		r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "worker:tests@8")
+		if r.code != 0 || !strings.Contains(r.stdout, "cpu_per_worker = 0.4") {
+			t.Fatalf("suggest --write exited %d: %s%s", r.code, r.stdout, r.stderr)
+		}
+		got := readNeeds(t, filepath.Join(dir, "needs.toml"))
+		w := got["worker:tests"]
+		if w["cpu_per_worker"] != 0.4 || w["cpu"] != tc.cpu || w["mem"] != "1536M" || w["evidence"] == nil {
+			t.Errorf("%q: worker:tests entry %v", tc.entry, w)
+		}
+		if tc.cpu != nil && w["gate"] != "w" {
+			t.Errorf("%q: gate dropped: %v", tc.entry, w)
+		}
+		if len(got) != 1 {
+			t.Errorf("--label wrote other entries: %v", got)
+		}
 	}
 }
 

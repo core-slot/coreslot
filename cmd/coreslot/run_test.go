@@ -895,6 +895,38 @@ func TestRunNeedFormsGrantAndLog(t *testing.T) {
 	}
 }
 
+// The run log's workers is the value the cpu placeholder took, else the label's @K, else absent:
+// for a per-worker entry the worker count {n} gave, not the tokens. Mutation: record the cpu
+// grant for every placeholder → the per-worker case logs 3, red.
+func TestRunLogsWorkers(t *testing.T) {
+	echo := []string{"sh", "-c", `echo "$1"`, "sh", "{n}"}
+	for _, c := range []struct {
+		name string
+		args []string
+		want string // "" for no workers key, "n" for what the command printed
+	}{
+		{"no placeholder, no @K", []string{"--label", "x", "--need", "cpu=3", "--", "true"}, ""},
+		{"@K", []string{"--label", "x@5", "--need", "cpu=3", "--", "true"}, "5"},
+		{"{n}", append([]string{"--label", "x@5", "--need", "cpu=3", "--"}, echo...), "n"},
+		{"per-worker {n}", append([]string{"--label", "pw", "--"}, echo...), "n"},
+	} {
+		dir := stateDir(t, "[resources]\ncpu = 8\n")
+		writeNeeds(t, dir, "[needs.\"pw\"]\ncpu_per_worker = 0.5\ncpu = \"2..6\"\n")
+		r := cli(t, baseEnv(dir), append([]string{"run"}, c.args...)...)
+		want := c.want
+		if want == "n" {
+			want = strings.TrimSpace(r.stdout)
+		}
+		lines := runLog(t, dir)
+		if r.code != 0 || len(lines) != 1 {
+			t.Fatalf("%s: exit %d, %d log lines (stderr %q)", c.name, r.code, len(lines), r.stderr)
+		}
+		if got, ok := lines[0]["workers"]; ok != (want != "") || ok && fmt.Sprint(got) != want {
+			t.Errorf("%s: workers %v (present %v), want %q", c.name, got, ok, want)
+		}
+	}
+}
+
 // What the burn helper makes resident and how much CPU time it uses.
 const (
 	burnBytes = 64 << 20

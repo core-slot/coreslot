@@ -40,11 +40,13 @@ type Stats struct {
 }
 
 // Suggestion is what the window suggests for the label's needs entry. CPU is nil and MemMiB 0
-// when no window run measured them.
+// when no window run measured them; CPUPerWorker, the cores one worker uses, is 0 when no
+// measured window run carries workers.
 type Suggestion struct {
-	CPU    *spec.Range
-	MemMiB int64
-	Reason string
+	CPU          *spec.Range
+	MemMiB       int64
+	CPUPerWorker float64
+	Reason       string
 }
 
 // counted reports whether r says what its label needs: labelled, not a pass-through, not run
@@ -74,6 +76,7 @@ func Summarize(runs []store.RunRecord, cpuSize int) []Stats {
 func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats {
 	s := Stats{Label: label, Runs: n, Window: window}
 	maxCores := 0.0
+	var perWorker []float64
 	for _, r := range window {
 		s.WaitedS += r.WaitedS
 		if r.WaitedFreeS != nil {
@@ -85,15 +88,27 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 		cores := (*r.CPUUserS + *r.CPUSysS) / r.RanS
 		s.CoresUsed = append(s.CoresUsed, cores)
 		maxCores = max(maxCores, cores)
+		if r.Workers != nil && *r.Workers > 0 {
+			perWorker = append(perWorker, cores/float64(*r.Workers))
+		}
 		if g := r.Grant["cpu"]; g > 0 && cores >= saturatedShare*float64(g) {
 			s.Saturated++
 		}
+	}
+	if len(perWorker) > 0 {
+		slices.Sort(perWorker)
+		s.Suggest.CPUPerWorker = perWorkerStep(perWorker[int(math.Ceil(0.9*float64(len(perWorker))))-1])
 	}
 	if len(s.CoresUsed) > 0 {
 		x := min(max(int(math.Ceil(maxCores)), 1), max(cpuSize, 1), spec.MaxPerResource)
 		cpu := spec.Range{Min: x, Max: x}
 		if last := window[len(window)-1].Need["cpu"]; last.Min < last.Max {
 			cpu.Min = 1
+			if s.Suggest.CPUPerWorker > 0 && s.Saturated == 0 {
+				// Its workers follow the grant, so it uses fewer cores when granted fewer: narrowing
+				// the max to the cores used would narrow it again on every learn.
+				cpu.Max = last.Max
+			}
 		}
 		s.Suggest.CPU = &cpu
 	}
@@ -102,6 +117,22 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 	s.Suggest.MemMiB = (s.MemPeakKiB + tokenKiB - 1) / tokenKiB * spec.MemTokenMiB
 	s.Suggest.Reason = s.reason(maxCores)
 	return s
+}
+
+// CPUPerWorkerFor is the cpu_per_worker to write over an entry whose current one is current, 0
+// when the entry is not per worker: the learned one, and for a per-worker entry with a saturated
+// window run at least current + 0.05, since its workers may have wanted more than they were paid.
+func (s Stats) CPUPerWorkerFor(current float64) float64 {
+	if current > 0 && s.Saturated > 0 {
+		return max(s.Suggest.CPUPerWorker, perWorkerStep(current+0.05))
+	}
+	return s.Suggest.CPUPerWorker
+}
+
+// perWorkerStep is x rounded up to a multiple of 0.05, at least 0.05; the epsilon keeps a product
+// that float arithmetic leaves a hair above a multiple from rounding up to the next.
+func perWorkerStep(x float64) float64 {
+	return max(math.Ceil(x*20-1e-9)/20, 0.05)
 }
 
 // memPeak sets the window's largest peak, and in PeakCPU the cpu grant of its run when that is above
@@ -126,6 +157,9 @@ func (s Stats) reason(maxCores float64) string {
 		span(s.Window[0].TimeNS, s.Window[len(s.Window)-1].TimeNS))}
 	if len(s.CoresUsed) > 0 {
 		parts = append(parts, fmt.Sprintf("max %.1f cores, %d of %d saturated", maxCores, s.Saturated, len(s.CoresUsed)))
+	}
+	if s.Suggest.CPUPerWorker > 0 && s.Saturated == 0 {
+		parts = append(parts, fmt.Sprintf("%[1]g cores per worker: set cpu_per_worker = %[1]g", s.Suggest.CPUPerWorker))
 	}
 	if s.MemPeakKiB > 0 {
 		peak := "peak " + spec.FormatMiB((s.MemPeakKiB+1023)/1024)
