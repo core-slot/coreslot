@@ -19,14 +19,18 @@ with the stand's state directory; GNU parallel runs with PARALLEL_HOME=<state_di
 
 The cells (CELLS): trace-quiet and trace-loaded (K, S1, S2, S3, F on the trace mix), heavy-quiet
 and heavy-loaded (K, S1, S2, P on the stand's agents), wide-quiet (K, S1, S2, F on the wide agents)
-and batch (KP, K, S1, F), each at its own level (run7.level). The trace mix: the gates of
+and batch (KP, KPU, K, S1, F), each at its own level (run7.level). The trace mix: the gates of
 gates_by_class, in sorted class order, shuffled with the seed "run8-mix" and dealt 3 to each of the
 four agents in agent_names order, the same in every arm, block and phase. The batch mix: the first
 agent runs the batch gate once at offset 0, the other three run the behind class's gate 3 times
 each, all from offset BATCH_DELAY_S (a dry stand may set "batch_delay_s"); no random offsets.
 
 The arms: K runs every gate under coreslot with cpu = "140%", mem = "60%" and OUT/needs.toml; KP
-the same, the batch label preemptible by coreslot's automatic rule on its learned entry; the batch
+the same, the batch label preemptible by coreslot's automatic rule on its learned entry; KPU is KP
+with the batch gate's command run as `TASKPOLICY <argv>` inside `coreslot run`, v0.3.1's darwin
+treatment on v0.3.0 (whose nice 10 leaves macOS's PRI at 31); each KP and KPU set records
+"batch_pri", the lowest `ps -o pri=` over the batch gate's process tree BATCH_PRI_AT_S after t0
+(None without a reading), and the treatment check wants BATCH_PRI[arm]. The batch
 cell's K the same with `preemptible = false` inserted into the batch label's entry (k_needs). S1,
 S2 and S3 hold each heavy gate on one of 1, 2 or 3 slots of an in-process counting semaphore, the
 light gates free; F runs every gate when its agent reaches it. P submits each heavy gate as one
@@ -63,20 +67,21 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            "cpu_s", its process tree's user and system seconds (os.wait4), None for P's queued
            jobs, and a P gate "submitted". The batch cell, when
            `coreslot run --preemptible=false -- true` exits 64 (a usage error: no such flag),
-           writes OUT/batch-skipped.json once and exits 0; any exit but 0 and 64, or batch-skipped.json while it exits 0, exits 2. Exit 2
-           when P is to run and parallel is not on PATH; on a non-dry stand when the binary is
-           not the stand's coreslot_sha256, and on its pilot and main when the evidence tree has
-           uncommitted changes; when pilot or main lacks OUT/power.json, or main a pilot_check.json
-           whose "go" is true; when the needs files do not match OUT/needs.sha256. A cell not in
-           power.json's "n" (dropped or left out), and the batch cell's main when
+           writes OUT/batch-skipped.json once and exits 0; any exit but 0 and 64, or
+           batch-skipped.json while it exits 0, exits 2. Exit 2 when P is to run and parallel is
+           not on PATH; on a non-dry stand when the binary is not the stand's coreslot_sha256,
+           and on its pilot and main when the evidence tree has uncommitted changes; when pilot
+           or main lacks OUT/power.json, or main a pilot_check.json whose "go" is true; when the
+           needs files do not match OUT/needs.sha256. A cell not in power.json's "n" (dropped or left out), and the batch cell's main when
            pilot_check.json's "batch_futile" is true, exit 0 without a set. P leaves a heavy
            cell's main when pilot_check.json's "p_feasible"[cell] is false. --as-block and
            --primer as run 7's.
   power    from PROBE_OUT's valid probe blocks (P never decides one): per trace cell S* (the
-           fixed count with the lowest mean) and d = ln(K/S*), per batch comparison its log
-           ratio and its batch_s KP/K against ln(1 + BATCH_COST_MARGIN), each with its mean, sd,
-           k and sigma (stats6.sigma_upper at 0.80); each cell's set seconds (a set_timeout set
-           counts its timeout_s, a held P set included, and every set its level_wait_s);
+           fixed count with the lowest mean) and d = ln(K/S*), per batch comparison (KP's and
+           KPU's alike) its log ratio and its batch_s KP/K and KPU/K against
+           ln(1 + BATCH_COST_MARGIN), each with its mean, sd, k and sigma (stats6.sigma_upper at
+           0.80); each cell's set seconds (a set_timeout set counts its timeout_s, a held P set
+           included, and every set its level_wait_s);
            stats8.power_plan's n (the batch cell's at most BATCH_N_MAX), drops (DROP_ORDER),
            hours (pilot and main blocks) and joint power, with "over_cap", and "batch_treatment"
            (each probe KP set's treatment problems), to OUT/power.json. "hours_parts" splits the
@@ -97,14 +102,15 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            from the first PILOT_BLOCKS valid pilot blocks of each cell power.json keeps (re-runs
            capped at PILOT_RERUNS; a dry cell's blocks present): stats8.futile at alpha 0.10 per
            comparison, P's timeouts and feasibility per heavy cell (at most P_INFEASIBLE_TIMEOUTS
-           per PILOT_BLOCKS blocks taken, pro rata), "go", "batch_futile" and the
+           per PILOT_BLOCKS blocks taken, pro rata), "go", "pre_futile" (whether a leg of
+           H-PRE, KP's, or of H-PRE-U, KPU's, is futile), "batch_futile" (both are) and the
            declared "outcome", to OUT/pilot_check.json. A cell with fewer than 2 blocks is
            untested; "go" is false when a primary cell is futile or untested. Exit 2 without
            power.json, once a main record exists, or while a non-dry
            cell is short with re-runs left.
   summary  from each kept cell's first n valid main blocks (n from power.json, re-runs up to
-           10 % of n; a dry cell's blocks present): the primary, secondary and H-PRE families
-           (the secondary its own Holm family whatever the primary's outcome), the primary's
+           10 % of n; a dry cell's blocks present): the primary, secondary, H-PRE and H-PRE-U
+           families (the secondary its own Holm family whatever the primary's outcome), the primary's
            joint power and every cell's effect sizes, to OUT/summary.json and OUT/summary.txt;
            a cell main did not run takes its pilot blocks' effect sizes, marked exploratory. A
            cell short of n with the re-runs spent is untested. After a pilot check whose "go" is
@@ -147,7 +153,11 @@ CELLS = {"trace-quiet": ("trace", "quiet", ("K", "S1", "S2", "S3", "F")),
          "heavy-quiet": ("heavy", "quiet", ("K", "S1", "S2", "P")),
          "heavy-loaded": ("heavy", "loaded", ("K", "S1", "S2", "P")),
          "wide-quiet": ("wide", "quiet", ("K", "S1", "S2", "F")),
-         "batch": ("batch", "quiet", ("KP", "K", "S1", "F"))}
+         "batch": ("batch", "quiet", ("KP", "KPU", "K", "S1", "F"))}
+PRE = {"H-PRE": "KP", "H-PRE-U": "KPU"}  # each preemptive treatment's family
+TASKPOLICY = ("/usr/sbin/taskpolicy", "-c", "utility", "--")
+BATCH_PRI = {"KP": 31, "KPU": 20}  # macOS's PRI under nice 10 (unchanged) and under taskpolicy
+BATCH_PRI_AT_S = 30
 PHASES = ("probe", "pilot", "main")
 RECORDS = tuple(f"{p}-*.jsonl" for p in PHASES)
 K_SHARE = run7.K_SHARE
@@ -330,26 +340,40 @@ def learn(cfg, out):
 
 # --- the treatment check and the batch cell's K needs -----------------------------------------
 
-def treatment(cell, arm, runlog, batch_label):
+def treatment(cell, arm, runlog, batch_label, batch_pri=None):
     """The problems with a set's treatment, from its run-log lines: (a) a preemptible key on any
-    label but the batch label; (b) one on the batch label in any arm but KP; (c) in the batch
-    cell's KP, no batch-label line, or one whose preemptible reason is not the automatic
-    rule's ("auto: ...")."""
+    label but the batch label; (b) one on the batch label in any arm but KP and KPU; (c) in the
+    batch cell's KP or KPU, no batch-label line, one whose preemptible reason is not the
+    automatic rule's ("auto: ..."), or a batch_pri other than BATCH_PRI[arm]."""
     problems = []
     for line in runlog:
         if "preemptible" not in line:
             continue
         if line.get("label") != batch_label:
             problems.append(f"preemptible on {line.get('label')}")
-        elif arm != "KP":
+        elif arm not in BATCH_PRI:
             problems.append(f"preemptible on the batch label in {arm}")
-    if cell == "batch" and arm == "KP":
+    if cell == "batch" and arm in BATCH_PRI:
         mine = [l for l in runlog if l.get("label") == batch_label]
         if not mine:
             problems.append("no run-log line of the batch label")
         problems += [f"the batch label's preemptible reason is {l.get('preemptible')!r}"
                      for l in mine if not str(l.get("preemptible") or "").startswith("auto: ")]
+        if batch_pri != BATCH_PRI[arm]:
+            problems.append(f"the batch gate's PRI is {batch_pri}, not {BATCH_PRI[arm]}")
     return problems
+
+
+def batch_pri(label):
+    """The lowest `ps -o pri=` over the process tree of each live gate run with label; None
+    without a reading."""
+    with run4._live_lock:
+        pids = [p.pid for p in run4._live if label in (p.args or ())]
+    tree = [d for p in pids for d in [p, *run7.descendants(run7.ps_snapshot(), p)]]
+    r = subprocess.run(["ps", "-o", "pri=", "-p", ",".join(map(str, tree))],
+                       capture_output=True, text=True) if tree else None
+    pris = [int(x) for x in r.stdout.split() if x.isdigit()] if r else []
+    return min(pris, default=None)
 
 
 def k_needs(text, label):
@@ -420,10 +444,11 @@ def run_gate(argv, **kw):
 
 
 def run_one(cfg, gate, arm):
-    """run4.run_one through run_gate: (exit, output, cpu_s)."""
+    """run4.run_one through run_gate, KPU's batch gate under TASKPOLICY: (exit, output, cpu_s)."""
     if arm.startswith("K"):
-        r = run4.cs(cfg, "run", "--label", gate["label"], "--", *gate["argv"], runner=run_gate,
-                    cwd=gate["cwd"], env=gate.get("env", {}))
+        pre = TASKPOLICY if arm == "KPU" and gate["label"] == batch_label(cfg) else ()
+        r = run4.cs(cfg, "run", "--label", gate["label"], "--", *pre, *gate["argv"],
+                    runner=run_gate, cwd=gate["cwd"], env=gate.get("env", {}))
     else:
         r = run_gate(run4.f_argv(gate), cwd=gate["cwd"],
                      env=dict(os.environ, **gate.get("env", {})))
@@ -609,16 +634,23 @@ def run_set8(cfg, path, *, cell, arm, offsets, meta, baseline, slots=None, needs
         with run7.level(level_name) as lvl:
             level_wait = round(time.monotonic() - w0, 1)
             h0, pf0, limit = overload.headroom_mib(), parallel_free_mib(), set_timeout(cfg, mix)
-            therm0 = therm()
+            therm0, pri = therm(), []
+            watch = threading.Timer(BATCH_PRI_AT_S, lambda: pri.append(batch_pri(
+                batch_label(cfg))))
+            if mix == "batch" and arm in BATCH_PRI:
+                watch.start()
             gates, failures, errors, samples, t0, timed_out = run_agents(
                 cfg, arm, offsets, slots, limit, queue_dir)
             therm1 = therm()
+            watch.cancel()
+            if watch.ident:
+                watch.join()
         if arm.startswith("K") and (open(dst).read() if os.path.exists(dst) else None) != needs:
             errors.append("the needs file changed during the set")
         verdict = {n: round(max(g["end"] for g in gates if g["agent"] == n) - offsets[n], 1)
                    for n in cfg["agents"] if any(g["agent"] == n for g in gates)}
         runlog = [json.loads(l) for l in acceptance.runlog_lines(cfg)[runlog0:]]
-        problems = treatment(cell, arm, runlog, batch_label(cfg))
+        problems = treatment(cell, arm, runlog, batch_label(cfg), (pri or [None])[0])
         flags = (["hot_start"] if cd["cooldown_gave_up"] else []) + lvl["flags"] + (
             ["level_off"] if run7.level_off(h0, level_name) else []) + (
             ["busy_background"] if bg_cpu > run7.BG_CPU_FLAG_CORES else [])
@@ -647,6 +679,8 @@ def run_set8(cfg, path, *, cell, arm, offsets, meta, baseline, slots=None, needs
             batch = [g for g in gates if g["agent"] == cfg["batch_agent"]]
             rec["short_mean_verdict_s"] = round(statistics.mean(behind), 1) if behind else None
             rec["batch_s"] = round(batch[0]["end"] - batch[0]["start"], 1) if batch else None
+            if arm in BATCH_PRI:
+                rec["batch_pri"] = (pri or [None])[0]
         with open(path, "a") as f:
             f.write(json.dumps(rec) + "\n")
         print(f"{meta.get('block')} {cell} {arm}: mean verdict {rec['mean_verdict_s']} s,"
@@ -763,7 +797,8 @@ SAFETY_SWAP_MARGIN_MIB = 64  # (probe) KP's swap-out above K's, per block: run 7
 OUTCOMES = {"go": "main runs every kept cell at power.json's n",
             "stop": "stop: the primary is futile at the pilot; main does not run; the pilot is"
                     " reported as exploratory, with its estimates",
-            "batch": "main runs without the batch cell; H-PRE is reported futile at the pilot"}
+            "batch": "main runs without the batch cell; H-PRE and H-PRE-U are reported futile at"
+                     " the pilot"}
 SHORT = "its cell is short of n, re-runs spent"
 DRY_SHORT = "a dry cell with fewer than 2 valid blocks"
 
@@ -795,9 +830,14 @@ def legs(blocks, cell):
         s = run6.lowest(blocks, list(blocks), ("S1", "S2", "S3"))
         return s, {f"K/{s}": (ln8(blocks, cell, "K", s), MARGIN)}
     if cell == "batch":
-        return None, {f"KP/{o}": (ln8(blocks, cell, "KP", o), b)
+        return None, {f"{t}/{o}": (ln8(blocks, cell, t, o), b) for t in PRE.values()
                       for o, b in (("K", 0.0), ("S1", 0.0), ("F", MARGIN))}
     return None, {}
+
+
+def treated(name):
+    """The preemptive arm a batch leg's name judges: "KPU" for "batch_s KPU/K"."""
+    return name.split("/")[0].split()[-1]
 
 
 def write_out(out, name, obj):
@@ -829,9 +869,9 @@ def power(probe_out, out):
         if len(blocks) < 2:
             refuse(f"probe {cell}: {len(blocks)} valid blocks; power needs 2")
         s, comps = legs(blocks, cell)
-        if cell == "batch":
-            comps["batch_s KP/K"] = (ln8(blocks, cell, "KP", "K", "batch_s"),
-                                     math.log(1 + BATCH_COST_MARGIN))
+        for t in PRE.values() if cell == "batch" else ():
+            comps[f"batch_s {t}/K"] = (ln8(blocks, cell, t, "K", "batch_s"),
+                                       math.log(1 + BATCH_COST_MARGIN))
         res["S*"].update({cell: s} if s else {})
         comps = res["components"][cell] = {name: {
             "mean": statistics.fmean(d), "sd": statistics.stdev(d), "k": len(d), "bound": bound,
@@ -885,7 +925,7 @@ def power(probe_out, out):
     res["hours_parts"] = {"cells": hp, "learn_h": learn_h,
                           "total_h": sum(sum(x.values()) for x in hp.values()) + learn_h}
     free = plan(cells, math.inf)  # each n as power asks, clamped at BATCH_N_MAX and N_MAX
-    s1 = ["H-S1"] + (["batch KP/S1"] if "batch" in cells else []) + [
+    s1 = ["H-S1"] + ([f"batch {t}/S1" for t in PRE.values()] if "batch" in cells else []) + [
         f"{c} K/S1 (S1 is the probe's S*)" for c, s in res["S*"].items() if s == "S1"]
     menu = {"all_arms": option(free["n"], p=free)[0],
             "no_S1": option(free["n"], without=("S1",), gives_up=s1)[0]}
@@ -947,9 +987,12 @@ def pilot_check(out):
     stop = OUTCOMES["stop"] if set(futile) & set(PRIMARY) else short and (
         f"stop: {', '.join(short)} untested at the pilot; main does not run; the pilot is"
         " reported as exploratory, with its estimates")
+    pre = {f: any(x["futile"] for k, x in res["components"].get("batch", {}).items()
+                  if treated(k) == t) for f, t in PRE.items()}  # the cell goes while one lives
+    gone = "batch" in res["components"] and all(pre.values())
     write_out(out, "pilot_check.json", dict(
-        res, futile=futile, go=not stop, batch_futile="batch" in futile,
-        outcome=stop or OUTCOMES["batch" if "batch" in futile else "go"]))
+        res, futile=futile, go=not stop, pre_futile=pre, batch_futile=gone,
+        outcome=stop or OUTCOMES["batch" if gone else "go"]))
 
 
 def holm8(ps, why=None):
@@ -981,36 +1024,37 @@ def secondary(used, plan):
     return tests
 
 
-def h_pre(bs):
-    """H-PRE's legs on the batch cell's blocks: time, cost and safety, and Holm over them."""
+def h_pre(bs, a="KP"):
+    """H-PRE's legs (H-PRE-U's with a = "KPU") on the batch cell's blocks: time, cost and
+    safety, and Holm over them."""
     def upper(d, bound):
         return stats6.paired_upper(list(d), bound)["p"]
-    t = {f"KP<{o}": stats6.paired_lower(ln8(bs, "batch", o, "KP"), 0)["p"] for o in ("K", "S1")}
-    t["KP~F"] = upper(ln8(bs, "batch", "KP", "F"), MARGIN)
-    safe = {"warn_s": upper((run4.warn_s(s["KP"]) - run4.warn_s(s["K"]) for s in bs.values()),
+    t = {f"{a}<{o}": stats6.paired_lower(ln8(bs, "batch", o, a), 0)["p"] for o in ("K", "S1")}
+    t[f"{a}~F"] = upper(ln8(bs, "batch", a, "F"), MARGIN)
+    safe = {"warn_s": upper((run4.warn_s(s[a]) - run4.warn_s(s["K"]) for s in bs.values()),
                             SAFETY_WARN_MARGIN_S),
-            "swapout_mib": upper((run4.swapout_mib(s["KP"]) - run4.swapout_mib(s["K"])
+            "swapout_mib": upper((run4.swapout_mib(s[a]) - run4.swapout_mib(s["K"])
                                   for s in bs.values()), SAFETY_SWAP_MARGIN_MIB)}
     res = {"time": {"legs": t, "p": stats8.iut_p(list(t.values()))},
-           "cost": {"p": upper(ln8(bs, "batch", "KP", "K", "batch_s"),
+           "cost": {"p": upper(ln8(bs, "batch", a, "K", "batch_s"),
                                math.log(1 + BATCH_COST_MARGIN))},
            "safety": {"legs": safe, "p": stats8.iut_p(list(safe.values()))}}
     return dict(res, rows=holm8({k: v["p"] for k, v in res.items()}))
 
 
 def effects(bs, cell, recs):
-    """Each non-K arm against K (KP against K, S1 and F in the batch cell; P over the blocks
-    with a valid P set), the batch's own time KP/K, and each arm's warn seconds and swap
-    traffic."""
+    """Each non-K arm against K (KP and KPU against K, S1 and F in the batch cell; P over the
+    blocks with a valid P set), the batch's own time KP/K and KPU/K, and each arm's warn seconds
+    and swap traffic."""
     p = {r["block"]: r for r in recs if r["arm"] == "P" and r["valid"]}
     by = {a: bs for a in CELLS[cell][2] if a != "P"}
     if "P" in CELLS[cell][2]:
         by["P"] = {b: dict(s, P=p[s["K"]["block"]]) for b, s in bs.items() if s["K"]["block"] in p}
-    pairs = ([("KP", o) for o in ("K", "S1", "F")] if cell == "batch"
+    pairs = ([(t, o) for t in PRE.values() for o in ("K", "S1", "F")] if cell == "batch"
              else [(a, "K") for a in by if a != "K"])
     res = {"ratio": {f"{a}/{b}": run6.estimate(ln8(by[a], cell, a, b)) for a, b in pairs}}
-    if cell == "batch":
-        res["ratio"]["batch_s KP/K"] = run6.estimate(ln8(bs, cell, "KP", "K", "batch_s"))
+    for t in PRE.values() if cell == "batch" else ():
+        res["ratio"][f"batch_s {t}/K"] = run6.estimate(ln8(bs, cell, t, "K", "batch_s"))
     for name, f in (("warn_s", run4.warn_s), ("swap_traffic_pages", run7.swap_traffic_pages)):
         res[name] = {a: run6.ci(f(s[a]) for s in by[a].values()) for a in by if by[a]}
     return res
@@ -1018,9 +1062,10 @@ def effects(bs, cell, recs):
 
 def summary_text(s):
     p = s["primary"]
+    fams = [(f, s[f]) for f in PRE if f in s]
     rows = [f"  {r['name']}: {r['status']}" + ("" if r.get("p") is None else f"; p {r['p']:.4g}")
-            for r in s["secondary"] + [dict(r, name=f"H-PRE {r['name']}")
-                                       for r in s["H-PRE"].get("rows", [])]]
+            for r in s["secondary"] + [dict(r, name=f"{f} {r['name']}")
+                                       for f, h in fams for r in h.get("rows", [])]]
     return "\n".join([
         "Acceptance run 8: summary" + (" (dry)" if s["dry"] else "") + (
             " of the pilot, exploratory: main did not run" if s.get("exploratory") else ""), "",
@@ -1032,8 +1077,9 @@ def summary_text(s):
             else "descriptive, no rejection claimed" if p["descriptive"]
             else "rejected" if p["rejected"] else "not rejected")
         + f"; joint power {p.get('joint_power')}",
-        "Secondary family (Holm, alpha 0.05), then H-PRE (Holm over time, cost and safety):",
-        *rows, *(f"  H-PRE: {k}, {v}" for k, v in s["H-PRE"].items() if k != "rows" and
+        "Secondary family (Holm, alpha 0.05), then H-PRE and H-PRE-U (KP's and KPU's, each Holm"
+        " over time, cost and safety):",
+        *rows, *(f"  {f}: {k}, {v}" for f, h in fams for k, v in h.items() if k != "rows" and
                  isinstance(v, str)), "", "Effect sizes:", json.dumps(s["effects"], indent=1), ""])
 
 
@@ -1066,7 +1112,7 @@ def stopped(out, plan, check):
             "primary": {"rejected": False, "status": f"not tested ({why})",
                         "joint_power": plan.get("joint")},
             "secondary": holm8(dict.fromkeys(secondary({}, plan)), why),
-            "H-PRE": {"rows": holm8(dict.fromkeys(("time", "cost", "safety")), why)},
+            **{f: {"rows": holm8(dict.fromkeys(("time", "cost", "safety")), why)} for f in PRE},
             "effects": exploratory(got)}
 
 
@@ -1115,17 +1161,17 @@ def summary_main(out, plan, check):
                        rejected=primary["rejected"] and not plan["descriptive"])
     primary["joint_power"] = plan.get("joint")
     tests = secondary(used, plan)
-    hpre = ({"skipped": skipped["reason"]} if skipped else
-            {"untested": "the pilot check found the batch cell futile"}
-            if check.get("batch_futile") else {"untested": plan["left_out"]["batch"]}
-            if "batch" in plan.get("left_out", {}) else {"untested": untested["batch"]}
-            if "batch" in untested else h_pre(used["batch"]))
+    why = ({"skipped": skipped["reason"]} if skipped else
+           {"untested": "the pilot check found the batch cell futile"}
+           if check.get("batch_futile") else {"untested": plan["left_out"]["batch"]}
+           if "batch" in plan.get("left_out", {}) else {"untested": untested["batch"]}
+           if "batch" in untested else None)
     return {"phase": "main", "dry": any(r.get("dry") for rs in recs.values() for r in rs),
             "dropped": plan["dropped"], "n": plan["n"],
             "blocks": {c: list(bs) for c, bs in used.items()}, "reruns": spent,
             "untested": untested, "primary": primary,
             "secondary": holm8({k: v["p"] for k, v in tests.items()}), "tests": tests,
-            "H-PRE": hpre, "effects": {
+            **{f: why or h_pre(used["batch"], a) for f, a in PRE.items()}, "effects": {
                 **{c: effects(bs, c, recs[c]) for c, bs in used.items()},
                 **exploratory(piloted(out, [c for c in CELLS if c not in recs]))}}
 

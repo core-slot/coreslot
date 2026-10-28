@@ -136,8 +136,21 @@ class Stand(unittest.TestCase):
 class Treatment(unittest.TestCase):
     B = "bench:batch"
 
-    def t(self, cell, arm, *lines):
-        return run8.treatment(cell, arm, [dict(l) for l in lines], self.B)
+    def t(self, cell, arm, *lines, pri="expected"):
+        pri = run8.BATCH_PRI.get(arm) if pri == "expected" else pri
+        return run8.treatment(cell, arm, [dict(l) for l in lines], self.B, pri)
+
+    def test_d_the_batch_gate_pri(self):
+        # mutations: KPU checked against KP's PRI (or the constant ignored) -> 20 refused, or 31
+        # passes -> red; a missing reading passes -> red; KPU outside the (b) rule -> red
+        self.assertEqual(run8.BATCH_PRI, {"KP": 31, "KPU": 20})
+        auto = {"label": self.B, "preemptible": "auto: median 14m >= 10m, cpu 12 >= 7"}
+        for arm, pri, n in (("KPU", 20, 0), ("KPU", 31, 1), ("KP", 31, 0), ("KP", 20, 1),
+                            ("KPU", None, 1)):
+            self.assertEqual(len(self.t("batch", arm, auto, pri=pri)), n, (arm, pri))
+        self.assertEqual(self.t("batch", "KPU", {"label": "bench:c-unit"}),
+                         ["no run-log line of the batch label"])
+        self.assertEqual(len(self.t("trace-quiet", "K", auto, pri=None)), 1)
 
     def test_a_preemptible_on_another_label(self):
         # mutation: check only the batch label -> another label's mark passes -> red
@@ -153,7 +166,7 @@ class Treatment(unittest.TestCase):
         line = {"label": self.B, "preemptible": "auto: median 14m >= 10m, cpu 12 >= 7"}
         for arm in ("K", "S1", "F"):
             self.assertEqual(len(self.t("batch", arm, line)), 1, arm)
-        self.assertEqual(self.t("batch", "KP", line), [])
+        self.assertEqual((self.t("batch", "KP", line), self.t("batch", "KPU", line)), ([], []))
 
     def test_c_kp_needs_the_automatic_reason_on_every_line(self):
         # mutations: drop the no-line check -> red; accept any reason (key present) -> "entry"
@@ -202,6 +215,7 @@ class RunSet8(unittest.TestCase):
         self.argvs, self.running, self.peak, self.lines = [], set(), [0], []
         self.parallels, self.killed, self.answer, self.mark = [], [], True, {}
         self.codes, self.level_sleep, self.therm, self.outputs = {}, 0, [], []
+        self.batch_mark = {}
         test, lock = self, threading.Lock()
 
         def run_gate(argv, **kw):
@@ -214,8 +228,10 @@ class RunSet8(unittest.TestCase):
             time.sleep(0.05 if "lint" in argv else 0.3)
             with lock:
                 test.running.discard(id(argv))
-                test.lines.append(json.dumps({"label": "bench:lint" if "lint" in argv
-                                              else "bench:tc", **test.mark}))
+                label = argv[argv.index("--label") + 1] if "--label" in argv else \
+                    "bench:lint" if "lint" in argv else "bench:tc"
+                test.lines.append(json.dumps({"label": label, **test.mark, **(
+                    test.batch_mark if label == "bench:batch" else {})}))
                 test.mark = {}
             r = subprocess.CompletedProcess(argv, test.codes.get("lint" in argv, 0), "", "")
             r.cpu_s = 0.5
@@ -396,6 +412,24 @@ class RunSet8(unittest.TestCase):
         rec = self.run_set("F")
         self.assertEqual((rec["therm_start"], rec["therm_end"]), (None, None))
 
+    def test_kpu_argv_and_batch_pri(self):
+        # mutations: taskpolicy on KP's batch gate, on KPU's behind gate, or outside coreslot
+        # run -> red; batch_pri not read for KP or KPU -> None, treatment -> red
+        self.cfg["agents"] = {"A1": [gate("batch")], "A2": [gate("unit")]}
+        self.cfg["batch_agent"], self.batch_mark = "A1", {"preemptible": "auto: x"}
+        unit = ["c", "run", "--label", "bench:unit", "--", "unit"]
+        for arm, pri, invalid in (("KPU", 20, []), ("KP", 31, []), ("KP", 20, ["treatment"])):
+            self.argvs.clear()
+            with mock.patch.object(run8, "batch_pri", lambda label: pri), \
+                    mock.patch.object(run8, "BATCH_PRI_AT_S", 0.05):
+                rec = self.run_set(arm, cell="batch", needs="[needs]\n")
+            batch = ["c", "run", "--label", "bench:batch", "--",
+                     *(run8.TASKPOLICY if arm == "KPU" else ()), "batch"]
+            self.assertEqual(sorted(self.argvs), sorted([batch, unit]), arm)
+            self.assertEqual((rec["batch_pri"], rec["invalid"]), (pri, invalid), arm)
+        self.assertEqual(run8.TASKPOLICY, ("/usr/sbin/taskpolicy", "-c", "utility", "--"))
+        self.assertNotIn("batch_pri", self.run_set("F", cell="batch"))
+
     def test_set_timeout_per_mix_and_dry_only_override(self):
         # mutation: honour RUN8_SET_TIMEOUT_S on any stand -> red; one timeout for every mix -> red
         self.assertEqual([run8.set_timeout({}, m) for m in ("trace", "heavy", "wide", "batch")],
@@ -504,7 +538,9 @@ class Verdict8(unittest.TestCase):
         by = {c["arm"]: c for c in self.calls}
         sealed = text(os.path.join(self.out, "needs.toml"))
         derived = run8.k_needs(sealed, "bench:batch")
-        self.assertEqual((by["KP"]["needs"], by["K"]["needs"]), (sealed, derived))
+        self.assertEqual((by["KP"]["needs"], by["KPU"]["needs"], by["K"]["needs"]),
+                         (sealed, sealed, derived))
+        self.assertEqual(len(self.calls), 5)  # order_for shuffles the five batch arms
         self.assertEqual(by["K"]["meta"]["derived_needs_sha256"],
                          hashlib.sha256(derived.encode()).hexdigest())
         self.assertIsNone(by["KP"]["meta"]["derived_needs_sha256"])
@@ -753,10 +789,22 @@ class Power8(unittest.TestCase):
             c = p["components"][cell][f"K/{s}"]
             self.assertAlmostEqual(c["mean"], statistics.fmean(d), places=12)
             self.assertEqual(c["sigma"], stats6.sigma_upper(statistics.stdev(d), 4, 0.80))
-        # mutation: leave the cost leg out of the batch cell's components -> red
+        # mutations: leave the cost leg out of the batch cell's components -> red; KPU's legs
+        # left out, or computed as KP's -> red
         self.assertEqual({k: v["bound"] for k, v in p["components"]["batch"].items()},
-                         {"KP/K": 0, "KP/S1": 0, "KP/F": run8.MARGIN,
-                          "batch_s KP/K": math.log(1 + run8.BATCH_COST_MARGIN)})
+                         {f"{t}{leg}": bound for t in ("KP", "KPU") for leg, bound in (
+                             ("/K", 0), ("/S1", 0), ("/F", run8.MARGIN))}
+                         | {f"batch_s {t}/K": math.log(1 + run8.BATCH_COST_MARGIN)
+                            for t in ("KP", "KPU")})
+        t = {(r["block"], r["arm"]): r["mean_verdict_s"]
+             for r in run4.read_jsonl(os.path.join(self.probe, "probe-batch.jsonl"))}
+        self.assertAlmostEqual(p["components"]["batch"]["KPU/F"]["mean"], statistics.fmean(
+            math.log(t[b, "KPU"] / t[b, "F"]) for b in range(1, 5)), places=12)
+        self.assertNotAlmostEqual(p["components"]["batch"]["KPU/F"]["mean"],
+                                  p["components"]["batch"]["KP/F"]["mean"])
+        sets = run4.read_jsonl(os.path.join(self.probe, "probe-batch.jsonl"))
+        self.assertAlmostEqual(p["set_s"]["batch"], sum(r["makespan_s"] + 5 for r in sets) / 4,
+                               places=9)  # KPU's sets count in the batch cell's hours
         self.assertEqual(p["batch_treatment"], [{"block": b, "treatment": []} for b in range(1, 5)])
         sets = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-quiet.jsonl"))
         self.assertAlmostEqual(p["set_s"]["heavy-quiet"],
@@ -841,7 +889,7 @@ class Power8(unittest.TestCase):
         xs1 = statistics.fmean(r["makespan_s"] + 5 for r in recs if r["arm"] == "S1")
         self.assertAlmostEqual(s1["hours"]["heavy-quiet"],
                                a["hours"]["heavy-quiet"] * (x - xs1 + 90) / (x + 120), places=9)
-        self.assertEqual(s1["gives_up"], ["H-S1", "batch KP/S1",
+        self.assertEqual(s1["gives_up"], ["H-S1", "batch KP/S1", "batch KPU/S1",
                                           "trace-loaded K/S1 (S1 is the probe's S*)"])
         self.assertEqual((menu["drop_order"]["dropped"], "note" in menu["drop_order"]),
                          ([], False))
@@ -883,7 +931,8 @@ class PilotCheck8(unittest.TestCase):
 
     def test_outcomes(self):
         # mutations: go over every cell -> the futile batch stops main -> red; batch futile only
-        # on all three comparisons -> red; outcomes swapped -> red
+        # on all three comparisons -> red; outcomes swapped -> red; the batch futile when one
+        # family is (KPU at 100 against F at 62 is, KP's is not) -> red
         for base, go, futile, outcome in (
                 ({"trace-quiet": {"K": 120}}, False, False, "stop"),
                 ({"trace-quiet": {"K": 80}, "batch": {"KP": 60, "F": 50}}, True, True, "batch"),
@@ -892,6 +941,7 @@ class PilotCheck8(unittest.TestCase):
             c = self.check(base)
             self.assertEqual((c["go"], c["batch_futile"], c["outcome"]),
                              (go, futile, run8.OUTCOMES[outcome]))
+        self.assertEqual(c["pre_futile"], {"H-PRE": False, "H-PRE-U": True})
 
     def test_futile_on_the_90_bound(self):
         # mutation: futility at alpha 0.05 -> the bound just past ln 1.03 is not futile -> red
@@ -997,7 +1047,7 @@ class Summary8(unittest.TestCase):
                          phase="pilot")
         self.assertEqual((s["phase"], s["exploratory"], s["pilot_check"]["components"]),
                          ("pilot", True, legs))
-        rows = [s["primary"], *s["secondary"], *s["H-PRE"]["rows"]]
+        rows = [s["primary"], *s["secondary"], *s["H-PRE"]["rows"], *s["H-PRE-U"]["rows"]]
         self.assertEqual({r["status"] for r in rows}, {"not tested (stopped at the pilot)"})
         self.assertEqual(len(s["secondary"]), 5)  # H-S1..H-S3, H-SAFE-trace and -heavy
         self.assertEqual((set(s["effects"]), s["primary"]["joint_power"]), (set(run8.CELLS), 0.9))
@@ -1045,6 +1095,16 @@ class Summary8(unittest.TestCase):
                 "H-PRE"]["rows"]
             self.assertEqual({r["name"]: r["status"] for r in rows}["cost"], status, ratio)
 
+    def test_h_pre_u_judges_kpu(self):
+        # mutations: H-PRE-U on KP's sets -> its cost rejected -> red; left out of the summary
+        # or its text -> red
+        s = self.summary(batch_s=lambda b, a: 130.0 if a == "KPU" else 100.0)
+        cost = {f: {r["name"]: r["status"] for r in s[f]["rows"]}["cost"] for f in run8.PRE}
+        self.assertEqual(cost, {"H-PRE": "rejected", "H-PRE-U": "not rejected"})
+        self.assertEqual(set(s["H-PRE-U"]["time"]["legs"]), {"KPU<K", "KPU<S1", "KPU~F"})
+        self.assertIn("H-PRE-U cost: not rejected", text(os.path.join(self.out, "summary.txt")))
+        self.assertIsNotNone(s["effects"]["batch"]["ratio"]["batch_s KPU/K"])
+
     def test_primary_margin_is_ln_1_03(self):
         # mutation: the primary tested against 2 * MARGIN -> K 4.5 % slower is rejected -> red
         s = self.summary(t=lambda b, a: 104.5 if a == "K" else 100.0)
@@ -1055,7 +1115,8 @@ class Summary8(unittest.TestCase):
         # mutations: the skip reason dropped -> red; the pilot's batch drop ignored -> red; a
         # dry cell judged against n or cut to n -> red; drop the pilot_check.json refusal ->
         # red; drop the refusal while a cell is short with re-runs left -> red
-        self.assertEqual(self.summary(skipped="no flag")["H-PRE"], {"skipped": "no flag"})
+        s = self.summary(skipped="no flag")
+        self.assertEqual((s["H-PRE"], s["H-PRE-U"]), ({"skipped": "no flag"},) * 2)
         h = self.summary(check={"go": True, "batch_futile": True})["H-PRE"]
         self.assertEqual(h, {"untested": "the pilot check found the batch cell futile"})
         for dry, untested, wide in (
