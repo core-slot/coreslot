@@ -1,0 +1,17 @@
+{
+  "description": "Offers heavy test and build commands back under coreslot's machine-wide core budget",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/coreslot_hook.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

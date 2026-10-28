@@ -1,0 +1,12 @@
+{
+  "shapes": [
+    {"label": "go-test", "programs": [["go", "test"]], "requires": ["./..."]},
+    {"label": "cargo", "programs": [["cargo", "test"], ["cargo", "build"], ["cargo", "nextest"], ["cargo", "clippy"]]},
+    {"label": "pytest", "programs": [["pytest"], ["python", "-m", "pytest"], ["python3", "-m", "pytest"], ["uv", "run", "pytest"], [".venv/bin/pytest"], [".venv/bin/python", "-m", "pytest"]], "requires": ["-n", "--numprocesses"]},
+    {"label": "js-test", "programs": [["npx", "jest"], ["npx", "vitest"], ["npm", "test"], ["npm", "run", "test"], ["pnpm", "test"], ["yarn", "test"], ["bun", "test"]]},
+    {"label": "make", "programs": [["make"]], "requires": ["-j"]},
+    {"label": "gradle", "programs": [["./gradlew"], ["gradle"]]},
+    {"label": "xcodebuild", "programs": [["xcodebuild"]]},
+    {"label": "bazel", "programs": [["bazel", "test"], ["bazel", "build"]]}
+  ]
+}
