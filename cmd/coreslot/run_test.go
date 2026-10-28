@@ -1238,6 +1238,25 @@ func TestPreemptiblePlaceholdersUnshrunk(t *testing.T) {
 	}
 }
 
+// A --light run is never admitted through the queue, so --preemptible leaves it as an unmarked
+// run: {n} and CORESLOT_GRANTED_CPU are its request's min, and its record has no preemptible
+// reason. Mutation: let the mark apply outside the queue (reason ignores queued) → "8 1" and the
+// reason flag, red.
+func TestLightPreemptibleIsUnmarked(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 8\n")
+	r := cli(t, baseEnv(dir), "run", "--light", "--preemptible", "--need", "cpu=2..8", "--",
+		"sh", "-c", `echo "$1 $CORESLOT_GRANTED_CPU"`, "sh", "{n}")
+	if r.code != 0 {
+		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if got := strings.TrimSpace(r.stdout); got != "2 2" {
+		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 2 2", got)
+	}
+	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["preemptible"] != nil {
+		t.Errorf("run log %v: want one line without a preemptible key", lines)
+	}
+}
+
 // A preemptible run's record keeps the unshrunk request as need, the real grant, and the reason
 // as preemptible; a run without a mark has no such key. Mutation: log the shrunk request as need →
 // the first two rows red; drop the key → red.

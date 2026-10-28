@@ -236,6 +236,7 @@ func TestPreemptibleMark(t *testing.T) {
 			t.Errorf("%s: parseRun(%q): %v", c.name, c.args, err)
 			continue
 		}
+		o.queued = true // the mark applies to a run that queues
 		if got := o.marked(); got != c.want {
 			t.Errorf("%s: marked() = %v, want %v", c.name, got, c.want)
 		}
@@ -273,6 +274,7 @@ func TestPreemptibleRequestsOneCPU(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 			continue
 		}
+		o.queued = true // the mark applies to a run that queues
 		req := o.request(0).Need
 		if req["cpu"] != c.cpu || req["mem"] != (spec.Range{Min: memTokens, Max: memTokens}) {
 			t.Errorf("%s: the request is %v, want cpu %v and mem %d", c.name, req, c.cpu, memTokens)

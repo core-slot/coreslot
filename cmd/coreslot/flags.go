@@ -32,6 +32,7 @@ type runOptions struct {
 	light       bool
 	preemptible *bool  // --preemptible, else the needs entry's key; nil when neither says
 	preemptWhy  string // why the run is preemptible: "flag", "entry" or the automatic rule's reason; "" if not
+	queued      bool   // the run queues for its grant: only then does preemptWhy apply (reason)
 	subst       bool
 	refusalCode int
 	argv        []string
@@ -222,9 +223,20 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	return o, nil
 }
 
+// reason is why the run is preemptible, "" when it is not. The mark applies only to a run the
+// budget admits through the queue (queued): a nested, --light, fail-open, timeout or Windows run
+// is never admitted, so a mark would only narrow its grant to one cpu token while widening its
+// placeholders to the request's max; such a run behaves as an unmarked one.
+func (o runOptions) reason() string {
+	if !o.queued {
+		return ""
+	}
+	return o.preemptWhy
+}
+
 // marked reports whether the run is preemptible: --preemptible, the entry's key or the automatic
-// rule said so.
-func (o runOptions) marked() bool { return o.preemptWhy != "" }
+// rule said so, and the run queues.
+func (o runOptions) marked() bool { return o.reason() != "" }
 
 // admitNeed is the request the budget sees. A preemptible run asks for one cpu token whatever its
 // cpu request: it runs at nice 10 and gets idle cores anyway, so a larger minimum buys nothing.
@@ -290,7 +302,7 @@ func usagef(format string, args ...any) error {
 // configuration's [priorities] unless --priority was given. Its hold says that the run's process
 // tree carries the work.
 func (o runOptions) request(priority int) spec.Request {
-	return spec.Request{Label: o.label, Priority: priority, Need: o.admitNeed(), Tree: true, Preemptible: o.preemptWhy}
+	return spec.Request{Label: o.label, Priority: priority, Need: o.admitNeed(), Tree: true, Preemptible: o.reason()}
 }
 
 // sortedNeed lists the requested resources in ascending name order.

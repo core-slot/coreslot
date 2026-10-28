@@ -138,7 +138,7 @@ func (r *run) runChild(c child) int {
 		TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
 		UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, Load1: r.load, FailOpen: c.failOpen,
-		Nested: c.nested, Preemptible: r.o.preemptWhy,
+		Nested: c.nested, Preemptible: r.o.reason(),
 	}
 	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
 	if g, ok := r.o.placeholderGrant(c.grant)["cpu"]; ok && slices.Contains(placeholderResources(r.o.argv, r.o.subst), "cpu") {
