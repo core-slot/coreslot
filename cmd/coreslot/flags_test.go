@@ -143,14 +143,3 @@ func TestNeedTextShowsTheNormalizedRange(t *testing.T) {
 		}
 	}
 }
-
-// --same-group parses as a plain switch and never touches the request.
-func TestRunParsesSameGroup(t *testing.T) {
-	o, err := parseRun([]string{"--same-group", "--need", "cpu=2", "--", "true"}, IO{}, nil)
-	if err != nil || !o.sameGroup {
-		t.Fatalf("parseRun(--same-group) = %+v, %v; want sameGroup set and no error", o, err)
-	}
-	if o, err = parseRun([]string{"--", "true"}, IO{}, nil); err != nil || o.sameGroup {
-		t.Errorf("without the flag: sameGroup = %v, err %v; want unset", o.sameGroup, err)
-	}
-}

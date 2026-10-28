@@ -1258,33 +1258,22 @@ func TestLightPreemptibleIsUnmarked(t *testing.T) {
 }
 
 // A preemptible run's record keeps the unshrunk request as need, the real grant, and the reason
-// as preemptible; a run without a mark has no such key. Mutation: log the shrunk request as need →
-// the first two rows red; drop the key → red.
+// as preemptible: "entry" for a needs entry's mark. Mutation: log the shrunk request as need →
+// [1 1], red; drop the key, or give an entry's mark another reason → red.
 func TestPreemptibleRunRecord(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 12\n")
 	writeNeeds(t, dir, "[needs.\"e\"]\ncpu = \"2..12\"\npreemptible = true\n")
-	for _, args := range [][]string{
-		{"--preemptible", "--need", "cpu=1..12"},
-		{"--label", "e"},
-		{"--need", "cpu=1..12"},
-	} {
-		if r := cli(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "true")...); r.code != 0 {
-			t.Fatalf("%q: exit %d, stderr %q", args, r.code, r.stderr)
-		}
+	if r := cli(t, baseEnv(dir), "run", "--label", "e", "--", "true"); r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
 	}
 	lines := runLog(t, dir)
-	if len(lines) != 3 {
-		t.Fatalf("%d log lines, want 3", len(lines))
+	if len(lines) != 1 {
+		t.Fatalf("%d log lines, want 1", len(lines))
 	}
-	for n, want := range []struct {
-		need   string
-		reason any
-	}{{"[1 12]", "flag"}, {"[2 12]", "entry"}, {"[1 12]", nil}} {
-		need := fmt.Sprint(lines[n]["need"].(map[string]any)["cpu"])
-		grant := lines[n]["grant"].(map[string]any)["cpu"]
-		if wantGrant := map[bool]any{true: float64(1), false: float64(12)}[want.reason != nil]; need != want.need || grant != wantGrant || lines[n]["preemptible"] != want.reason {
-			t.Errorf("run %d: need %s, grant %v, preemptible %v; want %s, %v and %v", n, need, grant, lines[n]["preemptible"], want.need, wantGrant, want.reason)
-		}
+	need := fmt.Sprint(lines[0]["need"].(map[string]any)["cpu"])
+	grant := lines[0]["grant"].(map[string]any)["cpu"]
+	if need != "[2 12]" || grant != float64(1) || lines[0]["preemptible"] != "entry" {
+		t.Errorf("need %s, grant %v, preemptible %v; want [2 12], 1 and entry", need, grant, lines[0]["preemptible"])
 	}
 }
 

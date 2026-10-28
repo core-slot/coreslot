@@ -534,8 +534,8 @@ func TestReadRunsRoundTrip(t *testing.T) {
 	}
 }
 
-// The preemptible key is written only for a run with a reason, and read back. Mutation: encode it
-// without omitempty → a plain run's line has the key, red; drop it from the decoder → red.
+// The preemptible key is written only for a run with a reason (TestReadRunsRoundTrip reads it
+// back). Mutation: encode it without omitempty → a plain run's line has the key, red.
 func TestRunLogPreemptibleKey(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
@@ -550,9 +550,5 @@ func TestRunLogPreemptibleKey(t *testing.T) {
 	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
 	if len(lines) != 2 || strings.Contains(lines[0], "preemptible") || !strings.Contains(lines[1], `"preemptible":"flag"`) {
 		t.Errorf("lines %q, want the key on the second only", lines)
-	}
-	runs, _, err := s.ReadRuns()
-	if err != nil || len(runs) != 2 || runs[0].Preemptible != "" || runs[1].Preemptible != "flag" {
-		t.Errorf("ReadRuns = %+v, %v; want the reason on the second only", runs, err)
 	}
 }

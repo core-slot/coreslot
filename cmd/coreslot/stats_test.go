@@ -160,18 +160,12 @@ func suggestWorkers(t *testing.T, entry string) map[string]any {
 	return got["worker:tests"]
 }
 
-// A per-worker entry gets cpu_per_worker rewritten, never cpu, and keeps every other key.
-// Mutation: write cpu over a per-worker entry, or keep its old cpu_per_worker → red.
+// A per-worker entry gets cpu_per_worker rewritten, never cpu, and keeps every other key; the
+// evidence counts the saturated run. Mutation: write cpu over a per-worker entry, keep its old
+// cpu_per_worker, or drop the saturated count from the evidence → red.
 func TestSuggestWritePerWorker(t *testing.T) {
-	if w := suggestWorkers(t, "cpu_per_worker = 2\ngate = \"w\"\n"); w["cpu_per_worker"] != 0.4 || w["cpu"] != nil || w["gate"] != "w" || w["mem"] != "1536M" || w["evidence"] == nil {
-		t.Errorf("worker:tests entry %v", w)
-	}
-}
-
-// A saturated per-worker run keeps its width and raises c through its own cores per worker:
-// CPU-bound workers lift an entry's 0.25 to 0.4. Mutation: write cpu over it → red.
-func TestSuggestPerWorkerSaturated(t *testing.T) {
-	if w := suggestWorkers(t, "cpu_per_worker = 0.25\ncpu = \"1..10\"\n"); w["cpu_per_worker"] != 0.4 || w["cpu"] != "1..10" || !strings.Contains(w["evidence"].(string), "1 of 1 saturated") {
+	if w := suggestWorkers(t, "cpu_per_worker = 2\ngate = \"w\"\n"); w["cpu_per_worker"] != 0.4 || w["cpu"] != nil || w["gate"] != "w" || w["mem"] != "1536M" ||
+		!strings.Contains(fmt.Sprint(w["evidence"]), "1 of 1 saturated") {
 		t.Errorf("worker:tests entry %v", w)
 	}
 }

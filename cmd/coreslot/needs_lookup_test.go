@@ -212,24 +212,18 @@ func TestNeedsLookupUnreadable(t *testing.T) {
 	}
 }
 
-// The mark is the flag's value when given, else the entry's, else unset. Mutation: let the entry
-// override the flag → the "=false" case red; ignore the entry → the entry case red; read the
-// flag as always true → the "=false" case red.
+// The mark is the flag's value when given, else the entry's, else unset; TestPreemptibleRequestsOneCPU
+// has the other cases. Mutation: let an entry marked false clear the flag's mark → the first row
+// red; look the entry up under the label with its @N → the worker count row red.
 func TestPreemptibleMark(t *testing.T) {
-	lookup, _ := lookupOf(t, "[needs.\"on\"]\npreemptible = true\n[needs.\"off\"]\npreemptible = false\n[needs.\"none\"]\ncpu = 2\n")
+	lookup, _ := lookupOf(t, "[needs.\"on\"]\npreemptible = true\n[needs.\"off\"]\npreemptible = false\n")
 	for _, c := range []struct {
 		name string
 		args []string
 		want bool
 	}{
-		{"flag", []string{"--preemptible", "--", "true"}, true},
-		{"flag false beats an entry marked true", []string{"--preemptible=false", "--label", "on", "--", "true"}, false},
 		{"flag beats an entry marked false", []string{"--preemptible", "--label", "off", "--", "true"}, true},
-		{"entry true", []string{"--label", "on", "--", "true"}, true},
 		{"entry true under a worker count", []string{"--label", "on@4", "--", "true"}, true},
-		{"entry false", []string{"--label", "off", "--", "true"}, false},
-		{"entry without the key", []string{"--label", "none", "--", "true"}, false},
-		{"neither", []string{"--", "true"}, false},
 	} {
 		o, err := parseRun(c.args, IO{}, lookup)
 		if err != nil {

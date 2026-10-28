@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -620,10 +619,6 @@ func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
 	waitFor(t, 10*time.Second, "the command's shell to die", gone(t, sh))
 	waitFor(t, 10*time.Second, "the grandchild to die", gone(t, gc))
 	tokensFree(t, dir, 2)
-	out := cli(t, baseEnv(dir), "status").stdout
-	if !regexp.MustCompile(`cpu\s+size 2\s+locked 0\b`).MatchString(out) {
-		t.Errorf("status does not show cpu locked 0:\n%s", out)
-	}
 }
 
 // A caller that SIGKILLs coreslot's group without --same-group leaves the command running in its

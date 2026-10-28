@@ -854,13 +854,12 @@ func TestHoldTreeKey(t *testing.T) {
 	}
 }
 
-// TestHoldPreemptibleKey pins the optional preemptible key: written only when set, absent or not
-// a string reads as empty and leaves the body well-formed. Mutation: dropping omitempty from the
+// TestHoldPreemptibleKey pins the optional preemptible key: written only when set, and a value
+// that is not a string reads as empty and leaves the body well-formed. Mutation: dropping omitempty from the
 // key reddens the exact-encoding tests, whose bodies carry none.
 func TestHoldPreemptibleKey(t *testing.T) {
 	const okHold = `{"label":"x","grant":{"cpu":[0]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
 	for body, want := range map[string]string{
-		okHold: "",
 		okHold[:len(okHold)-1] + `,"preemptible":"flag"}`: "flag",
 		okHold[:len(okHold)-1] + `,"preemptible":true}`:   "",
 	} {

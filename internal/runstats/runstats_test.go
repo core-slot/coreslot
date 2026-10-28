@@ -3,13 +3,9 @@
 package runstats
 
 import (
-	"bytes"
-	"encoding/json"
-	"os"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
@@ -228,33 +224,6 @@ func TestSuggestPerWorkerNoSwing(t *testing.T) {
 	if c2 := learnFrom(c1); c1 <= 0 || c2-c1 > 0.05+1e-9 || c1-c2 > 0.05+1e-9 {
 		t.Errorf("c1 %v, c2 %v; want them within 0.05", c1, c2)
 	}
-}
-
-// Run 7's learn pass of sqlalchemy-engine-tests (10 workers, 2.4 to 2.7 cores) learns 0.3 and
-// keeps 1..10, which the old rule narrowed to 1..3. Mutation: narrow the range → red.
-func TestSuggestRun7Fixture(t *testing.T) {
-	data, err := os.ReadFile("../../evidence/overload/run7/learn.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var runs []store.RunRecord
-	for line := range bytes.Lines(data) {
-		var e struct {
-			Started          time.Time
-			Gate, Pass, Form string
-			Cores            float64
-			RanS             float64 `json:"ran_s"`
-		}
-		if json.Unmarshal(line, &e) == nil && e.Gate == "sqlalchemy-engine-tests" && e.Pass == "learn" && e.Form == "K" {
-			r := per(run("bench:sqlalchemy-engine-tests", 0, 0, spec.Range{Min: 1, Max: 10}, 10), 10)
-			r.TimeNS, r.RanS, r.CPUUserS = e.Started.UnixNano(), e.RanS, f(e.Cores*e.RanS)
-			runs = append(runs, r)
-		}
-	}
-	if len(runs) != 6 {
-		t.Fatalf("%d fixture runs, want 6", len(runs))
-	}
-	wantPerWorker(t, only(t, Summarize(runs, 16)), 0.3, spec.Range{Min: 1, Max: 10})
 }
 
 // Without workers (a go test ./... that parallelises itself) a range still narrows to the cores

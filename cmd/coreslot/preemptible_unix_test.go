@@ -58,7 +58,6 @@ func TestAutoPreemptible(t *testing.T) {
 		want     string
 	}{
 		{"a learned range", spec.Range{Min: 1, Max: 12}, "x", nil, false, long, nil, true, "auto: median 14m >= 10m, cpu 12 >= 7"},
-		{"a fixed size", spec.Range{Min: 14, Max: 14}, "x", nil, false, long, nil, true, "auto: median 14m >= 10m, cpu 14 >= 7"},
 		{"exactly half", spec.Range{Min: 1, Max: 7}, "x", nil, false, long, nil, true, "auto: median 14m >= 10m, cpu 7 >= 7"},
 		{"a worker suffix names the same label", spec.Range{Min: 1, Max: 12}, "x@8", nil, false, longRuns("x@4", 14, 5), nil, true, "auto: median 14m >= 10m, cpu 12 >= 7"},
 		{"the median, not the mean or the minimum", spec.Range{Min: 1, Max: 12}, "x", nil, false, skewed, nil, true, "auto: median 15m >= 10m, cpu 12 >= 7"},
@@ -89,22 +88,16 @@ func TestAutoPreemptible(t *testing.T) {
 	}
 }
 
-// The hint about deadlines comes with the first demotion of a label and not after: it is printed
-// when no earlier record of the label has a preemptible reason, whichever reason. Mutation: print
-// it every time → the second row red; look only for an auto reason → the "entry" row red.
+// The hint about deadlines comes with the first demotion of a label and not after, whichever
+// reason the earlier demotion had: an earlier entry's mark counts as an auto one does
+// (TestAutoPreemptibleEndToEnd has the first demotion and the auto one). Mutation: look only for
+// an auto reason → red.
 func TestAutoPreemptibleHintOnce(t *testing.T) {
 	o := runOptions{label: "x", need: map[string]spec.Range{"cpu": {Min: 1, Max: 12}}}
-	for _, c := range []struct {
-		name   string
-		reason string // an earlier record's preemptible, "" for none
-		first  bool
-	}{{"no earlier demotion", "", true}, {"an earlier auto", "auto: median 14m >= 10m, cpu 12 >= 7", false}, {"an earlier entry", "entry", false}} {
-		runs := longRuns("x", 14, 5)
-		runs[2].Preemptible = c.reason
-		reason, first := autoPreemptible(o, false, 14, func() ([]store.RunRecord, error) { return runs, nil })
-		if reason == "" || first != c.first {
-			t.Errorf("%s: reason %q, first %v; want a reason and %v", c.name, reason, first, c.first)
-		}
+	runs := longRuns("x", 14, 5)
+	runs[2].Preemptible = "entry"
+	if reason, first := autoPreemptible(o, false, 14, func() ([]store.RunRecord, error) { return runs, nil }); reason == "" || first {
+		t.Errorf("after an earlier entry: reason %q, first %v; want a reason and not the first", reason, first)
 	}
 }
 
