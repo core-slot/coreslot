@@ -24,5 +24,24 @@
           "argv": ["python3", "-c", "import time; b = b'x' * (300 << 20); time.sleep(2)"]}],
   "W2": [{"gate": "dry-sleep", "label": "bench:dry-sleep", "cwd": "~/bench.noindex", "heavy": false,
           "argv": ["sleep", "1"]}]
- }
+ },
+ "agent_names": ["A1", "A2", "A3", "A4"],
+ "classes": {
+  "unit": {"gate": "dry-unit", "label": "bench:dry-unit", "cwd": "~/bench.noindex", "heavy": false,
+           "argv": ["sleep", "1"]},
+  "go": {"gate": "dry-go", "label": "bench:dry-go", "cwd": "~/bench.noindex", "heavy": true,
+         "fail_pattern": "^FAILED ",
+         "argv": ["python3", "-c", "import time; b = b'x' * (200 << 20); time.sleep(2)"]},
+  "db": {"gate": "dry-db", "label": "bench:dry-db", "cwd": "~/bench.noindex", "heavy": true,
+         "fail_pattern": "^FAILED ",
+         "argv": ["python3", "-c", "import time; b = b'x' * (250 << 20); time.sleep(2)"]},
+  "mut": {"gate": "dry-mut", "label": "bench:dry-mut", "cwd": "~/bench.noindex", "heavy": true,
+          "fail_pattern": "^FAILED ",
+          "argv": ["python3", "-c", "import time; b = b'x' * (150 << 20); time.sleep(2)"]}
+ },
+ "gates_by_class": {"unit": 5, "go": 3, "db": 2, "mut": 2},
+ "behind_class": "unit",
+ "batch": {"gate": "dry-batch", "label": "bench:dry-batch", "cwd": "~/bench.noindex", "heavy": true,
+           "argv": ["python3", "-c", "import time\nt = time.time() + 4\nwhile time.time() < t: pass"]},
+ "batch_delay_s": 2
 }
