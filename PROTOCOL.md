@@ -449,7 +449,8 @@ another host), so a writer that learns entries from the run log (section 20) doe
 
 `preemptible` is a boolean. When it is `true`, a client that reads the entry MAY admit the label's
 runs with one cpu token whatever their cpu request, run their command at a lower priority, and fill
-a cpu placeholder from the request's cpu max rather than from the grant. A command-line
+a cpu placeholder as the request's cpu max would rather than from the grant (for a `cpu_per_worker`
+entry, the worker count `K` or the width's max `b`). A command-line
 `--preemptible[=false]` wins over the key. When the key is absent, the Go CLI applies its automatic
 rule (the implementation note below); `preemptible = false` opts the label out of it. A preemptible
 run keeps its full `mem`: its cpu is not reserved, and its memory stays budgeted. This changes only
