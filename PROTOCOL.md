@@ -308,8 +308,8 @@ attempt.
 **Live size of `mem`.** A client MAY, for one admission or adoption attempt, size `mem` from the
 memory the kernel can still hand out instead of from the configuration alone. It does so only when
 `mem` is declared, the request's `mem` is fixed (`min = max`), the configuration's `[memory] live`
-is `true` (section 5.3), and the configured size less the locked count of `mem` is below that
-`min`; otherwise the size is the configured one. The **live size** is
+is `true` (section 5.3; it defaults to `false`), and the configured size less the locked count of
+`mem` is below that `min`; otherwise the size is the configured one. The **live size** is
 
 ```
 size = max(static, min(4096, locked + ⌊room / 128 MiB⌋))
@@ -392,9 +392,9 @@ live = true       # default false: the live size of mem (section 5.2)
   > **Implementation note.** The Go library uses `Request.Priority` as given and does not read
   > `[priorities]`; the Go CLI applies it when `--priority` is absent.
 - `[platform]`: `windows_warning`, a boolean.
-- `[memory]`: `live`, a boolean, default `false`; absent or `false` sizes `mem` from the
-  configuration alone, and a client that implements the live size (section 5.2) then never
-  computes it; `true` lets such a client compute it.
+- `[memory]`: `live`, a boolean, `false` when absent; `false` sizes `mem` from the configuration
+  alone, and a client that implements the live size (section 5.2) then never computes it; `true`
+  lets such a client compute it.
 - `resources`, `priorities`, `platform` and `memory`, when present, MUST be tables; any other value
   of one of them is invalid. Other tables and keys are ignored.
 

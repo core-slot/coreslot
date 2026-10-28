@@ -22,8 +22,8 @@ configuration, and finds a `mem` need undeclared. When `mem` became a built-in r
 declared in the user's own unit changed meaning: `mem = 16` is 16 GiB, `mem = "50%"` half of the
 physical memory, `--need mem=4` 4 GiB and `CORESLOT_GRANTED_MEM` MiB. When `mem` gained a live size
 ([`PROTOCOL.md` section 5.2](../PROTOCOL.md#52-sizes)), the configured `mem` became a floor: a newer
-client admits a fixed `mem` need above it from the memory the kernel can still hand out, unless
-`[memory] live = false`. An older client sizes `mem` from the configuration alone, so it waits while
+client admits a fixed `mem` need above it from the memory the kernel can still hand out, if
+`[memory] live = true` (off by default since v0.3.0). An older client sizes `mem` from the configuration alone, so it waits while
 newer clients' live admissions hold more `mem` than its size, as after a shrink, and `status` may
 show `mem` with 0 free while newer clients are still admitted above it. `v1.0.0` freezes the format then current; frozen
 means that from then on a new format number, or a change of what one means, needs a new major
