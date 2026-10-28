@@ -307,7 +307,7 @@ attempt.
 **Live size of `mem`.** A client MAY, for one admission or adoption attempt, size `mem` from the
 memory the kernel can still hand out instead of from the configuration alone. It does so only when
 `mem` is declared, the request's `mem` is fixed (`min = max`), the configuration's `[memory] live`
-is not `false` (section 5.3), and the configured size less the locked count of `mem` is below that
+is `true` (section 5.3), and the configured size less the locked count of `mem` is below that
 `min`; otherwise the size is the configured one. The **live size** is
 
 ```
@@ -376,7 +376,7 @@ pg-local = 2      # any declared resource
 windows_warning = false   # default true (section 16)
 
 [memory]
-live = false      # default true: the live size of mem (section 5.2)
+live = true       # default false: the live size of mem (section 5.2)
 ```
 
 - `[resources]`: each key MUST be a resource name (section 5.1) and each value a size (section
@@ -391,8 +391,9 @@ live = false      # default true: the live size of mem (section 5.2)
   > **Implementation note.** The Go library uses `Request.Priority` as given and does not read
   > `[priorities]`; the Go CLI applies it when `--priority` is absent.
 - `[platform]`: `windows_warning`, a boolean.
-- `[memory]`: `live`, a boolean; `false` sizes `mem` from the configuration alone, and a client
-  that implements the live size (section 5.2) then never computes it.
+- `[memory]`: `live`, a boolean, default `false`; absent or `false` sizes `mem` from the
+  configuration alone, and a client that implements the live size (section 5.2) then never
+  computes it; `true` lets such a client compute it.
 - `resources`, `priorities`, `platform` and `memory`, when present, MUST be tables; any other value
   of one of them is invalid. Other tables and keys are ignored.
 
@@ -415,11 +416,45 @@ cpu = "4"           # a need's value, as RES=... takes it: "N" or "MIN..MAX"; an
 mem = "3G"          # a size, as section 5.2 writes one; an integer is GiB
 pinned = true       # the user's entry: never rewritten from measurements
 evidence = "5 runs 2026-10-20..21: max 3.4 cores, 0 of 5 saturated, peak 2.7 GiB (footprint) at 22s"
+
+[needs."gate:pytest"]
+cpu_per_worker = 0.3  # cores per worker: the cpu need scales with the worker count
+cpu = "2..10"         # with cpu_per_worker, the worker width, not a token count
+preemptible = false   # never preemptible; absent, the automatic rule decides
+
+[needs."gate:docker"]
+cpu = "8"
+mem = "6G"
+observed = false      # its work runs outside the run's process tree: never learned from the log
 ```
 
 Each key of `[needs]` is a label without a final worker count: a label ending in `@` followed by
 digits or by `-` (`gate:unit@12`, `gate:unit@-`) finds the entry of what precedes the `@`, and a
 label that is empty without it finds none. A key the reader does not know is ignored.
+
+`cpu_per_worker`, a number above 0 (any other value is an entry that cannot be read), says the
+label's cpu need is per worker, `c` cores each. When the label ends in `@` followed by digits, those
+digits are the worker count `K` its caller gives, and a client that reads the entry requests
+`max(1, ⌈c × K⌉)` cpu tokens as a fixed range. Otherwise the entry's `cpu`, when present, is the
+worker width `"a..b"` rather than a token count (`"N"` is `N..N`), and absent it is `1..` the
+machine's CPU count (section 5.2); the client requests `max(1, ⌈c × a⌉)..max(1, ⌈c × b⌉)` tokens
+and, granted `g`, runs `min(b, max(a, ⌊g / c⌋))` workers. A `cpu` need the caller names wins over
+the entry, as it does over a `cpu` key. The granted count of cpu tokens (`CORESLOT_GRANTED_CPU`,
+section 17) stays the token count; only the worker count is derived from it.
+
+`observed`, a boolean, default `true`. `false` says the label's work runs outside the run's process
+tree (in a container, on another host), so the usage the run log records (section 20) is not its
+own: a client that learns entries from the run log never lowers the entry's `cpu` or `mem` from
+measurements, keeps the entry and says so in its `evidence`.
+
+`preemptible`, a boolean: `true` marks the label's runs preemptible, `false` keeps them from being
+made preemptible automatically, and when it is absent the client's automatic rule decides (the
+implementation note below). A preemptible run is admitted with its full `mem` and one `cpu`
+token, whatever its cpu request, and its command runs at a lower scheduling priority, so it takes
+the cores other runs leave idle: its cpu is not reserved, and its memory stays budgeted. This
+changes only how the client sizes its request and starts its command. The ticket and the hold carry
+the shrunk request (`cpu` `1..1`) and the one token granted, nothing is lent, rewritten or acquired
+again, and invariants I1 to I7 (section 3) hold as for any request.
 
 A writer replaces the file whole under `flock(LOCK_EX)` on `needs.toml.lock` beside the file it
 replaces (the file a symbolic link names, so that every link shares one lock): it writes a
@@ -428,8 +463,21 @@ file. The temporary name is outside the grammar of section 11, so reconciliation
 A file that cannot be parsed is left as it is.
 
 > **Implementation note.** The Go CLI reads the entry of a run's `--label` for each resource its
-> `--need` leaves out, `cpu` and `mem`; `coreslot suggest --write` writes `cpu`, `mem` and
-> `evidence` from the run log (section 20) and keeps pinned entries and every other key. Its `mem`
+> `--need` leaves out, `cpu` and `mem`, and fills `{n}` (section 17) with the worker count of a
+> `cpu_per_worker` entry, or with the token count when `--need` names `cpu`. A run is preemptible
+> when its entry says `preemptible = true` or `run --preemptible` marks it (`--preemptible=false`
+> and `preemptible = false` unmark it), and otherwise by the automatic rule: its cpu request's max
+> is at least half the cpu size, and the run log holds at least 5 runs of its label with a median
+> `ran_s` of at least 600 s. The rule never demotes a run in terminal mode, where a person is
+> watching, nor one of a label whose runs of at least 60 s averaged under 0.05 cores. The CLI sets
+> nice 10 on the command's process group right after starting it, fills `{n}` from the request
+> before it shrinks, so a `make -j{n}` keeps its width, and records the reason in the run log's
+> `preemptible` key. `coreslot suggest --write` writes `cpu`, `mem` and `evidence` from the run
+> log (section 20) and keeps pinned entries and every other key. For a `cpu_per_worker` entry it
+> writes `cpu_per_worker`, never `cpu`, learning cores per worker as the p90 of cores ÷ `workers`
+> over the window, rounded up to 0.05. It keeps an `observed = false` entry's weights. A label
+> whose runs of at least 60 s averaged under 0.05 cores may run its work outside its process tree:
+> `suggest` does not lower its weights and names `observed = false` in its evidence. Its `mem`
 > rests on the window's largest peak; when that run's cpu grant is above the `cpu` max it suggests,
 > the evidence names the grant.
 
@@ -1188,7 +1236,7 @@ writes no line. The object carries:
 |---|---|---|
 | `time_ns` | integer | wall clock at the run's start |
 | `label` | string | the request's label |
-| `need` | object | resource → `[min, max]` as requested, a CLI's defaults and one-sided ranges completed (section 21) |
+| `need` | object | resource → `[min, max]` as requested, a CLI's defaults and one-sided ranges completed (section 21); for a preemptible run, the request before it shrank (below) |
 | `grant` | object | resource → number of tokens granted (or `min` when unbudgeted) |
 | `clamped` | array of resource names | clamped resources |
 | `unbudgeted_resources` | array of resource names | unbudgeted resources |
@@ -1205,6 +1253,8 @@ writes no line. The object carries:
 | `load1` | number | one-minute load average at start |
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
+| `workers` | integer | optional; the worker count, when the writer knows it (below) |
+| `preemptible` | string | optional; present only for a preemptible run (section 5.4): the reason it is one (below) |
 
 The usage keys `cpu_user_s`, `cpu_sys_s` and `max_rss_kib` are OPTIONAL. A writer MUST omit a key
 whose value it does not know rather than write a zero: a run whose command could not be started
@@ -1232,6 +1282,16 @@ speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable` o
 or, when smaller, the room under the tightest cgroup v2 limit, the headroom of section 5.2)
 was at least its `mem` need, read at most once per second. It informs; no admission reads it.
 `need` and `grant` stay in tokens, `mem`'s included.
+
+The keys `workers` and `preemptible` are OPTIONAL too, under the same rule. `workers` is the
+worker count the run's command was given: the label's final `@` digits (section 5.4), or the value
+the writer substituted for a cpu placeholder (section 17). `preemptible` gives the reason a
+preemptible run is one: `entry` for the needs file's key, `flag` for a mark on the command line, or
+the automatic rule's own text, such as `auto: median 14m >= 10m, cpu 12 >= 7`. For a preemptible
+run `need` is the request before it was cut to one cpu token, and `grant` what was granted, so
+`need` may name more cpu than the ticket did. A preemptible run's cpu use above its grant is not
+saturation for a reader that learns from the log: its command ran at a lower priority on the cores
+other runs left idle.
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. The log's `clamped` is an array of resource names, unlike the hold body's `clamped` object
@@ -1571,9 +1631,9 @@ and `CORESLOT_GRANTED_CPU=2`, `CORESLOT_GRANTED_MEM=3072`, `CORESLOT_HELD_FD=3`,
 
 ### 21.11 Admission above the static size
 
-The configuration declares `mem = "1G"` (size 8) beside the sizes above, `/proc/meminfo` says
-`MemAvailable: 4194304 kB` (4 096 MiB), and no cgroup limits memory. A library client, pid 7600,
-holds `mem` 0-7 for `pool:a`; its hold has no `tree` key. Pid 7700 runs
+The configuration declares `mem = "1G"` (size 8) beside the sizes above and `[memory] live = true`,
+`/proc/meminfo` says `MemAvailable: 4194304 kB` (4 096 MiB), and no cgroup limits memory. A
+library client, pid 7600, holds `mem` 0-7 for `pool:a`; its hold has no `tree` key. Pid 7700 runs
 `coreslot run --need mem=2G --label gate:b -- ./build` at 12:50:00 with no ticket ahead: 2 048 MiB
 is 16 tokens, so its ticket's `need` is `{"mem": [16, 16]}`.
 
@@ -1586,7 +1646,7 @@ res/mem/0 ... res/mem/7                               [L] (held by pid 7600)
 ```
 
 Inside the section the configured size of `mem` is 8 and 8 tokens are locked, so `free = 0`, below
-the `min` of 16. The request is fixed and `[memory] live` is not `false`, so the run computes the
+the `min` of 16. The request is fixed and `[memory] live` is `true`, so the run computes the
 live size (sections 5.2 and 12.1 step 4): the headroom is 4 096 MiB; `pool:a`'s tree is not
 measured, so its 8 tokens are unrealised whole, 1 024 MiB; no locked token is unlisted; `room =
 4096 − 1024 − 0 = 3072` MiB, 24 tokens; `size = max(8, min(4096, 8 + 24)) = 32`. The effective
@@ -1603,9 +1663,9 @@ and it takes `mem` 8-23, below the size of 32, and publishes:
 The command starts with fd 3 = the hold, fds 4-19 = `mem` tokens 8-23, and
 `CORESLOT_GRANTED_MEM=2048`, `CORESLOT_HELD_FD=3`, `CORESLOT_TOKEN_FDS=4-19`. `coreslot status`
 now shows `mem` at a size of 1 GiB with 3 GiB locked and 0 free. A client that sizes `mem` from the
-configuration alone (one that does not implement the live size, or any client under `[memory] live
-= false`) asking for `mem` 1..1 meanwhile finds size 8 with 24 locked, and waits until the locked
-count falls below 8.
+configuration alone (one that does not implement the live size, or any client under a
+configuration without `[memory] live = true`) asking for `mem` 1..1 meanwhile finds size 8 with
+24 locked, and waits until the locked count falls below 8.
 
 ## 22. Timing constants
 

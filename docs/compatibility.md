@@ -25,7 +25,22 @@ physical memory, `--need mem=4` 4 GiB and `CORESLOT_GRANTED_MEM` MiB. When `mem`
 client admits a fixed `mem` need above it from the memory the kernel can still hand out, unless
 `[memory] live = false`. An older client sizes `mem` from the configuration alone, so it waits while
 newer clients' live admissions hold more `mem` than its size, as after a shrink, and `status` may
-show `mem` with 0 free while newer clients are still admitted above it. `v1.0.0` freezes the format then current; frozen
+show `mem` with 0 free while newer clients are still admitted above it. When `[memory] live`
+became `false` by default (v0.3.0), the configuration's default changed, not the format: a v0.2.x
+client on the same machine reading a configuration without a `[memory]` table still computes the
+live size, so it may be admitted above the configured `mem` while v0.3.0 clients wait, as after a
+shrink. When the run log gained the keys `workers` and `preemptible`, and a preemptible run's
+`need` became its request before it was cut to one cpu token
+([`PROTOCOL.md` section 20](../PROTOCOL.md#20-run-log)), the keys were optional ones every reader
+ignores when it does not know them, so the format did not change; an older `suggest` reading the same log ignores `preemptible`
+and may count a preemptible run as saturated (12 cores on 1 token). When the needs file gained
+`cpu_per_worker` sizing, `observed` and `preemptible`
+([`PROTOCOL.md` section 5.4](../PROTOCOL.md#54-needs-file)), an older client, which ignores what
+it does not know there, requests an entry's `cpu` as tokens, a worker width included, never demotes
+a run, and its `suggest --write` may lower an `observed = false` entry's weights unless the entry
+is pinned. A preemptible run is no format change either: its ticket and hold carry the
+shrunk request, nothing is lent, rewritten or acquired again, and the lower priority its command
+runs at is not protocol state. `v1.0.0` freezes the format then current; frozen
 means that from then on a new format number, or a change of what one means, needs a new major
 version.
 
@@ -105,14 +120,14 @@ contract and may change in any release; parse `status --json` instead.
 
 | Surface | Supported |
 |---|---|
-| `run` | `--need RES=MIN..MAX` (or `RES=N`, `RES=MIN..`, `RES=..MAX`; `mem=SIZE` such as `mem=3G` or `mem=768M`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--light`, `--subst`, `--refusal-code`; placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` (`{n:mem}` in MiB) |
+| `run` | `--need RES=MIN..MAX` (or `RES=N`, `RES=MIN..`, `RES=..MAX`; `mem=SIZE` such as `mem=3G` or `mem=768M`), `--label`, `--priority`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--light`, `--subst`, `--refusal-code`, `--preemptible` (a boolean flag; `--preemptible=false` unmarks); placeholders `{n}`, `{n:RES}`, `{{n}}`, `{{n:RES}}` (`{n:mem}` in MiB) |
 | `status` | `--json`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
 | `doctor` | `--clear`, `--reset` |
 | `stats` | `--label LABEL`, `--json` (its own `"schema": 1`) |
 | `suggest` | `--label LABEL`, `--write` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
-| configuration | `<home>/.config/coreslot/config.toml`: `[resources]` (with `cpu` and `mem` declared by default), `[priorities]`, `[platform] windows_warning`, `[memory] live`; `needs.toml` beside it: `[needs."<label>"]` with `cpu`, `mem`, `pinned`, `evidence` |
+| configuration | `<home>/.config/coreslot/config.toml`: `[resources]` (with `cpu` and `mem` declared by default), `[priorities]`, `[platform] windows_warning`, `[memory] live`; `needs.toml` beside it: `[needs."<label>"]` with `cpu`, `mem`, `pinned`, `evidence`, `cpu_per_worker`, `observed`, `preemptible` |
 | environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>` (`CORESLOT_GRANTED_MEM` in MiB), `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs and by the library) |
 | descriptors | the hold at fd 3, tokens from fd 4 in ascending resource name and index |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
