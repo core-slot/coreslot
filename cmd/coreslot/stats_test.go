@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,5 +204,52 @@ func TestStatsMalformedNeedsIsANotice(t *testing.T) {
 	}
 	if r := cli(t, baseEnv(dir), "stats"); !strings.Contains(r.stdout, "current  none") {
 		t.Errorf("stats over a malformed needs file:\n%s", r.stdout)
+	}
+}
+
+// unobservedDir is a state directory whose log has three 120 s runs of ci:box at 0.001 cores and
+// three of ci:busy at 0.5, each with a 1 GiB peak.
+func unobservedDir(t *testing.T, entries string) string {
+	t.Helper()
+	dir, log := statsDir(t), ""
+	writeNeeds(t, dir, entries)
+	for _, c := range []struct {
+		label string
+		cpu   float64
+	}{{"ci:box", 0.12}, {"ci:busy", 60}} {
+		log += strings.Repeat(fmt.Sprintf(`{"time_ns":1792590000000000000,"label":%q,"need":{"cpu":[2,2]},"grant":{"cpu":2},"ran_s":120,"cpu_user_s":%g,"cpu_sys_s":0,"mem_peak_kib":1048576,"fail_open":""}`+"\n", c.label, c.cpu), 3)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "log", "runs.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err == nil {
+		_, err = f.WriteString(log)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// An entry with observed = false is kept as written: no cpu or mem from its near-zero cores.
+// Mutation: ignore observed → the entry gets cpu = "1" and evidence.
+func TestSuggestKeepsUnobservedEntry(t *testing.T) {
+	dir := unobservedDir(t, "[needs.\"ci:box\"]\ncpu = 2\nmem = \"4G\"\nobserved = false\n")
+	r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "ci:box")
+	if e := readNeeds(t, filepath.Join(dir, "needs.toml"))["ci:box"]; r.code != 0 || e["cpu"] != int64(2) || e["mem"] != "4G" || e["evidence"] != nil ||
+		!strings.Contains(r.stdout, "observed = false: its work runs outside the process tree, kept") {
+		t.Errorf("exit %d, entry %v:\n%s%s", r.code, e, r.stdout, r.stderr)
+	}
+}
+
+// Runs of 120 s under 0.05 cores lower nothing and carry the hint; 0.5 cores is learned, no hint.
+// Mutation: drop the hint, or lower cpu anyway → red.
+func TestSuggestHintsUnobservedWork(t *testing.T) {
+	dir := unobservedDir(t, "[needs.\"ci:box\"]\ncpu = 2\nmem = \"4G\"\n")
+	r := cli(t, baseEnv(dir), "suggest", "--write", "--label", "ci:box")
+	r2 := cli(t, baseEnv(dir), "suggest", "--write", "--label", "ci:busy")
+	got := readNeeds(t, filepath.Join(dir, "needs.toml"))
+	box, busy := got["ci:box"], got["ci:busy"]
+	if r.code != 0 || r2.code != 0 || box["cpu"] != int64(2) || box["mem"] != "4G" || !strings.Contains(fmt.Sprint(box["evidence"]), "set observed = false or pin") ||
+		busy["cpu"] != "1" || strings.Contains(fmt.Sprint(busy["evidence"]), "observed") {
+		t.Errorf("ci:box %v, ci:busy %v:\n%s%s", box, busy, r.stderr, r2.stderr)
 	}
 }

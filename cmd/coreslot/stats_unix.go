@@ -189,6 +189,9 @@ func currentText(f needs.File, label string) string {
 	if e.Pinned {
 		parts = append(parts, "pinned")
 	}
+	if !e.Observed {
+		parts = append(parts, "observed = false")
+	}
 	if len(parts) == 0 {
 		return "an entry that sets nothing"
 	}
@@ -292,18 +295,21 @@ type suggestion struct {
 }
 
 // suggestions decides, per label, the keys to set: mem, the evidence, and cpu_per_worker for an
-// entry of f that has it, else cpu. A pinned entry, or one that does not parse, is kept.
+// entry of f that has it, else cpu. A pinned entry, one with observed = false, or one that does not
+// parse, is kept; a label that looks unobserved gets only its evidence.
 func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
 	var out []suggestion
 	for _, s := range stats {
 		sg := suggestion{label: s.Label}
-		e, _, err := f.Lookup(s.Label)
+		e, ok, err := f.Lookup(s.Label)
 		switch {
 		case err != nil:
 			sg.kept = "kept, its entry does not parse: " + err.Error()
 		case e.Pinned:
 			sg.kept = "pinned, kept"
-		case s.Suggest.CPU == nil && s.Suggest.MemMiB == 0:
+		case ok && !e.Observed:
+			sg.kept = "observed = false: its work runs outside the process tree, kept"
+		case s.Suggest.CPU == nil && s.Suggest.MemMiB == 0 && !s.Unobserved:
 			sg.kept = "nothing measured, kept"
 		default:
 			sg.set = map[string]any{"evidence": s.Suggest.Reason}
@@ -383,7 +389,7 @@ func suggestCommand(args []string, io IO) int {
 				parts = append(parts, fmt.Sprintf("%s = %#v", k, v)) // a string quoted, a number bare
 			}
 		}
-		fmt.Fprintf(io.Stdout, "%s: wrote %s and its evidence\n", text(sg.label), strings.Join(parts, ", "))
+		fmt.Fprintf(io.Stdout, "%s: wrote %s\n", text(sg.label), strings.Join(append(parts, "its evidence"), " and "))
 	}
 	return 0
 }

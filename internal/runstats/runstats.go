@@ -21,6 +21,10 @@ const (
 	WindowRuns = 5
 	// saturatedShare is the share of its cpu grant a run must use to count as saturated.
 	saturatedShare = 0.8
+	// unobservedMinRanS and unobservedCores bound Unobserved: runs of at least that many seconds
+	// that averaged fewer cores.
+	unobservedMinRanS = 60
+	unobservedCores   = 0.05
 )
 
 // Stats is what the run log says about one base label (needs.BaseLabel).
@@ -34,6 +38,7 @@ type Stats struct {
 	MemPeakSource string            // that peak's measure
 	PeakAfterS    *float64          // when that peak was read, nil when unknown
 	PeakCPU       int               // that run's cpu grant when above the suggested cpu max, else 0
+	Unobserved    bool              // Unobserved(Window): the suggestion lowers nothing
 	WaitedS       float64           // summed over the window
 	WaitedFreeS   float64           // summed over the window; a run without it adds 0
 	Suggest       Suggestion
@@ -71,6 +76,20 @@ func Summarize(runs []store.RunRecord, cpuSize int) []Stats {
 	}
 	slices.SortFunc(out, func(a, b Stats) int { return strings.Compare(a.Label, b.Label) })
 	return out
+}
+
+// Unobserved reports whether runs, one label's, did their work outside their process tree, in a
+// container or on another host: at least one has run for a minute with its CPU time measured, and
+// those runs averaged under 0.05 cores.
+func Unobserved(runs []store.RunRecord) bool {
+	sum, n := 0.0, 0
+	for _, r := range runs {
+		if r.RanS >= unobservedMinRanS && r.CPUUserS != nil && r.CPUSysS != nil {
+			sum += (*r.CPUUserS + *r.CPUSysS) / r.RanS
+			n++
+		}
+	}
+	return n > 0 && sum/float64(n) < unobservedCores
 }
 
 func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats {
@@ -120,6 +139,10 @@ func summarize(label string, n int, window []store.RunRecord, cpuSize int) Stats
 	const tokenKiB = spec.MemTokenMiB * 1024
 	s.Suggest.MemMiB = (s.MemPeakKiB + tokenKiB - 1) / tokenKiB * spec.MemTokenMiB
 	s.Suggest.Reason = s.reason(maxCores)
+	if s.Unobserved = Unobserved(window); s.Unobserved {
+		s.Suggest.CPU, s.Suggest.MemMiB, s.Suggest.CPUPerWorker = nil, 0, 0
+		s.Suggest.Reason += ", its work may run outside the process tree, in a container or on another host; set observed = false or pin the entry"
+	}
 	return s
 }
 

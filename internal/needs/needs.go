@@ -55,6 +55,7 @@ type Entry struct {
 	MemMiB       int64
 	Pinned       bool    // the entry is the user's, and is never rewritten from measurements
 	CPUPerWorker float64 // cpu tokens one worker takes (cpu_per_worker); then CPU is the worker width
+	Observed     bool    // false when the entry says observed = false: its work runs outside the process tree
 }
 
 // Request is the cpu tokens a run of the entry asks for and the workers it may start, for an entry
@@ -145,7 +146,7 @@ func (f File) Lookup(label string) (Entry, bool, error) {
 	bad := func(key string, err error) (Entry, bool, error) {
 		return Entry{}, false, fmt.Errorf("[needs.%q] %s: %v", base, key, err)
 	}
-	var e Entry
+	e := Entry{Observed: true}
 	if v, ok := tbl["cpu"]; ok {
 		s, err := scalar(v)
 		if err != nil {
@@ -177,6 +178,13 @@ func (f File) Lookup(label string) (Entry, bool, error) {
 			return bad("pinned", errors.New("want a boolean"))
 		}
 		e.Pinned = b
+	}
+	if v, ok := tbl["observed"]; ok {
+		b, ok := v.(bool)
+		if !ok {
+			return bad("observed", errors.New("want a boolean"))
+		}
+		e.Observed = b
 	}
 	if v, ok := tbl["cpu_per_worker"]; ok {
 		var c float64

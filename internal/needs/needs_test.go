@@ -65,6 +65,8 @@ light = true
 [needs."d"]
 pinned = true
 mem = "2G"
+[needs."f"]
+observed = false
 [needs.""]
 cpu = 3
 `)
@@ -73,11 +75,12 @@ cpu = 3
 		label string
 		want  Entry
 	}{
-		{"a", Entry{CPU: &spec.Range{Min: 1, Max: 7}, MemMiB: 3175}},
-		{"a@10", Entry{CPU: &spec.Range{Min: 1, Max: 7}, MemMiB: 3175}},
-		{"b", Entry{CPU: &spec.Range{Min: 4, Max: 4}, MemMiB: 3072}},
-		{"c", Entry{CPUPerWorker: 0.4}},
-		{"d", Entry{MemMiB: 2048, Pinned: true}},
+		{"a", Entry{CPU: &spec.Range{Min: 1, Max: 7}, MemMiB: 3175, Observed: true}},
+		{"a@10", Entry{CPU: &spec.Range{Min: 1, Max: 7}, MemMiB: 3175, Observed: true}},
+		{"b", Entry{CPU: &spec.Range{Min: 4, Max: 4}, MemMiB: 3072, Observed: true}},
+		{"c", Entry{CPUPerWorker: 0.4, Observed: true}},
+		{"d", Entry{MemMiB: 2048, Pinned: true, Observed: true}},
+		{"f", Entry{}},
 	} {
 		got, ok, err := f.Lookup(tc.label)
 		if err != nil || !ok {
@@ -85,7 +88,7 @@ cpu = 3
 			continue
 		}
 		if (got.CPU == nil) != (tc.want.CPU == nil) || (got.CPU != nil && *got.CPU != *tc.want.CPU) ||
-			got.MemMiB != tc.want.MemMiB || got.Pinned != tc.want.Pinned || got.CPUPerWorker != tc.want.CPUPerWorker {
+			got.MemMiB != tc.want.MemMiB || got.Pinned != tc.want.Pinned || got.Observed != tc.want.Observed || got.CPUPerWorker != tc.want.CPUPerWorker {
 			t.Errorf("Lookup(%q) = %+v (cpu %v), want %+v (cpu %v)", tc.label, got, got.CPU, tc.want, tc.want.CPU)
 		}
 	}
@@ -99,11 +102,13 @@ cpu = 3
 // TestLookupBadValue: a bad value is an error naming the label and the key. Mutation: drop the
 // key from the message → red.
 func TestLookupBadValue(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "needs.toml")
-	write(t, path, "[needs.\"a\"]\ncpu = \"x\"\n")
-	_, ok, err := load(t, path).Lookup("a")
-	if ok || err == nil || !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), "cpu") {
-		t.Fatalf("Lookup = %v, %v; want an error naming \"a\" and cpu", ok, err)
+	for _, key := range []string{`cpu = "x"`, `observed = "no"`} {
+		path := filepath.Join(t.TempDir(), "needs.toml")
+		write(t, path, "[needs.\"a\"]\n"+key+"\n")
+		_, ok, err := load(t, path).Lookup("a")
+		if ok || err == nil || !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), key[:3]) {
+			t.Fatalf("%s: Lookup = %v, %v; want an error naming \"a\" and the key", key, ok, err)
+		}
 	}
 }
 
