@@ -115,9 +115,11 @@ Every conforming client MUST preserve these invariants:
   from the configuration alone sees the tokens a live size admitted as locked above its size, as
   after a shrink, and waits until they fall below it.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
-  tickets were published before the election (section 10.3). There is no backfill: the head blocks
-  every waiter behind it, and a waiter is passed over only while it is STALLED, dead or canceled.
-  Adoption and token-only admission are outside the queue by definition.
+  tickets were published before the election (section 10.3), with one bounded exception: a waiter
+  in the front window MAY be admitted ahead of live tickets under the rule of section 10.3,
+  minimums before extras. Otherwise the head blocks every waiter behind it, and a waiter is passed
+  over only while it is STALLED, dead or canceled. Adoption and token-only admission are outside
+  the queue by definition.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's minimum is free and no process is stopped inside the admission section, the head is
   admitted within 3 s; up to 4 consecutive stopped tickets at the front of the queue stop blocking
@@ -721,16 +723,43 @@ A waiter:
   (section 12);
 - in each election also watches the **front window**: the first 4 tickets of the queue that are
   not gone (fewer when fewer are ahead of it), reading their mtimes as an observer (section 10.2)
-  even when the examination ended before reaching them. The front window only keeps every
+  even when the examination ended before reaching them. Watching the front window keeps every
   waiter's timers on the front of the queue running; the election's rule is unchanged. A dead
   ticket that is not yet removed still takes a slot of the window until reconciliation removes it
   (section 10.4);
+- when its own ticket is in the front window and the examination ended at a live ticket, MAY
+  enter the section once per election to be admitted ahead of it, under the rule below;
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.
 
 > **Implementation note.** The conformance traces' 22 s bound cannot tell a waiter that watches the
 > front window from one that does not; the Go and Python unit tests enforce it.
+
+**Minimums before extras.** A waiter whose own ticket is among the first 4 tickets of the queue
+that are not gone, counted as the front window counts them, MAY be admitted while live tickets are
+ahead of it, when for every declared resource it requests its plan fits in `free − Σ min_ahead`:
+the minimum and extra passes of section 12.1 step 6 are made against that reduced free.
+`min_ahead` is, for each counted ticket ahead, the effective minimum (section 12.2, against the
+same sizes) of that resource in its `need`; a ticket that does not name the resource contributes
+nothing, and neither does a resource that is not declared. Every ticket ahead counts except one
+the election passes over as STALLED, dead or canceled; a ticket the waiter has never observed
+counts as live. An entry ahead whose name matches the ticket grammar but whose body cannot be read
+or is malformed, or that is a stray (section 4.2), makes the waiter not pass. This fails closed,
+unlike the election, where such an entry takes no place in the queue (section 7.2): the waiter
+goes on waiting and is elected as before. The decision is made inside the section (section 12.1
+step 5); a waiter MAY make the same check outside the section first, to enter only when it would
+pass, but that check decides nothing.
+
+The rule never lets a waiter past a ticket ahead on a resource that ticket is short of and the
+waiter names: there `free − Σ min_ahead` is below zero. It moves work past a head that is short of
+a resource the waiter does not name, such as cpu-only runs past a head waiting for a `pg-local`
+slot. Nor does it starve a ticket ahead on the configured size: a passer takes nothing of a
+resource whose free is already below the minimums ahead and leaves at least those minimums free of
+every other, so tokens released later reach the tickets ahead as before, and I5 holds. Where a
+client uses the live size of `mem` (section 5.2), a passer that names no `mem` still uses memory
+that is in no reservation, so it can lower the headroom a head's live size would use. A client
+that does not implement the rule waits for its election and conforms.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting, and
@@ -745,8 +774,9 @@ whose ticket name is gone (section 10.4, step 2). When it later removes its tick
 A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2
 (1m30s); holders: gate:unit pid 4711 cpu12 (3m12s), ci:o-r pid 5120 cpu3 (1m05s)`: the request, its
 position, how long it has waited and the live holds with their grants and ages (informative).
-The position is an upper bound: tickets beyond the one that ended the examination are counted
-without being examined.
+The position is one plus the tickets ahead that the examination has not passed over, an upper
+bound: tickets beyond the one that ended the examination are counted without being examined. A
+waiter that passes under the rule above is admitted before its position reaches 1.
 
 ### 10.4 Reconciliation
 
@@ -825,7 +855,15 @@ Inside the section the head:
    well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
    this observer (its mtime from the listing counts as an observation), the head leaves the section
    and waits. A ticket the head has never observed, such as one published after its election,
-   counts as live;
+   counts as live.
+
+   A waiter that entered the section to pass under section 10.3's rule takes these steps as the
+   head does, except that at the re-election, instead of leaving when a live ticket is ahead, it
+   checks on the fresh listing that its own ticket is in the front window, reads the `need` of
+   every ticket ahead that counts, and leaves and waits if its ticket is not in the window or if
+   any entry ahead makes it not pass (section 10.3). Otherwise it reduces each resource's `free`
+   by `Σ min_ahead` and goes on to step 6 only if its effective `min` of every resource fits in
+   the reduced free; step 6 then takes against the reduced free;
 6. otherwise takes tokens with `LOCK_EX|LOCK_NB` at indices below the size, creating missing token
    files and skipping a token that turns out locked, in two passes, each in ascending resource name
    and then ascending index:
