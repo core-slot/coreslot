@@ -802,25 +802,39 @@ class PilotCheck8(unittest.TestCase):
                          (True, False, True, {"batch": run8.DRY_SHORT}))
 
 
+    def test_an_untested_primary_cell_stops(self):
+        # mutation: go over the futile primary cells only -> an untested trace-quiet goes -> red
+        c = self.check(blocks=(1, 2), dry=lambda b, a: True,
+                       invalid=lambda b, a: ["ac"] if a == "S1" and b == 2 else [])
+        self.assertEqual((c["go"], c["untested"]["trace-quiet"]), (False, run8.DRY_SHORT))
+        self.assertEqual(c["outcome"], "stop: trace-quiet untested at the pilot; main does not"
+                                       " run; the pilot is reported as exploratory, with its"
+                                       " estimates")
+
+
 GOOD = {"trace-quiet": {"K": 80}, "trace-loaded": {"K": 80}, "batch": {"KP": 60, "F": 62}}
 
 
 class Summary8(unittest.TestCase):
-    def summary(self, base=GOOD, dropped=(), joint=0.9, check=None, skipped=None, n=6, **kw):
+    def summary(self, base=GOOD, dropped=(), joint=0.9, check=None, skipped=None, n=6,
+                phase="main", pilot=(), **kw):
+        """phase's records of every planned cell, and pilot records of the cells in pilot."""
         self.out = tempfile.mkdtemp()
         n = {c: n for c in run8.CELLS if c not in dropped}
         dump(os.path.join(self.out, "power.json"), {"n": n, "dropped": list(dropped),
-                                                    "descriptive": joint < 0.5})
+                                                    "joint": joint, "descriptive": joint < 0.5})
         dump(os.path.join(self.out, "pilot_check.json"), check or {"go": True})
         if skipped:
             dump(os.path.join(self.out, "batch-skipped.json"), {"reason": skipped})
         for c in n:
-            write8(self.out, "main", c, range(1, 7), base.get(c), **kw)
+            write8(self.out, phase, c, range(1, 7), base.get(c), **kw)
+        for c in pilot:
+            write8(self.out, "pilot", c, range(1, 7), base.get(c))
         return deciding(run8.summary, self.out, name="summary.json")
 
     def test_primary_iut_s_star_and_effects(self):
         # mutations: the primary by union -> one rejecting cell suffices -> red; S* fixed to S1
-        # -> red; effects only for rejected cells -> red; secondary tested anyway -> red
+        # -> red; effects only for rejected cells -> red
         s = self.summary(dict(GOOD, **{"trace-quiet": {"K": 80, "S3": 90},
                                        "trace-loaded": {"K": 110}}))
         p = s["primary"]
@@ -828,12 +842,39 @@ class Summary8(unittest.TestCase):
         self.assertTrue(p["components"]["trace-quiet"]["rejected"])
         self.assertEqual(set(s["effects"]), set(run8.CELLS))
         self.assertIsNotNone(s["effects"]["trace-loaded"]["ratio"]["S1/K"])
-        self.assertEqual({r["status"] for r in s["secondary"]}, {"not tested (primary not"
-                                                                 " rejected)"})
+        # mutation: test the secondary only once the primary is rejected -> red
+        self.assertTrue(s["tests"])
+        self.assertFalse(any(r["status"].startswith("not tested") for r in s["secondary"]))
         self.assertTrue(self.summary()["primary"]["rejected"])
         # mutation: the joint power ignored -> a descriptive primary claims its rejection -> red
         p = self.summary(joint=0.4)["primary"]
         self.assertEqual((p["iut_rejected"], p["descriptive"], p["rejected"]), (True, True, False))
+        # mutation: power.json's joint power left out of the primary -> red
+        self.assertEqual(p["joint_power"], 0.4)
+        self.assertIn("joint power 0.4", text(os.path.join(self.out, "summary.txt")))
+
+    def test_a_pilot_stop_reports_the_pilot(self):
+        # mutations: summarise main after a stop -> refused, no main blocks -> red; a family
+        # tested -> red; effects for the primary cells only -> red; the futility legs dropped
+        # -> red
+        legs = {"trace-quiet": {"K/S3": {"mean": 0.1, "futile": True}}}
+        s = self.summary(check={"go": False, "components": legs, "outcome": "stop: x"},
+                         phase="pilot")
+        self.assertEqual((s["phase"], s["exploratory"], s["pilot_check"]["components"]),
+                         ("pilot", True, legs))
+        rows = [s["primary"], *s["secondary"], *s["H-PRE"]["rows"]]
+        self.assertEqual({r["status"] for r in rows}, {"not tested (stopped at the pilot)"})
+        self.assertEqual(len(s["secondary"]), 5)  # H-S1..H-S3, H-SAFE-trace and -heavy
+        self.assertEqual((set(s["effects"]), s["primary"]["joint_power"]), (set(run8.CELLS), 0.9))
+        self.assertTrue(all(e["exploratory"] for e in s["effects"].values()))
+
+    def test_cells_main_did_not_run_take_their_pilot_effects(self):
+        # mutation: effect sizes for the main cells only -> no heavy-loaded or batch -> red
+        s = self.summary(dropped=("heavy-loaded",), check={"go": True, "batch_futile": True},
+                         pilot=("heavy-loaded", "batch"))
+        self.assertEqual({c: e.get("exploratory", False) for c, e in s["effects"].items()},
+                         {c: c in ("heavy-loaded", "batch") for c in run8.CELLS})
+        self.assertIsNotNone(s["effects"]["batch"]["ratio"]["batch_s KP/K"])
 
     def test_secondary_union_and_safe(self):
         # mutations: H-S by IUT over its legs -> one slower cell is not enough -> red; H-SAFE for
@@ -855,7 +896,10 @@ class Summary8(unittest.TestCase):
                 ({"base": dict(GOOD, batch={"KP": 60, "F": 55})}, "time", "not rejected"),
                 ({"warn": lambda b, a: 10 if a == "KP" else 0}, "safety", "not rejected"),
                 ({"swap": lambda b, a: 100 if a == "KP" else 0}, "safety", "not rejected"),
-                ({"gates": lambda b, a: failed if a == "KP" else []}, "time", "not rejected")):
+                ({"gates": lambda b, a: failed if a == "KP" else []}, "time", "not rejected"),
+                # mutation: a failed KP set keeps its own batch_s -> cost 1.0, rejected -> red
+                ({"gates": lambda b, a: failed if a == "KP" else [],
+                  "batch_s": lambda b, a: 200.0 if a == "F" else 100.0}, "cost", "not rejected")):
             rows = self.summary(**kw)["H-PRE"]["rows"]
             self.assertEqual(({r["name"]: r["status"] for r in rows}[leg], len(rows)), (status, 3))
 

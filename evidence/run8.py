@@ -39,8 +39,8 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            the first agent; before it, the batch gate's LEARN_BATCH_K runs in its K form in pass
            "learn", none in F, none in relearn, each record with its run-log line's
            "preemptible" value (None without one). When the binary lacks --preemptible (R8
-           below) the batch gate is skipped. Resumes and refuses as run 7's learn; refuses as well once any
-           probe record exists.
+           below) the batch gate is skipped. Resumes and refuses as run 7's learn; refuses as
+           well once any probe record exists.
   verdict  blocks FIRST..LAST of PHASE (probe, pilot or main) and CELL, each block's arms in the
            order order_for gives it (seed run8-order-<phase>-<cell>-<block>), offsets from the seed
            run8-<phase>-<cell>-<block>. Each set as run 7's: cooldown, level, headroom at t0, the
@@ -58,10 +58,11 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            when P is to run and parallel is not on PATH; on pilot and main of a non-dry stand
            when the evidence tree has uncommitted changes or the binary is not the stand's
            coreslot_sha256; when pilot or main lacks OUT/power.json, or main a pilot_check.json
-           whose "go" is true; when the needs files do not match OUT/needs.sha256. A cell not in power.json's "n" (dropped or
-           left out), and the batch cell's main when pilot_check.json's "batch_futile" is true,
-           exit 0 without a set. P leaves a heavy cell's main when pilot_check.json's
-           "p_feasible"[cell] is false. --as-block and --primer as run 7's.
+           whose "go" is true; when the needs files do not match OUT/needs.sha256. A cell not in
+           power.json's "n" (dropped or left out), and the batch cell's main when
+           pilot_check.json's "batch_futile" is true, exit 0 without a set. P leaves a heavy
+           cell's main when pilot_check.json's "p_feasible"[cell] is false. --as-block and
+           --primer as run 7's.
   power    from PROBE_OUT's valid probe blocks (P never decides one): per trace cell S* (the
            fixed count with the lowest mean) and d = ln(K/S*), per batch comparison its log
            ratio and its batch_s KP/K against ln(1 + BATCH_COST_MARGIN), each with its mean, sd,
@@ -78,13 +79,19 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            capped at PILOT_RERUNS; a dry cell's blocks present): stats8.futile at alpha 0.10 per
            comparison, P's timeouts and feasibility per heavy cell, "go", "batch_futile" and the
            declared "outcome", to OUT/pilot_check.json. A cell with fewer than 2 blocks is
-           untested. Exit 2 without power.json, once a main record exists, or while a non-dry
+           untested; "go" is false when a primary cell is futile or untested. Exit 2 without
+           power.json, once a main record exists, or while a non-dry
            cell is short with re-runs left.
   summary  from each kept cell's first n valid main blocks (n from power.json, re-runs up to
            10 % of n; a dry cell's blocks present): the primary, secondary and H-PRE families
-           and every cell's effect sizes, to OUT/summary.json and OUT/summary.txt. A cell short
-           of n with the re-runs spent is untested. Exit 2 without power.json or
-           pilot_check.json, or while a non-dry cell is short with re-runs left.
+           (the secondary its own Holm family whatever the primary's outcome), the primary's
+           joint power and every cell's effect sizes, to OUT/summary.json and OUT/summary.txt;
+           a cell main did not run takes its pilot blocks' effect sizes, marked exploratory. A
+           cell short of n with the re-runs spent is untested. After a pilot check whose "go" is
+           false it summarises the pilot instead ("phase": "pilot", "exploratory": true): no
+           family tested, every planned cell's effect sizes and the pilot's futility legs. Exit
+           2 without power.json or pilot_check.json, or while a non-dry cell is short with
+           re-runs left.
 """
 import argparse
 import contextlib
@@ -677,6 +684,7 @@ PRIMARY = ("trace-quiet", "trace-loaded")
 LOADED = {"trace": "trace-loaded", "heavy": "heavy-loaded"}  # H-SAFE-<mix>'s cells
 DROP_ORDER = ("heavy-loaded", "wide-quiet", "trace-loaded")
 BATCH_COST_MARGIN = 0.25  # (probe) declared by the pre-registration
+# The safety margins are a tolerance on "not above K's", declared by the pre-registration:
 SAFETY_WARN_MARGIN_S = 5  # (probe) KP's warn seconds above K's, per block
 SAFETY_SWAP_MARGIN_MIB = 64  # (probe) KP's swap-out above K's, per block: run 7's swap event
 OUTCOMES = {"go": "main runs every kept cell at power.json's n",
@@ -696,14 +704,14 @@ def ln8(blocks, cell, a, b, key=None):
 def cell_blocks(out, phase, cell, cap=None):
     """The cell's records of phase, without the re-runs past cap, and its valid blocks over every
     arm but P (P never decides a block). A batch set coreslot failed takes its block's slowest
-    short_mean_verdict_s, as run6.valid_blocks gives such a set the slowest mean_verdict_s."""
+    short_mean_verdict_s and batch_s, as run6.valid_blocks gives such a set the slowest
+    mean_verdict_s; its safety stays as measured."""
     recs = run4.read_jsonl(os.path.join(out, f"{phase}-{cell}.jsonl"))
     recs = recs if cap is None else run6.capped(recs, cap)[0]
     blocks = run6.valid_blocks(recs, tuple(a for a in CELLS[cell][2] if a != "P"))
     for sets in blocks.values() if cell == "batch" else ():
-        worst = max(r["short_mean_verdict_s"] for r in sets.values())
-        sets.update({a: dict(r, short_mean_verdict_s=worst) for a, r in sets.items()
-                     if r.get("coreslot_failed")})
+        worst = {k: max(r[k] for r in sets.values()) for k in ("short_mean_verdict_s", "batch_s")}
+        sets.update({a: dict(r, **worst) for a, r in sets.items() if r.get("coreslot_failed")})
     return recs, blocks
 
 
@@ -799,10 +807,13 @@ def pilot_check(out):
                 "lower90": stats6.paired_lower(d, bound, 0.10)["lower"]}
                 for name, (d, bound) in comps.items()}
     futile = [c for c, cs in res["components"].items() if any(x["futile"] for x in cs.values())]
-    go = not set(futile) & set(PRIMARY)
+    short = [c for c in PRIMARY if c in res["untested"]]
+    stop = OUTCOMES["stop"] if set(futile) & set(PRIMARY) else short and (
+        f"stop: {', '.join(short)} untested at the pilot; main does not run; the pilot is"
+        " reported as exploratory, with its estimates")
     write_out(out, "pilot_check.json", dict(
-        res, futile=futile, go=go, batch_futile="batch" in futile,
-        outcome=OUTCOMES["stop" if not go else "batch" if "batch" in futile else "go"]))
+        res, futile=futile, go=not stop, batch_futile="batch" in futile,
+        outcome=stop or OUTCOMES["batch" if "batch" in futile else "go"]))
 
 
 def holm8(ps, why=None):
@@ -875,22 +886,70 @@ def summary_text(s):
             for r in s["secondary"] + [dict(r, name=f"H-PRE {r['name']}")
                                        for r in s["H-PRE"].get("rows", [])]]
     return "\n".join([
-        "Acceptance run 8: summary" + (" (dry)" if s["dry"] else ""), "",
+        "Acceptance run 8: summary" + (" (dry)" if s["dry"] else "") + (
+            " of the pilot, exploratory: main did not run" if s.get("exploratory") else ""), "",
         f"Blocks: {json.dumps({c: len(bs) for c, bs in s['blocks'].items()})}",
         f"Re-runs: {json.dumps(s['reruns'])}; dropped by the plan: {s['dropped']}",
         f"Untested cells: {json.dumps(s['untested'])}", "",
         "Primary (intersection-union over the kept trace cells, alpha 0.05): " + (
-            "untested" if "untested" in p else "descriptive, no rejection claimed"
-            if p["descriptive"] else "rejected" if p["rejected"] else "not rejected"),
+            p["status"] if "status" in p else "untested" if "untested" in p
+            else "descriptive, no rejection claimed" if p["descriptive"]
+            else "rejected" if p["rejected"] else "not rejected")
+        + f"; joint power {p.get('joint_power')}",
         "Secondary family (Holm, alpha 0.05), then H-PRE (Holm over time, cost and safety):",
         *rows, *(f"  H-PRE: {k}, {v}" for k, v in s["H-PRE"].items() if k != "rows" and
                  isinstance(v, str)), "", "Effect sizes:", json.dumps(s["effects"], indent=1), ""])
+
+
+def piloted(out, cells):
+    """Each cell's first PILOT_BLOCKS valid pilot blocks (re-runs capped at PILOT_RERUNS) and its
+    pilot records, for the cells with 2 or more."""
+    got = {}
+    for cell in cells:
+        recs, blocks = cell_blocks(out, "pilot", cell, PILOT_RERUNS)
+        if len(blocks := run6.first(blocks, PILOT_BLOCKS)) >= 2:
+            got[cell] = blocks, recs
+    return got
+
+
+def exploratory(got):
+    """The effect sizes of piloted()'s cells, each marked exploratory."""
+    return {c: dict(effects(bs, c, recs), exploratory=True) for c, (bs, recs) in got.items()}
+
+
+def stopped(out, plan, check):
+    """The summary after a pilot check whose go is false: no family tested, every planned cell's
+    effect sizes from its pilot blocks, and the pilot check's futility legs."""
+    why, got = "stopped at the pilot", piloted(out, plan["n"])
+    return {"phase": "pilot", "exploratory": True, "dry": bool(check.get("dry")),
+            "dropped": plan["dropped"], "n": plan["n"],
+            "blocks": {c: list(bs) for c, (bs, _) in got.items()},
+            "reruns": {c: run6.reruns(recs) for c, (_, recs) in got.items()},
+            "untested": check.get("untested", {}),
+            "pilot_check": {k: check.get(k) for k in ("S*", "components", "futile", "outcome")},
+            "primary": {"rejected": False, "status": f"not tested ({why})",
+                        "joint_power": plan.get("joint")},
+            "secondary": holm8(dict.fromkeys(secondary({}, plan)), why),
+            "H-PRE": {"rows": holm8(dict.fromkeys(("time", "cost", "safety")), why)},
+            "effects": exploratory(got)}
 
 
 def summary(out):
     plan, check = (read_json(os.path.join(out, f)) for f in ("power.json", "pilot_check.json"))
     if plan is None or check is None:
         refuse("summary needs power.json and pilot_check.json")
+    s = summary_main(out, plan, check) if check.get("go") else stopped(out, plan, check)
+    with open(os.path.join(out, "summary.json"), "w") as f:
+        json.dump(s, f, indent=1)
+    text = summary_text(s)
+    with open(os.path.join(out, "summary.txt"), "w") as f:
+        f.write(text)
+    print(text)
+
+
+def summary_main(out, plan, check):
+    """The summary of the main blocks; a cell main did not run takes its pilot's effect sizes,
+    marked exploratory."""
     skipped = read_json(os.path.join(out, "batch-skipped.json"))
     recs, used, untested, spent = {}, {}, {}, {}
     for cell, n in plan["n"].items():
@@ -918,27 +977,21 @@ def summary(out):
         primary.update(cells=cells, iut_rejected=primary["rejected"],
                        descriptive=plan["descriptive"],
                        rejected=primary["rejected"] and not plan["descriptive"])
+    primary["joint_power"] = plan.get("joint")
     tests = secondary(used, plan)
-    why = None if primary["rejected"] else "primary untested" if "untested" in primary else (
-        "primary not rejected")
     hpre = ({"skipped": skipped["reason"]} if skipped else
             {"untested": "the pilot check found the batch cell futile"}
             if check.get("batch_futile") else {"untested": plan["left_out"]["batch"]}
             if "batch" in plan.get("left_out", {}) else {"untested": untested["batch"]}
             if "batch" in untested else h_pre(used["batch"]))
-    s = {"dry": any(r.get("dry") for rs in recs.values() for r in rs),
-         "dropped": plan["dropped"], "n": plan["n"],
-         "blocks": {c: list(bs) for c, bs in used.items()}, "reruns": spent,
-         "untested": untested, "primary": primary,
-         "secondary": holm8({k: v["p"] for k, v in tests.items()}, why),
-         "tests": {} if why else tests, "H-PRE": hpre,
-         "effects": {c: effects(bs, c, recs[c]) for c, bs in used.items()}}
-    with open(os.path.join(out, "summary.json"), "w") as f:
-        json.dump(s, f, indent=1)
-    text = summary_text(s)
-    with open(os.path.join(out, "summary.txt"), "w") as f:
-        f.write(text)
-    print(text)
+    return {"phase": "main", "dry": any(r.get("dry") for rs in recs.values() for r in rs),
+            "dropped": plan["dropped"], "n": plan["n"],
+            "blocks": {c: list(bs) for c, bs in used.items()}, "reruns": spent,
+            "untested": untested, "primary": primary,
+            "secondary": holm8({k: v["p"] for k, v in tests.items()}), "tests": tests,
+            "H-PRE": hpre, "effects": {
+                **{c: effects(bs, c, recs[c]) for c, bs in used.items()},
+                **exploratory(piloted(out, [c for c in CELLS if c not in recs]))}}
 
 
 def main():
