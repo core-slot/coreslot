@@ -32,6 +32,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"hold body", "Hold", "start_ns"},
 	{"cancel body", "Cancel request", "requester_pid"},
 	{"run-log memory keys", "Run log", "mem_peak_kib"},
+	{"run-log workers and preemptible keys", "Run log", "preemptible"},
 	{"CORESLOT_GRANTED_*", "Descriptor and environment contract", "CORESLOT_GRANTED_"},
 	{"CORESLOT_HELD_FD", "Descriptor and environment contract", "CORESLOT_HELD_FD"},
 	{"CORESLOT_TOKEN_FDS", "Descriptor and environment contract", "CORESLOT_TOKEN_FDS"},
