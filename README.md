@@ -5,39 +5,80 @@
 [![Release](https://img.shields.io/github/v/release/core-slot/coreslot?sort=semver)](https://github.com/core-slot/coreslot/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/core-slot/coreslot)](LICENSE)
 
-One core budget for every test suite, build and agent on your machine: parallel gates wait their
-turn instead of melting the laptop.
+Several coding agents on one laptop, each running its own test suite, melt it. On the Claude Code
+tracker, 11 agents and a workflow drove an 11-core, 18 GB Mac to a load average of about 726 with
+swap full ([anthropics/claude-code#101193](https://github.com/anthropics/claude-code/issues/101193)).
+Every `pytest -n auto`, `make -j`, `go test ./...` and `cargo build` sizes itself to the whole
+machine, and none of them knows about the others: tests time out and fail falsely, and every gate
+runs slower than it would alone.
 
-Several coding-agent sessions, each in its own worktree, each running its own `pytest -n <cores>`
-or `make -j<cores>`, oversubscribe a machine several times over: timing-sensitive tests fail
-falsely and every gate runs far slower than it would alone. `coreslot` gives every such command a
-share of one machine-wide budget. A command asks for `min..max` cores, waits in one queue (first
-come, first served at equal priority) until `min` is free, and runs with what it got. There is no
-daemon: the budget is a directory of token files and `flock(2)` locks, so a killed client never
-leaks its share.
+`coreslot` gives them one machine-wide core budget. A command asks for `min..max` cores, waits in
+one queue until `min` is free, and runs with what it got:
+
+```sh
+brew install core-slot/tap/coreslot
+```
 
 ```sh
 coreslot run --need cpu=2..16 --subst -- make -j{n}  # waits for 2 cores, runs with up to 16
-coreslot run --need cpu=6 -- pytest -n 12            # 12 workers that keep about 4 cores busy
+coreslot run --label gate:unit -- pytest -n 12       # the label's needs, learned from its runs
 coreslot status                                      # who holds what, who waits
 ```
+
+![Mean time to verdict of four agents' gates on a 16 GB, 10-core laptop: everything at once 74.6 s, semaphores of 3, 2 and 1 slots 45.6, 35.9 and 36.0 s, coreslot 34.3 s](docs/img/overload-run6.svg)
+
+Four agents' type checks, lints and test suites on one laptop reached their verdicts in less than
+half the time of running everything at once (0.47 and 0.43 of it in two pre-registered runs of
+120 and 12 blocks), with next to no swap and no false failures. Against a semaphore whose slot
+count was tuned by hand for that mix it came out about even, without any tuning: it learned each
+gate's needs from a few of its own runs, while the best slot count changed with the machine's
+background load. It is not faster than a well-tuned semaphore; [Performance](#performance) has
+the details and the caveats.
+
+There is no daemon: the budget is a directory of token files and `flock(2)` locks, so a killed
+client never leaks its share, and any client written from [`PROTOCOL.md`](PROTOCOL.md) shares the
+same budget.
+
+**For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
+`go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as `coreslot run --label
+... -- <the same command>`:
+
+```text
+/plugin marketplace add core-slot/coreslot
+/plugin install coreslot@coreslot
+```
+
+Other agents get the same rule as a line in their instructions
+([the snippet](integrations/claude-code/README.md#other-coding-agents)).
 
 **Status:** `v0`. Before `v1.0.0` the CLI and the library may still change, and a release may
 introduce a new on-disk format; the [compatibility policy](docs/compatibility.md) says how.
 
+## Why not ...
+
+| Instead of coreslot | Good at | Where it stops |
+|---|---|---|
+| `make -j` and its jobserver | Sharing N job slots inside one build tree; Ninja, Cargo and GCC speak it | Each top-level build has its own pool: four agents at `-j12` are 48 jobs. coreslot can hand each one its `-j{n}`. |
+| A system-wide jobserver (Gentoo's steve) | One token pool for every jobserver-aware tool | Linux with CUSE, and jobserver-aware clients only; memory is not counted. |
+| GNU `sem`, a semaphore script | Simple, and as fast as coreslot when the slot count fits the mix | A fixed slot count for every command; no ranges, no memory, no strict queue order. |
+| cgroups, `systemd-run -p CPUQuota=` | Hard limits the kernel enforces | Everyone runs slower at once instead of waiting, a memory cap kills rather than waits, and macOS has neither. Pair one with coreslot for a hard cap. |
+| `nice`, `taskpolicy` | Keeping the desktop responsive | Lower priority still oversubscribes; on Linux autogroup confines it to one session. |
+| Bazel, Nx, Turborepo concurrency limits | Scheduling inside one invocation | Per invocation: two worktrees each take their share of the whole machine. |
+| Running agents in the cloud | Not sharing a laptop at all | Do it where you can; coreslot is for work that stays on your machine. |
+
 ## Install
-
-With Go 1.26 or newer:
-
-```sh
-go install github.com/core-slot/coreslot/cmd/coreslot@latest
-```
 
 With Homebrew, from a tap whose formula builds from source
 ([`packaging/homebrew/coreslot.rb.tmpl`](packaging/homebrew/coreslot.rb.tmpl)):
 
 ```sh
 brew install core-slot/tap/coreslot
+```
+
+With Go 1.26 or newer:
+
+```sh
+go install github.com/core-slot/coreslot/cmd/coreslot@latest
 ```
 
 Or download a release archive (macOS and Linux, amd64 and arm64) from the
@@ -437,6 +478,21 @@ had a median of 58 one-second samples at warn pressure and swapped 8 GiB per set
 the tuned two-slot semaphore the median ratio was 1.0065 and the declared bound of 1.10 held in only
 7 of 12 blocks
 ([acceptance run 4](evidence/README.md#acceptance-run-4-needs-coreslot-learned-itself-against-a-tuned-semaphore-run4py)).
+
+The chart at the top is the larger run of the same stand, with every slot count from 1 to 3 and
+three levels of background memory: 120 blocks of seven arms
+([acceptance run 6](evidence/README.md#acceptance-run-6-coreslot-against-no-admission-and-every-semaphore-under-background-memory-run6py)).
+coreslot at its default shares cut the mean time to verdict to 0.47 of running everything at once
+(geometric mean of the per-block ratios, one-sided upper bound 0.49), with less warn-level memory
+pressure in all 120 blocks and no false failure in 600 gate runs, where every semaphore and running
+everything at once failed FastAPI's suite 3 to 14 times. Against the best semaphore picked in
+hindsight per background level it was within a few percent either way (0.98), a ratio the
+pre-registered chain left untested; the best slot count was 2 at two levels and 1 at the third.
+A later pilot on the same laptop
+([run 7](evidence/README.md#acceptance-run-7-no-fixed-slot-count-keeps-up-across-load-run7py))
+found a one-slot lock keeping pace with coreslot at both levels it tried, while two slots lost by
+about a fifth: a semaphore whose count fits the mix is as good, and coreslot's case is not having
+to find that count.
 
 [`evidence/README.md`](evidence/README.md) has the scripts, the setup and every run, of the
 [waiter benchmark](evidence/README.md#waiter-benchmark-the-release-gate) and of the
