@@ -30,58 +30,57 @@ def n_for(power_target, comps, lo, hi):
                  if all(t_power_below(n, *c) >= power_target for c in comps)), hi)
 
 
-def power_plan(cells, *, primary, batch, drop_order, cap_h, power_min, lo, hi, alpha,
+def power_plan(cells, *, primary, batch, drop_order, cap_h, power_min, lo, hi, batch_n_max, alpha,
                descriptive_below=DESCRIPTIVE_BELOW):
-    """The block counts of every cell under a cap of cap_h hours. cells maps a name to
-    {"comps": [(mean, sigma, bound)], "set_s": seconds one block of the cell takes, all arms}.
-    Each kept primary cell takes the smallest n whose power reaches power_min ** (1 / m), m the
-    primary cells kept; a secondary cell takes the largest primary n; the batch cell (never
-    dropped) takes the n at which each of its components reaches power_min ** (1 / its count).
-    While the hours exceed cap_h the next cell of drop_order is dropped and m recomputed; if the
-    hours still exceed it, every non-batch n is scaled by one common factor (floor, never below
+    """The block counts of every cell under a cap of cap_h hours, the pilot's lo blocks a cell
+    counted with its n. cells maps a name to {"comps": [(mean, sigma, bound)], "set_s": seconds
+    one block of the cell takes, all arms}. The batch cell (never dropped) takes the n in [lo,
+    batch_n_max] at which each of its components, tested at alpha / 3 (Holm's first threshold
+    over H-PRE's three legs), reaches power_min ** (1 / its count), and its hours are reserved
+    first. Each kept primary cell takes the smallest n whose power reaches power_min ** (1 / m),
+    m the primary cells kept; a secondary cell takes the largest primary n. While the other cells'
+    hours exceed cap_h less the reserve, the next cell of drop_order is dropped and m recomputed;
+    if they still exceed it, every non-batch n is scaled by one common factor (floor, never below
     lo). Returns n, dropped, hours (and hours_by_cell), scale, per-component power, the joint
-    power (the product over the kept primary cells' components) and descriptive (joint power below
-    descriptive_below)."""
-    dropped = []
+    power (the product over the kept primary cells' components), descriptive (joint power below
+    descriptive_below) and over_cap (hours above cap_h)."""
+    def hours(n):
+        return sum((k + lo) * cells[c]["set_s"] for c, k in n.items()) / 3600
+
+    reserved = {}
+    if batch in cells:
+        comps = [(m, s, b, alpha / 3) for m, s, b in cells[batch]["comps"]]
+        reserved[batch] = n_for(power_min ** (1 / len(comps)), comps, lo, batch_n_max)
+    room, dropped = cap_h - hours(reserved), []
 
     def sized():
-        kept = [c for c in cells if c not in dropped]
+        kept = [c for c in cells if c not in dropped and c != batch]
         prim = [c for c in kept if c in primary]
-        n = {}
-        for c in prim:
-            comps = [(m, s, b, alpha) for m, s, b in cells[c]["comps"]]
-            n[c] = n_for(power_min ** (1 / len(prim)), comps, lo, hi)
+        n = {c: n_for(power_min ** (1 / len(prim)), [(m, s, b, alpha) for m, s, b in
+                                                    cells[c]["comps"]], lo, hi) for c in prim}
         top = max(n.values(), default=lo)
-        for c in kept:
-            if c == batch:
-                comps = [(m, s, b, alpha) for m, s, b in cells[c]["comps"]]
-                n[c] = n_for(power_min ** (1 / len(comps)), comps, lo, hi)
-            elif c not in primary:
-                n[c] = top
-        return n
-
-    def hours(n):
-        return sum(k * cells[c]["set_s"] for c, k in n.items()) / 3600
+        return {c: n.get(c, top) for c in kept}
 
     n = sized()
     for c in drop_order:
-        if hours(n) <= cap_h:
+        if hours(n) <= room:
             break
         if c in cells and c != batch and c not in dropped:
             dropped.append(c)
             n = sized()
     scale = 1.0
-    if hours(n) > cap_h:
-        fixed = cells[batch]["set_s"] * n[batch] if batch in n else 0
-        flex = sum(k * cells[c]["set_s"] for c, k in n.items() if c != batch)
-        scale = max(0.0, (cap_h * 3600 - fixed) / flex)
-        n = {c: k if c == batch else max(lo, math.floor(k * scale)) for c, k in n.items()}
-    power = {c: [t_power_below(n[c], m, s, b, alpha) for m, s, b in cells[c]["comps"]] for c in n}
+    if hours(n) > room:
+        pilot = lo * sum(cells[c]["set_s"] for c in n)
+        scale = max(0.0, (room * 3600 - pilot) / sum(k * cells[c]["set_s"] for c, k in n.items()))
+        n = {c: max(lo, math.floor(k * scale)) for c, k in n.items()}
+    n.update(reserved)
+    a = {c: alpha / 3 if c == batch else alpha for c in n}
+    power = {c: [t_power_below(n[c], m, s, b, a[c]) for m, s, b in cells[c]["comps"]] for c in n}
     joint = math.prod(p for c in n if c in primary for p in power[c])
     return {"n": n, "dropped": dropped, "hours": hours(n),
-            "hours_by_cell": {c: k * cells[c]["set_s"] / 3600 for c, k in n.items()},
+            "hours_by_cell": {c: (k + lo) * cells[c]["set_s"] / 3600 for c, k in n.items()},
             "scale": scale, "power": power, "joint": joint,
-            "descriptive": joint < descriptive_below}
+            "descriptive": joint < descriptive_below, "over_cap": hours(n) > cap_h}
 
 
 def futile(d, bound, alpha=0.10):

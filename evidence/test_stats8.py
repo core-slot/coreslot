@@ -79,19 +79,24 @@ def plan(cap_h, cells=None):
     return stats8.power_plan(
         cells or grid(), primary=("trace-quiet", "trace-loaded"), batch="batch",
         drop_order=("heavy-loaded", "wide-quiet", "trace-loaded"), cap_h=cap_h,
-        power_min=0.80, lo=2, hi=200, alpha=0.05)
+        power_min=0.80, lo=2, hi=200, batch_n_max=20, alpha=0.05)
+
+
+RESERVE_H = (20 + 2) * 300 / 3600  # the grid's batch cell: n clamped to 20, plus 2 pilot blocks
 
 
 class PowerPlan(unittest.TestCase):
     def test_a_fits_without_drops(self):
         # mutation: use power_min instead of power_min ** (1 / m) for a primary cell -> red
+        # mutation: count main blocks only in the hours (no pilot blocks) -> red
         p = plan(20)
-        # m = 2: target 0.8 ** 0.5 = 0.8944, n = 34; batch target 0.8 ** (1/3), n = 39
+        # m = 2: target 0.8 ** 0.5 = 0.8944, n = 34; the batch cell's n (about 60) clamped to 20
         self.assertEqual(p["dropped"], [])
         self.assertEqual(p["n"], {"trace-quiet": 34, "trace-loaded": 34, "heavy-loaded": 34,
-                                  "wide-quiet": 34, "batch": 39})
-        self.assertAlmostEqual(p["hours"], (4 * 34 * 300 + 39 * 300) / 3600, places=9)
-        self.assertEqual(p["scale"], 1.0)
+                                  "wide-quiet": 34, "batch": 20})
+        self.assertAlmostEqual(p["hours"], (4 * 36 * 300 + 22 * 300) / 3600, places=9)
+        self.assertAlmostEqual(p["hours_by_cell"]["batch"], RESERVE_H, places=9)
+        self.assertEqual((p["scale"], p["over_cap"]), (1.0, False))
         self.assertGreaterEqual(p["joint"], 0.8)
         self.assertFalse(p["descriptive"])
         self.assertEqual(len(p["power"]["batch"]), 3)
@@ -100,54 +105,69 @@ class PowerPlan(unittest.TestCase):
 
     def test_b_one_drop_in_order(self):
         # mutation: drop the largest cell (or the first primary) instead of the next in order -> red
+        # room 12.5 - 22 * 300 / 3600 = 10.667 h: four cells at 36 blocks 12 h, three 9 h
         p = plan(12.5)
         self.assertEqual(p["dropped"], ["heavy-loaded"])
         self.assertNotIn("heavy-loaded", p["n"])
         self.assertEqual(p["n"]["wide-quiet"], 34)
-        self.assertAlmostEqual(p["hours"], (3 * 34 * 300 + 39 * 300) / 3600, places=9)
+        self.assertAlmostEqual(p["hours"], (3 * 36 * 300 + 22 * 300) / 3600, places=9)
         self.assertEqual(p["scale"], 1.0)
 
     def test_c_all_drops_then_scaling_is_descriptive(self):
-        # mutation: leave the batch n unscaled-check out and scale it too, or floor with round -> red
-        p = plan(3.9)
+        # mutation: scale the batch n too, floor with round, or leave the pilot out of the
+        # scaled hours -> red
+        p = plan(2.6)
         self.assertEqual(p["dropped"], ["heavy-loaded", "wide-quiet", "trace-loaded"])
-        # trace-quiet alone, m = 1: n 25; scale (3.9 * 3600 - 39 * 300) / (25 * 300) = 0.312
-        self.assertAlmostEqual(p["scale"], 0.312, places=9)
-        self.assertEqual(p["n"], {"trace-quiet": 7, "batch": 39})
-        self.assertLessEqual(p["hours"], 3.9)
+        # trace-quiet alone, m = 1: n 25; scale (2.6 * 3600 - 22 * 300 - 2 * 300) / (25 * 300)
+        self.assertAlmostEqual(p["scale"], 0.288, places=9)
+        self.assertEqual(p["n"], {"trace-quiet": 7, "batch": 20})
+        self.assertLessEqual(p["hours"], 2.6)
         self.assertAlmostEqual(p["joint"], p["power"]["trace-quiet"][0], places=12)
         self.assertLess(p["joint"], 0.5)
         self.assertTrue(p["descriptive"])
 
     def test_c2_scaling_never_goes_below_lo(self):
         # mutation: drop the max(lo, ...) floor -> red
-        p = plan(3.3)
+        p = plan(2.0)
         self.assertEqual(p["n"]["trace-quiet"], 2)
-        self.assertEqual(p["n"]["batch"], 39)
+        self.assertEqual(p["n"]["batch"], 20)
 
-    def test_d_batch_never_dropped_and_own_target(self):
-        # mutation: let the batch cell join the drop order or take the primary n -> red
+    def test_d_batch_reserved_first_clamped_and_at_alpha_over_3(self):
+        # mutations: let the batch cell join the drop order or take the primary n -> red; drop
+        # the batch_n_max clamp -> a dead leg gives 200 -> red; size or scale the other cells
+        # against cap_h instead of cap_h less the reserve -> red; test at alpha -> n 7 -> red
         p = plan(0.1)
         self.assertNotIn("batch", p["dropped"])
-        self.assertEqual(p["n"]["batch"], 39)
+        self.assertEqual((p["n"]["batch"], p["over_cap"]), (20, True))
+        self.assertAlmostEqual(p["hours_by_cell"]["batch"], RESERVE_H, places=9)
         c = grid()
-        c["batch"]["comps"] = c["batch"]["comps"][:1]  # one component: target 0.80, n 25
-        self.assertEqual(plan(20, c)["n"]["batch"], 25)
+        c["batch"]["comps"] = [(-0.1, 0.2, 0.0), (0.1, 0.2, 0.0)]  # the second never reaches
+        self.assertEqual(plan(20, c)["n"]["batch"], 20)
+        rest = {k: v for k, v in grid().items() if k != "batch"}
+        for cap in (20, 12.5, 2.6, 2.0):
+            with self.subTest(cap=cap):
+                p, q = plan(cap), plan(cap - RESERVE_H, rest)
+                self.assertEqual(({k: v for k, v in p["n"].items() if k != "batch"},
+                                  p["dropped"], p["scale"]), (q["n"], q["dropped"], q["scale"]))
+        # one component (-0.2, 0.2, 0): Phi^-1(1 - 0.05 / 3) = 2.128, (2.128 + 0.842) ** 2 = 8.8
+        # -> n 9 (at alpha 0.05: (1.645 + 0.842) ** 2 = 6.2 -> n 7)
+        c["batch"]["comps"] = [(-0.2, 0.2, 0.0)]
+        self.assertEqual(plan(20, c)["n"]["batch"], 9)
 
     def test_f_batch_named_in_drop_order_is_kept(self):
         # mutation: let a drop_order entry that names the batch cell drop it -> red
         p = stats8.power_plan(
             grid(), primary=("trace-quiet", "trace-loaded"), batch="batch",
             drop_order=("batch", "heavy-loaded"), cap_h=12.5, power_min=0.80, lo=2, hi=200,
-            alpha=0.05)
+            batch_n_max=20, alpha=0.05)
         self.assertEqual(p["dropped"], ["heavy-loaded"])
-        self.assertEqual(p["n"]["batch"], 39)
+        self.assertEqual(p["n"]["batch"], 20)
 
     def test_e_dropping_trace_loaded_changes_m(self):
         # mutation: keep m = len(primary) after a primary cell is dropped -> red
         p = plan(5.5)
         self.assertEqual(p["dropped"], ["heavy-loaded", "wide-quiet", "trace-loaded"])
-        self.assertEqual(p["n"], {"trace-quiet": 25, "batch": 39})  # 25, not the m = 2 value 34
+        self.assertEqual(p["n"], {"trace-quiet": 25, "batch": 20})  # 25, not the m = 2 value 34
         self.assertEqual(p["scale"], 1.0)
         self.assertFalse(p["descriptive"])
 

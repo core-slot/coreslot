@@ -37,7 +37,8 @@ finished job, writes its joblog line and re-checks its memory only when it reads
   learn    run 7's learn (6 K-form and 3 F-form runs, suggest, 5 relearn runs, suggest, seal) over
            every gate of the agents, the wide agents and the classes, a class gate's "{agent}" as
            the first agent; before it, the batch gate's LEARN_BATCH_K runs in its K form in pass
-           "learn", none in F, none in relearn. When the binary lacks --preemptible (R8 below) the
+           "learn", none in F, none in relearn, each record with its run-log line's
+           "preemptible" value (None without one). When the binary lacks --preemptible (R8 below) the
            batch gate is skipped. Resumes and refuses as run 7's learn; refuses as well once any
            probe record exists.
   verdict  blocks FIRST..LAST of PHASE (probe, pilot or main) and CELL, each block's arms in the
@@ -54,18 +55,23 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            carries "submitted". The batch cell, when `coreslot run --preemptible=false -- true`
            fails, writes OUT/batch-skipped.json once and exits 0. Exit 2 when P is to run and
            parallel is not on PATH; on pilot and main of a non-dry stand when the evidence tree
-           has uncommitted changes or the binary is not the stand's coreslot_sha256; when main
-           lacks OUT/power.json or a pilot_check.json whose "go" is true, or its cell is in
-           power.json's "dropped" (the batch cell also when pilot_check.json's "batch_futile" is
-           true); when the needs files do not match OUT/needs.sha256. P leaves a heavy cell's main
-           when pilot_check.json's "p_feasible"[cell] is false. --as-block and --primer as run 7's.
+           has uncommitted changes or the binary is not the stand's coreslot_sha256; when pilot
+           or main lacks OUT/power.json, or main a pilot_check.json whose "go" is true; when the
+           needs files do not match OUT/needs.sha256. A cell not in power.json's "n" (dropped or
+           left out), and the batch cell's main when pilot_check.json's "batch_futile" is true,
+           exit 0 without a set. P leaves a heavy cell's main when pilot_check.json's
+           "p_feasible"[cell] is false. --as-block and --primer as run 7's.
   power    from PROBE_OUT's valid probe blocks (P never decides one): per trace cell S* (the
            fixed count with the lowest mean) and d = ln(K/S*), per batch comparison its log
-           ratio, each with its mean, sd, k and sigma (stats6.sigma_upper at 0.80); each cell's
-           set seconds; stats8.power_plan's n, drops (DROP_ORDER), hours and joint power, with
-           "over_cap", to OUT/power.json. A skipped batch cell, or one short of 2 valid probe
-           blocks, is left out ("left_out"). Exit 2 when power.json or any pilot or main record
-           exists in OUT, or a trace cell has fewer than 2 valid probe blocks.
+           ratio and its batch_s KP/K against ln(1 + BATCH_COST_MARGIN), each with its mean, sd,
+           k and sigma (stats6.sigma_upper at 0.80); each cell's set seconds; stats8.power_plan's
+           n (the batch cell's at most BATCH_N_MAX), drops (DROP_ORDER), hours (pilot and main
+           blocks) and joint power, with "over_cap", and "batch_treatment" (each probe KP set's
+           treatment problems), to OUT/power.json. A skipped batch cell, one whose every probe KP
+           set failed the treatment check, or one short of 2 valid probe blocks, is left out
+           ("left_out"). Exit 2 when power.json or any pilot or main record exists in OUT, a
+           non-batch cell has fewer than 2 valid probe blocks, or the batch cell's hours alone
+           exceed CAP_H (power.json is then not written).
   pilot-check
            from the first PILOT_BLOCKS valid pilot blocks of each cell power.json keeps (re-runs
            capped at PILOT_RERUNS; a dry cell's blocks present): stats8.futile at alpha 0.10 per
@@ -127,6 +133,7 @@ POWER_MIN = 0.80
 DESCRIPTIVE_BELOW = 0.5
 CAP_H = 30  # (probe)
 N_MAX = 200
+BATCH_N_MAX = 20  # (probe) the batch cell's n is clamped to [PILOT_BLOCKS, BATCH_N_MAX]
 BATCH_DELAY_S = 60  # (probe)
 P_MEMSUSPEND = "4.5G"
 P_JOBS = 4
@@ -244,10 +251,11 @@ def learn_batch(cfg, out, recs):
         log0 = len(acceptance.runlog_lines(cfg))
         code, output, peak, cores, wall = run6.measured(cfg, g, "K")
         new = acceptance.runlog_lines(cfg)[log0:]
+        line = json.loads(new[-1]) if new else {}
         rec = {"started": started, "gate": g["gate"], "label": g["label"], "form": "K",
                "pass": "learn", "run": n, "exit": code, "wall_s": wall, "peak_kib": peak,
                "cores": cores, "failures": run4.fail_lines(g, output) if code else [],
-               "ran_s": json.loads(new[-1]).get("ran_s") if new else None}
+               "ran_s": line.get("ran_s"), "preemptible": line.get("preemptible")}
         with open(path, "a") as f:
             f.write(json.dumps(rec) + "\n")
         print(json.dumps(rec), flush=True)
@@ -581,13 +589,17 @@ def verdict(cfg, out, phase, cell, first, last, as_block=None, primer=False):
     mix, level_name, arms = CELLS[cell]
     check = read_json(os.path.join(out, "pilot_check.json")) or {}
     power = read_json(os.path.join(out, "power.json"))
-    if phase == "main":
-        if not check.get("go") or power is None:
-            refuse("main runs only after power.json and a pilot check whose go is true")
-        if cell in power.get("dropped", []) or (cell == "batch" and check.get("batch_futile")):
-            refuse(f"main runs without the {cell} cell")
-        if check.get("p_feasible", {}).get(cell) is False:
-            arms = tuple(a for a in arms if a != "P")
+    if phase != "probe":
+        if power is None or phase == "main" and not check.get("go"):
+            refuse("the pilot runs after power.json, main after a pilot check whose go is true")
+        if cell not in power["n"]:
+            print(f"run8: {cell} is not in power.json's plan; nothing to run")
+            return
+        if phase == "main" and cell == "batch" and check.get("batch_futile"):
+            print("run8: the pilot check found the batch cell futile; main runs without it")
+            return
+    if phase == "main" and check.get("p_feasible", {}).get(cell) is False:
+        arms = tuple(a for a in arms if a != "P")
     run6.check_needs(out)
     if cell == "batch" and not preemptible_supported(cfg):
         path = os.path.join(out, "batch-skipped.json")
@@ -712,13 +724,22 @@ def power(probe_out, out):
     cells, res = {}, {"S*": {}, "components": {}, "set_s": {}, "left_out": {}}
     for cell, (_, _, arms) in CELLS.items():
         recs, blocks = cell_blocks(probe_out, "probe", cell)
+        if cell == "batch" and not skipped:
+            kp = res["batch_treatment"] = [{"block": r["block"], "treatment": r.get("treatment", [])}
+                                           for r in recs if r["arm"] == "KP"]
+            if all(r["treatment"] for r in kp):
+                skipped = {"reason": "the treatment check failed in every probe KP set: " + "; ".join(
+                    sorted({p for r in kp for p in r["treatment"]}))}
         if cell == "batch" and (skipped or len(blocks) < 2):
             res["left_out"][cell] = (skipped or {}).get("reason",
                                                         f"{len(blocks)} valid probe blocks")
             continue
-        if cell in PRIMARY and len(blocks) < 2:
+        if len(blocks) < 2:
             refuse(f"probe {cell}: {len(blocks)} valid blocks; power needs 2")
         s, comps = legs(blocks, cell)
+        if cell == "batch":
+            comps["batch_s KP/K"] = (ln8(blocks, cell, "KP", "K", "batch_s"),
+                                     math.log(1 + BATCH_COST_MARGIN))
         res["S*"].update({cell: s} if s else {})
         comps = res["components"][cell] = {name: {
             "mean": statistics.fmean(d), "sd": statistics.stdev(d), "k": len(d), "bound": bound,
@@ -730,8 +751,12 @@ def power(probe_out, out):
                        "comps": [(c["mean"], c["sigma"], c["bound"]) for c in comps.values()]}
     res.update(stats8.power_plan(cells, primary=PRIMARY, batch="batch", drop_order=DROP_ORDER,
                                  cap_h=CAP_H, power_min=POWER_MIN, lo=PILOT_BLOCKS, hi=N_MAX,
-                                 alpha=ALPHA, descriptive_below=DESCRIPTIVE_BELOW))
-    write_out(out, "power.json", dict(res, cap_h=CAP_H, over_cap=res["hours"] > CAP_H))
+                                 batch_n_max=BATCH_N_MAX, alpha=ALPHA,
+                                 descriptive_below=DESCRIPTIVE_BELOW))
+    if (h := res["hours_by_cell"].get("batch", 0)) > CAP_H:
+        refuse(f"the batch cell alone takes {h:.1f} h of the {CAP_H} h cap; the pre-registration"
+               " must change the cell")
+    write_out(out, "power.json", dict(res, cap_h=CAP_H))
 
 
 def pilot_check(out):

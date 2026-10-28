@@ -396,6 +396,7 @@ class Verdict8(unittest.TestCase):
         with open(os.path.join(self.out, "learn.jsonl"), "w") as f:
             f.write("{}\n")
         run7.seal(self.out)
+        self.write("power.json", {"n": dict.fromkeys(run8.CELLS, 10), "dropped": []})
         self.calls, self.status, self.which, self.supported = [], "", "/bin/parallel", True
 
         def output(*argv):
@@ -501,10 +502,17 @@ class Verdict8(unittest.TestCase):
         self.assertEqual(refused(self, self.verdict, "main", "trace-quiet", 1, 1), 2)
         self.write("pilot_check.json", {"go": True, "p_feasible": {"heavy-quiet": False},
                                         "batch_futile": True})
-        self.assertEqual(refused(self, self.verdict, "main", "trace-quiet", 1, 1), 2)
-        self.write("power.json", {"dropped": ["wide-quiet"]})
-        self.assertEqual(refused(self, self.verdict, "main", "wide-quiet", 1, 1), 2)
-        self.assertEqual(refused(self, self.verdict, "main", "batch", 1, 1), 2)
+        os.remove(os.path.join(self.out, "power.json"))
+        for phase in ("pilot", "main"):  # mutation: refuse main only -> the pilot runs -> red
+            self.assertEqual(refused(self, self.verdict, phase, "trace-quiet", 1, 1), 2)
+        # mutations: run a cell power.json does not plan, at the pilot or main -> sets -> red;
+        # refuse it -> exit 2 -> red; run the batch cell's main after a futile pilot -> red
+        self.write("power.json", {"n": {"trace-quiet": 10, "heavy-quiet": 10}, "dropped": [
+            "wide-quiet"], "left_out": {"batch": "x"}})
+        for phase, cell in (("pilot", "wide-quiet"), ("pilot", "batch"), ("main", "wide-quiet")):
+            self.verdict(phase, cell, 1, 1)
+        self.write("power.json", {"n": dict.fromkeys(run8.CELLS, 10), "dropped": []})
+        self.verdict("main", "batch", 1, 1)
         self.write("pilot_check.json", {"go": False})
         self.assertEqual(refused(self, self.verdict, "main", "trace-quiet", 1, 1), 2)
         self.assertEqual(len(self.calls), n)
@@ -528,6 +536,11 @@ class Learn8(unittest.TestCase):
 
         def measured(cfg, g, form):
             self.runs.append((g["gate"], form, g["cwd"]))
+            if g["gate"] == "batch":  # its run-log line, marked from the fourth run on
+                os.makedirs(os.path.join(cfg["state_dir"], "log"), exist_ok=True)
+                mark = {"preemptible": "auto: x"} if len(self.runs) > 3 else {}
+                with open(os.path.join(cfg["state_dir"], "log", "runs.jsonl"), "a") as f:
+                    f.write(json.dumps({"label": g["label"], "ran_s": 2.0, **mark}) + "\n")
             return 0, "", 1000, 1.0, 1.0
 
         def cs(cfg, *args, **kw):
@@ -559,6 +572,9 @@ class Learn8(unittest.TestCase):
         recs = run4.read_jsonl(os.path.join(self.out, "learn.jsonl"))
         self.assertEqual([(r["pass"], r["run"]) for r in recs if r["gate"] == "batch"],
                          [("learn", n) for n in range(1, 6)])
+        # mutation: leave the run-log line's preemptible value off the record -> red
+        self.assertEqual([r["preemptible"] for r in recs if r["gate"] == "batch"],
+                         [None] * 3 + ["auto: x"] * 2)
         self.assertTrue(os.path.exists(os.path.join(self.out, "needs.sha256")))
 
     def test_batch_skipped_without_preemptible(self):
@@ -633,8 +649,11 @@ class Power8(unittest.TestCase):
             c = p["components"][cell][f"K/{s}"]
             self.assertAlmostEqual(c["mean"], statistics.fmean(d), places=12)
             self.assertEqual(c["sigma"], stats6.sigma_upper(statistics.stdev(d), 4, 0.80))
+        # mutation: leave the cost leg out of the batch cell's components -> red
         self.assertEqual({k: v["bound"] for k, v in p["components"]["batch"].items()},
-                         {"KP/K": 0, "KP/S1": 0, "KP/F": run8.MARGIN})
+                         {"KP/K": 0, "KP/S1": 0, "KP/F": run8.MARGIN,
+                          "batch_s KP/K": math.log(1 + run8.BATCH_COST_MARGIN)})
+        self.assertEqual(p["batch_treatment"], [{"block": b, "treatment": []} for b in range(1, 5)])
         sets = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-quiet.jsonl"))
         self.assertAlmostEqual(p["set_s"]["heavy-quiet"],
                                sum(r["makespan_s"] + 5 for r in sets) / 4, places=9)
@@ -642,8 +661,12 @@ class Power8(unittest.TestCase):
 
     def test_drop_order_and_refusals(self):
         # mutations: DROP_ORDER reversed -> red; drop the power.json, pilot or short-primary
-        # refusal -> it plans -> red; the batch kept when skipped -> red
-        with mock.patch.object(run8, "CAP_H", 0.01):
+        # refusal -> it plans -> red; the batch kept when skipped -> red; plan on when the
+        # batch cell's reserve (20 blocks of 382 s, 2.1 h) alone exceeds the cap -> red
+        with mock.patch.object(run8, "CAP_H", 1):
+            self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "power.json")))
+        with mock.patch.object(run8, "CAP_H", 3):
             p = self.power()
         self.assertEqual((p["dropped"], p["over_cap"], "batch" in p["n"]),
                          (["heavy-loaded", "wide-quiet", "trace-loaded"], True, True))
@@ -659,6 +682,28 @@ class Power8(unittest.TestCase):
         os.remove(os.path.join(self.probe, "probe-trace-loaded.jsonl"))
         write8(self.probe, "probe", "trace-loaded", [1])
         self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
+
+
+    def test_short_cells_and_the_treatment_check(self):
+        # mutation: refuse only a short primary cell -> heavy-quiet planned on 1 block -> red
+        os.remove(os.path.join(self.probe, "probe-heavy-quiet.jsonl"))
+        write8(self.probe, "probe", "heavy-quiet", [1])
+        self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
+        write8(self.probe, "probe", "heavy-quiet", [2])
+        # mutation: no treatment rule -> the batch left out for "0 valid probe blocks" -> red
+        bad = ["no run-log line of the batch label"]
+        os.remove(os.path.join(self.probe, "probe-batch.jsonl"))
+        write8(self.probe, "probe", "batch", range(1, 5),
+               treatment=lambda b, a: bad if a == "KP" else [],
+               invalid=lambda b, a: ["treatment"] if a == "KP" else [])
+        p = self.power()
+        self.assertEqual(p["left_out"], {"batch": "the treatment check failed in every probe KP"
+                                                  " set: no run-log line of the batch label"})
+        self.assertEqual(p["batch_treatment"], [{"block": b, "treatment": bad} for b in range(1, 5)])
+        # mutation: leave the cell out when any KP set failed (all for any) -> red
+        os.remove(os.path.join(self.out, "power.json"))
+        write8(self.probe, "probe", "batch", range(5, 7))
+        self.assertIn("batch", self.power()["n"])
 
 
 class PilotCheck8(unittest.TestCase):

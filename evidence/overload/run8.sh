@@ -10,10 +10,11 @@
 # automatic update check is on; a dry run records them and goes on.
 #
 # With no phase: preflight, learn while OUT/needs.sha256 is missing, then the pilot of every
-# cell (`verdict pilot CELL 1 10`, the first with --primer); then it prints the next step,
-# pilot-check, which the operator runs and reads before any main block. power is not in this
-# path, it needs the exploratory probe's directory, but it refuses once a pilot record exists:
-# run `run8.sh power PROBE_OUT` after learn and before this pilot (the pilot refuses without
+# cell power.json plans (`verdict pilot CELL 1 10`, the first with --primer; a cell it dropped
+# or left out says so and exits 0); then it prints the next step, pilot-check, which the
+# operator runs and reads before any main block. power is not in this path, it needs the
+# exploratory probe's directory, but it refuses once a pilot record exists: run `run8.sh power
+# PROBE_OUT` after learn and before this pilot (the pilot and main refuse without
 # OUT/power.json). learn and verdict continue where an interrupted run stopped, so re-issuing
 # the same command resumes it. A phase given by name runs alone, for instance
 # `run8.sh verdict main trace-quiet 1 40`. pilot-check and summary take OUT only; power takes
@@ -22,7 +23,9 @@
 # STAND defaults to evidence/overload/stand8.json and OUT to evidence/overload/run8. --dry uses
 # stand-dry.json and OUT ~/bench.noindex/run8-dry, and with no phase runs the whole pipeline at
 # 2 blocks a phase: learn, the probe of every cell into OUT itself, power from OUT, the pilot,
-# pilot-check, the main blocks when it says go, and summary.
+# pilot-check, the main blocks when it says go, and summary. A dry batch set lasts seconds, far
+# under the automatic rule's 10 minutes, so every dry KP set fails the treatment check and power
+# leaves the batch cell out: the dry run never exercises the batch cell's positive KP path.
 #
 # The run takes days, so launch it detached from the terminal that starts it:
 #
@@ -102,8 +105,8 @@ if [ -n "$dry" ]; then
 	blocks pilot 2 --primer
 	run pilot-check "$OUT"
 	if grep -q '"go": true' "$OUT/pilot_check.json"; then
-		for c in $CELLS; do # a cell power dropped or the check found futile refuses with 2
-			run verdict "$STAND" "$OUT" main "$c" 1 2 || [ $? -eq 2 ]
+		for c in $CELLS; do # a cell power dropped or the check found futile exits 0
+			run verdict "$STAND" "$OUT" main "$c" 1 2
 		done
 	fi
 	run summary "$OUT"
