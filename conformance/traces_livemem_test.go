@@ -22,7 +22,7 @@ func TestTraceLiveMemOlderClientWaits(t *testing.T) {
 		t.Skipf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
 	}
 	e := State(t)
-	e.WriteConfig("[resources]\nmem = \"1G\"\n")
+	e.WriteConfig("[resources]\nmem = \"1G\"\n[memory]\nlive = true\n")
 
 	run := e.StartCommand("/usr/bin/env", "CORESLOT_TESTHOOK_HEADROOM_MIB=4096", bins.coreslot, "run",
 		"--label", "go", "--need", "mem=2G", "--", "sh", "-c", `echo $CORESLOT_GRANTED_MEM; sleep 5`)
