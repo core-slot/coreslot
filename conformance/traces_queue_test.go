@@ -272,8 +272,11 @@ func TestStateDirWithSpace(t *testing.T) {
 	if l := logLine(t, e, "go"); l["exit"] != float64(0) || l["fail_open"] != "" {
 		t.Errorf("run log line %v", l)
 	}
-	if rep := e.Status(); len(rep.Holds) != 0 || len(rep.Tickets) != 0 || rep.Degraded != nil {
-		t.Errorf("state after the runs: holds %v, tickets %v, degraded %v", rep.Holds, rep.Tickets, rep.Degraded)
+	// The canceled ticket stays dead until a reconciliation, at most once per 30 s.
+	rep := e.Status()
+	live := slices.DeleteFunc(rep.Tickets, func(tk coreslot.TicketInfo) bool { return tk.Dead })
+	if len(rep.Holds) != 0 || len(live) != 0 || rep.Degraded != nil {
+		t.Errorf("state after the runs: holds %v, live tickets %v, degraded %v", rep.Holds, live, rep.Degraded)
 	}
 	d := e.Start("doctor")
 	if code := d.Wait(); code != 0 {
