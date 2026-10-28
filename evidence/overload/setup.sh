@@ -26,8 +26,6 @@ RAFT_TAG=v1.7.3
 RAFT_SHA=c0dc6a0b2c7e889f31e5ab2f7ed90ceb159acffe
 SEMVER_TAG=3.0.4
 SEMVER_SHA=6adf8765f6e21910f1f0c13151ce84f32f8d431d
-TOMLI_TAG=2.3.0
-TOMLI_SHA=3fccd16450d0f1d87c042473d95a07f60955206e
 ZSTD_TAG=v1.5.7
 ZSTD_SHA=f8745da6ff1ad1e7bab384bd1f9d742439278e99
 LINUX=linux-6.12
@@ -93,14 +91,32 @@ for agent in A1 A2 A3 A4; do
 	for flags in "" -race "-tags batchtest"; do
 		(cd "$d/raft" && go test $flags -count=1 -run '^$' . >/dev/null)
 	done
-	# mutation: mutmut over two small pure-Python libraries. The library itself is not installed:
-	# mutmut puts its mutants/ copy first on the path.
+	# mutation: mutmut over python-semver. The library itself is not installed: mutmut puts its
+	# mutants/ copy first on the path. Its [mutmut] section, rewritten on every run, makes the
+	# mutants/ copy carry .pytest.ini (whose pythonpath would otherwise point the tests at the
+	# unmutated src/), replaces the addopts that need pytest-cov, deselects the one test that cannot
+	# run twice in a process (its parameters are spent context managers), and passes tests/ and
+	# docs/ to every mutant's run: each mutant runs the whole suite and the doctests until a test
+	# kills it, not only the tests mutmut's stats tie to the mutated function.
 	fetch https://github.com/python-semver/python-semver.git "$SEMVER_TAG" "$SEMVER_SHA" "$d/semver"
-	fetch https://github.com/hukkin/tomli.git "$TOMLI_TAG" "$TOMLI_SHA" "$d/tomli"
-	for lib in semver tomli; do
-		(cd "$d/$lib" && uv venv --quiet --allow-existing --python 3.13 .venv &&
-			uv pip install --quiet --compile-bytecode --python .venv/bin/python mutmut==3.8.0 pytest==9.1.1 packaging==26.3)
-	done
+	(cd "$d/semver" && uv venv --quiet --allow-existing --python 3.13 .venv &&
+		uv pip install --quiet --compile-bytecode --python .venv/bin/python mutmut==3.8.0 pytest==9.1.1 packaging==26.3 &&
+		git checkout --quiet -- setup.cfg && cat >>setup.cfg <<'EOF'
+
+[mutmut]
+also_copy =
+    .pytest.ini
+    docs
+    README.rst
+pytest_add_cli_args =
+    -o
+    addopts=--import-mode=importlib --doctest-glob=*.rst --doctest-modules
+    --deselect
+    tests/test_pysemver-cli.py::test_should_process_parsed_cli_arguments
+    tests
+    docs
+EOF
+	)
 done
 
 # The long batch: zstd from its release tag, so the measured binary is fixed, over a Linux

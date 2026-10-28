@@ -24,8 +24,8 @@
    {"gate": "sqlalchemy-serial-engine", "label": "bench8:py_db", "cwd": "~/bench.noindex/run8/{agent}/sqlalchemy", "heavy": true, "fail_pattern": "^(FAILED|ERROR) ", "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider", "-p", "no:xdist", "test/engine", "test/ext", "test/orm/declarative", "test/orm/inheritance", "test/orm/dml"]},
    {"gate": "sqlalchemy-serial-engine-base", "label": "bench8:py_db", "cwd": "~/bench.noindex/run8/{agent}/sqlalchemy", "heavy": true, "fail_pattern": "^(FAILED|ERROR) ", "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider", "-p", "no:xdist", "test/engine", "test/ext", "test/orm/declarative", "test/orm/inheritance", "test/orm/dml", "test/base"]}],
   "mutation": [
-   {"gate": "semver-mutmut-n2", "label": "bench8:mutation", "cwd": "~/bench.noindex/run8/{agent}/semver", "heavy": true, "free_n": 2, "argv": ["sh", "-c", "rm -rf mutants && exec .venv/bin/mutmut run --max-children {n}"]},
-   {"gate": "tomli-mutmut", "label": "bench8:mutation", "cwd": "~/bench.noindex/run8/{agent}/tomli", "heavy": true, "free_n": 3, "argv": ["sh", "-c", "rm -rf mutants && exec .venv/bin/mutmut run --max-children {n}"]}],
+   {"gate": "semver-mutmut-version", "label": "bench8:mutation", "cwd": "~/bench.noindex/run8/{agent}/semver", "heavy": true, "free_n": 3, "argv": ["sh", "-c", "rm -rf mutants && exec .venv/bin/mutmut run --max-children {n} 'semver.version.*'"]},
+   {"gate": "semver-mutmut-n2", "label": "bench8:mutation", "cwd": "~/bench.noindex/run8/{agent}/semver", "heavy": true, "free_n": 2, "argv": ["sh", "-c", "rm -rf mutants && exec .venv/bin/mutmut run --max-children {n}"]}],
   "long_batch": [
    {"gate": "zstd-linux-t10", "label": "bench8:long_batch", "cwd": "~/bench.noindex/run8/{agent}", "heavy": true, "argv": ["sh", "-c", "exec ../../bin/zstd -19 -T10 -q -c ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar > /dev/null"]}]
  },
