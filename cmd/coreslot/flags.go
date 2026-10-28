@@ -151,7 +151,10 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 			if _, given := need["cpu"]; !given {
 				switch {
 				case e.CPUPerWorker > 0:
-					cpus, _ := machineCPUs()
+					cpus, err := machineCPUs()
+					if err != nil || cpus <= 0 {
+						cpus = spec.DefaultMax // as defaultNeed does when the count is unknown
+					}
 					withEntry["cpu"], workers = e.Request(needs.WorkersFromLabel(o.label), cpus)
 					perWorker = e.CPUPerWorker
 				case e.CPU != nil:

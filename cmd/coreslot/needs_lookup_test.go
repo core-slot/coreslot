@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -94,6 +95,19 @@ func TestNeedsPerWorkerEntrySizesRequest(t *testing.T) {
 	o = wantNeed(t, []string{"--label", "x@8", "--need", "cpu=3", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 3, Max: 3}})
 	if o.cpuPerWorker != 0 || o.workers != (spec.Range{}) {
 		t.Errorf("--need cpu: cpuPerWorker %v, workers %v; want zero", o.cpuPerWorker, o.workers)
+	}
+}
+
+// A per-worker entry without a width, on a machine whose CPU count is unknown, gets the default
+// width as defaultNeed does. Mutation: pass the failed count (0) on → workers 1..1, red.
+func TestNeedsPerWorkerUnknownCPUCount(t *testing.T) {
+	saved := machineCPUs
+	t.Cleanup(func() { machineCPUs = saved })
+	machineCPUs = func() (int, error) { return 0, errors.New("no count") }
+	lookup, _ := lookupOf(t, "[needs.\"x\"]\ncpu_per_worker = 0.5\n")
+	o := wantNeed(t, []string{"--label", "x", "--", "true"}, lookup, map[string]spec.Range{"cpu": {Min: 1, Max: 8}})
+	if o.workers != (spec.Range{Min: 1, Max: spec.DefaultMax}) {
+		t.Errorf("workers %v, want 1..%d", o.workers, spec.DefaultMax)
 	}
 }
 

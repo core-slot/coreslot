@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"regexp"
 	"strconv"
 
@@ -70,7 +71,7 @@ func placeholderResources(argv []string, inside bool) []string {
 // CORESLOT_GRANTED_MEM is. With inside (--subst), placeholders and escapes within arguments are
 // replaced too (`-j{n}`). A placeholder naming a
 // resource missing from grant is left as it is; the caller has refused it before queueing.
-func substitute(argv []string, grant map[string]int, inside bool) []string {
+func substitute(argv []string, grant map[string]int, inside bool, perWorker float64, width spec.Range) []string {
 	out := make([]string, len(argv))
 	for i, arg := range argv {
 		matches := placeholderMatches(arg, inside)
@@ -85,6 +86,9 @@ func substitute(argv []string, grant map[string]int, inside bool) []string {
 			m := submatches(arg, idx)
 			res, escaped := placeholderResource(m)
 			n, ok := grant[res]
+			if res == "cpu" {
+				n = cpuPlaceholder(n, perWorker, width)
+			}
 			switch {
 			case escaped:
 				b = append(b, m[0][1:len(m[0])-1]...)
@@ -100,4 +104,17 @@ func substitute(argv []string, grant map[string]int, inside bool) []string {
 		out[i] = string(append(b, arg[last:]...))
 	}
 	return out
+}
+
+// cpuPlaceholder is the value of the cpu placeholders: the grant's tokens, or for a per-worker
+// request (perWorker, the tokens one worker takes, above 0) the number of workers they pay for,
+// kept inside width. It is never 0: a grant below perWorker times width.Min gives width.Min.
+func cpuPlaceholder(grantCPU int, perWorker float64, width spec.Range) int {
+	if perWorker <= 0 {
+		return grantCPU
+	}
+	// The epsilon keeps a quotient that float arithmetic leaves a hair below a whole number
+	// (4 / 0.4) from rounding down to the previous.
+	workers := int(math.Floor(float64(grantCPU)/perWorker + 1e-9))
+	return min(width.Max, max(width.Min, workers))
 }

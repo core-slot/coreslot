@@ -87,7 +87,7 @@ type child struct {
 // under the run, I1) has written nothing into the directory: the run says so and appends no
 // run-log line, and still returns the command's status.
 func (r *run) runChild(c child) int {
-	argv := substitute(r.o.argv, c.grant, r.o.subst)
+	argv := substitute(r.o.argv, c.grant, r.o.subst, r.o.cpuPerWorker, r.o.workers)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
 	cmd.Env = c.env
