@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -116,7 +118,89 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	// A suite run under `coreslot run` inherits the run's grant at fd 3 on, not close-on-exec.
+	// Marking it so keeps it in this process: the helpers the tests start, which receive their
+	// descriptors through ExtraFiles, never hold the outer tokens past the run.
+	if err := closeInheritedOnExec(); err != nil {
+		fmt.Fprintln(os.Stderr, "cannot mark the inherited descriptors close-on-exec:", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
+}
+
+// closeInheritedOnExec marks every open descriptor from 3 on close-on-exec, as listed in the
+// directory the system provides for this process's descriptors; without one it does nothing.
+func closeInheritedOnExec() error {
+	dir := "/dev/fd"
+	if runtime.GOOS == "linux" {
+		dir = "/proc/self/fd"
+	}
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, ent := range ents {
+		if fd, err := strconv.Atoi(ent.Name()); err == nil && fd >= 3 {
+			unix.CloseOnExec(fd)
+		}
+	}
+	return nil
+}
+
+// outerEnv makes TestInheritedDescriptorsStayInTheTestBinary's inner run start its helper.
+const outerEnv = "CORESLOT_ROOT_TEST_OUTER"
+
+// A suite run under `coreslot run` inherits the run's hold and tokens at fd 3 on without
+// close-on-exec, and every helper a test starts would inherit them too, outliving the run with
+// its tokens locked (PROTOCOL.md section 17). The test simulates that outer grant with a file at
+// fd 3 of a re-executed test binary, whatever it is itself run under, and requires the helper that
+// binary starts to see none of it.
+func TestInheritedDescriptorsStayInTheTestBinary(t *testing.T) {
+	if os.Getenv(outerEnv) != "" {
+		// The inner run: report the outer descriptor it holds, then what its helper holds.
+		var st unix.Stat_t
+		if err := unix.Fstat(3, &st); err != nil {
+			t.Fatalf("fd 3: %v", err)
+		}
+		fmt.Println("inner", uint64(st.Dev), uint64(st.Ino))
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		cmd.Env = append(os.Environ(), nestedEnv+"=fds")
+		out, err := cmd.CombinedOutput()
+		fmt.Printf("%s", out)
+		if err != nil {
+			t.Fatalf("helper: %v", err)
+		}
+		return
+	}
+	outer, err := os.Create(filepath.Join(t.TempDir(), "outer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outer.Close()
+	var st unix.Stat_t
+	if err := unix.Fstat(int(outer.Fd()), &st); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestInheritedDescriptorsStayInTheTestBinary$")
+	cmd.ExtraFiles = []*os.File{outer}
+	cmd.Env = append(withoutCoreslot(), outerEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	t.Logf("inner run:\n%s", out)
+	if err != nil {
+		t.Fatalf("inner run: %v", err)
+	}
+	mine := fmt.Sprintf("%d %d", uint64(st.Dev), uint64(st.Ino))
+	if !strings.Contains(string(out), "inner "+mine+"\n") {
+		t.Fatalf("the inner run does not hold the simulated outer descriptor (%s)", mine)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "fd ") && strings.HasSuffix(line, " "+mine) {
+			t.Errorf("the helper inherited the outer descriptor: %q", line)
+		}
+	}
 }
 
 // checkChild verifies the descriptor contract of PROTOCOL.md section 17 in the child: fd 3 is

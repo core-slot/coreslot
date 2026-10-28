@@ -29,6 +29,14 @@ func HolderUse(procs map[int]Proc, roots map[int]int64, stop map[int]bool) map[i
 	return holderUse(procs, roots, stop, resident)
 }
 
+// Alive reports whether the process that started at startNS (ns, a hold's start) as pid is still
+// in procs: pid is listed and started no more than 1 s after startNS. A pid that started later
+// was reused by another process.
+func Alive(procs map[int]Proc, pid int, startNS int64) bool {
+	p, ok := procs[pid]
+	return ok && p.StartNS <= startNS+startSlack
+}
+
 // holderUse is HolderUse over read, which gives a process's private and shared KiB: private adds
 // over the tree, the largest shared counts once.
 func holderUse(procs map[int]Proc, roots map[int]int64, stop map[int]bool, read func(pid int) (private, shared int64, ok bool)) map[int]int64 {
@@ -38,7 +46,7 @@ func holderUse(procs map[int]Proc, roots map[int]int64, stop map[int]bool, read 
 	}
 	use := make(map[int]int64, len(roots))
 	for root, start := range roots {
-		if p, ok := procs[root]; !ok || p.StartNS > start+startSlack {
+		if !Alive(procs, root, start) {
 			continue
 		}
 		var sum, shmem int64

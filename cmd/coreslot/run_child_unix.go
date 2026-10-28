@@ -106,7 +106,8 @@ func (r *run) runChild(c child) int {
 		code, _ := classify(&interruptError{Sig: sig})
 		return code
 	}
-	terminal := terminalMode(r.io.Stdin)
+	// --same-group takes the terminal-mode branch: the command stays in coreslot's group.
+	terminal := r.o.sameGroup || terminalMode(r.io.Stdin)
 	prepareChild(cmd, terminal)
 	started := time.Now()
 	status := 0
@@ -182,9 +183,9 @@ const preemptibleNice = 10
 // lowerPriority sets nice 10 on the command just started as pid. It runs after the start because
 // Go has no hook between fork and exec and SysProcAttr has no nice field. Outside terminal mode
 // the command leads its own group (prepareChild), and PRIO_PGRP reaches every member and every
-// later fork, all threads of each on Linux. In terminal mode the group is the shell's job, so
-// only the command's own process is lowered (PRIO_PROCESS), and a process it forked before this
-// call is missed. The error is ignored: the only expected failures are a command that already
+// later fork, all threads of each on Linux. In terminal mode the group is the shell's job, and
+// with --same-group it is coreslot's, so only the command's own process is lowered (PRIO_PROCESS),
+// and a process it forked before this call is missed. The error is ignored: the only expected failures are a command that already
 // exited and a caller already niced above 10, whose priority must not be raised.
 func lowerPriority(pid int, terminal bool) {
 	which := syscall.PRIO_PGRP

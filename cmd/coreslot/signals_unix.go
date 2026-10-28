@@ -114,9 +114,9 @@ func momentaryLockLeft() {
 	}
 }
 
-// prepareChild sets up the command's process group before it starts: in terminal mode it stays
-// in coreslot's group; otherwise it gets its own, and SIGCONT is caught from now on so that it
-// can be forwarded to that group.
+// prepareChild sets up the command's process group before it starts: in terminal mode, or with
+// --same-group, it stays in coreslot's group; otherwise it gets its own, and SIGCONT is caught
+// from now on so that it can be forwarded to that group.
 func prepareChild(cmd *exec.Cmd, terminal bool) {
 	if terminal {
 		return
@@ -138,11 +138,12 @@ func childDone(terminal bool) {
 // superviseChild waits for the started command and returns its status (128 + the signal when a
 // signal killed it), relaying the signals the run receives meanwhile:
 //
-//   - terminal mode: the command shares coreslot's group, so SIGINT and SIGQUIT from the
-//     terminal reach it directly and coreslot drops its own copies (one addressed to coreslot's
-//     pid alone is dropped too: it cannot be told apart); SIGTERM and SIGHUP are forwarded to
-//     the command's pid; SIGTSTP stops coreslot as it stops the command, and SIGCONT continues
-//     both;
+//   - terminal mode, or --same-group: the command shares coreslot's group, so SIGINT and
+//     SIGQUIT from the terminal reach it directly and coreslot drops its own copies (one
+//     addressed to coreslot's pid alone is dropped too: it cannot be told apart); SIGTERM and
+//     SIGHUP are forwarded to the command's pid; SIGTSTP stops coreslot as it stops the
+//     command, and SIGCONT continues both. With --same-group no terminal sends those keys:
+//     the group is the caller's to signal (a killpg, SIGKILL included, reaches the whole tree);
 //   - otherwise: SIGINT, SIGQUIT, SIGTERM, SIGHUP, SIGTSTP and SIGCONT are forwarded to the
 //     command's own group; after forwarding SIGTSTP coreslot stops too, so that a shell sees its
 //     job stopped, and the SIGCONT that continues it is forwarded in turn.

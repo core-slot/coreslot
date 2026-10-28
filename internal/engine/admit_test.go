@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
@@ -521,6 +522,41 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	}
 	if r.Format != 1 || !r.FormatUnderstood {
 		t.Errorf("format %d understood %v", r.Format, r.FormatUnderstood)
+	}
+}
+
+// A live hold's owner exited when the process listing lacks its pid, or the process there started
+// more than a second after the hold (the pid was reused); a listing that cannot be read reports
+// nothing. Mutations: OwnerExited set from the pid's presence alone reddens "pid reused"; set
+// regardless of the listing's ok reddens "listing unread".
+func TestSnapshotOwnerExited(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, nil)
+	admitted(t, step(t, enqueue(t, e, need("cpu=2"))))
+	r, err := e.Snapshot()
+	if err != nil || len(r.Holds) != 1 {
+		t.Fatalf("holds %+v, %v; want one", r.Holds, err)
+	}
+	h := r.Holds[0]
+	saved := listProcs
+	t.Cleanup(func() { listProcs = saved })
+	for _, c := range []struct {
+		name  string
+		procs map[int]memsample.Proc
+		ok    bool
+		want  bool
+	}{
+		{"alive", map[int]memsample.Proc{h.PID: {StartNS: h.StartNS - int64(time.Hour)}}, true, false},
+		{"alive within the slack", map[int]memsample.Proc{h.PID: {StartNS: h.StartNS + int64(time.Second)}}, true, false},
+		{"pid absent", map[int]memsample.Proc{}, true, true},
+		{"pid reused", map[int]memsample.Proc{h.PID: {StartNS: h.StartNS + int64(2*time.Second)}}, true, true},
+		{"listing unread", nil, false, false},
+	} {
+		listProcs = func() (map[int]memsample.Proc, bool) { return c.procs, c.ok }
+		r, err := e.Snapshot()
+		if err != nil || len(r.Holds) != 1 || r.Holds[0].OwnerExited != c.want {
+			t.Errorf("%s: holds %+v, %v; want OwnerExited %v", c.name, r.Holds, err, c.want)
+		}
 	}
 }
 
