@@ -211,3 +211,74 @@ func TestNeedsLookupUnreadable(t *testing.T) {
 		t.Errorf("notices %q, want one \"needs file …: …; ignoring it\"", *notices)
 	}
 }
+
+// The mark is the flag's value when given, else the entry's, else unset. Mutation: let the entry
+// override the flag → the "=false" case red; ignore the entry → the entry case red; read the
+// flag as always true → the "=false" case red.
+func TestPreemptibleMark(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"on\"]\npreemptible = true\n[needs.\"off\"]\npreemptible = false\n[needs.\"none\"]\ncpu = 2\n")
+	for _, c := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"flag", []string{"--preemptible", "--", "true"}, true},
+		{"flag false beats an entry marked true", []string{"--preemptible=false", "--label", "on", "--", "true"}, false},
+		{"flag beats an entry marked false", []string{"--preemptible", "--label", "off", "--", "true"}, true},
+		{"entry true", []string{"--label", "on", "--", "true"}, true},
+		{"entry true under a worker count", []string{"--label", "on@4", "--", "true"}, true},
+		{"entry false", []string{"--label", "off", "--", "true"}, false},
+		{"entry without the key", []string{"--label", "none", "--", "true"}, false},
+		{"neither", []string{"--", "true"}, false},
+	} {
+		o, err := parseRun(c.args, IO{}, lookup)
+		if err != nil {
+			t.Errorf("%s: parseRun(%q): %v", c.name, c.args, err)
+			continue
+		}
+		if got := o.marked(); got != c.want {
+			t.Errorf("%s: marked() = %v, want %v", c.name, got, c.want)
+		}
+	}
+	o, err := parseRun([]string{"--", "true"}, IO{}, lookup)
+	if err != nil || o.preemptible != nil {
+		t.Errorf("without a flag or a label, preemptible = %v (%v), want unset", o.preemptible, err)
+	}
+}
+
+// A preemptible run asks the budget for one cpu token whatever its cpu request, and keeps its
+// mem; the unshrunk request stays in need, for the placeholders and the run log. Mutation: shrink
+// mem too → every mem check red; skip the shrink for the flag → the flag row red; shrink an
+// unmarked run → the last three rows red.
+func TestPreemptibleRequestsOneCPU(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"fix\"]\ncpu = \"14\"\nmem = \"2G\"\npreemptible = true\n"+
+		"[needs.\"range\"]\ncpu = \"4..14\"\nmem = \"2G\"\npreemptible = true\n"+
+		"[needs.\"off\"]\ncpu = \"14\"\nmem = \"2G\"\npreemptible = false\n"+
+		"[needs.\"plain\"]\ncpu = \"14\"\nmem = \"2G\"\n")
+	memTokens := spec.MemTokensCeil(2048)
+	for _, c := range []struct {
+		name     string
+		args     []string
+		cpu, ask spec.Range // the request admission sees, and the one the run keeps
+	}{
+		{"entry, fixed", []string{"--label", "fix"}, spec.Range{Min: 1, Max: 1}, spec.Range{Min: 14, Max: 14}},
+		{"entry, range", []string{"--label", "range"}, spec.Range{Min: 1, Max: 1}, spec.Range{Min: 4, Max: 14}},
+		{"flag", []string{"--preemptible", "--label", "plain"}, spec.Range{Min: 1, Max: 1}, spec.Range{Min: 14, Max: 14}},
+		{"flag false beats the entry", []string{"--preemptible=false", "--label", "fix"}, spec.Range{Min: 14, Max: 14}, spec.Range{Min: 14, Max: 14}},
+		{"entry false", []string{"--label", "off"}, spec.Range{Min: 14, Max: 14}, spec.Range{Min: 14, Max: 14}},
+		{"no mark", []string{"--label", "plain"}, spec.Range{Min: 14, Max: 14}, spec.Range{Min: 14, Max: 14}},
+	} {
+		o, err := parseRun(append(c.args, "--", "true"), IO{}, lookup)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		req := o.request(0).Need
+		if req["cpu"] != c.cpu || req["mem"] != (spec.Range{Min: memTokens, Max: memTokens}) {
+			t.Errorf("%s: the request is %v, want cpu %v and mem %d", c.name, req, c.cpu, memTokens)
+		}
+		if o.need["cpu"] != c.ask || o.minGrant()["cpu"] != c.cpu.Min {
+			t.Errorf("%s: the run keeps cpu %v and minGrant cpu %d, want %v and %d", c.name, o.need["cpu"], o.minGrant()["cpu"], c.ask, c.cpu.Min)
+		}
+	}
+}

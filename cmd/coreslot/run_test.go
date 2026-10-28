@@ -1132,6 +1132,143 @@ func TestRunHoldHasTree(t *testing.T) {
 	}
 }
 
+// niceTable is every process's pid, parent pid and nice, from one ps snapshot.
+func niceTable(t *testing.T) (ppid, nice map[int]int) {
+	t.Helper()
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,ni=").Output()
+	if err != nil {
+		t.Fatalf("ps: %v", err)
+	}
+	ppid, nice = map[int]int{}, map[int]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		parent, err2 := strconv.Atoi(f[1])
+		ni, err3 := strconv.Atoi(f[2])
+		if err1 == nil && err2 == nil && err3 == nil {
+			ppid[pid], nice[pid] = parent, ni
+		}
+	}
+	return ppid, nice
+}
+
+// sleepsNice runs `coreslot run args... -- sh -c 'sleep 5 | sleep 5'`, waits until both sleeps
+// exist under the sh the run started, and returns their nice values once they have held for a
+// moment, with the run stopped.
+func sleepsNice(t *testing.T, args ...string) []int {
+	t.Helper()
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	cmd := cliCmd(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "sh", "-c", "sleep 5 | sleep 5")...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM) // reaches the command's group
+		_ = cmd.Wait()
+	}()
+	var sleeps []int
+	find := func() bool {
+		ppid, _ := niceTable(t)
+		sleeps = sleeps[:0]
+		for pid, parent := range ppid {
+			if ppid[parent] == cmd.Process.Pid {
+				sleeps = append(sleeps, pid)
+			}
+		}
+		return len(sleeps) == 2
+	}
+	waitFor(t, 30*time.Second, "both sleeps running under the run", find)
+	time.Sleep(200 * time.Millisecond) // a late change of priority would have landed by now
+	_, nice := niceTable(t)
+	return []int{nice[sleeps[0]], nice[sleeps[1]]}
+}
+
+// A preemptible run's command group runs at nice 10, every member of it, a pipeline's stages
+// included; a run without the mark leaves the caller's nice. The test runs without a terminal, so
+// this is the group form. Mutation: drop the Setpriority call and the marked case reddens; apply
+// it to every run and the unmarked case does.
+func TestRunPreemptibleLowersTheCommandGroup(t *testing.T) {
+	_, own := niceTable(t)
+	caller := own[os.Getpid()]
+	if caller >= 10 {
+		t.Skipf("this process already runs at nice %d: nice 10 would show nothing", caller)
+	}
+	if got := sleepsNice(t, "--preemptible"); got[0] != 10 || got[1] != 10 {
+		t.Errorf("--preemptible: the sleeps run at nice %v, want 10 and 10", got)
+	}
+	if got := sleepsNice(t); got[0] != caller || got[1] != caller {
+		t.Errorf("no mark: the sleeps run at nice %v, want the caller's %d", got, caller)
+	}
+}
+
+// A preemptible run's {n} keeps the width of its unshrunk request while the hold lists one cpu
+// token, CORESLOT_GRANTED_CPU is that one token, and the record's workers is the width; a
+// per-worker entry prints its worker count. Mutation: fill the placeholders from the grant → the
+// range row prints 1, red; record the grant as workers → the range row's workers is 1, red.
+func TestPreemptiblePlaceholdersUnshrunk(t *testing.T) {
+	const script = `echo "$1"; echo "$CORESLOT_GRANTED_CPU"; cat "$CORESLOT_STATE_DIR"/holds/*`
+	for _, c := range []struct {
+		name  string
+		label string
+		want  string // {n}, and the record's workers
+	}{
+		{"range", "x", "8"},
+		{"per worker", "pw@6", "6"},
+	} {
+		dir := stateDir(t, "[resources]\ncpu = 8\n")
+		writeNeeds(t, dir, "[needs.\"x\"]\ncpu = \"1..8\"\n[needs.\"pw\"]\ncpu_per_worker = 0.4\n")
+		r := cli(t, baseEnv(dir), "run", "--preemptible", "--label", c.label, "--", "sh", "-c", script, "sh", "{n}")
+		out := strings.SplitN(r.stdout, "\n", 3)
+		if r.code != 0 || len(out) != 3 {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q", c.name, r.code, r.stdout, r.stderr)
+		}
+		var hold struct{ Grant map[string][]int }
+		if err := json.Unmarshal([]byte(out[2]), &hold); err != nil {
+			t.Fatalf("%s: hold body %q: %v", c.name, out[2], err)
+		}
+		if out[0] != c.want || out[1] != "1" || len(hold.Grant["cpu"]) != 1 {
+			t.Errorf("%s: {n} %q, CORESLOT_GRANTED_CPU %q, hold cpu %v; want %s, 1 and one token", c.name, out[0], out[1], hold.Grant["cpu"], c.want)
+		}
+		if lines := runLog(t, dir); len(lines) != 1 || fmt.Sprint(lines[0]["workers"]) != c.want {
+			t.Errorf("%s: run log %v, want workers %s", c.name, lines, c.want)
+		}
+	}
+}
+
+// A preemptible run's record keeps the unshrunk request as need, the real grant, and the reason
+// as preemptible; a run without a mark has no such key. Mutation: log the shrunk request as need →
+// the first two rows red; drop the key → red.
+func TestPreemptibleRunRecord(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 12\n")
+	writeNeeds(t, dir, "[needs.\"e\"]\ncpu = \"2..12\"\npreemptible = true\n")
+	for _, args := range [][]string{
+		{"--preemptible", "--need", "cpu=1..12"},
+		{"--label", "e"},
+		{"--need", "cpu=1..12"},
+	} {
+		if r := cli(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "true")...); r.code != 0 {
+			t.Fatalf("%q: exit %d, stderr %q", args, r.code, r.stderr)
+		}
+	}
+	lines := runLog(t, dir)
+	if len(lines) != 3 {
+		t.Fatalf("%d log lines, want 3", len(lines))
+	}
+	for n, want := range []struct {
+		need   string
+		reason any
+	}{{"[1 12]", "flag"}, {"[2 12]", "entry"}, {"[1 12]", nil}} {
+		need := fmt.Sprint(lines[n]["need"].(map[string]any)["cpu"])
+		grant := lines[n]["grant"].(map[string]any)["cpu"]
+		if wantGrant := map[bool]any{true: float64(1), false: float64(12)}[want.reason != nil]; need != want.need || grant != wantGrant || lines[n]["preemptible"] != want.reason {
+			t.Errorf("run %d: need %s, grant %v, preemptible %v; want %s, %v and %v", n, need, grant, lines[n]["preemptible"], want.need, wantGrant, want.reason)
+		}
+	}
+}
+
 // A run's command gets the soft descriptor limit the run was started with plus 256, not 256 above
 // the limit the Go runtime raised the run's own to at start-up; a pass-through started by that
 // command gets 256 more again. Mutation: pass currentNofile() instead of the probed original to

@@ -13,7 +13,8 @@ type HolderInfo struct {
 	UnbudgetedResources []string
 	Clamped             map[string]int // resource -> requested min, for clamped resources
 	Adopted             bool
-	Tree                bool // the process tree at PID carries the grant's work; status does not show it
+	Tree                bool   // the process tree at PID carries the grant's work; status does not show it
+	Preemptible         string // why the run is preemptible, "" when it is not; escape it before printing
 }
 
 // TicketInfo describes one queue entry in a snapshot.

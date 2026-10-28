@@ -112,6 +112,33 @@ func TestLookupBadValue(t *testing.T) {
 	}
 }
 
+// TestLookupPreemptible: the preemptible key is a TOML boolean, and an entry without it leaves the
+// mark nil. Mutation: ignore the key → "true" and "false" red; accept a string → "x" red.
+func TestLookupPreemptible(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "needs.toml")
+	write(t, path, "[needs.\"t\"]\npreemptible = true\n[needs.\"f\"]\npreemptible = false\n[needs.\"n\"]\ncpu = 2\n[needs.\"x\"]\npreemptible = \"yes\"\n")
+	f := load(t, path)
+	for label, want := range map[string]string{"t": "true", "f": "false", "n": "nil"} {
+		e, ok, err := f.Lookup(label)
+		if err != nil || !ok {
+			t.Errorf("Lookup(%q) = %v, %v", label, ok, err)
+			continue
+		}
+		got := "nil"
+		if e.Preemptible != nil {
+			got = fmt.Sprint(*e.Preemptible)
+		}
+		if got != want {
+			t.Errorf("Lookup(%q).Preemptible = %s, want %s", label, got, want)
+		}
+	}
+	_, ok, err := f.Lookup("x")
+	if ok || err == nil || !strings.Contains(err.Error(), `"x"`) || !strings.Contains(err.Error(), "preemptible") ||
+		!strings.Contains(err.Error(), "want a boolean") {
+		t.Errorf("Lookup(\"x\") = %v, %v; want an error naming \"x\" and preemptible: want a boolean", ok, err)
+	}
+}
+
 func TestLoadMissing(t *testing.T) {
 	f, err := Load(filepath.Join(t.TempDir(), "needs.toml"))
 	if err != nil {

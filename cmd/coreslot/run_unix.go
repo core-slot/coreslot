@@ -99,6 +99,7 @@ func (r *run) ordinary() int {
 	if err != nil {
 		return r.failOpen(e, err)
 	}
+	r.autoPreempt(e)
 	req := r.o.request(prio)
 	if mem, ok := req.Need["mem"]; ok {
 		r.freeWait = &freeMeter{needMiB: int64(mem.Min) * spec.MemTokenMiB, headroom: memsample.Headroom}

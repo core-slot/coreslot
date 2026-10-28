@@ -145,6 +145,18 @@ func TestSaturationKeepsTheGrant(t *testing.T) {
 	}
 }
 
+// A preemptible run's 12 cores on its 1-token grant is not saturation. Mutation: count it → 1, red.
+func TestPreemptibleIsNotSaturated(t *testing.T) {
+	r := run("x", 1, 12, spec.Range{Min: 1, Max: 12}, 1)
+	if s := only(t, Summarize([]store.RunRecord{r}, 16)); s.Saturated != 1 {
+		t.Fatalf("Saturated %d without the mark, want 1 (the control)", s.Saturated)
+	}
+	r.Preemptible = "flag"
+	if s := only(t, Summarize([]store.RunRecord{r}, 16)); s.Saturated != 0 {
+		t.Errorf("Saturated %d for a preemptible run, want 0", s.Saturated)
+	}
+}
+
 // Unlabelled, pass-through and fail-open runs say nothing about what a label needs.
 // Mutation: count fail-open runs.
 func TestUncountedSkipped(t *testing.T) {

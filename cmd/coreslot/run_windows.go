@@ -45,7 +45,7 @@ func runCommand(args []string, io IO) int {
 	if msg := windowsNotice(windowsConfig()); msg != "" {
 		fmt.Fprintln(io.Stderr, msg)
 	}
-	argv := substitute(o.argv, o.minGrant(), o.subst, o.cpuPerWorker, o.workers)
+	argv := substitute(o.argv, o.placeholderGrant(o.minGrant()), o.subst, o.cpuPerWorker, o.workers)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = io.Stdin, io.Stdout, io.Stderr
 	cmd.Env = append(os.Environ(), engine.ChildEnv(o.minGrant(), false, 0, "")...)

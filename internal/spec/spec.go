@@ -39,6 +39,9 @@ type Request struct {
 	Priority int
 	Need     map[string]Range
 	Tree     bool // the process tree at the requester's pid carries the grant's work; only the CLI sets it
+	// Preemptible is why the run is preemptible (the run log's reason), "" when it is not; only the
+	// CLI sets it, and the hold carries it for status.
+	Preemptible string
 }
 
 // UsageError reports input that can never be valid: the CLI's exit 64.
