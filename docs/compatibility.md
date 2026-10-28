@@ -44,7 +44,8 @@ never demotes a run, and its `suggest --write` may lower an `observed = false` e
 unless the entry is pinned. A preemptible run, marked or made one by the client's automatic rule
 (the other default), is no format change either: its ticket and hold carry the shrunk request,
 nothing is lent, rewritten or acquired again, and the lower priority its command runs at is not
-protocol state.
+protocol state. Its hold body gains an optional `preemptible` key, which every reader ignores when
+it does not know it, so an older `status` does not show it and the format does not change.
 
 `v1.0.0` is not cut before the whole conformance suite passes at full length on macOS and on
 Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite is:

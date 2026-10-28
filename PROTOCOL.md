@@ -421,7 +421,7 @@ evidence = "5 runs 2026-10-20..21: max 3.4 cores, 0 of 5 saturated, peak 2.7 GiB
 [needs."gate:pytest"]
 cpu_per_worker = 0.3  # cpu tokens per worker; then cpu, if present, is the worker width
 cpu = "2..10"         # the worker width, not a token count
-preemptible = false   # not demoted by the automatic rule; absent, the rule decides
+preemptible = false   # opts out of the automatic rule; true admits with one cpu token
 
 [needs."gate:docker"]
 cpu = "8"
@@ -447,14 +447,15 @@ width `a..b` (`"N"` is `N..N`; default `1..` the machine's CPU count, section 5.
 another host), so a writer that learns entries from the run log (section 20) does not learn its
 `cpu`, `mem` or `cpu_per_worker`, and keeps the entry as written. Absent, it is `true`.
 
-`preemptible`, a boolean: `true` marks the label's runs preemptible, `false` keeps them from being
-made preemptible automatically, and when it is absent the client's automatic rule decides (the
-implementation note below). A preemptible run is admitted with its full `mem` and one `cpu`
-token, whatever its cpu request, and its command runs at a lower scheduling priority, so it takes
-the cores other runs leave idle: its cpu is not reserved, and its memory stays budgeted. This
-changes only how the client sizes its request and starts its command. The ticket and the hold carry
-the shrunk request (`cpu` `1..1`) and the one token granted, nothing is lent, rewritten or acquired
-again, and invariants I1 to I7 (section 3) hold as for any request.
+`preemptible` is a boolean. When it is `true`, a client that reads the entry MAY admit the label's
+runs with one cpu token whatever their cpu request, run their command at a lower priority, and fill
+a cpu placeholder from the request's cpu max rather than from the grant. A command-line
+`--preemptible[=false]` wins over the key. When the key is absent, the Go CLI applies its automatic
+rule (the implementation note below); `preemptible = false` opts the label out of it. A preemptible
+run keeps its full `mem`: its cpu is not reserved, and its memory stays budgeted. This changes only
+how the client sizes its request and starts its command. The ticket and the hold carry the shrunk
+request (`cpu` `1..1`) and the one token granted, nothing is lent, rewritten or acquired again, and
+invariants I1 to I7 (section 3) hold as for any request.
 
 A writer replaces the file whole under `flock(LOCK_EX)` on `needs.toml.lock` beside the file it
 replaces (the file a symbolic link names, so that every link shares one lock): it writes a
@@ -467,22 +468,25 @@ A file that cannot be parsed is left as it is.
 > `cpu_per_worker` entry, or with the token count when `--need` names `cpu`. A run is preemptible
 > when its entry says `preemptible = true` or `run --preemptible` marks it, and the command line
 > wins over the entry, as `--need` does: `--preemptible` marks a run whose entry says `false`, and
-> `--preemptible=false` unmarks one whose entry says `true`. With neither a key nor a flag it is
-> preemptible by the automatic rule: its cpu request's max is at least half the cpu size, and the
-> run log holds at least 5 runs of its label with a median `ran_s` of at least 600 s. The rule
-> never demotes a run in terminal mode, where a person is watching, nor one of a label whose runs
-> of at least 60 s averaged under 0.05 cores. The CLI sets
-> nice 10 on the command's process group right after starting it, fills `{n}` from the request
-> before it shrinks, so a `make -j{n}` keeps its width, and records the reason in the run log's
-> `preemptible` key. `coreslot suggest --write` writes `cpu` (or `cpu_per_worker` for an entry
-> that has it, never both), `mem` and `evidence` from the run log (section 20) and keeps pinned
-> entries and every other key; it learns `cpu_per_worker` as the p90 of cores ÷ `workers` over the
-> window, rounded up to 0.05; it writes nothing for an entry with `observed = false`, and only
-> `evidence` for a label whose runs of at least 60 s averaged under 0.05 cores, a hint that names
-> `observed = false`. A range entry without `cpu_per_worker` whose unsaturated runs carry `workers`
-> is no longer narrowed: the suggestion keeps its max, and its evidence suggests `cpu_per_worker`.
-> Its suggested `mem` rests on the window's largest peak; when that run's cpu grant is above the
-> `cpu` max it suggests, the evidence names the grant.
+> `--preemptible=false` unmarks one whose entry says `true`. With neither a key nor a flag, the
+> automatic rule demotes a run that queues for admission (not `--light`, not inside another grant,
+> not in terminal mode) when its cpu max is at least half the cpu size (`⌈size / 2⌉`) and its label
+> has at least 5 counted runs, across both run-log generations, with a median `ran_s` of at least
+> 600 s. The size is checked first, so the run log is read only for large requests. A label whose
+> runs of at least 60 s averaged under 0.05 cores is excluded. On a label's first demotion the CLI
+> prints one line about runs with wall-clock deadlines and `preemptible = false`. The CLI sets
+> nice 10 on the command's process group right after starting it (in terminal mode, where the
+> group is the shell's job, on the command's pid only), fills `{n}` from the request's cpu max, so
+> a `make -j{n}` keeps its width, and records the reason in the `preemptible` key of the hold
+> (section 7.4) and of the run log. `coreslot suggest --write` writes `cpu` (or `cpu_per_worker` for
+> an entry that has it, never both), `mem` and `evidence` from the run log (section 20) and keeps
+> pinned entries and every other key; it learns `cpu_per_worker` as the p90 of cores ÷ `workers`
+> over the window, rounded up to 0.05; it writes nothing for an entry with `observed = false`, and
+> only `evidence` for a label whose runs of at least 60 s averaged under 0.05 cores, a hint that
+> names `observed = false`. A range entry without `cpu_per_worker` whose unsaturated runs carry
+> `workers` is no longer narrowed: the suggestion keeps its max, and its evidence suggests
+> `cpu_per_worker`. Its suggested `mem` rests on the window's largest peak; when that run's cpu
+> grant is above the `cpu` max it suggests, the evidence names the grant.
 
 ## 6. Tokens and descriptor ownership
 
@@ -608,10 +612,12 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
 | `adopted` | boolean | `true` for an adoption (section 12.4) |
 | `tree` | boolean | optional: `true` when the process whose pid the name carries, with its descendants, carries the grant's work, so that its tree's resident memory measures the hold (section 5.2); absent means `false`. The CLI's run writes it (its command is its child); a library's grant and an adoption leave it out |
+| `preemptible` | string | optional: why the run is preemptible, as the run log's `preemptible` (section 20); absent or not a string reads as empty, which never makes a body malformed. `status` shows it on the hold |
 
 `tree` is an exception to section 7.2's "a writer MUST write every key of its table": a writer MAY
 leave it out, and a reader reads it as `false` when it is absent or is anything but `true`, which
-never makes a body malformed.
+never makes a body malformed. Like `tree`, `preemptible` is an exception to that rule: a writer MAY
+leave it out, and a reader reads it as empty when it is absent or not a string.
 
 Comparing `start_ns` with the name needs the name, so it is done by the reader of `holds/`, not by
 a body decoder. A start-ns in a name may be as large as 2^64 − 1 (section 7.1) while `start_ns` is
@@ -1241,7 +1247,7 @@ writes no line. The object carries:
 |---|---|---|
 | `time_ns` | integer | wall clock at the run's start |
 | `label` | string | the request's label |
-| `need` | object | resource → `[min, max]` as requested, a CLI's defaults and one-sided ranges completed (section 21); for a preemptible run, the request before it shrank (below) |
+| `need` | object | resource → `[min, max]` as requested, a CLI's defaults and one-sided ranges completed (section 21); for a preemptible run, the request before its cpu was reduced to one token |
 | `grant` | object | resource → number of tokens granted (or `min` when unbudgeted) |
 | `clamped` | array of resource names | clamped resources |
 | `unbudgeted_resources` | array of resource names | unbudgeted resources |
@@ -1259,7 +1265,7 @@ writes no line. The object carries:
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
 | `workers` | integer | optional; the command's worker count: the value a cpu placeholder took (section 17), else the label's final `@K`; absent when the command had neither |
-| `preemptible` | string | optional; present only for a preemptible run (section 5.4): the reason it is one (below) |
+| `preemptible` | string | optional; why the run was admitted as preemptible: `flag`, `entry`, or the automatic rule's reason (`auto: median 14m >= 10m, cpu 12 >= 7`); absent for any other run |
 
 The usage keys `cpu_user_s`, `cpu_sys_s` and `max_rss_kib` are OPTIONAL. A writer MUST omit a key
 whose value it does not know rather than write a zero: a run whose command could not be started
@@ -1291,12 +1297,12 @@ was at least its `mem` need, read at most once per second. It informs; no admiss
 The keys `workers` and `preemptible` are OPTIONAL too, under the same rule. `workers` is the
 worker count the run's command was given: the value the writer substituted for a cpu placeholder
 (section 17), else the label's final `@K` (section 5.4). `preemptible` gives the reason a
-preemptible run is one: `entry` for the needs file's key, `flag` for a mark on the command line, or
-the automatic rule's own text, such as `auto: median 14m >= 10m, cpu 12 >= 7`. For a preemptible
-run `need` is the request before it was cut to one cpu token, and `grant` what was granted, so
-`need` may name more cpu than the ticket did. A preemptible run's cpu use above its grant is not
-saturation for a reader that learns from the log: its command ran at a lower priority on the cores
-other runs left idle.
+preemptible run (section 5.4) is one: `entry` for the needs file's key, `flag` for a mark on the
+command line, or the automatic rule's own text. A preemptible run's `grant` is the real grant (one
+cpu token), while its `need` and `workers` keep the request's width, so `need` may name more cpu
+than the ticket did. A reader that learns needs from the log SHOULD leave such runs out of
+saturation counts: a preemptible command runs at a lower priority on the cores other runs leave
+idle, so its cpu use above its grant is not saturation.
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. The log's `clamped` is an array of resource names, unlike the hold body's `clamped` object
