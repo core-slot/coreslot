@@ -2,6 +2,7 @@
 import contextlib
 import hashlib
 import json
+import math
 import os
 import random
 import statistics
@@ -21,6 +22,7 @@ import run4  # noqa: E402
 import run6  # noqa: E402
 import run7  # noqa: E402
 import run8  # noqa: E402
+import stats6  # noqa: E402
 
 
 def text(path):
@@ -565,6 +567,231 @@ class Learn8(unittest.TestCase):
         open(os.path.join(self.out, "probe-trace-quiet.jsonl"), "w").close()
         self.assertEqual(refused(self, run8.learn, self.cfg, self.out), 2)
         self.assertEqual(self.runs, [])
+
+
+# --- the deciding side ------------------------------------------------------------------------
+
+def rec8(cell, arm, block, t, phase, invalid=(), warn=0, swap=0, batch_s=100.0, **kw):
+    """A set record: t as both time metrics, `warn` samples at pressure 2, `swap` MiB out."""
+    return {"phase": phase, "cell": cell, "block": block, "as_block": None, "arm": arm,
+            "valid": not invalid, "invalid": list(invalid), "gates": [], "runlog": [],
+            "started": "2026-10-28T00:00:00+00:00", "mean_verdict_s": t, "batch_s": batch_s,
+            "short_mean_verdict_s": t, "makespan_s": t + 10, "cooldown_s": 5, "page_bytes": 2**20,
+            "samples": [{"pressure": 1 + (i < warn), "swapouts": swap * (i > warn), "swapins": 0}
+                        for i in range(warn + 2)], **kw}
+
+
+def write8(out, phase, cell, blocks, base=None, t=None, **kw):
+    """Every arm's set per block: t(b, a) seconds, else base[a] (100) with +-2 % noise differing
+    between arms; kw holds functions of (b, a) for rec8's other fields."""
+    with open(os.path.join(out, f"{phase}-{cell}.jsonl"), "a") as f:
+        for b in blocks:
+            for i, a in enumerate(run8.CELLS[cell][2]):
+                sec = t(b, a) if t else (base or {}).get(a, 100) * (1 + ((b * 7 + i) % 5 - 2) / 100)
+                more = {k: v(b, a) for k, v in kw.items()}
+                f.write(json.dumps(rec8(cell, a, b, sec, phase, **more)) + "\n")
+
+
+def dump(path, obj):
+    with open(path, "w") as f:
+        json.dump(obj, f)
+
+
+def deciding(fn, out, *args, name=None):
+    with mock.patch("sys.stdout"):
+        fn(*args, out)
+    return json.loads(text(os.path.join(out, name)))
+
+
+class Power8(unittest.TestCase):
+    def setUp(self):
+        self.probe, self.out = tempfile.mkdtemp(), tempfile.mkdtemp()
+        base = {"trace-quiet": {"K": 90, "S1": 120, "S2": 110, "S3": 100},
+                "trace-loaded": {"K": 90, "S2": 130, "S3": 120}, "batch": {"KP": 60, "F": 62}}
+        for cell in run8.CELLS:
+            write8(self.probe, "probe", cell, range(1, 5), base.get(cell))
+
+    def power(self):
+        return deciding(run8.power, self.out, self.probe, name="power.json")
+
+    def test_inputs(self):
+        # mutations: S* fixed to S1 -> red; sigma = sd -> red; set_s without cooldown_s -> red;
+        # KP/F against 0 -> red
+        p = self.power()
+        self.assertEqual(p["S*"], {"trace-quiet": "S3", "trace-loaded": "S1"})
+        for cell, s in p["S*"].items():
+            t = {(r["block"], r["arm"]): r["mean_verdict_s"]
+                 for r in run4.read_jsonl(os.path.join(self.probe, f"probe-{cell}.jsonl"))}
+            d = [math.log(t[b, "K"] / t[b, s]) for b in range(1, 5)]
+            c = p["components"][cell][f"K/{s}"]
+            self.assertAlmostEqual(c["mean"], statistics.fmean(d), places=12)
+            self.assertEqual(c["sigma"], stats6.sigma_upper(statistics.stdev(d), 4, 0.80))
+        self.assertEqual({k: v["bound"] for k, v in p["components"]["batch"].items()},
+                         {"KP/K": 0, "KP/S1": 0, "KP/F": run8.MARGIN})
+        sets = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-quiet.jsonl"))
+        self.assertAlmostEqual(p["set_s"]["heavy-quiet"],
+                               sum(r["makespan_s"] + 5 for r in sets) / 4, places=9)
+        self.assertEqual((p["over_cap"], p["cap_h"], p["dropped"]), (False, 30, []))
+
+    def test_drop_order_and_refusals(self):
+        # mutations: DROP_ORDER reversed -> red; drop the power.json, pilot or short-primary
+        # refusal -> it plans -> red; the batch kept when skipped -> red
+        with mock.patch.object(run8, "CAP_H", 0.01):
+            p = self.power()
+        self.assertEqual((p["dropped"], p["over_cap"], "batch" in p["n"]),
+                         (["heavy-loaded", "wide-quiet", "trace-loaded"], True, True))
+        self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
+        os.remove(os.path.join(self.out, "power.json"))
+        dump(os.path.join(self.out, "pilot-wide-quiet.jsonl"), {})
+        self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
+        os.remove(os.path.join(self.out, "pilot-wide-quiet.jsonl"))
+        dump(os.path.join(self.probe, "batch-skipped.json"), {"reason": "no flag"})
+        p = self.power()
+        self.assertEqual((p["left_out"], "batch" in p["n"]), ({"batch": "no flag"}, False))
+        os.remove(os.path.join(self.out, "power.json"))
+        os.remove(os.path.join(self.probe, "probe-trace-loaded.jsonl"))
+        write8(self.probe, "probe", "trace-loaded", [1])
+        self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
+
+
+class PilotCheck8(unittest.TestCase):
+    CELLS = ("trace-quiet", "heavy-quiet", "batch")
+
+    def setUp(self):
+        self.out = tempfile.mkdtemp()
+        dump(os.path.join(self.out, "power.json"), {"n": dict.fromkeys(self.CELLS, 12)})
+
+    def check(self, base=None, blocks=range(1, 11), **kw):
+        for cell in self.CELLS:
+            write8(self.out, "pilot", cell, blocks, (base or {}).get(cell), **kw)
+        return deciding(run8.pilot_check, self.out, name="pilot_check.json")
+
+    def test_outcomes(self):
+        # mutations: go over every cell -> the futile batch stops main -> red; batch futile only
+        # on all three comparisons -> red; outcomes swapped -> red
+        for base, go, futile, outcome in (
+                ({"trace-quiet": {"K": 120}}, False, False, "stop"),
+                ({"trace-quiet": {"K": 80}, "batch": {"KP": 60, "F": 50}}, True, True, "batch"),
+                ({"trace-quiet": {"K": 80}, "batch": {"KP": 60, "F": 62}}, True, False, "go")):
+            self.setUp()
+            c = self.check(base)
+            self.assertEqual((c["go"], c["batch_futile"], c["outcome"]),
+                             (go, futile, run8.OUTCOMES[outcome]))
+
+    def test_futile_on_the_90_bound(self):
+        # mutation: futility at alpha 0.05 -> the bound just past ln 1.03 is not futile -> red
+        se = 0.05 * math.sqrt(10 / 9) / math.sqrt(10)
+        for eps, futile in ((-1e-6, False), (1e-6, True)):
+            self.setUp()
+            c0 = run8.MARGIN + stats6.t_ppf(0.90, 9) * se + eps
+            c = self.check(t=lambda b, a: 100 * math.exp(c0 + (0.05 if b % 2 else -0.05))
+                           if a == "K" else 60 if a == "KP" else 100)
+            self.assertEqual((c["go"], c["components"]["trace-quiet"]["K/S1"]["futile"]),
+                             (not futile, futile))
+
+    def test_p_feasibility_and_refusals(self):
+        # mutations: `<` for `<=` -> 2 timeouts infeasible -> red; P deciding block validity ->
+        # red; drop the short, main or power.json refusal -> red; refuse a short dry cell -> red
+        for bs, feasible in (((2, 5), True), ((2, 5, 9), False)):
+            self.setUp()
+            c = self.check(invalid=lambda b, a: ["set_timeout"] if a == "P" and b in bs else [])
+            self.assertEqual((c["p_timeouts"]["heavy-quiet"], c["p_feasible"], c["go"]),
+                             (len(bs), {"heavy-quiet": feasible}, True))
+            self.assertEqual(c["blocks"]["heavy-quiet"], list(range(1, 11)))
+        self.setUp()
+        self.assertEqual(refused(self, self.check, blocks=range(1, 10)), 2)
+        for cell in self.CELLS:
+            write8(self.out, "pilot", cell, range(11, 14), as_block=lambda b, a: 10,
+                   invalid=lambda b, a: ["ac"])
+        self.assertEqual(self.check(blocks=())["blocks"]["batch"], list(range(1, 10)))
+        dump(os.path.join(self.out, "main-batch.jsonl"), {})
+        self.assertEqual(refused(self, run8.pilot_check, self.out), 2)
+        os.remove(os.path.join(self.out, "power.json"))
+        os.remove(os.path.join(self.out, "main-batch.jsonl"))
+        self.assertEqual(refused(self, run8.pilot_check, self.out), 2)
+        self.setUp()
+        c = self.check(blocks=(1, 2), dry=lambda b, a: True,
+                       invalid=lambda b, a: ["treatment"] if a == "KP" else [])
+        self.assertEqual((c["go"], c["batch_futile"], c["dry"], c["untested"]),
+                         (True, False, True, {"batch": run8.DRY_SHORT}))
+
+
+GOOD = {"trace-quiet": {"K": 80}, "trace-loaded": {"K": 80}, "batch": {"KP": 60, "F": 62}}
+
+
+class Summary8(unittest.TestCase):
+    def summary(self, base=GOOD, dropped=(), joint=0.9, check=None, skipped=None, n=6, **kw):
+        self.out = tempfile.mkdtemp()
+        n = {c: n for c in run8.CELLS if c not in dropped}
+        dump(os.path.join(self.out, "power.json"), {"n": n, "dropped": list(dropped),
+                                                    "descriptive": joint < 0.5})
+        dump(os.path.join(self.out, "pilot_check.json"), check or {"go": True})
+        if skipped:
+            dump(os.path.join(self.out, "batch-skipped.json"), {"reason": skipped})
+        for c in n:
+            write8(self.out, "main", c, range(1, 7), base.get(c), **kw)
+        return deciding(run8.summary, self.out, name="summary.json")
+
+    def test_primary_iut_s_star_and_effects(self):
+        # mutations: the primary by union -> one rejecting cell suffices -> red; S* fixed to S1
+        # -> red; effects only for rejected cells -> red; secondary tested anyway -> red
+        s = self.summary(dict(GOOD, **{"trace-quiet": {"K": 80, "S3": 90},
+                                       "trace-loaded": {"K": 110}}))
+        p = s["primary"]
+        self.assertEqual((p["cells"]["trace-quiet"]["S*"], p["rejected"]), ("S3", False))
+        self.assertTrue(p["components"]["trace-quiet"]["rejected"])
+        self.assertEqual(set(s["effects"]), set(run8.CELLS))
+        self.assertIsNotNone(s["effects"]["trace-loaded"]["ratio"]["S1/K"])
+        self.assertEqual({r["status"] for r in s["secondary"]}, {"not tested (primary not"
+                                                                 " rejected)"})
+        self.assertTrue(self.summary()["primary"]["rejected"])
+        # mutation: the joint power ignored -> a descriptive primary claims its rejection -> red
+        p = self.summary(joint=0.4)["primary"]
+        self.assertEqual((p["iut_rejected"], p["descriptive"], p["rejected"]), (True, True, False))
+
+    def test_secondary_union_and_safe(self):
+        # mutations: H-S by IUT over its legs -> one slower cell is not enough -> red; H-SAFE for
+        # a dropped loaded cell -> red; H-S legs over the batch cell -> 10 legs -> red
+        s = self.summary(dict(GOOD, **{"heavy-quiet": {"S1": 130}}), dropped=("heavy-loaded",))
+        h = s["tests"]["H-S1"]
+        self.assertEqual((len(h["legs"]), h["p"]), (8, min(1, 8 * min(h["legs"].values()))))
+        self.assertEqual(len(s["tests"]["H-S3"]["legs"]), 4)
+        self.assertEqual({r["name"]: r["status"] for r in s["secondary"]}["H-S1"], "rejected")
+        self.assertEqual([t for t in s["tests"] if "SAFE" in t], ["H-SAFE-trace"])
+
+    def test_h_pre(self):
+        # mutations: time over K and S1 only -> red; cost against ln 1.03 -> red; safety p of
+        # one margin only -> red; a batch set coreslot failed keeps its own time -> red
+        failed = [{"label": "x", "start": 0, "exit": 0}]
+        for kw, leg, status in (
+                ({"batch_s": lambda b, a: 120.0 if a == "KP" else 100.0}, "cost", "rejected"),
+                ({}, "time", "rejected"), ({}, "safety", "rejected"),
+                ({"base": dict(GOOD, batch={"KP": 60, "F": 55})}, "time", "not rejected"),
+                ({"warn": lambda b, a: 10 if a == "KP" else 0}, "safety", "not rejected"),
+                ({"swap": lambda b, a: 100 if a == "KP" else 0}, "safety", "not rejected"),
+                ({"gates": lambda b, a: failed if a == "KP" else []}, "time", "not rejected")):
+            rows = self.summary(**kw)["H-PRE"]["rows"]
+            self.assertEqual(({r["name"]: r["status"] for r in rows}[leg], len(rows)), (status, 3))
+
+    def test_h_pre_skipped_untested_and_refusals(self):
+        # mutations: the skip reason dropped -> red; the pilot's batch drop ignored -> red; a
+        # dry cell judged against n or cut to n -> red; drop the pilot_check.json refusal ->
+        # red; drop the refusal while a cell is short with re-runs left -> red
+        self.assertEqual(self.summary(skipped="no flag")["H-PRE"], {"skipped": "no flag"})
+        h = self.summary(check={"go": True, "batch_futile": True})["H-PRE"]
+        self.assertEqual(h, {"untested": "the pilot check found the batch cell futile"})
+        for dry, untested, wide in (
+                (True, {"batch": run8.DRY_SHORT}, list(range(1, 7))),
+                (False, dict.fromkeys(("trace-quiet", "trace-loaded", "batch"), run8.SHORT),
+                 [1, 2, 3, 4])):  # n 4: a dry cell keeps every valid block
+            s = self.summary(n=4, dry=lambda b, a: dry, invalid=lambda b, a: ["ac"] if a in (
+                "KP", "S3") and b > (1 if a == "KP" else 2) else [])
+            self.assertEqual((s["dry"], s["untested"], s["blocks"].get("wide-quiet")),
+                             (dry, untested, wide))
+            self.assertEqual(s["H-PRE"], {"untested": untested["batch"]})
+        os.remove(os.path.join(self.out, "pilot_check.json"))
+        self.assertEqual(refused(self, run8.summary, self.out), 2)
+        self.assertEqual(refused(self, self.summary, n=10), 2)
 
 
 if __name__ == "__main__":

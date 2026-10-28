@@ -59,12 +59,25 @@ finished job, writes its joblog line and re-checks its memory only when it reads
            power.json's "dropped" (the batch cell also when pilot_check.json's "batch_futile" is
            true); when the needs files do not match OUT/needs.sha256. P leaves a heavy cell's main
            when pilot_check.json's "p_feasible"[cell] is false. --as-block and --primer as run 7's.
-  power    from PROBE_OUT's probe records: each cell's n and the hours, to OUT/power.json.
+  power    from PROBE_OUT's valid probe blocks (P never decides one): per trace cell S* (the
+           fixed count with the lowest mean) and d = ln(K/S*), per batch comparison its log
+           ratio, each with its mean, sd, k and sigma (stats6.sigma_upper at 0.80); each cell's
+           set seconds; stats8.power_plan's n, drops (DROP_ORDER), hours and joint power, with
+           "over_cap", to OUT/power.json. A skipped batch cell, or one short of 2 valid probe
+           blocks, is left out ("left_out"). Exit 2 when power.json or any pilot or main record
+           exists in OUT, or a trace cell has fewer than 2 valid probe blocks.
   pilot-check
-           from the pilot's first PILOT_BLOCKS valid blocks per cell: futility, P's feasibility
-           and "go", to OUT/pilot_check.json.
-  summary  from the main records, power.json and pilot_check.json: the primary, secondary and
-           H-PRE families and the reported estimates, to OUT/summary.json and OUT/summary.txt.
+           from the first PILOT_BLOCKS valid pilot blocks of each cell power.json keeps (re-runs
+           capped at PILOT_RERUNS; a dry cell's blocks present): stats8.futile at alpha 0.10 per
+           comparison, P's timeouts and feasibility per heavy cell, "go", "batch_futile" and the
+           declared "outcome", to OUT/pilot_check.json. A cell with fewer than 2 blocks is
+           untested. Exit 2 without power.json, once a main record exists, or while a non-dry
+           cell is short with re-runs left.
+  summary  from each kept cell's first n valid main blocks (n from power.json, re-runs up to
+           10 % of n; a dry cell's blocks present): the primary, secondary and H-PRE families
+           and every cell's effect sizes, to OUT/summary.json and OUT/summary.txt. A cell short
+           of n with the re-runs spent is untested. Exit 2 without power.json or
+           pilot_check.json, or while a non-dry cell is short with re-runs left.
 """
 import argparse
 import contextlib
@@ -91,6 +104,9 @@ import overload  # noqa: E402  (Sampler, headroom_mib)
 import run4  # noqa: E402  (cs, run_one, write_config, offsets_for, ...)
 import run6  # noqa: E402  (measured, check_needs, write_learn_state, apps_meta, reruns, ...)
 import run7  # noqa: E402  (learn, level, provenance, kill_tree, parallel_home, ...)
+import stats6  # noqa: E402
+import stats7  # noqa: E402
+import stats8  # noqa: E402
 
 CELLS = {"trace-quiet": ("trace", "quiet", ("K", "S1", "S2", "S3", "F")),
          "trace-loaded": ("trace", "loaded", ("K", "S1", "S2", "S3", "F")),
@@ -634,6 +650,262 @@ def verdict(cfg, out, phase, cell, first, last, as_block=None, primer=False):
                      needs=needs)
 
 
+# --- the deciding side: power, pilot check, summary -----------------------------------------
+
+PRIMARY = ("trace-quiet", "trace-loaded")
+LOADED = {"trace": "trace-loaded", "heavy": "heavy-loaded"}  # H-SAFE-<mix>'s cells
+DROP_ORDER = ("heavy-loaded", "wide-quiet", "trace-loaded")
+BATCH_COST_MARGIN = 0.25  # (probe) declared by the pre-registration
+SAFETY_WARN_MARGIN_S = 5  # (probe) KP's warn seconds above K's, per block
+SAFETY_SWAP_MARGIN_MIB = 64  # (probe) KP's swap-out above K's, per block: run 7's swap event
+OUTCOMES = {"go": "main runs every kept cell at power.json's n",
+            "stop": "stop: the primary is futile at the pilot; main does not run; the pilot is"
+                    " reported as exploratory, with its estimates",
+            "batch": "main runs without the batch cell; H-PRE is reported futile at the pilot"}
+SHORT = "its cell is short of n, re-runs spent"
+DRY_SHORT = "a dry cell with fewer than 2 valid blocks"
+
+
+def ln8(blocks, cell, a, b, key=None):
+    """ln(a / b) per block on key, by default the cell's time metric."""
+    key = key or ("short_mean_verdict_s" if cell == "batch" else "mean_verdict_s")
+    return [math.log(s[a][key] / s[b][key]) for s in blocks.values()]
+
+
+def cell_blocks(out, phase, cell, cap=None):
+    """The cell's records of phase, without the re-runs past cap, and its valid blocks over every
+    arm but P (P never decides a block). A batch set coreslot failed takes its block's slowest
+    short_mean_verdict_s, as run6.valid_blocks gives such a set the slowest mean_verdict_s."""
+    recs = run4.read_jsonl(os.path.join(out, f"{phase}-{cell}.jsonl"))
+    recs = recs if cap is None else run6.capped(recs, cap)[0]
+    blocks = run6.valid_blocks(recs, tuple(a for a in CELLS[cell][2] if a != "P"))
+    for sets in blocks.values() if cell == "batch" else ():
+        worst = max(r["short_mean_verdict_s"] for r in sets.values())
+        sets.update({a: dict(r, short_mean_verdict_s=worst) for a, r in sets.items()
+                     if r.get("coreslot_failed")})
+    return recs, blocks
+
+
+def legs(blocks, cell):
+    """S* (a trace cell's fixed count with the lowest mean over the blocks) and the comparisons
+    power and futility judge, name -> (d, bound) for the claim mean(d) < bound."""
+    if cell in PRIMARY:
+        s = run6.lowest(blocks, list(blocks), ("S1", "S2", "S3"))
+        return s, {f"K/{s}": (ln8(blocks, cell, "K", s), MARGIN)}
+    if cell == "batch":
+        return None, {f"KP/{o}": (ln8(blocks, cell, "KP", o), b)
+                      for o, b in (("K", 0.0), ("S1", 0.0), ("F", MARGIN))}
+    return None, {}
+
+
+def write_out(out, name, obj):
+    with open(os.path.join(out, name), "w") as f:
+        json.dump(obj, f, indent=1)
+    print(json.dumps(obj, indent=1))
+
+
+def power(probe_out, out):
+    if os.path.exists(os.path.join(out, "power.json")) or any(
+            glob.glob(os.path.join(out, p)) for p in RECORDS[1:]):
+        refuse("power is planned once, before any pilot or main record")
+    skipped = read_json(os.path.join(probe_out, "batch-skipped.json"))
+    cells, res = {}, {"S*": {}, "components": {}, "set_s": {}, "left_out": {}}
+    for cell, (_, _, arms) in CELLS.items():
+        recs, blocks = cell_blocks(probe_out, "probe", cell)
+        if cell == "batch" and (skipped or len(blocks) < 2):
+            res["left_out"][cell] = (skipped or {}).get("reason",
+                                                        f"{len(blocks)} valid probe blocks")
+            continue
+        if cell in PRIMARY and len(blocks) < 2:
+            refuse(f"probe {cell}: {len(blocks)} valid blocks; power needs 2")
+        s, comps = legs(blocks, cell)
+        res["S*"].update({cell: s} if s else {})
+        comps = res["components"][cell] = {name: {
+            "mean": statistics.fmean(d), "sd": statistics.stdev(d), "k": len(d), "bound": bound,
+            "sigma": stats6.sigma_upper(statistics.stdev(d), len(d), 0.80)}
+            for name, (d, bound) in comps.items()}
+        res["set_s"][cell] = sum(statistics.fmean(t) for a in arms if (t := [
+            (r["makespan_s"] or 0) + r["cooldown_s"] for r in recs if r["arm"] == a]))
+        cells[cell] = {"set_s": res["set_s"][cell],
+                       "comps": [(c["mean"], c["sigma"], c["bound"]) for c in comps.values()]}
+    res.update(stats8.power_plan(cells, primary=PRIMARY, batch="batch", drop_order=DROP_ORDER,
+                                 cap_h=CAP_H, power_min=POWER_MIN, lo=PILOT_BLOCKS, hi=N_MAX,
+                                 alpha=ALPHA, descriptive_below=DESCRIPTIVE_BELOW))
+    write_out(out, "power.json", dict(res, cap_h=CAP_H, over_cap=res["hours"] > CAP_H))
+
+
+def pilot_check(out):
+    plan = read_json(os.path.join(out, "power.json"))
+    if plan is None or glob.glob(os.path.join(out, "main-*.jsonl")):
+        refuse("pilot-check judges the pilot after power.json and before any main record")
+    res = {"blocks": {}, "S*": {}, "components": {}, "untested": {}, "p_timeouts": {},
+           "p_feasible": {}, "dry": False}
+    for cell in plan["n"]:
+        recs, blocks = cell_blocks(out, "pilot", cell, PILOT_RERUNS)
+        dry = any(r.get("dry") for r in recs)
+        res["dry"] |= dry
+        blocks = run6.first(blocks, PILOT_BLOCKS)
+        if len(blocks) < PILOT_BLOCKS and not dry and len(run6.reruns(recs)) < PILOT_RERUNS:
+            refuse(f"pilot {cell}: {len(blocks)} of {PILOT_BLOCKS} valid blocks, re-runs left")
+        res["blocks"][cell] = list(blocks)
+        if "P" in CELLS[cell][2]:
+            taken = {s["K"]["block"] for s in blocks.values()}
+            k = sum("set_timeout" in r["invalid"] for r in recs
+                    if r["arm"] == "P" and r["block"] in taken)
+            res["p_timeouts"][cell], res["p_feasible"][cell] = k, k <= P_INFEASIBLE_TIMEOUTS
+        if len(blocks) < 2:
+            res["untested"][cell] = DRY_SHORT if dry else SHORT
+            continue
+        s, comps = legs(blocks, cell)
+        res["S*"].update({cell: s} if s else {})
+        if comps:
+            res["components"][cell] = {name: {
+                "mean": statistics.fmean(d), "bound": bound, "futile": stats8.futile(d, bound),
+                "lower90": stats6.paired_lower(d, bound, 0.10)["lower"]}
+                for name, (d, bound) in comps.items()}
+    futile = [c for c, cs in res["components"].items() if any(x["futile"] for x in cs.values())]
+    go = not set(futile) & set(PRIMARY)
+    write_out(out, "pilot_check.json", dict(
+        res, futile=futile, go=go, batch_futile="batch" in futile,
+        outcome=OUTCOMES["stop" if not go else "batch" if "batch" in futile else "go"]))
+
+
+def holm8(ps, why=None):
+    """Holm at ALPHA with each row's status; every row "not tested (why)" when why is given."""
+    if why:
+        return [{"name": n, "status": f"not tested ({why})"} for n in ps]
+    rows = stats7.holm(ps, ALPHA)
+    for r in rows:
+        r["status"] = ("untested" if not r["tested"]
+                       else "rejected" if r["rejected"] else "not rejected")
+    return rows
+
+
+def secondary(used, plan):
+    """H-S1..H-S3, each a union over its legs (slower, less safe) in every kept non-batch cell
+    it runs in, and H-SAFE-<mix> for each loaded cell kept."""
+    tests = {}
+    for s in ("S1", "S2", "S3"):
+        ps = {}
+        for c, bs in used.items():
+            if c != "batch" and s in CELLS[c][2]:
+                ps[f"{c} slower"] = stats6.paired_lower(ln8(bs, c, s, "K"), 0)["p"]
+                ps[f"{c} less safe"] = stats7.wilcoxon_less(run7.traffic_diffs(bs, "K", s))["p"]
+        tests[f"H-{s}"] = {"legs": ps, "p": stats8.union_p(ps.values())}
+    for mix, c in LOADED.items():
+        if c in plan["n"]:
+            tests[f"H-SAFE-{mix}"] = {"p": stats7.wilcoxon_less(run7.traffic_diffs(
+                used[c], "K", "S2"))["p"]} if c in used else {"p": None, "untested": SHORT}
+    return tests
+
+
+def h_pre(bs):
+    """H-PRE's legs on the batch cell's blocks: time, cost and safety, and Holm over them."""
+    def upper(d, bound):
+        return stats6.paired_upper(list(d), bound)["p"]
+    t = {f"KP<{o}": stats6.paired_lower(ln8(bs, "batch", o, "KP"), 0)["p"] for o in ("K", "S1")}
+    t["KP~F"] = upper(ln8(bs, "batch", "KP", "F"), MARGIN)
+    safe = {"warn_s": upper((run4.warn_s(s["KP"]) - run4.warn_s(s["K"]) for s in bs.values()),
+                            SAFETY_WARN_MARGIN_S),
+            "swapout_mib": upper((run4.swapout_mib(s["KP"]) - run4.swapout_mib(s["K"])
+                                  for s in bs.values()), SAFETY_SWAP_MARGIN_MIB)}
+    res = {"time": {"legs": t, "p": stats8.iut_p(list(t.values()))},
+           "cost": {"p": upper(ln8(bs, "batch", "KP", "K", "batch_s"),
+                               math.log(1 + BATCH_COST_MARGIN))},
+           "safety": {"legs": safe, "p": stats8.iut_p(list(safe.values()))}}
+    return dict(res, rows=holm8({k: v["p"] for k, v in res.items()}))
+
+
+def effects(bs, cell, recs):
+    """Each non-K arm against K (KP against K, S1 and F in the batch cell; P over the blocks
+    with a valid P set), the batch's own time KP/K, and each arm's warn seconds and swap
+    traffic."""
+    p = {r["block"]: r for r in recs if r["arm"] == "P" and r["valid"]}
+    by = {a: bs for a in CELLS[cell][2] if a != "P"}
+    if "P" in CELLS[cell][2]:
+        by["P"] = {b: dict(s, P=p[s["K"]["block"]]) for b, s in bs.items() if s["K"]["block"] in p}
+    pairs = ([("KP", o) for o in ("K", "S1", "F")] if cell == "batch"
+             else [(a, "K") for a in by if a != "K"])
+    res = {"ratio": {f"{a}/{b}": run6.estimate(ln8(by[a], cell, a, b)) for a, b in pairs}}
+    if cell == "batch":
+        res["ratio"]["batch_s KP/K"] = run6.estimate(ln8(bs, cell, "KP", "K", "batch_s"))
+    for name, f in (("warn_s", run4.warn_s), ("swap_traffic_pages", run7.swap_traffic_pages)):
+        res[name] = {a: run6.ci(f(s[a]) for s in by[a].values()) for a in by if by[a]}
+    return res
+
+
+def summary_text(s):
+    p = s["primary"]
+    rows = [f"  {r['name']}: {r['status']}" + ("" if r.get("p") is None else f"; p {r['p']:.4g}")
+            for r in s["secondary"] + [dict(r, name=f"H-PRE {r['name']}")
+                                       for r in s["H-PRE"].get("rows", [])]]
+    return "\n".join([
+        "Acceptance run 8: summary" + (" (dry)" if s["dry"] else ""), "",
+        f"Blocks: {json.dumps({c: len(bs) for c, bs in s['blocks'].items()})}",
+        f"Re-runs: {json.dumps(s['reruns'])}; dropped by the plan: {s['dropped']}",
+        f"Untested cells: {json.dumps(s['untested'])}", "",
+        "Primary (intersection-union over the kept trace cells, alpha 0.05): " + (
+            "untested" if "untested" in p else "descriptive, no rejection claimed"
+            if p["descriptive"] else "rejected" if p["rejected"] else "not rejected"),
+        "Secondary family (Holm, alpha 0.05), then H-PRE (Holm over time, cost and safety):",
+        *rows, *(f"  H-PRE: {k}, {v}" for k, v in s["H-PRE"].items() if k != "rows" and
+                 isinstance(v, str)), "", "Effect sizes:", json.dumps(s["effects"], indent=1), ""])
+
+
+def summary(out):
+    plan, check = (read_json(os.path.join(out, f)) for f in ("power.json", "pilot_check.json"))
+    if plan is None or check is None:
+        refuse("summary needs power.json and pilot_check.json")
+    skipped = read_json(os.path.join(out, "batch-skipped.json"))
+    recs, used, untested, spent = {}, {}, {}, {}
+    for cell, n in plan["n"].items():
+        if cell == "batch" and (skipped or check.get("batch_futile")):
+            continue
+        recs[cell], blocks = cell_blocks(out, "main", cell, n // 10)
+        spent[cell], dry = run6.reruns(recs[cell]), any(r.get("dry") for r in recs[cell])
+        if len(blocks) < (2 if dry else n):
+            if not dry and len(spent[cell]) < n // 10:
+                refuse(f"main {cell}: {len(blocks)} of {n} valid blocks, re-runs left")
+            untested[cell] = DRY_SHORT if dry else SHORT
+        else:
+            used[cell] = blocks if dry else run6.first(blocks, n)
+    kept = [c for c in PRIMARY if c in plan["n"]]
+    if any(c not in used for c in kept):
+        primary = {"rejected": False, "untested": SHORT}
+    else:
+        cells = {}
+        for c in kept:
+            s, comps = legs(used[c], c)
+            d = comps[f"K/{s}"][0]
+            t = stats6.paired_upper(d, MARGIN)
+            cells[c] = {"S*": s, "t": run7.finite_t(t), "p": t["p"], "estimate": run6.estimate(d)}
+        primary = stats7.iut({c: x["p"] for c, x in cells.items()}, ALPHA)
+        primary.update(cells=cells, iut_rejected=primary["rejected"],
+                       descriptive=plan["descriptive"],
+                       rejected=primary["rejected"] and not plan["descriptive"])
+    tests = secondary(used, plan)
+    why = None if primary["rejected"] else "primary untested" if "untested" in primary else (
+        "primary not rejected")
+    hpre = ({"skipped": skipped["reason"]} if skipped else
+            {"untested": "the pilot check found the batch cell futile"}
+            if check.get("batch_futile") else {"untested": plan["left_out"]["batch"]}
+            if "batch" in plan.get("left_out", {}) else {"untested": untested["batch"]}
+            if "batch" in untested else h_pre(used["batch"]))
+    s = {"dry": any(r.get("dry") for rs in recs.values() for r in rs),
+         "dropped": plan["dropped"], "n": plan["n"],
+         "blocks": {c: list(bs) for c, bs in used.items()}, "reruns": spent,
+         "untested": untested, "primary": primary,
+         "secondary": holm8({k: v["p"] for k, v in tests.items()}, why),
+         "tests": {} if why else tests, "H-PRE": hpre,
+         "effects": {c: effects(bs, c, recs[c]) for c, bs in used.items()}}
+    with open(os.path.join(out, "summary.json"), "w") as f:
+        json.dump(s, f, indent=1)
+    text = summary_text(s)
+    with open(os.path.join(out, "summary.txt"), "w") as f:
+        f.write(text)
+    print(text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -648,7 +920,16 @@ def main():
             p.add_argument("last", type=int)
             p.add_argument("--as-block", type=int, default=None)
             p.add_argument("--primer", action="store_true")
+    p = sub.add_parser("power")
+    p.add_argument("probe_out")
+    p.add_argument("out")
+    sub.add_parser("pilot-check").add_argument("out")
+    sub.add_parser("summary").add_argument("out")
     args = ap.parse_args()
+    if args.cmd == "power":
+        return power(args.probe_out, args.out)
+    if args.cmd in ("pilot-check", "summary"):
+        return (pilot_check if args.cmd == "pilot-check" else summary)(args.out)
     cfg = load(args.stand)
 
     def interrupted(*_):
