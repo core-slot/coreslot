@@ -2298,20 +2298,50 @@ against K60):
 
 Warn seconds over the level's 6 sets: loaded K60 9, S1 2, S2 68; quiet K60 0, S1 0, S2 28. The
 light mix's K60 against F was 0.94; the wide mix's S2 against K60 was 0.94, and F against K60
-1.05. K60 held the type check and FastAPI's suite at once (86 mem tokens against the static 76)
-in 4 of its 12 heavy sets, two at each level.
+1.05. K60 held the type check and a suite at once (86 mem tokens against the static 76) in 4 of
+its 12 heavy sets, two at each level: the ORM suite (`sqlalchemy-orm-tests`) in blocks 2, 6 and
+12, and FastAPI's in block 1, for 8.1 s (beside 0.4 s with the ORM suite). The overlap passed 5 s
+only in blocks 1 and 12. Blocks 1 and 6 were loaded sets, at a headroom at t0 of 7926 and
+7952 MiB, so pairing depends on the arrival order and on the headroom when a suite is admitted,
+not on the headroom at t0.
 
-**What it means, by the outcomes declared before the data.** The pilot can only stop the run, so
-P1 is not tested; its stop falls on outcome 2, "P1 not rejected only through T3". On this machine
-and mix, a machine-wide lock of one slot (S1) kept pace with coreslot at both levels, while
-`sem -j2` lost at both, by about a fifth of the time to verdict and with most of the memory
-pressure. The likely mechanism: at the quiet level's headroom of 9.6-11.8 GiB the live size
-rarely had room to run a suite beside the type check (it needs about 11 GiB with the relearned
-2 GiB FastAPI need), so coreslot mostly ran one heavy gate at a time, as the lock does. The same
-outcome makes further development of the one-machine product conditional on the wide mix showing
-the frozen S2 losing too; in the pilot's six wide blocks S2 was faster than K60 in every one.
-`sem --memsuspend 9G` started no gate within 600 s in 4 of its 6 loaded sets, so it is reported
-as infeasible on this machine under load, not tuned.
+**What it means, by the outcomes declared before the data.** Run 7 confirmed nothing. The pilot
+can only stop the run, so P1 is not tested, and every number above is exploratory. No declared
+outcome covers a pilot stop; the stop is mapped by analogy onto outcome 2, "P1 not rejected only
+through T3". Outcome 2's narrowed claim, "faster than a lock when the machine is quiet", is
+not published as worded: the pilot did not support it. On this machine and mix, a machine-wide
+lock of one slot (S1) kept pace with coreslot at both levels, while `sem -j2` lost at both, by
+about a fifth of the time to verdict and with most of the memory pressure.
 
-**Deviations.** None. The stop is the procedure's own: a `"go"` of false stops the run, and no
-main phase follows it.
+**Why T3's effect did not hold.** T3 rested on run 6's quiet effect (S1/K60 1.058 at 0 MiB), and
+that effect came with no pairing: in none of run 6's 120 K60 heavy sets did a type check overlap
+a suite for more than 5 s. It came from the two suites running together, for more than 5 s in
+0.55 of run 6's K60 sets at 0 MiB and 0.53 at 3072 MiB, and in 0.33 of the pilot's (4 of 12).
+Meanwhile S1 got faster: at quiet, its FastAPI suite's median fell from 18.6 to 13.4 s, and its
+mean time to verdict from 35.5 to 28.0 s (K60's from 33.4 to 27.9 s). The likely cause is
+`--dist loadgroup`, which removed a handicap FastAPI's suite carried in run 6; that risk was noted
+before the pilot, though not in the text above. The cause is not a lack of pairing.
+
+Outcome 2 also states: "Development continues only if the wide mix, reported descriptively, shows
+the same frozen S2 losing too." In the pilot's 6 wide blocks S2 was faster than K60 in every one
+(ln(S2/K60) mean −0.062, SD 0.024). By run 7's own rule, development does not continue on run 7's
+strength. `sem --memsuspend 9G` started no gate within 600 s in 4 of its 6 loaded sets, so P is
+reported as infeasible at `--memsuspend 9G` with a loaded headroom of 8000 MiB, not tuned.
+
+**Deviations.** One, the owner's. The stop is the procedure's own: a `"go"` of false stops the
+run, and no main phase follows it. What follows is the owner's to decide, recorded here. On
+2026-10-28 the owner overrode outcome 2's condition and continues development for product
+reasons, all visible in run 7's records:
+
+- **`suggest`'s cpu ratchet.** The relearn pass narrowed W3's suite (`sqlalchemy-engine-tests`)
+  to a cpu grant of 1 (see "Learning, frozen before the pilot"). Its verdict averaged 62.6 s
+  under K60 over the 6 wide sets, against 32.2 s under S2 and 31.6 s under F.
+- **Over-reservation.** In 5 of K60's 6 wide sets, the `test/sql test/dialect` suite waited
+  16-26 s for cpu while the ORM suite and FastAPI's held 13 or 14 of the 14 cpu tokens.
+- **A stand that is not representative.** The heavy mix's type check and both its suites each
+  saturate the cores alone (5 of 5 learning runs each), so running them one at a time costs
+  little.
+
+A user would recognise both defects. This is an override of run 7's rule, not a result of it.
+Corrected on 2026-10-28 (the pairing partner, the mechanism, P's scope, this deviation); the first
+version is in the repository's history.
