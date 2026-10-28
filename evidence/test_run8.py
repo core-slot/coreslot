@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import shutil
 import statistics
 import subprocess
 import sys
@@ -792,6 +793,75 @@ class Summary8(unittest.TestCase):
         os.remove(os.path.join(self.out, "pilot_check.json"))
         self.assertEqual(refused(self, run8.summary, self.out), 2)
         self.assertEqual(refused(self, self.summary, n=10), 2)
+
+
+class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a stub run8.py
+    SH = os.path.join(HERE, "overload", "run8.sh")
+    ENV = {"STUB_BATT": "AC Power", "STUB_INDEX": "Indexing disabled.", "STUB_PGREP": "1 /bin/node -k=hunter2",
+           "STUB_UPDATE": "Automatic check is turned off"}
+    CELLS = "trace-quiet trace-loaded heavy-quiet heavy-loaded wide-quiet batch".split()
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.out, self.log = os.path.join(self.tmp, "out"), os.path.join(self.tmp, "calls.log")
+        os.mkdir(self.out)
+        listing = 'echo "PID Status Label"; echo "- 0 com.apple.x"; echo "- 0 com.example.agent"'
+        for tool, body in {"pmset": "$STUB_BATT", "mdutil": "$STUB_INDEX", "softwareupdate": "$STUB_UPDATE",
+                           "pgrep": "$STUB_PGREP", "caffeinate": "", "launchctl": listing}.items():
+            body = body if body.startswith("echo") or not body else f'echo "{body}"'
+            with open(os.path.join(self.tmp, tool), "w") as f:
+                f.write(f'#!/bin/sh\necho "{tool} $*" >> "$LOG"\n{body}\n')
+            os.chmod(os.path.join(self.tmp, tool), 0o755)
+        with open(os.path.join(self.tmp, "run8.py"), "w") as f:  # logs argv; pilot-check says go
+            f.write("import os, sys\nopen(os.environ['LOG'], 'a').write('run8.py ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+                    "if sys.argv[1] == 'pilot-check':\n    open(sys.argv[2] + '/pilot_check.json', 'w').write('{\"go\": true}')\n")
+
+    def sh(self, *args, power=True, sealed=True, **env):
+        for name, present in (("power.json", power), ("needs.sha256", sealed)):
+            path = os.path.join(self.out, name)
+            if present:
+                open(path, "w").close()
+            elif os.path.exists(path):
+                os.remove(path)
+        path = [self.tmp, os.path.dirname(sys.executable), "/usr/bin", "/bin", "/usr/sbin"]
+        env = dict(os.environ, **{**self.ENV, **env}, LOG=self.log, OUT=self.out, STAND="S",
+                   RUN8_PY=os.path.join(self.tmp, "run8.py"), PATH=":".join(path))
+        code, err = (lambda p: (p.returncode, p.stderr))(subprocess.run(
+            ["/bin/sh", self.SH, *args], env=env, capture_output=True, text=True))
+        lines = text(self.log).splitlines() if os.path.exists(self.log) else []
+        os.path.exists(self.log) and os.remove(self.log)
+        return code, err, [x.replace(self.out, "OUT")[8:] for x in lines if x.startswith("run8.py")], lines
+
+    def test_preflight(self):
+        # mutations: no AC check, or it run after python -> red; the indexing or the update
+        # check dropped, or enforced on a dry run -> red; caffeinate without -w, or pgrep's full
+        # command lines logged, or the apple agents listed -> red
+        batt, off, on = {"STUB_BATT": "Battery Power"}, {"STUB_INDEX": "Indexing enabled."}, {"STUB_UPDATE": "turned on"}
+        for args, env, rc in (((), batt, 2), (("--dry",), batt, 2), (("learn",), off, 2), (("verdict",), on, 2),
+                              (("--dry", "verdict"), {**off, **on}, 0), (("preflight",), {}, 0), (("learn",), {}, 0)):
+            code, err, py, _ = self.sh(*args, **env)
+            self.assertEqual((code, bool(py), "run8: " in err), (rc, rc == 0 and args[-1] != "preflight", rc == 2), args)
+        log = text(os.path.join(self.out, "preflight.log"))
+        self.assertTrue("1 node" in log and "hunter2" not in log and "com.example.agent" in log
+                        and "com.apple.x" not in log and "Indexing enabled" in log, log)
+        self.assertIn("caffeinate -dimsu -w ", "\n".join(self.sh("preflight")[3]))
+
+    def test_dispatch_and_default_paths(self):
+        # mutations: power, pilot-check or summary given STAND, or power not given OUT last ->
+        # red; the primer on every pilot or on none -> red; the pilot started without power.json
+        # -> red; the dry pipeline's order, its probe, power OUT OUT or main loop changed -> red
+        v = lambda phase, c, last, primer=False: f"verdict S OUT {phase} {c} 1 {last}" + " --primer" * primer
+        for args, want in ((("pilot-check",), "pilot-check OUT"), (("summary", "--x"), "summary OUT --x"),
+                           (("power", "PROBE"), "power PROBE OUT"), (("verdict", "main", "batch", "1", "2"), v("main", "batch", 2))):
+            self.assertEqual(self.sh(*args)[2], [want])
+        self.assertEqual(self.sh()[2], [v("pilot", c, 10, i == 0) for i, c in enumerate(self.CELLS)])
+        code, err, py, _ = self.sh(power=False, sealed=False)
+        self.assertEqual((code, py, "power.json" in err), (2, ["learn S OUT"], True))
+        dry = (["learn S OUT"] + [v("probe", c, 2) for c in self.CELLS] + ["power OUT OUT"]
+               + [v("pilot", c, 2, i == 0) for i, c in enumerate(self.CELLS)] + ["pilot-check OUT"]
+               + [v("main", c, 2) for c in self.CELLS] + ["summary OUT"])
+        self.assertEqual(self.sh("--dry", power=False, sealed=False)[2], dry)
 
 
 if __name__ == "__main__":
