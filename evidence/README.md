@@ -2394,7 +2394,8 @@ hide that feature's failure.
 - **The cost margin** is the owner's choice, made before the blinded report and from no probe
   value. This departs from "declared from the probe": the probe's KP/K is the very effect the
   blinding hides. The model's predicted KP/K (1.19 at the 999.8 s stand-in, 1.25-1.39 at 780 s) is
-  in view when the margin is chosen, and the choice is made in the same decision as the menu pick.
+  in view. The margin is decided and committed before the blinded report, which needs it for the
+  batch n, separately from and before the menu pick.
 - **The safety tolerances** are fixed now as a registered choice. 64 MiB is run 7's swap event.
 - **All-zero safety differences.** A sub-leg whose KP − K differences are all zero has se 0 and
   p 0, an empty rejection. It is reported as "no warn (or swap) in either arm", and the other
@@ -2424,16 +2425,10 @@ is reported untested ("treatment not shown in the probe"): `[CODE: treatment any
 `[PROBE: shown or not]`. **P is descriptive.** GNU parallel `--memsuspend 4.5G -j 4`, in the heavy
 cells, is reported and not tested.
 
-**Reported for every cell, rejected or not:**
-
-- each arm against K (KP against K, S1 and F) as a geometric mean ratio, with its one-sided 95 %
-  bound and BCa 90 % interval;
-- the batch's KP/K;
-- each arm's warn seconds and swap traffic.
-
-A cell that main did not run reports its pilot's effects. A cell that main left short reports its
-valid main blocks. Both are marked exploratory: `[CODE: short effects]`. A cell dropped before the
-pilot reports nothing.
+**Reported for every cell, rejected or not:** each arm against K (KP against K, S1, F) as a
+geometric mean ratio with its one-sided 95 % bound and BCa 90 % interval; the batch's KP/K; each
+arm's warn seconds and swap traffic. A cell main did not run reports its pilot, and a short main
+cell its valid blocks, both exploratory `[CODE: short effects]`; a dropped cell reports nothing.
 
 ### Cells, arms and mixes
 
@@ -2463,16 +2458,18 @@ derives the mix from the owner's two machines' run logs.
 
 **Revision 1's rule** and its profiles (`run8-profiles.json`) are in public commit `273abeb`
 (2026-10-28 02:34 UTC), before the first stand-in record (05:29 UTC). **Revision 2** (pull request
-#43, unmerged) was written after the stand-ins' alone runs and during the probe's learn, so "the
-rule came before any stand-in ran" holds for revision 1 only. What was in view when revision 2 was
-written: `[OPEN: declared by its author]`. Revision 2 changes three things. A class enters at a
+#43, unmerged) is in public commits of 2026-10-28 at 17:59 and 18:20 UTC, after the last stand-in
+record (06:43 UTC) and against the probe's learn window
+`[PROBE: learn start and end, UTC, from its learn.jsonl]`. So "the rule came before any stand-in
+ran" holds for revision 1 only. What was in view when revision 2 was written:
+`[OPEN: declared by its author]`. Revision 2 changes three things. A class enters at a
 share of short-gate runs or wall time of at least 1/24 on either machine. There are six classes:
 py_unit 4, go_test 2, py_db 2, typecheck 2, mutation 1 and other 1. Each class's stand-in runs on
 its own repository.
 
 `[OPEN: the mix]` is one of two rules. (i) Register revision 1 as probed. (ii) Revision 2 lands,
 its stand-ins are measured alone, and a new probe runs on it. Every probe input below then comes
-from that new probe: block seconds, pooled SDs, n, the overload fact, the timeout margin, the
+from that new probe: block seconds, pooled SDs, n, the overload fact, the computed timeouts, the
 treatment and the learned needs.
 
 Each stand-in must sit within its class's band when run alone (`standins8.py check`):
@@ -2502,19 +2499,23 @@ MiB; `level_off` marks a loaded set more than ±512 MiB off. Each cell keeps its
 flags never invalidate a set.
 
 **The block order interleaves cells.** In the probe each cell ran in its own stretch of the night,
-so cell is confounded with time of night. Pilot and main run in R rounds, R the largest kept n:
-block i of a cell with n_c blocks runs in round ⌈i × R / n_c⌉, spreading each cell evenly.
-Cells within a round run in an order shuffled with the seed `run8-round-<phase>-<r>`. Re-runs
-follow in rounds of at most one per cell, seeded `run8-rerun-<phase>-<r>`. Their position at the
-end is a residual confounding, which is reported. `[CODE: rounds]`
+so cell is confounded with time of night. Pilot and main run in R rounds, R the phase's largest
+kept n (10 in the pilot, the largest `power.json` n in main). Block i of a cell with n_c blocks
+runs in round ⌈i × R / n_c⌉, and cells within a round run in an order seeded
+`run8-round-<phase>-<r>`. Re-runs follow in rounds of at most one per cell, seeded
+`run8-rerun-<phase>-<r>`. A stated limitation: a small cell's block falls at the end of its
+stride window, so the cell runs later on average and never in the first ⌈R / n_c⌉ − 1 rounds.
+`[CODE: rounds]`
 
-**Set timeouts** (`SET_TIMEOUT_S`, fixed now): trace 3,600 s, heavy and wide 600 s, batch
-10,800 s. Before the pilot, by rule, a mix's timeout is raised to at least twice its cells'
-longest probe set, rounded up to 600 s:
-`[PROBE: the timeout margin, the longest set over its timeout per cell]`.
-In revision 1's mix, S1 serialises 12 gates whose alone medians sum to about 900 s; under
-revision 2 that sum changes. The other probe-marked constants are fixed now at the code's values:
-`BATCH_N_MAX` = 20, `BATCH_DELAY_S` = 60 and the level headrooms. `CAP_H` comes from the pick.
+**Set timeouts.** The rule is fixed now. For each cell's non-P sets, the timeout is the larger
+of two values: the code's `SET_TIMEOUT_S` for the cell's mix (trace 3,600 s, heavy and wide
+600 s, batch 10,800 s), and 2 × the cell's longest probe set, rounded up to the next multiple of
+600 s. A probe set that timed out counts at its timeout. P's sets keep the heavy 600 s. The values
+are computed in the registration from the probe's set times, and the hours use them:
+`[PROBE: the computed timeout per cell]` `[CODE: timeouts]`. In revision 1's mix, S1 serialises
+12 gates whose alone medians sum to about 900 s; under revision 2 that sum changes. The other
+probe-marked constants are fixed now at the code's values: `BATCH_N_MAX` = 20,
+`BATCH_DELAY_S` = 60 and the level headrooms. `CAP_H` comes from the pick.
 
 ### Metrics
 
@@ -2539,24 +2540,21 @@ is the optimistic end: yielding lengthens the batch by design (one cpu token at 
 assumed 0 overstates the cost leg's power, and the batch n is the largest over its components.
 `[OPEN: the owner chooses these assumed effects, the cost leg's knowingly]` `[CODE: blinded power]`
 
-**Mix quality is judged only on three facts**, never on K-vs-S or K-vs-F differences:
-
-1. Does the F arm want more than 10 cores or 9 GiB at once? This comes from the F sets' gate
-   intervals, each gate weighted by its alone F-form cores and peak, since the samples carry no
-   per-gate figures.
-2. Is each stand-in, run alone, within its class's band?
-3. Is P feasible (see below)?
+**Mix quality is judged only on three facts**, never on K-vs-S or K-vs-F differences. (1) Does
+the F arm want more than 10 cores or 9 GiB at once? This comes from the F sets' gate intervals,
+each gate weighted by its alone F-form cores and peak, since the samples carry no per-gate figures.
+(2) Is each stand-in, alone, within its class's band? (3) Is P feasible (below)?
 
 **Who computes, and what they report.** A fresh agent session reads the pinned probe records. It
-is neither the owner nor the analyst who launches the run. It runs the frozen code's `power` once
-per menu option, into scratch directories, never the run's. It reports only:
+is neither the owner nor the analyst who launches the run. It runs `power`, in the code of the
+registration commit, once per menu option, into scratch directories, never the run's. It reports
+only:
 
 - per cell, the block seconds (all arms) and the pooled SDs;
-- per option, n per cell, each powered hypothesis's power, the joint power, and the hours;
+- per option, n per cell, each powered hypothesis's power, the joint power and the hours;
 - the mix-quality facts;
-- pass or fail for the treatment, the no-demotion condition, the timeout rule, P's rule and the
-  background match;
-- the binary and needs SHA-256.
+- pass or fail for the treatment, the no-demotion condition, P's rule and the background match;
+- the computed timeouts, and the binary and needs SHA-256.
 
 It reports no arm mean, ratio, difference or per-arm time. **Declared leaks:** S1's mean set
 seconds per cell can be solved from the hours of A and B, and the longest set in a trace cell is
@@ -2570,12 +2568,17 @@ the code does not enforce it.
 
 ### The anchor of n
 
-The probe record set that power is computed from is pinned in the registration commit by its
-path, its block count per cell and the SHA-256 of each probe record file. The probe ends when its
-declared block count is reached, and that count is fixed before the blinded report:
-`[PROBE: blocks per cell]`. The pick's `power.json` is computed by the frozen code from that set.
-It is committed with the registration, and its SHA-256 and n per cell are written in this section.
-`power.json` binds: the blinded report's arithmetic must reproduce it. `[CODE: power pin]`
+**The probe set is fixed by the probe's own launch, not chosen afterwards.** Per cell, it is
+the block count that the probe's launch command requested, as recorded in its command line and
+log: `[PROBE: blocks per cell, as launched]`. If a directory holds more blocks than that, only
+blocks 1..k per cell count, and no probe block is added after the probe ends. `power` reads
+exactly that set: `[CODE: probe set]`. The registration commit pins it by path and by the
+SHA-256 of each record file: `[PROBE: the probe set's path and per-file SHA-256]`.
+
+The pick's `power.json` is computed from that set by the code at the registration commit and
+committed with it, and it binds: `[PROBE: power.json's SHA-256]` and
+`[PROBE: n per cell from power.json]`. If the blinded report's arithmetic does not reproduce
+those n, the registration stops until the section explains the difference. `[CODE: power pin]`
 
 ### Power, the time budget and the menu
 
@@ -2585,7 +2588,7 @@ It is committed with the registration, and its SHA-256 and n per cell are writte
 | primary | each kept trace cell: the smallest n in [10, `N_MAX` = 200] with power ≥ 0.80^(1/m) at α = 0.05, m the kept primary cells; joint power = their product; a secondary cell takes the largest primary n |
 | batch cell | the smallest n in [10, `BATCH_N_MAX` = 20] at which each of its four powered components (KP/K, KP/S1, KP/F, batch_s KP/K; three under B or C) reaches 0.80^(1/4) (or ^(1/3)) at α / 3; reserved first, never dropped |
 | H-PRE's safety leg | not powered (the probe gives it no usable input); tested at the batch cell's n and reported with "no power claimed" |
-| below target | H-PRE's time or cost leg below its target is reported with its power, and as descriptive below 0.5 joint, parallel to the primary `[CODE: H-PRE power]` |
+| below target | H-PRE's joint power is the product of its three legs' powers: the time leg's (itself the product over its three components), the cost leg's, and the unpowered safety leg's, taken as 1. Below its 0.80 target, H-PRE is reported with that power, and below 0.5 as descriptive, as the primary is `[CODE: H-PRE power]` |
 | hours | Σ over kept cells of (`PILOT_BLOCKS` + n) × block seconds; block seconds = Σ over the cell's kept arms of the mean (makespan + cooldown + per-set overhead) in the probe, the overhead being the rest of each set's t0-to-next-t0 span, a timed-out set at its timeout `[CODE: set seconds]` |
 | not in the hours | re-runs (up to 3 per pilot cell, 10 % of main n), the extra quiet waits and ballast build-ups the rounds add at each change of level, and the probe's own blocks; "under the cap" is not a bound on the run |
 
@@ -2597,20 +2600,20 @@ edit of `CAP_H`: `[CODE: option]`.
 |---|---|---|
 | A | all cells and arms at n from power, uncapped | 69.3 h (66.9-81.1): batch 33.3, trace 28.7, heavy and wide 7.4 |
 | B | S1 dropped in every cell: S\* is the better of S2 and S3, H-S1 and H-PRE's KP<S1 leave; uncapped `[CODE: drop S1]` | 47.6 h: trace 17.8 (S1 is about 38 % of a trace block), batch 22.4, heavy and wide 7.4 (no S1 split modelled) |
-| C | B, plus a batch stand-in at the mix rule's 780 s floor, under `CAP_H` = 30 h: drop in `DROP_ORDER` (heavy-loaded, wide-quiet, trace-loaded), then scale every non-batch n by one common factor (floor, never below 10) | about 29 h: batch 18.9, trace-quiet 8.9, heavy-quiet 1.5; trace-loaded, wide-quiet and heavy-loaded dropped, so the primary rests on trace-quiet alone |
+| C | B, plus a batch stand-in at the mix rule's 780 s floor, under `CAP_H` = 30 h, as `stats8.power_plan` applies it: while the hours exceed the cap, drop the next cell of `DROP_ORDER` (heavy-loaded, wide-quiet, trace-loaded); only if they still exceed it after every drop, scale every non-batch n by one common factor (rounded down, never below 10) | about 29 h: batch 18.9, trace-quiet 8.9, heavy-quiet 1.5; trace-loaded, wide-quiet and heavy-loaded dropped, so the primary rests on trace-quiet alone |
 
 The estimates come from a processor-sharing model of the current mix, not from data. They assume
 a central cooldown and the floor of 10 + 10 blocks per cell. They are lower bounds: the batch n can
 reach `BATCH_N_MAX`, about 1.5× the floor's batch hours. C includes B's drop, because with S1 kept
 in trace-quiet the model gives about 34.8 h, over the cap. C's 780 s stand-in has no probe data.
-It must be measured alone within its band, and the batch cell probed on it by the same stop rule,
-before the blinded report. The rules that hold for every option:
+It must be measured alone within its band, and the batch cell probed on it under the same stop
+rule, before the blinded report: `[PROBE: C's 780 s stand-in, its argv and alone records]`. The
+rules that hold for every option:
 
-- If the hours still exceed the cap after every drop and the scale to the floor (`over_cap`),
-  the run goes ahead at those n, over the cap, and reports the hours.
-- n per cell is fixed before the pilot and never re-estimated upwards.
-- If the primary misses its 0.80 joint power, the run goes ahead at the power reached. Below
-  `DESCRIPTIVE_BELOW` = 0.5 the primary is reported as descriptive only.
+- `over_cap` (hours still above the cap after every drop and the scale): the run goes ahead at
+  those n and reports the hours. n is fixed before the pilot and never re-estimated upwards.
+- If the primary misses its 0.80 joint power, the run goes ahead at the power reached, and below
+  `DESCRIPTIVE_BELOW` = 0.5 it is reported as descriptive only.
 
 `[OPEN: the menu option]`
 
@@ -2642,9 +2645,10 @@ at `PILOT_RERUNS` = 3.
   the background, not the level, decides P.
 - **Declared now:** in each heavy cell, if the median over the probe's P sets of free plus
   inactive at t0 is below 4,608 MiB, P is infeasible at the probe's background and runs in no pilot
-  or main set `[CODE: P switch]`. This applies only when the probe's P sets ran at the run's
-  declared background, which means the same application-set SHA-256 in the records and the same VM
-  state in the preflight log. Otherwise the pilot's rule decides.
+  or main set `[CODE: P switch]`. It applies only when every probe P set's application-set record
+  equals the declared one, and the preflight log's VM state matches `[CODE: VM field]`. If the run's
+  VM refusal makes that match impossible (the probe's P sets ran with a VM up), the rule cannot fire
+  and the pilot's rule decides P.
 - **Each P set reports** free plus inactive at t0, its minimum, its median and the held label
   `[CODE: P report]`.
 - **Scope.** A P verdict reads "P at `--memsuspend 4.5G` with free plus inactive at t0 of
@@ -2659,13 +2663,18 @@ exit unless the hashes match; learn refuses once a probe, pilot or main record e
 
 `[OPEN: the learn]` is one of two rules:
 
-- (i) the run uses the probe's sealed learn, copied into its output directory with its records.
-  That learn ran with Docker Desktop's VM up, which then becomes an input of the run.
-- (ii) the run relearns from empty without the VM, before registration. The probe's treatment and
-  learned entry then describe the probe only, and the run's batch entry must meet the automatic
-  rule (cpu ≥ 7, 5 runs, median ≥ 600 s) before registration.
+- (i) **The run uses the learn of the probe it is powered from.** That probe's `needs.toml`,
+  `needs-pass1.toml`, `learn.jsonl` and `needs.sha256` are copied into the run's output directory.
+  The state directory's run log is rebuilt from learn's own lines only, never from the probe's
+  verdict sets: `[CODE: learn carry]`. The batch label then holds exactly its 5 learn runs, so the
+  first KP set sees the rule's minimum, and no demotion carries over from the probe. That learn's
+  background becomes an input of the run: `[PROBE: whether its learn ran with a VM up]`.
+- (ii) **The run relearns from empty, without the VM, before registration**, in its own output
+  directory and state. The probe's treatment check still decides whether the batch cell runs.
+  The run's batch entry must also meet the automatic rule (cpu ≥ 7, 5 runs, median ≥ 600 s), or
+  the batch cell is left out.
 
-`[PROBE: the needs.toml and learn.jsonl SHA-256 of the learn the run uses]`
+`[PROBE: needs.toml and learn.jsonl SHA-256 of the learn the run uses, probe's (i) or relearn (ii)]`
 
 ### Validity, re-runs and provenance
 
@@ -2709,12 +2718,12 @@ These directions are reasoned, not measured.
 | Orphans and stale holds (`--same-group`, descendant holds) | product | Neutral: the gates do not orphan, and a timed-out set is killed down to its process groups |
 | Preemptible runs, automatic by default | product | Favours KP in the batch cell (the treatment). Against K elsewhere: a label demoted from contended history fails its sets and can leave a cell untested |
 | Trace-derived cells (revision 1), the new primary | stand and mix | Neutral by construction: the rule (`273abeb`, 02:34 UTC) came before the first stand-in ran (05:29 UTC). Whether the mix overloads the machine is judged blind |
-| The mix rule's revision 2 `[OPEN: the mix]` | stand and mix | Post-hoc: written after the stand-ins' alone runs and during the probe's learn. A memory-heavier class (typecheck) raises the chance of overload, which favours K and the S arms over F |
+| The mix rule's revision 2 `[OPEN: the mix]` | stand and mix | Post-hoc: its commits (17:59 and 18:20 UTC) came after the last stand-in record (06:43 UTC). A memory-heavier class (typecheck) raises the chance of overload, which favours K and the S arms over F |
 | No trace stand-in may meet the automatic rule `[OPEN: lands in the mix rule]` | stand and mix | Neutral: it keeps the treatment on the batch label alone |
 | The S3 arm | stand and mix | Against K: one more comparator in the hindsight choice |
 | The batch cell and KP | stand and mix | No effect on the primary; H-PRE is its own family |
 | The update check re-anchored; the VM refusal | procedure | Neutral across arms. Without a VM there is more free memory: favours P's feasibility |
-| Docker Desktop's VM ran during the probe's learn | procedure | Memory in use was higher, so learned peaks and P's free figure are lower than in a VM-free run. Lower mem needs admit more under K (faster, possibly less safe). The probe's P figure is pessimistic for P. An input of the run only under learn (i) |
+| Docker Desktop's VM was up at the probe's learn, as the probe's preflight log records | procedure | Memory in use was higher, so learned peaks and P's free figure are lower than in a VM-free run. Lower mem needs admit more under K (faster, possibly less safe). The probe's P figure is pessimistic for P. An input of the run only under learn (i) |
 | P's start gate at 4,608 MiB, one queue per set (run 7: 9G, one `sem` per agent) | procedure | Favours P's feasibility: run 7's 9G started no gate in 4 of 6 loaded sets |
 | Interleaved rounds; the cap, the drop order, power from a blinded probe | procedure | Neutral by arm. Under C the primary loses trace-loaded |
 | Best of S1-S3 per cell in hindsight, intersected over the trace cells | analysis | Against K: the in-sample choice favours the comparator |
@@ -2730,7 +2739,7 @@ These are decided now, before the data `[OPEN: the owner confirms the meanings]`
 | Pilot stop: a primary cell futile | K is not within 3 % of the best fixed count on that cell at the pilot. Nothing is confirmed; the pilot is reported as exploratory; "keeps up with the best fixed count" is not published; the owner decides what follows, recorded as a deviation |
 | Pilot stop: a primary cell with fewer than 2 valid blocks | the run measured nothing there: a stand or runner failure, not a result about coreslot. Reported with its cause; measuring again needs a new registration |
 | Batch futile at the pilot | demotion did not get short gates through faster than K and S1, or as fast as F. H-PRE is reported futile; the automatic default is reconsidered before the next release |
-| Batch left out at power (treatment not shown, or fewer than 2 probe blocks) | H-PRE untested. If the treatment was not shown, the automatic rule failed to demote the batch label: a product finding, stated |
+| Batch left out before the pilot. Triggers: a probe KP set with any treatment problem (a non-batch label demoted, a key in a non-KP arm, or the batch label not demoted with an `auto:` reason); fewer than 2 valid probe batch blocks; under learn (ii), the run's batch entry failing the automatic rule; a binary without `--preemptible` | H-PRE untested, and the trigger is reported. Only a batch label not demoted, or a failing relearned entry, is a finding about the automatic rule; a demoted non-batch label is a finding against the rule's reach; the rest are failures of the stand |
 | Primary untested in main (a cell short, re-runs spent) | no claim. A cell lost to treatment failures (a demoted trace label) is a finding against coreslot's automatic rule; any other cause is reported as a failed run |
 | Primary descriptive (joint power < 0.5) | estimates only, no rejection claimed, no claim of keeping up |
 | Primary rejected | in every kept trace cell, K is within 3 % of the best fixed count chosen afterwards. Published as that, scoped to the kept cells, this machine and this mix; development continues |
@@ -2755,12 +2764,16 @@ These are decided now, before the data `[OPEN: the owner confirms the meanings]`
 | `power pin` | pilot records carry `power_sha256`, and `verdict` refuses a `power.json` whose SHA-256 differs from the registered one (today: main records only) |
 | `treatment any` | `power` leaves the batch cell out when any probe KP set has a treatment problem, or none exists (today: only when every one failed) |
 | `zero safety` | `h_pre` applies the all-zero rule above |
-| `H-PRE power` | `summary` reports H-PRE's power per leg, and descriptive below 0.5 |
+| `H-PRE power` | `summary` reports H-PRE's power per leg and joint, and descriptive below 0.5 |
 | `short effects` | `summary` reports a short main cell's valid blocks, marked exploratory |
 | `P switch` | a stand switch that leaves P out of the heavy cells |
 | `P report` | `summary` reports each P set's free plus inactive at t0, minimum, median and held label |
 | `preflight updates` | on branch `evidence-run8-probe`, not yet on `main` (today: `softwareupdate --schedule`) |
 | `VM refusal` | not yet written |
+| `VM field` | the preflight log records the VM state as a field (today it can only be inferred from the `pgrep` lines) |
+| `probe set` | `power` reads exactly blocks 1..k per cell of the pinned probe set (today: every valid probe block in PROBE_OUT) |
+| `timeouts` | `SET_TIMEOUT_S` is per cell at the computed values, with P's sets at 600 s (today: per mix) |
+| `learn carry` | under learn (i), the run's state directory gets a run log rebuilt from the probe learn's own lines only |
 
 ### The anchor
 
@@ -2780,7 +2793,8 @@ Before the first pilot set, four things exist:
 evidence/overload/setup.sh
 # then install the v0.3.0 release binary into ~/bench.noindex/bin/coreslot (the pin refuses a build)
 evidence/overload/run8.sh preflight                    # the machine's checks, to OUT/preflight.log
-evidence/overload/run8.sh learn                        # learn, relearn, seal; resumes
+evidence/overload/run8.sh learn                        # learn (ii): relearn from empty, seal
+# learn (i) instead: copy the probe learn's four files into OUT, then [CODE: learn carry]
 evidence/overload/run8.sh power PROBE_OUT              # OUT/power.json from the pinned probe set
 nohup evidence/overload/run8.sh > ~/bench.noindex/run8.log 2>&1 &  # preflight, the pilot rounds
 evidence/overload/run8.sh pilot-check                  # OUT/pilot_check.json
