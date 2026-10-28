@@ -72,8 +72,9 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
   --independent         queue as a request of its own, even inside another run's grant
   --light               run at once outside the budget with MIN of each resource, for a
                         command that keeps well under one core busy (a download, a stream)
-  --preemptible         run the command at a lower priority (nice 10) for the whole run
-                        (default the label's needs.toml entry, else off)
+  --preemptible         admit with one cpu token and run the command at a lower priority
+                        (nice 10) for the whole run (default the label's needs.toml entry,
+                        else a long run of a large request is made so by itself)
   --subst               replace placeholders inside arguments too, as in make -j{n}
   --refusal-code N      exit status of a refusal, 1 to 255 (default 75)
 
@@ -281,7 +282,7 @@ func usagef(format string, args ...any) error {
 // configuration's [priorities] unless --priority was given. Its hold says that the run's process
 // tree carries the work.
 func (o runOptions) request(priority int) spec.Request {
-	return spec.Request{Label: o.label, Priority: priority, Need: o.admitNeed(), Tree: true}
+	return spec.Request{Label: o.label, Priority: priority, Need: o.admitNeed(), Tree: true, Preemptible: o.preemptWhy}
 }
 
 // sortedNeed lists the requested resources in ascending name order.

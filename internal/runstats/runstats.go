@@ -60,6 +60,14 @@ func counted(r store.RunRecord) bool {
 	return r.Label != "" && !r.Nested && r.FailOpen == ""
 }
 
+// LabelRuns is the counted runs of label's base label, in the order of runs.
+func LabelRuns(runs []store.RunRecord, label string) []store.RunRecord {
+	base := needs.BaseLabel(label)
+	return slices.DeleteFunc(slices.Clone(runs), func(r store.RunRecord) bool {
+		return !counted(r) || needs.BaseLabel(r.Label) != base
+	})
+}
+
 // Summarize groups the counted runs by base label and summarizes each, sorted by label. cpuSize
 // is the cpu resource's size, which clamps the cpu suggestion.
 func Summarize(runs []store.RunRecord, cpuSize int) []Stats {

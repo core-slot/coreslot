@@ -267,7 +267,8 @@ func (g *Grant) publishHold(sec *store.Section, req spec.Request, adopted bool) 
 	g.adopted = adopted
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
-		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted, Tree: req.Tree && !adopted}
+		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted, Tree: req.Tree && !adopted,
+		Preemptible: req.Preemptible}
 	f, name, err := sec.PublishHold(h, os.Getpid(), g.e.seq())
 	if err != nil {
 		return err

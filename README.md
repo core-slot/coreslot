@@ -147,14 +147,32 @@ on its tokens is pointed at `--light`. A nested run inside a light run passes th
 as inside any run outside the budget.
 
 `coreslot run --preemptible` (or `preemptible = true` in the label's `needs.toml` entry;
-`--preemptible=false` overrides the entry) runs the command at a lower priority, nice 10, for the
-whole run: coreslot sets it on the command's process group right after the start, so every process
-of the command and everything it forks later has it. Three limits. In terminal mode the group is
-the shell's job, so only the command's own process is lowered, and processes it forked before
-that are missed. On Linux, nice compares processes only within one autogroup (one session, on by
-default) or cpu cgroup, so the demotion reaches another session's work only where autogroup is
-off. And a command whose work runs outside its process tree, such as a Docker container, has
-nothing in that tree to lower, so the mark does nothing that matters for it.
+`--preemptible=false` overrides the entry) marks a batch run. It is admitted with one cpu token
+whatever its cpu request, and with its full memory, and its command runs at a lower priority, nice
+10, for the whole run: coreslot sets it on the command's process group right after the start, so
+every process of the command and everything it forks later has it. Other runs are admitted because
+the cpu tokens it leaves are free, and the scheduler gives them the cores first; the batch run takes the
+whole machine only when nothing else wants it. Its cpu is not reserved, so it over-commits cpu by
+design and pays in time only: mark batch work, not tests with timers, network or a database. `{n}`
+keeps the width of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the
+real grant, 1, and the run log records the request as `need`, the grant, and a `preemptible` key
+with the reason (`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold.
+
+A run that nothing marked becomes preemptible by itself when it queues for admission (not
+`--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
+half the cpu size, and its label (without a worker count) has at least 5 recorded runs with a
+median of 10 minutes or more, in both generations of the run log. No history, no demotion, and a
+label whose runs of a minute or more averaged under 0.05 cores is left alone, since its work looks
+to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
+that runs with wall-clock deadlines can fail when demoted; `preemptible = false` in the entry opts
+out.
+
+Three limits. In terminal mode the group is the shell's job, so only the command's own process is
+lowered, and processes it forked before that are missed. On Linux, nice compares processes only
+within one autogroup (one session, on by default) or cpu cgroup, so the demotion reaches another
+session's work only where autogroup is off. And a command whose work runs outside its process
+tree, such as a Docker container, has nothing in that tree to lower, and the mark frees tokens
+that work still uses.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
 budget that admits `a` and makes `b` wait leaves `a` blocked on the full pipe until `b` reads it:
