@@ -85,12 +85,11 @@ for agent in A1 A2 A3 A4; do
 	(cd "$d/sqlalchemy" && uv venv --quiet --allow-existing --python 3.13 .venv &&
 		uv pip install --quiet --compile-bytecode --python .venv/bin/python -e . pytest==9.1.1 pytest-xdist==3.8.0 &&
 		.venv/bin/python -m pytest -q -p no:cacheprovider --collect-only test >/dev/null)
-	# go_test: hashicorp/raft's package tests, which mostly wait on election and heartbeat
-	# timeouts over in-memory transports. Building the test binaries once fills the build cache.
+	# go_test: hashicorp/raft's snapshot-restore and transport tests under the race detector,
+	# which mostly wait. The cluster election tests are left out: they fail under load on timing.
+	# Building the race test binary once fills the build cache.
 	fetch https://github.com/hashicorp/raft.git "$RAFT_TAG" "$RAFT_SHA" "$d/raft"
-	for flags in "" -race "-tags batchtest"; do
-		(cd "$d/raft" && go test $flags -count=1 -run '^$' . >/dev/null)
-	done
+	(cd "$d/raft" && go test -race -count=1 -run '^$' . >/dev/null)
 	# mutation: mutmut over python-semver. The library itself is not installed: mutmut puts its
 	# mutants/ copy first on the path. Its [mutmut] section, rewritten on every run, makes the
 	# mutants/ copy carry .pytest.ini (whose pythonpath would otherwise point the tests at the
