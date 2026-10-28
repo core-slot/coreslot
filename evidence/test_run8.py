@@ -241,6 +241,7 @@ class RunSet8(unittest.TestCase):
             def __init__(self, argv, **kw):
                 self.argv, self.env, self.returncode = argv, kw["env"], None
                 self.pid, self.seq, self.buf, self.stdin = 7000 + len(test.parallels), 0, "", self
+                self.pending = None
                 self.joblog = argv[argv.index("--joblog") + 1]
                 test.parallels.append(self)
 
@@ -248,13 +249,14 @@ class RunSet8(unittest.TestCase):
                 self.buf += s
 
             def flush(self):
-                for line in self.buf.splitlines():
-                    self.seq += 1
-                    if line != ":" and test.answer:
-                        sig = 0 if "-n" in line else 9
+                for line in self.buf.splitlines():  # a job's joblog line waits for the next input,
+                    self.seq += 1                     # as parallel's does: only a tick ends the last
+                    if self.pending:
+                        seq, job, at = self.pending
                         with open(self.joblog, "a") as f:
-                            f.write(f"{self.seq}\t:\t{time.time() + 5:.3f}\t     7.000\t0\t0\t0"
-                                    f"\t{sig}\t{line}\n")
+                            f.write(f"{seq}\t:\t{at + 5:.3f}\t     7.000\t0\t0\t0"
+                                    f"\t{0 if '-n' in job else 9}\t{job}\n")
+                    self.pending = (self.seq, line, time.time()) if line != ":" and test.answer else None
                 self.buf = ""
 
             def close(self):

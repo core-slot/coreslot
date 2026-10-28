@@ -73,7 +73,7 @@ preflight() {
 	download=$(defaults read $prefs AutomaticDownload 2>&1 || true)
 	install=$(defaults read $prefs AutomaticallyInstallMacOSUpdates 2>&1 || true)
 	vm=$(pgrep -lf 'Virtualization\.VirtualMachine|com\.docker\.backend' |
-		awk '{ n = split($2, p, "/"); printf "%s%s %s", sep, $1, p[n]; sep = ", " }' || true)
+		awk 'NF { n = split($2, p, "/"); printf "%s%s %s", sep, $1, p[n]; sep = ", " }' || true)
 	agents=$(launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true)
 	work=$(pgrep -lf 'go |pytest|node|docker|Code Helper|claude' || true)
 	private=${RUN8_PRIVATE:-$HOME/bench.noindex/run8-private}
