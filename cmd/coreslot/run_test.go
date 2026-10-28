@@ -1132,6 +1132,78 @@ func TestRunHoldHasTree(t *testing.T) {
 	}
 }
 
+// niceTable is every process's pid, parent pid and nice, from one ps snapshot.
+func niceTable(t *testing.T) (ppid, nice map[int]int) {
+	t.Helper()
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,ni=").Output()
+	if err != nil {
+		t.Fatalf("ps: %v", err)
+	}
+	ppid, nice = map[int]int{}, map[int]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		parent, err2 := strconv.Atoi(f[1])
+		ni, err3 := strconv.Atoi(f[2])
+		if err1 == nil && err2 == nil && err3 == nil {
+			ppid[pid], nice[pid] = parent, ni
+		}
+	}
+	return ppid, nice
+}
+
+// sleepsNice runs `coreslot run args... -- sh -c 'sleep 5 | sleep 5'`, waits until both sleeps
+// exist under the sh the run started, and returns their nice values once they have held for a
+// moment, with the run stopped.
+func sleepsNice(t *testing.T, args ...string) []int {
+	t.Helper()
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	cmd := cliCmd(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "sh", "-c", "sleep 5 | sleep 5")...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM) // reaches the command's group
+		_ = cmd.Wait()
+	}()
+	var sleeps []int
+	find := func() bool {
+		ppid, _ := niceTable(t)
+		sleeps = sleeps[:0]
+		for pid, parent := range ppid {
+			if ppid[parent] == cmd.Process.Pid {
+				sleeps = append(sleeps, pid)
+			}
+		}
+		return len(sleeps) == 2
+	}
+	waitFor(t, 30*time.Second, "both sleeps running under the run", find)
+	time.Sleep(200 * time.Millisecond) // a late change of priority would have landed by now
+	_, nice := niceTable(t)
+	return []int{nice[sleeps[0]], nice[sleeps[1]]}
+}
+
+// A preemptible run's command group runs at nice 10, every member of it, a pipeline's stages
+// included; a run without the mark leaves the caller's nice. The test runs without a terminal, so
+// this is the group form. Mutation: drop the Setpriority call and the marked case reddens; apply
+// it to every run and the unmarked case does.
+func TestRunPreemptibleLowersTheCommandGroup(t *testing.T) {
+	_, own := niceTable(t)
+	caller := own[os.Getpid()]
+	if caller >= 10 {
+		t.Skipf("this process already runs at nice %d: nice 10 would show nothing", caller)
+	}
+	if got := sleepsNice(t, "--preemptible"); got[0] != 10 || got[1] != 10 {
+		t.Errorf("--preemptible: the sleeps run at nice %v, want 10 and 10", got)
+	}
+	if got := sleepsNice(t); got[0] != caller || got[1] != caller {
+		t.Errorf("no mark: the sleeps run at nice %v, want the caller's %d", got, caller)
+	}
+}
+
 // A run's command gets the soft descriptor limit the run was started with plus 256, not 256 above
 // the limit the Go runtime raised the run's own to at start-up; a pass-through started by that
 // command gets 256 more again. Mutation: pass currentNofile() instead of the probed original to

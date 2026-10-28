@@ -146,6 +146,16 @@ and the run log still records what it used, so the line above says when a light 
 on its tokens is pointed at `--light`. A nested run inside a light run passes through unbudgeted,
 as inside any run outside the budget.
 
+`coreslot run --preemptible` (or `preemptible = true` in the label's `needs.toml` entry;
+`--preemptible=false` overrides the entry) runs the command at a lower priority, nice 10, for the
+whole run: coreslot sets it on the command's process group right after the start, so every process
+of the command and everything it forks later has it. Three limits. In terminal mode the group is
+the shell's job, so only the command's own process is lowered, and processes it forked before
+that are missed. On Linux, nice compares processes only within one autogroup (one session, on by
+default) or cpu cgroup, so the demotion reaches another session's work only where autogroup is
+off. And a command whose work runs outside its process tree, such as a Docker container, has
+nothing in that tree to lower, so the mark does nothing that matters for it.
+
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
 budget that admits `a` and makes `b` wait leaves `a` blocked on the full pipe until `b` reads it:
 the two wait on each other until a `--timeout`. Write `coreslot run --need cpu=2 -- sh -c 'a | b'`,

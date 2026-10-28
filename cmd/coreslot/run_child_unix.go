@@ -121,6 +121,9 @@ func (r *run) runChild(c child) int {
 		r.notice("cannot run %s: %s", text(argv[0]), text(err.Error()))
 		status = code
 	} else {
+		if r.o.marked() {
+			lowerPriority(cmd.Process.Pid, terminal)
+		}
 		sampler := startPeakSampler(cmd.Process.Pid, memSampleEvery, memsample.Tree)
 		status = superviseChild(cmd, terminal)
 		peakKiB, peakAfterS, sampled = sampler.stop()
@@ -170,6 +173,24 @@ func (r *run) runChild(c child) int {
 		}
 	}
 	return status
+}
+
+// preemptibleNice is the nice value of a preemptible run's command.
+const preemptibleNice = 10
+
+// lowerPriority sets nice 10 on the command just started as pid. It runs after the start because
+// Go has no hook between fork and exec and SysProcAttr has no nice field. Outside terminal mode
+// the command leads its own group (prepareChild), and PRIO_PGRP reaches every member and every
+// later fork, all threads of each on Linux. In terminal mode the group is the shell's job, so
+// only the command's own process is lowered (PRIO_PROCESS), and a process it forked before this
+// call is missed. The error is ignored: the only expected failures are a command that already
+// exited and a caller already niced above 10, whose priority must not be raised.
+func lowerPriority(pid int, terminal bool) {
+	which := syscall.PRIO_PGRP
+	if terminal {
+		which = syscall.PRIO_PROCESS
+	}
+	_ = syscall.Setpriority(which, pid, preemptibleNice)
 }
 
 // recordUsage copies the command's CPU time and peak resident set size from its wait4 rusage
