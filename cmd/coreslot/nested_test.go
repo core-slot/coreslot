@@ -182,6 +182,19 @@ func TestNestedPreemptibleIsUnmarked(t *testing.T) {
 	}
 }
 
+// A preemptible run's command keeps its grant's descriptors, on macOS too, where it starts
+// through taskpolicy: a run nested in it passes through on the parent's one cpu token. A command
+// started without them would have the environment and not the descriptors, and the nested run
+// would refuse the inherited grant as one that does not validate.
+func TestNestedInPreemptibleKeepsTheGrant(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 8\n")
+	r := cli(t, append(baseEnv(dir), "BIN="+cliBinary(t)), "run", "--preemptible", "--need", "cpu=1..8", "--",
+		"sh", "-c", `"$BIN" run --need cpu=1 -- sh -c 'echo "$CORESLOT_GRANTED_CPU"'`)
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "1" {
+		t.Errorf("exit %d, stdout %q, stderr %q; want 0 and the parent's one token", r.code, r.stdout, r.stderr)
+	}
+}
+
 func TestNestedUndeclaredInParent(t *testing.T) {
 	dir := stateDir(t, "[resources]\ncpu = 8\npg-local = 2\n")
 	r := outer(t, dir, []string{"cpu=2"}, `"$BIN" run --need pg-local=1 -- sh -c 'echo $CORESLOT_GRANTED_PG_LOCAL $CORESLOT_GRANTED_CPU'`)

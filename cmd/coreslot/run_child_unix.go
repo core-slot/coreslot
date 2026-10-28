@@ -90,6 +90,9 @@ type child struct {
 func (r *run) runChild(c child) int {
 	argv := substitute(r.o.argv, r.o.placeholderGrant(c.grant), r.o.subst, r.o.cpuPerWorker, r.o.workers)
 	cmd := exec.Command(argv[0], argv[1:]...)
+	if r.o.marked() {
+		clampPriority(cmd)
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
 	cmd.Env = c.env
 	if slices.ContainsFunc(c.files, func(f *os.File) bool { return f != nil }) {
@@ -185,8 +188,10 @@ const preemptibleNice = 10
 // the command leads its own group (prepareChild), and PRIO_PGRP reaches every member and every
 // later fork, all threads of each on Linux. In terminal mode the group is the shell's job, and
 // with --same-group it is coreslot's, so only the command's own process is lowered (PRIO_PROCESS),
-// and a process it forked before this call is missed. The error is ignored: the only expected failures are a command that already
-// exited and a caller already niced above 10, whose priority must not be raised.
+// and a process it forked before this call is missed. macOS ignores nice for every thread with a
+// QoS class, which is every ordinary thread there: clampPriority demotes the command on macOS.
+// The error is ignored: the only expected failures are a command that already exited and a caller
+// already niced above 10, whose priority must not be raised.
 func lowerPriority(pid int, terminal bool) {
 	which := syscall.PRIO_PGRP
 	if terminal {

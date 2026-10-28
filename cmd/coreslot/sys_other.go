@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os/exec"
 	"runtime"
 
 	"golang.org/x/sys/unix"
@@ -32,3 +33,6 @@ func maxRSSKiB(maxrss int64) (kib int64, known bool) {
 	}
 	return 0, false
 }
+
+// clampPriority leaves cmd as it is: on this platform, lowerPriority's nice demotes a preemptible command.
+func clampPriority(*exec.Cmd) {}

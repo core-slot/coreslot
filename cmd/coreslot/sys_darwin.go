@@ -4,6 +4,8 @@ package main
 
 import (
 	"encoding/binary"
+	"os"
+	"os/exec"
 
 	"golang.org/x/sys/unix"
 )
@@ -43,3 +45,26 @@ func stopSelf() { _ = unix.Kill(unix.Getpid(), unix.SIGSTOP) }
 // maxRSSKiB converts a wait4 ru_maxrss to KiB: macOS reports it in bytes (getrusage(2)), unlike
 // Linux and the BSDs.
 func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss / 1024, true }
+
+// taskpolicyPath is taskpolicy(8), which runs a command under a QoS clamp.
+const taskpolicyPath = "/usr/sbin/taskpolicy"
+
+// clampPriority makes cmd start under a utility QoS clamp, as `taskpolicy -c utility -- cmd`.
+// macOS ignores nice for every thread with a QoS class, and libpthread gives every ordinary
+// thread one, so lowerPriority alone leaves a preemptible command at its full priority. The clamp
+// caps the priority of every thread of the command and of everything it starts, from its first
+// instruction, terminal mode and --same-group included. taskpolicy sets the clamp and replaces
+// itself with the command (posix_spawn with POSIX_SPAWN_SETEXEC), so the command keeps the pid,
+// the process group, the environment and the inherited descriptors. The command sees its
+// resolved path as argv[0]. A command that could not be resolved is left as it is, so its error
+// stays coreslot's, and so is every command where taskpolicy is missing.
+func clampPriority(cmd *exec.Cmd) {
+	if cmd.Err != nil {
+		return
+	}
+	if _, err := os.Stat(taskpolicyPath); err != nil {
+		return
+	}
+	cmd.Args = append([]string{taskpolicyPath, "-c", "utility", "--", cmd.Path}, cmd.Args[1:]...)
+	cmd.Path = taskpolicyPath
+}

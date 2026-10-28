@@ -75,8 +75,9 @@ Two defaults change:
 
 - Long, large runs are [preemptible](#choosing-a-range) by themselves: a run that asks for at least
   half the cpu budget, whose label's runs take 10 minutes or more, is admitted with one cpu token
-  and runs at nice 10. For a label with wall-clock deadlines (test timeouts, browser or end-to-end
-  tests, agent tool timeouts), opt out in its `needs.toml` entry:
+  and runs at a lower priority (nice 10, or a utility QoS clamp on macOS). For a label with
+  wall-clock deadlines (test timeouts, browser or end-to-end tests, agent tool timeouts), opt out in
+  its `needs.toml` entry:
 
   ```toml
   [needs."gate:e2e"]
@@ -181,17 +182,21 @@ as inside any run outside the budget.
 
 `coreslot run --preemptible` (or `preemptible = true` in the label's `needs.toml` entry;
 `--preemptible=false` overrides the entry) marks a batch run. It is admitted with one cpu token
-whatever its cpu request, and with its full memory, and its command runs at a lower priority, nice
-10, for the whole run: coreslot sets it on the command's process group right after the start, so
-every process of the command and everything it forks later has it. Other runs are admitted because
-the cpu tokens it leaves are free, and the scheduler gives them the cores first; the batch run takes the
-whole machine only when nothing else wants it. Its cpu is not reserved, so it over-commits cpu by
-design and pays in time only: mark batch work, not tests with timers, network or a database. `{n}`
-keeps the width of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the
-real grant, 1, and the run log records the request as `need`, the grant, and a `preemptible` key
-with the reason (`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold. A run
-that the queue does not admit (inside another run's grant, `--light`, outside an unusable budget,
-or at its `--timeout` under `--on-timeout run`) ignores the mark.
+whatever its cpu request, and with its full memory, and its command runs at a lower priority for the
+whole run. On Linux and the BSDs coreslot sets nice 10 on the command's process group right after
+the start, so every process of the command and everything it forks later has it. macOS ignores nice
+for every ordinary thread, so there coreslot starts the command through
+`/usr/sbin/taskpolicy -c utility`: a utility QoS clamp that every thread and every process of the command inherits from its
+first instruction. The command keeps its pid, sees its resolved path as `argv[0]`, and its disk I/O
+gets a lower tier too, as any utility work does. Other runs are admitted because the cpu tokens it
+leaves are free, and the scheduler gives them the cores first; the batch run takes the whole machine
+only when nothing else wants it. Its cpu is not reserved, so it over-commits cpu by design and pays
+in time only: mark batch work, not tests with timers, network or a database. `{n}` keeps the width
+of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the real grant, 1, and
+the run log records the request as `need`, the grant, and a `preemptible` key with the reason
+(`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold. A run that the queue does
+not admit (inside another run's grant, `--light`, outside an unusable budget, or at its `--timeout`
+under `--on-timeout run`) ignores the mark.
 
 A run that nothing marked becomes preemptible by itself when it queues for admission (not
 `--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
@@ -203,13 +208,13 @@ alone, since its work looks to run outside the process tree. The first time a la
 that runs with wall-clock deadlines can fail when demoted; `preemptible = false` in the entry opts
 out. An entry that says `observed = false` is never demoted by itself either.
 
-Four limits. In terminal mode the group is the shell's job, so only the command's own process is
-lowered, and processes it forked before that are missed. On Linux, nice compares processes only
-within one autogroup (one session, on by default) or cpu cgroup, so the demotion reaches another
-session's work only where autogroup is off. And a command whose work runs outside its process
-tree, such as a Docker container, has nothing in that tree to lower, and the mark frees tokens
-that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested inside
-its command gets 1 cpu, and `{n}` is what one token gives; `preemptible = false` on the outer
+Four limits. Outside macOS, in terminal mode the group is the shell's job, so only the command's own
+process is lowered, and processes it forked before that are missed. On Linux, nice compares
+processes only within one autogroup (one session, on by default) or cpu cgroup, so the demotion
+reaches another session's work only where autogroup is off. And a command whose work runs outside
+its process tree, such as a Docker container, has nothing in that tree to lower, and the mark frees
+tokens that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested
+inside its command gets 1 cpu, and `{n}` is what one token gives; `preemptible = false` on the outer
 label avoids it.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
@@ -334,10 +339,10 @@ A suite that also needs the shared database adds `--need pg-local=1`. The state 
 
 ## What it is not
 
-- **Not enforcement.** coreslot is cooperative admission control. It sets no cgroup quota, `nice`
-  value or CPU affinity; a command that ignores its grant, or a tool that never asks, is not stopped
-  or counted. A hostile process of the same user can hoard tokens or corrupt the state
-  ([SECURITY.md](SECURITY.md)).
+- **Not enforcement.** coreslot is cooperative admission control. It sets no cgroup quota or CPU
+  affinity, and lowers no priority but a preemptible run's; a command that ignores its grant, or a
+  tool that never asks, is not stopped or counted. A hostile process of the same user can hoard
+  tokens or corrupt the state ([SECURITY.md](SECURITY.md)).
 - **Not a daemon.** Nothing runs between commands; there is no network and no distribution of work
   across machines.
 - **Not multi-user.** One budget per user; never share the state directory across users or hosts.
