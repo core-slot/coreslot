@@ -6,10 +6,11 @@
 # Before learn and verdict, and alone as `run8.sh preflight`, it checks the machine: it holds
 # caffeinate for its own life, refuses (exit 2) on battery power, and appends the Spotlight and
 # software-update settings, the background agents still running (names only), the date, uptime
-# and swap to OUT/preflight.log. A real run also refuses while Spotlight indexing is on or the
-# automatic update check is on (AutomaticCheckEnabled in /Library/Preferences/com.apple.SoftwareUpdate
-# is not 0; `softwareupdate --schedule` no longer reflects it and is recorded only); a dry run
-# records them and goes on.
+# and swap to OUT/preflight.log. A real run also refuses while Spotlight indexing is on or while
+# macOS may download or install updates in the background: AutomaticDownload or
+# AutomaticallyInstallMacOSUpdates in /Library/Preferences/com.apple.SoftwareUpdate not 0. The
+# periodic check is recorded only (its key, which macOS 27 drops from the file, and
+# `softwareupdate --schedule`, which no longer reflects it). A dry run records them and goes on.
 #
 # With no phase: preflight, learn while OUT/needs.sha256 is missing, then the pilot of every
 # cell power.json plans (`verdict pilot CELL 1 10`, the first with --primer; a cell it dropped
@@ -65,6 +66,7 @@ preflight() {
 	prefs=/Library/Preferences/com.apple.SoftwareUpdate
 	check=$(defaults read $prefs AutomaticCheckEnabled 2>&1 || true)
 	download=$(defaults read $prefs AutomaticDownload 2>&1 || true)
+	install=$(defaults read $prefs AutomaticallyInstallMacOSUpdates 2>&1 || true)
 	mkdir -p "$OUT"
 	{
 		date -u
@@ -74,6 +76,7 @@ preflight() {
 		echo "spotlight: $index"
 		echo "software update: $update"
 		echo "AutomaticCheckEnabled: $check; AutomaticDownload: $download"
+		echo "AutomaticallyInstallMacOSUpdates: $install"
 		echo "background agents:"
 		launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true
 		pgrep -lf 'go |pytest|node|docker|Code Helper|claude' |
@@ -81,7 +84,8 @@ preflight() {
 	} >>"$OUT/preflight.log"
 	[ -n "$dry" ] && return
 	case $index in *"Indexing disabled"*) ;; *) refuse "Spotlight indexing is on; mdutil -a -i off" ;; esac
-	[ "$check" = 0 ] || refuse "the automatic update check is on; sudo defaults write $prefs AutomaticCheckEnabled -bool false"
+	[ "$download" = 0 ] && [ "$install" = 0 ] || refuse "macOS may download or install updates; sudo defaults write \
+$prefs AutomaticDownload -bool false; sudo defaults write $prefs AutomaticallyInstallMacOSUpdates -bool false"
 }
 
 if [ $# -gt 0 ]; then
