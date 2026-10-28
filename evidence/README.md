@@ -2319,8 +2319,8 @@ a suite for more than 5 s. It came from the two suites running together, for mor
 0.55 of run 6's K60 sets at 0 MiB and 0.53 at 3072 MiB, and in 0.33 of the pilot's (4 of 12).
 Meanwhile S1 got faster: at quiet, its FastAPI suite's median fell from 18.6 to 13.4 s, and its
 mean time to verdict from 35.5 to 28.0 s (K60's from 33.4 to 27.9 s). The likely cause is
-`--dist loadgroup`, which removed a handicap FastAPI's suite carried in run 6; that risk was noted
-before the pilot, though not in the text above. The cause is not a lack of pairing.
+`--dist loadgroup`, which removed a handicap FastAPI's suite carried in run 6. The cause is not a
+lack of pairing.
 
 Outcome 2 also states: "Development continues only if the wide mix, reported descriptively, shows
 the same frozen S2 losing too." In the pilot's 6 wide blocks S2 was faster than K60 in every one
@@ -2338,9 +2338,9 @@ reasons, all visible in run 7's records:
   under K60 over the 6 wide sets, against 32.2 s under S2 and 31.6 s under F.
 - **Over-reservation.** In 5 of K60's 6 wide sets, the `test/sql test/dialect` suite waited
   16-26 s for cpu while the ORM suite and FastAPI's held 13 or 14 of the 14 cpu tokens.
-- **A stand that is not representative.** The heavy mix's type check and both its suites each
-  saturate the cores alone (5 of 5 learning runs each), so running them one at a time costs
-  little.
+- **A stand that is not representative.** The heavy mix's type check and both its suites each used
+  their full cpu grant in 5 of 5 learning runs (peaks 5.4, 6.6 and 8.7 cores), so running them one
+  at a time costs little, as S1 keeping pace with K60 shows.
 
 A user would recognise both defects. This is an override of run 7's rule, not a result of it.
 Corrected on 2026-10-28 (the pairing partner, the mechanism, P's scope, this deviation); the first
