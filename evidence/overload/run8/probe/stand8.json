@@ -1,0 +1,75 @@
+{
+ "coreslot": "~/bench.noindex/bin/coreslot",
+ "coreslot_sha256": "e3806d2d6115a4eb0a85ef175d24724edea2d2df8479eae0d23f5f4139db79ba",
+ "state_dir": "~/bench.noindex/state8",
+ "cpu": 10,
+ "window_s": 5,
+ "agent_names": ["A1", "A2", "A3", "A4"],
+ "gates_by_class": {"go_test": 2, "mutation": 1, "other": 1, "py_db": 2, "py_unit": 4, "typecheck": 2},
+ "behind_class": "py_unit",
+ "classes": {
+  "py_unit": {"gate": "sqlalchemy-wide", "label": "bench8:py_unit", "cwd": "~/bench.noindex/run8/{agent}/sqlalchemy", "heavy": true, "free_n": 2, "fail_pattern": "^(FAILED|ERROR) ", "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider", "-n", "{n}", "test/orm", "test/sql", "test/dialect", "test/engine", "test/ext"]},
+  "go_test": {"gate": "raft-restore-transport", "label": "bench8:go_test", "cwd": "~/bench.noindex/run8/{agent}/raft", "heavy": true, "fail_pattern": "^(--- FAIL|FAIL)", "argv": ["go", "test", "-race", "-count=1", "-run", "^(TestRaft_UserRestore|TestNetworkTransport.*|TestFileSS.*|TestFileSnapshot.*|TestInmem.*)$", "."]},
+  "py_db": {"gate": "django-orm-serial", "label": "bench8:py_db", "cwd": "~/bench.noindex/run8/{agent}/django", "heavy": true, "fail_pattern": "^(FAIL|ERROR): ", "argv": [".venv/bin/python", "tests/runtests.py", "--settings=test_sqlite", "--parallel", "1", "--noinput", "-v", "0", "queries", "expressions", "aggregation", "lookup", "model_fields", "admin_views", "db_functions", "prefetch_related", "many_to_one", "model_inheritance", "generic_relations", "annotations", "delete", "bulk_create", "select_related", "defer", "update", "ordering", "m2m_through", "custom_lookups", "backends", "migrations", "model_forms", "admin_changelist", "admin_inlines", "admin_widgets", "generic_views", "fixtures", "serializers", "contenttypes_tests", "model_formsets", "aggregation_regress"]},
+  "mutation": {"gate": "semver-mutmut", "label": "bench8:mutation", "cwd": "~/bench.noindex/run8/{agent}/semver", "heavy": true, "free_n": 3, "argv": ["sh", "-c", "rm -rf mutants && exec .venv/bin/mutmut run --max-children \"$1\"", "sh", "{n}"]},
+  "typecheck": {"gate": "pyright-pandas", "label": "bench8:typecheck", "cwd": "~/bench.noindex/run8/pandas", "heavy": true, "argv": ["sh", "-c", "\"$0\" \"$@\"; [ $? -le 1 ]", "../pyright/node_modules/.bin/pyright", "-p", "pyrightconfig.run8.json", "--pythonpath", ".venv/bin/python"]},
+  "other": {"gate": "vitest-vue-coverage", "label": "bench8:other", "cwd": "~/bench.noindex/run8/{agent}/vue-core", "heavy": true, "free_n": 1, "argv": ["node_modules/.bin/vitest", "run", "--project", "unit*", "--coverage", "--pool", "forks", "--maxWorkers", "{n}"]}
+ },
+ "candidates": {
+  "py_unit": [
+   {"gate": "sqlalchemy-wide-n3", "label": "bench8:py_unit", "cwd": "~/bench.noindex/run8/{agent}/sqlalchemy", "heavy": true, "free_n": 3, "fail_pattern": "^(FAILED|ERROR) ", "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider", "-n", "{n}", "test/orm", "test/sql", "test/dialect", "test/engine", "test/ext"]},
+   {"gate": "sqlalchemy-orm-sql", "label": "bench8:py_unit", "cwd": "~/bench.noindex/run8/{agent}/sqlalchemy", "heavy": true, "free_n": 2, "fail_pattern": "^(FAILED|ERROR) ", "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider", "-n", "{n}", "test/orm", "test/sql", "test/dialect"]}],
+  "go_test": [
+   {"gate": "raft-race-full", "label": "bench8:go_test", "cwd": "~/bench.noindex/run8/{agent}/raft", "heavy": true, "fail_pattern": "^(--- FAIL|FAIL)", "argv": ["go", "test", "-race", "-count=1", "-skip", "^(TestRaft_FollowerRemovalNoElection|TestRaft_ClusterCanRegainStability_WhenNonVoterWithHigherTermJoin)$", "."]}],
+  "py_db": [
+   {"gate": "django-orm-serial-21", "label": "bench8:py_db", "cwd": "~/bench.noindex/run8/{agent}/django", "heavy": true, "fail_pattern": "^(FAIL|ERROR): ", "argv": [".venv/bin/python", "tests/runtests.py", "--settings=test_sqlite", "--parallel", "1", "--noinput", "-v", "0", "queries", "expressions", "aggregation", "lookup", "model_fields", "admin_views", "db_functions", "prefetch_related", "many_to_one", "model_inheritance", "generic_relations", "annotations", "delete", "bulk_create", "select_related", "defer", "update", "ordering", "m2m_through", "custom_lookups", "backends"]}],
+  "mutation": [
+   {"gate": "semver-mutmut-version", "label": "bench8:mutation", "cwd": "~/bench.noindex/run8/{agent}/semver", "heavy": true, "free_n": 3, "argv": ["sh", "-c", "rm -rf mutants && exec .venv/bin/mutmut run --max-children \"$1\" 'semver.version.*'", "sh", "{n}"]},
+   {"gate": "semver-mutmut-n2", "label": "bench8:mutation", "cwd": "~/bench.noindex/run8/{agent}/semver", "heavy": true, "free_n": 2, "argv": ["sh", "-c", "rm -rf mutants && exec .venv/bin/mutmut run --max-children \"$1\"", "sh", "{n}"]}],
+  "long_batch": [
+   {"gate": "zstd-linux-t10", "label": "bench8:long_batch", "cwd": "~/bench.noindex/run8/{agent}", "heavy": true, "argv": ["sh", "-c", "exec ../../bin/zstd -19 -T10 -q -c ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar > /dev/null"]}],
+  "other": [
+   {"gate": "vitest-vue-coverage-threads", "label": "bench8:other", "cwd": "~/bench.noindex/run8/{agent}/vue-core", "heavy": true, "free_n": 1, "argv": ["node_modules/.bin/vitest", "run", "--project", "unit*", "--coverage", "--pool", "threads", "--maxWorkers", "{n}"]}]
+ },
+ "batch": {"gate": "zstd-linux", "label": "bench8:long_batch", "cwd": "~/bench.noindex/run8/{agent}", "heavy": true, "argv": ["sh", "-c", "exec ../../bin/zstd -19 -T9 -q -c ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar ../linux-6.12.tar > /dev/null"]},
+ "agents": {
+  "A1": [{"gate": "vscode-typecheck", "label": "bench:vscode-typecheck", "cwd": "~/bench.noindex/vscode",
+          "heavy": true, "fail_pattern": "error TS[0-9]+",
+          "argv": ["npm", "run", "--silent", "typecheck-client"]}],
+  "A2": [{"gate": "vscode-typecheck", "label": "bench:vscode-typecheck", "cwd": "~/bench.noindex/vscode",
+          "heavy": true, "fail_pattern": "error TS[0-9]+",
+          "argv": ["npm", "run", "--silent", "typecheck-client"]}],
+  "A3": [{"gate": "fastapi-ruff", "label": "bench:fastapi-ruff", "cwd": "~/bench.noindex/fastapi",
+          "heavy": false, "argv": [".venv/bin/ruff", "check", "fastapi", "tests"]},
+         {"gate": "fastapi-tests", "label": "bench:fastapi-tests", "cwd": "~/bench.noindex/fastapi",
+          "heavy": true, "free_n": "auto", "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "--dist", "loadgroup"]}],
+  "A4": [{"gate": "sqlalchemy-orm-tests", "label": "bench:sqlalchemy-orm-tests",
+          "cwd": "~/bench.noindex/sqlalchemy", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/orm"]}]
+ },
+ "wide_agents": {
+  "W1": [{"gate": "sqlalchemy-orm-tests", "label": "bench:sqlalchemy-orm-tests",
+          "cwd": "~/bench.noindex/sqlalchemy", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/orm"]}],
+  "W2": [{"gate": "sqlalchemy-sql-tests", "label": "bench:sqlalchemy-sql-tests",
+          "cwd": "~/bench.noindex/sqlalchemy-sql", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/sql", "test/dialect"]}],
+  "W3": [{"gate": "sqlalchemy-engine-tests", "label": "bench:sqlalchemy-engine-tests",
+          "cwd": "~/bench.noindex/sqlalchemy-engine", "heavy": true, "free_n": "auto",
+          "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "test/engine", "test/ext"]}],
+  "W4": [{"gate": "fastapi-tests", "label": "bench:fastapi-tests", "cwd": "~/bench.noindex/fastapi",
+          "heavy": true, "free_n": "auto", "fail_pattern": "^(FAILED|ERROR) ",
+          "argv": [".venv/bin/python", "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider",
+                   "-n", "{n}", "--dist", "loadgroup"]}]
+ }
+}
