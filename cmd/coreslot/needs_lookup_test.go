@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -140,6 +141,77 @@ func TestNeedsEntryNeverRefuses(t *testing.T) {
 		!strings.Contains((*notices)[0], "the entry for a makes the request invalid: ") ||
 		!strings.HasSuffix((*notices)[0], "; running without it") {
 		t.Errorf("notices %q, want one naming the file, the label and the error", *notices)
+	}
+}
+
+// --default-need fills a resource that neither --need nor the label's entry names, and only that
+// one: an entry's cpu wins over it, and so does an explicit --need. Mutation: apply it before the
+// entry → cpu 1..16 where the entry says 2..6, red; apply it over --need → cpu 1..16, red; skip
+// it → cpu 1..1, red.
+func TestDefaultNeedFillsOnlyWhatNothingNames(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"known\"]\ncpu = \"2..6\"\n")
+	o := wantNeed(t, []string{"--label", "other", "--default-need", "cpu=1..", "--", "true"}, lookup,
+		map[string]spec.Range{"cpu": {Min: 1, Max: 16}})
+	if !maps.Equal(o.named, map[string]bool{"cpu": true}) {
+		t.Errorf("named = %v, want cpu", o.named)
+	}
+	o = wantNeed(t, []string{"--label", "known", "--default-need", "cpu=1..", "--", "true"}, lookup,
+		map[string]spec.Range{"cpu": {Min: 2, Max: 6}})
+	if len(o.named) != 0 {
+		t.Errorf("named = %v, want none: the entry supplied cpu", o.named)
+	}
+	wantNeed(t, []string{"--label", "other", "--need", "cpu=4", "--default-need", "cpu=1..", "--", "true"}, lookup,
+		map[string]spec.Range{"cpu": {Min: 4, Max: 4}})
+	wantNeed(t, []string{"--default-need", "cpu=1..", "--", "true"}, lookup,
+		map[string]spec.Range{"cpu": {Min: 1, Max: 16}})
+}
+
+// An entry set aside as invalid (its minimums and gpu's pass a grant's 512 tokens) leaves
+// --default-need in force. Mutation: build the bare request from --need alone → no gpu, red.
+func TestDefaultNeedSurvivesASetAsideEntry(t *testing.T) {
+	lookup, notices := lookupOf(t, "[needs.\"a\"]\ncpu = \"256\"\nmem = \"32G\"\n")
+	wantNeed(t, []string{"--label", "a", "--default-need", "cpu=1..", "--default-need", "gpu=1", "--", "true"}, lookup,
+		map[string]spec.Range{"cpu": {Min: 1, Max: 16}, "gpu": {Min: 1, Max: 1}})
+	if len(*notices) != 1 {
+		t.Errorf("notices %q, want the one setting the entry aside", *notices)
+	}
+}
+
+// A malformed or duplicate --default-need is a usage error, as --need's are. Mutation: ignore its
+// parse error → no error, red.
+func TestDefaultNeedMalformed(t *testing.T) {
+	for _, args := range [][]string{
+		{"--default-need", "cpu=..", "--", "true"},
+		{"--default-need", "cpu=1", "--default-need", "cpu=2", "--", "true"},
+	} {
+		var ue *spec.UsageError
+		if _, err := parseRun(args, IO{}, nil); !errors.As(err, &ue) {
+			t.Errorf("parseRun(%q) = %v, want a usage error", args, err)
+		}
+	}
+}
+
+// The plugin's offered command queues: on a budget of 8, a label with no entry run with
+// `--default-need cpu=1..` takes the whole budget, so a second one waits (here, --no-wait
+// refuses it), where without the flag both are admitted with one token each. Mutation: drop the
+// fallback → the second run is admitted, red.
+func TestDefaultNeedQueuesUnknownLabels(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 8\nmem = 0\n")
+	env := baseEnv(dir)
+	first := cliCmd(t, env, "run", "--label", "go-test", "--default-need", "cpu=1..", "--", "sleep", "60")
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 30*time.Second, "the first run holding all 8 tokens", func() bool {
+		for i := range 8 {
+			if !locked(t, dir, "cpu", i) {
+				return false
+			}
+		}
+		return true
+	})
+	if r := cli(t, env, "run", "--no-wait", "--label", "go-test", "--default-need", "cpu=1..", "--", "true"); r.code != exitRefusal {
+		t.Errorf("second run: exit %d, want %d (refused, the budget is full)\n%s", r.code, exitRefusal, r.stderr)
 	}
 }
 

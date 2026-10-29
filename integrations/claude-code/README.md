@@ -7,19 +7,22 @@ build command bare, the hook refuses it once and offers the same command back un
 Claude:  go test -race ./...
 hook:    coreslot: this machine shares its cores through a budget, and this command is one of
          its heavy ones. Run it with the `coreslot run --label ... --` prefix inserted, ...
-         coreslot run --label go-test -- go test -race ./...
-Claude:  coreslot run --label go-test -- go test -race ./...
+         coreslot run --label go-test --default-need cpu=1.. -- go test -race ./...
+Claude:  coreslot run --label go-test --default-need cpu=1.. -- go test -race ./...
 ```
 
 The offered command waits for its share of the machine's core budget, so four sessions that each
-start a test suite take turns instead of running four suites on the same cores. It goes through
+start a test suite take turns instead of running four suites on the same cores. Every command the
+hook recognises sizes itself to the machine, so `--default-need cpu=1..` asks for one core up to
+the whole budget: on a budget of 8, the first `go test ./...` takes all 8 and the next three wait. It goes through
 your permission rules like any command you type: the hook only refuses, it never approves
 anything.
 
 ## Install
 
-1. Install coreslot itself and put it on `PATH`
-   ([the main README](../../README.md#install)):
+1. Install coreslot v0.3.1 or later and put it on `PATH`
+   ([the main README](../../README.md#install)); an older one refuses the offered command's
+   `--default-need` as an unknown flag:
 
    ```sh
    brew install core-slot/tap/coreslot
@@ -35,24 +38,11 @@ anything.
    On Claude Code 2.1.275 or later one line does both:
    `/plugin install coreslot --marketplace core-slot/coreslot`.
 
-3. Tell coreslot how many cores each label keeps busy, in `~/.config/coreslot/needs.toml`. A
-   range from 1 is a safe start for commands that size themselves to the machine; after a few
-   runs, `coreslot suggest --write` replaces each entry with what the runs used:
-
-   ```toml
-   [needs.go-test]
-   cpu = "1.."
-
-   [needs.cargo]
-   cpu = "1.."
-
-   [needs.pytest]
-   cpu = "1.."
-   ```
-
-   Without an entry a label asks for one core, which keeps the queue honest only for commands
-   that really use one; coreslot prints a line after each run that used more, saying what would
-   fit.
+3. Nothing else is required: the offered command queues from the first run. After a few runs
+   of a label, `coreslot suggest --write` writes its entry into `needs.toml` (beside coreslot's
+   configuration) with the cores its runs kept busy, and from then on that entry replaces the
+   `cpu=1..` default, so two suites that each keep 3 cores busy run side by side on 8. coreslot
+   also prints a line after a run whose use did not match its grant, saying what would fit.
 
 The hook needs `python3` (3.9 or newer) and nothing else. It does nothing on a machine where
 `coreslot` is not on `PATH`.
@@ -135,8 +125,9 @@ The same rule works as an instruction for any agent that reads an instructions f
 ```markdown
 ## Heavy commands
 This machine shares its cores between several agent sessions through coreslot. Run test suites
-and builds that use many cores through it: `coreslot run --label <tool> -- <command>`, for
-example `coreslot run --label go-test -- go test ./...`. Never run them bare in parallel.
+and builds that use many cores through it: `coreslot run --label <tool> --default-need cpu=1.. -- <command>`, for
+example `coreslot run --label go-test --default-need cpu=1.. -- go test ./...`. Never run them
+bare in parallel.
 ```
 
 ## Tests

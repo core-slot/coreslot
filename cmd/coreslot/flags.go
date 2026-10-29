@@ -18,8 +18,8 @@ import (
 // runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the
 // CLI is not part of the protocol).
 type runOptions struct {
-	need        map[string]spec.Range // normalized: --need, then the needs file, then defaultNeed
-	named       map[string]bool       // the resources --need named, or cpu when defaultNeed supplied it
+	need        map[string]spec.Range // normalized: --need, the needs file, --default-need, then defaultNeed
+	named       map[string]bool       // the resources --need or --default-need named, or cpu when defaultNeed supplied it
 	label       string
 	priority    int
 	prioritySet bool // --priority given: it overrides the configuration's [priorities]
@@ -45,8 +45,8 @@ type runOptions struct {
 	unobserved   bool // the label's entry says observed = false: its work runs outside the process tree
 }
 
-const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D]
-       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--same-group]
+const runUsage = `usage: coreslot run [--need RES=MIN..MAX]... [--default-need RES=MIN..MAX]...
+       [--label L] [--priority P] [--timeout D] [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--same-group]
        [--light] [--preemptible] [--subst] [--refusal-code N] -- COMMAND...`
 
 // runHelp is what `coreslot run --help` prints: the synopsis, then each flag with its default.
@@ -61,6 +61,10 @@ Runs COMMAND once the budget grants it between MIN and MAX tokens of each resour
                         configuration; with neither --need nor cpu there, the default applies
                         (default cpu=1..16, at most the CPU count, when COMMAND has a cpu
                         placeholder, else cpu=1..1)
+  --default-need RES=MIN..MAX
+                        as --need, but only for a resource that neither --need nor the
+                        label's entry names; repeatable. For a wrapper that does not know
+                        whether the user has an entry, such as an agent hook
   --label L             a name for the request, shown by status and kept in the run log, so
                         never a secret; it names the request's entry in needs.toml, without a
                         final @N or @- (default none)
@@ -105,8 +109,8 @@ var errHelp = errors.New("help requested")
 // value, a missing command, or a placeholder naming a resource the request does not name.
 //
 // lookup, when not nil, finds the needs file's entry for a label. Each resource's range comes
-// from --need, else from the entry for the run's label, else, for cpu and only when no --need
-// was given at all, from defaultNeed. An entry that makes a valid request invalid is set aside
+// from --need, else from the entry for the run's label, else from --default-need, else, for cpu
+// and only when neither --need nor --default-need gave anything, from defaultNeed. An entry that makes a valid request invalid is set aside
 // with lookup's notice, and the run goes on without it: the needs file never refuses a run.
 func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error) {
 	o := runOptions{onTimeout: "fail", refusalCode: exitRefusal}
@@ -114,6 +118,8 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	fs.SetOutput(io.Discard)
 	var needArgs needList
 	fs.Var(&needArgs, "need", "RES=MIN..MAX, RES=MIN.., RES=..MAX or RES=N (repeatable)")
+	var fallbackArgs needList
+	fs.Var(&fallbackArgs, "default-need", "as --need, for a resource nothing else names (repeatable)")
 	fs.StringVar(&o.label, "label", "", "label of the request")
 	fs.IntVar(&o.priority, "priority", 0, "priority in [-1000, 1000]")
 	fs.DurationVar(&o.timeout, "timeout", 0, "give up waiting after this long")
@@ -159,6 +165,10 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	if err != nil {
 		return o, err
 	}
+	fallback, err := spec.ParseNeeds(fallbackArgs)
+	if err != nil {
+		return o, err
+	}
 	o.named = make(map[string]bool, len(need)+1)
 	for name := range need {
 		o.named[name] = true
@@ -197,9 +207,19 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 			}
 		}
 	}
-	req, err := o.validRequest(withEntry, len(needArgs) > 0)
+	// fill adds each --default-need resource that m leaves out; it counts as given, as --need does.
+	fill := func(m map[string]spec.Range) (map[string]spec.Range, bool) {
+		filled := false
+		for name, r := range fallback {
+			if _, ok := m[name]; !ok {
+				m[name], o.named[name], filled = r, true, true
+			}
+		}
+		return m, len(needArgs) > 0 || filled
+	}
+	req, err := o.validRequest(fill(withEntry))
 	if err != nil && setAside != nil {
-		if bare, berr := o.validRequest(need, len(needArgs) > 0); berr == nil {
+		if bare, berr := o.validRequest(fill(maps.Clone(need))); berr == nil {
 			setAside(err)
 			req, err = bare, nil
 			perWorker, workers, unobserved = 0, spec.Range{}, false
@@ -268,7 +288,7 @@ func (o runOptions) placeholderGrant(grant map[string]int) map[string]int {
 }
 
 // validRequest is the validated request for need, which takes defaultNeed's cpu when it has none and
-// no --need was given.
+// no --need or --default-need was given.
 func (o *runOptions) validRequest(need map[string]spec.Range, given bool) (spec.Request, error) {
 	if _, ok := need["cpu"]; !ok && !given {
 		need["cpu"] = defaultNeed(o.argv, o.subst)["cpu"]

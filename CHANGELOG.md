@@ -12,9 +12,14 @@ All notable changes to this project are recorded here. The format follows
 
 - A Claude Code plugin, `integrations/claude-code`: a `PreToolUse` hook that refuses a bare heavy
   test or build command once (`go test ./...`, `cargo test`, `pytest -n`, `make -j`, ...) and
-  offers the same command back as `coreslot run --label <label> -- <command>`. The repository is
-  its marketplace: `/plugin marketplace add core-slot/coreslot`, then
-  `/plugin install coreslot@coreslot`.
+  offers the same command back as `coreslot run --label <label> --default-need cpu=1.. --
+  <command>`. The repository is its marketplace: `/plugin marketplace add core-slot/coreslot`,
+  then `/plugin install coreslot@coreslot`.
+- `coreslot run --default-need RES=MIN..MAX`: a need used only for a resource that neither
+  `--need` nor the label's `needs.toml` entry names. A wrapper that cannot know whether the user
+  has an entry, such as the plugin's hook, gives a self-sizing command a range without overriding
+  the entry `coreslot suggest --write` learns. Without it, a label with no entry asks for one
+  core, so four `go test ./...` on a budget of 8 were all admitted at once.
 
 ### Fixed
 
