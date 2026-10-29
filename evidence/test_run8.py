@@ -136,8 +136,22 @@ class Stand(unittest.TestCase):
 class Treatment(unittest.TestCase):
     B = "bench:batch"
 
-    def t(self, cell, arm, *lines):
-        return run8.treatment(cell, arm, [dict(l) for l in lines], self.B)
+    def t(self, cell, arm, *lines, pri="expected"):
+        pri = {"KP": 31, "KPU": 20}.get(arm) if pri == "expected" else pri
+        return run8.treatment(cell, arm, [dict(l) for l in lines], self.B, pri)
+
+    def test_d_the_batch_gate_pri(self):
+        # mutations: KPU's bound on KP or exact values (decayed 14 in KPU, or 24 in KP, refused)
+        # -> red; `<` for `<=` -> 20 in KPU refused -> red; a missing reading passes -> red; KPU
+        # outside the (b) rule -> red
+        self.assertEqual((run8.BATCH_PRI, run8.UTILITY_PRI), (("KP", "KPU"), 20))
+        auto = {"label": self.B, "preemptible": "auto: median 14m >= 10m, cpu 12 >= 7"}
+        for arm, pri, n in (("KPU", 20, 0), ("KPU", 14, 0), ("KPU", 21, 1), ("KP", 31, 0),
+                            ("KP", 24, 0), ("KP", 20, 1), ("KPU", None, 1), ("KP", None, 1)):
+            self.assertEqual(len(self.t("batch", arm, auto, pri=pri)), n, (arm, pri))
+        self.assertEqual(self.t("batch", "KPU", {"label": "bench:c-unit"}),
+                         ["no run-log line of the batch label"])
+        self.assertEqual(len(self.t("trace-quiet", "K", auto, pri=None)), 1)
 
     def test_a_preemptible_on_another_label(self):
         # mutation: check only the batch label -> another label's mark passes -> red
@@ -153,7 +167,7 @@ class Treatment(unittest.TestCase):
         line = {"label": self.B, "preemptible": "auto: median 14m >= 10m, cpu 12 >= 7"}
         for arm in ("K", "S1", "F"):
             self.assertEqual(len(self.t("batch", arm, line)), 1, arm)
-        self.assertEqual(self.t("batch", "KP", line), [])
+        self.assertEqual((self.t("batch", "KP", line), self.t("batch", "KPU", line)), ([], []))
 
     def test_c_kp_needs_the_automatic_reason_on_every_line(self):
         # mutations: drop the no-line check -> red; accept any reason (key present) -> "entry"
@@ -201,6 +215,8 @@ class RunSet8(unittest.TestCase):
         os.makedirs(self.cfg["state_dir"])
         self.argvs, self.running, self.peak, self.lines = [], set(), [0], []
         self.parallels, self.killed, self.answer, self.mark = [], [], True, {}
+        self.codes, self.level_sleep, self.therm, self.outputs = {}, 0, [], []
+        self.batch_mark = {}
         test, lock = self, threading.Lock()
 
         def run_gate(argv, **kw):
@@ -213,15 +229,20 @@ class RunSet8(unittest.TestCase):
             time.sleep(0.05 if "lint" in argv else 0.3)
             with lock:
                 test.running.discard(id(argv))
-                test.lines.append(json.dumps({"label": "bench:lint" if "lint" in argv
-                                              else "bench:tc", **test.mark}))
+                label = argv[argv.index("--label") + 1] if "--label" in argv else \
+                    "bench:lint" if "lint" in argv else "bench:tc"
+                test.lines.append(json.dumps({"label": label, **test.mark, **(
+                    test.batch_mark if label == "bench:batch" else {})}))
                 test.mark = {}
-            return subprocess.CompletedProcess(argv, 0, "", "")
+            r = subprocess.CompletedProcess(argv, test.codes.get("lint" in argv, 0), "", "")
+            r.cpu_s = 0.5
+            return r
 
         class Parallel:
             def __init__(self, argv, **kw):
                 self.argv, self.env, self.returncode = argv, kw["env"], None
                 self.pid, self.seq, self.buf, self.stdin = 7000 + len(test.parallels), 0, "", self
+                self.pending = None
                 self.joblog = argv[argv.index("--joblog") + 1]
                 test.parallels.append(self)
 
@@ -229,13 +250,14 @@ class RunSet8(unittest.TestCase):
                 self.buf += s
 
             def flush(self):
-                for line in self.buf.splitlines():
-                    self.seq += 1
-                    if line != ":" and test.answer:
-                        sig = 0 if "-n" in line else 9
+                for line in self.buf.splitlines():  # a job's joblog line waits for the next input,
+                    self.seq += 1                     # as parallel's does: only a tick ends the last
+                    if self.pending:
+                        seq, job, at = self.pending
                         with open(self.joblog, "a") as f:
-                            f.write(f"{self.seq}\t:\t{time.time() + 5:.3f}\t     7.000\t0\t0\t0"
-                                    f"\t{sig}\t{line}\n")
+                            f.write(f"{seq}\t:\t{at + 5:.3f}\t     7.000\t0\t0\t0"
+                                    f"\t{0 if '-n' in job else 9}\t{job}\n")
+                    self.pending = (self.seq, line, time.time()) if line != ":" and test.answer else None
                 self.buf = ""
 
             def close(self):
@@ -247,8 +269,13 @@ class RunSet8(unittest.TestCase):
 
         @contextlib.contextmanager
         def level(name):
+            time.sleep(test.level_sleep)
             yield {"level": name, "headroom_before_mib": 9000, "ballast_mib": 0,
                    "ballast_rss_mib": None, "flags": []}
+
+        def output(*argv):
+            test.outputs.append(argv)
+            return test.therm.pop(0) if test.therm else None
 
         def Sampler():  # run8.sampler swaps in its own samples list before start
             s = mock.Mock(samples=[])
@@ -261,8 +288,9 @@ class RunSet8(unittest.TestCase):
                 if p.pid in pids:
                     p.returncode = -15
         patch_all(self, (
-            (run4, "ROOT", self.root), (run4, "run_gate", run_gate),
-            (run4, "on_ac", lambda: True), (run4, "background", lambda: (16384, {})),
+            (run4, "ROOT", self.root), (run4, "run_gate", run_gate), (run8, "run_gate", run_gate),
+            (run7, "output", output), (run4, "on_ac", lambda: True),
+            (run4, "background", lambda: (16384, {})),
             (run4, "budget_empty", lambda cfg: True),
             (acceptance, "cooldown", lambda *a: {"cooldown_gave_up": False}),
             (acceptance, "runlog_lines", lambda cfg: list(self.lines)),
@@ -302,10 +330,11 @@ class RunSet8(unittest.TestCase):
     def test_p_one_shared_queue_and_joblog_times(self):
         # mutations: start a parallel per gate -> two Popens -> red; time a gate from its
         # submission -> start == submitted -> red; take Exitval only -> the signal is lost -> red;
-        # count only job lines for Seq (not the ticks) -> the wrong line or none -> red
+        # count only job lines for Seq (not the ticks) -> the wrong line or none -> red; P's
+        # joblog exit not checked for gate_failed -> valid -> red
         with mock.patch.dict(run8.SET_TIMEOUT_S, heavy=10):  # a missed line ends as a timeout
             rec = self.run_set("P")
-        self.assertTrue(rec["valid"], rec["invalid"])
+        self.assertEqual(rec["invalid"], ["gate_failed"])  # A2's job ended on signal 9
         self.assertEqual(len(self.parallels), 1)
         p = self.parallels[0]
         self.assertEqual(p.argv[:7], ["parallel", "--will-cite", "--memsuspend", "4.5G", "-j", "4",
@@ -361,6 +390,64 @@ class RunSet8(unittest.TestCase):
         self.assertAlmostEqual(rec["batch_s"], g["A1"]["end"] - g["A1"]["start"], delta=0.11)
         self.assertNotIn("batch_s", self.run_set("F"))
 
+    def test_a_failed_gate_invalidates_its_set(self):
+        # mutation: no gate_failed reason -> red; coreslot's own exit in K invalidates too -> the
+        # K set with exit 75 invalid -> red; skip K arms entirely -> K's exit 1 valid -> red
+        for arm, code, invalid in (("F", 1, ["gate_failed"]), ("S1", -15, ["gate_failed"]),
+                                   ("K", 1, ["gate_failed"]), ("K", 75, []), ("F", 0, [])):
+            self.codes = {True: code}  # the light gate's exit
+            rec = self.run_set(arm, slots=1 if arm == "S1" else None,
+                               needs="[needs]\n" if arm == "K" else None)
+            self.assertEqual(rec["invalid"], invalid, (arm, code))
+
+    def test_level_wait_thermal_state_and_gate_cpu(self):
+        # mutations: time the level wait after the level -> 0.0 -> red; therm_end taken before
+        # the agents or dropped -> red; a failing pmset recorded as "" -> red; cpu_s left off the
+        # gates -> red
+        self.level_sleep = 0.3
+        self.therm = ["  Thermal warning level: none \n", "CPU_Speed_Limit = 100\n"]
+        rec = self.run_set("F")
+        self.assertGreaterEqual(rec["level_wait_s"], 0.3)
+        self.assertEqual((rec["therm_start"], rec["therm_end"]),
+                         ("Thermal warning level: none", "CPU_Speed_Limit = 100"))
+        self.assertEqual(self.outputs, [("pmset", "-g", "therm")] * 2)
+        self.assertEqual([g["cpu_s"] for g in rec["gates"]], [0.5] * 3)
+        rec = self.run_set("F")
+        self.assertEqual((rec["therm_start"], rec["therm_end"]), (None, None))
+
+    def test_batch_pri_reads_threads_below_coreslot(self):
+        # mutations: coreslot's own process read (its 31 wins in KPU) -> red; min for max -> red;
+        # the "T" suffix not stripped -> no reading -> red
+        out = "USER PID TT %CPU STAT PRI STIME UTIME COMMAND\nm 11 ?? 9.0 R 20T 0:01 0:09 zstd 20T\n" \
+              "  11  8.0 R 18T 0:01 0:08 18T\n"
+        live = [mock.Mock(pid=10, args=["c", "run", "--label", "bench:batch", "--", "x"])]
+        seen = []
+        with mock.patch.object(run4, "_live", live), \
+                mock.patch.object(run7, "ps_snapshot", lambda: {}), \
+                mock.patch.object(run7, "descendants", lambda snap, pid: [11] if pid == 10 else []), \
+                mock.patch.object(run8.subprocess, "run", lambda argv, **kw: seen.append(argv) or
+                                  subprocess.CompletedProcess(argv, 0, out, "")):
+            self.assertEqual(run8.batch_pri("bench:batch"), 20)
+        self.assertEqual(seen, [["ps", "-M", "-o", "pri=", "-p", "11"]])
+
+    def test_kpu_argv_and_batch_pri(self):
+        # mutations: taskpolicy on KP's batch gate, on KPU's behind gate, or outside coreslot
+        # run -> red; batch_pri not read for KP or KPU -> None, treatment -> red
+        self.cfg["agents"] = {"A1": [gate("batch")], "A2": [gate("unit")]}
+        self.cfg["batch_agent"], self.batch_mark = "A1", {"preemptible": "auto: x"}
+        unit = ["c", "run", "--label", "bench:unit", "--", "unit"]
+        for arm, pri, invalid in (("KPU", 20, []), ("KP", 31, []), ("KP", 20, ["treatment"])):
+            self.argvs.clear()
+            with mock.patch.object(run8, "batch_pri", lambda label: pri), \
+                    mock.patch.object(run8, "BATCH_PRI_AT_S", 0.05):
+                rec = self.run_set(arm, cell="batch", needs="[needs]\n")
+            batch = ["c", "run", "--label", "bench:batch", "--",
+                     *(run8.TASKPOLICY if arm == "KPU" else ()), "batch"]
+            self.assertEqual(sorted(self.argvs), sorted([batch, unit]), arm)
+            self.assertEqual((rec["batch_pri"], rec["invalid"]), (pri, invalid), arm)
+        self.assertEqual(run8.TASKPOLICY, ("/usr/sbin/taskpolicy", "-c", "utility", "--"))
+        self.assertNotIn("batch_pri", self.run_set("F", cell="batch"))
+
     def test_set_timeout_per_mix_and_dry_only_override(self):
         # mutation: honour RUN8_SET_TIMEOUT_S on any stand -> red; one timeout for every mix -> red
         self.assertEqual([run8.set_timeout({}, m) for m in ("trace", "heavy", "wide", "batch")],
@@ -368,6 +455,18 @@ class RunSet8(unittest.TestCase):
         with mock.patch.dict(os.environ, {"RUN8_SET_TIMEOUT_S": "5"}):
             self.assertEqual(run8.set_timeout({}, "batch"), 10800)
             self.assertEqual(run8.set_timeout({"dry": True}, "batch"), 5.0)
+
+
+class GateCpu(unittest.TestCase):
+    def test_cpu_of_the_reaped_tree(self):
+        # mutations: cpu_s from the runner's own rusage (RUSAGE_SELF) -> about 0 -> red; the exit
+        # not taken from wait4 -> None -> red
+        spin = "import time\nt = time.process_time()\nwhile time.process_time() - t < 0.3: pass"
+        child = f"import subprocess, sys; subprocess.run([sys.executable, '-c', {spin!r}]); " \
+                "print('ok'); sys.exit(3)"
+        r = run8.run_gate([sys.executable, "-c", child])
+        self.assertEqual((r.returncode, r.stdout), (3, "ok\n"))
+        self.assertGreaterEqual(r.cpu_s, 0.3)  # the grandchild's time, reaped by the child
 
 
 class FreeFigure(unittest.TestCase):
@@ -443,6 +542,9 @@ class Verdict8(unittest.TestCase):
         self.assertEqual(k["needs"], text(os.path.join(self.out, "needs.toml")))
         self.assertEqual(next(x for x in self.calls if x["arm"] == "S3")["slots"], 3)
         self.assertIsNone(next(x for x in self.calls if x["arm"] == "F")["needs"])
+        # mutation: the needs digest on K arms only -> S and F records carry None -> red
+        self.assertEqual({x["meta"]["needs_sha256"] for x in self.calls},
+                         {run4.sha256(os.path.join(self.out, "needs.toml"))})
         self.cfg["dry"] = True
         self.verdict("pilot", "trace-quiet", 1, 1)
         self.assertTrue(self.calls[-1]["meta"]["dry"])
@@ -454,7 +556,9 @@ class Verdict8(unittest.TestCase):
         by = {c["arm"]: c for c in self.calls}
         sealed = text(os.path.join(self.out, "needs.toml"))
         derived = run8.k_needs(sealed, "bench:batch")
-        self.assertEqual((by["KP"]["needs"], by["K"]["needs"]), (sealed, derived))
+        self.assertEqual((by["KP"]["needs"], by["KPU"]["needs"], by["K"]["needs"]),
+                         (sealed, sealed, derived))
+        self.assertEqual(len(self.calls), 5)  # order_for shuffles the five batch arms
         self.assertEqual(by["K"]["meta"]["derived_needs_sha256"],
                          hashlib.sha256(derived.encode()).hexdigest())
         self.assertIsNone(by["KP"]["meta"]["derived_needs_sha256"])
@@ -502,8 +606,12 @@ class Verdict8(unittest.TestCase):
         self.assertEqual(refused(self, self.verdict, "pilot", "heavy-quiet", 1, 1), 2)
         self.verdict("pilot", "wide-quiet", 1, 1)
         self.which = "/bin/parallel"
-        self.cfg["coreslot_sha256"] = "0" * 64
-        self.assertEqual(refused(self, self.verdict, "pilot", "trace-quiet", 1, 1), 2)
+        # mutation: pin the binary at the pilot and main only -> the probe runs on it -> red
+        for sha in ("0" * 64, "unpinned"):
+            self.cfg["coreslot_sha256"] = sha
+            for phase in ("probe", "pilot"):
+                self.assertEqual(refused(self, self.verdict, phase, "trace-quiet", 1, 1), 2)
+        self.assertEqual(len(self.calls), 8)
         self.cfg["dry"] = True  # a dry stand skips the pin and the tree check
         self.verdict("pilot", "trace-quiet", 1, 1)
         n = len(self.calls)
@@ -566,6 +674,10 @@ class Learn8(unittest.TestCase):
         self.root = tempfile.mkdtemp()
         self.cfg, self.out = stand(self.root), os.path.join(self.root, "out")
         self.runs, self.supported = [], True
+        self.cfg["coreslot"] = os.path.join(self.root, "coreslot")
+        with open(self.cfg["coreslot"], "wb") as f:
+            f.write(b"binary")
+        self.cfg["coreslot_sha256"] = hashlib.sha256(b"binary").hexdigest()
 
         def measured(cfg, g, form):
             self.runs.append((g["gate"], form, g["cwd"]))
@@ -593,10 +705,11 @@ class Learn8(unittest.TestCase):
 
     def test_batch_counts_and_class_gates(self):
         # mutations: give the batch gate run 7's forms -> F and relearn runs -> red; learn a class
-        # gate as each agent -> four cwds -> red; leave the classes out -> red
+        # gate as each agent -> four cwds -> red; leave the classes out -> red; LEARN_BATCH_K
+        # back to 5 -> red
         self.learn()
-        self.assertEqual([r for r in self.runs if r[0] == "batch"], [("batch", "K", "/w/A1/b")] * 5)
-        self.assertEqual(self.runs[:5], [("batch", "K", "/w/A1/b")] * 5)
+        self.assertEqual([r for r in self.runs if r[0] == "batch"], [("batch", "K", "/w/A1/b")] * 6)
+        self.assertEqual(self.runs[:6], [("batch", "K", "/w/A1/b")] * 6)
         unit = [r for r in self.runs if r[0] == "c-unit"]
         self.assertEqual([r[1] for r in unit], ["K"] * 6 + ["F"] * 3 + ["K"] * 5)
         self.assertEqual({r[2] for r in unit}, {"/w/A1"})
@@ -604,10 +717,10 @@ class Learn8(unittest.TestCase):
                          {"batch", "tc", "lint", "build", "c-unit", "c-go", "c-db", "c-mut"})
         recs = run4.read_jsonl(os.path.join(self.out, "learn.jsonl"))
         self.assertEqual([(r["pass"], r["run"]) for r in recs if r["gate"] == "batch"],
-                         [("learn", n) for n in range(1, 6)])
+                         [("learn", n) for n in range(1, 7)])
         # mutation: leave the run-log line's preemptible value off the record -> red
         self.assertEqual([r["preemptible"] for r in recs if r["gate"] == "batch"],
-                         [None] * 3 + ["auto: x"] * 2)
+                         [None] * 3 + ["auto: x"] * 3)
         self.assertTrue(os.path.exists(os.path.join(self.out, "needs.sha256")))
 
     def test_batch_skipped_without_preemptible(self):
@@ -615,6 +728,17 @@ class Learn8(unittest.TestCase):
         self.supported = False
         self.learn()
         self.assertNotIn("batch", {r[0] for r in self.runs})
+        self.assertIn("c-go", {r[0] for r in self.runs})
+
+    def test_pins_the_binary(self):
+        # mutation: no pin in learn -> it runs on an unpinned binary -> red; pin a dry stand too
+        # -> the dry learn refuses -> red
+        for sha in ("unpinned", "0" * 64):
+            self.cfg["coreslot_sha256"] = sha
+            self.assertEqual(refused(self, run8.learn, self.cfg, self.out), 2)
+        self.assertEqual(self.runs, [])
+        self.cfg["dry"] = True
+        self.learn()
         self.assertIn("c-go", {r[0] for r in self.runs})
 
     def test_refuses_after_a_probe_record(self):
@@ -664,6 +788,7 @@ class Power8(unittest.TestCase):
         self.probe, self.out = tempfile.mkdtemp(), tempfile.mkdtemp()
         base = {"trace-quiet": {"K": 90, "S1": 120, "S2": 110, "S3": 100},
                 "trace-loaded": {"K": 90, "S2": 130, "S3": 120}, "batch": {"KP": 60, "F": 62}}
+        self.base = base
         for cell in run8.CELLS:
             write8(self.probe, "probe", cell, range(1, 5), base.get(cell))
 
@@ -682,23 +807,50 @@ class Power8(unittest.TestCase):
             c = p["components"][cell][f"K/{s}"]
             self.assertAlmostEqual(c["mean"], statistics.fmean(d), places=12)
             self.assertEqual(c["sigma"], stats6.sigma_upper(statistics.stdev(d), 4, 0.80))
-        # mutation: leave the cost leg out of the batch cell's components -> red
+        # mutations: leave the cost leg out of the batch cell's components -> red; KPU's legs
+        # left out, or computed as KP's -> red
         self.assertEqual({k: v["bound"] for k, v in p["components"]["batch"].items()},
-                         {"KP/K": 0, "KP/S1": 0, "KP/F": run8.MARGIN,
-                          "batch_s KP/K": math.log(1 + run8.BATCH_COST_MARGIN)})
+                         {f"{t}{leg}": bound for t in ("KP", "KPU") for leg, bound in (
+                             ("/K", 0), ("/S1", 0), ("/F", run8.MARGIN))}
+                         | {f"batch_s {t}/K": math.log(1 + run8.BATCH_COST_MARGIN)
+                            for t in ("KP", "KPU")})
+        t = {(r["block"], r["arm"]): r["mean_verdict_s"]
+             for r in run4.read_jsonl(os.path.join(self.probe, "probe-batch.jsonl"))}
+        self.assertAlmostEqual(p["components"]["batch"]["KPU/F"]["mean"], statistics.fmean(
+            math.log(t[b, "KPU"] / t[b, "F"]) for b in range(1, 5)), places=12)
+        self.assertNotAlmostEqual(p["components"]["batch"]["KPU/F"]["mean"],
+                                  p["components"]["batch"]["KP/F"]["mean"])
+        sets = run4.read_jsonl(os.path.join(self.probe, "probe-batch.jsonl"))
+        self.assertAlmostEqual(p["set_s"]["batch"], sum(r["makespan_s"] + 5 for r in sets) / 4,
+                               places=9)  # KPU's sets count in the batch cell's hours
         self.assertEqual(p["batch_treatment"], [{"block": b, "treatment": []} for b in range(1, 5)])
         sets = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-quiet.jsonl"))
         self.assertAlmostEqual(p["set_s"]["heavy-quiet"],
                                sum(r["makespan_s"] + 5 for r in sets) / 4, places=9)
+        # mutation: a held set counted by its finished gates' makespan -> red
+        os.remove(os.path.join(self.probe, "probe-heavy-loaded.jsonl"))
+        write8(self.probe, "probe", "heavy-loaded", range(1, 5), timeout_s=lambda b, a: 600,
+               invalid=lambda b, a: ["set_timeout"] if a == "P" else [])
+        shutil.rmtree(self.out)
+        os.mkdir(self.out)
+        sets = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-loaded.jsonl"))
+        self.assertAlmostEqual(self.power()["set_s"]["heavy-loaded"], sum(
+            (600 if r["arm"] == "P" else r["makespan_s"]) + 5 for r in sets) / 4, places=9)
         self.assertEqual((p["over_cap"], p["cap_h"], p["dropped"]), (False, 30, []))
 
     def test_drop_order_and_refusals(self):
         # mutations: DROP_ORDER reversed -> red; drop the power.json, pilot or short-primary
-        # refusal -> it plans -> red; the batch kept when skipped -> red; plan on when the
-        # batch cell's reserve (20 blocks of 382 s, 2.1 h) alone exceeds the cap -> red
+        # refusal -> it plans -> red; the batch kept when skipped -> red; refuse when the batch
+        # cell alone exceeds the cap -> no power.json -> red; the batch hours left unscaled -> red
         with mock.patch.object(run8, "CAP_H", 1):
-            self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
-        self.assertFalse(os.path.exists(os.path.join(self.out, "power.json")))
+            p = self.power()
+        o = p["menu"]["drop_order"]
+        self.assertEqual((p["over_cap"], o["over_cap"], o["dropped"]),
+                         (True, True, ["heavy-loaded", "wide-quiet", "trace-loaded"]))
+        self.assertEqual(o["note"], "needs a shorter batch (780 s), not measured")
+        self.assertAlmostEqual(o["batch_scaled"]["hours"], o["hours"]["batch"] * 7.8, places=9)
+        self.assertEqual(o["batch_scaled"]["label"], "scaled, not measured")
+        os.remove(os.path.join(self.out, "power.json"))
         with mock.patch.object(run8, "CAP_H", 3):
             p = self.power()
         self.assertEqual((p["dropped"], p["over_cap"], "batch" in p["n"]),
@@ -716,6 +868,49 @@ class Power8(unittest.TestCase):
         write8(self.probe, "probe", "trace-loaded", [1])
         self.assertEqual(refused(self, run8.power, self.probe, self.out), 2)
 
+
+    def test_hours_parts_and_menu(self):
+        # mutations: the level wait left out -> red; main's re-runs not capped at n // 10 -> red;
+        # P's invalid sets counted as re-runs -> heavy-loaded's non-zero -> red; learn_h to the
+        # last start -> 4.0 -> red; the primer on every cell -> red; no_S1 keeping S1's sets -> red
+        bad = {("heavy-quiet", "S1", 1), ("heavy-loaded", "P", 2)}
+        for cell in run8.CELLS:
+            os.remove(os.path.join(self.probe, f"probe-{cell}.jsonl"))
+            write8(self.probe, "probe", cell, range(1, 5), self.base.get(cell),
+                   level_wait_s=lambda b, a: 30,
+                   invalid=lambda b, a: ["ac"] if (cell, a, b) in bad else [])
+        with open(os.path.join(self.probe, "learn.jsonl"), "w") as f:
+            for at, wall in (("00", 100), ("04", 1800)):
+                f.write(json.dumps({"started": f"2026-10-28T{at}:00:00+00:00", "wall_s": wall})
+                        + "\n")
+        p = self.power()
+        recs = run4.read_jsonl(os.path.join(self.probe, "probe-heavy-quiet.jsonl"))
+        x = sum(r["makespan_s"] + 5 for r in recs) / 4
+        n = p["n"]["heavy-quiet"]
+        self.assertAlmostEqual(p["set_s"]["heavy-quiet"], x + 120, places=9)
+        want = {"sets": (n + 10) * x / 3600, "level_wait": (n + 10) * 120 / 3600, "primer": 0,
+                "reruns": (2.5 + n // 10) * (x + 120) / 3600}
+        got = p["hours_parts"]["cells"]
+        for k, v in want.items():
+            self.assertAlmostEqual(got["heavy-quiet"][k], v, places=9, msg=k)
+        self.assertEqual(got["heavy-loaded"]["reruns"], 0)
+        k = [r["makespan_s"] + 5 for r in run4.read_jsonl(os.path.join(
+            self.probe, "probe-trace-quiet.jsonl")) if r["arm"] == "K"]
+        self.assertAlmostEqual(got["trace-quiet"]["primer"], (statistics.fmean(k) + 30) / 3600)
+        self.assertEqual(p["hours_parts"]["learn_h"], 4.5)
+        self.assertAlmostEqual(p["hours_parts"]["total_h"],
+                               sum(sum(c.values()) for c in got.values()) + 4.5, places=9)
+        menu = p["menu"]
+        a, s1 = menu["all_arms"], menu["no_S1"]
+        self.assertEqual(set(a["power"]), set(run8.CELLS))
+        self.assertAlmostEqual(a["total_h"], sum(a["hours"].values()) + 4.5, places=9)
+        xs1 = statistics.fmean(r["makespan_s"] + 5 for r in recs if r["arm"] == "S1")
+        self.assertAlmostEqual(s1["hours"]["heavy-quiet"],
+                               a["hours"]["heavy-quiet"] * (x - xs1 + 90) / (x + 120), places=9)
+        self.assertEqual(s1["gives_up"], ["H-S1", "batch KP/S1", "batch KPU/S1",
+                                          "trace-loaded K/S1 (S1 is the probe's S*)"])
+        self.assertEqual((menu["drop_order"]["dropped"], "note" in menu["drop_order"]),
+                         ([], False))
 
     def test_short_cells_and_the_treatment_check(self):
         # mutation: refuse only a short primary cell -> heavy-quiet planned on 1 block -> red
@@ -754,7 +949,8 @@ class PilotCheck8(unittest.TestCase):
 
     def test_outcomes(self):
         # mutations: go over every cell -> the futile batch stops main -> red; batch futile only
-        # on all three comparisons -> red; outcomes swapped -> red
+        # on all three comparisons -> red; outcomes swapped -> red; the batch futile when one
+        # family is (KPU at 100 against F at 62 is, KP's is not) -> red
         for base, go, futile, outcome in (
                 ({"trace-quiet": {"K": 120}}, False, False, "stop"),
                 ({"trace-quiet": {"K": 80}, "batch": {"KP": 60, "F": 50}}, True, True, "batch"),
@@ -763,6 +959,7 @@ class PilotCheck8(unittest.TestCase):
             c = self.check(base)
             self.assertEqual((c["go"], c["batch_futile"], c["outcome"]),
                              (go, futile, run8.OUTCOMES[outcome]))
+        self.assertEqual(c["pre_futile"], {"H-PRE": False, "H-PRE-U": True})
 
     def test_futile_on_the_90_bound(self):
         # mutation: futility at alpha 0.05 -> the bound just past ln 1.03 is not futile -> red
@@ -784,6 +981,12 @@ class PilotCheck8(unittest.TestCase):
             self.assertEqual((c["p_timeouts"]["heavy-quiet"], c["p_feasible"], c["go"]),
                              (len(bs), {"heavy-quiet": feasible}, True))
             self.assertEqual(c["blocks"]["heavy-quiet"], list(range(1, 11)))
+        # mutation: the count not pro rata -> a dry check's 2 timeouts in 2 blocks feasible -> red
+        for bs, feasible in (((), True), ((1,), False)):
+            self.setUp()
+            c = self.check(blocks=(1, 2), dry=lambda b, a: True,
+                           invalid=lambda b, a: ["set_timeout"] if a == "P" and b in bs else [])
+            self.assertEqual(c["p_feasible"], {"heavy-quiet": feasible})
         self.setUp()
         self.assertEqual(refused(self, self.check, blocks=range(1, 10)), 2)
         for cell in self.CELLS:
@@ -862,7 +1065,7 @@ class Summary8(unittest.TestCase):
                          phase="pilot")
         self.assertEqual((s["phase"], s["exploratory"], s["pilot_check"]["components"]),
                          ("pilot", True, legs))
-        rows = [s["primary"], *s["secondary"], *s["H-PRE"]["rows"]]
+        rows = [s["primary"], *s["secondary"], *s["H-PRE"]["rows"], *s["H-PRE-U"]["rows"]]
         self.assertEqual({r["status"] for r in rows}, {"not tested (stopped at the pilot)"})
         self.assertEqual(len(s["secondary"]), 5)  # H-S1..H-S3, H-SAFE-trace and -heavy
         self.assertEqual((set(s["effects"]), s["primary"]["joint_power"]), (set(run8.CELLS), 0.9))
@@ -910,6 +1113,16 @@ class Summary8(unittest.TestCase):
                 "H-PRE"]["rows"]
             self.assertEqual({r["name"]: r["status"] for r in rows}["cost"], status, ratio)
 
+    def test_h_pre_u_judges_kpu(self):
+        # mutations: H-PRE-U on KP's sets -> its cost rejected -> red; left out of the summary
+        # or its text -> red
+        s = self.summary(batch_s=lambda b, a: 130.0 if a == "KPU" else 100.0)
+        cost = {f: {r["name"]: r["status"] for r in s[f]["rows"]}["cost"] for f in run8.PRE}
+        self.assertEqual(cost, {"H-PRE": "rejected", "H-PRE-U": "not rejected"})
+        self.assertEqual(set(s["H-PRE-U"]["time"]["legs"]), {"KPU<K", "KPU<S1", "KPU~F"})
+        self.assertIn("H-PRE-U cost: not rejected", text(os.path.join(self.out, "summary.txt")))
+        self.assertIsNotNone(s["effects"]["batch"]["ratio"]["batch_s KPU/K"])
+
     def test_primary_margin_is_ln_1_03(self):
         # mutation: the primary tested against 2 * MARGIN -> K 4.5 % slower is rejected -> red
         s = self.summary(t=lambda b, a: 104.5 if a == "K" else 100.0)
@@ -920,7 +1133,8 @@ class Summary8(unittest.TestCase):
         # mutations: the skip reason dropped -> red; the pilot's batch drop ignored -> red; a
         # dry cell judged against n or cut to n -> red; drop the pilot_check.json refusal ->
         # red; drop the refusal while a cell is short with re-runs left -> red
-        self.assertEqual(self.summary(skipped="no flag")["H-PRE"], {"skipped": "no flag"})
+        s = self.summary(skipped="no flag")
+        self.assertEqual((s["H-PRE"], s["H-PRE-U"]), ({"skipped": "no flag"},) * 2)
         h = self.summary(check={"go": True, "batch_futile": True})["H-PRE"]
         self.assertEqual(h, {"untested": "the pilot check found the batch cell futile"})
         for dry, untested, wide in (
@@ -940,7 +1154,8 @@ class Summary8(unittest.TestCase):
 class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a stub run8.py
     SH = os.path.join(HERE, "overload", "run8.sh")
     ENV = {"STUB_BATT": "AC Power", "STUB_INDEX": "Indexing disabled.", "STUB_PGREP": "1 /bin/node -k=hunter2",
-           "STUB_UPDATE": "Automatic check is turned off"}
+           "STUB_UPDATE": "Automatic checking for updates is turned on", "STUB_CHECK": "", "STUB_DOWNLOAD": "0",
+           "STUB_INSTALL": "0", "STUB_VM": ""}
     CELLS = "trace-quiet trace-loaded heavy-quiet heavy-loaded wide-quiet batch".split()
 
     def setUp(self):
@@ -950,8 +1165,11 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
         os.mkdir(self.out)
         listing = 'echo "PID Status Label"; echo "- 0 com.apple.x"; echo "- 0 com.example.agent"'
         for tool, body in {"pmset": "$STUB_BATT", "mdutil": "$STUB_INDEX", "softwareupdate": "$STUB_UPDATE",
-                           "pgrep": "$STUB_PGREP", "caffeinate": "", "launchctl": listing}.items():
-            body = body if body.startswith("echo") or not body else f'echo "{body}"'
+                           "pgrep": 'case $2 in *Virtualization*) echo "$STUB_VM" ;; *) echo "$STUB_PGREP" ;; esac',
+                           "caffeinate": "", "launchctl": listing,
+                           "defaults": 'case $3 in *Check*) echo "$STUB_CHECK" ;; *Download) echo "$STUB_DOWNLOAD" ;; '
+                                       '*) echo "$STUB_INSTALL" ;; esac'}.items():
+            body = f'echo "{body}"' if body.startswith("$") else body
             with open(os.path.join(self.tmp, tool), "w") as f:
                 f.write(f'#!/bin/sh\necho "{tool} $*" >> "$LOG"\n{body}\n')
             os.chmod(os.path.join(self.tmp, tool), 0o755)
@@ -968,7 +1186,8 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
                 os.remove(path)
         path = [self.tmp, os.path.dirname(sys.executable), "/usr/bin", "/bin", "/usr/sbin"]
         env = dict(os.environ, **{**self.ENV, **env}, LOG=self.log, OUT=self.out, STAND="S",
-                   RUN8_PY=os.path.join(self.tmp, "run8.py"), PATH=":".join(path))
+                   RUN8_PY=os.path.join(self.tmp, "run8.py"), PATH=":".join(path),
+                   RUN8_PRIVATE=os.path.join(self.tmp, "private"))
         code, err = (lambda p: (p.returncode, p.stderr))(subprocess.run(
             ["/bin/sh", self.SH, *args], env=env, capture_output=True, text=True))
         lines = text(self.log).splitlines() if os.path.exists(self.log) else []
@@ -977,16 +1196,31 @@ class Wrapper8(unittest.TestCase):  # overload/run8.sh under stub tools and a st
 
     def test_preflight(self):
         # mutations: no AC check, or it run after python -> red; the indexing or the update
-        # check dropped, or enforced on a dry run -> red; caffeinate without -w, or pgrep's full
-        # command lines logged, or the apple agents listed -> red
-        batt, off, on = {"STUB_BATT": "Battery Power"}, {"STUB_INDEX": "Indexing enabled."}, {"STUB_UPDATE": "turned on"}
+        # check dropped, the update check read from softwareupdate --schedule or from
+        # AutomaticCheckEnabled, either update key unchecked, or either check enforced on a dry
+        # run -> red; a running VM not refused, or refused on a dry run -> red; caffeinate without -w, or pgrep's full command lines logged, or the
+        # apple agents listed -> red
+        batt, off, on = {"STUB_BATT": "Battery Power"}, {"STUB_INDEX": "Indexing enabled."}, {"STUB_DOWNLOAD": "1"}
+        vm = {"STUB_VM": "47376 /System/Library/Frameworks/x/com.apple.Virtualization.VirtualMachine"}
         for args, env, rc in (((), batt, 2), (("--dry",), batt, 2), (("learn",), off, 2), (("verdict",), on, 2),
+                              (("learn",), {"STUB_INSTALL": "1"}, 2), (("learn",), {"STUB_INSTALL": ""}, 2),
+                              (("verdict",), vm, 2), (("--dry", "learn"), vm, 0),
                               (("--dry", "verdict"), {**off, **on}, 0), (("preflight",), {}, 0), (("learn",), {}, 0)):
             code, err, py, _ = self.sh(*args, **env)
             self.assertEqual((code, bool(py), "run8: " in err), (rc, rc == 0 and args[-1] != "preflight", rc == 2), args)
+        # mutations: an agent or process name in OUT/preflight.log, or the names not in the
+        # private file -> red; counts by another pattern -> red
         log = text(os.path.join(self.out, "preflight.log"))
-        self.assertTrue("1 node" in log and "hunter2" not in log and "com.example.agent" in log
-                        and "com.apple.x" not in log and "Indexing enabled" in log, log)
+        self.assertTrue("hunter2" not in log and "com.example.agent" not in log
+                        and "/bin/node" not in log and "com.apple.x" not in log
+                        and "background agents not com.apple: 1" in log
+                        and "workload processes: go 0, pytest 0, node 1, docker 0, claude 0" in log
+                        and "Indexing enabled" in log
+                        and "AutomaticCheckEnabled: ; AutomaticDownload: 1" in log
+                        and "virtual machines: 47376 com.apple.Virtualization.VirtualMachine" in log, log)
+        private = text(os.path.join(self.tmp, "private", "preflight-out.log"))
+        self.assertTrue("com.example.agent" in private and "1 node" in private
+                        and "hunter2" not in private and "com.apple.x" not in private, private)
         self.assertIn("caffeinate -dimsu -w ", "\n".join(self.sh("preflight")[3]))
 
     def test_dispatch_and_default_paths(self):

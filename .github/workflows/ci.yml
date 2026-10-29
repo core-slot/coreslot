@@ -121,6 +121,13 @@ jobs:
         working-directory: conformance/pyclient
         run: python3 -m unittest
 
+      - name: Run 8 runner and analysis tests
+        # The evidence runner's tests stub every tool they call; one cell runs them so a change to
+        # the runner is checked without loading the measurement machine.
+        if: matrix.os == 'macos-latest' && matrix.go == 'stable'
+        working-directory: evidence
+        run: python3 -m unittest test_run8 test_stats8
+
       - name: Claude Code hook
         working-directory: integrations/claude-code
         run: python3 -m unittest

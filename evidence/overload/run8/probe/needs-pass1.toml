@@ -1,0 +1,53 @@
+[needs]
+  [needs."bench8:go_test"]
+    cpu = "1"
+    evidence = "5 runs 2026-10-28: max 0.2 cores, 0 of 5 saturated, peak 225 MiB (max_rss)"
+    mem = "256M"
+  [needs."bench8:long_batch"]
+    cpu = "9"
+    evidence = "5 runs 2026-10-28: max 8.3 cores, 5 of 5 saturated, peak 1.2 GiB (footprint) at 1006s"
+    mem = "1280M"
+  [needs."bench8:mutation"]
+    cpu = "1..9"
+    evidence = "5 runs 2026-10-28: max 8.1 cores, 5 of 5 saturated, 0.85 cores per worker: set cpu_per_worker = 0.85, peak 444 MiB (footprint) at 14s with cpu 10"
+    mem = "512M"
+  [needs."bench8:other"]
+    cpu = "1..10"
+    evidence = "5 runs 2026-10-28: max 7.6 cores, 0 of 5 saturated, 0.8 cores per worker: set cpu_per_worker = 0.8, peak 1.7 GiB (footprint) at 2s"
+    mem = "1792M"
+  [needs."bench8:py_db"]
+    cpu = "1"
+    evidence = "5 runs 2026-10-28: max 0.9 cores, 5 of 5 saturated, peak 490 MiB (max_rss)"
+    mem = "512M"
+  [needs."bench8:py_unit"]
+    cpu = "1..9"
+    evidence = "5 runs 2026-10-28: max 8.0 cores, 3 of 5 saturated, 0.85 cores per worker: set cpu_per_worker = 0.85, peak 3.9 GiB (footprint) at 70s with cpu 10"
+    mem = "3968M"
+  [needs."bench8:typecheck"]
+    cpu = "2"
+    evidence = "5 runs 2026-10-28: max 1.6 cores, 5 of 5 saturated, peak 2.3 GiB (footprint) at 15s"
+    mem = "2432M"
+  [needs."bench:fastapi-ruff"]
+    cpu = "2"
+    evidence = "5 runs 2026-10-28: max 1.9 cores, 5 of 5 saturated, peak 21 MiB (max_rss)"
+    mem = "128M"
+  [needs."bench:fastapi-tests"]
+    cpu = "1..9"
+    evidence = "5 runs 2026-10-28: max 8.0 cores, 5 of 5 saturated, 0.85 cores per worker: set cpu_per_worker = 0.85, peak 2.4 GiB (footprint) at 12s with cpu 10"
+    mem = "2560M"
+  [needs."bench:sqlalchemy-engine-tests"]
+    cpu = "1..10"
+    evidence = "5 runs 2026-10-28: max 2.7 cores, 0 of 5 saturated, 0.3 cores per worker: set cpu_per_worker = 0.3, peak 1.1 GiB (footprint) at 7s"
+    mem = "1280M"
+  [needs."bench:sqlalchemy-orm-tests"]
+    cpu = "1..10"
+    evidence = "5 runs 2026-10-28: max 9.2 cores, 5 of 5 saturated, 0.95 cores per worker: set cpu_per_worker = 0.95, peak 2.1 GiB (footprint) at 19s"
+    mem = "2304M"
+  [needs."bench:sqlalchemy-sql-tests"]
+    cpu = "1..10"
+    evidence = "5 runs 2026-10-28: max 5.9 cores, 0 of 5 saturated, 0.6 cores per worker: set cpu_per_worker = 0.6, peak 2.3 GiB (footprint) at 14s"
+    mem = "2432M"
+  [needs."bench:vscode-typecheck"]
+    cpu = "5"
+    evidence = "5 runs 2026-10-28: max 4.9 cores, 5 of 5 saturated, peak 8.7 GiB (footprint) at 11s"
+    mem = "8960M"

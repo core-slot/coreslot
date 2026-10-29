@@ -1,0 +1,91 @@
+Wed Oct 28 19:42:49 UTC 2026
+20:42  up 4 days, 22:10, 1 user, load averages: 2.48 2.54 2.64
+vm.swapusage: total = 4096.00M  used = 2783.50M  free = 1312.50M  (encrypted)
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=22741091)	80%; AC attached; not charging present: true
+spotlight: /:
+	Indexing disabled.
+software update: Automatic checking for updates is turned on
+AutomaticCheckEnabled: Error: Could not find key 'AutomaticCheckEnabled' in domain 'com.apple.SoftwareUpdate'.; AutomaticDownload: 0
+AutomaticallyInstallMacOSUpdates: 0
+virtual machines: 
+background agents not com.apple: 18
+workload processes: go 0, pytest 0, node 42, docker 14, claude 43
+Wed Oct 28 23:57:57 UTC 2026
+ 0:57  up 5 days,  2:25, 1 user, load averages: 3.08 4.03 4.25
+vm.swapusage: total = 4096.00M  used = 2615.50M  free = 1480.50M  (encrypted)
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=22741091)	80%; AC attached; not charging present: true
+spotlight: /:
+	Indexing disabled.
+software update: Automatic checking for updates is turned on
+AutomaticCheckEnabled: Error: Could not find key 'AutomaticCheckEnabled' in domain 'com.apple.SoftwareUpdate'.; AutomaticDownload: 0
+AutomaticallyInstallMacOSUpdates: 0
+virtual machines: 
+background agents not com.apple: 18
+workload processes: go 0, pytest 0, node 41, docker 14, claude 44
+Thu Oct 29 00:45:01 UTC 2026
+ 1:45  up 5 days,  3:12, 1 user, load averages: 10.77 5.70 4.24
+vm.swapusage: total = 5120.00M  used = 4239.00M  free = 881.00M  (encrypted)
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=22741091)	80%; AC attached; not charging present: true
+spotlight: /:
+	Indexing disabled.
+software update: Automatic checking for updates is turned on
+AutomaticCheckEnabled: Error: Could not find key 'AutomaticCheckEnabled' in domain 'com.apple.SoftwareUpdate'.; AutomaticDownload: 0
+AutomaticallyInstallMacOSUpdates: 0
+virtual machines: 
+background agents not com.apple: 18
+workload processes: go 0, pytest 0, node 41, docker 14, claude 44
+Thu Oct 29 01:04:49 UTC 2026
+ 2:04  up 5 days,  3:32, 1 user, load averages: 14.83 11.49 9.27
+vm.swapusage: total = 5120.00M  used = 3791.88M  free = 1328.12M  (encrypted)
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=22741091)	80%; AC attached; not charging present: true
+spotlight: /:
+	Indexing disabled.
+software update: Automatic checking for updates is turned on
+AutomaticCheckEnabled: Error: Could not find key 'AutomaticCheckEnabled' in domain 'com.apple.SoftwareUpdate'.; AutomaticDownload: 0
+AutomaticallyInstallMacOSUpdates: 0
+virtual machines: 
+background agents not com.apple: 17
+workload processes: go 0, pytest 0, node 41, docker 14, claude 44
+Thu Oct 29 01:45:57 UTC 2026
+ 2:45  up 5 days,  4:13, 1 user, load averages: 5.48 5.63 6.20
+vm.swapusage: total = 5120.00M  used = 3575.62M  free = 1544.38M  (encrypted)
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=22741091)	80%; AC attached; not charging present: true
+spotlight: /:
+	Indexing disabled.
+software update: Automatic checking for updates is turned on
+AutomaticCheckEnabled: Error: Could not find key 'AutomaticCheckEnabled' in domain 'com.apple.SoftwareUpdate'.; AutomaticDownload: 0
+AutomaticallyInstallMacOSUpdates: 0
+virtual machines: 
+background agents not com.apple: 17
+workload processes: go 0, pytest 0, node 41, docker 14, claude 44
+Thu Oct 29 04:15:11 UTC 2026
+ 5:15  up 5 days,  6:42, 1 user, load averages: 3.63 3.95 3.91
+vm.swapusage: total = 4096.00M  used = 3237.31M  free = 858.69M  (encrypted)
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=22741091)	80%; AC attached; not charging present: true
+spotlight: /:
+	Indexing disabled.
+software update: Automatic checking for updates is turned on
+AutomaticCheckEnabled: Error: Could not find key 'AutomaticCheckEnabled' in domain 'com.apple.SoftwareUpdate'.; AutomaticDownload: 0
+AutomaticallyInstallMacOSUpdates: 0
+virtual machines: 
+background agents not com.apple: 17
+workload processes: go 0, pytest 0, node 41, docker 14, claude 44
+Thu Oct 29 06:18:21 UTC 2026
+ 7:18  up 5 days,  8:45, 1 user, load averages: 4.08 4.34 4.07
+vm.swapusage: total = 4096.00M  used = 3109.31M  free = 986.69M  (encrypted)
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=22741091)	80%; AC attached; not charging present: true
+spotlight: /:
+	Indexing disabled.
+software update: Automatic checking for updates is turned on
+AutomaticCheckEnabled: Error: Could not find key 'AutomaticCheckEnabled' in domain 'com.apple.SoftwareUpdate'.; AutomaticDownload: 0
+AutomaticallyInstallMacOSUpdates: 0
+virtual machines: 
+background agents not com.apple: 17
+workload processes: go 0, pytest 0, node 41, docker 14, claude 44

@@ -5,9 +5,17 @@
 #
 # Before learn and verdict, and alone as `run8.sh preflight`, it checks the machine: it holds
 # caffeinate for its own life, refuses (exit 2) on battery power, and appends the Spotlight and
-# software-update settings, the background agents still running (names only), the date, uptime
-# and swap to OUT/preflight.log. A real run also refuses while Spotlight indexing is on or the
-# automatic update check is on; a dry run records them and goes on.
+# software-update settings, the date, uptime, swap, power source and VMs to OUT/preflight.log,
+# with counts only of what else runs: the launchd agents not com.apple, and the processes per
+# workload pattern (go, pytest, node, docker, claude). Their names (agent labels, pid and
+# executable) go to preflight-<OUT's name>.log in ${RUN8_PRIVATE:-~/bench.noindex/run8-private},
+# outside the repository: OUT is published. A real run also refuses while Spotlight indexing
+# is on or while macOS may download or install updates in the background: AutomaticDownload or
+# AutomaticallyInstallMacOSUpdates in /Library/Preferences/com.apple.SoftwareUpdate not 0. The
+# periodic check is recorded only (its key, which macOS 27 drops from the file, and
+# `softwareupdate --schedule`, which no longer reflects it). It also refuses while a virtual
+# machine runs (Docker Desktop's backend or any Virtualization.framework VM): its memory keeps
+# the levels and P's --memsuspend from being reached. A dry run records them and goes on.
 #
 # With no phase: preflight, learn while OUT/needs.sha256 is missing, then the pilot of every
 # cell power.json plans (`verdict pilot CELL 1 10`, the first with --primer; a cell it dropped
@@ -60,7 +68,16 @@ preflight() {
 	case $batt in *"AC Power"*) ;; *) refuse "the machine is not on AC power" ;; esac
 	index=$(mdutil -s / 2>&1 || true)
 	update=$(softwareupdate --schedule 2>&1 || true)
-	mkdir -p "$OUT"
+	prefs=/Library/Preferences/com.apple.SoftwareUpdate
+	check=$(defaults read $prefs AutomaticCheckEnabled 2>&1 || true)
+	download=$(defaults read $prefs AutomaticDownload 2>&1 || true)
+	install=$(defaults read $prefs AutomaticallyInstallMacOSUpdates 2>&1 || true)
+	vm=$(pgrep -lf 'Virtualization\.VirtualMachine|com\.docker\.backend' |
+		awk 'NF { n = split($2, p, "/"); printf "%s%s %s", sep, $1, p[n]; sep = ", " }' || true)
+	agents=$(launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true)
+	work=$(pgrep -lf 'go |pytest|node|docker|Code Helper|claude' || true)
+	private=${RUN8_PRIVATE:-$HOME/bench.noindex/run8-private}
+	mkdir -p "$OUT" "$private"
 	{
 		date -u
 		uptime || true
@@ -68,14 +85,26 @@ preflight() {
 		echo "$batt"
 		echo "spotlight: $index"
 		echo "software update: $update"
-		echo "background agents:"
-		launchctl list | awk 'NR > 1 && $3 !~ /^com\.apple\./ { print $3 }' || true
-		pgrep -lf 'go |pytest|node|docker|Code Helper|claude' |
-			awk '{ n = split($2, p, "/"); print $1, p[n] }' || true
+		echo "AutomaticCheckEnabled: $check; AutomaticDownload: $download"
+		echo "AutomaticallyInstallMacOSUpdates: $install"
+		echo "virtual machines: $vm"
+		echo "background agents not com.apple: $(printf '%s' "$agents" | grep -c . || true)"
+		printf '%s\n' "$work" | awk 'BEGIN { k = split("go ,pytest,node,docker,claude", w, ",") }
+			{ for (i = 1; i <= k; i++) if (index($0, w[i])) { c[i]++; break } }
+			END { printf "workload processes:"; for (i = 1; i <= k; i++) {
+				sub(/ $/, "", w[i]); printf "%s %s %d", (i > 1 ? "," : ""), w[i], c[i] }; print "" }'
 	} >>"$OUT/preflight.log"
+	{
+		date -u
+		echo "background agents:"
+		printf '%s\n' "$agents"
+		printf '%s\n' "$work" | awk 'NF { n = split($2, p, "/"); print $1, p[n] }'
+	} >>"$private/preflight-$(basename "$OUT").log"
 	[ -n "$dry" ] && return
 	case $index in *"Indexing disabled"*) ;; *) refuse "Spotlight indexing is on; mdutil -a -i off" ;; esac
-	case $update in *"turned off"*) ;; *) refuse "the automatic update check is on; softwareupdate --schedule off" ;; esac
+	[ "$download" = 0 ] && [ "$install" = 0 ] || refuse "macOS may download or install updates; sudo defaults write \
+$prefs AutomaticDownload -bool false; sudo defaults write $prefs AutomaticallyInstallMacOSUpdates -bool false"
+	[ -z "$vm" ] || refuse "a virtual machine is running ($vm); quit Docker Desktop and any other VM"
 }
 
 if [ $# -gt 0 ]; then
