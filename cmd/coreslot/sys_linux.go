@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -46,3 +47,6 @@ func stopSelf() {
 // maxRSSKiB converts a wait4 ru_maxrss to KiB: Linux reports it in kilobytes of 1024 bytes
 // already (getrusage(2)).
 func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss, true }
+
+// clampPriority leaves cmd as it is: on Linux, lowerPriority's nice demotes a preemptible command.
+func clampPriority(*exec.Cmd) string { return "" }

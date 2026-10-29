@@ -5,39 +5,79 @@
 [![Release](https://img.shields.io/github/v/release/core-slot/coreslot?sort=semver)](https://github.com/core-slot/coreslot/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/core-slot/coreslot)](LICENSE)
 
-One core budget for every test suite, build and agent on your machine: parallel gates wait their
-turn instead of melting the laptop.
+Several coding agents on one laptop, each running its own test suite, melt it. On the Claude Code
+tracker, 11 agents and a workflow drove an 11-core, 18 GB Mac to a load average of about 726 with
+swap full ([anthropics/claude-code#101193](https://github.com/anthropics/claude-code/issues/101193)).
+Every `pytest -n auto`, `make -j`, `go test ./...` and `cargo build` sizes itself to the whole
+machine, and none of them knows about the others: tests time out and fail falsely, and every gate
+runs slower than it would alone.
 
-Several coding-agent sessions, each in its own worktree, each running its own `pytest -n <cores>`
-or `make -j<cores>`, oversubscribe a machine several times over: timing-sensitive tests fail
-falsely and every gate runs far slower than it would alone. `coreslot` gives every such command a
-share of one machine-wide budget. A command asks for `min..max` cores, waits in one queue (first
-come, first served at equal priority) until `min` is free, and runs with what it got. There is no
-daemon: the budget is a directory of token files and `flock(2)` locks, so a killed client never
-leaks its share.
+`coreslot` gives them one machine-wide core budget. A command asks for `min..max` cores, waits in
+one queue until `min` is free, and runs with what it got:
+
+```sh
+brew install core-slot/tap/coreslot
+```
 
 ```sh
 coreslot run --need cpu=2..16 --subst -- make -j{n}  # waits for 2 cores, runs with up to 16
-coreslot run --need cpu=6 -- pytest -n 12            # 12 workers that keep about 4 cores busy
+coreslot run --label gate:unit -- pytest -n 12       # needs from `coreslot suggest --write`, else cpu=1
 coreslot status                                      # who holds what, who waits
 ```
+
+![Mean time to verdict of four agents' gates on a 16 GB, 10-core laptop: everything at once 74.6 s, semaphores of 3, 2 and 1 slots 45.6, 35.9 and 36.0 s, coreslot 34.3 s](docs/img/overload-run6.svg)
+
+Four agents' type checks, lints and test suites on one laptop reached their verdicts in less than
+half the time of running everything at once, in two pre-registered runs (a geometric mean of 0.47
+over run 6's 120 blocks, a median of 0.43 over run 4's 12), with next to no swap and no false
+failures. Against a semaphore whose slot count fits the mix it came out about even, and no run
+shows it more robust than one. It is not faster than a well-tuned semaphore;
+[Performance](#performance) has the details and the caveats.
+
+There is no daemon: the budget is a directory of token files and `flock(2)` locks, so a killed
+client never leaks its share, and any client written from [`PROTOCOL.md`](PROTOCOL.md) shares the
+same budget.
+
+**For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
+`go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as `coreslot run --label
+... -- <the same command>`:
+
+```text
+/plugin marketplace add core-slot/coreslot
+/plugin install coreslot@coreslot
+```
+
+Other agents get the same rule as a line in their instructions
+([the snippet](integrations/claude-code/README.md#other-coding-agents)).
 
 **Status:** `v0`. Before `v1.0.0` the CLI and the library may still change, and a release may
 introduce a new on-disk format; the [compatibility policy](docs/compatibility.md) says how.
 
+## Why not ...
+
+| Instead of coreslot | Good at | Where it stops |
+|---|---|---|
+| `make -j` and its jobserver | Sharing N job slots inside one build tree; Ninja, Cargo and GCC speak it | Each top-level build has its own pool: four agents at `-j12` are 48 jobs. coreslot can hand each one its `-j{n}`. |
+| A system-wide jobserver (Gentoo's steve) | One token pool for every jobserver-aware tool | Linux with CUSE, and jobserver-aware clients only; memory is not counted. |
+| GNU `sem`, a semaphore script | Simple, and as fast as coreslot when the slot count fits the mix | A fixed slot count for every command; no ranges, no memory, no strict queue order. |
+| cgroups, `systemd-run -p CPUQuota=` | Hard limits the kernel enforces | Everyone runs slower at once instead of waiting, a memory cap kills rather than waits, and macOS has neither. Pair one with coreslot for a hard cap. |
+| `nice`, `taskpolicy` | Keeping the desktop responsive | Lower priority still oversubscribes; on Linux autogroup confines it to one session. |
+| Bazel, Nx, Turborepo concurrency limits | Scheduling inside one invocation | Per invocation: two worktrees each take their share of the whole machine. |
+| Running agents in the cloud | Not sharing a laptop at all | Do it where you can; coreslot is for work that stays on your machine. |
+
 ## Install
-
-With Go 1.26 or newer:
-
-```sh
-go install github.com/core-slot/coreslot/cmd/coreslot@latest
-```
 
 With Homebrew, from a tap whose formula builds from source
 ([`packaging/homebrew/coreslot.rb.tmpl`](packaging/homebrew/coreslot.rb.tmpl)):
 
 ```sh
 brew install core-slot/tap/coreslot
+```
+
+With Go 1.26 or newer:
+
+```sh
+go install github.com/core-slot/coreslot/cmd/coreslot@latest
 ```
 
 Or download a release archive (macOS and Linux, amd64 and arm64) from the
@@ -75,8 +115,9 @@ Two defaults change:
 
 - Long, large runs are [preemptible](#choosing-a-range) by themselves: a run that asks for at least
   half the cpu budget, whose label's runs take 10 minutes or more, is admitted with one cpu token
-  and runs at nice 10. For a label with wall-clock deadlines (test timeouts, browser or end-to-end
-  tests, agent tool timeouts), opt out in its `needs.toml` entry:
+  and runs at a lower priority (nice 10, or a utility QoS clamp on macOS). For a label with
+  wall-clock deadlines (test timeouts, browser or end-to-end tests, agent tool timeouts), opt out in
+  its `needs.toml` entry:
 
   ```toml
   [needs."gate:e2e"]
@@ -181,34 +222,43 @@ as inside any run outside the budget.
 
 `coreslot run --preemptible` (or `preemptible = true` in the label's `needs.toml` entry;
 `--preemptible=false` overrides the entry) marks a batch run. It is admitted with one cpu token
-whatever its cpu request, and with its full memory, and its command runs at a lower priority, nice
-10, for the whole run: coreslot sets it on the command's process group right after the start, so
-every process of the command and everything it forks later has it. Other runs are admitted because
-the cpu tokens it leaves are free, and the scheduler gives them the cores first; the batch run takes the
-whole machine only when nothing else wants it. Its cpu is not reserved, so it over-commits cpu by
-design and pays in time only: mark batch work, not tests with timers, network or a database. `{n}`
-keeps the width of the request you wrote (`cpu = "1..8"` gives 8), `CORESLOT_GRANTED_CPU` is the
-real grant, 1, and the run log records the request as `need`, the grant, and a `preemptible` key
-with the reason (`flag`, `entry` or `auto: ...`); `status` shows the reason on the hold. A run
-that the queue does not admit (inside another run's grant, `--light`, outside an unusable budget,
-or at its `--timeout` under `--on-timeout run`) ignores the mark.
+whatever its cpu request, and with its full memory, and its command runs at a lower priority for the
+whole run. On Linux and the BSDs coreslot sets nice 10 on the command's process group right after
+the start, so every process of the command and everything it forks later has it. macOS ignores nice
+for every ordinary thread, so there coreslot starts the command through
+`/usr/sbin/taskpolicy -c utility`: a utility QoS clamp that every thread and every process of the
+command inherits from its first instruction. The command keeps its pid, sees its resolved path as
+`argv[0]`, and its disk I/O gets a lower tier too, as any utility work does. taskpolicy is a
+restricted binary, whose start drops every `DYLD_*` variable, so a command whose environment has one
+runs unclamped, and the run log's reason says so (`flag; unclamped: DYLD_* in the environment`). A
+path that is not an executable file runs unwrapped too and fails with coreslot's 126 or 127; a
+script whose `#!` interpreter is missing still fails with taskpolicy's own status and message. Other
+runs are admitted because the cpu tokens it leaves are free, and the scheduler gives them the cores
+first; the batch run takes the whole machine only when nothing else wants it. Its cpu is not
+reserved, so it over-commits cpu by design and pays in time only: mark batch work, not tests with
+timers, network or a database. `{n}` keeps the width of the request you wrote (`cpu = "1..8"` gives
+8), `CORESLOT_GRANTED_CPU` is the real grant, 1, and the run log records the request as `need`, the
+grant, and a `preemptible` key with the reason (`flag`, `entry` or `auto: ...`); `status` shows the
+reason on the hold. A run that the queue does not admit (inside another run's grant, `--light`,
+outside an unusable budget, or at its `--timeout` under `--on-timeout run`) ignores the mark.
 
 A run that nothing marked becomes preemptible by itself when it queues for admission (not
 `--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
 half the cpu size, and its label (without a worker count) has at least 5 recorded runs with a
-median of 10 minutes or more, in both generations of the run log. No history, no demotion, and a
-label whose runs of a minute or more averaged under 0.05 cores is left alone, since its work looks
-to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
+median of 10 minutes or more, in both generations of the run log. A run that was itself demoted
+counts only when it took under 10 minutes, since its demotion may be what made it long. No
+history, no demotion, and a label whose runs of a minute or more averaged under 0.05 cores is left
+alone, since its work looks to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
 that runs with wall-clock deadlines can fail when demoted; `preemptible = false` in the entry opts
 out. An entry that says `observed = false` is never demoted by itself either.
 
-Four limits. In terminal mode the group is the shell's job, so only the command's own process is
-lowered, and processes it forked before that are missed. On Linux, nice compares processes only
-within one autogroup (one session, on by default) or cpu cgroup, so the demotion reaches another
-session's work only where autogroup is off. And a command whose work runs outside its process
-tree, such as a Docker container, has nothing in that tree to lower, and the mark frees tokens
-that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested inside
-its command gets 1 cpu, and `{n}` is what one token gives; `preemptible = false` on the outer
+Four limits. Outside macOS, in terminal mode the group is the shell's job, so only the command's own
+process is lowered, and processes it forked before that are missed. On Linux, nice compares
+processes only within one autogroup (one session, on by default) or cpu cgroup, so the demotion
+reaches another session's work only where autogroup is off. And a command whose work runs outside
+its process tree, such as a Docker container, has nothing in that tree to lower, and the mark frees
+tokens that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested
+inside its command gets 1 cpu, and `{n}` is what one token gives; `preemptible = false` on the outer
 label avoids it.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
@@ -333,10 +383,10 @@ A suite that also needs the shared database adds `--need pg-local=1`. The state 
 
 ## What it is not
 
-- **Not enforcement.** coreslot is cooperative admission control. It sets no cgroup quota, `nice`
-  value or CPU affinity; a command that ignores its grant, or a tool that never asks, is not stopped
-  or counted. A hostile process of the same user can hoard tokens or corrupt the state
-  ([SECURITY.md](SECURITY.md)).
+- **Not enforcement.** coreslot is cooperative admission control. It sets no cgroup quota or CPU
+  affinity, and lowers no priority but a preemptible run's; a command that ignores its grant, or a
+  tool that never asks, is not stopped or counted. A hostile process of the same user can hoard
+  tokens or corrupt the state ([SECURITY.md](SECURITY.md)).
 - **Not a daemon.** Nothing runs between commands; there is no network and no distribution of work
   across machines.
 - **Not multi-user.** One budget per user; never share the state directory across users or hosts.
@@ -436,6 +486,22 @@ had a median of 58 one-second samples at warn pressure and swapped 8 GiB per set
 the tuned two-slot semaphore the median ratio was 1.0065 and the declared bound of 1.10 held in only
 7 of 12 blocks
 ([acceptance run 4](evidence/README.md#acceptance-run-4-needs-coreslot-learned-itself-against-a-tuned-semaphore-run4py)).
+
+The chart at the top is the larger run of the same stand, with every slot count from 1 to 3 and
+three levels of background memory: 120 blocks of seven arms
+([acceptance run 6](evidence/README.md#acceptance-run-6-coreslot-against-no-admission-and-every-semaphore-under-background-memory-run6py)).
+coreslot at its default shares cut the mean time to verdict to 0.47 of running everything at once
+(geometric mean of the per-block ratios, one-sided upper bound 0.49), with less warn-level memory
+pressure in all 120 blocks and no false failure in 600 gate runs, where every semaphore and running
+everything at once failed FastAPI's suite 3 to 14 times. Against the best semaphore picked in
+hindsight per background level it was within a few percent either way (0.98), a ratio the
+pre-registered chain left untested, as it left robustness: no fixed slot count was shown worse
+than coreslot at any level, and the run calls one slot a fair alternative on this mix. A later
+pilot on the same laptop
+([run 7](evidence/README.md#acceptance-run-7-no-fixed-slot-count-keeps-up-across-load-run7py))
+found a one-slot lock keeping pace with coreslot at both levels it tried; two slots lost by about
+a fifth there, and won all 6 blocks of a wide mix that fits in memory. A semaphore whose count
+fits the mix is as good as coreslot.
 
 [`evidence/README.md`](evidence/README.md) has the scripts, the setup and every run, of the
 [waiter benchmark](evidence/README.md#waiter-benchmark-the-release-gate) and of the

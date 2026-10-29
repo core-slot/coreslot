@@ -1,0 +1,16 @@
+{
+  "name": "coreslot",
+  "description": "coreslot: one machine-wide core budget for test suites, builds and coding agents",
+  "owner": {
+    "name": "core-slot",
+    "url": "https://github.com/core-slot"
+  },
+  "plugins": [
+    {
+      "name": "coreslot",
+      "source": "./integrations/claude-code",
+      "description": "Routes heavy test and build commands through coreslot run, so parallel agent sessions share one machine-wide core budget.",
+      "category": "development"
+    }
+  ]
+}

@@ -25,6 +25,15 @@ func longRuns(label string, minutes float64, n int) []store.RunRecord {
 	return runs
 }
 
+// demotedRuns is longRuns, recorded as demoted by the automatic rule.
+func demotedRuns(label string, minutes float64, n int) []store.RunRecord {
+	runs := longRuns(label, minutes, n)
+	for i := range runs {
+		runs[i].Preemptible = "auto: median 14m >= 10m, cpu 12 >= 7"
+	}
+	return runs
+}
+
 // The automatic rule, for a cpu size of 14: a run that nothing marked and that queues is
 // preemptible when its request's max is at least half the size and its label has 5 or more
 // counted runs with a median of 10 minutes or more that do not look unobserved. A small request
@@ -32,7 +41,9 @@ func longRuns(label string, minutes float64, n int) []store.RunRecord {
 // log, red; count 4 runs → the 4-run row red; compare the median with 540 s → the 9-minute row
 // red; take the mean or the minimum for the median → the skewed row red; drop the unobserved test, the terminal test or the mark test → their rows red; count
 // pass-through runs → the "pass-through" row red; drop the entry's observed = false test → the
-// check after the rows red.
+// check after the rows red. A demoted run only lengthens, so one under 10 minutes counts and one
+// over says nothing: count every demoted run → both "demoted over" rows red; drop every demoted
+// run → the "short demoted" row red.
 func TestAutoPreemptible(t *testing.T) {
 	long := longRuns("x", 14, 5)
 	unobserved := longRuns("x", 14, 5)
@@ -46,6 +57,12 @@ func TestAutoPreemptible(t *testing.T) {
 	// Two short runs among three of 15 minutes: the median is 15 minutes, the mean is under 10.
 	skewed := longRuns("x", 15, 5)
 	skewed[0].RanS, skewed[1].RanS = 60, 60
+	// Five runs of 5 minutes, then six demoted ones that took 15: the demotion is what lengthened them.
+	shortThenDemoted := append(longRuns("x", 5, 5), demotedRuns("x", 15, 6)...)
+	// Five runs of 14 minutes, then six demoted ones that took 20.
+	longThenDemoted := append(longRuns("x", 14, 5), demotedRuns("x", 20, 6)...)
+	// Five runs of 14 minutes, then six demoted ones that took 2: the label got faster.
+	longThenShort := append(longRuns("x", 14, 5), demotedRuns("x", 2, 6)...)
 	yes, no := true, false
 	for _, c := range []struct {
 		name     string
@@ -64,6 +81,9 @@ func TestAutoPreemptible(t *testing.T) {
 		{"the median, not the mean or the minimum", spec.Range{Min: 1, Max: 12}, "x", nil, false, skewed, nil, true, "auto: median 15m >= 10m, cpu 12 >= 7"},
 		{"4 runs", spec.Range{Min: 1, Max: 12}, "x", nil, false, long[:4], nil, true, ""},
 		{"median 9 minutes", spec.Range{Min: 1, Max: 12}, "x", nil, false, longRuns("x", 9, 5), nil, true, ""},
+		{"demoted over 10 minutes, after short runs", spec.Range{Min: 1, Max: 12}, "x", nil, false, shortThenDemoted, nil, true, ""},
+		{"demoted over 10 minutes, after long runs", spec.Range{Min: 1, Max: 12}, "x", nil, false, longThenDemoted, nil, true, "auto: median 14m >= 10m, cpu 12 >= 7"},
+		{"short demoted runs", spec.Range{Min: 1, Max: 12}, "x", nil, false, longThenShort, nil, true, ""},
 		{"max 6", spec.Range{Min: 1, Max: 6}, "x", nil, false, long, nil, false, ""},
 		{"another label", spec.Range{Min: 1, Max: 12}, "y", nil, false, long, nil, true, ""},
 		{"pass-through runs", spec.Range{Min: 1, Max: 12}, "x", nil, false, nested, nil, true, ""},
@@ -101,7 +121,7 @@ func TestAutoPreemptible(t *testing.T) {
 // an auto reason → red.
 func TestAutoPreemptibleHintOnce(t *testing.T) {
 	o := runOptions{label: "x", need: map[string]spec.Range{"cpu": {Min: 1, Max: 12}}}
-	runs := longRuns("x", 14, 5)
+	runs := longRuns("x", 14, 6)
 	runs[2].Preemptible = "entry"
 	if reason, first := autoPreemptible(o, false, 14, func() ([]store.RunRecord, error) { return runs, nil }); reason == "" || first {
 		t.Errorf("after an earlier entry: reason %q, first %v; want a reason and not the first", reason, first)

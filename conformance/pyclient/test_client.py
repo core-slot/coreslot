@@ -165,6 +165,10 @@ class Base(unittest.TestCase):
         except FileNotFoundError:
             return []
 
+    def tickets(self) -> list[str]:
+        """The tickets in queue/: a listing also shows a temporary while a client publishes."""
+        return [n for n in self.ls("queue") if not n.startswith(".")]
+
     def gen(self) -> dict:
         with open(os.path.join(self.S, "gen"), "rb") as fh:
             return json.loads(fh.read())
@@ -524,10 +528,10 @@ class OrderTests(Base):
         order = os.path.join(self.root, "order")
         procs = []
         for name, extra in (("A", []), ("B", []), ("C", ["--priority", "5"])):
-            n = len(self.ls("queue"))
+            n = len(self.tickets())
             procs.append(self.cli("run", "--need", "cpu=1..1", "--label", name, *extra, "--",
                                   "sh", "-c", f"echo {name} >> '{order}'; sleep 0.2"))
-            self.wait_for(lambda: len(self.ls("queue")) == n + 1, what=f"{name}'s ticket")
+            self.wait_for(lambda: len(self.tickets()) == n + 1, what=f"{name}'s ticket")
         holder.kill()
         for p in procs:
             self.assertEqual(p.wait(timeout=30), 0)
@@ -1040,19 +1044,21 @@ class CancelTests(Base):
     def test_cancellation_cli_exits_with_refusal_code(self):
         self.config("[resources]\ncpu = 1\n")
         self.lock(os.path.join(self.S, "res", "cpu", "0"))
+        # A young temporary is no ticket: a listing shows one while a client publishes (§21.1).
+        self.write(os.path.join(self.S, "queue", ".tmp-0000000001-000001"), b"")
         p = self.cli("run", "--need", "cpu=1", "--", "true", stderr=subprocess.DEVNULL)
-        self.wait_for(lambda: len(self.ls("queue")) == 1, what="ticket")
-        [name] = self.ls("queue")
+        self.wait_for(lambda: len(self.tickets()) == 1, what="ticket")
+        [name] = self.tickets()
         c = self.cli("cancel", name[:38])
         self.assertEqual(c.wait(timeout=10), 0)
         self.assertEqual(p.wait(timeout=10), 75)
-        self.assertEqual((self.ls("queue"), self.ls("cancel")), ([], []))
+        self.assertEqual((self.tickets(), self.ls("cancel")), ([], []))
 
     def test_interrupted_waiter_withdraws_and_exits_130(self):
         self.config("[resources]\ncpu = 1\n")
         self.lock(os.path.join(self.S, "res", "cpu", "0"))
         p = self.cli("run", "--need", "cpu=1", "--", "true", stderr=subprocess.DEVNULL)
-        self.wait_for(lambda: len(self.ls("queue")) == 1, what="ticket")
+        self.wait_for(lambda: len(self.tickets()) == 1, what="ticket")
         time.sleep(0.3)
         p.send_signal(signal.SIGINT)
         self.assertEqual(p.wait(timeout=10), 130)

@@ -46,6 +46,11 @@ func TestMain(m *testing.M) {
 	if h := os.Getenv(helperEnv); h != "" {
 		os.Exit(runHelper(h, os.Args[1:]))
 	}
+	// A helper named in argv[1] (helper:NAME) sees the environment coreslot gave its command,
+	// where CORESLOT_CLI_TEST_HELPER would make coreslot itself the helper.
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "helper:") {
+		os.Exit(runHelper(strings.TrimPrefix(os.Args[1], "helper:"), os.Args[2:]))
+	}
 	if os.Getenv(asMainEnv) != "" {
 		main()
 	}
@@ -86,6 +91,9 @@ const helperDeadline = 2 * time.Minute
 // runHelper runs one helper command of the tests.
 func runHelper(name string, args []string) int {
 	switch name {
+	case "getenv":
+		fmt.Println(os.Getenv(args[0]))
+		return 0
 	case "fds":
 		// Report the CORESLOT_* environment and every open descriptor from 3 to 600 with its
 		// inode, one line each.
@@ -1133,13 +1141,16 @@ func TestRunHoldHasTree(t *testing.T) {
 }
 
 // niceTable is every process's pid, parent pid and nice, from one ps snapshot.
-func niceTable(t *testing.T) (ppid, nice map[int]int) {
+func niceTable(t *testing.T) (ppid, nice map[int]int) { return psTable(t, "ni") }
+
+// psTable maps every process to its parent and to ps's field (ni, pri).
+func psTable(t *testing.T, field string) (ppid, value map[int]int) {
 	t.Helper()
-	out, err := exec.Command("ps", "-axo", "pid=,ppid=,ni=").Output()
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,"+field+"=").Output()
 	if err != nil {
 		t.Fatalf("ps: %v", err)
 	}
-	ppid, nice = map[int]int{}, map[int]int{}
+	ppid, value = map[int]int{}, map[int]int{}
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
 		if len(f) != 3 {
@@ -1147,18 +1158,21 @@ func niceTable(t *testing.T) (ppid, nice map[int]int) {
 		}
 		pid, err1 := strconv.Atoi(f[0])
 		parent, err2 := strconv.Atoi(f[1])
-		ni, err3 := strconv.Atoi(f[2])
+		v, err3 := strconv.Atoi(f[2])
 		if err1 == nil && err2 == nil && err3 == nil {
-			ppid[pid], nice[pid] = parent, ni
+			ppid[pid], value[pid] = parent, v
 		}
 	}
-	return ppid, nice
+	return ppid, value
 }
 
 // sleepsNice runs `coreslot run args... -- sh -c 'sleep 5 | sleep 5'`, waits until both sleeps
 // exist under the sh the run started, and returns their nice values once they have held for a
 // moment, with the run stopped.
-func sleepsNice(t *testing.T, args ...string) []int {
+func sleepsNice(t *testing.T, args ...string) []int { return sleepsPS(t, "ni", args...) }
+
+// sleepsPS is sleepsNice for any of ps's fields.
+func sleepsPS(t *testing.T, field string, args ...string) []int {
 	t.Helper()
 	dir := stateDir(t, "[resources]\ncpu = 2\n")
 	cmd := cliCmd(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "sh", "-c", "sleep 5 | sleep 5")...)
@@ -1182,8 +1196,8 @@ func sleepsNice(t *testing.T, args ...string) []int {
 	}
 	waitFor(t, 30*time.Second, "both sleeps running under the run", find)
 	time.Sleep(200 * time.Millisecond) // a late change of priority would have landed by now
-	_, nice := niceTable(t)
-	return []int{nice[sleeps[0]], nice[sleeps[1]]}
+	_, value := psTable(t, field)
+	return []int{value[sleeps[0]], value[sleeps[1]]}
 }
 
 // A preemptible run's command group runs at nice 10, every member of it, a pipeline's stages
@@ -1201,6 +1215,98 @@ func TestRunPreemptibleLowersTheCommandGroup(t *testing.T) {
 	}
 	if got := sleepsNice(t); got[0] != caller || got[1] != caller {
 		t.Errorf("no mark: the sleeps run at nice %v, want the caller's %d", got, caller)
+	}
+}
+
+// On macOS a preemptible run's command runs under a utility QoS clamp: both sleeps of a pipeline
+// show base priority 20, the utility class's, where nice 10 alone leaves them at the default
+// class's 31 (macOS ignores nice for a thread with a QoS class); a run without the mark keeps the
+// caller's priority. A caller already at 20 or below shows nothing: GitHub's macOS runners run
+// their jobs at 20, so there TestPreemptibleStartsThroughTaskpolicy is the check. Mutation: drop
+// clampPriority and the marked case shows 31, red; clamp every run and the unmarked case shows 20.
+func TestRunPreemptibleClampsQoSOnMacOS(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the QoS clamp is macOS's; elsewhere nice demotes the command")
+	}
+	_, own := psTable(t, "pri")
+	caller, ok := own[os.Getpid()]
+	if !ok {
+		t.Fatalf("ps lists no priority for this process, %d", os.Getpid())
+	}
+	if caller <= 20 {
+		t.Skipf("this process already runs at priority %d: the clamp would show nothing", caller)
+	}
+	if got := sleepsPS(t, "pri", "--preemptible"); got[0] != 20 || got[1] != 20 {
+		t.Errorf("--preemptible: the sleeps run at priority %v, want 20 and 20", got)
+	}
+	if got := sleepsPS(t, "pri"); got[0] != caller || got[1] != caller {
+		t.Errorf("no mark: the sleeps run at priority %v, want the caller's %d", got, caller)
+	}
+}
+
+// On macOS a preemptible run's command is started by taskpolicy, which execs it by the resolved
+// path coreslot passes: the command's argv[0] is /bin/sh where a run without the mark starts it as
+// sh. Mutation: drop the clampPriority call and the marked command shows sh, red.
+func TestPreemptibleStartsThroughTaskpolicy(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("only macOS starts a preemptible command through taskpolicy")
+	}
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--preemptible"}, "/bin/sh"},
+		{nil, "sh"},
+	} {
+		args := append(append([]string{"run"}, c.args...), "--", "sh", "-c", `echo "$(ps -o args= -p $$)"`)
+		r := cli(t, baseEnv(dir), args...)
+		if f := strings.Fields(r.stdout); r.code != 0 || len(f) == 0 || f[0] != c.want {
+			t.Errorf("%v: exit %d, the command's args %q (stderr %q), want argv[0] %s", c.args, r.code, r.stdout, r.stderr, c.want)
+		}
+	}
+}
+
+// A preemptible command that is not an executable file fails with coreslot's own status, as an
+// unmarked one does: 127 for a missing path, 126 for a file without the execute bit. Mutation:
+// wrap a path command that coreslot has not resolved to an executable → on macOS the status is
+// taskpolicy's, red.
+func TestPreemptiblePathCommandErrors(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	plain := filepath.Join(t.TempDir(), "plain")
+	if err := os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		path string
+		code int
+	}{
+		{filepath.Join(t.TempDir(), "missing"), 127},
+		{plain, 126},
+	} {
+		r := cli(t, baseEnv(dir), "run", "--preemptible", "--", c.path)
+		if r.code != c.code || !strings.Contains(r.stderr, "cannot run") {
+			t.Errorf("%s: exit %d, stderr %q; want %d and coreslot's cannot run", c.path, r.code, r.stderr, c.code)
+		}
+	}
+}
+
+// A preemptible command keeps a DYLD_* variable of its environment. On macOS taskpolicy's start
+// would drop it, so the command runs unclamped and the run log's reason says why. Mutation: wrap
+// it anyway → the command sees no variable, red.
+func TestPreemptibleKeepsDYLD(t *testing.T) {
+	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	r := cli(t, append(baseEnv(dir), "DYLD_CORESLOT_TEST=kept"), "run", "--preemptible", "--",
+		cliBinary(t), "helper:getenv", "DYLD_CORESLOT_TEST")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "kept" {
+		t.Errorf("exit %d, stdout %q, stderr %q; want the variable kept", r.code, r.stdout, r.stderr)
+	}
+	want := "flag"
+	if runtime.GOOS == "darwin" {
+		want = "flag; unclamped: DYLD_* in the environment"
+	}
+	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["preemptible"] != want {
+		t.Errorf("run log %v, want preemptible %q", lines, want)
 	}
 }
 

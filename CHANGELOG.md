@@ -8,6 +8,29 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A Claude Code plugin, `integrations/claude-code`: a `PreToolUse` hook that refuses a bare heavy
+  test or build command once (`go test ./...`, `cargo test`, `pytest -n`, `make -j`, ...) and
+  offers the same command back as `coreslot run --label <label> -- <command>`. The repository is
+  its marketplace: `/plugin marketplace add core-slot/coreslot`, then
+  `/plugin install coreslot@coreslot`.
+
+### Fixed
+
+- The automatic preemptible rule no longer keeps a label demoted on the strength of the runs its
+  demotion lengthened: a demoted run counts toward the label's median only when it ran for under
+  10 minutes.
+- A preemptible run was not demoted on macOS: v0.3.0's demotion there was a no-op. It set nice 10 on
+  the command, and macOS ignores nice for every thread with a QoS class, which every ordinary thread
+  has, so the command kept its full priority (base priority 31) and ran with one cpu token beside
+  other runs at the same priority. On macOS coreslot now starts a preemptible command through
+  `/usr/sbin/taskpolicy -c utility`, a utility QoS clamp that every thread and every process of the
+  command inherits (base priority 20). The command keeps its pid and its descriptors, sees its
+  resolved path as `argv[0]`, and its disk I/O gets a lower tier too. A command whose environment
+  has a `DYLD_*` variable, which taskpolicy's start would drop, runs unclamped, and the run log's
+  `preemptible` reason ends in `; unclamped: DYLD_* in the environment`. Linux keeps nice 10.
+
 ## [0.3.0] - 2026-10-28
 
 A command's worker count is no longer its cpu reservation, long batch runs give way to the rest,
@@ -22,11 +45,11 @@ Two defaults change:
   `[memory] live = true` in the configuration turns the live size back on.
 - Long, large runs are demoted automatically: a run that queues with a cpu request of at least half
   the cpu budget, whose label has at least 5 recorded runs with a median of 10 minutes or more, is
-  admitted with one cpu token and runs at nice 10 (see **Added**). `preemptible = false` in the
-  label's `needs.toml` entry opts it out; set it for runs with wall-clock deadlines (test timeouts,
-  browser or end-to-end tests, agent tool timeouts), and for a run whose command runs nested
-  `coreslot run`s with `{n}`, which a demoted run holds to one cpu. An entry with
-  `observed = false` is never demoted by itself.
+  admitted with one cpu token and runs at nice 10, which macOS ignored until 0.3.1 (see **Added**).
+  `preemptible = false` in the label's `needs.toml` entry opts it out; set it for runs with
+  wall-clock deadlines (test timeouts, browser or end-to-end tests, agent tool timeouts), and for a
+  run whose command runs nested `coreslot run`s with `{n}`, which a demoted run holds to one cpu. An
+  entry with `observed = false` is never demoted by itself.
 
 An older client on the same machine still sizes `mem` live unless `live = false`, and ignores the
 new `needs.toml` keys; [the compatibility policy](docs/compatibility.md) says what it does
@@ -44,14 +67,13 @@ differently.
   runs of a minute or more averaged under 0.05 cores gets a hint in `suggest`'s evidence instead of
   a lowered need.
 - Preemptible runs: `coreslot run --preemptible` (`--preemptible=false` unmarks) or
-  `preemptible = true` in the label's entry admits a batch run with its full `mem` and one cpu
-  token, and runs its command at nice 10 (its whole process group, except in a terminal or under
-  `--same-group`). The mark applies only to a run the queue admits, and a
-  `coreslot run` nested inside a preemptible one gets its one cpu token. `{n}` keeps the
-  width of the request; the run log records the request as `need`, the real grant, and a
-  `preemptible` key with the reason (`flag`, `entry` or `auto: …`), which `status` also shows on
-  the hold. The first automatic demotion of a label prints one line about runs with wall-clock
-  deadlines.
+  `preemptible = true` in the label's entry admits a batch run with its full `mem` and one cpu token, and runs its
+  command at nice 10 (its whole process group, except in a terminal or under `--same-group`; macOS
+  ignored it until 0.3.1). The mark applies only to a run the queue admits, and a `coreslot run`
+  nested inside a preemptible one gets its one cpu token. `{n}` keeps the width of the request; the
+  run log records the request as `need`, the real grant, and a `preemptible` key with the reason
+  (`flag`, `entry` or `auto: …`), which `status` also shows on the hold. The first automatic
+  demotion of a label prints one line about runs with wall-clock deadlines.
 - `coreslot run --same-group` keeps the command in coreslot's own process group, so a caller that
   kills that group, SIGKILL included, reaches the whole command tree. As in a terminal, a signal
   sent to coreslot's pid alone then reaches only the command's pid, or none: signal the group.
