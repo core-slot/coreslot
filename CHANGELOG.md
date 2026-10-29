@@ -8,6 +8,14 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-30
+
+A preemptible run is demoted on macOS too, coding agents get a Claude Code plugin whose offered
+command queues from the first run, and `coreslot run` takes a fallback need. The on-disk protocol
+stays at format 1 and no configuration default changes, but on macOS a run that v0.3.0 marked
+preemptible, by the automatic rule too, now really runs at a lower priority: a label with
+wall-clock deadlines that v0.3.0 demoted wants `preemptible = false` in its entry.
+
 ### Added
 
 - A Claude Code plugin, `integrations/claude-code`: a `PreToolUse` hook that refuses a bare heavy
@@ -20,6 +28,8 @@ All notable changes to this project are recorded here. The format follows
   has an entry, such as the plugin's hook, gives a self-sizing command a range without overriding
   the entry `coreslot suggest --write` learns. Without it, a label with no entry asks for one
   core, so four `go test ./...` on a budget of 8 were all admitted at once.
+- [`docs/remote.md`](docs/remote.md): running a command on another machine under that machine's
+  budget, through Crabbox.
 
 ### Fixed
 
@@ -50,7 +60,7 @@ Two defaults change:
   `[memory] live = true` in the configuration turns the live size back on.
 - Long, large runs are demoted automatically: a run that queues with a cpu request of at least half
   the cpu budget, whose label has at least 5 recorded runs with a median of 10 minutes or more, is
-  admitted with one cpu token and runs at nice 10, which macOS ignored until 0.3.1 (see **Added**).
+  admitted with one cpu token and runs at nice 10, which macOS ignored until 0.3.1 (see its **Fixed**).
   `preemptible = false` in the label's `needs.toml` entry opts it out; set it for runs with
   wall-clock deadlines (test timeouts, browser or end-to-end tests, agent tool timeouts), and for a
   run whose command runs nested `coreslot run`s with `{n}`, which a demoted run holds to one cpu. An
@@ -234,7 +244,8 @@ The module path is `github.com/core-slot/coreslot`; an install from the earlier 
 - Release archives with checksums and a build-provenance attestation for every archive, and a
   Homebrew formula template that builds from source.
 
-[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/core-slot/coreslot/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/core-slot/coreslot/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/core-slot/coreslot/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/core-slot/coreslot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/core-slot/coreslot/compare/v0.1.0...v0.2.0
