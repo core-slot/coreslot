@@ -25,6 +25,8 @@ coreslot run --label gate:unit -- pytest -n 12       # needs from `coreslot sugg
 coreslot status                                      # who holds what, who waits
 ```
 
+![Four test gates ask for 4 cores each on a budget of 8: two run, two wait in order, and nothing leaks](docs/demo/demo.gif)
+
 ![Mean time to verdict of four agents' gates on a 16 GB, 10-core laptop: everything at once 74.6 s, semaphores of 3, 2 and 1 slots 45.6, 35.9 and 36.0 s, coreslot 34.3 s](docs/img/overload-run6.svg)
 
 Four agents' type checks, lints and test suites on one laptop reached their verdicts in less than

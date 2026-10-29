@@ -1,0 +1,13 @@
+{"version":3,"term":{"cols":120,"rows":32},"timestamp":1793241377,"command":"docs/demo/demo.sh","env":{"SHELL":"/bin/sh"}}
+[0.427, "o", "\r\n\u001b[1m$ # a budget of 8 cores; four agents each start a gate that asks for 4\u001b[0m\r\n"]
+[1.005, "o", "$ coreslot run --need cpu=4 --label agent-1:tests -- sleep 8 &   # a test suite\r\n"]
+[0.407, "o", "$ coreslot run --need cpu=4 --label agent-2:tests -- sleep 8 &   # a test suite\r\n"]
+[0.410, "o", "$ coreslot run --need cpu=4 --label agent-3:tests -- sleep 8 &   # a test suite\r\n"]
+[0.411, "o", "$ coreslot run --need cpu=4 --label agent-4:tests -- sleep 8 &   # a test suite\r\n"]
+[1.414, "o", "\r\n\u001b[1m$ coreslot status\u001b[0m\r\n"]
+[1.018, "o", "state directory: /tmp/coreslot-demo.jRbsrT/state\r\nformat: 1\r\nadmission section: free\r\ndegraded: no\r\nresources:\r\n  cpu  size 8  locked 8  free 0\r\nholds:\r\n  agent-1:tests  pid 86347  cpu 4  held 3s\r\n  agent-2:tests  pid 86351  cpu 4  held 3s\r\nqueue:\r\n  1. agent-3:tests  pid 86355  priority 0  need cpu 4..4  waiting 2s  id 01793241379406206000-0000086355-000001\r\n  2. agent-4:tests  pid 86358  priority 0  need cpu 4..4  waiting 2s  id 01793241379815324000-0000086358-000001\r\nSTALLED: not observed (use --observe 10s or more)\r\n"]
+[8.006, "o", "\r\n\u001b[1m$ coreslot status   # the first two finished; the next two were admitted in order\u001b[0m\r\n"]
+[1.018, "o", "state directory: /tmp/coreslot-demo.jRbsrT/state\r\nformat: 1\r\nadmission section: free\r\ndegraded: no\r\nresources:\r\n  cpu  size 8  locked 8  free 0\r\nholds:\r\n  agent-3:tests  pid 86355  cpu 4  held 4s\r\n  agent-4:tests  pid 86358  cpu 4  held 4s\r\nqueue: empty\r\n"]
+[3.818, "o", "\r\n\u001b[1m$ coreslot status   # all four done, nothing leaked\u001b[0m\r\n"]
+[1.011, "o", "state directory: /tmp/coreslot-demo.jRbsrT/state\r\nformat: 1\r\nadmission section: free\r\ndegraded: no\r\nresources:\r\n  cpu  size 8  locked 0  free 8\r\nholds: none\r\nqueue: empty\r\n"]
+[0.010, "x", "0"]
