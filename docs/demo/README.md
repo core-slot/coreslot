@@ -10,9 +10,10 @@ With [asciinema](https://asciinema.org) and its GIF renderer
 [agg](https://github.com/asciinema/agg):
 
 ```sh
-asciinema rec --cols 100 --rows 30 -c docs/demo/demo.sh docs/demo/demo.cast
+asciinema rec --headless --window-size 120x32 --overwrite -c docs/demo/demo.sh docs/demo/demo.cast
 agg --font-size 16 docs/demo/demo.cast docs/demo/demo.gif
 ```
 
-Commit `demo.gif` and put it under the README's first code block. A `.cast` file can also be
-uploaded to asciinema.org and linked instead of a GIF.
+The committed [`demo.cast`](demo.cast) and [`demo.gif`](demo.gif) were made this way, with
+asciinema 3.2.1 and agg 1.9.0; the README shows the GIF under its first code block. A `.cast`
+file can also be uploaded to asciinema.org and linked instead of a GIF.

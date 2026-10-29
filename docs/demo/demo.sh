@@ -1,5 +1,5 @@
 #!/bin/sh
-# A 30-second demo of the queue, for a terminal recording (see docs/demo/README.md).
+# A 20-second demo of the queue, for a terminal recording (see docs/demo/README.md).
 #
 # Four "agents" each start a test gate that asks for 4 cores, on a budget of 8: two run, two
 # wait their turn, and `coreslot status` shows who holds what. The gates are `sleep`s, so the
@@ -7,7 +7,7 @@
 # It runs on a scratch budget of its own and never touches the machine's real one.
 set -eu
 
-CORESLOT_STATE_DIR="$(mktemp -d)/state"
+CORESLOT_STATE_DIR="$(mktemp -d /tmp/coreslot-demo.XXXXXX)/state"
 export CORESLOT_STATE_DIR
 mkdir -p "$CORESLOT_STATE_DIR"
 printf '[resources]\ncpu = 8\nmem = 0\n' >"$CORESLOT_STATE_DIR/config.toml"
