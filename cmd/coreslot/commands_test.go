@@ -1247,7 +1247,7 @@ func TestHelpGoesToStdout(t *testing.T) {
 	for _, want := range []string{
 		"  --need RES=MIN..MAX   tokens of RES", "RES=MIN.. means MIN..max(MIN, 16)",
 		"RES=..MAX means 1..MAX", "(default cpu=1..16, at most the CPU count, when COMMAND has a cpu",
-		"  --label L ", "  --priority P ", "else 0)", "  --timeout D ", "(default 0, no limit)",
+		"  --default-need RES=MIN..MAX", "neither --need nor the", "  --label L ", "  --priority P ", "else 0)", "  --timeout D ", "(default 0, no limit)",
 		"  --on-timeout run|fail ", "(default fail)", "  --no-wait ", "  --strict ", "  --independent ",
 		"  --same-group ", "signal the group, not coreslot's pid", "  --subst ", "  --refusal-code N ", "(default 75)", "exactly {n}", "{n:RES}",
 	} {

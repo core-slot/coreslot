@@ -3,10 +3,13 @@
 
 A Claude Code `PreToolUse` hook on `Bash`. When a command runs one of the heavy shapes of the
 shape file (`go test ./...`, `cargo test`, `pytest -n`, `make -j`, ...) and `coreslot` is on
-`PATH`, it denies the call with the same command offered back: `coreslot run --label <label> -- `
-inserted at the program word of every recognised segment, every other byte unchanged. The model
-then runs the offered command, which waits for its share of the budget instead of oversubscribing
-the machine; it goes through the user's permission rules like any other command.
+`PATH`, it denies the call with the same command offered back: `coreslot run --label <label>
+--default-need cpu=1.. -- ` inserted at the program word of every recognised segment, every other
+byte unchanged. The model then runs the offered command, which waits for its share of the budget
+instead of oversubscribing the machine; it goes through the user's permission rules like any other
+command. Every shape is a command that sizes itself to the machine, so a label with no entry in
+coreslot's `needs.toml` asks for 1 core up to the budget, and an entry, such as the one `coreslot
+suggest --write` learns, replaces that default (coreslot v0.3.1 or later).
 
 It is a nudge, not containment: a rephrased command escapes it. So it passes, silently, whenever
 it is not sure:
@@ -52,6 +55,9 @@ KEEP_SECONDS = 7 * 24 * 3600
 LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 _ASSIGNMENT = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*=")
 _BLANK = b" \t"
+# The offered prefix's request when the label has no needs.toml entry: a shape's command sizes
+# itself to the machine, so one core would undercount it.
+DEFAULT_NEED = "cpu=1.."
 
 
 class Segment(NamedTuple):
@@ -278,9 +284,9 @@ def classify(values: list[str], shapes: tuple[Shape, ...]) -> str | None:
 
 
 def offer(command: str, shapes: tuple[Shape, ...]) -> tuple[str, list[str]] | None:
-    """The command with `coreslot run --label <label> -- ` inserted at the program word of every
-    segment a shape matches, and the labels in order; None when no segment matches or the
-    command cannot be split."""
+    """The command with `coreslot run --label <label> --default-need cpu=1.. -- ` inserted at the
+    program word of every segment a shape matches, and the labels in order; None when no segment
+    matches or the command cannot be split."""
     raw = command.encode("utf-8")
     segments = split_segments(raw)
     if segments is None:
@@ -298,7 +304,8 @@ def offer(command: str, shapes: tuple[Shape, ...]) -> tuple[str, list[str]] | No
         return None
     offered = raw
     for offset, label in reversed(inserts):
-        offered = offered[:offset] + f"coreslot run --label {label} -- ".encode() + offered[offset:]
+        prefix = f"coreslot run --label {label} --default-need {DEFAULT_NEED} -- "
+        offered = offered[:offset] + prefix.encode() + offered[offset:]
     return offered.decode("utf-8"), [label for _, label in inserts]
 
 

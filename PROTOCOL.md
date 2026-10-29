@@ -1391,7 +1391,7 @@ temporaries from one counter and the temporaries of `gen`, `FORMAT` and `degrade
 any numbering conforms (section 7.1).
 
 The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
-[--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
+[--need RES=MIN..MAX]... [--default-need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
 [--no-wait] [--strict] [--independent] [--same-group] [--light] [--subst] [--refusal-code N]
 [--preemptible[=false]] -- COMMAND...`. `RES=N` means `N..N`, `RES=MIN..` means
 `MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage error, and every form keeps
@@ -1405,7 +1405,9 @@ which a cpu size above 100 % would otherwise grant. `--need mem=SIZE` takes one 
 string of section 5.2 above 0 and never a range, and asks for that many 128 MiB tokens rounded up
 as a fixed range, at most 256. A labelled run takes each of `cpu` and `mem` that its
 `--need` leaves out from the needs file's entry for its label (section 5.4), and only a run with no
-`--need` and no `cpu` from that entry gets the default `cpu` above. The effective request caps
+`--need` and no `cpu` from that entry gets the default `cpu` above. `--default-need` names a
+range used only for a resource that neither `--need` nor the entry names, and counts as a
+`--need` for that rule. The effective request caps
 the max at the size (section 12.2), so `cpu=1..16` on a budget of 8 takes at most 8. A run log's
 `need` (section 20) and the waiting line (section 10.3) show the request as these rules complete
 it. `--timeout` defaults to 0, no limit, and a negative one is a usage error; `--on-timeout`

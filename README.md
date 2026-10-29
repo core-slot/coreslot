@@ -40,12 +40,18 @@ same budget.
 
 **For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
 `go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as `coreslot run --label
-... -- <the same command>`:
+go-test --default-need cpu=1.. -- <the same command>`. With coreslot v0.3.1 or later on `PATH`,
+two lines set it up:
 
 ```text
 /plugin marketplace add core-slot/coreslot
 /plugin install coreslot@coreslot
 ```
+
+Nothing else is needed for heavy commands to queue: a label with no `needs.toml` entry asks for
+one core up to the whole budget, so the first suite takes the machine and the next ones wait their
+turn. After a few runs, `coreslot suggest --write` records what each label really keeps busy, and
+suites that fit beside each other then run side by side.
 
 Other agents get the same rule as a line in their instructions
 ([the snippet](integrations/claude-code/README.md#other-coding-agents)).
@@ -285,7 +291,9 @@ Without `--need` (and without `cpu` in its [needs file](#memory) entry), a run w
 machine's CPU count when it has fewer, and any other run for `cpu=1..1`: a command that cannot
 learn its grant would hold tokens it leaves idle. A command that parallelizes itself without
 `{n}`, such as `go test ./...` or `cargo build`, should say `--need cpu=1..16` (or `cpu=1..`) so
-that it is counted honestly.
+that it is counted honestly. A wrapper that does not know whether the label has an entry says
+`--default-need cpu=1..` instead: it applies only to a resource that neither `--need` nor the entry
+names, so the entry `coreslot suggest --write` learns still wins.
 
 ### Memory
 
