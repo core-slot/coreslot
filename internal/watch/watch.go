@@ -25,6 +25,11 @@ const (
 // measured, so that an unknown command needs more evidence.
 const DefaultNormalShare = 0.25
 
+// minWorkShare is the part of a period a job's user, system and page-wait time must reach to count
+// toward E: an idle polling job is mostly system time and says nothing about memory. interim: the
+// calibration sets it.
+const minWorkShare = 0.10
+
 const (
 	clearSamples   = 15                      // samples in a row below yellow_points that clear yellow
 	floorGrowthMiB = 256                     // swap growth over the floor window that makes floor an edge
@@ -123,7 +128,7 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	r, ok := rates(prev.Host, cur.Host)
 	d.Rates, d.Excess, d.Gate = r, 0, false
 	if ok {
-		d.Excess = Excess(cur.Jobs)
+		d.Excess = Excess(cur.Jobs, cur.Host.WallNS-prev.Host.WallNS)
 		d.Gate = r.DecompS+r.SwapInsS >= c.GatePagesPerS || r.PSISomeUSS > 0
 	}
 	d.Window = slices.DeleteFunc(d.Window, func(p Point) bool { return p.AtNS > now || now-p.AtNS > windowNS })
@@ -201,13 +206,13 @@ func Share(j Job) (s float64, ok bool) {
 	return float64(j.DSysNS+j.DPageWaitNS) / float64(total), true
 }
 
-// Excess is the stall excess E in points: the mean of max(0, S − normal) over the jobs, weighted
-// by their time; 0 when no job reported time.
-func Excess(jobs []Job) float64 {
+// Excess is the stall excess E in points: the mean of max(0, S − normal) over the jobs that worked
+// for at least minWorkShare of the period of periodNS ns, weighted by their time; 0 when none did.
+func Excess(jobs []Job, periodNS int64) float64 {
 	var sum, weight float64
 	for _, j := range jobs {
-		if s, ok := Share(j); ok {
-			w := float64(j.DUserNS + j.DSysNS + j.DPageWaitNS)
+		w := float64(j.DUserNS + j.DSysNS + j.DPageWaitNS)
+		if s, ok := Share(j); ok && w >= minWorkShare*float64(periodNS) {
 			sum += w * max(0, s-j.NormalShare)
 			weight += w
 		}

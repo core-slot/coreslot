@@ -47,12 +47,12 @@ func job(share, normal float64) Job {
 // is S 60 % against a normal 4 %: 56 points.
 func TestExcessFromAirRamp(t *testing.T) {
 	j := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04}
-	if e := Excess([]Job{j}); math.Abs(e-56) > 1e-9 {
+	if e := Excess([]Job{j}, 2e9); math.Abs(e-56) > 1e-9 {
 		t.Errorf("excess %v, want 56", e)
 	}
 	// Weighted by time: a calm job with three times the time pulls it to a quarter.
 	calm := Job{DUserNS: 6e9, NormalShare: 0.04}
-	if e := Excess([]Job{j, calm}); math.Abs(e-14) > 1e-9 {
+	if e := Excess([]Job{j, calm}, 2e9); math.Abs(e-14) > 1e-9 {
 		t.Errorf("excess with a calm job %v, want 14", e)
 	}
 }
@@ -66,6 +66,23 @@ func TestHighNormalShareNotYellow(t *testing.T) {
 		if l := f.step(c, true, job(0.27, 0.25)); l != Green {
 			t.Fatalf("sample %d: %v, want green", i, l)
 		}
+	}
+}
+
+// Two idle polling jobs spend 80 % of their few milliseconds in the system, and the gate is open at
+// idle on a Mac: with under a tenth of the period between them, they carry no excess and the
+// machine stays green.
+func TestIdleJobsCarryNoExcess(t *testing.T) {
+	c := Defaults()
+	f := newFeed(c)
+	idle := Job{DUserNS: 5e6, DSysNS: 20e6, NormalShare: 0.04}
+	for i := range 30 {
+		if l := f.step(c, true, idle, idle); l != Green {
+			t.Fatalf("sample %d: %v, want green", i, l)
+		}
+	}
+	if f.d.Excess != 0 {
+		t.Errorf("excess %v with no job at work, want 0", f.d.Excess)
 	}
 }
 
