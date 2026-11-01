@@ -10,10 +10,10 @@ import (
 
 // feed drives a detector with one sample every 2 s, as the watchdog takes them.
 type feed struct {
-	d                          Detector
-	prev                       Sample
-	pages                      uint64
-	swapUsed, swapFree, vmFree int64
+	d                                        Detector
+	prev                                     Sample
+	pages                                    uint64
+	swapUsed, swapFree, vmFree, memAvailable int64
 }
 
 // newFeed starts a feed on a machine with room in swap; its first sample has no predecessor.
@@ -30,8 +30,8 @@ func (f *feed) step(c Config, gate bool, jobs ...Job) Level {
 	if gate {
 		f.pages += 5000 // 2500/s, above the gate's 1000/s
 	}
-	cur := Sample{Host: memsample.HostReading{Decomp: f.pages, SwapUsedMiB: f.swapUsed,
-		SwapFreeMiB: f.swapFree, VMVolumeFreeMiB: f.vmFree, WallNS: ns, AwakeNS: ns}, Jobs: jobs}
+	cur := Sample{Host: memsample.HostReading{Decomp: f.pages, SwapUsedMiB: f.swapUsed, SwapFreeMiB: f.swapFree,
+		VMVolumeFreeMiB: f.vmFree, MemAvailableMiB: f.memAvailable, WallNS: ns, AwakeNS: ns}, Jobs: jobs}
 	l := f.d.Advance(f.prev, cur, c)
 	f.prev = cur
 	return l
@@ -171,6 +171,20 @@ func TestFloorIsAnEdge(t *testing.T) {
 	}
 	if l != Floor {
 		t.Errorf("swap +300 MiB in 20 s at 1 GiB of room: %v, want floor", l)
+	}
+}
+
+// On Linux the swap room counts MemAvailable: with 1 GiB of swap left but 8 GiB available, 300 MiB
+// more swap within 20 s is ordinary paging, not floor. Mutation: swap room from SwapFree alone.
+func TestFloorCountsMemAvailable(t *testing.T) {
+	c := Defaults()
+	f := newFeed(c)
+	f.swapFree, f.vmFree, f.swapUsed, f.memAvailable = 1024, 0, 1024, 8192
+	for range 10 {
+		f.swapUsed += 30
+		if l := f.step(c, false); l == Floor {
+			t.Fatalf("swap +%d MiB with 8 GiB available: floor", f.swapUsed-1024)
+		}
 	}
 }
 

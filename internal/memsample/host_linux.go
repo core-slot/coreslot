@@ -18,8 +18,8 @@ var hasPSI = sync.OnceValue(func() bool {
 	return err == nil && ok
 })
 
-// readHost reads pswpin of /proc/vmstat, the swap of /proc/meminfo, the PSI memory stall where
-// the kernel reports it, and the two clocks.
+// readHost reads pswpin of /proc/vmstat, the swap and MemAvailable of /proc/meminfo, the PSI
+// memory stall where the kernel reports it, and the two clocks.
 func readHost() (HostReading, error) {
 	var r HostReading
 	data, err := os.ReadFile("/proc/vmstat")
@@ -39,6 +39,9 @@ func readHost() (HostReading, error) {
 		return r, errors.New(procMeminfo + ": no SwapTotal or SwapFree in kB")
 	}
 	r.SwapFreeMiB, r.SwapUsedMiB = free/1024, (total-free)/1024
+	if avail, ok := meminfo(string(data), "MemAvailable"); ok {
+		r.MemAvailableMiB = avail / 1024
+	}
 	if hasPSI() {
 		if data, err := os.ReadFile(procPSI); err == nil {
 			r.PSISomeUS, r.HasPSI = psiTotal(string(data))

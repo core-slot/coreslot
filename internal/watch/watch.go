@@ -168,7 +168,7 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 		d.Yellow = d.Below < clearSamples
 	}
 	switch h := cur.Host; {
-	case h.VMVolumeFreeMiB+h.SwapFreeMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB:
+	case h.VMVolumeFreeMiB+h.SwapFreeMiB+h.MemAvailableMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB:
 		d.Level = Floor
 	case d.Bucket >= c.RedSamples:
 		d.Level = Red

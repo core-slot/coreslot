@@ -1441,6 +1441,7 @@ well under a millisecond with no subprocess:
 | memory stall (PSI) | none | the `total` of the `some` line of `/proc/pressure/memory`, in µs; absent or `EOPNOTSUPP` when the kernel does not report it, and then not used |
 | swap used, swap free | `vm.swapusage` | `SwapTotal − SwapFree` and `SwapFree` of `/proc/meminfo` |
 | free space of the volume that holds the swap files | `/System/Volumes/VM` | none |
+| available memory | none | `MemAvailable` of `/proc/meminfo` |
 | the sleep-inclusive clock, the **host clock** | `CLOCK_MONOTONIC_RAW` | `CLOCK_BOOTTIME` |
 | the sleep-exclusive clock | `CLOCK_UPTIME_RAW` | `CLOCK_MONOTONIC` |
 
@@ -1486,7 +1487,8 @@ below that applies.
   −0.5 for any other comparable sample, never below 0, never above `red_samples` and never reset.
   Red while it is at `red_samples`, so the first sample after the danger leaves red.
 - **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
-  `SwapFree` on Linux) is under `floor`, and swap used grew by at least 256 MiB over the last 20 s.
+  `SwapFree` plus `MemAvailable` on Linux) is under `floor`, and swap used grew by at least 256 MiB
+  over the last 20 s.
   It is an edge: a calm machine with little room never reaches it.
 - **Green** otherwise.
 

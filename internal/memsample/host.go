@@ -18,6 +18,7 @@ type HostReading struct {
 	PSISomeUS                                 uint64
 	HasPSI                                    bool
 	SwapUsedMiB, SwapFreeMiB, VMVolumeFreeMiB int64
+	MemAvailableMiB                           int64 // Linux: MemAvailable, which swap room counts there; 0 elsewhere
 	// WallNS counts the time the machine slept and AwakeNS does not; both are in ns since boot.
 	WallNS, AwakeNS int64
 }
