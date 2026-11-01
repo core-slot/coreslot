@@ -203,8 +203,15 @@ future = "ignored"
 	if err != nil || c.Watch != want {
 		t.Errorf("[watch]: %+v, %v; want %+v", c.Watch, err, want)
 	}
+	// A threshold of 0 would make every sample hot, or the floor unreachable; a wait of 0 is none.
+	if c, err := Load(writeConfig(t, "[watch]\ncalm_s = 0\npost_kill_s = 0\nspacing_s = 0\n")); err != nil ||
+		c.Watch.CalmS != 0 || c.Watch.PostKillS != 0 || c.Watch.SpacingS != 0 {
+		t.Errorf("waits of 0: %+v, %v; want them taken", c.Watch, err)
+	}
 	for _, body := range []string{"watch = 1", "[watch]\nmode = \"kill\"", "[watch]\nsample_log = 1",
-		"[watch]\nred_points = \"high\"", "[watch]\ncalm_s = -1", "[watch]\nfloor = \"lots\""} {
+		"[watch]\nred_points = \"high\"", "[watch]\ncalm_s = -1", "[watch]\nfloor = \"lots\"",
+		"[watch]\nyellow_points = 0", "[watch]\nred_points = 0", "[watch]\nred_samples = 0",
+		"[watch]\ngate_pages_s = 0", "[watch]\nfloor = \"0\""} {
 		var ce *Error
 		if _, err := Load(writeConfig(t, body+"\n")); !errors.As(err, &ce) {
 			t.Errorf("Load(%q) = %v, want a *config.Error", body, err)

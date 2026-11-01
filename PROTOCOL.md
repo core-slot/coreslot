@@ -305,8 +305,10 @@ windows_warning = false   # default true (section 16)
 ```
 
 - `[memory]`: `reserve`, a size (section 5.2), 0 allowed.
-- `[watch]`: `mode`, `"enforce"` or `"observe"`; `sample_log`, a boolean; `floor`, a size; the other
-  keys, numbers not below 0. A key that is absent takes the release's default. The defaults and
+- `[watch]`: `mode`, `"enforce"` or `"observe"`; `sample_log`, a boolean; `floor`, a size above 0;
+  `yellow_points`, `red_points`, `red_samples` and `gate_pages_s`, numbers above 0; the waits
+  `calm_s`, `post_kill_s` and `spacing_s`, numbers not below 0, where 0 waits not at all. A key that
+  is absent takes the release's default. The defaults and
   the values of the examples are not part of the format: a minor release may change them
   (introduction).
 - `[platform]`: `windows_warning`, a boolean.

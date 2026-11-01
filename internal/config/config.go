@@ -155,8 +155,8 @@ func parse(data string) (Config, string) {
 	return c, ""
 }
 
-// parseWatch reads the keys of [watch] into w: mode, sample_log, floor (a size, as reserve) and
-// the thresholds, numbers not below 0.
+// parseWatch reads the keys of [watch] into w: mode, sample_log, floor (a size above 0), the
+// thresholds, numbers above 0, and the waits, numbers not below 0 (0 waits not at all).
 func parseWatch(tbl map[string]any, w *watch.Config) string {
 	if v, ok := tbl["mode"]; ok {
 		if v != "enforce" && v != "observe" {
@@ -174,6 +174,9 @@ func parseWatch(tbl map[string]any, w *watch.Config) string {
 		if err != nil {
 			return err.Error()
 		}
+		if mib == 0 {
+			return "floor: want a size above 0"
+		}
 		w.FloorMiB = mib
 	}
 	for key, p := range map[string]*float64{"yellow_points": &w.YellowPoints, "red_points": &w.RedPoints,
@@ -188,8 +191,11 @@ func parseWatch(tbl map[string]any, w *watch.Config) string {
 		default:
 			return key + ": want a number"
 		}
-		if !(*p >= 0) {
+		switch wait := p == &w.CalmS || p == &w.PostKillS || p == &w.SpacingS; {
+		case wait && !(*p >= 0):
 			return key + ": want a number not below 0"
+		case !wait && !(*p > 0):
+			return key + ": want a number above 0"
 		}
 	}
 	return ""
