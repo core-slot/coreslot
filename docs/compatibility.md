@@ -53,26 +53,20 @@ Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite is:
 - the deterministic traces in [`conformance/`](../conformance), which pause real CLI and helper
   processes at named points inside the protocol's steps, stop, continue or kill them there, and
   check the state directory and what the other clients do meanwhile;
-- the kill storm there, which for 60 s kills, stops, resumes and cancels 50 CLI and
-  Python clients, some of them nested and some in token-only mode, while it shrinks and grows the
+- the kill storm there, which for 60 s kills, stops, resumes and cancels 50 CLI
+  clients, some of them nested and some in token-only mode, while it shrinks and grows the
   budget and a sampler checks invariants I1, I2, I3 and I7 of
   [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants);
-- the interoperability test there, which queues the Python client and the CLI in one FIFO order
-  and checks that the Go and Python decoders agree on every wire fixture;
-- the Python client's own tests in [`conformance/pyclient`](../conformance/pyclient).
 
-At full length means without `-short` and with the Python client required:
+At full length means without `-short`:
 
 ```sh
-CORESLOT_REQUIRE_PYTHON=1 go test -tags coreslot_testhooks -race ./conformance/
-(cd conformance/pyclient && python3 -m unittest)
+go test -tags coreslot_testhooks -race ./conformance/
 ```
 
 CI runs the suite on every change, on Linux and macOS, but shortened: with `-short` the kill storm
 runs 20 clients for 10 s, `TestClockStepThenHeadStops` skips its forward clock step and
-`TestSuspendAllWaiters` its third phase; and the Python clients take part only when Python 3.11 or
-newer is found, which CI provides but does not require. What is still missing is a full-length pass
-on each system, which is recorded in [`evidence/README.md`](../evidence/README.md) when it is made.
+`TestSuspendAllWaiters` its third phase. What is still missing is a full-length pass on each system.
 
 Until `v1.0.0` a minor release (`0.x`) may change the CLI surface within the
 deprecation window, and may introduce a new format number (below). `v1.0.0` freezes the format then
@@ -175,7 +169,3 @@ macOS and Linux on amd64 and arm64, built with the two Go releases the Go projec
 (`go.mod` names the older one; 1.26 and 1.27 as of 2026-10). CI runs the tests on Linux amd64,
 Linux arm64 and macOS arm64 with both releases; macOS amd64 is built for the release archives but
 not tested in CI. Windows builds, but runs commands without a budget.
-
-The Python client in [`conformance/pyclient`](../conformance/pyclient) is a conformance artifact:
-it proves `PROTOCOL.md` is sufficient for an independent implementation and is not a supported
-distribution.

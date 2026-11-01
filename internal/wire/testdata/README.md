@@ -1,7 +1,7 @@
 # Wire-format fixtures (protocol format 1)
 
 Test vectors for the names and bodies of `PROTOCOL.md` section 7. The Go reference implementation
-and the independent Python client read these same files; neither generates them at test time. This
+reads these files; it does not generate them at test time. This
 README is enough to consume them without reading any Go code. The rules the fixtures exercise are
 those of `PROTOCOL.md` sections 1, 7.1 to 7.5 and 9; where this file and `PROTOCOL.md` differ,
 `PROTOCOL.md` wins and the difference is a bug in the fixtures.

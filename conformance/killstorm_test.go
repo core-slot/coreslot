@@ -28,13 +28,12 @@ import (
 	"github.com/core-slot/coreslot/internal/store"
 )
 
-// The kill-storm: randomized CLI and independent Python clients,
-// some of them nested runs and some token-only, queue for mem while the storm kills
-// them with SIGKILL, stops and continues them, cancels them, and shrinks and grows the sizes
-// through the configuration. A sampler checks I1, I2, I3 and I7 throughout. Each client runs
-// with its headroom pinned through the test hook, so that the Go clients size mem from it when
-// the static size falls short, and the Python client, which does not, waits beside them; I3
-// then bounds mem by the headroom's tokens too. Every run prints its seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
+// The kill-storm: randomized CLI clients, some of them nested runs and some token-only, queue
+// for mem while the storm kills them with SIGKILL, stops and continues them, cancels them, and
+// shrinks and grows the sizes through the configuration. A sampler checks I1, I2, I3 and I7
+// throughout. Each client runs with its headroom pinned through the test hook, so that the
+// clients size mem from it when the static size falls short; I3 then bounds mem by the
+// headroom's tokens too. Every run prints its seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
 // and delays, and the size changes; the interleaving is the scheduler's). The schedule also
 // depends on -short. The first clients and the first two size changes are fixed, and one
 // client is canceled while it is seen queued, so that every run exercises each kind of
@@ -80,22 +79,6 @@ func stormRequest(label string) (map[string]spec.Range, bool) {
 	lo, _ := strconv.Atoi(m[1])
 	hi, _ := strconv.Atoi(m[2])
 	return map[string]spec.Range{"mem": {Min: lo, Max: hi}}, true
-}
-
-// pyClient returns the interpreter and the independent client's path, or why there are none.
-func pyClient(t *testing.T) (py, client string, err error) {
-	t.Helper()
-	if py, err = python(); err != nil {
-		if os.Getenv("CORESLOT_REQUIRE_PYTHON") == "1" {
-			t.Fatalf("CORESLOT_REQUIRE_PYTHON=1 and no Python 3.11+: %v", err)
-		}
-		return "", "", err
-	}
-	root, err := moduleRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return py, filepath.Join(root, "conformance", "pyclient", "coreslot_client.py"), nil
 }
 
 // ---------------------------------------------------------------- token-only runs
@@ -216,9 +199,9 @@ func (r *tokenOnlyRuns) reportLatency() (longest time.Duration, runs int) {
 
 type stormClient struct {
 	id          int
-	kind        string // cli, py, tok; nested runs are "<outer>-<inner>", like cli-py
-	outer       string // cli, py or tok
-	inner       string // "", go or py: the nested run's client
+	kind        string // cli or tok; nested runs are "<outer>-<inner>", like cli-go
+	outer       string // cli or tok
+	inner       string // "" or go: the nested run
 	name        string // the label, and the marker name of its command
 	need        map[string]spec.Range
 	timeout     time.Duration
@@ -226,7 +209,6 @@ type stormClient struct {
 	at          time.Duration
 	stopFor     time.Duration
 	hold        time.Duration
-	cancelPy    bool
 	afterShrink bool // a first-wave client: holds until the first shrink
 
 	proc      *Proc
@@ -248,8 +230,6 @@ type storm struct {
 	s       *Sampler
 	seed    uint64
 	short   bool
-	py      string // "" without Python 3.11+
-	pyc     string
 	started time.Time
 	tok     *tokenOnlyRuns
 	shrunk  chan struct{} // closed after the first shrink, or when the storm ends without it
@@ -285,7 +265,7 @@ func (st *storm) victimID() int {
 
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
 // not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
-// one admission of each kind (CLI, Python, a CLI run with a nested Go run, token-only), each
+// one admission of each kind (CLI, CLI, a CLI run with a nested run, token-only), each
 // holding mem until the first shrink: 1 token each, but 6 for the two CLI runs, so the
 // first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
 // the one victimID picks, which is killed while it holds. The memFlood clients after them are
@@ -298,18 +278,13 @@ func (st *storm) plan(id int) *stormClient {
 	r := rand.New(rand.NewPCG(st.seed, uint64(id)))
 	c := &stormClient{id: id, need: map[string]spec.Range{}}
 	outers := []string{"cli", "cli", "cli", "cli", "cli", "cli", "tok"}
-	inners := []string{"go"}
-	if st.py != "" {
-		outers = append(outers, "py", "py", "py")
-		inners = append(inners, "py")
-	}
 	c.outer = outers[r.IntN(len(outers))]
 	if c.outer != "tok" && r.IntN(6) == 0 {
-		c.inner = inners[r.IntN(len(inners))]
+		c.inner = "go"
 	}
-	// A mem need is fixed (min = max), as the CLIs take one size, and a client without one asks
-	// for the default of one token; the Python client's default is not mem, so it always names one.
-	if n := 1 + r.IntN(8); c.outer == "tok" || c.outer == "py" || r.IntN(8) != 0 {
+	// A mem need is fixed (min = max), as the CLI takes one size, and a client without one asks
+	// for the default of one token.
+	if n := 1 + r.IntN(8); c.outer == "tok" || r.IntN(8) != 0 {
 		c.need["mem"] = spec.Range{Min: n, Max: n}
 	}
 	if c.outer != "tok" && r.IntN(5) == 0 {
@@ -336,14 +311,9 @@ func (st *storm) plan(id int) *stormClient {
 		c.stopFor = 10500*time.Millisecond + time.Duration(r.IntN(2500))*time.Millisecond // STALLED
 	}
 	c.hold = 50*time.Millisecond + time.Duration(r.IntN(1950))*time.Millisecond
-	c.cancelPy = st.py != "" && r.IntN(2) == 0
 
 	if id <= firstWave {
-		py := "py"
-		if st.py == "" {
-			py = "cli"
-		}
-		c.outer = []string{"cli", py, "cli", "tok"}[id-1]
+		c.outer = []string{"cli", "cli", "cli", "tok"}[id-1]
 		c.inner = ""
 		if id == 3 {
 			c.inner = "go"
@@ -373,16 +343,6 @@ func (st *storm) plan(id int) *stormClient {
 	return c
 }
 
-// needFlags writes need as flag options. The Python client takes mem as one size in MiB, never a
-// range.
-func needFlags(need map[string]spec.Range) []string {
-	var out []string
-	for _, r := range slices.Sorted(maps.Keys(need)) {
-		out = append(out, "--need", fmt.Sprintf("%s=%dM", r, need[r].Min*spec.MemTokenMiB))
-	}
-	return out
-}
-
 // memFlags writes need as the CLI's one --mem size.
 func memFlags(need map[string]spec.Range) []string {
 	if r, ok := need["mem"]; ok {
@@ -404,33 +364,19 @@ func (st *storm) clientArgv(c *stormClient) []string {
 		leaf = append([]string{"/bin/sh", "-c", `: > "$0" && exec "$@"`, begunPath(st.e.MarkDir, c.name)}, leaf...)
 	}
 	cmd := leaf
-	switch c.inner {
-	case "go":
+	if c.inner == "go" {
 		cmd = append([]string{bins.coreslot, "run", "--mem", "128M", "--"}, leaf...)
-	case "py":
-		cmd = append([]string{st.py, st.pyc, "run", "--need", "mem=128M", "--"}, leaf...)
 	}
-	switch c.outer {
-	case "cli", "tok":
-		a := []string{bins.coreslot, "run", "--label", c.name}
-		if c.outer == "tok" {
-			// A client implementing only format 2 finds format 1 and runs token-only.
-			a = append([]string{"CORESLOT_TESTHOOK_FORMATS=2"}, a...)
-		}
-		if c.timeout > 0 {
-			a = append(a, "--timeout", c.timeout.String())
-		}
-		a = append(a, memFlags(c.need)...)
-		return append(append(a, "--"), cmd...)
-	case "py":
-		a := []string{st.py, st.pyc, "run", "--label", c.name}
-		if c.timeout > 0 {
-			a = append(a, "--timeout", strconv.FormatFloat(c.timeout.Seconds(), 'f', 3, 64))
-		}
-		a = append(a, needFlags(c.need)...)
-		return append(append(a, "--"), cmd...)
+	a := []string{bins.coreslot, "run", "--label", c.name}
+	if c.outer == "tok" {
+		// A client implementing only format 2 finds format 1 and runs token-only.
+		a = append([]string{"CORESLOT_TESTHOOK_FORMATS=2"}, a...)
 	}
-	panic("unknown storm client " + c.outer)
+	if c.timeout > 0 {
+		a = append(a, "--timeout", c.timeout.String())
+	}
+	a = append(a, memFlags(c.need)...)
+	return append(append(a, "--"), cmd...)
 }
 
 // after waits d while c's process lives: false when the storm ended or the process exited.
@@ -578,13 +524,12 @@ func (st *storm) ticketID(c *stormClient) (string, bool) {
 	return "", false
 }
 
-// cancel waits up to 2 s for c's ticket, then publishes a cancel request for it, through the
-// Go CLI by label or through the Python client by id. A ticket admitted meanwhile, or gone,
-// makes it a no-op. The cancel command is killed if it has not exited within exitWait, and is
+// cancel waits up to 2 s for c's ticket, then publishes a cancel request for it through the CLI
+// by label. A ticket admitted meanwhile, or gone, makes it a no-op. The cancel command is killed if it has not exited within exitWait, and is
 // reaped before the storm ends.
 func (st *storm) cancel(ctx context.Context, c *stormClient) {
-	id, queued := st.ticketID(c)
-	for end := time.Now().Add(2 * time.Second); !queued && time.Now().Before(end); id, queued = st.ticketID(c) {
+	_, queued := st.ticketID(c)
+	for end := time.Now().Add(2 * time.Second); !queued && time.Now().Before(end); _, queued = st.ticketID(c) {
 		if st.holding(c) || !st.after(ctx, c, pollStep) {
 			return
 		}
@@ -592,12 +537,7 @@ func (st *storm) cancel(ctx context.Context, c *stormClient) {
 	if !queued {
 		return
 	}
-	var p *Proc
-	if c.cancelPy {
-		p = st.e.StartCommand(st.py, st.pyc, "cancel", id)
-	} else {
-		p = st.e.Start("cancel", "--label", c.name)
-	}
+	p := st.e.Start("cancel", "--label", c.name)
 	st.mu.Lock()
 	st.helpers = append(st.helpers, p)
 	st.mu.Unlock()
@@ -613,17 +553,14 @@ func (st *storm) cancel(ctx context.Context, c *stormClient) {
 	}
 }
 
-// cancelledMessage is what each kind of client prints on stderr when a cancel request ended its
-// wait: the evidence, besides the refusal code, that the cancel acted. Token-only clients are
-// never queued and have none.
-var cancelledMessage = map[string]string{
-	"cli": "coreslot: the request was cancelled", // the Go CLI
-	"py":  " was cancelled",                      // the Python client: "coreslot: ticket <id> was cancelled"
-}
+// cancelledMessage is what a client prints on stderr when a cancel request ended its wait: the
+// evidence, besides the refusal code, that the cancel acted. Token-only clients are never queued
+// and have none.
+const cancelledMessage = "coreslot: the request was cancelled"
 
-// canceller cancels one client while it is seen queued: it picks a live CLI or Python
+// canceller cancels one client while it is seen queued: it picks a live CLI
 // client with a ticket, no timeout and a command that does not run, publishes a cancel request
-// for it by label, and checks that the client then exits with the refusal code and its kind's
+// for it by label, and checks that the client then exits with the refusal code and the
 // canceled message. A request that loses the race (the client was admitted first) is retried
 // with another queued client, at most cancelTries times and only while the storm runs; none
 // found or none taking effect leaves the floor to fail by name.
@@ -681,7 +618,7 @@ func (st *storm) canceller(ctx context.Context) {
 		st.count("cancel published")
 		select {
 		case <-c.proc.done:
-			if c.proc.code == exitRefusal && strings.Contains(c.proc.Stderr(), cancelledMessage[c.outer]) {
+			if c.proc.code == exitRefusal && strings.Contains(c.proc.Stderr(), cancelledMessage) {
 				st.count("cancel took effect")
 				st.count("cancel took effect on " + c.kind)
 				return
@@ -860,14 +797,8 @@ func TestKillStorm(t *testing.T) {
 	st := &storm{t: t, e: e, seed: seed, short: testing.Short(),
 		tok: &tokenOnlyRuns{markDir: e.MarkDir}, shrunk: make(chan struct{}),
 		labels: map[string]map[string]spec.Range{}, live: map[*stormClient]bool{}, counts: map[string]int{}}
-	py, pyc, err := pyClient(t)
-	if err != nil {
-		t.Logf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
-	} else {
-		st.py, st.pyc = py, pyc
-	}
-	banner := fmt.Sprintf("kill-storm seed %d (%s=%d replays the schedule; -short=%v), %d clients for %v, python %v; load: %s",
-		seed, stormSeedEnv, seed, testing.Short(), clients, dur, st.py != "", uptime())
+	banner := fmt.Sprintf("kill-storm seed %d (%s=%d replays the schedule; -short=%v), %d clients for %v; load: %s",
+		seed, stormSeedEnv, seed, testing.Short(), clients, dur, uptime())
 	t.Log(banner)
 	fmt.Fprintln(os.Stderr, banner)
 	defer func() {
@@ -1047,9 +978,6 @@ func TestKillStorm(t *testing.T) {
 	}
 	floors := []string{"admitted cli", "admitted tok", "admitted nested", "SIGKILL of a holder",
 		"SIGSTOP", "cancel took effect", "shrink below the locked count", "growth"}
-	if st.py != "" {
-		floors = append(floors, "admitted py")
-	}
 	floorFailed := false
 	for _, what := range floors {
 		if st.counts[what] < 1 {

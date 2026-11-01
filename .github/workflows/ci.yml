@@ -117,10 +117,6 @@ jobs:
             exit 1
           fi
 
-      - name: Python interop client
-        working-directory: conformance/pyclient
-        run: python3 -m unittest
-
       - name: Claude Code hook
         working-directory: integrations/claude-code
         run: python3 -m unittest

@@ -6,7 +6,7 @@
 // of wall time, as a percentage of one core, for each run and the spread over the runs.
 //
 // The gate is its default: 100 waiters, five 120 s runs, median at most 10 % of one core, on the
-// macOS reference host (evidence/README.md); it exits 1 when the median exceeds it. Any other -n,
+// macOS reference host; it exits 1 when the median exceeds it. Any other -n,
 // -runs or -duration is a measurement with no verdict (exit 0), for example the published
 // 1000-waiter figure.
 //

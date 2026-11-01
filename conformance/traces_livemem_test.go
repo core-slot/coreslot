@@ -8,19 +8,15 @@ import (
 	"time"
 )
 
-// TestTraceLiveMemOlderClientWaits: a Go CLI run is admitted above the static mem size from free
-// memory, and the independent Python client, which sizes mem statically, waits for it. Static mem
-// is 1 GiB (8 tokens) and the headroom is pinned at 4096 MiB, so the run's 2 GiB (16 tokens) gets
-// a live size of 32 and runs unclamped; the Python client's 128 MiB then finds 16 locked above
-// its size of 8 and stays queued until the run exits.
+// TestTraceLiveMemStaticSizeWaits: a CLI run is admitted above the static mem size from free
+// memory, and a run that sizes mem statically (live sizing was switched off by then) waits for
+// it. Static mem is 1 GiB (8 tokens) and the headroom is pinned at 4096 MiB, so the first run's
+// 2 GiB (16 tokens) gets a live size of 32 and runs unclamped; the second run's 128 MiB then finds
+// 16 locked above its size of 8 and stays queued until the first exits.
 //
 // Mutation: attemptSizes returning the static sizes clamps the run to 8 tokens, so it prints 1024
 // instead of 2048.
-func TestTraceLiveMemOlderClientWaits(t *testing.T) {
-	py, pyc, err := pyClient(t)
-	if err != nil {
-		t.Skipf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
-	}
+func TestTraceLiveMemStaticSizeWaits(t *testing.T) {
 	e := State(t)
 	e.WriteConfig("[resources]\nmem = \"1G\"\n[memory]\nlive = true\n")
 
@@ -28,11 +24,11 @@ func TestTraceLiveMemOlderClientWaits(t *testing.T) {
 		"--label", "go", "--mem", "2G", "--", "sh", "-c", `echo $CORESLOT_GRANTED_MEM; sleep 5`)
 	e.WaitHold("go", startWait)
 
-	waiter := e.StartCommand(py, pyc, "run", "--label", "py", "--need", "mem=128M", "--",
-		bins.child, "hold", e.MarkDir, "py")
-	e.WaitTicket("py")
+	writeConfigAtomic(e, "[resources]\nmem = \"1G\"\n")
+	waiter := e.Run("static", "--mem", "128M")
+	e.WaitTicket("static")
 	for !run.Exited() {
-		noHold(t, e, "py", "the Go run holds 16 mem tokens above the Python client's size of 8")
+		noHold(t, e, "static", "the first run holds 16 mem tokens above the static size of 8")
 		time.Sleep(100 * time.Millisecond)
 	}
 	run.ExitCode(0)
@@ -41,7 +37,7 @@ func TestTraceLiveMemOlderClientWaits(t *testing.T) {
 			got, run.Stderr())
 	}
 
-	e.WaitStarted("py")
-	e.ReleaseChild("py")
+	e.WaitStarted("static")
+	e.ReleaseChild("static")
 	waiter.ExitCode(0)
 }

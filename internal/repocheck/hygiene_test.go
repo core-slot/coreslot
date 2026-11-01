@@ -61,7 +61,7 @@ func danglingMarkdown(file, line string, files, bases map[string]bool) []string 
 // resolves (relative, from the root, bare, with an anchor) or sits in a URL is not.
 func TestMarkdownNameMatcher(t *testing.T) {
 	unbar := func(s string) string { return strings.ReplaceAll(s, "|", "") }
-	files := map[string]bool{"PROTOCOL.md": true, "docs/compatibility.md": true, "evidence/README.md": true}
+	files := map[string]bool{"PROTOCOL.md": true, "docs/compatibility.md": true, "README.md": true}
 	bases := map[string]bool{"PROTOCOL.md": true, "compatibility.md": true, "README.md": true}
 	mustCatch := []string{
 		"see TOD|O.m|d",
@@ -80,7 +80,7 @@ func TestMarkdownNameMatcher(t *testing.T) {
 	}
 	mustPass := []string{
 		"PROTOCOL.md section 12.2: a request above the size waits",
-		"[policy](../PROTOCOL.m|d#151-what-every-format-keeps) and `evidence/README.md`",
+		"[policy](../PROTOCOL.m|d#151-what-every-format-keeps) and `README.md`",
 		"[compat](compatibility.m|d)",
 		"README.md, https://example.com/x/NOTE|S.m|d",
 		"go 1.26.0",
@@ -104,7 +104,6 @@ func TestPatternFile(t *testing.T) {
 	}{
 		{".gitignore", true},
 		{".gitattributes", true},
-		{"conformance/pyclient/.gitignore", true},
 		{"x.go", false},
 		{inDocs, false},
 		{"README.md", false},

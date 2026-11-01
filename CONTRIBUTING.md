@@ -55,7 +55,6 @@ staticcheck ./... && staticcheck -tags coreslot_testhooks ./... && staticcheck -
 govulncheck ./...
 go test -race ./...
 go test -tags coreslot_testhooks -race -short ./...  # CI runs only the tests this tag adds
-(cd conformance/pyclient && python3 -m unittest)
 (cd integrations/claude-code && python3 -m unittest)
 GOOS=windows go build ./...
 ```
@@ -87,13 +86,8 @@ release.
   packages, `PROTOCOL.md`'s contract inventory, local paths and dangling Markdown names); it has
   only tests.
 - **Benchmarks.** `bench/waiters` and `bench/floor` build only with `-tags coreslot_bench`, so
-  that `go install github.com/core-slot/coreslot/...@latest` installs `coreslot` alone;
-  [`evidence/README.md`](evidence/README.md) has the commands that run them.
-- **The Python client.** [`conformance/pyclient`](conformance/pyclient) is an independent client
-  written from `PROTOCOL.md` alone (Python 3.11 or newer, standard library only). It must keep
-  passing after any protocol change; a place where `PROTOCOL.md` is silent or ambiguous goes into
-  its `AMBIGUITIES.md` and is fixed in `PROTOCOL.md`, not resolved by reading the Go code.
-
+  that `go install github.com/core-slot/coreslot/...@latest` installs `coreslot` alone; each
+  command's header comment says how to build and run it.
 - **The Claude Code hook.** [`integrations/claude-code`](integrations/claude-code) is a plugin
   whose hook is one Python file (Python 3.9 or newer, standard library only), so that it runs on
   the `python3` macOS ships. It never decides anything about the budget: it only offers a command

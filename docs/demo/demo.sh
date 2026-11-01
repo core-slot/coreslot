@@ -3,7 +3,7 @@
 #
 # Four "agents" each start a test gate that asks for 1 GiB of memory, on a budget of 2 GiB: two
 # run, two wait their turn, and `coreslot status` shows who holds what. The gates are `sleep`s,
-# so the demo shows the mechanics only; the measured effect on real suites is in evidence/README.md.
+# so the demo shows the mechanics only.
 # It runs on a scratch budget of its own and never touches the machine's real one.
 set -eu
 

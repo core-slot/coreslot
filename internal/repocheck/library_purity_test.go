@@ -31,7 +31,7 @@ func TestLibraryPurity(t *testing.T) {
 				return filepath.SkipDir
 			}
 			switch d.Name() {
-			case "testdata", ".git", "evidence", "docs":
+			case "testdata", ".git", "docs":
 				if path != "." {
 					return filepath.SkipDir
 				}

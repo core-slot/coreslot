@@ -607,9 +607,8 @@ func TestEncodeCanonicalAndStable(t *testing.T) {
 	}
 }
 
-// The fixtures under testdata are shared with the independent Python client. This test is the
-// Go side of the same contract: every valid file decodes to its expectation, every bad file
-// is malformed, every name is accepted or refused as stated.
+// The fixtures under testdata are the contract of the wire format: every valid file decodes to
+// its expectation, every bad file is malformed, every name is accepted or refused as stated.
 
 type nameCase struct {
 	Name     string  `json:"name"`

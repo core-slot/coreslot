@@ -793,7 +793,7 @@ A waiter:
   rescan when `gen` changed) before each attempt.
 
 > **Implementation note.** The conformance traces' 22 s bound cannot tell a waiter that watches the
-> front window from one that does not; the Go and Python unit tests enforce it.
+> front window from one that does not; the Go unit tests enforce it.
 
 **Minimums before extras.** A waiter whose own ticket is among the first 4 tickets of the queue
 that are not gone, counted as the front window counts them, MAY be admitted while live tickets are

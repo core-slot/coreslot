@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -29,8 +28,7 @@ import (
 // 11 s; the traces allow twice that, because OS scheduling of the processes involved is not part
 // of the claim. That bound cannot tell a waiter that watches the front window from one that does
 // not (a missed window costs about 10 s more per successor, and a tighter bound would flake on a
-// loaded host): the front window is enforced by the Go engine tests (wait_test.go) and the Python
-// client's tests, not here.
+// loaded host): the front window is enforced by the Go engine tests (wait_test.go), not here.
 const (
 	stalledHeadBound = 22 * time.Second
 	pollBound        = 100 * time.Millisecond // an engine Poll while the section is held
@@ -161,19 +159,10 @@ func logLine(t *testing.T, e Env, label string) map[string]any {
 	return nil
 }
 
-// python returns a Python 3.11+ interpreter for the independent client.
-func python() (string, error) {
-	py, err := exec.LookPath("python3")
-	if err == nil {
-		err = exec.Command(py, "-c", "import sys; sys.exit(sys.version_info < (3, 11))").Run()
-	}
-	return py, err
-}
-
 // ---------------------------------------------------------------- environment traces
 
-// The default macOS state directory contains a space. Every CLI command, the descriptor
-// mapping and the independent Python client work there unchanged, sharing one budget.
+// The default macOS state directory contains a space. Every CLI command and the descriptor
+// mapping work there unchanged.
 func TestStateDirWithSpace(t *testing.T) {
 	e := State(t)
 	if !strings.Contains(e.Dir, " ") {
@@ -228,31 +217,15 @@ func TestStateDirWithSpace(t *testing.T) {
 	e.Start("cancel", "--label", "waiting2").ExitCode(0)
 	w2.ExitCode(exitRefusal)
 
-	t.Run("python", func(t *testing.T) {
-		py, err := python()
-		if err != nil {
-			if os.Getenv("CORESLOT_REQUIRE_PYTHON") == "1" {
-				t.Fatalf("CORESLOT_REQUIRE_PYTHON=1 and no Python 3.11+: %v", err)
-			}
-			t.Skipf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
-		}
+	t.Run("cancel with a busy section", func(t *testing.T) {
 		e := e.on(t)
-		root, err := moduleRoot()
-		if err != nil {
-			t.Fatal(err)
-		}
-		client := filepath.Join(root, "conformance", "pyclient", "coreslot_client.py")
-		p := e.StartCommand(py, client, "run", "--need", "mem=128M", "--label", "py", "--",
-			bins.child, "hold", e.MarkDir, "py")
-		e.WaitTicket("py")
-
-		// The Python client cancels a Go run's ticket in the same directory. The run, held after a
-		// refresh until the request is published, then finds the admission section busy: it
-		// withdraws and leaves its ticket dead for a reconciliation (PROTOCOL.md section 13.2).
+		// A cancel request published for a run held after a refresh until it is there, then finds
+		// the admission section busy: the run withdraws and leaves its ticket dead for a
+		// reconciliation (PROTOCOL.md section 13.2).
 		v := e.Pausing("ticket.refreshed").Run("victim", "--mem", "128M")
 		tk := e.WaitTicket("victim")
 		v.WaitReached("ticket.refreshed")
-		e.StartCommand(py, client, "cancel", tk.ID).ExitCode(0)
+		e.Start("cancel", tk.ID).ExitCode(0)
 		leave := holdSection(e)
 		v.Release("ticket.refreshed")
 		e.Eventually(startWait, "the canceled ticket is dead", func() bool {
@@ -261,13 +234,6 @@ func TestStateDirWithSpace(t *testing.T) {
 		})
 		leave()
 		v.ExitCode(exitRefusal)
-
-		e.ReleaseChild("go")
-		pr := e.WaitStarted("py")
-		ph := e.WaitHold("py", startWait)
-		checkDescriptors(t, e, pr, ph.Name, e.HoldBody(ph.Name).Grant)
-		e.ReleaseChild("py")
-		p.ExitCode(0)
 	})
 	e.ReleaseChild("go")
 	g.ExitCode(0)

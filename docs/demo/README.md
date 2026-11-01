@@ -4,7 +4,7 @@
 each on a budget of 2 GiB, two run, two wait, and `coreslot status` shows the holds and the
 queue at each step. It runs on a scratch budget (`CORESLOT_STATE_DIR` in a temporary directory),
 so it never touches the machine's real one. The gates are `sleep`s: the demo shows the
-mechanics, and [the evidence](../../evidence/README.md) has the measured effect on real suites.
+mechanics only.
 
 With [asciinema](https://asciinema.org) and its GIF renderer
 [agg](https://github.com/asciinema/agg):

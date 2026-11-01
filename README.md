@@ -24,15 +24,6 @@ coreslot run --label gate:unit -- pytest -n 12       # needs from `coreslot sugg
 coreslot status                                      # who holds what, who waits
 ```
 
-![Mean time to verdict of four agents' gates on a 16 GB, 10-core laptop: everything at once 74.6 s, semaphores of 3, 2 and 1 slots 45.6, 35.9 and 36.0 s, coreslot 34.3 s](docs/img/overload-run6.svg)
-
-Four agents' type checks, lints and test suites on one laptop reached their verdicts in less than
-half the time of running everything at once, in two pre-registered runs (a geometric mean of 0.47
-over run 6's 120 blocks, a median of 0.43 over run 4's 12), with next to no swap and no false
-failures. Against a semaphore whose slot count fits the mix it came out about even, and no run
-shows it more robust than one. It is not faster than a well-tuned semaphore;
-[Performance](#performance) has the details and the caveats.
-
 There is no daemon: the budget is a directory of token files and `flock(2)` locks, so a killed
 client never leaks its share, and any client written from [`PROTOCOL.md`](PROTOCOL.md) shares the
 same budget.
@@ -205,11 +196,7 @@ The line counts what the run log counts (below), so a command whose work runs in
 a daemon it talks to looks idle to it. Ask for the cores a command keeps busy, measured on this machine:
 each run appends a line to the run log, `log/runs.jsonl` in the state directory, and
 (`cpu_user_s` + `cpu_sys_s`) ÷ `ran_s` in it is the cores the run used (the command and the
-descendants it waited for; not a database or daemon it talks to). Ask for that times about 1.2. In
-the mix measured under [Performance](#performance), a pytest suite's 12 workers kept 2.4 to 4.3
-cores busy: asking for 12 tokens left most of the budget idle while the other gates waited, and
-with 6 it ran as fast as it did without coreslot
-([evidence](evidence/README.md#product-acceptance-acceptancepy)).
+descendants it waited for; not a database or daemon it talks to). Ask for that times about 1.2.
 
 A command that keeps well under one core busy for a long time, such as a download or a stream
 that waits on the network, needs no token: `coreslot run --light -- curl -O URL` runs at once
@@ -398,9 +385,7 @@ A suite that also needs the shared database adds `--need pg-local=1`. The state 
 
 A `coreslot run` inside a container sees the container's filesystem and therefore its own budget.
 Containers take part through a client on the host. On Docker Desktop for macOS a lock the host
-holds on a bind-mounted file is not visible inside the container
-([`evidence/probe-docker-flock.sh`](evidence/probe-docker-flock.sh), recorded in
-[`evidence/README.md`](evidence/README.md)).
+holds on a bind-mounted file is not visible inside the container.
 
 The run log counts the command's process tree, so a run whose work happens in a container or on
 another host looks idle to it. `coreslot suggest` does not lower the cpu and mem of a label whose
@@ -412,60 +397,7 @@ the process tree, and the run is never refused. Put `observed = false` in the en
 
 [`PROTOCOL.md`](PROTOCOL.md) is the normative definition of format 1: the state directory, its
 files and bodies, the admission critical section, and the descriptor and environment contract. Any
-client written from it alone shares one budget with every other. An independent Python client
-written that way lives in [`conformance/pyclient`](conformance/pyclient).
-
-## Performance
-
-Waiting is cheap: 100 waiting clients (one process each) cost **5.7 % of one core** in total, on
-a 14-core Mac, while the queue churns with arrivals, admissions, cancellations and stopped waiters
-(median of five 120 s runs, min 5.10 %, max 6.24 %;
-[the run](evidence/README.md#the-gate-run-2026-10-12-c114bc9)). A release is not cut while this
-figure is above 10 %. Larger queues:
-
-- **Linux, 1000 waiters:** 361.4 % of one core, measured once inside Docker Desktop's VM on the
-  same, loaded Mac.
-- **macOS, 1000 waiters:** not measured.
-  [A projection](evidence/README.md#projection-to-1000-waiters-on-macos-not-a-measurement) from the
-  measured runs gives about 150 % of one core; it is an extrapolation, not a measurement.
-
-On a real mix coreslot cost no measurable time, and it has not yet been shown to save any. Three
-test suites and a lint job started together on a busy 14-core Mac, twelve times with coreslot and
-twelve without, alternating: the last job finished after a median of 539 s with it and 536 s without
-(ratio 1.007; the bound declared before the runs was 1.05), and no job failed. That is a tie, not a
-speed-up: on that mix the suites needed about 6 to 9 of the 14 cores. An earlier attempt, with one
-token per pytest worker, lost at 1.144, which is why a request asks for the cores a command keeps
-busy ([choosing a range](#choosing-a-range)).
-
-On a mix that overloads memory and CPU, coreslot with needs it learned itself beat running
-everything at once, and did not meet its declared bound against a semaphore whose slot count was
-tuned for that mix. Four agents' type checks, lint and test suites on a 16 GiB, 10-core laptop, twelve
-counterbalanced blocks: coreslot cut the mean time to verdict to a median 0.4305 of running
-everything at once (12 of 12 blocks), with no memory pressure where running everything at once
-had a median of 58 one-second samples at warn pressure and swapped 8 GiB per set, and no false failure where it had 3; against
-the tuned two-slot semaphore the median ratio was 1.0065 and the declared bound of 1.10 held in only
-7 of 12 blocks
-([acceptance run 4](evidence/README.md#acceptance-run-4-needs-coreslot-learned-itself-against-a-tuned-semaphore-run4py)).
-
-The chart at the top is the larger run of the same stand, with every slot count from 1 to 3 and
-three levels of background memory: 120 blocks of seven arms
-([acceptance run 6](evidence/README.md#acceptance-run-6-coreslot-against-no-admission-and-every-semaphore-under-background-memory-run6py)).
-coreslot at its default shares cut the mean time to verdict to 0.47 of running everything at once
-(geometric mean of the per-block ratios, one-sided upper bound 0.49), with less warn-level memory
-pressure in all 120 blocks and no false failure in 600 gate runs, where every semaphore and running
-everything at once failed FastAPI's suite 3 to 14 times. Against the best semaphore picked in
-hindsight per background level it was within a few percent either way (0.98), a ratio the
-pre-registered chain left untested, as it left robustness: no fixed slot count was shown worse
-than coreslot at any level, and the run calls one slot a fair alternative on this mix. A later
-pilot on the same laptop
-([run 7](evidence/README.md#acceptance-run-7-no-fixed-slot-count-keeps-up-across-load-run7py))
-found a one-slot lock keeping pace with coreslot at both levels it tried; two slots lost by about
-a fifth there, and won all 6 blocks of a wide mix that fits in memory. A semaphore whose count
-fits the mix is as good as coreslot.
-
-[`evidence/README.md`](evidence/README.md) has the scripts, the setup and every run, of the
-[waiter benchmark](evidence/README.md#waiter-benchmark-the-release-gate) and of the
-[product acceptance](evidence/README.md#product-acceptance-acceptancepy).
+client written from it alone shares one budget with every other.
 
 ## More
 
