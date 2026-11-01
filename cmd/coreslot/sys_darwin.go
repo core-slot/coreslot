@@ -14,3 +14,6 @@ func stopSelf() { _ = unix.Kill(unix.Getpid(), unix.SIGSTOP) }
 // maxRSSKiB converts a wait4 ru_maxrss to KiB: macOS reports it in bytes (getrusage(2)), unlike
 // Linux and the BSDs.
 func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss / 1024, true }
+
+// raiseOOMScore does nothing: macOS has no OOM score.
+func raiseOOMScore() {}
