@@ -2,9 +2,8 @@ package main
 
 import "github.com/core-slot/coreslot/internal/needs"
 
-// needsLookup finds the needs file's entry for a label; ignore, when the entry made the request
-// invalid, prints the notice that sets it aside.
-type needsLookup func(label string) (e needs.Entry, ok bool, ignore func(error))
+// needsLookup finds the needs file's entry for a label.
+type needsLookup func(label string) (e needs.Entry, ok bool)
 
 // newNeedsLookup is parseRun's lookup of the needs file beside the configuration cfgPath. The
 // file is loaded once, on first use. A file that cannot be read, or an entry that does not
@@ -16,7 +15,7 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 		err    error
 		loaded bool
 	)
-	return func(label string) (needs.Entry, bool, func(error)) {
+	return func(label string) (needs.Entry, bool) {
 		if !loaded {
 			loaded = true
 			if f, err = needs.Load(path); err != nil {
@@ -24,16 +23,13 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 			}
 		}
 		if err != nil {
-			return needs.Entry{}, false, nil
+			return needs.Entry{}, false
 		}
 		e, ok, lerr := f.Lookup(label)
 		if lerr != nil {
 			notice("needs file %s: %s; ignoring it", text(path), text(lerr.Error()))
-			return needs.Entry{}, false, nil
+			return needs.Entry{}, false
 		}
-		return e, ok, func(err error) {
-			notice("needs file %s: the entry for %s makes the request invalid: %s; running without it",
-				text(path), text(label), text(err.Error()))
-		}
+		return e, ok
 	}
 }

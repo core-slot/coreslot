@@ -3,32 +3,10 @@
 package main
 
 import (
-	"os"
-	"os/exec"
 	"runtime"
-	"strconv"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
-
-// load1 is the one-minute load average, the first field of /proc/loadavg; 0 when it cannot be
-// read.
-func load1() float64 {
-	b, err := os.ReadFile("/proc/loadavg")
-	if err != nil {
-		return 0
-	}
-	f := strings.Fields(string(b))
-	if len(f) == 0 {
-		return 0
-	}
-	v, err := strconv.ParseFloat(f[0], 64)
-	if err != nil {
-		return 0
-	}
-	return v
-}
 
 // fileCap is the most a soft RLIMIT_NOFILE can be set to below the hard limit; 0, none here.
 func fileCap() uint64 { return 0 }
@@ -47,6 +25,3 @@ func stopSelf() {
 // maxRSSKiB converts a wait4 ru_maxrss to KiB: Linux reports it in kilobytes of 1024 bytes
 // already (getrusage(2)).
 func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss, true }
-
-// clampPriority leaves cmd as it is: on Linux, lowerPriority's nice demotes a preemptible command.
-func clampPriority(*exec.Cmd) string { return "" }

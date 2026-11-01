@@ -28,7 +28,6 @@ type run struct {
 	loc       location // the state directory and configuration, located once
 	startNS   int64    // wall clock at the run's start
 	start     time.Time
-	load      float64
 	waited    time.Duration
 	env       []string     // the command's environment before its grant: the inherited context dropped
 	nofile    *nofileProbe // learns the descriptor limit the run was started with (rlimit_unix.go)
@@ -56,7 +55,7 @@ func runCommand(args []string, io IO) int {
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now(), load: load1()}
+	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now()}
 	defer func() { r.nofile.stop() }()
 	return r.decide()
 }
@@ -71,37 +70,13 @@ func (r *run) refuse(format string, args ...any) int {
 	return r.o.refusalCode
 }
 
-// priority is the request's priority: --priority, or else the configuration's [priorities]
-// entry of the longest prefix of the label, or 0. A configuration that cannot be read is a
-// state error, under --priority too.
-func (r *run) priority(e *engine.Engine) (int, error) {
-	cfg, err := e.Config()
-	if err != nil {
-		return 0, err
-	}
-	if r.o.prioritySet {
-		return r.o.priority, nil
-	}
-	p, _ := cfg.PriorityFor(r.o.label)
-	return p, nil
-}
-
 // ordinary is a run that queues (PROTOCOL.md section 18 rule 3).
 func (r *run) ordinary() int {
 	e, err := openEngine(r.loc, false)
 	if err != nil {
 		return r.failOpen(nil, err)
 	}
-	if r.o.light {
-		return r.lightRun(e)
-	}
-	prio, err := r.priority(e)
-	if err != nil {
-		return r.failOpen(e, err)
-	}
-	r.autoPreempt(e)
-	r.o.queued = true // from here the preemptible mark applies, until the queue lets the run go
-	req := r.o.request(prio)
+	req := r.o.request()
 	if mem, ok := req.Need["mem"]; ok {
 		r.freeWait = &freeMeter{needMiB: int64(mem.Min) * spec.MemTokenMiB, headroom: memsample.Headroom}
 	}
@@ -152,11 +127,8 @@ func (r *run) ordinary() int {
 	return r.admitted(e, g)
 }
 
-// notAdmitted handles a wait that ended without a grant. The run is never admitted through the
-// queue now, so the preemptible mark no longer applies: a timeout or fail-open run takes min of
-// each resource of its unshrunk request, as an unmarked run does.
+// notAdmitted handles a wait that ended without a grant.
 func (r *run) notAdmitted(e *engine.Engine, t *engine.Ticket, err error) int {
-	r.o.queued = false
 	switch {
 	case errors.Is(err, engine.ErrCanceled):
 		return r.refuse("the request was cancelled")

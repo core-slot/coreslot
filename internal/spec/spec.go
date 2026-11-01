@@ -161,7 +161,7 @@ func (r Range) validate(name string) error {
 }
 
 // Validate checks every bound of a request. Call it on a normalized request: an empty Need is a
-// *UsageError here, where Normalize makes it cpu=1..1.
+// *UsageError here, where Normalize makes it mem=1..1.
 func (r Request) Validate() error {
 	if len(r.Need) == 0 {
 		return usagef("a request names at least one resource")
@@ -201,11 +201,11 @@ func ValidateLabel(label string) error {
 	return nil
 }
 
-// Normalize returns a copy of r whose Need defaults to cpu=1..1 when empty. It never shares the
+// Normalize returns a copy of r whose Need defaults to mem=1..1 when empty. It never shares the
 // caller's map.
 func Normalize(r Request) Request {
 	if len(r.Need) == 0 {
-		r.Need = map[string]Range{"cpu": {Min: 1, Max: 1}}
+		r.Need = map[string]Range{"mem": {Min: 1, Max: 1}}
 	} else {
 		r.Need = maps.Clone(r.Need)
 	}

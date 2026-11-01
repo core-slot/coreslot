@@ -2,30 +2,7 @@
 
 package main
 
-import (
-	"encoding/binary"
-	"os"
-	"os/exec"
-	"slices"
-	"strings"
-
-	"golang.org/x/sys/unix"
-)
-
-// load1 is the one-minute load average, from the vm.loadavg sysctl (struct loadavg: three
-// 32-bit fixed-point values, then the scale as a long); 0 when it cannot be read.
-func load1() float64 {
-	b, err := unix.SysctlRaw("vm.loadavg")
-	if err != nil || len(b) < 24 {
-		return 0
-	}
-	ld := binary.NativeEndian.Uint32(b[0:4])
-	scale := binary.NativeEndian.Uint64(b[16:24])
-	if scale == 0 {
-		return 0
-	}
-	return float64(ld) / float64(scale)
-}
+import "golang.org/x/sys/unix"
 
 // fileCap is the most a soft RLIMIT_NOFILE can be set to below the hard limit: macOS refuses a
 // soft limit above kern.maxfilesperproc. 0 means no cap is known.
@@ -47,37 +24,3 @@ func stopSelf() { _ = unix.Kill(unix.Getpid(), unix.SIGSTOP) }
 // maxRSSKiB converts a wait4 ru_maxrss to KiB: macOS reports it in bytes (getrusage(2)), unlike
 // Linux and the BSDs.
 func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss / 1024, true }
-
-// taskpolicyPath is taskpolicy(8), which runs a command under a QoS clamp.
-const taskpolicyPath = "/usr/sbin/taskpolicy"
-
-// clampPriority makes cmd start under a utility QoS clamp, as `taskpolicy -c utility -- cmd`,
-// and returns why it did not, or "". cmd's environment must be set. macOS ignores nice for every
-// thread with a QoS class, and libpthread gives every ordinary thread one, so lowerPriority alone
-// leaves a preemptible command at its full priority. The clamp caps the priority of every thread
-// of the command and of everything it starts, from its first instruction, terminal mode and
-// --same-group included. taskpolicy sets the clamp and replaces itself with the command
-// (posix_spawn with POSIX_SPAWN_SETEXEC): the command keeps the pid, the process group and the
-// inherited descriptors, and sees its resolved path as argv[0]. Two things change through it, so
-// cmd runs as it is when either would: a command that is not an executable file gets
-// taskpolicy's exit status instead of coreslot's 126 or 127, so only a command coreslot has
-// resolved to one is wrapped (it runs as it is and fails as before); and taskpolicy is a
-// restricted binary, whose start drops every DYLD_* variable, so a command whose environment has
-// one runs unclamped, and so does every command where taskpolicy is missing.
-func clampPriority(cmd *exec.Cmd) string {
-	if cmd.Err != nil {
-		return ""
-	}
-	if _, err := exec.LookPath(cmd.Path); err != nil {
-		return ""
-	}
-	if slices.ContainsFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, "DYLD_") }) {
-		return "DYLD_* in the environment"
-	}
-	if _, err := os.Stat(taskpolicyPath); err != nil {
-		return "no " + taskpolicyPath
-	}
-	cmd.Args = append([]string{taskpolicyPath, "-c", "utility", "--", cmd.Path}, cmd.Args[1:]...)
-	cmd.Path = taskpolicyPath
-	return ""
-}

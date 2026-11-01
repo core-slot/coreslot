@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BurntSushi/toml"
-
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/runstats"
@@ -23,7 +21,7 @@ import (
 // statsSchema is the version of the `stats --json` document.
 const statsSchema = 1
 
-// learned is what stats and suggest read: the run log's statistics and the needs file, which is
+// learned is what stats reads: the run log's statistics and the needs file, which is
 // empty when it cannot be read, with needsErr saying why.
 type learned struct {
 	stats     []runstats.Stats
@@ -285,135 +283,4 @@ func writeStatsJSON(io IO, l learned) error {
 	}
 	_, err := io.Stdout.Write(wire.EscapeJSON(buf.Bytes()))
 	return err
-}
-
-// suggestion is what suggest does with one label: the keys it sets, or why it sets none.
-type suggestion struct {
-	label string
-	set   map[string]any
-	kept  string // why the entry is kept as it is, when set is nil
-}
-
-// suggestions decides, per label, the keys to set: mem, the evidence, and cpu_per_worker for an
-// entry of f that has it, else cpu. A pinned entry, one with observed = false, or one that does not
-// parse, is kept; a label that looks unobserved gets only its evidence.
-func suggestions(stats []runstats.Stats, f needs.File) []suggestion {
-	var out []suggestion
-	for _, s := range stats {
-		sg := suggestion{label: s.Label}
-		e, ok, err := f.Lookup(s.Label)
-		switch {
-		case err != nil:
-			sg.kept = "kept, its entry does not parse: " + err.Error()
-		case e.Pinned:
-			sg.kept = "pinned, kept"
-		case ok && !e.Observed:
-			sg.kept = "observed = false: its work runs outside the process tree, kept"
-		case s.Suggest.CPU == nil && s.Suggest.MemMiB == 0 && !s.Unobserved:
-			sg.kept = "nothing measured, kept"
-		default:
-			sg.set = map[string]any{"evidence": s.Suggest.Reason}
-			switch {
-			case e.CPUPerWorker > 0 && s.Suggest.CPUPerWorker > 0:
-				sg.set["cpu_per_worker"] = s.Suggest.CPUPerWorker // its cpu is the worker width, kept
-			case s.Suggest.CPU != nil && e.CPUPerWorker == 0:
-				sg.set["cpu"] = cpuText(*s.Suggest.CPU)
-			}
-			if s.Suggest.MemMiB > 0 {
-				sg.set["mem"] = spec.NeedText(s.Suggest.MemMiB)
-			}
-		}
-		out = append(out, sg)
-	}
-	return out
-}
-
-// suggestCommand is `coreslot suggest [--label L] [--write]`: it prints the needs-file entries
-// the run log suggests, and with --write sets them in the needs file, keeping every other key
-// and every pinned entry, as the file reads under its lock. It exits 1 when what it reads cannot
-// be read or the needs file cannot be written (a state error, PROTOCOL.md section 19); a
-// malformed needs file is left as it is. Without --write, a needs file that cannot be read is a
-// notice, as in stats.
-func suggestCommand(args []string, io IO) int {
-	fs, label, write := suggestFlags()
-	if code, ok := parseOnly(fs, args, "suggest", suggestUsage, io); !ok {
-		return code
-	}
-	l, err := learn(*label)
-	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: suggest: %s\n", text(err.Error()))
-		return exitProblems
-	}
-	if *write && l.needsErr != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: suggest: needs file %s: %s\n", text(l.needsPath), text(l.needsErr.Error()))
-		return exitProblems
-	}
-	needsNotice(io, "suggest", l)
-	if len(l.stats) == 0 {
-		fmt.Fprintln(io.Stdout, "no runs recorded")
-		return 0
-	}
-	if !*write {
-		return printSuggestions(io, l.needsPath, suggestions(l.stats, l.needs))
-	}
-	var sgs []suggestion
-	err = needs.Update(l.needsPath, func(entries map[string]map[string]any) error {
-		sgs = suggestions(l.stats, needs.FromEntries(entries))
-		for _, sg := range sgs {
-			if sg.set == nil {
-				continue
-			}
-			e := entries[sg.label]
-			if e == nil {
-				e = map[string]any{}
-				entries[sg.label] = e
-			}
-			for k, v := range sg.set {
-				e[k] = v
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		fmt.Fprintf(io.Stderr, "coreslot: suggest: needs file %s: %s\n", text(l.needsPath), text(err.Error()))
-		return exitProblems
-	}
-	for _, sg := range sgs {
-		if sg.set == nil {
-			fmt.Fprintf(io.Stdout, "%s: %s\n", text(sg.label), text(sg.kept))
-			continue
-		}
-		var parts []string
-		for _, k := range []string{"cpu", "cpu_per_worker", "mem"} {
-			if v, ok := sg.set[k]; ok {
-				parts = append(parts, fmt.Sprintf("%s = %#v", k, v)) // a string quoted, a number bare
-			}
-		}
-		fmt.Fprintf(io.Stdout, "%s: wrote %s\n", text(sg.label), strings.Join(append(parts, "its evidence"), " and "))
-	}
-	return 0
-}
-
-// printSuggestions prints, as TOML, the keys --write would set, and as comments the entries it
-// would keep.
-func printSuggestions(io IO, path string, sgs []suggestion) int {
-	set := map[string]map[string]any{}
-	var b strings.Builder
-	fmt.Fprintf(&b, "# coreslot suggest --write sets these keys in %s; it keeps the others\n", text(path))
-	for _, sg := range sgs {
-		if sg.set == nil {
-			fmt.Fprintf(&b, "# %s: %s\n", text(sg.label), text(sg.kept))
-		} else {
-			set[sg.label] = sg.set
-		}
-	}
-	if len(set) > 0 {
-		b.WriteString("\n")
-		if err := toml.NewEncoder(&b).Encode(map[string]any{"needs": set}); err != nil {
-			fmt.Fprintf(io.Stderr, "coreslot: suggest: %s\n", text(err.Error()))
-			return exitInternal
-		}
-	}
-	fmt.Fprint(io.Stdout, b.String())
-	return 0
 }

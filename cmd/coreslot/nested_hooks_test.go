@@ -47,7 +47,7 @@ echo "me:x:$2:$2:me:$GETENT_HOME:/bin/sh"
 	env = append(env, asMainEnv+"=1", "CORESLOT_TESTHOOK_PASSWD_MISS=1", "CORESLOT_TESTHOOK_GETENT="+getent,
 		"GETENT_REPORT="+report, "GETENT_HOME="+home)
 
-	r := cli(t, env, "run", "--need", "cpu=1", "--", cliBinary(t), "run", "--need", "cpu=1", "--", "true")
+	r := cli(t, env, "run", "--mem", "128M", "--", cliBinary(t), "run", "--mem", "128M", "--", "true")
 	if r.code != 0 {
 		t.Fatalf("the nested runs exited %d: %q", r.code, r.stderr)
 	}

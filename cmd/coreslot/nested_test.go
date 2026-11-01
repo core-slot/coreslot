@@ -18,15 +18,11 @@ import (
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
-// outer runs script under `coreslot run need -- sh -c script`, with $BIN the coreslot binary,
-// $FDS the fds helper's command line and $D a scratch directory.
-func outer(t *testing.T, dir string, need []string, script string, extraEnv ...string) result {
+// outer runs script under `coreslot run --mem mem -- sh -c script`, with $BIN the coreslot
+// binary, $FDS the fds helper's command line and $D a scratch directory.
+func outer(t *testing.T, dir string, mem string, script string, extraEnv ...string) result {
 	t.Helper()
-	args := []string{"run"}
-	for _, n := range need {
-		args = append(args, "--need", n)
-	}
-	args = append(args, "--", "sh", "-c", script)
+	args := []string{"run", "--mem", mem, "--", "sh", "-c", script}
 	env := append(baseEnv(dir), "BIN="+cliBinary(t), "D="+t.TempDir(),
 		"FDS=env "+helperEnv+"=fds "+cliBinary(t))
 	return cli(t, append(env, extraEnv...), args...)
@@ -68,12 +64,12 @@ func nestedLines(t *testing.T, dir string) []map[string]any {
 
 func TestNestedGrant(t *testing.T) {
 	req := spec.Request{Need: map[string]spec.Range{
-		"cpu":      {Min: 4, Max: 12},
+		"mem":      {Min: 4, Max: 12},
 		"gpu":      {Min: 3, Max: 3},
 		"pg-local": {Min: 1, Max: 1},
 	}}
-	grant, clamped, unbudgeted := engine.NestedGrant(req, map[string]int{"cpu": 8, "gpu": 2})
-	if want := map[string]int{"cpu": 8, "gpu": 2, "pg-local": 1}; !maps.Equal(grant, want) {
+	grant, clamped, unbudgeted := engine.NestedGrant(req, map[string]int{"mem": 8, "gpu": 2})
+	if want := map[string]int{"mem": 8, "gpu": 2, "pg-local": 1}; !maps.Equal(grant, want) {
 		t.Errorf("grant %v, want %v", grant, want)
 	}
 	if want := map[string]int{"gpu": 3}; !maps.Equal(clamped, want) {
@@ -82,18 +78,18 @@ func TestNestedGrant(t *testing.T) {
 	if !slices.Equal(unbudgeted, []string{"pg-local"}) {
 		t.Errorf("unbudgeted %v, want [pg-local]", unbudgeted)
 	}
-	grant, _, _ = engine.NestedGrant(spec.Request{Need: map[string]spec.Range{"cpu": {Min: 2, Max: 4}}}, map[string]int{"cpu": 10})
-	if grant["cpu"] != 4 {
-		t.Errorf("min(max, held) = %d, want 4", grant["cpu"])
+	grant, _, _ = engine.NestedGrant(spec.Request{Need: map[string]spec.Range{"mem": {Min: 2, Max: 4}}}, map[string]int{"mem": 10})
+	if grant["mem"] != 4 {
+		t.Errorf("min(max, held) = %d, want 4", grant["mem"])
 	}
 }
 
 func TestNestedPassThrough(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\n")
-	r := outer(t, dir, []string{"cpu=8"}, `
+	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	r := outer(t, dir, "1G", `
 		cat "$CORESLOT_STATE_DIR/gen" > "$D/gen-before"
 		ls "$CORESLOT_STATE_DIR/queue" > "$D/queue"
-		"$BIN" run --need cpu=4..12 --label inner -- $FDS || exit 1
+		"$BIN" run --mem 1536M --label inner -- $FDS || exit 1
 		cat "$CORESLOT_STATE_DIR/gen" > "$D/gen-after"
 		cmp -s "$D/gen-before" "$D/gen-after" || echo gen-changed
 		ls "$CORESLOT_STATE_DIR/queue" | cmp -s - "$D/queue" || echo queue-changed`)
@@ -104,42 +100,42 @@ func TestNestedPassThrough(t *testing.T) {
 		t.Errorf("the nested run touched the queue or gen: %q", r.stdout)
 	}
 	env := envOf(r.stdout)
-	if env["CORESLOT_GRANTED_CPU"] != "8" || env["CORESLOT_TOKEN_FDS"] != "4-11" || env["CORESLOT_HELD_FD"] != "3" {
+	if env["CORESLOT_GRANTED_MEM"] != "1024" || env["CORESLOT_TOKEN_FDS"] != "4-11" || env["CORESLOT_HELD_FD"] != "3" {
 		t.Errorf("the nested command's environment: %v", env)
 	}
 	fds := fdsOf(r.stdout)
 	for i := 0; i < 8; i++ {
-		if got, want := fds[4+i], inode(t, filepath.Join(dir, "res", "cpu", strconv.Itoa(i))); got != want {
-			t.Errorf("fd %d is %q, want token cpu/%d (%s)", 4+i, got, i, want)
+		if got, want := fds[4+i], inode(t, filepath.Join(dir, "res", "mem", strconv.Itoa(i))); got != want {
+			t.Errorf("fd %d is %q, want token mem/%d (%s)", 4+i, got, i, want)
 		}
 	}
 	lines := nestedLines(t, dir)
-	if len(lines) != 1 || lines[0]["label"] != "inner" || fmt.Sprint(lines[0]["grant"]) != "map[cpu:8]" {
-		t.Errorf("nested run-log lines %v: want one for inner with cpu 8", lines)
+	if len(lines) != 1 || lines[0]["label"] != "inner" || fmt.Sprint(lines[0]["grant"]) != "map[mem:8]" {
+		t.Errorf("nested run-log lines %v: want one for inner with mem 8", lines)
 	}
 	tokensFree(t, dir, 8)
 }
 
 func TestNestedSiblingsBothRun(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\n")
-	r := outer(t, dir, []string{"cpu=8"}, `
-		"$BIN" run --need cpu=1..8 -- sh -c 'echo $CORESLOT_GRANTED_CPU > "$D/a"; sleep 1' &
-		"$BIN" run --need cpu=1..8 -- sh -c 'echo $CORESLOT_GRANTED_CPU > "$D/b"; sleep 1' &
+	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	r := outer(t, dir, "1G", `
+		"$BIN" run --mem 1G -- sh -c 'echo $CORESLOT_GRANTED_MEM > "$D/a"; sleep 1' &
+		"$BIN" run --mem 1G -- sh -c 'echo $CORESLOT_GRANTED_MEM > "$D/b"; sleep 1' &
 		wait
 		cat "$D/a" "$D/b"`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if got := strings.Fields(r.stdout); !slices.Equal(got, []string{"8", "8"}) {
-		t.Errorf("siblings ran with %q, want 8 and 8 (nested runs are not budgeted against each other)", got)
+	if got := strings.Fields(r.stdout); !slices.Equal(got, []string{"1024", "1024"}) {
+		t.Errorf("siblings ran with %q, want 1024 and 1024 (nested runs are not budgeted against each other)", got)
 	}
 }
 
 // The pass-through's clamp notice reads mem in bytes. Mutation: printing its counts as tokens
 // turns it red.
 func TestNestedNoticeMem(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\nmem = \"8G\"\n")
-	r := outer(t, dir, []string{"cpu=1", "mem=1G"}, `"$BIN" run --need mem=3G -- true`)
+	dir := stateDir(t, "[resources]\nmem = \"8G\"\n")
+	r := outer(t, dir, "1G", `"$BIN" run --mem 3G -- true`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -149,83 +145,33 @@ func TestNestedNoticeMem(t *testing.T) {
 }
 
 func TestNestedClampsAboveHeld(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\n")
-	r := outer(t, dir, []string{"cpu=4"}, `"$BIN" run --need cpu=8..8 -- echo {n}`)
+	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	r := outer(t, dir, "512M", `"$BIN" run --mem 1G -- sh -c 'echo $CORESLOT_GRANTED_MEM'`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if got := strings.TrimSpace(r.stdout); got != "4" {
-		t.Errorf("{n} = %q, want 4", got)
+	if got := strings.TrimSpace(r.stdout); got != "512" {
+		t.Errorf("CORESLOT_GRANTED_MEM = %q, want 512", got)
 	}
-	if want := "coreslot: cpu: requested 8, the parent run holds 4; running with 4"; !strings.Contains(r.stderr, want) {
+	if want := "coreslot: mem: requested 1 GiB, the parent run holds 512 MiB; running with 512 MiB"; !strings.Contains(r.stderr, want) {
 		t.Errorf("stderr %q, want the notice %q", r.stderr, want)
 	}
 }
 
-// A pass-through is never admitted through the queue, so a preemptible entry leaves it as an
-// unmarked run: {n} and CORESLOT_GRANTED_CPU are what the parent holds, and its record has no
-// preemptible reason. Mutation: let the mark apply outside the queue (reason ignores queued) →
-// "16 1" and the reason entry, red.
-func TestNestedPreemptibleIsUnmarked(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\n")
-	writeNeeds(t, dir, "[needs.\"x\"]\ncpu = \"1..16\"\npreemptible = true\n")
-	r := outer(t, dir, []string{"cpu=4"}, `"$BIN" run --label x -- sh -c 'echo "$1 $CORESLOT_GRANTED_CPU"' sh {n}`)
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	if got := strings.TrimSpace(r.stdout); got != "4 4" {
-		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 4 4", got)
-	}
-	lines := nestedLines(t, dir)
-	if len(lines) != 1 || fmt.Sprint(lines[0]["grant"]) != "map[cpu:4]" || lines[0]["preemptible"] != nil {
-		t.Errorf("nested run-log lines %v: want one with cpu 4 and no preemptible key", lines)
-	}
-}
-
-// A preemptible run's command keeps its grant's descriptors, on macOS too, where it starts
-// through taskpolicy: a run nested in it passes through on the parent's one cpu token. A command
-// started without them would have the environment and not the descriptors, and the nested run
-// would refuse the inherited grant as one that does not validate.
-func TestNestedInPreemptibleKeepsTheGrant(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\n")
-	r := cli(t, append(baseEnv(dir), "BIN="+cliBinary(t)), "run", "--preemptible", "--need", "cpu=1..8", "--",
-		"sh", "-c", `"$BIN" run --need cpu=1 -- sh -c 'echo "$CORESLOT_GRANTED_CPU"'`)
-	if r.code != 0 || strings.TrimSpace(r.stdout) != "1" {
-		t.Errorf("exit %d, stdout %q, stderr %q; want 0 and the parent's one token", r.code, r.stdout, r.stderr)
-	}
-}
-
-func TestNestedUndeclaredInParent(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\npg-local = 2\n")
-	r := outer(t, dir, []string{"cpu=2"}, `"$BIN" run --need pg-local=1 -- sh -c 'echo $CORESLOT_GRANTED_PG_LOCAL $CORESLOT_GRANTED_CPU'`)
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	if got := strings.TrimSpace(r.stdout); got != "1 2" {
-		t.Errorf("the command saw %q, want pg-local 1 and the parent's cpu 2", got)
-	}
-	if !strings.Contains(r.stderr, "pg-local") || !strings.Contains(r.stderr, "unbudgeted") {
-		t.Errorf("stderr %q, want a notice for pg-local", r.stderr)
-	}
-	if locked(t, dir, "pg-local", 0) || locked(t, dir, "pg-local", 1) {
-		t.Error("the nested run locked a pg-local token")
-	}
-}
-
 func TestNestedCountsFromDescriptorsNotEnv(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\n")
-	r := outer(t, dir, []string{"cpu=8"}, `CORESLOT_GRANTED_CPU=99 "$BIN" run --need cpu=1..64 -- echo {n}`)
+	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	r := outer(t, dir, "1G", `CORESLOT_GRANTED_MEM=99999 "$BIN" run --mem 8G -- sh -c 'echo $CORESLOT_GRANTED_MEM'`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if got := strings.TrimSpace(r.stdout); got != "8" {
-		t.Errorf("{n} = %q, want 8: held is counted from the descriptors", got)
+	if got := strings.TrimSpace(r.stdout); got != "1024" {
+		t.Errorf("CORESLOT_GRANTED_MEM = %q, want 1024: held is counted from the descriptors", got)
 	}
 }
 
 func TestDescriptorClosingLauncherRefuses(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
-	r := outer(t, dir, []string{"cpu=4"}, `
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	r := outer(t, dir, "512M", `
 		start=$(date +%s)
 		sh -c 'exec 4>&-; exec "$BIN" run -- true'
 		code=$?
@@ -247,8 +193,8 @@ func TestDescriptorClosingLauncherRefuses(t *testing.T) {
 }
 
 func TestIndependentQueues(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
-	r := outer(t, dir, []string{"cpu=2"}, `"$BIN" run --independent --timeout 1s -- true; echo "code=$?"`)
+	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	r := outer(t, dir, "256M", `"$BIN" run --independent --timeout 1s -- true; echo "code=$?"`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -258,25 +204,25 @@ func TestIndependentQueues(t *testing.T) {
 }
 
 func TestIndependentDropsInheritedContext(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
-	r := outer(t, dir, []string{"cpu=2"}, `exec 7</dev/null; "$BIN" run --independent --need cpu=1 -- $FDS`)
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	r := outer(t, dir, "256M", `exec 7</dev/null; "$BIN" run --independent --mem 128M -- $FDS`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
 	env := envOf(r.stdout)
-	if env["CORESLOT_TOKEN_FDS"] != "4" || env["CORESLOT_GRANTED_CPU"] != "1" || env["CORESLOT_HELD_FD"] != "3" {
+	if env["CORESLOT_TOKEN_FDS"] != "4" || env["CORESLOT_GRANTED_MEM"] != "128" || env["CORESLOT_HELD_FD"] != "3" {
 		t.Errorf("the command's environment %v: want only its own grant", env)
 	}
 	fds := fdsOf(r.stdout)
-	if fds[4] != inode(t, filepath.Join(dir, "res", "cpu", "2")) {
-		t.Errorf("fd 4 is %q, want its own token cpu/2", fds[4])
+	if fds[4] != inode(t, filepath.Join(dir, "res", "mem", "2")) {
+		t.Errorf("fd 4 is %q, want its own token mem/2", fds[4])
 	}
 	// The helper's own runtime may open descriptors of its own, so check identities, not numbers.
 	for i := 0; i < 2; i++ {
-		parent := inode(t, filepath.Join(dir, "res", "cpu", strconv.Itoa(i)))
+		parent := inode(t, filepath.Join(dir, "res", "mem", strconv.Itoa(i)))
 		for fd, id := range fds {
 			if id == parent {
-				t.Errorf("fd %d is the parent's token cpu/%d, which was passed on: %v", fd, i, fds)
+				t.Errorf("fd %d is the parent's token mem/%d, which was passed on: %v", fd, i, fds)
 			}
 		}
 	}
@@ -286,17 +232,17 @@ func TestIndependentDropsInheritedContext(t *testing.T) {
 }
 
 func TestNestedUnderUnbudgetedParent(t *testing.T) {
-	show := `echo "$CORESLOT_GRANTED_CPU $CORESLOT_UNBUDGETED"`
+	show := `echo "$CORESLOT_GRANTED_MEM $CORESLOT_UNBUDGETED"`
 
 	t.Run("fresh directory", func(t *testing.T) {
 		dir := stateDir(t, "")
-		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason", "CORESLOT_GRANTED_CPU=5")
-		r := cli(t, env, "run", "--need", "cpu=3..6", "--", "sh", "-c", show)
+		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason", "CORESLOT_GRANTED_MEM=640")
+		r := cli(t, env, "run", "--mem", "384M", "--", "sh", "-c", show)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
-		if got := strings.TrimSpace(r.stdout); got != "3 parent-reason" {
-			t.Errorf("the command saw %q, want its min 3 and the parent's reason", got)
+		if got := strings.TrimSpace(r.stdout); got != "384 parent-reason" {
+			t.Errorf("the command saw %q, want its 384 MiB and the parent's reason", got)
 		}
 		if !strings.Contains(r.stderr, "unbudgeted") {
 			t.Errorf("stderr %q: want a notice", r.stderr)
@@ -335,7 +281,7 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 		}
 		gen, _ := os.ReadFile(filepath.Join(dir, "gen"))
 		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason")
-		if r := cli(t, env, "run", "--need", "cpu=3", "--label", "nested-unbudgeted", "--", "true"); r.code != 0 {
+		if r := cli(t, env, "run", "--mem", "384M", "--label", "nested-unbudgeted", "--", "true"); r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
 		if after, _ := os.ReadFile(filepath.Join(dir, "gen")); string(after) != string(gen) {
@@ -345,7 +291,7 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 			t.Error("the pass-through wrote a degraded record")
 		}
 		lines := nestedLines(t, dir)
-		if len(lines) != 1 || lines[0]["label"] != "nested-unbudgeted" || fmt.Sprint(lines[0]["unbudgeted_resources"]) != "[cpu]" {
+		if len(lines) != 1 || lines[0]["label"] != "nested-unbudgeted" || fmt.Sprint(lines[0]["unbudgeted_resources"]) != "[mem]" {
 			t.Errorf("nested run-log lines %v", lines)
 		}
 	})
@@ -384,7 +330,7 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 			}
 			replace(t, filepath.Join(dir, "FORMAT"))
 			env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason")
-			r := cli(t, env, "run", "--need", "cpu=3", "--label", "nested-format", "--", "true")
+			r := cli(t, env, "run", "--mem", "384M", "--label", "nested-format", "--", "true")
 			if r.code != 0 {
 				t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 			}
@@ -400,7 +346,7 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 
 func TestValidateInherited(t *testing.T) {
 	dir := stateDir(t, "")
-	res := filepath.Join(dir, "res", "cpu")
+	res := filepath.Join(dir, "res", "mem")
 	if err := os.MkdirAll(res, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -477,12 +423,12 @@ func TestValidateInherited(t *testing.T) {
 	}
 
 	held, err := check(list(dup(tokens[0], true), dup(tokens[1], true)))
-	if err != nil || len(held["cpu"]) != 2 {
+	if err != nil || len(held["mem"]) != 2 {
 		t.Fatalf("two locked tokens: held %v, err %v", held, err)
 	}
 	one := dup(tokens[0], true)
 	held, err = check(fmt.Sprintf("%d-%d", one, one))
-	if err != nil || len(held["cpu"]) != 1 {
+	if err != nil || len(held["mem"]) != 1 {
 		t.Fatalf("a single descriptor written as a range: held %v, err %v", held, err)
 	}
 }

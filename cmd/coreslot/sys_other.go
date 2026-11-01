@@ -3,14 +3,10 @@
 package main
 
 import (
-	"os/exec"
 	"runtime"
 
 	"golang.org/x/sys/unix"
 )
-
-// load1 is the one-minute load average; this platform does not report it here.
-func load1() float64 { return 0 }
 
 // fileCap is the most a soft RLIMIT_NOFILE can be set to below the hard limit; 0, none here.
 func fileCap() uint64 { return 0 }
@@ -33,6 +29,3 @@ func maxRSSKiB(maxrss int64) (kib int64, known bool) {
 	}
 	return 0, false
 }
-
-// clampPriority leaves cmd as it is: on this platform, lowerPriority's nice demotes a preemptible command.
-func clampPriority(*exec.Cmd) string { return "" }

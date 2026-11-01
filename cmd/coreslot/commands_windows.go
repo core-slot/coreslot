@@ -24,8 +24,3 @@ func statsCommand(args []string, io IO) int {
 	fs, _, _ := statsFlags()
 	return noBudget("stats", statsUsage, fs, args, io)
 }
-
-func suggestCommand(args []string, io IO) int {
-	fs, _, _ := suggestFlags()
-	return noBudget("suggest", suggestUsage, fs, args, io)
-}

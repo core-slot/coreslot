@@ -285,9 +285,6 @@ func (v statusView) human() string {
 		if h.Adopted {
 			line += "  adopted"
 		}
-		if h.Preemptible != "" {
-			line += "  preemptible (" + text(h.Preemptible) + ")"
-		}
 		if h.OwnerExited {
 			line += "  owner exited, held by a descendant"
 		}
@@ -460,7 +457,6 @@ type jsonHold struct {
 	UnbudgetedResources []string       `json:"unbudgeted_resources"`
 	Clamped             map[string]int `json:"clamped"`
 	Adopted             bool           `json:"adopted"`
-	Preemptible         string         `json:"preemptible,omitempty"`
 	OwnerExited         bool           `json:"owner_exited"` // the owner exited; a descendant holds the grant
 }
 
@@ -521,7 +517,7 @@ func (v statusView) document() jsonStatus {
 		d.Holds = append(d.Holds, jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), Grant: nonNilMap(h.Grant),
 			Unbudgeted: h.Unbudgeted, UnbudgetedResources: nonNil(h.UnbudgetedResources),
-			Clamped: nonNilMap(h.Clamped), Adopted: h.Adopted, Preemptible: h.Preemptible,
+			Clamped: nonNilMap(h.Clamped), Adopted: h.Adopted,
 			OwnerExited: h.OwnerExited})
 	}
 	for _, t := range v.tickets {

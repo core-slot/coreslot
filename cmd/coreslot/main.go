@@ -1,8 +1,8 @@
-// Command coreslot runs commands inside a cooperative, machine-wide budget of CPU cores and
-// other declared resources, shared through the flock(2) protocol of PROTOCOL.md.
+// Command coreslot runs commands inside a cooperative, machine-wide memory budget, shared through
+// the flock(2) protocol of PROTOCOL.md.
 //
-//	coreslot run [--need RES=MIN..MAX]... [flags] -- COMMAND...
-//	coreslot status | cancel | doctor | stats | suggest | version
+//	coreslot run [--mem SIZE] [flags] -- COMMAND...
+//	coreslot status | cancel | doctor | stats | version
 //
 // All printing, signal handling and exit statuses live here; the library does none of them.
 package main
@@ -34,7 +34,6 @@ commands:
   cancel   cancel a waiting request
   doctor   check the state directory and the configuration
   stats    show what each label's recent runs used
-  suggest  suggest needs.toml entries from the run log
   version  print the version and the protocol formats implemented`
 
 func main() {
@@ -62,8 +61,6 @@ func dispatch(args []string, io IO) int {
 		return doctorCommand(args[1:], io)
 	case "stats":
 		return statsCommand(args[1:], io)
-	case "suggest":
-		return suggestCommand(args[1:], io)
 	case "help", "-h", "--help":
 		fmt.Fprintln(io.Stdout, usage)
 		return 0

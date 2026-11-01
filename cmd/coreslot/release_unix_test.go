@@ -23,12 +23,12 @@ func TestRunReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 	for _, c := range []struct{ name, cfg, script string }{
 		{"admitted", "", recreate},
 		{"admitted, new FORMAT", "", withFormat},
-		{"fail-open", "[resources]\ncpu = 0\n", recreate},
+		{"fail-open", "[resources]\nmem = \"bogus\"\n", recreate},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stateDir(t, c.cfg)
 			env := append(baseEnv(dir), "S="+dir)
-			r := cli(t, env, "run", "--need", "cpu=1", "--", "sh", "-c", c.script+" && exit 7")
+			r := cli(t, env, "run", "--mem", "128M", "--", "sh", "-c", c.script+" && exit 7")
 			if r.code != 7 {
 				t.Fatalf("exit %d, want the command's 7; stderr:\n%s", r.code, r.stderr)
 			}
@@ -66,8 +66,8 @@ func TestReleaseFailureStopsWritingOnlyOnAMismatch(t *testing.T) {
 		{"released", nil, false, ""},
 		{"identity mismatch", &engine.IdentityError{Err: &store.StateError{Reason: "holds/h: the held file is no longer linked"}}, true,
 			"coreslot: state error at release: holds/h: the held file is no longer linked; nothing more was written into the state directory, not even the run log\n"},
-		{"close error", fmt.Errorf("close res/cpu/0: %w", os.ErrInvalid), false,
-			"coreslot: the grant's descriptors did not all close: close res/cpu/0: invalid argument\n"},
+		{"close error", fmt.Errorf("close res/mem/0: %w", os.ErrInvalid), false,
+			"coreslot: the grant's descriptors did not all close: close res/mem/0: invalid argument\n"},
 		{"state error from closing", &store.StateError{Reason: "x"}, false,
 			"coreslot: the grant's descriptors did not all close: coreslot state error: x\n"},
 	} {

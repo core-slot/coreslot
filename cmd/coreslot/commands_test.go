@@ -175,11 +175,11 @@ func treeContent(t *testing.T, dir string) string {
 // ---------------------------------------------------------------- status
 
 func TestStatusJSONSchema(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(3, 3)}) // tokens 0..2
-	queue(t, c, "waiting", map[string]coreslot.Range{"cpu": rng(2, 4)})
-	holdToken(t, dir, "cpu", 3) // locked, and no hold lists it
+	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(3, 3)}) // tokens 0..2
+	queue(t, c, "waiting", map[string]coreslot.Range{"mem": rng(2, 4)})
+	holdToken(t, dir, "mem", 3) // locked, and no hold lists it
 
 	doc := statusDoc(t, dir, 0)
 	const top = "cancel_requests config_error dead_holds degraded format format_error format_present format_understood gen holds ignored observed_s reconciled_ns resources schema section state_dir state_dir_exists tickets undeclared_locked"
@@ -202,12 +202,12 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Errorf("state_dir_exists = %v", doc["state_dir_exists"])
 	}
 
-	cpu := doc["resources"].(map[string]any)["cpu"].(map[string]any)
-	if got := keysOf(cpu); got != "free locked size unlisted_locked" {
+	mem := doc["resources"].(map[string]any)["mem"].(map[string]any)
+	if got := keysOf(mem); got != "free free_mib locked locked_mib size size_mib unlisted_locked" {
 		t.Errorf("resource keys %s", got)
 	}
-	if cpu["size"] != float64(4) || cpu["locked"] != float64(4) || cpu["free"] != float64(0) || cpu["unlisted_locked"] != float64(1) {
-		t.Errorf("cpu = %v, want size 4, locked 4, free 0 and one locked token no hold lists", cpu)
+	if mem["size"] != float64(4) || mem["locked"] != float64(4) || mem["free"] != float64(0) || mem["unlisted_locked"] != float64(1) {
+		t.Errorf("mem = %v, want size 4, locked 4, free 0 and one locked token no hold lists", mem)
 	}
 
 	holds := doc["holds"].([]any)
@@ -219,7 +219,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}
-	if h["label"] != "gate" || h["adopted"] != true || h["owner_exited"] != false || h["grant"].(map[string]any)["cpu"] != float64(3) || h["pid"] != float64(os.Getpid()) {
+	if h["label"] != "gate" || h["adopted"] != true || h["owner_exited"] != false || h["grant"].(map[string]any)["mem"] != float64(3) || h["pid"] != float64(os.Getpid()) {
 		t.Errorf("hold = %v", h)
 	}
 
@@ -238,7 +238,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	if v, present := tk["stalled"]; !present || v != nil {
 		t.Errorf("stalled = %v (present %v), want null without --observe", v, present)
 	}
-	need := tk["need"].(map[string]any)["cpu"].(map[string]any)
+	need := tk["need"].(map[string]any)["mem"].(map[string]any)
 	if got := keysOf(need); got != "max min" || need["min"] != float64(2) || need["max"] != float64(4) {
 		t.Errorf("need = %v (keys %s)", need, got)
 	}
@@ -255,11 +255,11 @@ func TestStatusJSONSchema(t *testing.T) {
 // With --observe the JSON says, for each ticket, whether it stalled: true for one nobody
 // refreshes, false for one a waiter keeps polling. The human output says when it did not look.
 func TestStatusObserveReportsStalled(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(4, 4)})
-	queue(t, c, "idle", map[string]coreslot.Range{"cpu": rng(1, 1)}) // never polled: nobody refreshes it
-	live := queue(t, c, "polled", map[string]coreslot.Range{"cpu": rng(1, 1)})
+	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
+	queue(t, c, "idle", map[string]coreslot.Range{"mem": rng(1, 1)}) // never polled: nobody refreshes it
+	live := queue(t, c, "polled", map[string]coreslot.Range{"mem": rng(1, 1)})
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -315,47 +315,44 @@ func TestStatusObserveReportsStalled(t *testing.T) {
 }
 
 // status shows each waiting ticket's request on the ticket's line as the waiting line writes it,
-// every resource MIN..MAX in name order, between its priority and how long it has waited.
-// Mutation: changing needText's separator (`..` to `-`) reddens it.
+// MIN..MAX, between its priority and how long it has waited. Mutation: changing needText's
+// separator (`..` to `-`) reddens it.
 func TestStatusTicketLineShowsTheNeed(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 16\npg-local = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"2048M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(16, 16)})
-	queue(t, c, "wide", map[string]coreslot.Range{"cpu": rng(4, 12), "pg-local": rng(1, 1)})
+	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(16, 16)})
+	queue(t, c, "wide", map[string]coreslot.Range{"mem": rng(4, 12)})
 	r := cli(t, baseEnv(dir), "status")
-	want := fmt.Sprintf("\n  1. wide  pid %d  priority 0  need cpu 4..12, pg-local 1..1  waiting ", os.Getpid())
+	want := fmt.Sprintf("\n  1. wide  pid %d  priority 0  need mem 512 MiB..1.5 GiB  waiting ", os.Getpid())
 	if r.code != 0 || !strings.Contains(r.stdout, want) {
 		t.Errorf("status: exit %d, want a ticket line with %q:\n%s", r.code, want, r.stdout)
 	}
-	for _, line := range []string{"\n  cpu  size 16  locked 16  free 0\n", "\n  pg-local  size 2  locked 0  free 2\n"} {
-		if !strings.Contains(r.stdout, line) {
-			t.Errorf("status lacks the resource line %q:\n%s", strings.TrimSpace(line), r.stdout)
-		}
+	if line := "\n  mem  size 2 GiB  locked 2 GiB  free 0 MiB\n"; !strings.Contains(r.stdout, line) {
+		t.Errorf("status lacks the resource line %q:\n%s", strings.TrimSpace(line), r.stdout)
 	}
 }
 
 // memReport is a snapshot with a 9.5 GiB mem budget, 3 GiB of it locked by one hold.
 func memReport() engine.Report {
 	return engine.Report{Resources: map[string]engine.ResourceInfo{
-		"cpu": {Size: 16, Locked: 2, Available: 14},
 		"mem": {Size: 76, Locked: 24, Available: 52},
-	}, Holds: []engine.HolderInfo{{Name: "h", Label: "gate", PID: 7, Grant: map[string]int{"cpu": 2, "mem": 24}}}}
+	}, Holds: []engine.HolderInfo{{Name: "h", Label: "gate", PID: 7, Grant: map[string]int{"mem": 24}}}}
 }
 
-// status prints mem in bytes and every other resource in tokens. Mutation: printing the resource
-// line's counts as tokens for mem turns it red.
+// status prints mem in bytes. Mutation: printing the resource line's counts as tokens for mem
+// turns it red.
 func TestStatusHumanMem(t *testing.T) {
 	h := buildStatus(memReport(), 0, nil, 0).human()
-	for _, line := range []string{"\n  mem  size 9.5 GiB  locked 3 GiB  free 6.5 GiB\n", "\n  cpu  size 16  locked 2  free 14\n",
-		"  gate  pid 7  cpu 2, mem 3 GiB  held "} {
+	for _, line := range []string{"\n  mem  size 9.5 GiB  locked 3 GiB  free 6.5 GiB\n",
+		"  gate  pid 7  mem 3 GiB  held "} {
 		if !strings.Contains(h, line) {
 			t.Errorf("status lacks the resource line %q:\n%s", strings.TrimSpace(line), h)
 		}
 	}
 }
 
-// status --json keeps schema 1 and token counts, and adds MiB to mem alone. Mutation: dropping
-// omitempty from the MiB fields gives cpu size_mib 0 and turns it red.
+// status --json keeps schema 1 and token counts, and adds MiB to mem. Mutation: dropping a MiB
+// field turns it red.
 func TestStatusJSONMemMiB(t *testing.T) {
 	var buf bytes.Buffer
 	if err := buildStatus(memReport(), 0, nil, 0).writeJSON(&buf); err != nil {
@@ -370,14 +367,13 @@ func TestStatusJSONMemMiB(t *testing.T) {
 	}
 	wantMem := map[string]int{"size": 76, "locked": 24, "free": 52, "unlisted_locked": 0,
 		"size_mib": 9728, "locked_mib": 3072, "free_mib": 6656}
-	wantCPU := map[string]int{"size": 16, "locked": 2, "free": 14, "unlisted_locked": 0}
-	if doc.Schema != 1 || !maps.Equal(doc.Resources["mem"], wantMem) || !maps.Equal(doc.Resources["cpu"], wantCPU) {
-		t.Errorf("schema %d, resources %v; want schema 1, mem %v, cpu %v", doc.Schema, doc.Resources, wantMem, wantCPU)
+	if doc.Schema != 1 || !maps.Equal(doc.Resources["mem"], wantMem) {
+		t.Errorf("schema %d, resources %v; want schema 1, mem %v", doc.Schema, doc.Resources, wantMem)
 	}
 }
 
 func TestStatusEscapesLabels(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
 	labels := []string{
 		"line one\nline two",
@@ -387,9 +383,9 @@ func TestStatusEscapesLabels(t *testing.T) {
 		`back\slash "quote" <tag>`,
 		"c1\u009bcontrol",
 	}
-	hold(t, c, labels[0], map[string]coreslot.Range{"cpu": rng(4, 4)})
+	hold(t, c, labels[0], map[string]coreslot.Range{"mem": rng(4, 4)})
 	for _, l := range labels[1:] {
-		queue(t, c, l, map[string]coreslot.Range{"cpu": rng(1, 1)})
+		queue(t, c, l, map[string]coreslot.Range{"mem": rng(1, 1)})
 	}
 
 	r := cli(t, baseEnv(dir), "status")
@@ -465,7 +461,7 @@ func rawTerminalControls(b []byte) []rune {
 // leaves status --json and the run log only as JSON escapes, and decodes to the same label.
 func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 	const label = "x\x1b]0;pwn\a\u009b2J\u202ey"
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--label", label, "--", "true"); r.code != 0 {
 		t.Fatalf("run: exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -482,7 +478,7 @@ func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 	}
 
 	c := openLib(t, dir)
-	hold(t, c, label, map[string]coreslot.Range{"cpu": rng(1, 1)})
+	hold(t, c, label, map[string]coreslot.Range{"mem": rng(1, 1)})
 	r := cli(t, baseEnv(dir), "status", "--json")
 	if r.code != 0 {
 		t.Fatalf("status --json: exit %d (stderr %q)", r.code, r.stderr)
@@ -499,7 +495,7 @@ func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 }
 
 func TestStatusExits3WhenDegraded(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	if r := cli(t, baseEnv(dir), "status"); r.code != 0 {
 		t.Fatalf("status of a healthy directory exited %d (stderr %q)", r.code, r.stderr)
 	}
@@ -607,9 +603,9 @@ func TestStatusStaleSectionHolder(t *testing.T) {
 }
 
 func TestStatusShowsHoldFlagsStraysAndIgnored(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "big", map[string]coreslot.Range{"cpu": rng(8, 8), "gpu": rng(1, 1)}) // clamped; gpu undeclared
+	hold(t, c, "big", map[string]coreslot.Range{"mem": rng(8, 8), "gpu": rng(1, 1)}) // mem clamped; gpu undeclared
 	for _, d := range []string{"queue", "holds"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			t.Fatal(err)
@@ -625,7 +621,7 @@ func TestStatusShowsHoldFlagsStraysAndIgnored(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
 	}
-	for _, want := range []string{"big  pid", "clamped cpu (asked 8)", "unbudgeted gpu", "adopted", "ignored entries (malformed or stray): queue 1, holds 1"} {
+	for _, want := range []string{"big  pid", "clamped mem (asked 1 GiB)", "unbudgeted gpu", "adopted", "ignored entries (malformed or stray): queue 1, holds 1"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("status lacks %q:\n%s", want, r.stdout)
 		}
@@ -636,7 +632,7 @@ func TestStatusShowsHoldFlagsStraysAndIgnored(t *testing.T) {
 		t.Errorf("ignored = %v", ig)
 	}
 	h := doc["holds"].([]any)[0].(map[string]any)
-	if h["clamped"].(map[string]any)["cpu"] != float64(8) || !slices.Equal(anyStrings(h["unbudgeted_resources"]), []string{"gpu"}) {
+	if h["clamped"].(map[string]any)["mem"] != float64(8) || !slices.Equal(anyStrings(h["unbudgeted_resources"]), []string{"gpu"}) {
 		t.Errorf("hold = %v", h)
 	}
 }
@@ -710,7 +706,7 @@ func TestStatusFlagsStalledTicket(t *testing.T) {
 // ---------------------------------------------------------------- doctor
 
 func TestDoctorClear(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -736,7 +732,7 @@ func TestDoctorClear(t *testing.T) {
 }
 
 func TestDoctorReportsLimits(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\npg-local = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	r := cli(t, baseEnv(dir), "doctor")
 	if r.code != 0 {
 		t.Fatalf("doctor exited %d (stderr %q):\n%s", r.code, r.stderr, r.stdout)
@@ -748,8 +744,7 @@ func TestDoctorReportsLimits(t *testing.T) {
 	for _, want := range []string{
 		"filesystem: host-local",
 		"permissions: every entry of the layout is the user's",
-		"resource cpu: size 4, locked 0, free 4",
-		"resource pg-local: size 2, locked 0, free 2",
+		"resource mem: size 512 MiB, locked 0 MiB, free 512 MiB",
 		fmt.Sprintf(", hard %s; a grant of 512 tokens needs about 600", limitName(uint64(lim.Max))),
 		"degraded: no",
 		"no problems found",
@@ -785,10 +780,10 @@ func TestDoctorReportsLimits(t *testing.T) {
 	// An invalid configuration is a problem, reported with its reason, which already names the
 	// file: the word "configuration" is printed once. Mutation: put the "configuration: " label
 	// back in front of a reason that begins with it.
-	bad := stateDir(t, "[resources]\ncpu = \"lots\"\n")
+	bad := stateDir(t, "[resources]\nmem = \"lots\"\n")
 	r = cli(t, baseEnv(bad), "doctor")
 	want := "\nPROBLEM: configuration " + filepath.Join(bad, "config.toml") +
-		`: [resources] cpu: size "lots": want an integer, "N%" or "-K"` + "\n"
+		`: [resources] mem: "lots" is not a size: want a number of GiB, such as 3 or 2.5G, or of MiB, such as 768M, or "N%" of memory` + "\n"
 	if r.code != 1 || !strings.Contains(r.stdout, want) {
 		t.Errorf("doctor with an invalid configuration: exit %d, want the line %q in:\n%s", r.code, want, r.stdout)
 	}
@@ -809,13 +804,13 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 		want string
 	}{
 		{"hold", func(t *testing.T, dir string, c *coreslot.Client) {
-			hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(2, 2)})
+			hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(2, 2)})
 		}, "1 live hold (pid"},
 		{"ticket", func(t *testing.T, dir string, c *coreslot.Client) {
-			hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(4, 4)})
-			queue(t, c, "waiting", map[string]coreslot.Range{"cpu": rng(1, 1)})
+			hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
+			queue(t, c, "waiting", map[string]coreslot.Range{"mem": rng(1, 1)})
 		}, "1 live ticket (pid"},
-		{"token", func(t *testing.T, dir string, c *coreslot.Client) { holdToken(t, dir, "cpu", 1) }, "locked tokens (cpu 1)"},
+		{"token", func(t *testing.T, dir string, c *coreslot.Client) { holdToken(t, dir, "mem", 1) }, "locked tokens (mem 1)"},
 		{"section", func(t *testing.T, dir string, c *coreslot.Client) {
 			st, err := store.Open(dir)
 			if err != nil {
@@ -830,9 +825,9 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := stateDir(t, "[resources]\ncpu = 4\n")
+			dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 			c := openLib(t, dir)
-			g, err := c.Adopt(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"cpu": rng(1, 1)}})
+			g, err := c.Adopt(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"mem": rng(1, 1)}})
 			if err != nil { // FORMAT, gen and the token files exist
 				t.Fatal(err)
 			}
@@ -857,20 +852,20 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 }
 
 func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	g := hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(2, 2)})
+	g := hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(2, 2)})
 	g.Close() // nothing is alive any more; FORMAT, gen, a hold-less queue and the tokens remain
 	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recordDegraded(t, st, "test")
-	if r := cli(t, baseEnv(dir), "run", "--need", "cpu=1", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	lockInode := inodeOf(t, filepath.Join(dir, "admit.lock"))
-	tokenInode := inodeOf(t, filepath.Join(dir, "res", "cpu", "0"))
+	tokenInode := inodeOf(t, filepath.Join(dir, "res", "mem", "0"))
 
 	r := cli(t, baseEnv(dir), "doctor", "--reset")
 	if r.code != 0 || !strings.Contains(r.stdout, "reset: removed ") {
@@ -891,10 +886,10 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 			t.Errorf("%s: %v", f, err)
 		}
 	}
-	if inodeOf(t, filepath.Join(dir, "admit.lock")) != lockInode || inodeOf(t, filepath.Join(dir, "res", "cpu", "0")) != tokenInode {
+	if inodeOf(t, filepath.Join(dir, "admit.lock")) != lockInode || inodeOf(t, filepath.Join(dir, "res", "mem", "0")) != tokenInode {
 		t.Error("admit.lock or a token file was replaced")
 	}
-	if r := cli(t, baseEnv(dir), "run", "--need", "cpu=1", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--", "true"); r.code != 0 {
 		t.Errorf("a run after the reset exited %d (stderr %q)", r.code, r.stderr)
 	}
 }
@@ -942,12 +937,12 @@ func inodeOf(t *testing.T, path string) uint64 {
 // ---------------------------------------------------------------- cancel
 
 func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(4, 4)})
-	a := queue(t, c, "twin", map[string]coreslot.Range{"cpu": rng(1, 1)})
-	b := queue(t, c, "twin", map[string]coreslot.Range{"cpu": rng(1, 1)})
-	solo := queue(t, c, "solo", map[string]coreslot.Range{"cpu": rng(1, 1)})
+	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
+	a := queue(t, c, "twin", map[string]coreslot.Range{"mem": rng(1, 1)})
+	b := queue(t, c, "twin", map[string]coreslot.Range{"mem": rng(1, 1)})
+	solo := queue(t, c, "solo", map[string]coreslot.Range{"mem": rng(1, 1)})
 
 	r := cli(t, baseEnv(dir), "cancel", "--label", "twin")
 	if r.code != 75 || !strings.Contains(r.stderr, "2 waiting tickets have the label twin") {
@@ -974,10 +969,10 @@ func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
 }
 
 func TestCancelByIDAndRefusals(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"cpu": rng(4, 4)})
-	w := queue(t, c, "victim", map[string]coreslot.Range{"cpu": rng(1, 1)})
+	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
+	w := queue(t, c, "victim", map[string]coreslot.Range{"mem": rng(1, 1)})
 
 	var id string
 	for _, tk := range statusDoc(t, dir, 0)["tickets"].([]any) {
@@ -1074,9 +1069,9 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 				if doc["state_dir_exists"] != false {
 					t.Errorf("state_dir_exists = %v, want false", doc["state_dir_exists"])
 				}
-				cpu := doc["resources"].(map[string]any)["cpu"].(map[string]any)
-				if cpu["locked"] != float64(0) || cpu["free"] != cpu["size"] {
-					t.Errorf("an empty budget is expected, got %v", cpu)
+				mem := doc["resources"].(map[string]any)["mem"].(map[string]any)
+				if mem["locked"] != float64(0) || mem["free"] != mem["size"] {
+					t.Errorf("an empty budget is expected, got %v", mem)
 				}
 			}
 		})
@@ -1085,7 +1080,7 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 
 // Tokens locked under a res/<name> the configuration does not declare are still locks.
 func TestStatusReportsUndeclaredLockedTokens(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	holdToken(t, dir, "old-gpu", 0)
 	holdToken(t, dir, "old-gpu", 1)
 	r := cli(t, baseEnv(dir), "status")
@@ -1102,7 +1097,7 @@ func TestStatusReportsUndeclaredLockedTokens(t *testing.T) {
 // a malformed one cannot be cleared (a reset repairs it).
 func TestDoctorFormatRefusals(t *testing.T) {
 	setup := func(t *testing.T, format string) string {
-		dir := stateDir(t, "[resources]\ncpu = 4\n")
+		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 		st, err := store.Open(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -1245,11 +1240,10 @@ func TestHelpGoesToStdout(t *testing.T) {
 	}
 	help := cli(t, baseEnv(dir), "run", "--help").stdout
 	for _, want := range []string{
-		"  --need RES=MIN..MAX   tokens of RES", "RES=MIN.. means MIN..max(MIN, 16)",
-		"RES=..MAX means 1..MAX", "(default cpu=1..16, at most the CPU count, when COMMAND has a cpu",
-		"  --label L ", "  --priority P ", "else 0)", "  --timeout D ", "(default 0, no limit)",
+		"  --mem SIZE ", "such as 3G or 768M",
+		"  --label L ", "  --timeout D ", "(default 0, no limit)",
 		"  --on-timeout run|fail ", "(default fail)", "  --no-wait ", "  --strict ", "  --independent ",
-		"  --same-group ", "signal the group, not coreslot's pid", "  --subst ", "  --refusal-code N ", "(default 75)", "exactly {n}", "{n:RES}",
+		"  --same-group ", "signal the group, not coreslot's pid", "  --refusal-code N ", "(default 75)",
 	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("run --help lacks %q:\n%s", want, help)
@@ -1369,10 +1363,10 @@ func TestUnreadableStateEntryExitStatuses(t *testing.T) {
 // and exits 3, since runs fail open. The file's error, which names it, follows the label with the
 // word "configuration" printed once. Mutation: print the reason whole after the label.
 func TestStatusWithInvalidConfiguration(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = \"lots\"\n")
+	dir := stateDir(t, "[resources]\nmem = \"lots\"\n")
 	r := cli(t, baseEnv(dir), "status")
 	want := "\nCONFIGURATION ERROR: " + filepath.Join(dir, "config.toml") +
-		`: [resources] cpu: size "lots": want an integer, "N%" or "-K"` + "\n"
+		`: [resources] mem: "lots" is not a size: want a number of GiB, such as 3 or 2.5G, or of MiB, such as 768M, or "N%" of memory` + "\n"
 	if r.code != 3 || !strings.Contains(r.stdout, "\nresources: not known, the configuration cannot be read (runs fail open until it is fixed)\n") ||
 		strings.Contains(r.stdout, "none declared") || !strings.Contains(r.stdout, want) {
 		t.Errorf("status: exit %d, want 3, the line %q and the budget reported unknown (stderr %q):\n%s", r.code, want, r.stderr, r.stdout)
@@ -1495,10 +1489,10 @@ func TestCancelRefusesWhileSectionHeld(t *testing.T) {
 
 // A refused reset names each live hold and ticket by its label, as status shows it.
 func TestDoctorResetRefusalNamesLabels(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "hold:three", map[string]coreslot.Range{"cpu": rng(4, 4)})
-	queue(t, c, "ticket:one", map[string]coreslot.Range{"cpu": rng(1, 1)})
+	hold(t, c, "hold:three", map[string]coreslot.Range{"mem": rng(4, 4)})
+	queue(t, c, "ticket:one", map[string]coreslot.Range{"mem": rng(1, 1)})
 	r := cli(t, baseEnv(dir), "doctor", "--reset")
 	if r.code != 75 {
 		t.Fatalf("doctor --reset: exit %d, want 75 (stderr %q)", r.code, r.stderr)

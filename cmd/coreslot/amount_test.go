@@ -10,7 +10,6 @@ func TestAmount(t *testing.T) {
 		tokens int
 		want   string
 	}{
-		{"cpu", 12, "12"},
 		{"pg-local", 1, "1"},
 		{"mem", 24, "3 GiB"},
 		{"mem", 76, "9.5 GiB"},

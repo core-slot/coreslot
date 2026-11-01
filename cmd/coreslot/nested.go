@@ -198,14 +198,16 @@ func (r *run) passThrough(held map[string][]*os.File) int {
 	for name, files := range held {
 		counts[name] = len(files)
 	}
-	grant, clamped, unbudgeted := engine.NestedGrant(r.o.request(0), counts)
-	for _, name := range r.namedOnly(slices.Sorted(maps.Keys(clamped))) {
-		n := amount(name, grant[name])
-		r.notice("%s: requested %s, the parent run holds %s; running with %s", name, amount(name, clamped[name]), n, n)
-	}
-	if none := r.namedOnly(unbudgeted); len(none) > 0 {
-		r.notice("%s: the parent run holds none; running unbudgeted with %s",
-			strings.Join(none, ", "), grantText(grant, none))
+	grant, clamped, unbudgeted := engine.NestedGrant(r.o.request(), counts)
+	if r.o.mem > 0 { // a mem the user did not type, from the default or the needs file, is not announced
+		for _, name := range slices.Sorted(maps.Keys(clamped)) {
+			n := amount(name, grant[name])
+			r.notice("%s: requested %s, the parent run holds %s; running with %s", name, amount(name, clamped[name]), n, n)
+		}
+		if len(unbudgeted) > 0 {
+			r.notice("%s: the parent run holds none; running unbudgeted with %s",
+				strings.Join(unbudgeted, ", "), grantText(grant, unbudgeted))
+		}
 	}
 	return r.runChild(child{
 		env:        withGrant(grant),

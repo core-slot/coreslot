@@ -30,7 +30,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	var g *engine.Grant
 	var ferr error
 	if e != nil {
-		g, ferr = e.FailOpen(r.o.request(0), reason)
+		g, ferr = e.FailOpen(r.o.request(), reason)
 	}
 	c := r.unbudgetedChild(reason, g)
 	if g != nil && g.HoldName() != "" {
@@ -86,7 +86,7 @@ const timeoutReason = "timeout"
 func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
 		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
-	g, herr := e.UnbudgetedHold(r.o.request(0), timeoutReason)
+	g, herr := e.UnbudgetedHold(r.o.request(), timeoutReason)
 	c := r.unbudgetedChild(timeoutReason, g)
 	if timeoutLogs(g != nil && g.HoldName() != "", herr, t != nil && !t.TokenOnly()) {
 		c.log = e.Store()
@@ -111,23 +111,4 @@ func timeoutLogs(holdPublished bool, holdErr error, ticketUnderstood bool) bool 
 		return false
 	}
 	return ticketUnderstood
-}
-
-// lightReason is the reason a --light run gives in its hold, its run-log line and
-// CORESLOT_UNBUDGETED.
-const lightReason = "light"
-
-// lightRun is --light: the command runs at once with min of each resource outside the budget,
-// as a timeout run does but without having queued. Its unbudgeted hold shows it in status, and
-// its run-log line keeps the cores it used, which the usage hint compares with one core.
-func (r *run) lightRun(e *engine.Engine) int {
-	g, herr := e.UnbudgetedHold(r.o.request(0), lightReason)
-	c := r.unbudgetedChild(lightReason, g)
-	if timeoutLogs(g != nil && g.HoldName() != "", herr, false) {
-		c.log = e.Store()
-	}
-	if herr != nil {
-		r.notice("the unbudgeted hold was not published: %s", text(herr.Error()))
-	}
-	return r.runChild(c)
 }

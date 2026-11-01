@@ -21,7 +21,7 @@ func installLockHooks() {}
 func shieldInherited() {}
 
 // runCommand runs `coreslot run` on Windows, which has no budget (PROTOCOL.md section 16): the
-// command runs at once with min of each resource, after one warning unless the configuration
+// command runs at once, after one warning unless the configuration
 // silences it; --strict refuses instead.
 func runCommand(args []string, io IO) int {
 	var lookup needsLookup
@@ -45,7 +45,7 @@ func runCommand(args []string, io IO) int {
 	if msg := windowsNotice(windowsConfig()); msg != "" {
 		fmt.Fprintln(io.Stderr, msg)
 	}
-	argv := substitute(o.argv, o.placeholderGrant(o.minGrant()), o.subst, o.cpuPerWorker, o.workers)
+	argv := o.argv
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = io.Stdin, io.Stdout, io.Stderr
 	cmd.Env = append(os.Environ(), engine.ChildEnv(o.minGrant(), false, 0, "")...)

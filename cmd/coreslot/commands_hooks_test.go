@@ -41,7 +41,7 @@ func TestVersionListsEveryImplementedFormat(t *testing.T) {
 // A real client paused inside the section: status names its pid. FORMAT exists already, so the
 // first point is the ticket's publication, after the entry wrote admit.lock's body.
 func TestStatusNamesSectionHolderOfPausedRun(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -184,7 +184,7 @@ func probeFallback(t *testing.T) uint64 {
 // with context.WithCancel instead of context.WithTimeout (no end takes 30 s).
 func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 	want := probeFallback(t)
-	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	dir := stateDir(t, "[resources]\nmem = \"128M\"\n")
 	pids := t.TempDir()
 	sleeper := func(name string) string {
 		return probeScript(t, fmt.Sprintf("echo $$ > %q\nexec /bin/sleep 30\n", filepath.Join(pids, name)))
@@ -241,7 +241,7 @@ func TestRunFallsBackWhenTheProbeFails(t *testing.T) {
 	// then fails the test) or, past the probe's 1 s bound, be preceded by that bound's kill,
 	// which would hide a missing stop.
 	t.Run("refused", func(t *testing.T) {
-		holdToken(t, dir, "cpu", 0)
+		holdToken(t, dir, "mem", 0)
 		pidFile := filepath.Join(pids, "refused")
 		env := append(baseEnv(dir), "CORESLOT_TESTHOOK_PROBE_SHELL="+sleeper("refused"), "CORESLOT_TESTHOOK_PROBE_TIMEOUT=10m")
 		cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run --label refused -- true`, cliBinary(t))
@@ -292,7 +292,7 @@ func TestNofileProbeInheritsNoGrant(t *testing.T) {
 	if uint64(lim.Max) < 1024 {
 		t.Skipf("the hard limit %d leaves no room above 256 + 256", lim.Max)
 	}
-	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	dir := stateDir(t, "[resources]\nmem = \"128M\"\n")
 	reports := t.TempDir()
 	probe := probeScript(t, fmt.Sprintf("%s=fds %q > %q/probe.$$ && echo reported >> %q/probe.$$\nulimit -S -n\n",
 		helperEnv, cliBinary(t), reports, reports))
@@ -314,7 +314,7 @@ func TestNofileProbeInheritsNoGrant(t *testing.T) {
 		}
 		return ids
 	}
-	// The grant of cpu = 1 is the hold at fd 3 and the token at fd 4.
+	// The grant of mem = 128M is the hold at fd 3 and the token at fd 4.
 	grant := files(string(out), "3", "4")
 	if !strings.Contains(string(out), "env CORESLOT_HELD_FD=3\n") || !strings.Contains(string(out), "env CORESLOT_TOKEN_FDS=4\n") ||
 		len(grant) != 2 {
@@ -359,7 +359,7 @@ func TestNofileProbeExecsBeforeThePublication(t *testing.T) {
 	if uint64(lim.Max) < 1024 {
 		t.Skipf("the hard limit %d leaves no room above 256 + 256", lim.Max)
 	}
-	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	dir := stateDir(t, "[resources]\nmem = \"128M\"\n")
 	hooks := t.TempDir()
 	env := append(baseEnv(dir), "CORESLOT_TESTHOOK_DIR="+hooks, "CORESLOT_TESTHOOK_PAUSE=probe.before-start")
 	cmd := shCmd(t, env, `ulimit -S -n 256 && exec "$0" run --no-wait -- true`, cliBinary(t))

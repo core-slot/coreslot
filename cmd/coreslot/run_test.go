@@ -5,13 +5,11 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -501,19 +499,12 @@ func TestWindowsNotice(t *testing.T) {
 func TestRunUsageErrors(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, args := range [][]string{
-		{"run", "--need", "cpu=4..2", "--", "true"},
-		{"run", "--need", "cpu=..", "--", "true"},
-		{"run", "--need", "cpu=257..", "--", "true"},
-		{"run", "--need", "cpu=1", "--need", "cpu=2", "--", "true"},
-		{"run", "--need", "cpu=1", "--", "echo", "{n:gpu}"},
-		{"run", "--subst", "--", "make", "-j{n:gpu}"},
+		{"run", "--mem", "0", "--", "true"},
+		{"run", "--mem", "lots", "--", "true"},
+		{"run", "--mem", "1G", "--mem", "x", "--", "true"},
 		{"run", "--bogus", "--", "true"},
-		{"run", "--need", "gpu=1", "--", "echo", "{n}"},
 		{"run"},
 		{"run", "--on-timeout", "maybe", "--", "true"},
-		{"run", "--light", "--timeout", "1s", "--", "true"},
-		{"run", "--light", "--no-wait", "--", "true"},
-		{"run", "--light", "--priority", "5", "--", "true"},
 	} {
 		if r := cli(t, baseEnv(dir), args...); r.code != 64 {
 			t.Errorf("%q: exit %d, want 64 (stderr %q)", args, r.code, r.stderr)
@@ -537,9 +528,9 @@ func TestRunPassesExitStatus(t *testing.T) {
 }
 
 func TestRunMissingCommandFreesEverything(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	for _, cmd := range []string{"coreslot-no-such-command", filepath.Join(dir, "missing")} {
-		r := cli(t, baseEnv(dir), "run", "--need", "cpu=2..4", "--", cmd)
+		r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", cmd)
 		if r.code != 127 {
 			t.Errorf("%s: exit %d, want 127 (stderr %q)", cmd, r.code, r.stderr)
 		}
@@ -547,7 +538,7 @@ func TestRunMissingCommandFreesEverything(t *testing.T) {
 			t.Errorf("%s: holds left: %q", cmd, h)
 		}
 		for i := 0; i < 4; i++ {
-			if locked(t, dir, "cpu", i) {
+			if locked(t, dir, "mem", i) {
 				t.Errorf("%s: token %d still locked", cmd, i)
 			}
 		}
@@ -562,11 +553,11 @@ func TestRunMissingCommandFreesEverything(t *testing.T) {
 }
 
 func TestCtrlCWhileWaitingExits130(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	dir := stateDir(t, "[resources]\nmem = \"128M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
-	holdToken(t, dir, "cpu", 0)
+	holdToken(t, dir, "mem", 0)
 	cmd := cliCmd(t, baseEnv(dir), "run", "--", "true")
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -594,16 +585,16 @@ func TestCtrlCWhileWaitingExits130(t *testing.T) {
 }
 
 func TestNoWaitAdmitsAtOnce(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
-	r := cli(t, baseEnv(dir), "run", "--no-wait", "--need", "cpu=2..3", "--", "echo", "{n}")
-	if r.code != 0 || strings.TrimSpace(r.stdout) != "3" {
-		t.Errorf("exit %d stdout %q stderr %q, want 0 and a grant of 3", r.code, r.stdout, r.stderr)
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	r := cli(t, baseEnv(dir), "run", "--no-wait", "--mem", "384M", "--", "sh", "-c", "echo $CORESLOT_GRANTED_MEM")
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "384" {
+		t.Errorf("exit %d stdout %q stderr %q, want 0 and a grant of 384 MiB", r.code, r.stdout, r.stderr)
 	}
 	tokensFree(t, dir, 4)
 }
 
 func TestNoWaitRefusesWithin2s(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -628,8 +619,8 @@ func TestNoWaitRefusesWithin2s(t *testing.T) {
 	})
 
 	t.Run("budget full", func(t *testing.T) {
-		holdToken(t, dir, "cpu", 0)
-		holdToken(t, dir, "cpu", 1)
+		holdToken(t, dir, "mem", 0)
+		holdToken(t, dir, "mem", 1)
 		r := cli(t, baseEnv(dir), "run", "--no-wait", "--refusal-code", "9", "--", "true")
 		if r.code != 9 {
 			t.Errorf("exit %d stderr %q, want the refusal code 9", r.code, r.stderr)
@@ -638,25 +629,25 @@ func TestNoWaitRefusesWithin2s(t *testing.T) {
 }
 
 func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 1\n")
+	dir := stateDir(t, "[resources]\nmem = \"128M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
-	holdToken(t, dir, "cpu", 0)
+	holdToken(t, dir, "mem", 0)
 	before := len(runLog(t, dir))
 
-	r := cli(t, baseEnv(dir), "run", "--need", "cpu=1", "--timeout", "1s", "--", "true")
+	r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--timeout", "1s", "--", "true")
 	if r.code != 75 {
 		t.Fatalf("--on-timeout defaults to fail: exit %d, want 75 (stderr %q)", r.code, r.stderr)
 	}
 
-	r = cli(t, append(baseEnv(dir), "SNAPSHOT="+strings.Join(helper(t, "snapshot"), " ")), "run", "--need", "cpu=1",
+	r = cli(t, append(baseEnv(dir), "SNAPSHOT="+strings.Join(helper(t, "snapshot"), " ")), "run", "--mem", "128M",
 		"--label", "late", "--timeout", "1s", "--on-timeout", "run", "--", "sh", "-c",
-		`echo "granted=$CORESLOT_GRANTED_CPU unbudgeted=$CORESLOT_UNBUDGETED tokens=$CORESLOT_TOKEN_FDS"; $SNAPSHOT`)
+		`echo "granted=$CORESLOT_GRANTED_MEM unbudgeted=$CORESLOT_UNBUDGETED tokens=$CORESLOT_TOKEN_FDS"; $SNAPSHOT`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if got := strings.Split(strings.TrimSpace(r.stdout), "\n")[0]; got != "granted=1 unbudgeted=timeout tokens=" {
+	if got := strings.Split(strings.TrimSpace(r.stdout), "\n")[0]; got != "granted=128 unbudgeted=timeout tokens=" {
 		t.Errorf("command saw %q", got)
 	}
 	if !strings.Contains(r.stdout, "hold late unbudgeted=true") {
@@ -667,8 +658,8 @@ func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
 		t.Fatalf("run log has %d lines, want %d", len(lines), before+1)
 	}
 	last := lines[len(lines)-1]
-	if fmt.Sprint(last["unbudgeted_resources"]) != "[cpu]" || last["fail_open"] != "timeout" {
-		t.Errorf("run log line %v: want unbudgeted_resources [cpu] and the reason timeout", last)
+	if fmt.Sprint(last["unbudgeted_resources"]) != "[mem]" || last["fail_open"] != "timeout" {
+		t.Errorf("run log line %v: want unbudgeted_resources [mem] and the reason timeout", last)
 	}
 	if h := entries(t, dir, "holds"); len(h) != 0 {
 		t.Errorf("the unbudgeted hold outlived the run: %q", h)
@@ -678,64 +669,21 @@ func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
 	}
 }
 
-// A --light run starts at once on a full budget, outside it: an unbudgeted hold while it runs,
-// its reason in the command's environment and the run log, and no degraded record. Mutation:
-// dropping the r.o.light branch of ordinary makes the run queue behind the held token until cli
-// kills it, so it exits 137, not 0.
-func TestLightRunsAtOnceOutsideTheBudget(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 1\n")
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
-		t.Fatalf("setup run: %d %q", r.code, r.stderr)
-	}
-	holdToken(t, dir, "cpu", 0)
-	before := len(runLog(t, dir))
-
-	start := time.Now()
-	r := cli(t, append(baseEnv(dir), "SNAPSHOT="+strings.Join(helper(t, "snapshot"), " ")), "run", "--light",
-		"--label", "dl", "--", "sh", "-c",
-		`echo "granted=$CORESLOT_GRANTED_CPU unbudgeted=$CORESLOT_UNBUDGETED tokens=$CORESLOT_TOKEN_FDS"; $SNAPSHOT`)
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Errorf("the light run took %v on a full budget: it waited", d)
-	}
-	if got := strings.Split(strings.TrimSpace(r.stdout), "\n")[0]; got != "granted=1 unbudgeted=light tokens=" {
-		t.Errorf("command saw %q", got)
-	}
-	if !strings.Contains(r.stdout, "hold dl unbudgeted=true") {
-		t.Errorf("the snapshot taken while the command ran shows no unbudgeted hold: %q", r.stdout)
-	}
-	lines := runLog(t, dir)
-	if len(lines) != before+1 {
-		t.Fatalf("run log has %d lines, want %d", len(lines), before+1)
-	}
-	if last := lines[len(lines)-1]; fmt.Sprint(last["unbudgeted_resources"]) != "[cpu]" || last["fail_open"] != "light" {
-		t.Errorf("run log line %v: want unbudgeted_resources [cpu] and the reason light", last)
-	}
-	if h := entries(t, dir, "holds"); len(h) != 0 {
-		t.Errorf("the unbudgeted hold outlived the run: %q", h)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "degraded")); err == nil {
-		t.Error("a light run recorded degraded mode")
-	}
-}
-
 func TestFailOpenExportsUnbudgeted(t *testing.T) {
-	show := `echo "granted=$CORESLOT_GRANTED_CPU unbudgeted=$CORESLOT_UNBUDGETED"`
+	show := `echo "granted=$CORESLOT_GRANTED_MEM unbudgeted=$CORESLOT_UNBUDGETED"`
 
 	t.Run("unusable directory", func(t *testing.T) {
 		dir := stateDir(t, "")
 		if err := os.Chmod(dir, 0o777); err != nil {
 			t.Fatal(err)
 		}
-		r := cli(t, baseEnv(dir), "run", "--need", "cpu=3..8", "--", "sh", "-c", show)
+		r := cli(t, baseEnv(dir), "run", "--mem", "384M", "--", "sh", "-c", show)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
 		out := strings.TrimSpace(r.stdout)
-		if !strings.HasPrefix(out, "granted=3 unbudgeted=") || out == "granted=3 unbudgeted=" {
-			t.Errorf("command saw %q, want granted=3 and a reason", out)
+		if !strings.HasPrefix(out, "granted=384 unbudgeted=") || out == "granted=384 unbudgeted=" {
+			t.Errorf("command saw %q, want granted=384 and a reason", out)
 		}
 		if !strings.Contains(r.stderr, "state error") || !strings.Contains(r.stderr, "nothing was written") {
 			t.Errorf("stderr %q: want the diagnostic and that nothing was recorded", r.stderr)
@@ -746,13 +694,13 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 	})
 
 	t.Run("invalid configuration", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = \"bogus\"\n")
-		r := cli(t, baseEnv(dir), "run", "--need", "cpu=2", "--", "sh", "-c",
+		dir := stateDir(t, "[resources]\nmem = \"bogus\"\n")
+		r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "sh", "-c",
 			show+`; ls "$CORESLOT_STATE_DIR/holds"`)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
-		if !strings.Contains(r.stdout, "granted=2 unbudgeted=configuration") {
+		if !strings.Contains(r.stdout, "granted=256 unbudgeted=configuration") {
 			t.Errorf("command saw %q", r.stdout)
 		}
 		if strings.Count(r.stdout, "\n") < 2 {
@@ -772,7 +720,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 	})
 
 	t.Run("strict refuses", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = \"bogus\"\n")
+		dir := stateDir(t, "[resources]\nmem = \"bogus\"\n")
 		marker := filepath.Join(t.TempDir(), "ran")
 		r := cli(t, baseEnv(dir), "run", "--strict", "--", "touch", marker)
 		if r.code != 75 {
@@ -784,65 +732,10 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 	})
 }
 
-// Without --priority a run's ticket carries the configuration's [priorities] entry of the longest
-// prefix of its label, or 0 when none matches; --priority overrides it. Mutation: run.priority
-// returning 0 instead of the entry reddens the two labels with a matching prefix.
-func TestRunTakesItsPriorityFromTheConfiguration(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 1\n\n[priorities]\n\"ci:\" = 5\n\"ci:release\" = 9\n")
-	holdToken(t, dir, "cpu", 0)
-	want := map[string]float64{"ci:release-7": 9, "ci:test": 5, "dev": 0, "ci:forced": -3}
-	var runs []*exec.Cmd
-	defer func() {
-		for _, cmd := range runs {
-			_ = unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
-			_ = cmd.Wait()
-		}
-	}()
-	for label := range want {
-		args := []string{"run", "--label", label}
-		if label == "ci:forced" {
-			args = append(args, "--priority", "-3")
-		}
-		cmd := cliCmd(t, baseEnv(dir), append(args, "--", "true")...)
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		runs = append(runs, cmd)
-	}
-	waitFor(t, 30*time.Second, "the four tickets", func() bool { return len(entries(t, dir, "queue")) == len(want) })
-	got := map[string]float64{}
-	for _, tk := range statusDoc(t, dir, 0)["tickets"].([]any) {
-		m := tk.(map[string]any)
-		got[m["label"].(string)] = m["priority"].(float64)
-	}
-	if !maps.Equal(got, want) {
-		t.Errorf("ticket priorities %v, want %v", got, want)
-	}
-}
-
-// A configuration that cannot be read when the run looks up its priority is a state error at
-// that point, under --priority too: the run fails open before it queues, so no ticket is ever
-// published (queue/ is never created), and the command runs unbudgeted. Mutation: ignoring
-// run.priority's error lets the run publish a ticket and fail open only when its admission
-// reads the configuration, which creates queue/.
-func TestRunFailsOpenBeforeQueueingOnAnUnreadableConfiguration(t *testing.T) {
-	for _, args := range [][]string{{"run"}, {"run", "--priority", "3"}} {
-		dir := stateDir(t, "[resources]\ncpu = \"bogus\"\n")
-		r := cli(t, baseEnv(dir), append(args, "--label", "ci:x", "--", "sh", "-c", `echo "$CORESLOT_UNBUDGETED"`)...)
-		if r.code != 0 || !strings.HasPrefix(r.stdout, "configuration") ||
-			!strings.Contains(r.stderr, "state error: configuration") || !strings.Contains(r.stderr, "(fail-open)") {
-			t.Errorf("%v: exit %d, stdout %q, stderr %q; want a fail-open on the configuration", args, r.code, r.stdout, r.stderr)
-		}
-		if _, err := os.Lstat(filepath.Join(dir, "queue")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("%v: queue/ exists (%v): the run published a ticket before failing open", args, err)
-		}
-	}
-}
-
 func TestRunAppendsOneLogLine(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	env := append(baseEnv(dir), "CORESLOT_TEST_SECRET=env-secret-value")
-	r := cli(t, env, "run", "--need", "cpu=2..3", "--label", "gate:unit", "--", "sh", "-c", "exit 0", "argv-secret-value")
+	r := cli(t, env, "run", "--mem", "384M", "--label", "gate:unit", "--", "sh", "-c", "exit 0", "argv-secret-value")
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -859,75 +752,12 @@ func TestRunAppendsOneLogLine(t *testing.T) {
 		}
 	}
 	line := runLog(t, dir)[0]
-	if line["label"] != "gate:unit" || fmt.Sprint(line["need"]) != "map[cpu:[2 3]]" ||
-		fmt.Sprint(line["grant"]) != "map[cpu:3]" || line["exit"] != float64(0) {
+	if line["label"] != "gate:unit" || fmt.Sprint(line["need"]) != "map[mem:[3 3]]" ||
+		fmt.Sprint(line["grant"]) != "map[mem:3]" || line["exit"] != float64(0) {
 		t.Errorf("run log line %v", line)
 	}
 	if _, nested := line["nested"]; nested {
 		t.Errorf("an ordinary run's line is marked nested: %v", line)
-	}
-}
-
-// On an 8-token budget a run gets what its request, as normalized, allows, and its run log
-// records that normalized request: the default without a placeholder takes 1, the default with
-// {n} takes the budget up to the machine's CPU count, a one-sided min takes the whole budget, and a
-// one-sided max caps the grant.
-// Mutation: drop the default rule in parseRun, and the {n} case gets 1 and logs [1 1].
-func TestRunNeedFormsGrantAndLog(t *testing.T) {
-	report := []string{"sh", "-c", `echo "$CORESLOT_GRANTED_CPU $1"`, "sh"}
-	cold, n := coldMax(), min(8, coldMax())
-	for _, c := range []struct {
-		name   string
-		args   []string
-		out    string
-		logged string
-	}{
-		{"default, no placeholder", append(append([]string{"--"}, report...), "x"), "1 x", "map[cpu:[1 1]]"},
-		{"default, {n}", append(append([]string{"--"}, report...), "{n}"), fmt.Sprintf("%d %d", n, n), fmt.Sprintf("map[cpu:[1 %d]]", cold)},
-		{"default, {{n}}", append(append([]string{"--"}, report...), "{{n}}"), "1 {n}", "map[cpu:[1 1]]"},
-		{"default, --subst -j{n}", append(append([]string{"--subst", "--"}, report...), "-j{n}"), fmt.Sprintf("%d -j%d", n, n), fmt.Sprintf("map[cpu:[1 %d]]", cold)},
-		{"cpu=4..", append(append([]string{"--need", "cpu=4..", "--"}, report...), "x"), "8 x", "map[cpu:[4 16]]"},
-		{"cpu=..2", append(append([]string{"--need", "cpu=..2", "--"}, report...), "x"), "2 x", "map[cpu:[1 2]]"},
-	} {
-		dir := stateDir(t, "[resources]\ncpu = 8\n")
-		r := cli(t, baseEnv(dir), append([]string{"run"}, c.args...)...)
-		if r.code != 0 {
-			t.Errorf("%s: exit %d (stderr %q)", c.name, r.code, r.stderr)
-			continue
-		}
-		if got := strings.TrimSpace(r.stdout); got != c.out {
-			t.Errorf("%s: the command printed %q, want %q", c.name, got, c.out)
-		}
-		if lines := runLog(t, dir); len(lines) != 1 || fmt.Sprint(lines[0]["need"]) != c.logged {
-			t.Errorf("%s: run log %v, want one line with need %s", c.name, lines, c.logged)
-		}
-	}
-}
-
-// The run log's workers is the value the cpu placeholder took, else the label's @K, else absent;
-// for a per-worker entry, the workers {n} gave, not the tokens. Mutation: record the cpu grant for
-// every placeholder → the per-worker row logs 3, red.
-func TestRunLogsWorkers(t *testing.T) {
-	echo := []string{"--", "sh", "-c", `echo "$1"`, "sh", "{n}"}
-	for _, c := range []struct {
-		args []string
-		want string // "" for the {n} the command printed
-	}{
-		{[]string{"--label", "x", "--need", "cpu=3", "--", "true"}, "<nil>"},
-		{[]string{"--label", "x@5", "--need", "cpu=3", "--", "true"}, "5"},
-		{append([]string{"--label", "x@5", "--need", "cpu=3"}, echo...), ""},
-		{append([]string{"--label", "pw"}, echo...), ""},
-	} {
-		dir := stateDir(t, "[resources]\ncpu = 8\n")
-		writeNeeds(t, dir, "[needs.\"pw\"]\ncpu_per_worker = 0.5\ncpu = \"2..6\"\n")
-		r := cli(t, baseEnv(dir), append([]string{"run"}, c.args...)...)
-		lines := runLog(t, dir)
-		if r.code != 0 || len(lines) != 1 {
-			t.Fatalf("%q: exit %d, %d log lines (stderr %q)", c.args, r.code, len(lines), r.stderr)
-		}
-		if got, want := fmt.Sprint(lines[0]["workers"]), cmp.Or(c.want, strings.TrimSpace(r.stdout)); got != want {
-			t.Errorf("%q: workers %s, want %s", c.args, got, want)
-		}
 	}
 }
 
@@ -965,8 +795,8 @@ func checkUsage(t *testing.T, what string, line map[string]any) {
 func TestRunLogRecordsUsage(t *testing.T) {
 	burn := helper(t, "burn")
 	t.Run("command", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = 4\n")
-		r := cli(t, baseEnv(dir), append([]string{"run", "--need", "cpu=1", "--"}, burn...)...)
+		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "128M", "--"}, burn...)...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -977,8 +807,8 @@ func TestRunLogRecordsUsage(t *testing.T) {
 		checkUsage(t, "the command", lines[0])
 	})
 	t.Run("waited-for descendant", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = 4\n")
-		args := append([]string{"run", "--need", "cpu=1", "--", "sh", "-c", `"$@"; :`, "sh"}, burn...)
+		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+		args := append([]string{"run", "--mem", "128M", "--", "sh", "-c", `"$@"; :`, "sh"}, burn...)
 		r := cli(t, baseEnv(dir), args...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -990,8 +820,8 @@ func TestRunLogRecordsUsage(t *testing.T) {
 		checkUsage(t, "the shell that waited for it", lines[0])
 	})
 	t.Run("fail-open", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = \"bogus\"\n")
-		r := cli(t, baseEnv(dir), append([]string{"run", "--need", "cpu=1", "--"}, burn...)...)
+		dir := stateDir(t, "[resources]\nmem = \"bogus\"\n")
+		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "128M", "--"}, burn...)...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -1002,9 +832,9 @@ func TestRunLogRecordsUsage(t *testing.T) {
 		checkUsage(t, "the fail-open run", lines[0])
 	})
 	t.Run("pass-through", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = 4\n")
-		args := append([]string{"run", "--need", "cpu=2", "--label", "outer", "--", cliBinary(t),
-			"run", "--need", "cpu=1", "--label", "inner", "--"}, burn...)
+		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+		args := append([]string{"run", "--mem", "256M", "--label", "outer", "--", cliBinary(t),
+			"run", "--mem", "128M", "--label", "inner", "--"}, burn...)
 		r := cli(t, baseEnv(dir), args...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -1053,7 +883,7 @@ func TestRunLogsTreePeak(t *testing.T) {
 //
 // Mutation: in recordUsage, record zeros when ps is nil.
 func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	notExec := filepath.Join(dir, "not-executable")
 	if err := os.WriteFile(notExec, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1062,7 +892,7 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 		label, cmd string
 		code       int
 	}{{"not-found", "coreslot-no-such-command", 127}, {"not-executable", notExec, 126}} {
-		r := cli(t, baseEnv(dir), "run", "--need", "cpu=1", "--label", c.label, "--", c.cmd)
+		r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--label", c.label, "--", c.cmd)
 		if r.code != c.code {
 			t.Errorf("%s: exit %d, want %d (stderr %q)", c.cmd, r.code, c.code, r.stderr)
 		}
@@ -1080,27 +910,12 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 	}
 }
 
-func TestClampNotice(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 10\n")
-	r := cli(t, baseEnv(dir), "run", "--need", "cpu=16..16", "--", "echo", "{n}")
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	if got := strings.TrimSpace(r.stdout); got != "10" {
-		t.Errorf("{n} = %q, want 10", got)
-	}
-	want := "coreslot: cpu: requested 16, budget is 10; running alone with 10\n"
-	if !strings.Contains(r.stderr, want) {
-		t.Errorf("stderr %q, want the notice %q", r.stderr, want)
-	}
-}
-
 // A clamped mem need is reported in bytes. [memory] live = false keeps the clamp at the static
 // size, so that it never depends on the test machine's memory. Mutation: printing the clamp
 // notice's counts as tokens turns it red.
 func TestClampNoticeMem(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 10\nmem = \"9.5G\"\n[memory]\nlive = false\n")
-	r := cli(t, baseEnv(dir), "run", "--need", "mem=10G", "--", "true")
+	dir := stateDir(t, "[resources]\nmem = \"9.5G\"\n[memory]\nlive = false\n")
+	r := cli(t, baseEnv(dir), "run", "--mem", "10G", "--", "true")
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -1114,7 +929,7 @@ func TestClampNoticeMem(t *testing.T) {
 // measure it. Mutation: the run's request not setting Tree.
 func TestRunHoldHasTree(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"8G\"\n[memory]\nlive = false\n")
-	cmd := cliCmd(t, baseEnv(dir), "run", "--need", "mem=1G", "--", "sleep", "1")
+	cmd := cliCmd(t, baseEnv(dir), "run", "--mem", "1G", "--", "sleep", "1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1137,274 +952,6 @@ func TestRunHoldHasTree(t *testing.T) {
 			}
 			return
 		}
-	}
-}
-
-// niceTable is every process's pid, parent pid and nice, from one ps snapshot.
-func niceTable(t *testing.T) (ppid, nice map[int]int) { return psTable(t, "ni") }
-
-// psTable maps every process to its parent and to ps's field (ni, pri).
-func psTable(t *testing.T, field string) (ppid, value map[int]int) {
-	t.Helper()
-	out, err := exec.Command("ps", "-axo", "pid=,ppid=,"+field+"=").Output()
-	if err != nil {
-		t.Fatalf("ps: %v", err)
-	}
-	ppid, value = map[int]int{}, map[int]int{}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) != 3 {
-			continue
-		}
-		pid, err1 := strconv.Atoi(f[0])
-		parent, err2 := strconv.Atoi(f[1])
-		v, err3 := strconv.Atoi(f[2])
-		if err1 == nil && err2 == nil && err3 == nil {
-			ppid[pid], value[pid] = parent, v
-		}
-	}
-	return ppid, value
-}
-
-// sleepsNice runs `coreslot run args... -- sh -c 'sleep 5 | sleep 5'`, waits until both sleeps
-// exist under the sh the run started, and returns their nice values once they have held for a
-// moment, with the run stopped.
-func sleepsNice(t *testing.T, args ...string) []int { return sleepsPS(t, "ni", args...) }
-
-// sleepsPS is sleepsNice for any of ps's fields.
-func sleepsPS(t *testing.T, field string, args ...string) []int {
-	t.Helper()
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
-	cmd := cliCmd(t, baseEnv(dir), append(append([]string{"run"}, args...), "--", "sh", "-c", "sleep 5 | sleep 5")...)
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = cmd.Process.Signal(syscall.SIGTERM) // reaches the command's group
-		_ = cmd.Wait()
-	}()
-	var sleeps []int
-	find := func() bool {
-		ppid, _ := niceTable(t)
-		sleeps = sleeps[:0]
-		for pid, parent := range ppid {
-			if ppid[parent] == cmd.Process.Pid {
-				sleeps = append(sleeps, pid)
-			}
-		}
-		return len(sleeps) == 2
-	}
-	waitFor(t, 30*time.Second, "both sleeps running under the run", find)
-	time.Sleep(200 * time.Millisecond) // a late change of priority would have landed by now
-	_, value := psTable(t, field)
-	return []int{value[sleeps[0]], value[sleeps[1]]}
-}
-
-// A preemptible run's command group runs at nice 10, every member of it, a pipeline's stages
-// included; a run without the mark leaves the caller's nice. The test runs without a terminal, so
-// this is the group form. Mutation: drop the Setpriority call and the marked case reddens; apply
-// it to every run and the unmarked case does.
-func TestRunPreemptibleLowersTheCommandGroup(t *testing.T) {
-	_, own := niceTable(t)
-	caller := own[os.Getpid()]
-	if caller >= 10 {
-		t.Skipf("this process already runs at nice %d: nice 10 would show nothing", caller)
-	}
-	if got := sleepsNice(t, "--preemptible"); got[0] != 10 || got[1] != 10 {
-		t.Errorf("--preemptible: the sleeps run at nice %v, want 10 and 10", got)
-	}
-	if got := sleepsNice(t); got[0] != caller || got[1] != caller {
-		t.Errorf("no mark: the sleeps run at nice %v, want the caller's %d", got, caller)
-	}
-}
-
-// On macOS a preemptible run's command runs under a utility QoS clamp: both sleeps of a pipeline
-// show base priority 20, the utility class's, where nice 10 alone leaves them at the default
-// class's 31 (macOS ignores nice for a thread with a QoS class); a run without the mark keeps the
-// caller's priority. A caller already at 20 or below shows nothing: GitHub's macOS runners run
-// their jobs at 20, so there TestPreemptibleStartsThroughTaskpolicy is the check. Mutation: drop
-// clampPriority and the marked case shows 31, red; clamp every run and the unmarked case shows 20.
-func TestRunPreemptibleClampsQoSOnMacOS(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("the QoS clamp is macOS's; elsewhere nice demotes the command")
-	}
-	_, own := psTable(t, "pri")
-	caller, ok := own[os.Getpid()]
-	if !ok {
-		t.Fatalf("ps lists no priority for this process, %d", os.Getpid())
-	}
-	if caller <= 20 {
-		t.Skipf("this process already runs at priority %d: the clamp would show nothing", caller)
-	}
-	if got := sleepsPS(t, "pri", "--preemptible"); got[0] != 20 || got[1] != 20 {
-		t.Errorf("--preemptible: the sleeps run at priority %v, want 20 and 20", got)
-	}
-	if got := sleepsPS(t, "pri"); got[0] != caller || got[1] != caller {
-		t.Errorf("no mark: the sleeps run at priority %v, want the caller's %d", got, caller)
-	}
-}
-
-// On macOS a preemptible run's command is started by taskpolicy, which execs it by the resolved
-// path coreslot passes: the command's argv[0] is /bin/sh where a run without the mark starts it as
-// sh. Mutation: drop the clampPriority call and the marked command shows sh, red.
-func TestPreemptibleStartsThroughTaskpolicy(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("only macOS starts a preemptible command through taskpolicy")
-	}
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
-	for _, c := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"--preemptible"}, "/bin/sh"},
-		{nil, "sh"},
-	} {
-		args := append(append([]string{"run"}, c.args...), "--", "sh", "-c", `echo "$(ps -o args= -p $$)"`)
-		r := cli(t, baseEnv(dir), args...)
-		if f := strings.Fields(r.stdout); r.code != 0 || len(f) == 0 || f[0] != c.want {
-			t.Errorf("%v: exit %d, the command's args %q (stderr %q), want argv[0] %s", c.args, r.code, r.stdout, r.stderr, c.want)
-		}
-	}
-}
-
-// A preemptible command that is not an executable file fails with coreslot's own status, as an
-// unmarked one does: 127 for a missing path, 126 for a file without the execute bit. Mutation:
-// wrap a path command that coreslot has not resolved to an executable → on macOS the status is
-// taskpolicy's, red.
-func TestPreemptiblePathCommandErrors(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
-	plain := filepath.Join(t.TempDir(), "plain")
-	if err := os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range []struct {
-		path string
-		code int
-	}{
-		{filepath.Join(t.TempDir(), "missing"), 127},
-		{plain, 126},
-	} {
-		r := cli(t, baseEnv(dir), "run", "--preemptible", "--", c.path)
-		if r.code != c.code || !strings.Contains(r.stderr, "cannot run") {
-			t.Errorf("%s: exit %d, stderr %q; want %d and coreslot's cannot run", c.path, r.code, r.stderr, c.code)
-		}
-	}
-}
-
-// A preemptible command keeps a DYLD_* variable of its environment. On macOS taskpolicy's start
-// would drop it, so the command runs unclamped and the run log's reason says why. Mutation: wrap
-// it anyway → the command sees no variable, red.
-func TestPreemptibleKeepsDYLD(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
-	r := cli(t, append(baseEnv(dir), "DYLD_CORESLOT_TEST=kept"), "run", "--preemptible", "--",
-		cliBinary(t), "helper:getenv", "DYLD_CORESLOT_TEST")
-	if r.code != 0 || strings.TrimSpace(r.stdout) != "kept" {
-		t.Errorf("exit %d, stdout %q, stderr %q; want the variable kept", r.code, r.stdout, r.stderr)
-	}
-	want := "flag"
-	if runtime.GOOS == "darwin" {
-		want = "flag; unclamped: DYLD_* in the environment"
-	}
-	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["preemptible"] != want {
-		t.Errorf("run log %v, want preemptible %q", lines, want)
-	}
-}
-
-// A preemptible run's {n} keeps the width of its unshrunk request while the hold lists one cpu
-// token, CORESLOT_GRANTED_CPU is that one token, and the record's workers is the width; a
-// per-worker entry prints its worker count. Mutation: fill the placeholders from the grant → the
-// range row prints 1, red; record the grant as workers → the range row's workers is 1, red.
-func TestPreemptiblePlaceholdersUnshrunk(t *testing.T) {
-	const script = `echo "$1"; echo "$CORESLOT_GRANTED_CPU"; cat "$CORESLOT_STATE_DIR"/holds/*`
-	for _, c := range []struct {
-		name  string
-		label string
-		want  string // {n}, and the record's workers
-	}{
-		{"range", "x", "8"},
-		{"per worker", "pw@6", "6"},
-	} {
-		dir := stateDir(t, "[resources]\ncpu = 8\n")
-		writeNeeds(t, dir, "[needs.\"x\"]\ncpu = \"1..8\"\n[needs.\"pw\"]\ncpu_per_worker = 0.4\n")
-		r := cli(t, baseEnv(dir), "run", "--preemptible", "--label", c.label, "--", "sh", "-c", script, "sh", "{n}")
-		out := strings.SplitN(r.stdout, "\n", 3)
-		if r.code != 0 || len(out) != 3 {
-			t.Fatalf("%s: exit %d, stdout %q, stderr %q", c.name, r.code, r.stdout, r.stderr)
-		}
-		var hold struct{ Grant map[string][]int }
-		if err := json.Unmarshal([]byte(out[2]), &hold); err != nil {
-			t.Fatalf("%s: hold body %q: %v", c.name, out[2], err)
-		}
-		if out[0] != c.want || out[1] != "1" || len(hold.Grant["cpu"]) != 1 {
-			t.Errorf("%s: {n} %q, CORESLOT_GRANTED_CPU %q, hold cpu %v; want %s, 1 and one token", c.name, out[0], out[1], hold.Grant["cpu"], c.want)
-		}
-		if lines := runLog(t, dir); len(lines) != 1 || fmt.Sprint(lines[0]["workers"]) != c.want {
-			t.Errorf("%s: run log %v, want workers %s", c.name, lines, c.want)
-		}
-	}
-}
-
-// A --light run is never admitted through the queue, so --preemptible leaves it as an unmarked
-// run: {n} and CORESLOT_GRANTED_CPU are its request's min, and its record has no preemptible
-// reason. Mutation: let the mark apply outside the queue (reason ignores queued) → "8 1" and the
-// reason flag, red.
-func TestLightPreemptibleIsUnmarked(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 8\n")
-	r := cli(t, baseEnv(dir), "run", "--light", "--preemptible", "--need", "cpu=2..8", "--",
-		"sh", "-c", `echo "$1 $CORESLOT_GRANTED_CPU"`, "sh", "{n}")
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	if got := strings.TrimSpace(r.stdout); got != "2 2" {
-		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 2 2", got)
-	}
-	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["preemptible"] != nil {
-		t.Errorf("run log %v: want one line without a preemptible key", lines)
-	}
-}
-
-// A marked run that queues and then runs at its timeout (--on-timeout run) is not admitted, so
-// it runs as an unmarked one: the min of its request for {n} and CORESLOT_GRANTED_CPU, and no
-// preemptible reason in its record. Mutation: drop the reset of the mark in notAdmitted → {n} is
-// the max, 2, and the record says flag, red.
-func TestTimeoutPreemptibleIsUnmarked(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
-		t.Fatalf("setup run: %d %q", r.code, r.stderr)
-	}
-	holdToken(t, dir, "cpu", 0)
-	holdToken(t, dir, "cpu", 1)
-	before := len(runLog(t, dir))
-	r := cli(t, baseEnv(dir), "run", "--preemptible", "--need", "cpu=1..2", "--timeout", "1s", "--on-timeout", "run",
-		"--", "sh", "-c", `echo "$1 $CORESLOT_GRANTED_CPU"`, "sh", "{n}")
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	if got := strings.TrimSpace(r.stdout); got != "1 1" {
-		t.Errorf("{n} and CORESLOT_GRANTED_CPU are %q, want 1 1", got)
-	}
-	if lines := runLog(t, dir); len(lines) != before+1 || lines[len(lines)-1]["preemptible"] != nil {
-		t.Errorf("run log %v: want one more line, without a preemptible key", lines)
-	}
-}
-
-// A preemptible run's record keeps the unshrunk request as need, the real grant, and the reason
-// as preemptible: "entry" for a needs entry's mark. Mutation: log the shrunk request as need →
-// [1 1], red; drop the key, or give an entry's mark another reason → red.
-func TestPreemptibleRunRecord(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 12\n")
-	writeNeeds(t, dir, "[needs.\"e\"]\ncpu = \"2..12\"\npreemptible = true\n")
-	if r := cli(t, baseEnv(dir), "run", "--label", "e", "--", "true"); r.code != 0 {
-		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
-	}
-	lines := runLog(t, dir)
-	if len(lines) != 1 {
-		t.Fatalf("%d log lines, want 1", len(lines))
-	}
-	need := fmt.Sprint(lines[0]["need"].(map[string]any)["cpu"])
-	grant := lines[0]["grant"].(map[string]any)["cpu"]
-	if need != "[2 12]" || grant != float64(1) || lines[0]["preemptible"] != "entry" {
-		t.Errorf("need %s, grant %v, preemptible %v; want [2 12], 1 and entry", need, grant, lines[0]["preemptible"])
 	}
 }
 
@@ -1443,9 +990,9 @@ func TestChildRlimitRaised(t *testing.T) {
 	}
 }
 
-// bigGrantConfig is a budget on which `--need cpu=150 --need io=150` is a grant of 300 tokens and
-// a hold: 301 descriptors.
-const bigGrantConfig = "[resources]\ncpu = 150\nio = 150\n"
+// bigGrantConfig is a budget on which `--mem 32G` is a grant of 256 tokens and a hold: 257
+// descriptors.
+const bigGrantConfig = "[resources]\nmem = \"32G\"\n"
 
 // wantRlimitAtLeast runs cmd, a run whose command prints its soft descriptor limit, and fails the
 // test unless the run succeeded without a word on its standard error and gave the command at
@@ -1483,19 +1030,19 @@ func wantRlimitAtLeast(t *testing.T, cmd *exec.Cmd, floor uint64) {
 // to 242 or above (the helper's Go runtime holds a few low descriptors of its own while it opens
 // them, which shift them up, so 240 rather than 253 leaves room below the limit: macOS's dyld
 // aborts a program started with a descriptor at or above its soft limit), a run holds its
-// 301-descriptor grant at fd 243 and above, and its command gets at least 544 + 256. Mutations in
+// 257-descriptor grant at fd 243 and above, and its command gets at least 500 + 256. Mutations in
 // raiseChildNofile: base := original (512), or a floor of 3+len(ExtraFiles) without the
-// descriptor scan (560), and the run cannot start its command (exit 70).
+// descriptor scan (516), and the run cannot start its command (exit 70).
 func TestRunRlimitCoversInheritedDescriptors(t *testing.T) {
 	dir := stateDir(t, bigGrantConfig)
 	cmd := shCmd(t, baseEnv(dir), `exec env `+helperEnv+`=inherit-fds "$0" 240 sh -c 'ulimit -S -n 256 && `+
-		`exec "$0" run --need cpu=150 --need io=150 -- sh -c "ulimit -S -n"' "$0"`, cliBinary(t))
-	wantRlimitAtLeast(t, cmd, 243+301+256)
+		`exec "$0" run --mem 32G -- sh -c "ulimit -S -n"' "$0"`, cliBinary(t))
+	wantRlimitAtLeast(t, cmd, 243+257+256)
 }
 
 // A pass-through passes its grant on by inheritance, not in ExtraFiles, and still never sets its
 // own soft limit below its highest open descriptor plus 256. Its caller lowered the soft limit to
-// 16 under a 301-descriptor grant at fds 3 to 303, so its command gets at least 304 + 256. Only
+// 16 under a 257-descriptor grant at fds 3 to 259, so its command gets at least 260 + 256. Only
 // Linux starts a program with descriptors above its soft limit, and only a statically linked one,
 // as a release build is: macOS's dyld aborts it, and the dynamic loader cannot open libc. So the
 // test builds a cgo-free coreslot rather than run the test binary, which may be dynamically
@@ -1513,9 +1060,9 @@ func TestPassThroughRlimitCoversItsGrant(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	dir := stateDir(t, bigGrantConfig)
-	cmd := shCmd(t, baseEnv(dir), `exec "$0" run --need cpu=150 --need io=150 -- sh -c 'ulimit -S -n 16 && `+
-		`exec "$0" run --need cpu=150 --need io=150 -- sh -c "ulimit -S -n"' "$0"`, bin)
-	wantRlimitAtLeast(t, cmd, 304+256)
+	cmd := shCmd(t, baseEnv(dir), `exec "$0" run --mem 32G -- sh -c 'ulimit -S -n 16 && `+
+		`exec "$0" run --mem 32G -- sh -c "ulimit -S -n"' "$0"`, bin)
+	wantRlimitAtLeast(t, cmd, 260+256)
 }
 
 // childNofile adds 256 to the highest of the original limit, the highest open descriptor plus 1
@@ -1574,10 +1121,10 @@ func TestHighestOpenFD(t *testing.T) {
 }
 
 func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
 	tmp := t.TempDir()
 	closed, release := filepath.Join(tmp, "closed"), filepath.Join(tmp, "release")
-	args := append([]string{"run", "--need", "cpu=2", "--"}, helper(t, "close-and-wait", closed, release)...)
+	args := append([]string{"run", "--mem", "256M", "--"}, helper(t, "close-and-wait", closed, release)...)
 	cmd := cliCmd(t, baseEnv(dir), args...)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -1590,7 +1137,7 @@ func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 	})
 	time.Sleep(200 * time.Millisecond)
 	for i := 0; i < 2; i++ {
-		if !locked(t, dir, "cpu", i) {
+		if !locked(t, dir, "mem", i) {
 			t.Errorf("token %d was released while the command still runs", i)
 		}
 	}
@@ -1602,7 +1149,7 @@ func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 		t.Fatalf("exit %d (stderr %q)", got, errb.String())
 	}
 	for i := 0; i < 2; i++ {
-		if locked(t, dir, "cpu", i) {
+		if locked(t, dir, "mem", i) {
 			t.Errorf("token %d is still locked after the command exited", i)
 		}
 	}
@@ -1622,7 +1169,7 @@ func (s *fakeStepper) step(context.Context) (engine.StepResult, error) {
 
 func (s *fakeStepper) holders() ([]engine.HolderInfo, error) {
 	s.holderCalls++
-	return []engine.HolderInfo{{Label: "gate", PID: 4711, Grant: map[string]int{"cpu": 12},
+	return []engine.HolderInfo{{Label: "gate", PID: 4711, Grant: map[string]int{"mem": 12},
 		StartNS: time.Now().Add(-192 * time.Second).UnixNano()}}, nil
 }
 
@@ -1657,7 +1204,7 @@ func TestWaitingLineEvery30s(t *testing.T) {
 	clk := &fakeClock{limit: 95 * time.Second, cancel: cancel}
 	s := &fakeStepper{}
 	var out bytes.Buffer
-	r := &run{o: runOptions{need: map[string]spec.Range{"cpu": {Min: 4, Max: 12}}}}
+	r := &run{o: runOptions{need: map[string]spec.Range{"mem": {Min: 8, Max: 8}}}}
 	_, err := waitLoop(ctx, s, clk, &out, r.waitingLine, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitLoop = %v, want the context's end", err)
@@ -1667,7 +1214,7 @@ func TestWaitingLineEvery30s(t *testing.T) {
 		t.Fatalf("%d waiting lines in 95 s, want 3 (at 30, 60 and 90 s):\n%s", len(lines), out.String())
 	}
 	for i, want := range []string{"(30s)", "(1m00s)", "(1m30s)"} {
-		if !strings.HasPrefix(lines[i], "coreslot: waiting for cpu 4..12: position 2 "+want+"; holders: gate pid 4711 cpu12 (3m1") {
+		if !strings.HasPrefix(lines[i], "coreslot: waiting for mem 1 GiB: position 2 "+want+"; holders: gate pid 4711 mem 1.5 GiB (3m1") {
 			t.Errorf("line %d = %q", i, lines[i])
 		}
 	}
@@ -1818,7 +1365,7 @@ func TestEnqueueBoundedLeavesNothing(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	tk, err := e.EnqueueContext(ctx, spec.Request{Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}})
+	tk, err := e.EnqueueContext(ctx, spec.Request{Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}})
 	if !errors.Is(err, context.DeadlineExceeded) || tk != nil {
 		t.Fatalf("enqueue = %v, %v; want the deadline and no ticket", tk, err)
 	}

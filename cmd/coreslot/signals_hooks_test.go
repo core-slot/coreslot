@@ -70,7 +70,7 @@ func finish(t *testing.T, cmd *exec.Cmd, prefix string) int {
 // Mutation: call the lock hook's enter before Enter's loop and its leave only on return, so
 // that it brackets the wait as well (the run does not stop while the section stays held).
 func TestStopWhileWaitingForTheSection(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -114,7 +114,7 @@ func TestStopWhileWaitingForTheSection(t *testing.T) {
 // Mutations: Enter no longer calls the lock hook (the run stops inside the section); Leave no
 // longer calls it (the run never stops).
 func TestStopDeferredWhileHoldingTheSection(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -155,17 +155,17 @@ func TestStopDeferredWhileHoldingTheSection(t *testing.T) {
 // A status that holds a token's probe lock defers SIGTSTP until it has closed the probe, and then
 // stops: a client stopped holding a probe lock makes every other client count the token as
 // locked, so a head whose minimum needs it is never admitted although nobody is stopped inside
-// the admission section (I5). The status pauses in its probe of cpu's first token, holding its
+// the admission section (I5). The status pauses in its probe of mem's first token, holding its
 // lock, and is sent SIGTSTP there; once it goes on, it must stop with that token free, and a
-// request for the whole of cpu must be admitted at once while it stays stopped.
+// request for the whole of mem must be admitted at once while it stays stopped.
 // Mutation: ProbeLocked no longer calls the lock hooks (the status stops holding the token).
 func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
-	if r := cli(t, baseEnv(dir), "run", "--need", "cpu=2", "--", "true"); r.code != 0 {
+	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	if r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	whole := func() result {
-		return cli(t, baseEnv(dir), "run", "--no-wait", "--need", "cpu=2", "--", "true")
+		return cli(t, baseEnv(dir), "run", "--no-wait", "--mem", "256M", "--", "true")
 	}
 	hooks := t.TempDir()
 	cmd := cliCmd(t, append(baseEnv(dir), "CORESLOT_TESTHOOK_DIR="+hooks, "CORESLOT_TESTHOOK_PAUSE=probe.locked"),
@@ -185,7 +185,7 @@ func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if st := procState(t, cmd.Process.Pid); st == "T" {
 		r := whole()
-		t.Fatalf("the status stopped holding a token's probe lock; a request for the whole of cpu then exits %d: %q",
+		t.Fatalf("the status stopped holding a token's probe lock; a request for the whole of mem then exits %d: %q",
 			r.code, r.stderr)
 	}
 	resume(t, probing)
@@ -193,7 +193,7 @@ func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
 		return procState(t, cmd.Process.Pid) == "T"
 	})
 	if r := whole(); r.code != 0 {
-		t.Errorf("while the status is stopped, a request for the whole of cpu exits %d, want 0: %q", r.code, r.stderr)
+		t.Errorf("while the status is stopped, a request for the whole of mem exits %d, want 0: %q", r.code, r.stderr)
 	}
 	if err := unix.Kill(cmd.Process.Pid, unix.SIGCONT); err != nil {
 		t.Fatal(err)

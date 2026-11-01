@@ -24,7 +24,7 @@ func libraryHelper(name string, args []string) (code int, ok bool) {
 }
 
 // libWait is a Go program inside `coreslot run` that queues through the library: args are the
-// cpu min and max, how long Wait may take, and "independent" or "nested" for
+// mem token min and max, how long Wait may take, and "independent" or "nested" for
 // Options.Independent. It prints the grant (or the error) with how long the Enqueue and Wait
 // took, and what queue/ and holds/ held and gen read while it had the grant.
 func libWait(args []string) int {
@@ -59,7 +59,7 @@ func libWait(args []string) int {
 		return 1
 	}
 	start := time.Now()
-	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: "lib", Need: map[string]coreslot.Range{"cpu": {Min: lo, Max: hi}}})
+	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: "lib", Need: map[string]coreslot.Range{"mem": {Min: lo, Max: hi}}})
 	if err != nil {
 		fmt.Println("error:", err)
 		return 1
@@ -73,7 +73,7 @@ func libWait(args []string) int {
 		return 1
 	}
 	defer g.Close()
-	fmt.Printf("grant cpu=%d passthrough=%v after %v\n", g.Granted()["cpu"], g.PassThrough(), took.Round(10*time.Millisecond))
+	fmt.Printf("grant mem=%d passthrough=%v after %v\n", g.Granted()["mem"], g.PassThrough(), took.Round(10*time.Millisecond))
 	fmt.Printf("queue [%s]\nholds [%s]\ngen %s -> %s\n", names("queue"), names("holds"), before, gen())
 	if took > 2*time.Second {
 		fmt.Println("slow")
@@ -81,8 +81,8 @@ func libWait(args []string) int {
 	return 0
 }
 
-// The defect a library caller inside a run hit: budget 2, `coreslot run --need cpu=2` runs a Go
-// program that asks the library for cpu 1..2 and waits up to 10 s. Before pass-through it queued
+// The defect a library caller inside a run hit: budget 2, `coreslot run --mem 256M` runs a Go
+// program that asks the library for mem 1..2 tokens and waits up to 10 s. Before pass-through it queued
 // behind its own parent and timed out (it would have waited forever without a bound); now it
 // runs at once on the parent's grant, with no ticket, no hold of its own and no gen bump. With
 // Options.Independent it queues as an unrelated request and waits again. Mutation: making
@@ -90,14 +90,14 @@ func libWait(args []string) int {
 // timeout of the defect.
 func TestLibraryInsideRunPassesThrough(t *testing.T) {
 	t.Run("pass-through", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = 2\n")
-		r := cli(t, baseEnv(dir), append([]string{"run", "--need", "cpu=2", "--"}, helper(t, "lib-wait", "1", "2", "10s", "nested")...)...)
+		dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "256M", "--"}, helper(t, "lib-wait", "1", "2", "10s", "nested")...)...)
 		t.Logf("exit %d\nstdout:\n%s\nstderr:\n%s", r.code, r.stdout, r.stderr)
 		if r.code != 0 {
 			t.Fatalf("the library inside the run got no grant: exit %d, %s", r.code, strings.TrimSpace(r.stdout))
 		}
-		if !strings.Contains(r.stdout, "grant cpu=2 passthrough=true after ") || strings.Contains(r.stdout, "slow") {
-			t.Errorf("stdout %q: want a pass-through grant of cpu 2 at once", r.stdout)
+		if !strings.Contains(r.stdout, "grant mem=2 passthrough=true after ") || strings.Contains(r.stdout, "slow") {
+			t.Errorf("stdout %q: want a pass-through grant of mem 2 at once", r.stdout)
 		}
 		lines := strings.Split(r.stdout, "\n")
 		if len(lines) < 4 || lines[1] != "queue []" || strings.Count(lines[2], ",") != 0 || lines[2] == "holds []" {
@@ -109,8 +109,8 @@ func TestLibraryInsideRunPassesThrough(t *testing.T) {
 		tokensFree(t, dir, 2)
 	})
 	t.Run("independent", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\ncpu = 2\n")
-		r := cli(t, baseEnv(dir), append([]string{"run", "--need", "cpu=2", "--"}, helper(t, "lib-wait", "1", "2", "1s", "independent")...)...)
+		dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "256M", "--"}, helper(t, "lib-wait", "1", "2", "1s", "independent")...)...)
 		t.Logf("exit %d\nstdout:\n%s\nstderr:\n%s", r.code, r.stdout, r.stderr)
 		if r.code != 1 || !strings.Contains(r.stdout, "error: context deadline exceeded") {
 			t.Fatalf("exit %d, stdout %q: an Independent request must queue behind the parent until its bound", r.code, r.stdout)
