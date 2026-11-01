@@ -564,6 +564,40 @@ func TestRunPassesExitStatus(t *testing.T) {
 	}
 }
 
+// A command's own exit 75 is its status, with no marker line. Mutation: reading 75 as a
+// give-up prints the marker.
+func TestOwnExit75PassesThrough(t *testing.T) {
+	dir := stateDir(t, "")
+	if r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", "exit 75"); r.code != 75 || r.stderr != "" {
+		t.Errorf("exit 75: got %d, stderr %q; want 75 and nothing said", r.code, r.stderr)
+	}
+}
+
+// A SIGKILL coreslot did not send is reported, and the command is not restarted. Mutation:
+// counting every SIGKILL as a stop restarts it.
+func TestOutsideSigkillNotRestarted(t *testing.T) {
+	dir := stateDir(t, "")
+	marks := filepath.Join(t.TempDir(), "starts")
+	r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", `echo >>"$0"; kill -KILL $$`, marks)
+	if want := "ended by SIGKILL from outside coreslot; not restarted"; r.code != 137 || !strings.Contains(r.stderr, want) {
+		t.Errorf("got %d, stderr %q; want 137 and %q", r.code, r.stderr, want)
+	}
+	if data, err := os.ReadFile(marks); err != nil || len(data) != 1 {
+		t.Errorf("the command started %d times (%v), want once", len(data), err)
+	}
+}
+
+// A stopped command comes back with the larger of its peak and its need. Mutation: keeping the
+// need gives 1 GiB.
+func TestRestartNeedIsPeak(t *testing.T) {
+	if got := restartNeed(3<<20, 1024); got != 3072 {
+		t.Errorf("restartNeed(3 GiB peak, 1 GiB need) = %d MiB, want 3072", got)
+	}
+	if got := restartNeed(512<<10, 1024); got != 1024 {
+		t.Errorf("restartNeed(512 MiB peak, 1 GiB need) = %d MiB, want 1024", got)
+	}
+}
+
 func TestRunMissingCommandFreesEverything(t *testing.T) {
 	dir := budgetDir(t, 512)
 	for _, cmd := range []string{"coreslot-no-such-command", filepath.Join(dir, "missing")} {

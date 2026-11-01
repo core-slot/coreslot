@@ -231,6 +231,9 @@ func (t *Ticket) publish(sec *store.Section) error {
 		return err
 	}
 	arrival := e.clock.Realtime()
+	if t.req.ArrivalNS > 0 {
+		arrival = t.req.ArrivalNS
+	}
 	body, err := wire.Encode(wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival})
 	if err != nil {
 		return err

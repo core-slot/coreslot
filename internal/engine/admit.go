@@ -237,6 +237,13 @@ func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, nee
 // GrantMiB is the memory the command was granted, in MiB: the need.
 func (g *Grant) GrantMiB() int64 { return g.grantMiB }
 
+// ArrivalNS is the wall clock at the run's first arrival in the queue, as its hold carries it.
+func (g *Grant) ArrivalNS() int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.body.ArrivalNS
+}
+
 // HoldName is the hold's file name in holds/; empty without a hold.
 func (g *Grant) HoldName() string { return g.holdName }
 

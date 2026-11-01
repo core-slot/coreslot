@@ -96,12 +96,18 @@ func (r *run) runChild(c child) int {
 		released = c.release()
 	}
 	r.stopped, r.peakKiB = stopped && status == 128+int(syscall.SIGKILL), p.kib
+	if c.grant != nil && status == 128+int(syscall.SIGKILL) && !r.stopped {
+		r.notice("ended by SIGKILL from outside coreslot; not restarted")
+	}
 	if r.releaseFailed(released) {
 		return status
 	}
 	rec := store.RunRecord{
 		TimeNS: r.startNS, Label: r.o.label, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen, Nested: c.nested,
+	}
+	if r.stopped {
+		rec.Stops = r.stops + 1
 	}
 	var maxRSS *int64
 	if sup != nil {
@@ -112,7 +118,7 @@ func (r *run) runChild(c child) int {
 		free := r.freeWait.total().Seconds()
 		rec.WaitedFreeS = &free
 	}
-	if !c.nested && c.failOpen == "" && rec.MemPeakKiB != nil {
+	if !c.nested && c.failOpen == "" && !r.stopped && rec.MemPeakKiB != nil {
 		if h := memHint(r.o.label, c.grantMiB, *rec.MemPeakKiB, rec.RanS); h != "" {
 			r.notice("%s", h)
 		}

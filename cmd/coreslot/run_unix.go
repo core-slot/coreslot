@@ -14,6 +14,7 @@ import (
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/runstats"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -22,6 +23,9 @@ const (
 	waitLineEvery = 30 * time.Second // the waiting line
 	noWaitFor     = time.Second      // --no-wait: how long the section is tried
 )
+
+// maxStops is the memory stops after which a run gives up.
+const maxStops = 3
 
 // readLog reads the run log once for a run: the need it gives label, the p90 peak of its last
 // counted runs (ok false when unknown), and every label's normal share of system time.
@@ -105,7 +109,8 @@ func (r *run) refuse(format string, args ...any) int {
 	return r.o.refusalCode
 }
 
-// ordinary is a run that queues (PROTOCOL.md section 18 rule 3).
+// ordinary is a run that queues (PROTOCOL.md section 18 rule 3). A command a stop round killed
+// queues again with its first arrival, until its third stop; --timeout covers every wait.
 func (r *run) ordinary() int {
 	e, err := openEngine(r.loc, false)
 	if err != nil {
@@ -115,8 +120,6 @@ func (r *run) ordinary() int {
 	if total, over := e.Oversized(req.NeedMiB); over {
 		r.notice("needs %.1f GiB of %.1f GiB; runs only alone", float64(req.NeedMiB)/1024, float64(total)/1024)
 	}
-	r.freeWait = &freeMeter{needMiB: req.NeedMiB, headroom: memsample.Headroom}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if r.o.timeout > 0 {
@@ -124,6 +127,33 @@ func (r *run) ordinary() int {
 		ctx, c = context.WithTimeout(ctx, r.o.timeout)
 		defer c()
 	}
+	for {
+		g, code, ok := r.wait(ctx, cancel, e, req)
+		if !ok {
+			return code
+		}
+		if code = r.admitted(e, g); !r.stopped {
+			return code
+		}
+		if r.stops++; r.stops == maxStops {
+			r.notice("gave up after %d memory stops (run %s)", maxStops, g.HoldName())
+			return r.o.refusalCode
+		}
+		r.notice("memory stop %d of %d: the command was killed to free memory; coreslot restarts it by itself; do not run it again",
+			r.stops, maxStops)
+		req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
+		r.start, r.startNS = time.Now(), time.Now().UnixNano()
+	}
+}
+
+// restartNeed is the need of a stopped command coming back: the larger of its peak before the
+// kill and its need.
+func restartNeed(peakKiB, needMiB int64) int64 { return max((peakKiB+1023)/1024, needMiB) }
+
+// wait queues req and waits for its grant. ok is false when the run ends without one, with code
+// its exit status.
+func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Engine, req spec.Request) (g *engine.Grant, code int, ok bool) {
+	r.freeWait = &freeMeter{needMiB: req.NeedMiB, headroom: memsample.Headroom}
 	watch := watchSignals(cancel)
 
 	enqCtx := ctx
@@ -133,7 +163,6 @@ func (r *run) ordinary() int {
 		defer c()
 	}
 	t, err := e.EnqueueContext(enqCtx, req)
-	var g *engine.Grant
 	if err == nil {
 		if r.o.noWait {
 			g, err = r.tryOnce(ctx, t)
@@ -155,12 +184,12 @@ func (r *run) ordinary() int {
 			r.notice("interrupted while waiting")
 		}
 		code, _ := classify(&interruptError{Sig: sig.(syscall.Signal)})
-		return code
+		return nil, code, false
 	}
 	if err != nil {
-		return r.notAdmitted(e, err)
+		return nil, r.notAdmitted(e, err), false
 	}
-	return r.admitted(e, g)
+	return g, 0, true
 }
 
 // notAdmitted handles a wait that ended without a grant.
