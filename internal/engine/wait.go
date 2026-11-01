@@ -102,12 +102,6 @@ func newTicket(e *Engine, req spec.Request) *Ticket {
 	return &Ticket{e: e, req: req, wellFormed: map[string]bool{}, last: Waiting{Position: 1}}
 }
 
-// ID is the ticket's id, what a cancel request names.
-func (t *Ticket) ID() wire.ID {
-	_, id := t.ownName()
-	return id
-}
-
 // Name is the ticket's file name in queue/.
 func (t *Ticket) Name() string {
 	name, _ := t.ownName()

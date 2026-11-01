@@ -215,7 +215,7 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	}()
 	defer func() { point = defaultPoint }()
 	<-reached
-	if err := newEngine(t, dir, nil).CancelContext(context.Background(), head.ID()); err != nil { // its own completed section
+	if err := newEngine(t, dir, nil).CancelContext(context.Background(), ticketID(head)); err != nil { // its own completed section
 		t.Fatalf("Cancel: %v", err)
 	}
 	close(release)
@@ -229,7 +229,7 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	if n := reservedUnits(t, e); n != 0 {
 		t.Errorf("%d units reserved by a cancelled head", n)
 	}
-	if exists(filepath.Join(dir, store.CancelDir, head.ID().String())) {
+	if exists(filepath.Join(dir, store.CancelDir, ticketID(head).String())) {
 		t.Error("the cancel request was not removed")
 	}
 }

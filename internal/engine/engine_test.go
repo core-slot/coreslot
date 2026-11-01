@@ -141,6 +141,12 @@ func needLabel(arg, label string) spec.Request {
 	return spec.Request{Label: label, NeedMiB: mib}
 }
 
+// ticketID is the id of tk's ticket, what a cancel request names.
+func ticketID(tk *Ticket) wire.ID {
+	id, _ := wire.ParseName(tk.Name())
+	return id
+}
+
 func enqueue(t *testing.T, e *Engine, req spec.Request) *Ticket {
 	t.Helper()
 	tk, err := e.EnqueueContext(context.Background(), req)
@@ -585,10 +591,10 @@ func blocked(t *testing.T, roomMiB int64) (dir string, e *Engine, clk *fakeClock
 func TestCancelThroughFile(t *testing.T) {
 	dir, _, clk, tk := blocked(t, 128)
 	other := newEngine(t, dir, nil) // another client
-	if err := other.CancelContext(context.Background(), tk.ID()); err != nil {
+	if err := other.CancelContext(context.Background(), ticketID(tk)); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	cancelPath := filepath.Join(dir, store.CancelDir, tk.ID().String())
+	cancelPath := filepath.Join(dir, store.CancelDir, ticketID(tk).String())
 	if !exists(cancelPath) {
 		t.Fatal("no cancel request published")
 	}
@@ -602,7 +608,7 @@ func TestCancelThroughFile(t *testing.T) {
 	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCanceled) {
 		t.Errorf("a second Step: %v, want ErrCanceled", err)
 	}
-	if err := other.CancelContext(context.Background(), tk.ID()); !errors.Is(err, ErrNoTicket) {
+	if err := other.CancelContext(context.Background(), ticketID(tk)); !errors.Is(err, ErrNoTicket) {
 		t.Errorf("cancelling a gone ticket: %v, want ErrNoTicket", err)
 	}
 }
@@ -612,7 +618,7 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	tk := enqueue(t, e, need("mem=2"))
-	id := tk.ID()
+	id := ticketID(tk)
 	r := step(t, tk)
 	if !isAdmitted(r) {
 		t.Fatal("not admitted")
@@ -726,7 +732,7 @@ func TestSeqWraps(t *testing.T) {
 	}
 	var ids []wire.ID
 	for i := 0; i < 3; i++ {
-		ids = append(ids, enqueue(t, e, need("mem=1")).ID())
+		ids = append(ids, ticketID(enqueue(t, e, need("mem=1"))))
 	}
 	for i, want := range []int{999999, 0, 1} {
 		if ids[i].Seq != want {
@@ -744,8 +750,8 @@ func TestSeqWraps(t *testing.T) {
 	next = 999998
 	mu.Unlock()
 	tk := enqueue(t, e, need("mem=1"))
-	if tk.ID().Seq != 2 {
-		t.Errorf("after collisions on 999999, 0 and 1: seq %d, want 2", tk.ID().Seq)
+	if ticketID(tk).Seq != 2 {
+		t.Errorf("after collisions on 999999, 0 and 1: seq %d, want 2", ticketID(tk).Seq)
 	}
 	entries, _, err := e.st.List(store.QueueDir)
 	if err != nil || len(entries) != 4 {
@@ -785,7 +791,7 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 	c := enqueue(t, e, need("mem=1"))
 	step(t, c)
 	before = readGen(t, e)
-	if err := newEngine(t, dir, nil).CancelContext(context.Background(), c.ID()); err != nil {
+	if err := newEngine(t, dir, nil).CancelContext(context.Background(), ticketID(c)); err != nil {
 		t.Fatal(err)
 	}
 	if got := readGen(t, e); got != before {
@@ -813,7 +819,7 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 func TestCancelAlreadyRequestedIsNotAnError(t *testing.T) {
 	_, e, _, tk := blocked(t, 128)
 	for i := 0; i < 2; i++ {
-		if err := e.CancelContext(context.Background(), tk.ID()); err != nil {
+		if err := e.CancelContext(context.Background(), ticketID(tk)); err != nil {
 			t.Fatalf("Cancel #%d: %v", i+1, err)
 		}
 	}
@@ -1062,7 +1068,7 @@ func TestStrayEntriesAreIgnored(t *testing.T) {
 	}
 	// A directory under the ticket's own cancel name, a symlink ticket ahead of it, and a
 	// group-writable hold.
-	if err := os.Mkdir(filepath.Join(dir, store.CancelDir, tk.ID().String()), 0o700); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, store.CancelDir, ticketID(tk).String()), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	ahead := wire.TicketName(wire.ID{OrderKey: 1, PID: 1, Seq: 1}, "")
