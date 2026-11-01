@@ -1337,8 +1337,9 @@ func TestStatusWithMalformedFormat(t *testing.T) {
 }
 
 // FORMAT naming format 0 is a format this client does not implement (PROTOCOL.md section 7.6),
-// not an absent FORMAT: status and doctor say so. Mutation: take
-// Format == 0 for absence again, before FormatUnderstood, in either command and its case turns red.
+// not an absent FORMAT: status and doctor say so, and doctor counts it a problem, since every run
+// there fails open. Mutation: take Format == 0 for absence again, before FormatUnderstood, in
+// either command and its case turns red; a line instead of a problem exits doctor 0.
 func TestStatusAndDoctorReportFormatZero(t *testing.T) {
 	dir := stateDir(t, "")
 	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 0\n"), 0o600); err != nil {
@@ -1348,9 +1349,9 @@ func TestStatusAndDoctorReportFormatZero(t *testing.T) {
 		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement\n") {
 		t.Errorf("status: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
 	}
-	if r := cli(t, baseEnv(dir), "doctor"); r.code != 0 ||
-		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement; runs fail open until `coreslot doctor --reset`\n") {
-		t.Errorf("doctor: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	if r := cli(t, baseEnv(dir), "doctor"); r.code != 1 ||
+		!strings.Contains(r.stdout, "format: 0, which this client does not implement; runs fail open until `coreslot doctor --reset`\n") {
+		t.Errorf("doctor: exit %d, want 1 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
 	}
 	doc := statusDoc(t, dir, 0)
 	if doc["format"] != float64(0) || doc["format_present"] != true || doc["format_understood"] != false {

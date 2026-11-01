@@ -1029,7 +1029,7 @@ itself.
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
 | 3 | `status`: runs fail open, because degraded mode is recorded or a state error (an unusable directory, a malformed `FORMAT`, an invalid configuration) stands; `doctor`: degraded mode is recorded and nothing else is wrong |
-| 1 | `doctor`: it found a problem (an unusable directory, filesystem, `FORMAT` or configuration), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusals of `--clear` and `--reset` are 75 |
+| 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusals of `--clear` and `--reset` are 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
 `status` exits 3, `doctor` exits 1 and `cancel` refuses with 75. `--help` prints on stdout and exits
