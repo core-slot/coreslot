@@ -68,7 +68,7 @@ type holdJSON struct {
 	FootprintMiB int64  `json:"footprint_mib"`
 	DUserNS      int64  `json:"d_user_ns"`
 	DSysNS       int64  `json:"d_sys_ns"`
-	DPageWaitNS  int64  `json:"d_pagewait_ns"`
+	DPageWaitNS  int64  `json:"d_page_wait_ns"`
 	SampledNS    int64  `json:"sampled_ns"`
 	Victim       bool   `json:"victim"`
 	ChildExited  bool   `json:"child_exited"`
@@ -213,7 +213,7 @@ func DecodeHold(body []byte) (Hold, error) {
 		dst *int64
 	}{{"start_ns", &h.StartNS}, {"arrival_ns", &h.ArrivalNS}, {"need_mib", &h.NeedMiB},
 		{"footprint_mib", &h.FootprintMiB}, {"d_user_ns", &h.DUserNS}, {"d_sys_ns", &h.DSysNS},
-		{"d_pagewait_ns", &h.DPageWaitNS}, {"sampled_ns", &h.SampledNS}} {
+		{"d_page_wait_ns", &h.DPageWaitNS}, {"sampled_ns", &h.SampledNS}} {
 		if *f.dst, err = o.int64(f.key); err != nil {
 			return Hold{}, err
 		}

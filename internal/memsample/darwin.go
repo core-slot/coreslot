@@ -12,11 +12,11 @@ import (
 // Source names Tree's measure: the physical footprint, as footprint(1) reports it.
 const Source = "footprint"
 
-// Tree returns the summed physical footprint of root and its descendants, in KiB.
-func Tree(root int) (kib int64, ok bool) {
+// Tree returns the summed physical footprint of root and its descendants, in KiB, and their pids.
+func Tree(root int) (kib int64, pids []int, ok bool) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
-		return 0, false
+		return 0, nil, false
 	}
 	parents := make(map[int]int, len(procs))
 	for _, p := range procs {
@@ -36,13 +36,6 @@ func Listing() (map[int]Proc, bool) {
 		out[int(p.Proc.P_pid)] = Proc{PPID: int(p.Eproc.Ppid), StartNS: p.Proc.P_starttime.Nano()}
 	}
 	return out, true
-}
-
-// resident reads pid's physical footprint, the measure Tree adds; macOS has no shared part to
-// count once.
-func resident(pid int) (private, shared int64, ok bool) {
-	private, ok = footprint(pid)
-	return private, 0, ok
 }
 
 // footprint reads ri_phys_footprint of pid's rusage_info_v4, in KiB.

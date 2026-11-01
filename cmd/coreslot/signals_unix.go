@@ -135,8 +135,65 @@ func childDone(terminal bool) {
 	}
 }
 
-// superviseChild waits for the started command and returns its status (128 + the signal when a
-// signal killed it), relaying the signals the run receives meanwhile:
+// killGroup sends SIGKILL to the process group pgid; tests replace it.
+var killGroup = func(pgid int) error { return unix.Kill(-pgid, unix.SIGKILL) }
+
+// supervisor reaps the command and is the one place that kills its process group: the kill and
+// the reap take its lock, so the group is signalled only while the command is unreaped and its
+// pid, the group's id, cannot have been reused.
+type supervisor struct {
+	mu     sync.Mutex
+	pid    int
+	group  bool // the command leads a process group of its own
+	reaped bool
+	waited bool // the reap read the command's status and rusage
+	ws     syscall.WaitStatus
+	ru     syscall.Rusage
+}
+
+func newSupervisor(cmd *exec.Cmd, group bool) *supervisor {
+	return &supervisor{pid: cmd.Process.Pid, group: group}
+}
+
+// KillGroup sends SIGKILL to the command's own process group and reports whether it did: never
+// once the command is reaped, nor to a group the command shares with coreslot.
+func (s *supervisor) KillGroup() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.group && !s.reaped && killGroup(s.pid) == nil
+}
+
+// reap waits for the command to exit, woken by SIGCHLD, and reaps it under the lock.
+func (s *supervisor) reap() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGCHLD)
+	defer signal.Stop(ch)
+	for {
+		s.mu.Lock()
+		pid, err := syscall.Wait4(s.pid, &s.ws, syscall.WNOHANG, &s.ru)
+		s.waited = pid == s.pid
+		s.reaped = s.waited || err != nil && err != syscall.EINTR
+		reaped := s.reaped
+		s.mu.Unlock()
+		if reaped {
+			return
+		}
+		if err == nil {
+			<-ch
+		}
+	}
+}
+
+// usage is the reaped command's rusage; nil when the reap read none.
+func (s *supervisor) usage() *syscall.Rusage {
+	if !s.waited {
+		return nil
+	}
+	return &s.ru
+}
+
+// superviseChild waits for the started command, reaping it through s, and returns its status
+// (128 + the signal when a signal killed it), relaying the signals the run receives meanwhile:
 //
 //   - terminal mode, or --same-group: the command shares coreslot's group, so SIGINT and
 //     SIGQUIT from the terminal reach it directly and coreslot drops its own copies (one
@@ -149,7 +206,7 @@ func childDone(terminal bool) {
 //     job stopped, and the SIGCONT that continues it is forwarded in turn.
 //
 // It never signals coreslot's own process group.
-func superviseChild(cmd *exec.Cmd, terminal bool) int {
+func superviseChild(cmd *exec.Cmd, s *supervisor, terminal bool) int {
 	pid := cmd.Process.Pid
 	if !terminal {
 		stops.mu.Lock()
@@ -167,17 +224,21 @@ func superviseChild(cmd *exec.Cmd, terminal bool) int {
 		defer close(relayed)
 		for {
 			select {
-			case s := <-runSignals:
-				forward(s.(syscall.Signal), pid, terminal)
+			case sig := <-runSignals:
+				forward(sig.(syscall.Signal), pid, terminal)
 			case <-done:
 				return
 			}
 		}
 	}()
-	_ = cmd.Wait()
+	s.reap()
+	_ = cmd.Wait() // ends the copying of its I/O; the command is reaped already
 	close(done)
 	<-relayed
-	return exitStatus(cmd.ProcessState)
+	if s.ws.Signaled() {
+		return 128 + int(s.ws.Signal())
+	}
+	return s.ws.ExitStatus()
 }
 
 // forward relays one signal the run received to its command.

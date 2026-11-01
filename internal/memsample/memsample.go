@@ -1,7 +1,7 @@
 // Package memsample reads the machine's memory: its total, the kernel's headroom, and the private
 // memory a process tree holds. Tree's measure is Source: on macOS each process's physical
 // footprint, on Linux each process's anonymous resident memory and swap, plus the tree's largest
-// shared memory once. HolderUse measures the same without swap, which is not resident.
+// shared memory once.
 package memsample
 
 import (
@@ -22,47 +22,12 @@ type Proc struct {
 // start time and the hold's clock read differ by the kernel's rounding.
 const startSlack = int64(time.Second)
 
-// HolderUse returns, per root pid, the resident memory in KiB of its tree in procs, leaving out
-// the subtree of every other pid in stop. A root absent from procs, started more than 1 s after
-// roots[pid] (its hold's start, ns), or none of whose processes could be read, is absent.
-func HolderUse(procs map[int]Proc, roots map[int]int64, stop map[int]bool) map[int]int64 {
-	return holderUse(procs, roots, stop, resident)
-}
-
 // Alive reports whether the process that started at startNS (ns, a hold's start) as pid is still
 // in procs: pid is listed and started no more than 1 s after startNS. A pid that started later
 // was reused by another process.
 func Alive(procs map[int]Proc, pid int, startNS int64) bool {
 	p, ok := procs[pid]
 	return ok && p.StartNS <= startNS+startSlack
-}
-
-// holderUse is HolderUse over read, which gives a process's private and shared KiB: private adds
-// over the tree, the largest shared counts once.
-func holderUse(procs map[int]Proc, roots map[int]int64, stop map[int]bool, read func(pid int) (private, shared int64, ok bool)) map[int]int64 {
-	parents := make(map[int]int, len(procs))
-	for pid, p := range procs {
-		parents[pid] = p.PPID
-	}
-	use := make(map[int]int64, len(roots))
-	for root, start := range roots {
-		if !Alive(procs, root, start) {
-			continue
-		}
-		var sum, shmem int64
-		found := false
-		for _, pid := range descendants(root, parents, stop) {
-			if private, shared, ok := read(pid); ok {
-				sum += private
-				shmem = max(shmem, shared)
-				found = true
-			}
-		}
-		if found {
-			use[root] = sum + shmem
-		}
-	}
-	return use
 }
 
 // descendants returns root and every process below it in parents (pid to parent pid), sorted,
@@ -88,18 +53,19 @@ func descendants(root int, parents map[int]int, stop map[int]bool) []int {
 	return out
 }
 
-// treeSum adds read over root and its descendants in parents. A process that cannot be read
-// (it exited after the listing) is skipped; ok is false when not one of them could be read.
-func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, ok bool)) (int64, bool) {
+// treeSum adds read over root and its descendants in parents and returns the pids it read. A
+// process that cannot be read (it exited after the listing) is skipped; ok is false when not one
+// of them could be read.
+func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, ok bool)) (int64, []int, bool) {
 	var sum int64
-	found := false
+	var pids []int
 	for _, pid := range descendants(root, parents, nil) {
 		if kib, ok := read(pid); ok {
 			sum += kib
-			found = true
+			pids = append(pids, pid)
 		}
 	}
-	return sum, found
+	return sum, pids, len(pids) > 0
 }
 
 // meminfo returns the value of key, in KiB, from the text of /proc/meminfo. It lives here, not

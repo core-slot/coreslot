@@ -545,11 +545,17 @@ func (t *Ticket) Holders() ([]HolderInfo, error) {
 	return live, nil
 }
 
-// holderInfo decodes a hold body; nil when it is malformed, including a pid or start_ns that is
-// not the name's (PROTOCOL.md 7.4).
-func holderInfo(en store.Entry, body []byte) *HolderInfo {
+// decodeHold decodes a hold body; ok is false when it is malformed, including a pid or start_ns
+// that is not the name's (PROTOCOL.md 7.4).
+func decodeHold(en store.Entry, body []byte) (wire.Hold, bool) {
 	h, err := wire.DecodeHold(body)
-	if err != nil || uint64(h.StartNS) != en.ID.OrderKey || h.PID != en.ID.PID {
+	return h, err == nil && uint64(h.StartNS) == en.ID.OrderKey && h.PID == en.ID.PID
+}
+
+// holderInfo decodes a hold body as decodeHold does; nil when it is malformed.
+func holderInfo(en store.Entry, body []byte) *HolderInfo {
+	h, ok := decodeHold(en, body)
+	if !ok {
 		return nil
 	}
 	return &HolderInfo{Name: en.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS, ArrivalNS: h.ArrivalNS,

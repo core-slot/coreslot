@@ -263,11 +263,11 @@ func TestDecodeStrict(t *testing.T) {
 
 	// Hold: every key is required, each within its rule.
 	holdKeys := []string{"label", "pid", "start_ns", "arrival_ns", "need_mib", "stops", "footprint_mib",
-		"d_user_ns", "d_sys_ns", "d_pagewait_ns", "sampled_ns", "victim", "child_exited", "tree"}
+		"d_user_ns", "d_sys_ns", "d_page_wait_ns", "sampled_ns", "victim", "child_exited", "tree"}
 	holdWith := func(key, val string) string {
 		m := map[string]string{
 			"label": `"x"`, "pid": `4711`, "start_ns": `5`, "arrival_ns": `4`, "need_mib": `2048`, "stops": `0`,
-			"footprint_mib": `512`, "d_user_ns": `1`, "d_sys_ns": `2`, "d_pagewait_ns": `3`, "sampled_ns": `6`,
+			"footprint_mib": `512`, "d_user_ns": `1`, "d_sys_ns": `2`, "d_page_wait_ns": `3`, "sampled_ns": `6`,
 			"victim": `false`, "child_exited": `false`, "tree": `true`,
 		}
 		m[key] = val
@@ -303,7 +303,7 @@ func TestDecodeStrict(t *testing.T) {
 		"stops float":               holdWith("stops", `1.5`),
 		"d_user_ns negative":        holdWith("d_user_ns", `-1`),
 		"d_sys_ns negative":         holdWith("d_sys_ns", `-1`),
-		"d_pagewait_ns negative":    holdWith("d_pagewait_ns", `-1`),
+		"d_page_wait_ns negative":   holdWith("d_page_wait_ns", `-1`),
 		"sampled_ns negative":       holdWith("sampled_ns", `-1`),
 		"victim number":             holdWith("victim", `1`),
 		"child_exited null":         holdWith("child_exited", `null`),
@@ -394,7 +394,7 @@ func TestEncodeShapeAndRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := `{"label":"","pid":0,"start_ns":7,"arrival_ns":0,"need_mib":0,"stops":0,"footprint_mib":0,` +
-		`"d_user_ns":0,"d_sys_ns":0,"d_pagewait_ns":0,"sampled_ns":0,"victim":false,"child_exited":false,"tree":false}`; string(b) != want {
+		`"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"sampled_ns":0,"victim":false,"child_exited":false,"tree":false}`; string(b) != want {
 		t.Errorf("hold body = %s, want %s", b, want)
 	}
 	b, err = Encode(Cancel{RequestedNS: 9, RequesterPID: 4711})
@@ -498,7 +498,7 @@ func TestEncodeCanonicalAndStable(t *testing.T) {
 		}
 	}
 	if want := `{"label":"x","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":2048,"stops":1,"footprint_mib":900,` +
-		`"d_user_ns":10,"d_sys_ns":20,"d_pagewait_ns":30,"sampled_ns":40,"victim":true,"child_exited":false,"tree":true}`; string(a) != want {
+		`"d_user_ns":10,"d_sys_ns":20,"d_page_wait_ns":30,"sampled_ns":40,"victim":true,"child_exited":false,"tree":true}`; string(a) != want {
 		t.Errorf("hold body = %s\nwant        %s", a, want)
 	}
 }

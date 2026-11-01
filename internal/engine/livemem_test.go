@@ -5,8 +5,8 @@ package engine
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -14,29 +14,12 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// Every engine test measures no tree unless it sets one, so that no admission depends on the
-// test machine's processes. Helper processes run this init too.
-func init() {
-	liveMem.use = func(map[int]int64, map[int]bool) map[int]int64 { return nil }
-}
-
-// setLiveMem replaces the headroom testMachine reports, in MiB, and the use in KiB that every
-// root asked about reports (none when useKiB is negative), for one test.
-func setLiveMem(t *testing.T, headroomMiB, useKiB int64) {
+// setLiveMem replaces the headroom testMachine reports, in MiB, for one test.
+func setLiveMem(t *testing.T, headroomMiB int64) {
 	t.Helper()
-	savedUse, savedHeadroom := liveMem, testHeadroom
-	t.Cleanup(func() { liveMem, testHeadroom = savedUse, savedHeadroom })
+	saved := testHeadroom
+	t.Cleanup(func() { testHeadroom = saved })
 	testHeadroom.mib, testHeadroom.ok = headroomMiB, true
-	liveMem.use = func(roots map[int]int64, _ map[int]bool) map[int]int64 {
-		if useKiB < 0 {
-			return nil
-		}
-		out := make(map[int]int64, len(roots))
-		for pid := range roots {
-			out[pid] = useKiB
-		}
-		return out
-	}
 }
 
 // The room is the headroom less the reserve and every live hold's unmeasured need: of 4096 MiB,
@@ -44,7 +27,7 @@ func setLiveMem(t *testing.T, headroomMiB, useKiB int64) {
 // the reserve admits C; comparing need < room refuses B.
 func TestRoomGatesAdmission(t *testing.T) {
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
-	setLiveMem(t, 4096, -1)
+	setLiveMem(t, 4096)
 	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
 	admitted(t, step(t, enqueue(t, e, need("mem=2G"))))
 	if r := step(t, enqueue(t, e, need("mem=1M"))); isAdmitted(r) {
@@ -56,7 +39,7 @@ func TestRoomGatesAdmission(t *testing.T) {
 // is held to them. Mutation: gating on the room when idle refuses the first.
 func TestIdleHeadAlwaysStarts(t *testing.T) {
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
-	setLiveMem(t, 100, -1) // below the reserve
+	setLiveMem(t, 100) // below the reserve
 	g := admitted(t, step(t, enqueue(t, e, need("mem=4G"))))
 	if g.GrantMiB() != 4096 {
 		t.Errorf("grant %d, want the 4096 asked", g.GrantMiB())
@@ -70,33 +53,30 @@ func TestIdleHeadAlwaysStarts(t *testing.T) {
 // ahead. Mutation: reading the headroom as 0 when it is not ok, and B waits.
 func TestUnreadHeadroomGatesNothing(t *testing.T) {
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
-	setLiveMem(t, 0, -1)
+	setLiveMem(t, 0)
 	testHeadroom.ok = false
 	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
 	admitted(t, step(t, enqueue(t, e, need("mem=2G"))))
 }
 
-// A hold hands the room back by what its tree already uses: with 3584 MiB, A's 1 GiB unmeasured
-// leaves 1536 MiB after the reserve, too little for B's 2 GiB. With A's tree measured at 1 GiB
-// nothing of it is still to grow, 2560 MiB are free and B is admitted. Mutation: measure taking
-// every hold as claiming its tree reddens the first half; never asking use reddens the second.
-func TestRoomUnmeasuredHoldCountsWhole(t *testing.T) {
-	for _, c := range []struct {
-		name  string
-		tree  bool
-		admit bool
-	}{{"no tree", false, false}, {"tree measured", true, true}} {
-		t.Run(c.name, func(t *testing.T) {
-			e := newEngine(t, newStateDir(t, ""), newFakeClock())
-			setLiveMem(t, 3584, 1<<20)
-			req := need("mem=1G")
-			req.Tree = c.tree
-			admitted(t, step(t, enqueue(t, e, req)))
-			if r := step(t, enqueue(t, e, need("mem=2G"))); isAdmitted(r) != c.admit {
-				t.Errorf("B admitted %v, want %v", isAdmitted(r), c.admit)
-			}
-		})
+// A hold hands the room back by the footprint its run wrote: with 3584 MiB, A's 1 GiB with no
+// footprint leaves 1536 MiB after the reserve, too little for B's 2 GiB. With A's footprint at
+// 1 GiB nothing of it is still to grow, 2560 MiB are free and B is admitted. Mutation: ignoring
+// the footprint keeps B out.
+func TestRoomCountsFootprint(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	setLiveMem(t, 3584)
+	a := admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
+	b := enqueue(t, e, need("mem=2G"))
+	if isAdmitted(step(t, b)) {
+		t.Fatal("B admitted beside A's whole need")
 	}
+	if err := a.UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 1024 }); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Second) // the head's next attempt
+	admitted(t, step(t, b))
 }
 
 // A live hold whose body does not parse (its run rewrites it in place, so a read can be torn)
@@ -105,7 +85,7 @@ func TestRoomUnmeasuredHoldCountsWhole(t *testing.T) {
 func TestTornLiveHoldCountsAtColdStart(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	setLiveMem(t, 2048, -1)
+	setLiveMem(t, 2048)
 	if err := os.MkdirAll(filepath.Join(dir, store.HoldsDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -129,23 +109,4 @@ func TestTornLiveHoldCountsAtColdStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	admitted(t, step(t, enqueue(t, e, need("mem=598M"))))
-}
-
-// B's process runs inside A's tree and B's whole reservation counts, so A's tree is read without
-// B's subtree; C, a tree hold that reserves nothing, stops the walk unread; D and E name one pid
-// and both count whole. Mutation: stop only at the measured roots, and 12 is no stop; roots
-// without the h.needMiB > 0 check, and 14 is a root; claims[h.pid] == 1 as >= 1, and 16 is a root.
-func TestMeasureStopsAtEveryLiveHold(t *testing.T) {
-	setLiveMem(t, 0, -1)
-	var roots map[int]int64
-	var stop map[int]bool
-	liveMem.use = func(r map[int]int64, s map[int]bool) map[int]int64 {
-		roots, stop = r, s
-		return nil
-	}
-	measure([]memHold{{pid: 10, tree: true, needMiB: 4096}, {pid: 12, needMiB: 1024}, {pid: 14, tree: true},
-		{pid: 16, tree: true, needMiB: 1024}, {pid: 16, tree: true, needMiB: 1024}})
-	if !reflect.DeepEqual(roots, map[int]int64{10: 0}) || !reflect.DeepEqual(stop, map[int]bool{10: true, 12: true, 14: true, 16: true}) {
-		t.Errorf("use asked roots %v, stop %v; want roots map[10:0], stop map[10 12 14 16]", roots, stop)
-	}
 }

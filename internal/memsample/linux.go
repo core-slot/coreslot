@@ -13,11 +13,12 @@ import (
 const Source = "anon"
 
 // Tree returns, in KiB, RssAnon + VmSwap summed over root and its descendants, plus the largest
-// RssShmem among them once: shared memory is mapped by several of them but held once.
-func Tree(root int) (kib int64, ok bool) {
+// RssShmem among them once: shared memory is mapped by several of them but held once. It also
+// returns their pids.
+func Tree(root int) (kib int64, pids []int, ok bool) {
 	ents, err := os.ReadDir("/proc")
 	if err != nil {
-		return 0, false
+		return 0, nil, false
 	}
 	parents := make(map[int]int, len(ents))
 	for _, ent := range ents {
@@ -30,7 +31,7 @@ func Tree(root int) (kib int64, ok bool) {
 		}
 	}
 	var shmem int64
-	kib, ok = treeSum(root, parents, func(pid int) (int64, bool) {
+	kib, pids, ok = treeSum(root, parents, func(pid int) (int64, bool) {
 		data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
 		if err != nil {
 			return 0, false
@@ -44,7 +45,7 @@ func Tree(root int) (kib int64, ok bool) {
 		shmem = max(shmem, shm)
 		return anon + swap, true
 	})
-	return kib + shmem, ok
+	return kib + shmem, pids, ok
 }
 
 // userHZ is the unit of the start time in /proc/<pid>/stat: clock ticks of 1/100 s.
@@ -89,21 +90,6 @@ func Listing() (map[int]Proc, bool) {
 		procs[pid] = Proc{PPID: ppid, StartNS: btime*int64(time.Second) + ticks*(int64(time.Second)/userHZ)}
 	}
 	return procs, true
-}
-
-// resident reads pid's RssAnon as private and RssShmem as shared from /proc/<pid>/status. Swap
-// is not resident, so it is not counted.
-func resident(pid int) (private, shared int64, ok bool) {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
-	if err != nil {
-		return 0, 0, false
-	}
-	private, ok = meminfo(string(data), "RssAnon")
-	if !ok {
-		return 0, 0, false
-	}
-	shared, _ = meminfo(string(data), "RssShmem")
-	return private, shared, true
 }
 
 // parent reads pid's parent from /proc/<pid>/stat.

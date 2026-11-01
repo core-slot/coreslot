@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,8 +12,8 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
-	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // memSampleEvery is the period of the command tree's memory sampler.
@@ -26,6 +27,7 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		grantMiB: g.GrantMiB(),
 		release:  g.Close,
 		log:      e.Store(), // FORMAT was understood in the admitting section
+		grant:    g,
 	}
 	return r.runChild(c)
 }
@@ -37,8 +39,9 @@ type child struct {
 	grantMiB int64
 	failOpen string
 	nested   bool
-	release  func() error // closes the run's copies of the grant once the command exited
-	log      *store.Store // the run log to append to; nil writes none
+	release  func() error  // closes the run's copies of the grant once the command exited
+	log      *store.Store  // the run log to append to; nil writes none
+	grant    *engine.Grant // the admitted grant the watchdog ticks for; nil outside the budget
 }
 
 // runChild starts the command with c, waits for it, releases the grant and appends the run
@@ -66,9 +69,9 @@ func (r *run) runChild(c child) int {
 	started := time.Now()
 	status := 0
 	var released error
-	var peakKiB int64
-	var peakAfterS float64
-	sampled := false
+	var sup *supervisor
+	var p peak
+	stopped := false
 	if err := exposeInherited(cmd.Start); err != nil {
 		childDone(terminal)
 		released = c.release()
@@ -76,12 +79,23 @@ func (r *run) runChild(c child) int {
 		r.notice("cannot run %s: %s", text(argv[0]), text(err.Error()))
 		status = code
 	} else {
-		sampler := startPeakSampler(cmd.Process.Pid, memSampleEvery, memsample.Tree)
-		status = superviseChild(cmd, terminal)
-		peakKiB, peakAfterS, sampled = sampler.stop()
+		sup = newSupervisor(cmd, !terminal)
+		ctx, stop := context.WithCancel(context.Background())
+		watched := make(chan struct{})
+		go func() {
+			defer close(watched)
+			stopped, p = r.watchChild(ctx, sup, c.grant)
+		}()
+		status = superviseChild(cmd, sup, terminal)
+		stop()
+		<-watched
+		if c.grant != nil {
+			_ = c.grant.UpdateHold(func(h *wire.Hold) { h.ChildExited = true })
+		}
 		childDone(terminal)
 		released = c.release()
 	}
+	r.stopped, r.peakKiB = stopped && status == 128+int(syscall.SIGKILL), p.kib
 	if r.releaseFailed(released) {
 		return status
 	}
@@ -89,8 +103,11 @@ func (r *run) runChild(c child) int {
 		TimeNS: r.startNS, Label: r.o.label, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen, Nested: c.nested,
 	}
-	maxRSS := recordUsage(&rec, cmd.ProcessState) // nil when the command never started
-	setMemPeak(&rec, maxRSS, peakKiB, peakAfterS, sampled)
+	var maxRSS *int64
+	if sup != nil {
+		maxRSS = recordUsage(&rec, sup.usage())
+	}
+	setMemPeak(&rec, maxRSS, p)
 	if r.freeWait != nil {
 		free := r.freeWait.total().Seconds()
 		rec.WaitedFreeS = &free
@@ -117,15 +134,10 @@ func (r *run) runChild(c child) int {
 // recordUsage copies the command's user and system seconds from its wait4 rusage into rec
 // (PROTOCOL.md section 20) and returns its peak resident set size in KiB. The rusage covers the
 // command and the descendants it waited for, not the ones it left running. A command that never
-// started has no ProcessState and gets no keys and a nil peak, as does a platform whose wait
-// reports no rusage: an unknown value is left out rather than written as zero. The seconds are
-// not rounded, like ran_s and waited_s.
-func recordUsage(rec *store.RunRecord, ps *os.ProcessState) (maxRSS *int64) {
-	if ps == nil {
-		return nil
-	}
-	ru, ok := ps.SysUsage().(*syscall.Rusage)
-	if !ok || ru == nil {
+// started, or whose reap read no rusage (ru nil), gets no keys and a nil peak: an unknown value is
+// left out rather than written as zero. The seconds are not rounded, like ran_s and waited_s.
+func recordUsage(rec *store.RunRecord, ru *syscall.Rusage) (maxRSS *int64) {
+	if ru == nil {
 		return nil
 	}
 	user := time.Duration(ru.Utime.Nano()).Seconds()

@@ -16,6 +16,7 @@ type runOptions struct {
 	need        int64 // MiB, once resolveNeed ran
 	mem         int64 // MiB from --mem, 0 when not given
 	pinned      bool  // need is --mem or the needs file's pin: learning leaves it alone
+	noRestart   bool  // the needs file marks the label no_restart: never stopped to free memory
 	label       string
 	timeout     time.Duration
 	onTimeout   string // "fail" (the default) or "run"

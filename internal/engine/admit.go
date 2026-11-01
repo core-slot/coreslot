@@ -64,7 +64,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	need := t.req.NeedMiB
-	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, measure(holds))
+	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		return nil, nil
 	}

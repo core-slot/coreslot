@@ -3,39 +3,22 @@
 package engine
 
 import (
+	"cmp"
+	"context"
 	"path/filepath"
 
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
-	"github.com/core-slot/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// liveMem is the seam for the reading of a holder's tree; tests replace it. Under the test hook's
-// headroom it measures no tree.
-var liveMem = struct {
-	use func(roots map[int]int64, stop map[int]bool) map[int]int64 // nil map: nothing measured
-}{
-	use: func(roots map[int]int64, stop map[int]bool) map[int]int64 {
-		if _, set := testhooks.Headroom(); set {
-			return nil
-		}
-		procs, ok := memsample.Listing()
-		if !ok {
-			return nil
-		}
-		return memsample.HolderUse(procs, roots, stop)
-	},
-}
-
-// memHold is one live hold as admission reads it.
-type memHold struct {
-	pid       int
-	startNS   int64
-	tree      bool
-	needMiB   int64
-	footprint int64 // MiB, as its run last wrote it
+// liveHold is one live hold as admission and the watch tick read it.
+type liveHold struct {
+	name string
+	body wire.Hold
 }
 
 // liveHolds lists holds/ and returns the live holds, a lock probe each, as Ticket.Holders does;
@@ -43,12 +26,12 @@ type memHold struct {
 // so a read can be torn) reserves coldStartMiB: unknown is not zero. It fails when holds/ or a
 // body cannot be read. It takes no lock of its own: admit runs under stepMu, which
 // Ticket.Holders takes.
-func liveHolds(st *store.Store, coldStartMiB int64) ([]memHold, error) {
+func liveHolds(st *store.Store, coldStartMiB int64) ([]liveHold, error) {
 	entries, _, err := st.List(store.HoldsDir)
 	if err != nil {
 		return nil, err
 	}
-	var live []memHold
+	var live []liveHold
 	for _, en := range entries {
 		body, err := st.ReadSmall(filepath.Join(store.HoldsDir, en.Name), wire.MaxBodyBytes)
 		if gone(err) || stray(err) {
@@ -57,7 +40,7 @@ func liveHolds(st *store.Store, coldStartMiB int64) ([]memHold, error) {
 		if err != nil {
 			return nil, err
 		}
-		info := holderInfo(en, body)
+		h, ok := decodeHold(en, body)
 		dead, err := probe(st, store.HoldsDir, en.Name)
 		if gone(err) || stray(err) || (err == nil && dead) {
 			continue
@@ -65,48 +48,69 @@ func liveHolds(st *store.Store, coldStartMiB int64) ([]memHold, error) {
 		if err != nil {
 			return nil, err
 		}
-		if info == nil {
-			live = append(live, memHold{pid: en.ID.PID, startNS: int64(en.ID.OrderKey), needMiB: coldStartMiB})
-			continue
+		if !ok {
+			h = wire.Hold{NeedMiB: coldStartMiB}
 		}
-		live = append(live, memHold{pid: info.PID, startNS: info.StartNS, tree: info.Tree,
-			needMiB: info.NeedMiB, footprint: info.FootprintMiB})
+		live = append(live, liveHold{name: en.Name, body: h})
 	}
 	return live, nil
 }
 
-// measure turns holds into the room's input: a hold that reserves memory is measured, less every
-// other live hold's subtree, when it alone claims its pid's tree; otherwise its footprint is the
-// one its body carries.
-func measure(holds []memHold) []state.MemHold {
-	claims := make(map[int]int)
-	stop := make(map[int]bool, len(holds))
-	for _, h := range holds {
-		stop[h.pid] = true
-		if h.tree {
-			claims[h.pid]++
-		}
-	}
-	roots := make(map[int]int64)
-	for _, h := range holds {
-		if h.tree && claims[h.pid] == 1 && h.needMiB > 0 {
-			roots[h.pid] = h.startNS
-		}
-	}
-	var use map[int]int64
-	if len(roots) > 0 {
-		use = liveMem.use(roots, stop)
-	}
+// reservations are the room's input: each live hold that reserves memory, with the footprint its
+// run last wrote.
+func reservations(holds []liveHold) []state.MemHold {
 	out := make([]state.MemHold, 0, len(holds))
 	for _, h := range holds {
-		if h.needMiB == 0 {
-			continue
+		if h.body.NeedMiB > 0 {
+			out = append(out, state.MemHold{NeedMiB: h.body.NeedMiB, FootprintMiB: h.body.FootprintMiB})
 		}
-		fp := h.footprint
-		if kib, ok := use[h.pid]; ok && h.tree && claims[h.pid] == 1 {
-			fp = kib / 1024
-		}
-		out = append(out, state.MemHold{NeedMiB: h.needMiB, FootprintMiB: fp})
 	}
 	return out
+}
+
+// Tick is the grant's part in the shared watch tick: inside the section, entered within
+// sectionWait, the detector advances on a new machine sample of the host and the live holds when
+// the stored one is a period old (store.Section.Tick). It returns the detector and the [watch]
+// configuration; a section that stayed busy returns the zero detector. normal holds the labels'
+// normal shares; a label it lacks has watch.DefaultNormalShare.
+func (g *Grant) Tick(ctx context.Context, normal map[string]float64) (watch.Detector, watch.Config, error) {
+	e := g.e
+	sec, entered, err := e.enter(ctx, false)
+	if err != nil || !entered {
+		return watch.Detector{}, watch.Config{}, err
+	}
+	defer sec.Leave()
+	if n, understood, err := sec.Format(); err != nil || !understood {
+		return watch.Detector{}, watch.Config{}, cmp.Or(err, refuseFormat(n, ""))
+	}
+	cfg, m, err := e.reading()
+	if err != nil {
+		return watch.Detector{}, watch.Config{}, err
+	}
+	d, _, err := sec.Tick(e.clock.Realtime(), func() (watch.Sample, error) {
+		host, err := memsample.ReadHost()
+		if err != nil {
+			return watch.Sample{}, err
+		}
+		holds, err := liveHolds(e.st, spec.ColdStartMiB(m.MemMiB))
+		if err != nil {
+			return watch.Sample{}, err
+		}
+		s := watch.Sample{Host: host}
+		if m.HeadroomOK {
+			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
+		}
+		for _, h := range holds {
+			b := h.body
+			share, ok := normal[b.Label]
+			if !ok {
+				share = watch.DefaultNormalShare
+			}
+			s.Jobs = append(s.Jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
+				NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
+				DPageWaitNS: b.DPageWaitNS, NormalShare: share, Victim: b.Victim, ChildExited: b.ChildExited})
+		}
+		return s, nil
+	}, cfg.Watch)
+	return d, cfg.Watch, err
 }

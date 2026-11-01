@@ -39,17 +39,20 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 
 // resolveNeed sets the run's need: --mem, else the needs file's pin for its label, else what its
 // last runs needed (learned, read only when neither is set), else the cold start of a machine of
-// totalMiB.
+// totalMiB. It also takes the label's no_restart mark.
 func (o *runOptions) resolveNeed(lookup needsLookup, learned func() (int64, bool), totalMiB int64) {
+	var e needs.Entry
+	if lookup != nil && o.label != "" {
+		e, _ = lookup(o.label)
+	}
+	o.noRestart = e.NoRestart
 	if mib := o.mem; mib > 0 {
 		o.need, o.pinned = mib, true
 		return
 	}
-	if lookup != nil && o.label != "" {
-		if e, ok := lookup(o.label); ok && e.MemMiB > 0 {
-			o.need, o.pinned = e.MemMiB, true
-			return
-		}
+	if e.MemMiB > 0 {
+		o.need, o.pinned = e.MemMiB, true
+		return
 	}
 	if mib, ok := learned(); ok {
 		o.need = mib

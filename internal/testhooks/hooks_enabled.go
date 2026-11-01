@@ -19,8 +19,7 @@
 //     finds no record for the uid, so that the NSS fallback runs on a host whose lookup would
 //     answer (darwin's always does, and so does any account with a passwd entry).
 //   - CORESLOT_TESTHOOK_HEADROOM_MIB: a decimal integer of MiB that replaces the kernel's memory
-//     headroom in the live mem size, which then measures no holder's tree, so that a test's
-//     live admission never depends on the machine's memory.
+//     headroom, so that a test's admission never depends on the machine's memory.
 //   - <CORESLOT_TESTHOOK_DIR>/readings: when this file exists, its named numbers replace the
 //     machine readings of those names, re-read whenever the file changes.
 package testhooks

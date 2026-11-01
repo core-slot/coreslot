@@ -202,7 +202,7 @@ func reservedUnits(t *testing.T, e *Engine) int {
 	}
 	var reserved int64
 	for _, h := range holds {
-		reserved += h.needMiB
+		reserved += h.body.NeedMiB
 	}
 	return int(reserved / unit)
 }

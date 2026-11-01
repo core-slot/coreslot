@@ -23,20 +23,28 @@ const (
 	noWaitFor     = time.Second      // --no-wait: how long the section is tried
 )
 
-// learnedNeed is the need the run log gives label: the p90 peak of its last counted runs.
-func learnedNeed(loc location, label string) (int64, bool) {
+// readLog reads the run log once for a run: the need it gives label, the p90 peak of its last
+// counted runs (ok false when unknown), and every label's normal share of system time.
+func readLog(loc location, label string) (needMiB int64, ok bool, normal map[string]float64) {
+	normal = map[string]float64{}
 	if loc.err != nil {
-		return 0, false
+		return 0, false, normal
 	}
 	st, err := store.OpenReadOnly(loc.dir)
 	if err != nil || !st.Exists() {
-		return 0, false
+		return 0, false, normal
 	}
 	runs, _, err := st.ReadRuns()
 	if err != nil {
-		return 0, false
+		return 0, false, normal
 	}
-	return runstats.NeedMiB(runstats.Window(runs, label, runstats.WindowRuns))
+	for _, s := range runstats.Summarize(runs) {
+		if share, ok := runstats.NormalShare(s.Window); ok {
+			normal[s.Label] = share
+		}
+	}
+	needMiB, ok = runstats.NeedMiB(runstats.Window(runs, label, runstats.WindowRuns))
+	return needMiB, ok, normal
 }
 
 // run is one `coreslot run`.
@@ -47,9 +55,13 @@ type run struct {
 	startNS   int64    // wall clock at the run's start
 	start     time.Time
 	waited    time.Duration
-	env       []string   // the command's environment before its grant: the inherited context dropped
-	pipeNoted bool       // the waiting line said once whether stdin is a pipe
-	freeWait  *freeMeter // how long it waited while its need was free
+	env       []string           // the command's environment before its grant: the inherited context dropped
+	pipeNoted bool               // the waiting line said once whether stdin is a pipe
+	freeWait  *freeMeter         // how long it waited while its need was free
+	normal    map[string]float64 // every label's normal share, from the run log
+	stops     int                // memory stops so far
+	stopped   bool               // the last command was killed by a stop round
+	peakKiB   int64              // the last command's sampled peak
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -74,11 +86,12 @@ func runCommand(args []string, io IO) int {
 		})
 	}
 	machine, _ := readMachine()
-	o.resolveNeed(lookup, func() (int64, bool) { return learnedNeed(loc, o.label) }, machine.MemMiB)
+	learned, known, normal := readLog(loc, o.label)
+	o.resolveNeed(lookup, func() (int64, bool) { return learned, known }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now()}
+	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now(), normal: normal}
 	return r.decide()
 }
 

@@ -96,7 +96,7 @@ func TestTreeCountsChildren(t *testing.T) {
 			t.Fatalf("%d of 2 helpers ready after 30 s", n)
 		}
 	}
-	kib, ok := Tree(cmd.Process.Pid)
+	kib, _, ok := Tree(cmd.Process.Pid)
 	if mib := kib / 1024; !ok || mib < 540 || mib > 760 {
 		t.Errorf("Tree = %d MiB, %v; want 540..760 MiB, true", mib, ok)
 	}
@@ -138,7 +138,7 @@ func TestTreeOfExitedPID(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
-	if kib, ok := Tree(cmd.Process.Pid); ok {
+	if kib, _, ok := Tree(cmd.Process.Pid); ok {
 		t.Errorf("Tree(exited) = %d, true; want false", kib)
 	}
 }
@@ -173,28 +173,5 @@ func TestListingHasSelf(t *testing.T) {
 	}
 	if start := time.Unix(0, p.StartNS); start.Before(now.Add(-time.Hour)) || start.After(now) {
 		t.Errorf("StartNS = %v; want within the last hour before %v", start, now)
-	}
-}
-
-// The cost the admission section pays per live attempt: one listing of the machine, and the use
-// of the test's own tree in a table of 500 processes.
-func BenchmarkListingHolderUse(b *testing.B) {
-	listed, ok := Listing()
-	if !ok {
-		b.Fatal("Listing() not ok")
-	}
-	self := os.Getpid()
-	procs := map[int]Proc{self: listed[self]}
-	for pid := 1 << 22; len(procs) < 500; pid++ {
-		procs[pid] = Proc{PPID: 1}
-	}
-	roots := map[int]int64{self: time.Now().UnixNano()}
-	for b.Loop() {
-		if _, ok := Listing(); !ok {
-			b.Fatal("Listing() not ok")
-		}
-		if use := HolderUse(procs, roots, nil); len(use) != 1 {
-			b.Fatalf("HolderUse = %v; want one root", use)
-		}
 	}
 }

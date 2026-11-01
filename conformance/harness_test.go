@@ -231,7 +231,32 @@ func State(t *testing.T) Env {
 			t.Fatal(err)
 		}
 	}
+	e.SetReadings(calm(0))
 	return e
+}
+
+// calm is the machine readings of a host that pages nothing and has ample swap room, with
+// swapUsedMiB of swap used: the watchdog's level then depends on no trace's host.
+func calm(swapUsedMiB int64) map[string]int64 {
+	return map[string]int64{"Decomp": 0, "SwapIns": 0, "HasPSI": 0, "SwapUsedMiB": swapUsedMiB,
+		"SwapFreeMiB": 1 << 20, "VMVolumeFreeMiB": 1 << 20}
+}
+
+// SetReadings replaces the named machine readings of every process sharing e's hook directory, as
+// StepClock steps their clock; the readings it leaves out are the host's.
+func (e Env) SetReadings(nums map[string]int64) {
+	e.t.Helper()
+	var b strings.Builder
+	for name, n := range nums {
+		fmt.Fprintf(&b, "%s %d\n", name, n)
+	}
+	path := filepath.Join(e.HookDir, testhooks.ReadingsFile)
+	if err := os.WriteFile(path+".partial", []byte(b.String()), 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.Rename(path+".partial", path); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 // WriteConfig writes body as the state directory's config.toml (PROTOCOL.md section 5.3: under
