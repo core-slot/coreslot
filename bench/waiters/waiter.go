@@ -33,6 +33,14 @@ const (
 // needMiB is a waiter's need; the budget is the harness's -size of them.
 const needMiB = 128
 
+// benchHeadroomMiB is the headroom every engine of the harness reads, so that the budget is what
+// the configuration's reserve leaves of it, not what the machine has free.
+const benchHeadroomMiB = 1 << 19
+
+func benchMachine() (config.Machine, error) {
+	return config.Machine{MemMiB: benchHeadroomMiB, HeadroomMiB: benchHeadroomMiB, HeadroomOK: true}, nil
+}
+
 // waiterMain is one waiter: open the engine (the state directory from CORESLOT_STATE_DIR, with its
 // config.toml), enqueue needMiB, then Wait, the engine's polling loop. Admitted, it closes the
 // grant and exits. It writes "E <pid>" once enqueued and, on SIGUSR1, "B <pid> <cpu-ns>": its
@@ -65,7 +73,7 @@ func waiterMain(args []string) int {
 		fmt.Fprintf(os.Stderr, "waiter %d: open: %v\n", pid, err)
 		return exitError
 	}
-	e := engine.New(st, &config.Watcher{Path: cfgPath}, config.ReadMachine, engine.Clock{})
+	e := engine.New(st, &config.Watcher{Path: cfgPath}, benchMachine, engine.Clock{})
 	w, err := e.EnqueueContext(context.Background(), spec.Request{Label: *label,
 		NeedMiB: needMiB})
 	if err != nil {

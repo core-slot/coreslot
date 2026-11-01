@@ -247,9 +247,12 @@ func (v statusView) human() string {
 		p("CONFIGURATION ERROR: %s", text(strings.TrimPrefix(r.ConfigError, "configuration ")))
 	}
 
-	if r.ConfigError != "" {
+	switch {
+	case r.ConfigError != "":
 		p("mem: not known, the configuration cannot be read (runs fail open until it is fixed)")
-	} else {
+	case !r.Mem.Known:
+		p("mem: not known, the machine's free memory cannot be read")
+	default:
 		p("mem: size %s  reserved %s  free %s", spec.FormatMiB(r.Mem.SizeMiB), spec.FormatMiB(r.Mem.ReservedMiB),
 			spec.FormatMiB(r.Mem.FreeMiB))
 	}
@@ -373,7 +376,7 @@ type jsonHolder struct {
 	Alive     *bool   `json:"alive"`
 }
 
-// jsonMem is the memory budget in MiB; null when the configuration cannot be read.
+// jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
 type jsonMem struct {
 	SizeMiB     int64 `json:"size_mib"`
 	ReservedMiB int64 `json:"reserved_mib"`
@@ -414,7 +417,7 @@ func (v statusView) document() jsonStatus {
 		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
 	}
-	if r.ConfigError == "" {
+	if r.Mem.Known {
 		d.Mem = &jsonMem{SizeMiB: r.Mem.SizeMiB, ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB}
 	}
 	if r.Section.Held {

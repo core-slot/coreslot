@@ -12,6 +12,8 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/runstats"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // Timing of a waiting run (PROTOCOL.md section 22).
@@ -19,6 +21,22 @@ const (
 	waitLineEvery = 30 * time.Second // the waiting line
 	noWaitFor     = time.Second      // --no-wait: how long the section is tried
 )
+
+// learnedNeed is the need the run log gives label: the p90 peak of its last counted runs.
+func learnedNeed(loc location, label string) (int64, bool) {
+	if loc.err != nil {
+		return 0, false
+	}
+	st, err := store.OpenReadOnly(loc.dir)
+	if err != nil || !st.Exists() {
+		return 0, false
+	}
+	runs, _, err := st.ReadRuns()
+	if err != nil {
+		return 0, false
+	}
+	return runstats.NeedMiB(runstats.Window(runs, label, runstats.WindowRuns))
+}
 
 // run is one `coreslot run`.
 type run struct {
@@ -36,13 +54,7 @@ type run struct {
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
 func runCommand(args []string, io IO) int {
 	loc := locate()
-	var lookup needsLookup
-	if loc.err == nil {
-		lookup = newNeedsLookup(loc.cfgPath, func(format string, args ...any) {
-			fmt.Fprintf(io.Stderr, "coreslot: "+format+"\n", args...)
-		})
-	}
-	o, err := parseRun(args, io, lookup)
+	o, err := parseRun(args, io)
 	if errors.Is(err, errHelp) {
 		return 0
 	}
@@ -50,6 +62,14 @@ func runCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: %v\n", err)
 		return exitUsage
 	}
+	var lookup needsLookup
+	if loc.err == nil {
+		lookup = newNeedsLookup(loc.cfgPath, func(format string, args ...any) {
+			fmt.Fprintf(io.Stderr, "coreslot: "+format+"\n", args...)
+		})
+	}
+	machine, _ := readMachine()
+	o.resolveNeed(lookup, func() (int64, bool) { return learnedNeed(loc, o.label) }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
@@ -74,6 +94,9 @@ func (r *run) ordinary() int {
 		return r.failOpen(nil, err)
 	}
 	req := r.o.request()
+	if total, over := e.Oversized(req.NeedMiB); over {
+		r.notice("needs %.1f GiB of %.1f GiB; runs only alone", float64(req.NeedMiB)/1024, float64(total)/1024)
+	}
 	r.freeWait = &freeMeter{needMiB: req.NeedMiB, headroom: memsample.Headroom}
 
 	ctx, cancel := context.WithCancel(context.Background())

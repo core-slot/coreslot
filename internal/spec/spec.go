@@ -15,10 +15,10 @@ const (
 	// MaxNeedMiB bounds every MiB amount of a body (1 PiB), so that summing a full directory of
 	// them never overflows.
 	MaxNeedMiB = 1 << 30
-	// DefaultNeedMiB is the need of a run that names none. interim: the learned or cold-start
-	// need replaces it.
-	DefaultNeedMiB = 128
 )
+
+// ColdStartMiB is the need of a label with no pin and no counted run, on a machine of totalMiB.
+func ColdStartMiB(totalMiB int64) int64 { return max(1, min(4096, totalMiB/4)) }
 
 // Request is what a client asks for: NeedMiB of memory.
 type Request struct {
@@ -49,8 +49,7 @@ func ParseDigits(s string) (int, bool) {
 	return n, err == nil
 }
 
-// Validate checks every bound of a request. Call it on a normalized request: a need of 0 is a
-// *UsageError here, where Normalize makes it DefaultNeedMiB.
+// Validate checks every bound of a request; a need of 0 is a *UsageError.
 func (r Request) Validate() error {
 	if r.NeedMiB < 1 || r.NeedMiB > MaxNeedMiB {
 		return usagef("a need of %d MiB: want 1 to %d", r.NeedMiB, MaxNeedMiB)
@@ -68,12 +67,4 @@ func ValidateLabel(label string) error {
 		return usagef("label is not valid UTF-8")
 	}
 	return nil
-}
-
-// Normalize returns r with a need of 0 replaced by DefaultNeedMiB.
-func Normalize(r Request) Request {
-	if r.NeedMiB == 0 {
-		r.NeedMiB = DefaultNeedMiB
-	}
-	return r
 }

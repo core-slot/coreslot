@@ -144,7 +144,7 @@ func parent(args []string) int {
 
 // prepare builds what the children use. Syscall modes: a gen file, an own ticket file per
 // child (created by the child), and a ticket "ahead" whose lock this process holds, so a probe
-// finds it live. Waiter mode: a state directory with mem = 128M, all of it held by this process
+// finds it live. Waiter mode: a state directory whose memory this process holds entirely,
 // and a ticket ahead of every child kept fresh by this process's Polls.
 func prepare(mode, dir string) (stop func(), err error) {
 	if mode != "waiter" && mode != "cli" {
@@ -160,15 +160,13 @@ func prepare(mode, dir string) (stop func(), err error) {
 		}
 		return func() { f.Close() }, nil
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"128M\"\n"), 0o600); err != nil {
-		return nil, err
-	}
 	e, err := openEngine(dir)
 	if err != nil {
 		return nil, err
 	}
-	const need = 128 // MiB: the whole budget
-	holder, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-holder", NeedMiB: need})
+	// The holder reserves more than any machine has, so that every waiter waits on any machine.
+	const need = 128 // MiB
+	holder, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-holder", NeedMiB: spec.MaxNeedMiB})
 	if err != nil {
 		return nil, err
 	}

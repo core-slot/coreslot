@@ -36,7 +36,7 @@ const doctorUsage = `usage: coreslot doctor [--clear] [--reset]`
 
 const statsUsage = `usage: coreslot stats [--label LABEL] [--json]
 
-Shows what each label's last 5 runs in the run log used, and what they suggest
+Shows what each label's last 20 runs in the run log used, and what they suggest
 for its entry in needs.toml, beside the configuration.`
 
 func statsFlags() (fs *flag.FlagSet, label *string, asJSON *bool) {

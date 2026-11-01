@@ -47,21 +47,20 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, ErrCanceled
 	}
 
-	// 2-4. The capacity, and what the live holds reserve of it. A need above the capacity is
-	// clamped to it and admitted only when nothing is reserved.
-	sizeMiB, live, err := t.e.memSize()
+	// 2-4. The room: the headroom less the reserve and what the live holds still have to grow
+	// into. With no hold live the head starts whatever the numbers say; a headroom that cannot be
+	// read gates nothing, and nobody then passes the tickets ahead.
+	cfg, m, err := t.e.reading()
 	if err != nil {
 		return nil, err
 	}
-	holds, err := liveHolds(t.e.st)
+	holds, err := liveHolds(t.e.st, spec.ColdStartMiB(m.MemMiB))
 	if err != nil {
 		return nil, err
 	}
 	need := t.req.NeedMiB
-	reserved := reservedMiB(holds)
-	capacity, raised := capacityFor(sizeMiB, live, holds, reserved, need)
-	grant := min(need, capacity)
-	if reserved+grant > capacity {
+	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, measure(holds))
+	if m.HeadroomOK && len(holds) > 0 && need > room {
 		return nil, nil
 	}
 	// 5. The re-election: a ticket published ahead of this one since its election wins, unless
@@ -72,15 +71,13 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	if len(ahead) > 0 {
-		// A passer sized from the live capacity does not pass: the needs ahead are counted
-		// against the configured size, which the live capacity would let it take from.
-		if front >= FrontWindow || malformed || raised {
+		if front >= FrontWindow || malformed || !m.HeadroomOK {
 			return nil, nil
 		}
 		for _, a := range ahead {
-			reserved += min(a, capacity)
+			room -= a
 		}
-		if reserved+grant > capacity {
+		if need > room {
 			return nil, nil
 		}
 	}
@@ -92,10 +89,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if t.status != statusWaiting {
 		return nil, ErrCanceled
 	}
-	g := &Grant{e: t.e, grantMiB: grant, liveMem: raised}
-	if grant < need {
-		g.clampedMiB = need
-	}
+	g := &Grant{e: t.e, grantMiB: need}
 	if err := g.publishHold(sec, t.req, t.arrivalNS, need); err != nil {
 		return nil, err
 	}
@@ -178,13 +172,11 @@ func (t *Ticket) reelect() (ahead []int64, front int, malformed bool, err error)
 // Grant is what an admission holds: the hold's lock-carrying descriptor, which carries the
 // reservation in its body. Its methods are safe for concurrent use.
 type Grant struct {
-	e          *Engine
-	hold       *os.File
-	holdName   string
-	grantMiB   int64  // what the command may use
-	clampedMiB int64  // the need asked when the capacity clamped it, else 0
-	liveMem    bool   // the attempt that admitted it used a raised capacity
-	failOpen   string // the reason of a fail-open run's grant
+	e        *Engine
+	hold     *os.File
+	holdName string
+	grantMiB int64  // the need the command was granted
+	failOpen string // the reason of a fail-open run's grant
 
 	mu     sync.Mutex
 	body   wire.Hold // the hold's body as last written
@@ -205,14 +197,8 @@ func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, nee
 	return nil
 }
 
-// GrantMiB is the memory the command may use, in MiB: the need, or the capacity that clamped it.
+// GrantMiB is the memory the command was granted, in MiB: the need.
 func (g *Grant) GrantMiB() int64 { return g.grantMiB }
-
-// ClampedMiB is the need asked when the capacity clamped it (PROTOCOL.md section 12.2), else 0.
-func (g *Grant) ClampedMiB() int64 { return g.clampedMiB }
-
-// LiveMem reports that the attempt that admitted g used a raised capacity.
-func (g *Grant) LiveMem() bool { return g.liveMem }
 
 // HoldName is the hold's file name in holds/; empty without a hold.
 func (g *Grant) HoldName() string { return g.holdName }

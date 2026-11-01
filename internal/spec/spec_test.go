@@ -42,12 +42,3 @@ func TestValidateBounds(t *testing.T) {
 		}
 	}
 }
-
-func TestNormalize(t *testing.T) {
-	if got := Normalize(Request{Label: "x"}).NeedMiB; got != DefaultNeedMiB {
-		t.Errorf("Normalize default need = %d MiB, want %d", got, DefaultNeedMiB)
-	}
-	if got := Normalize(Request{NeedMiB: 700}).NeedMiB; got != 700 {
-		t.Errorf("Normalize changed an explicit need to %d MiB", got)
-	}
-}

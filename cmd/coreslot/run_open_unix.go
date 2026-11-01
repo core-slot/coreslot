@@ -23,6 +23,9 @@ func locate() location {
 	return loc
 }
 
+// readMachine reads the machine's memory; tests replace it.
+var readMachine = config.ReadMachine
+
 // openEngine opens the state directory at loc. A run creates what is missing of it; readOnly
 // creates nothing, not the directory, res/ or admit.lock (status, cancel and doctor leave a
 // machine where nothing has run as they found it), and the engine's Snapshot then reports a
@@ -39,7 +42,7 @@ func openEngine(loc location, readOnly bool) (*engine.Engine, error) {
 	if err != nil {
 		return nil, asState(err)
 	}
-	return engine.New(st, &config.Watcher{Path: loc.cfgPath}, config.ReadMachine, engine.Clock{}), nil
+	return engine.New(st, &config.Watcher{Path: loc.cfgPath}, readMachine, engine.Clock{}), nil
 }
 
 // asState gives openEngine's failure the CLI's own form, "state error: <reason>" with one

@@ -30,25 +30,25 @@ func only(t *testing.T, stats []Stats) Stats {
 	return stats[0]
 }
 
-// The window is the last 5 counted runs of a label by time_ns, whatever order the log has them in.
-// Mutation: a window of all runs instead of the last 5.
-func TestWindowIsLastFive(t *testing.T) {
-	var runs []store.RunRecord
-	for _, i := range []int64{6, 0, 1, 2, 3, 4, 5} {
+// The window is the last 20 counted runs of a label by time_ns, whatever order the log has them in.
+// Mutation: a window of all runs instead of the last 20.
+func TestWindowIsLastTwenty(t *testing.T) {
+	runs := []store.RunRecord{run("x", 24)}
+	for i := range int64(24) {
 		runs = append(runs, run("x", i))
 	}
 	s := only(t, Summarize(runs))
-	if s.Runs != 7 || len(s.Window) != 5 {
-		t.Fatalf("Runs %d, window %d; want 7 and 5", s.Runs, len(s.Window))
+	if s.Runs != 25 || len(s.Window) != 20 {
+		t.Fatalf("Runs %d, window %d; want 25 and 20", s.Runs, len(s.Window))
 	}
 	for n, r := range s.Window {
-		if want := t0 + int64(n+2)*1e9; r.TimeNS != want {
+		if want := t0 + int64(n+5)*1e9; r.TimeNS != want {
 			t.Errorf("window[%d] at %d, want %d", n, r.TimeNS, want)
 		}
 	}
 }
 
-// mem is the window's largest peak, a failed run's included, rounded up to a whole MiB.
+// With few runs the need is the largest peak, a failed run's included, rounded up to a whole MiB.
 // Mutation: leave failed runs out of the peak, or round down (2764).
 func TestMemIsMaxRoundedUp(t *testing.T) {
 	r1, r2, r3 := run("x", 1), run("x", 2), run("x", 3)
@@ -105,5 +105,43 @@ func TestWaitedFreeSummed(t *testing.T) {
 	s := only(t, Summarize([]store.RunRecord{a, b, c}))
 	if s.WaitedFreeS != 7 || s.WaitedS != 12 {
 		t.Errorf("waited %v, waited while free %v; want 12 and 7", s.WaitedS, s.WaitedFreeS)
+	}
+}
+
+// The need is the p90 of the window's peaks: of 20 peaks, 1 to 20 GiB, the 19th.
+// Mutation: the maximum (20 GiB), or the 18th by nearest rank (18 GiB).
+func TestNeedIsP90(t *testing.T) {
+	var runs []store.RunRecord
+	for i := int64(1); i <= 20; i++ {
+		r := run("x", i)
+		r.MemPeakKiB = gib(float64(i))
+		runs = append(runs, r)
+	}
+	if got, ok := NeedMiB(Window(runs, "x", WindowRuns)); !ok || got != 19*1024 {
+		t.Errorf("NeedMiB = %d, %v; want %d, true", got, ok, 19*1024)
+	}
+}
+
+// A run that was stopped says nothing about what its label needs.
+// Mutation: count a run with stops.
+func TestStoppedRunsNotCounted(t *testing.T) {
+	ok, stopped := run("x", 1), run("x", 2)
+	stopped.Stops = 1
+	if w := Window([]store.RunRecord{ok, stopped}, "x", WindowRuns); len(w) != 1 || w[0].TimeNS != ok.TimeNS {
+		t.Errorf("Window = %+v, want only the run that was not stopped", w)
+	}
+}
+
+// The normal share is the median of sys_s/(user_s+sys_s); a run with no time adds nothing.
+func TestNormalShareIsMedian(t *testing.T) {
+	var window []store.RunRecord
+	for i, sys := range []float64{1, 3, 2} {
+		r := run("x", int64(i))
+		r.UserS, r.SysS = f(4-sys), f(sys)
+		window = append(window, r)
+	}
+	window = append(window, run("x", 9))
+	if got, ok := NormalShare(window); !ok || got != 0.5 {
+		t.Errorf("NormalShare = %v, %v; want 0.5, true", got, ok)
 	}
 }

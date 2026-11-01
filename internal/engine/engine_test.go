@@ -67,11 +67,30 @@ func (c *fakeClock) advance(d time.Duration) {
 // unit is the need of need("mem=1"): the tests count holds in it.
 const unit = 128
 
-// testUnits is the default mem size on testMachine, 60% of its memory, in whole units.
+// testUnits is the room testMachine leaves by default, in whole units.
 const testUnits = 8
 
-// testMachine is the machine every test engine resolves sizes against: 1707 MiB.
-func testMachine() (config.Machine, error) { return config.Machine{MemMiB: 1707}, nil }
+// testHeadroom is the headroom testMachine reports; ok false is a headroom that cannot be read.
+// The default leaves testUnits of room under the default reserve.
+var testHeadroom = struct {
+	mib int64
+	ok  bool
+}{testUnits*unit + config.DefaultReserveMiB, true}
+
+// testMachine is the machine every test engine reads: 1707 MiB, with testHeadroom.
+func testMachine() (config.Machine, error) {
+	return config.Machine{MemMiB: 1707, HeadroomMiB: testHeadroom.mib, HeadroomOK: testHeadroom.ok}, nil
+}
+
+// capped returns a new state directory in which an empty machine offers roomMiB of room, for the
+// rest of the test.
+func capped(t *testing.T, roomMiB int64) string {
+	t.Helper()
+	saved := testHeadroom
+	t.Cleanup(func() { testHeadroom = saved })
+	testHeadroom.mib = roomMiB + config.DefaultReserveMiB
+	return newStateDir(t, "")
+}
 
 // newStateDir creates a state directory whose config.toml holds cfg (none when cfg is empty).
 func newStateDir(t *testing.T, cfg string) string {
@@ -177,11 +196,15 @@ func reservedUnits(t *testing.T, e *Engine) int {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	holds, err := liveHolds(e.st)
+	holds, err := liveHolds(e.st, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return int(reservedMiB(holds) / unit)
+	var reserved int64
+	for _, h := range holds {
+		reserved += h.needMiB
+	}
+	return int(reserved / unit)
 }
 
 func exists(path string) bool {
@@ -396,7 +419,7 @@ func holdPath(t *testing.T, dir string, units int) string {
 
 // The queue orders by arrival alone (PROTOCOL.md section 9).
 func TestFIFOByArrival(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
+	dir := capped(t, 128)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	a := enqueue(t, e, needLabel("mem=1", "a"))
@@ -546,9 +569,9 @@ func TestDeadTicketPassedOverImmediately(t *testing.T) {
 }
 
 // blocked returns a ticket that cannot be admitted because a helper holds the whole budget.
-func blocked(t *testing.T, cfg string) (dir string, e *Engine, clk *fakeClock, tk *Ticket) {
+func blocked(t *testing.T, roomMiB int64) (dir string, e *Engine, clk *fakeClock, tk *Ticket) {
 	t.Helper()
-	dir = newStateDir(t, cfg)
+	dir = capped(t, roomMiB)
 	clk = newFakeClock()
 	e = newEngine(t, dir, clk)
 	startHelper(t, "lock", dir, holdPath(t, dir, 1))
@@ -560,7 +583,7 @@ func blocked(t *testing.T, cfg string) (dir string, e *Engine, clk *fakeClock, t
 }
 
 func TestCancelThroughFile(t *testing.T) {
-	dir, _, clk, tk := blocked(t, "[resources]\nmem = \"128M\"\n")
+	dir, _, clk, tk := blocked(t, 128)
 	other := newEngine(t, dir, nil) // another client
 	if err := other.CancelContext(context.Background(), tk.ID()); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -744,7 +767,7 @@ func readGen(t *testing.T, e *Engine) int64 {
 // Every section that publishes or removes a ticket or hold bumps gen once; a cancel publication
 // does not (PROTOCOL.md section 7.8).
 func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
+	dir := capped(t, 128)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 
@@ -788,7 +811,7 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 // A cancel request that already exists means the cancellation is already requested: not an
 // error, and no second request (PROTOCOL.md section 11).
 func TestCancelAlreadyRequestedIsNotAnError(t *testing.T) {
-	_, e, _, tk := blocked(t, "[resources]\nmem = \"128M\"\n")
+	_, e, _, tk := blocked(t, 128)
 	for i := 0; i < 2; i++ {
 		if err := e.CancelContext(context.Background(), tk.ID()); err != nil {
 			t.Fatalf("Cancel #%d: %v", i+1, err)

@@ -1,5 +1,4 @@
-// Package config reads coreslot's configuration and resolves the memory budget against the
-// machine's physical memory (PROTOCOL.md section 5).
+// Package config reads coreslot's configuration and the machine's memory (PROTOCOL.md section 5).
 package config
 
 import (
@@ -7,19 +6,22 @@ import (
 	"fmt"
 	"io/fs"
 	"strconv"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/testhooks"
 )
+
+// DefaultReserveMiB is the memory admission keeps free beyond every job's need. interim: the
+// calibration sets it.
+const DefaultReserveMiB = 1024
 
 // Config is a parsed configuration file.
 type Config struct {
-	Mem            SizeExpr // [resources] mem, 60% of physical memory unless set
-	WindowsWarning bool     // [platform] windows_warning, default true
-	LiveMem        bool     // [memory] live, default false
+	ReserveMiB     int64 // [memory] reserve
+	WindowsWarning bool  // [platform] windows_warning, default true
 }
 
 // Error reports a configuration that cannot be read or is invalid: a state error. Err is the
@@ -35,77 +37,51 @@ func (e *Error) Error() string { return fmt.Sprintf("configuration %s: %s", e.Pa
 // Unwrap returns the error that made the configuration unreadable, or nil.
 func (e *Error) Unwrap() error { return e.Err }
 
-type sizeKind int
-
-const (
-	sizeMemPercent sizeKind = iota // N% of physical memory
-	sizeMemMiB                     // n MiB
-)
-
-// SizeExpr is a configured size; Resolve turns it into a size for a machine.
-type SizeExpr struct {
-	kind sizeKind
-	n    int
-}
-
-var defaultMem = SizeExpr{kind: sizeMemPercent, n: 60}
-
-// Machine is what sizes resolve against: the physical memory in MiB.
+// Machine is what admission reads of the machine: its physical memory and the memory the kernel
+// can hand out without paging anything anonymous out, both in MiB. HeadroomOK is false when the
+// headroom cannot be read.
 type Machine struct {
-	MemMiB int64
+	MemMiB      int64
+	HeadroomMiB int64
+	HeadroomOK  bool
 }
 
-// ReadMachine reads the machine's physical memory.
+// ReadMachine reads the machine's memory. The test hook's headroom replaces the kernel's.
 func ReadMachine() (Machine, error) {
-	mib, err := memsample.Total()
+	total, err := memsample.Total()
 	if err != nil {
 		return Machine{}, err
 	}
-	return Machine{MemMiB: mib}, nil
-}
-
-// Resolve returns the size in MiB on machine m, rounded down, at least 1.
-func (s SizeExpr) Resolve(m Machine) int64 {
-	v := int64(s.n)
-	if s.kind == sizeMemPercent {
-		v = m.MemMiB * v / 100
+	m := Machine{MemMiB: total}
+	if mib, set := testhooks.Headroom(); set {
+		m.HeadroomMiB, m.HeadroomOK = mib, true
+	} else {
+		m.HeadroomMiB, m.HeadroomOK = memsample.Headroom()
 	}
-	return max(v, 1)
+	return m, nil
 }
 
-// ParseMemSize parses the size of the mem resource: an integer is GiB; a string is "N%" of
-// physical memory with N in 1..100, or a size spec.ParseBytes reads ("9.5G", "768M"), more than
-// 0. Anything else is an error.
-func ParseMemSize(v any) (SizeExpr, error) {
+// parseReserve parses reserve: a size spec.ParseBytes reads ("768M", "1.5G"), or an integer of
+// GiB. 0 is allowed.
+func parseReserve(v any) (int64, error) {
+	var s string
 	switch x := v.(type) {
-	case int64:
-		if x < 0 {
-			return SizeExpr{}, fmt.Errorf("mem %d is negative", x)
-		}
-		return ParseMemSize(strconv.FormatInt(x, 10))
 	case string:
-		if pct, ok := strings.CutSuffix(x, "%"); ok {
-			n, ok := spec.ParseDigits(pct)
-			if !ok || n < 1 || n > 100 {
-				return SizeExpr{}, fmt.Errorf(`mem %q: want "N%%" with N in 1..100`, x)
-			}
-			return SizeExpr{kind: sizeMemPercent, n: n}, nil
-		}
-		mib, err := spec.ParseBytes(x)
-		if err != nil {
-			return SizeExpr{}, fmt.Errorf(`mem: %v, or "N%%" of memory`, err)
-		}
-		if mib == 0 {
-			return SizeExpr{}, fmt.Errorf("mem %q: want more than 0", x)
-		}
-		return SizeExpr{kind: sizeMemMiB, n: int(mib)}, nil
+		s = x
+	case int64:
+		s = strconv.FormatInt(x, 10)
 	default:
-		return SizeExpr{}, fmt.Errorf(`mem %v (%T): want an integer of GiB, "N%%" or a size such as "768M"`, v, v)
+		return 0, fmt.Errorf(`reserve %v (%T): want an integer of GiB or a size such as "768M"`, v, v)
 	}
+	mib, err := spec.ParseBytes(s)
+	if err != nil {
+		return 0, fmt.Errorf("reserve: %v", err)
+	}
+	return mib, nil
 }
 
 func defaults() Config {
-	return Config{Mem: defaultMem, WindowsWarning: true}
+	return Config{ReserveMiB: DefaultReserveMiB, WindowsWarning: true}
 }
 
 // notRegularError is the reason of a configuration path that resolves to something but a regular
@@ -115,7 +91,7 @@ type notRegularError struct{ msg string }
 func (e notRegularError) Error() string { return e.msg }
 
 // Load reads the configuration at path, through symbolic links. A missing file, a dangling
-// symlink included, is the defaults (mem = "60%"), with no error; an unreadable file, one that
+// symlink included, is the defaults, with no error; an unreadable file, one that
 // is not a regular file (a directory, a FIFO, a device; Load never blocks on it), or a malformed
 // or invalid one is a *Error. Unknown tables and keys are ignored.
 func Load(path string) (Config, error) {
@@ -139,19 +115,6 @@ func parse(data string) (Config, string) {
 		return Config{}, err.Error()
 	}
 	c := defaults()
-	if v, ok := raw["resources"]; ok {
-		tbl, ok := v.(map[string]any)
-		if !ok {
-			return Config{}, "[resources] is not a table"
-		}
-		if v, ok := tbl["mem"]; ok {
-			size, err := ParseMemSize(v)
-			if err != nil {
-				return Config{}, "[resources] " + err.Error()
-			}
-			c.Mem = size
-		}
-	}
 	if v, ok := raw["platform"]; ok {
 		tbl, ok := v.(map[string]any)
 		if !ok {
@@ -170,16 +133,13 @@ func parse(data string) (Config, string) {
 		if !ok {
 			return Config{}, "[memory] is not a table"
 		}
-		if w, ok := tbl["live"]; ok {
-			b, ok := w.(bool)
-			if !ok {
-				return Config{}, "[memory] live: want a boolean"
+		if r, ok := tbl["reserve"]; ok {
+			mib, err := parseReserve(r)
+			if err != nil {
+				return Config{}, "[memory] " + err.Error()
 			}
-			c.LiveMem = b
+			c.ReserveMiB = mib
 		}
 	}
 	return c, ""
 }
-
-// MemMiB resolves the budget on machine m, in MiB.
-func (c Config) MemMiB(m Machine) int64 { return c.Mem.Resolve(m) }

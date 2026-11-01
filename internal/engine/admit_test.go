@@ -103,15 +103,21 @@ func TestHoldIsTheReservation(t *testing.T) {
 }
 
 // A need above the machine is representable, in the ticket and in the hold, with no cap: on a
-// 32 GiB machine a 40 GiB need runs alone, clamped to the budget.
+// 32 GiB machine a 40 GiB need runs alone, as asked.
 func TestNoPerGrantCap(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"100%\"\n")
+	dir := newStateDir(t, "")
 	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
-		func() (config.Machine, error) { return config.Machine{MemMiB: 32768}, nil }, newFakeClock().clock())
+		func() (config.Machine, error) {
+			return config.Machine{MemMiB: 32768, HeadroomMiB: 20000, HeadroomOK: true}, nil
+		},
+		newFakeClock().clock())
+	if total, over := e.Oversized(40960); total != 32768 || !over {
+		t.Errorf("Oversized(40960) = %d, %v; want 32768, true", total, over)
+	}
 	tk := enqueue(t, e, spec.Request{NeedMiB: 40960})
 	body, err := e.readBody(store.QueueDir, tk.Name())
 	if err != nil {
@@ -121,27 +127,27 @@ func TestNoPerGrantCap(t *testing.T) {
 		t.Fatalf("ticket %+v, %v; want need_mib 40960", w, err)
 	}
 	g := admitted(t, step(t, tk))
-	if g.GrantMiB() != 32768 || g.ClampedMiB() != 40960 || readHold(t, e, g).NeedMiB != 40960 {
-		t.Errorf("grant %d clamped %d hold %+v; want 32768, 40960 and need_mib 40960", g.GrantMiB(), g.ClampedMiB(), readHold(t, e, g))
+	if g.GrantMiB() != 40960 || readHold(t, e, g).NeedMiB != 40960 {
+		t.Errorf("grant %d hold %+v; want 40960 and need_mib 40960", g.GrantMiB(), readHold(t, e, g))
 	}
 }
 
-// PROTOCOL.md section 12.2: a need above the size waits for the whole budget, runs alone with all
-// of it, and its hold reserves the need asked.
-func TestOversizeIsClampedAndRunsAlone(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"1280M\"\n")
+// A need above what the room can ever be waits for the machine to be idle, then runs alone, its
+// hold reserving the need asked.
+func TestOversizeRunsAlone(t *testing.T) {
+	dir := capped(t, 1280)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	other := startHelper(t, "lock", dir, holdPath(t, dir, 1))
 	tk := enqueue(t, e, need("mem=16"))
 	if r := step(t, tk); isAdmitted(r) {
-		t.Fatal("clamped request admitted with 9 of 10 units free")
+		t.Fatal("an oversized request admitted beside a live hold")
 	}
 	other.stop()
 	clk.advance(time.Second)
 	g := admitted(t, step(t, tk))
-	if g.GrantMiB() != 10*unit || g.ClampedMiB() != 16*unit {
-		t.Errorf("grant %d clamped %d, want %d and %d", g.GrantMiB(), g.ClampedMiB(), 10*unit, 16*unit)
+	if g.GrantMiB() != 16*unit {
+		t.Errorf("grant %d, want %d", g.GrantMiB(), 16*unit)
 	}
 	if n := reservedUnits(t, e); n != 16 {
 		t.Errorf("reserved %d units, want the 16 asked", n)
@@ -438,7 +444,7 @@ func TestSnapshotOwnerExited(t *testing.T) {
 // the section repeats the election over a fresh listing, where a ticket the head has never
 // watched counts as live (PROTOCOL.md section 12.1 step 5).
 func TestReelectionInsideTheSection(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
+	dir := capped(t, 128)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	h := enqueue(t, e, need("mem=1"))
@@ -471,7 +477,7 @@ func TestReelectionInsideTheSection(t *testing.T) {
 // and, as it is never refreshed, passes it over once it is STALLED instead of being kept out
 // for ever.
 func TestReelectionWatchesATicketPublishedWithoutBump(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
+	dir := capped(t, 128)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	holder := startHelper(t, "lock", dir, holdPath(t, dir, 1))

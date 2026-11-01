@@ -1,11 +1,14 @@
 package main
 
-import "github.com/core-slot/coreslot/internal/needs"
+import (
+	"github.com/core-slot/coreslot/internal/needs"
+	"github.com/core-slot/coreslot/internal/spec"
+)
 
 // needsLookup finds the needs file's entry for a label.
 type needsLookup func(label string) (e needs.Entry, ok bool)
 
-// newNeedsLookup is parseRun's lookup of the needs file beside the configuration cfgPath. The
+// newNeedsLookup is resolveNeed's lookup of the needs file beside the configuration cfgPath. The
 // file is loaded once, on first use. A file that cannot be read, or an entry that does not
 // parse, is one notice and no entry: the run goes on as if the file had none.
 func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
@@ -32,4 +35,25 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 		}
 		return e, ok
 	}
+}
+
+// resolveNeed sets the run's need: --mem, else the needs file's pin for its label, else what its
+// last runs needed (learned, read only when neither is set), else the cold start of a machine of
+// totalMiB.
+func (o *runOptions) resolveNeed(lookup needsLookup, learned func() (int64, bool), totalMiB int64) {
+	if mib := o.mem; mib > 0 {
+		o.need, o.pinned = mib, true
+		return
+	}
+	if lookup != nil && o.label != "" {
+		if e, ok := lookup(o.label); ok && e.MemMiB > 0 {
+			o.need, o.pinned = e.MemMiB, true
+			return
+		}
+	}
+	if mib, ok := learned(); ok {
+		o.need = mib
+		return
+	}
+	o.need = spec.ColdStartMiB(totalMiB)
 }

@@ -26,18 +26,15 @@ import (
 
 // The kill-storm: randomized CLI clients, some of them nested runs, queue for mem while the storm kills them with SIGKILL, stops and continues them, cancels them, and
 // shrinks and grows the size through the configuration. A sampler checks I1, I2, I3 and I7 on
-// the hold bodies throughout. Each client runs with its headroom pinned through the test hook,
-// so that the clients size mem from it when the static size falls short; I3 then bounds the
-// reservations by the headroom too. Needs are counted in units of 128 MiB. Every run prints its seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
+// the hold bodies throughout. Needs are counted in units of 128 MiB. Every run prints its seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
 // and delays, and the size changes; the interleaving is the scheduler's). The schedule also
 // depends on -short. The first clients and the first two size changes are fixed, and one
 // client is canceled while it is seen queued, so that every run exercises each kind of
 // client, a kill of a holder, a stop, a cancellation, a shrink below what is reserved and a
 // growth; the test asserts that it did.
 //
-// Mutations: dropping the holds from state.Room admits all three memFlood clients beside the
-// first wave, 36 units reserved against the headroom's 24 (I3); capacityFor returning the static
-// size leaves no sample with more reserved than the static size.
+// Mutation: dropping the holds from state.Room admits all three memFlood clients beside the
+// first wave, 38 units reserved against the size's 14 (I3).
 
 const (
 	stormFull, stormShort     = 60 * time.Second, 10 * time.Second
@@ -45,12 +42,10 @@ const (
 	stormSeedEnv              = "CORESLOT_STORM_SEED"
 	// windDown bounds the end of the storm: every client killed and reaped.
 	windDown = 60 * time.Second
-	// stormUnit is the MiB of one unit of need. The static sizes the sizer sets range over
-	// stormMemMin..stormMemMax units, and every client's headroom is stormHeadroomMiB: a live
-	// capacity never exceeds it, so neither do the reservations.
+	// stormUnit is the MiB of one unit of need. The sizes the sizer sets range over
+	// stormMemMin..stormMemMax units.
 	stormUnit                = 128
-	stormMemMin, stormMemMax = 8, 16
-	stormHeadroomMiB         = stormUnit * (stormMemMax + 8)
+	stormMemMin, stormMemMax = 14, 20
 )
 
 // A storm label names its need, so that the sampler can check I7 from the hold alone:
@@ -99,7 +94,7 @@ type stormClient struct {
 	kind        string // cli, or cli-go for a nested run
 	inner       string // "" or go: the nested run
 	name        string // the label, and the marker name of its command
-	need        int    // units; 0 asks for the default
+	need        int    // units
 	timeout     time.Duration
 	fate        string // release, kill (at a time), killheld (once it holds), killheld-after-shrink, stop or cancel
 	at          time.Duration
@@ -161,22 +156,19 @@ func (st *storm) victimID() int {
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
 // not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
 // four CLI admissions, the third with a nested run, each holding mem until the first shrink:
-// 1 unit each, but 6 for the first and the third, so the first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
+// 1 unit each, but 6 for the first and the third, so the first wave holds 14, all of the size. Then each lets go, except
 // the one victimID picks, which is killed while it holds. The memFlood clients after them are
 // CLI runs of 8 units and nothing else, each holding for a second, which arrive while the
-// first wave holds and find nothing ahead of them: a live capacity admits one beside the first wave's 14 and
-// holds the others back at the headroom's 24 units, while a capacity that forgets the holds'
-// reservations admits all three. Client firstWave+memFlood+1 is stopped and continued.
+// first wave holds and find nothing ahead of them: the room the holds leave admits none beside
+// the first wave's 14, while a room that forgets the holds' reservations admits all three.
+// Client firstWave+memFlood+1 is stopped and continued.
 func (st *storm) plan(id int) *stormClient {
 	r := rand.New(rand.NewPCG(st.seed, uint64(id)))
 	c := &stormClient{id: id}
 	if r.IntN(6) == 0 {
 		c.inner = "go"
 	}
-	// A client without a need asks for the default of one unit.
-	if n := 1 + r.IntN(8); r.IntN(8) != 0 {
-		c.need = n
-	}
+	c.need = 1 + r.IntN(8)
 	if r.IntN(5) == 0 {
 		c.timeout = time.Second + time.Duration(r.IntN(5000))*time.Millisecond
 	}
@@ -229,21 +221,12 @@ func (st *storm) plan(id int) *stormClient {
 	return c
 }
 
-// memFlags writes a need of units as the CLI's --mem size; none for the default.
+// memFlags writes a need of units as the CLI's --mem size.
 func memFlags(units int) []string {
-	if units > 0 {
-		return []string{"--mem", fmt.Sprintf("%dM", units*stormUnit)}
-	}
-	return nil
+	return []string{"--mem", fmt.Sprintf("%dM", units*stormUnit)}
 }
 
-// argv is c's command line, with the headroom pinned.
 func (st *storm) argv(c *stormClient) []string {
-	return append([]string{"/usr/bin/env", "CORESLOT_TESTHOOK_HEADROOM_MIB=" + strconv.Itoa(stormHeadroomMiB)},
-		st.clientArgv(c)...)
-}
-
-func (st *storm) clientArgv(c *stormClient) []string {
 	leaf := []string{bins.child, "hold", st.e.MarkDir, c.name}
 	cmd := leaf
 	if c.inner == "go" {
@@ -554,8 +537,8 @@ func (st *storm) resize(ctx context.Context, units int) bool {
 	return true
 }
 
-// sizer changes the configuration: first a shrink of mem from 8 to 4 once the first wave holds
-// (or 5 s passed) and a sample saw it hold, then a growth back to 8, then random static sizes of
+// sizer changes the configuration: first a shrink of mem from 14 to 7 once the first wave holds
+// (or 5 s passed) and a sample saw it hold, then a growth back to 14, then random sizes of
 // stormMemMin..stormMemMax every 1.5 to 4 s.
 func (st *storm) sizer(ctx context.Context) {
 	shrunk := false
@@ -584,7 +567,7 @@ func (st *storm) sizer(ctx context.Context) {
 			break
 		}
 	}
-	_, _ = st.s.Sample(ctx) // the first wave's 14 units above the static 8, before the shrink
+	_, _ = st.s.Sample(ctx) // the first wave's 14 units, before the shrink
 	if ctx.Err() != nil || !st.resize(ctx, stormMemMin/2) {
 		return
 	}
@@ -671,7 +654,7 @@ func TestKillStorm(t *testing.T) {
 		}
 	}()
 
-	st.s = NewSampler(t, e, stormMemMin*stormUnit, stormHeadroomMiB)
+	st.s = NewSampler(t, e, stormMemMin*stormUnit)
 	st.s.Request = st.request
 
 	sctx, stopSampler := context.WithCancel(context.Background())
@@ -798,14 +781,14 @@ func TestKillStorm(t *testing.T) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	summary := fmt.Sprintf("kill-storm seed %d: %d clients in %v, %d samples (%d missed), %d violations; "+
-		"holder killed: %s; samples above a static size %v; events %v; endings %v; load after: %s",
+		"holder killed: %s; events %v; endings %v; load after: %s",
 		seed, len(st.results), time.Since(st.started).Round(time.Second), samples, missed, len(violations),
-		st.victim, st.s.AboveStatic(), st.counts, codes, uptime())
+		st.victim, st.counts, codes, uptime())
 	t.Log(summary)
 	fmt.Fprintln(os.Stderr, summary)
 
 	// The run exercised what it is for: floors on what happened, scaled for -short. The first
-	// shrink is deterministic (8 units to 4 while the first wave holds 14), so the floor on a
+	// shrink is deterministic (14 units to 7 while the first wave holds 14), so the floor on a
 	// shrink below what is reserved checks that the schedule ran, not that chance produced one.
 	admitted := 0
 	for k, n := range st.counts {
@@ -840,12 +823,6 @@ func TestKillStorm(t *testing.T) {
 					r.c.name, r.c.proc.pid, r.c.fate, r.code, r.c.killed, r.admitted, r.stderr)
 			}
 		}
-	}
-	// The live path ran: some sample saw more reserved than the static size and a shrink's
-	// bound allow, which only a live capacity admits. The first wave's two 6-unit clients take
-	// 12 of a static 8 in every run.
-	if st.s.AboveStatic() < 1 {
-		t.Errorf("no sample saw more reserved than the static size: the live capacity never admitted")
 	}
 	if minSamples := int(3 * dur.Seconds()); samples < minSamples || missed > 3 {
 		t.Errorf("%d samples (%d missed), want at least %d and at most 3 missed", samples, missed, minSamples)

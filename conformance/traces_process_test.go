@@ -192,7 +192,7 @@ func settled(t *testing.T, e Env) {
 // a second time and publishing a second unbudgeted hold.
 func TestNestedUnderFailOpenParent(t *testing.T) {
 	e := State(t)
-	e.WriteConfig("[resources]\nmem = \"0M\"\n") // invalid: a state error, so the parent fails open
+	e.WriteConfig("[memory]\nreserve = \"lots\"\n") // invalid: a state error, so the parent fails open
 	p := e.Start("run", "--label", "parent", "--mem", "256M", "--", "sh", "-c",
 		`"$0" run --label inner --mem 384M -- "$1" hold "$2" inner`, bins.coreslot, bins.child, e.MarkDir)
 	r := e.WaitStarted("inner")

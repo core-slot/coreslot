@@ -1,6 +1,6 @@
 //go:build unix
 
-// Package runstats summarizes the run log per label and suggests what each label needs.
+// Package runstats summarizes the run log per label and says what each label needs.
 package runstats
 
 import (
@@ -14,8 +14,8 @@ import (
 	"github.com/core-slot/coreslot/internal/store"
 )
 
-// WindowRuns is how many of a label's latest counted runs a suggestion rests on.
-const WindowRuns = 5
+// WindowRuns is how many of a label's latest counted runs its need rests on.
+const WindowRuns = 20
 
 // Stats is what the run log says about one label.
 type Stats struct {
@@ -30,31 +30,75 @@ type Stats struct {
 	Suggest       Suggestion
 }
 
-// Suggestion is what the window suggests for the label's needs entry. MemMiB is 0 when no window
-// run measured a peak.
+// Suggestion is what the window suggests for the label's needs entry: its need. MemMiB is 0 when
+// no window run measured a peak.
 type Suggestion struct {
 	MemMiB int64
 	Reason string
 }
 
 // counted reports whether r says what its label needs: labelled, not a pass-through, not run
-// without the budget.
+// without the budget, not stopped.
 func counted(r store.RunRecord) bool {
-	return r.Label != "" && !r.Nested && r.FailOpen == ""
+	return r.Label != "" && !r.Nested && r.FailOpen == "" && r.Stops == 0
+}
+
+// Window is the last n counted runs of label by time, oldest first.
+func Window(runs []store.RunRecord, label string, n int) []store.RunRecord {
+	var rs []store.RunRecord
+	for _, r := range runs {
+		if r.Label == label && counted(r) {
+			rs = append(rs, r)
+		}
+	}
+	slices.SortStableFunc(rs, func(a, b store.RunRecord) int { return cmp.Compare(a.TimeNS, b.TimeNS) })
+	return rs[max(len(rs)-n, 0):]
+}
+
+// NeedMiB is the p90 of the window's memory peaks, rounded up to a whole MiB; ok is false when
+// no run measured one.
+func NeedMiB(window []store.RunRecord) (mib int64, ok bool) {
+	var peaks []int64
+	for _, r := range window {
+		if r.MemPeakKiB != nil {
+			peaks = append(peaks, *r.MemPeakKiB)
+		}
+	}
+	if len(peaks) == 0 {
+		return 0, false
+	}
+	slices.Sort(peaks)
+	return (peaks[min(len(peaks)-1, len(peaks)*9/10)] + 1023) / 1024, true
+}
+
+// NormalShare is the median share of the window's runs' CPU time spent in the system,
+// sys_s/(user_s+sys_s); ok is false when no run has a measured, non-zero time.
+func NormalShare(window []store.RunRecord) (share float64, ok bool) {
+	var shares []float64
+	for _, r := range window {
+		if r.UserS != nil && r.SysS != nil && *r.UserS+*r.SysS > 0 {
+			shares = append(shares, *r.SysS/(*r.UserS+*r.SysS))
+		}
+	}
+	if len(shares) == 0 {
+		return 0, false
+	}
+	slices.Sort(shares)
+	n := len(shares)
+	return (shares[(n-1)/2] + shares[n/2]) / 2, true
 }
 
 // Summarize groups the counted runs by label and summarizes each, sorted by label.
 func Summarize(runs []store.RunRecord) []Stats {
-	byLabel := map[string][]store.RunRecord{}
+	n := map[string]int{}
 	for _, r := range runs {
 		if counted(r) {
-			byLabel[r.Label] = append(byLabel[r.Label], r)
+			n[r.Label]++
 		}
 	}
-	out := make([]Stats, 0, len(byLabel))
-	for label, rs := range byLabel {
-		slices.SortStableFunc(rs, func(a, b store.RunRecord) int { return cmp.Compare(a.TimeNS, b.TimeNS) })
-		out = append(out, summarize(label, len(rs), rs[max(len(rs)-WindowRuns, 0):]))
+	out := make([]Stats, 0, len(n))
+	for label, count := range n {
+		out = append(out, summarize(label, count, Window(runs, label, WindowRuns)))
 	}
 	slices.SortFunc(out, func(a, b Stats) int { return strings.Compare(a.Label, b.Label) })
 	return out
@@ -71,7 +115,7 @@ func summarize(label string, n int, window []store.RunRecord) Stats {
 			s.MemPeakKiB, s.MemPeakSource, s.PeakAfterS = *r.MemPeakKiB, r.MemPeakSource, r.PeakAfterS
 		}
 	}
-	s.Suggest.MemMiB = (s.MemPeakKiB + 1023) / 1024
+	s.Suggest.MemMiB, _ = NeedMiB(window)
 	s.Suggest.Reason = s.reason()
 	return s
 }

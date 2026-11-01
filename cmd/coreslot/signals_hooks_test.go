@@ -70,7 +70,7 @@ func finish(t *testing.T, cmd *exec.Cmd, prefix string) int {
 // Mutation: call the lock hook's enter before Enter's loop and its leave only on return, so
 // that it brackets the wait as well (the run does not stop while the section stays held).
 func TestStopWhileWaitingForTheSection(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -114,7 +114,7 @@ func TestStopWhileWaitingForTheSection(t *testing.T) {
 // Mutations: Enter no longer calls the lock hook (the run stops inside the section); Leave no
 // longer calls it (the run never stops).
 func TestStopDeferredWhileHoldingTheSection(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -160,7 +160,7 @@ func TestStopDeferredWhileHoldingTheSection(t *testing.T) {
 // hold dead again, and a request for the whole of mem must be admitted at once while it stays
 // stopped. Mutation: ProbeLocked no longer calls the lock hooks (the status stops holding it).
 func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	if r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}

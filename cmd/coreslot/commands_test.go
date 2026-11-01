@@ -33,6 +33,11 @@ import (
 // held by the test process, so the CLI the test runs sees live holds and tickets.
 func openLib(t *testing.T, dir string) *engine.Engine {
 	t.Helper()
+	if mib, ok := budgetRoom.Load(dir); ok {
+		saved := readMachine
+		readMachine = machineWithHeadroom(mib.(int64))
+		t.Cleanup(func() { readMachine = saved })
+	}
 	e, err := openEngine(location{dir: dir, cfgPath: filepath.Join(dir, store.ConfigFile)}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +185,7 @@ func treeContent(t *testing.T, dir string) string {
 // ---------------------------------------------------------------- status
 
 func TestStatusJSONSchema(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	hold(t, c, "gate", 3)
 	queue(t, c, "waiting", 2)
@@ -258,7 +263,7 @@ func TestStatusJSONSchema(t *testing.T) {
 // With --observe the JSON says, for each ticket, whether it stalled: true for one nobody
 // refreshes, false for one a waiter keeps polling. The human output says when it did not look.
 func TestStatusObserveReportsStalled(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	hold(t, c, "gate", 4)
 	queue(t, c, "idle", 1) // never polled: nobody refreshes it
@@ -320,7 +325,7 @@ func TestStatusObserveReportsStalled(t *testing.T) {
 // status shows each waiting ticket's need on the ticket's line as the waiting line writes it,
 // between its pid and how long it has waited, and the budget's line.
 func TestStatusTicketLineShowsTheNeed(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"2048M\"\n")
+	dir := budgetDir(t, 2048)
 	c := openLib(t, dir)
 	hold(t, c, "gate", 16)
 	queue(t, c, "wide", 12)
@@ -336,7 +341,7 @@ func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 
 // memReport is a snapshot with a 9.5 GiB mem budget, 3 GiB of it reserved by one hold.
 func memReport() engine.Report {
-	return engine.Report{Mem: engine.MemInfo{SizeMiB: 9728, ReservedMiB: 3072, FreeMiB: 6656},
+	return engine.Report{Mem: engine.MemInfo{Known: true, SizeMiB: 9728, ReservedMiB: 3072, FreeMiB: 6656},
 		Holds: []engine.HolderInfo{{Name: "h", Label: "gate", PID: 7, NeedMiB: 3072}}}
 }
 
@@ -376,7 +381,7 @@ func TestStatusJSONMemMiB(t *testing.T) {
 }
 
 func TestStatusEscapesLabels(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	labels := []string{
 		"line one\nline two",
@@ -464,7 +469,7 @@ func rawTerminalControls(b []byte) []rune {
 // leaves status --json and the run log only as JSON escapes, and decodes to the same label.
 func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 	const label = "x\x1b]0;pwn\a\u009b2J\u202ey"
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	if r := cli(t, baseEnv(dir), "run", "--label", label, "--", "true"); r.code != 0 {
 		t.Fatalf("run: exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -498,7 +503,7 @@ func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 }
 
 func TestStatusExits3WhenDegraded(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	if r := cli(t, baseEnv(dir), "status"); r.code != 0 {
 		t.Fatalf("status of a healthy directory exited %d (stderr %q)", r.code, r.stderr)
 	}
@@ -606,7 +611,7 @@ func TestStatusStaleSectionHolder(t *testing.T) {
 }
 
 func TestStatusShowsHoldNeedStraysAndIgnored(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	hold(t, c, "big", 8) // clamped to the budget; the hold reserves the need asked
 	for _, d := range []string{"queue", "holds"} {
@@ -700,7 +705,7 @@ func TestStatusFlagsStalledTicket(t *testing.T) {
 // ---------------------------------------------------------------- doctor
 
 func TestDoctorClear(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -726,7 +731,7 @@ func TestDoctorClear(t *testing.T) {
 }
 
 func TestDoctorReports(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	r := cli(t, baseEnv(dir), "doctor")
 	if r.code != 0 {
 		t.Fatalf("doctor exited %d (stderr %q):\n%s", r.code, r.stderr, r.stdout)
@@ -746,10 +751,10 @@ func TestDoctorReports(t *testing.T) {
 	// An invalid configuration is a problem, reported with its reason, which already names the
 	// file: the word "configuration" is printed once. Mutation: put the "configuration: " label
 	// back in front of a reason that begins with it.
-	bad := stateDir(t, "[resources]\nmem = \"lots\"\n")
+	bad := stateDir(t, "[memory]\nreserve = \"lots\"\n")
 	r = cli(t, baseEnv(bad), "doctor")
 	want := "\nPROBLEM: configuration " + filepath.Join(bad, "config.toml") +
-		`: [resources] mem: "lots" is not a size: want a number of GiB, such as 3 or 2.5G, or of MiB, such as 768M, or "N%" of memory` + "\n"
+		`: [memory] reserve: "lots" is not a size: want a number of GiB, such as 3 or 2.5G, or of MiB, such as 768M` + "\n"
 	if r.code != 1 || !strings.Contains(r.stdout, want) {
 		t.Errorf("doctor with an invalid configuration: exit %d, want the line %q in:\n%s", r.code, want, r.stdout)
 	}
@@ -783,7 +788,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+			dir := budgetDir(t, 512)
 			c := openLib(t, dir)
 			hold(t, c, "", 1).Close() // FORMAT, gen and a dead hold exist
 			tc.live(t, dir, c)
@@ -806,7 +811,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 }
 
 func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	g := hold(t, c, "gate", 2)
 	g.Close() // nothing is alive any more; FORMAT, gen and a hold-less queue remain
@@ -893,7 +898,7 @@ func inodeOf(t *testing.T, path string) uint64 {
 // ---------------------------------------------------------------- cancel
 
 func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	hold(t, c, "gate", 4)
 	a := queue(t, c, "twin", 1)
@@ -925,7 +930,7 @@ func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
 }
 
 func TestCancelByIDAndRefusals(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	hold(t, c, "gate", 4)
 	w := queue(t, c, "victim", 1)
@@ -1080,7 +1085,7 @@ func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 // a malformed one cannot be cleared (a reset repairs it).
 func TestDoctorFormatRefusals(t *testing.T) {
 	setup := func(t *testing.T, format string) string {
-		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+		dir := budgetDir(t, 512)
 		st, err := store.Open(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -1306,10 +1311,10 @@ func TestUnreadableStateEntryExitStatuses(t *testing.T) {
 // and exits 3, since runs fail open. The file's error, which names it, follows the label with the
 // word "configuration" printed once. Mutation: print the reason whole after the label.
 func TestStatusWithInvalidConfiguration(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"lots\"\n")
+	dir := stateDir(t, "[memory]\nreserve = \"lots\"\n")
 	r := cli(t, baseEnv(dir), "status")
 	want := "\nCONFIGURATION ERROR: " + filepath.Join(dir, "config.toml") +
-		`: [resources] mem: "lots" is not a size: want a number of GiB, such as 3 or 2.5G, or of MiB, such as 768M, or "N%" of memory` + "\n"
+		`: [memory] reserve: "lots" is not a size: want a number of GiB, such as 3 or 2.5G, or of MiB, such as 768M` + "\n"
 	if r.code != 3 || !strings.Contains(r.stdout, "\nmem: not known, the configuration cannot be read (runs fail open until it is fixed)\n") ||
 		strings.Contains(r.stdout, "none declared") || !strings.Contains(r.stdout, want) {
 		t.Errorf("status: exit %d, want 3, the line %q and the budget reported unknown (stderr %q):\n%s", r.code, want, r.stderr, r.stdout)
@@ -1432,7 +1437,7 @@ func TestCancelRefusesWhileSectionHeld(t *testing.T) {
 
 // A refused reset names each live hold and ticket by its label, as status shows it.
 func TestDoctorResetRefusalNamesLabels(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
 	hold(t, c, "hold:three", 4)
 	queue(t, c, "ticket:one", 1)

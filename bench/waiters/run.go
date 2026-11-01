@@ -164,7 +164,7 @@ func runOnce(p params, run int) (result, error) {
 	if err := os.MkdirAll(b.state, 0o700); err != nil {
 		return result{}, err
 	}
-	cfg := fmt.Sprintf("[resources]\nmem = \"%dM\"\n", p.Size*needMiB)
+	cfg := fmt.Sprintf("[memory]\nreserve = \"%dM\"\n", benchHeadroomMiB-p.Size*needMiB)
 	if err := os.WriteFile(filepath.Join(b.state, "config.toml"), []byte(cfg), 0o600); err != nil {
 		return result{}, err
 	}
@@ -189,7 +189,7 @@ func runOnce(p params, run int) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	b.client = engine.New(st, &config.Watcher{Path: filepath.Join(b.state, store.ConfigFile)}, config.ReadMachine, engine.Clock{})
+	b.client = engine.New(st, &config.Watcher{Path: filepath.Join(b.state, store.ConfigFile)}, benchMachine, engine.Clock{})
 	// The whole budget, taken while the machine is idle, before any waiter queues.
 	t, err := b.client.EnqueueContext(context.Background(), spec.Request{Label: "bench-harness", NeedMiB: int64(p.Size) * needMiB})
 	if err != nil {

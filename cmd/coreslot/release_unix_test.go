@@ -23,7 +23,7 @@ func TestRunReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 	for _, c := range []struct{ name, cfg, script string }{
 		{"admitted", "", recreate},
 		{"admitted, new FORMAT", "", withFormat},
-		{"fail-open", "[resources]\nmem = \"bogus\"\n", recreate},
+		{"fail-open", "[memory]\nreserve = \"bogus\"\n", recreate},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stateDir(t, c.cfg)

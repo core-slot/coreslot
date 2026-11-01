@@ -67,9 +67,6 @@ type Sampler struct {
 	// Request returns the need behind a hold's label, for I7. Holds whose label it does not know
 	// are not checked for I7.
 	Request func(label string) (needMiB int64, ok bool)
-	// LiveBound is the most a live capacity can admit (the test hook's headroom): I3 then bounds
-	// the reservations by it too. 0 keeps the size and the shrink's bound.
-	LiveBound int64
 
 	mu          sync.Mutex
 	dir         string
@@ -84,19 +81,17 @@ type Sampler struct {
 	last        time.Time // when the previous sample was taken
 	samples     int
 	missed      int
-	aboveStatic int // the samples that saw more reserved than max(size, bound)
 	configMtime time.Time
 }
 
-// NewSampler writes the configuration size into e's state directory, with the live capacity on
-// when liveBound (the Sampler's LiveBound) is above 0, makes sure FORMAT is written and returns
-// a sampler of the directory.
-func NewSampler(t *testing.T, e Env, sizeMiB, liveBound int64) *Sampler {
+// NewSampler writes the configuration size into e's state directory, makes sure FORMAT is written
+// and returns a sampler of the directory.
+func NewSampler(t *testing.T, e Env, sizeMiB int64) *Sampler {
 	t.Helper()
 	if err := os.MkdirAll(e.Dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := &Sampler{LiveBound: liveBound, dir: e.Dir, scratch: t.TempDir(),
+	s := &Sampler{dir: e.Dir, scratch: t.TempDir(),
 		inodes: map[string][2]uint64{}, prev: map[string]Violation{}, reported: map[string]bool{}}
 	var err error
 	if s.st, err = store.Open(e.Dir); err != nil {
@@ -119,16 +114,11 @@ func NewSampler(t *testing.T, e Env, sizeMiB, liveBound int64) *Sampler {
 	return s
 }
 
-// configBody is the configuration declaring sizeMiB, with the live capacity on when live.
-func configBody(sizeMiB int64, live bool) string {
-	return fmt.Sprintf("[resources]\nmem = \"%dM\"\n[memory]\nlive = %v\n", sizeMiB, live)
-}
-
 // writeConfig replaces config.toml atomically, with an mtime strictly after the previous one,
 // so that a client caching the configuration by mtime and size sees every change.
 func (s *Sampler) writeConfig(sizeMiB int64) error {
 	tmp := filepath.Join(s.scratch, "config.toml")
-	if err := os.WriteFile(tmp, []byte(configBody(sizeMiB, s.LiveBound > 0)), 0o600); err != nil {
+	if err := os.WriteFile(tmp, []byte(capacityConfig(sizeMiB)), 0o600); err != nil {
 		return err
 	}
 	m := time.Now()
@@ -176,13 +166,15 @@ func (s *Sampler) Resize(ctx context.Context, sizeMiB int64) (reserved int64, er
 	return reserved, nil
 }
 
-// reserved is what obs's live holds reserve, each at most the most any admission could have
-// granted it: a need above the capacity runs alone with all of it.
+// reserved is what obs's live holds reserve; a lone hold is at most the most any admission could
+// have granted it, since a need above the capacity runs alone.
 func (s *Sampler) reserved(obs observation) int64 {
-	limit := max(s.size, s.ceiling, s.LiveBound)
 	var n int64
 	for _, h := range obs.holds {
-		n += min(h.Body.NeedMiB, limit)
+		n += h.Body.NeedMiB
+	}
+	if len(obs.holds) == 1 {
+		n = min(n, max(s.size, s.ceiling))
 	}
 	return n
 }
@@ -306,18 +298,14 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		}
 	}
 
-	// I3: what the live holds reserve stays within the bound, or within the live bound when
-	// there is one.
+	// I3: what the live holds reserve stays within the bound.
 	n := s.reserved(obs)
-	if n > max(s.size, s.ceiling, s.LiveBound) {
-		add("I3", "I3 mem", "%d MiB reserved; size %d, bound %d, live bound %d", n, s.size, s.ceiling, s.LiveBound)
-	}
 	if n > max(s.size, s.ceiling) {
-		s.aboveStatic++
+		add("I3", "I3 mem", "%d MiB reserved; size %d, bound %d", n, s.size, s.ceiling)
 	}
 	s.ceiling = max(s.size, min(s.ceiling, n))
 
-	// I7: an ordinary admission reserves the need asked, clamped or not.
+	// I7: an ordinary admission reserves the need asked.
 	for _, h := range obs.holds {
 		if h.Body.NeedMiB == 0 {
 			add("fail-open", "fail-open "+h.Name, "hold %s is unbudgeted (a client failed open)", h.Name)
@@ -335,14 +323,6 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		add("I2", "malformed "+name, "live hold %s has a malformed body", name)
 	}
 	return found
-}
-
-// AboveStatic returns how many samples saw more reserved than the size and the shrink's bound
-// allow: admissions that only a live capacity explains.
-func (s *Sampler) AboveStatic() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.aboveStatic
 }
 
 // Leftovers returns, from one observation inside the section, the live holds: after every
@@ -435,7 +415,7 @@ func inSection(t *testing.T, e Env, build func(*store.Section)) {
 // above the size is not reported.
 func TestSamplerCatchesAViolation(t *testing.T) {
 	e := State(t)
-	s := NewSampler(t, e, 4*128, 0)
+	s := NewSampler(t, e, 4*128)
 	s.Request = stormRequest
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

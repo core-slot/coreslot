@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -43,9 +45,7 @@ const exitRefusal = 75
 // ---------------------------------------------------------------- helpers
 
 // memConfig is a configuration of n units of 128 MiB.
-func memConfig(n int) string {
-	return fmt.Sprintf("[resources]\nmem = \"%dM\"\n", n*128)
-}
+func memConfig(n int) string { return capacityConfig(int64(n) * 128) }
 
 func admittedAt(h engine.HolderInfo) time.Time { return time.Unix(0, h.StartNS) }
 
@@ -263,17 +263,16 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if got := p.Stderr() + p.Stdout(); got != "" {
 		t.Errorf("a run on a fresh machine printed %q", got)
 	}
-	if r.Env["CORESLOT_GRANTED_MEM"] != "128" || r.Env["CORESLOT_UNBUDGETED"] != "" {
-		t.Errorf("environment %v", r.Env)
-	}
 	m, err := config.ReadMachine()
 	if err != nil {
 		t.Fatal(err)
 	}
-	mem := m.MemMiB * 60 / 100
+	if want := strconv.FormatInt(spec.ColdStartMiB(m.MemMiB), 10); r.Env["CORESLOT_GRANTED_MEM"] != want || r.Env["CORESLOT_UNBUDGETED"] != "" {
+		t.Errorf("environment %v, want a grant of the cold start, %s MiB", r.Env, want)
+	}
 	rep := e.Status()
-	if rep.Mem.SizeMiB != mem {
-		t.Errorf("mem %+v, want a size of %d MiB", rep.Mem, mem)
+	if want := int64(confHeadroomMiB - config.DefaultReserveMiB); rep.Mem.SizeMiB != want {
+		t.Errorf("mem %+v, want a size of %d MiB", rep.Mem, want)
 	}
 	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != 2 {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)
@@ -793,15 +792,21 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 
 // ---------------------------------------------------------------- admission edges
 
-// A need above the budget is clamped: the run waits for the whole budget, runs alone with it,
-// says so once, and its hold reserves the need asked.
-func TestOversizeIsClamped(t *testing.T) {
+// A need above the budget waits for the machine to be idle, runs alone as asked, says so once, and
+// its hold reserves the need asked.
+func TestOversizeRunsAlone(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(8))
+	x := e.Run("X", "--mem", "128M")
+	e.WaitHold("X", startWait)
 	o := e.Run("O", "--mem", "2048M")
+	e.WaitTicket("O")
+	noHold(t, e, "O", "O ran beside X")
+	e.ReleaseChild("X")
+	x.ExitCode(0)
 	r := e.WaitStarted("O")
 	h := e.WaitHold("O", startWait)
-	if r.Env["CORESLOT_GRANTED_MEM"] != "1024" || h.NeedMiB != 2048 {
+	if r.Env["CORESLOT_GRANTED_MEM"] != "2048" || h.NeedMiB != 2048 {
 		t.Errorf("command environment %v; hold need %d MiB", r.Env, h.NeedMiB)
 	}
 	checkDescriptors(t, e, r, h.Name)
@@ -810,11 +815,11 @@ func TestOversizeIsClamped(t *testing.T) {
 	}
 	y := e.Run("Y", "--mem", "128M")
 	e.WaitTicket("Y")
-	noHold(t, e, "Y", "Y ran beside the clamped run")
+	noHold(t, e, "Y", "Y ran beside the oversized run")
 	e.ReleaseChild("O")
 	o.ExitCode(0)
-	if want := "coreslot: mem: requested 2 GiB, budget is 1 GiB; running alone with 1 GiB\n"; o.Stderr() != want {
-		t.Errorf("stderr %q, want %q", o.Stderr(), want)
+	if !regexp.MustCompile(`^coreslot: needs 2\.0 GiB of \d+\.\d GiB; runs only alone\n$`).MatchString(o.Stderr()) {
+		t.Errorf("stderr %q, want the oversize notice once", o.Stderr())
 	}
 	e.WaitHold("Y", startWait)
 	e.ReleaseChild("Y")
@@ -875,11 +880,11 @@ func TestStoppedInSectionDoesNotHangCallers(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(1))
 	c := e.Engine()
-	poller, err := c.EnqueueContext(context.Background(), spec.Request{Label: "poller"})
+	poller, err := c.EnqueueContext(context.Background(), spec.Request{Label: "poller", NeedMiB: 128})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiter, err := c.EnqueueContext(context.Background(), spec.Request{Label: "waiter"})
+	waiter, err := c.EnqueueContext(context.Background(), spec.Request{Label: "waiter", NeedMiB: 128})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -114,12 +114,12 @@ func TestUnbudgetedHoldRecordsNoDegraded(t *testing.T) {
 // A configuration the snapshot cannot use is reported by its reason alone: the caller prints it
 // under its own heading, so it carries no "coreslot state error:" prefix.
 func TestSnapshotConfigErrorIsTheReason(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"0M\"\n")
+	dir := newStateDir(t, "[memory]\nreserve = \"lots\"\n")
 	r, err := newEngine(t, dir, nil).Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ConfigError == "" || strings.Contains(r.ConfigError, "state error") || !strings.Contains(r.ConfigError, "mem") {
+	if r.ConfigError == "" || strings.Contains(r.ConfigError, "state error") || !strings.Contains(r.ConfigError, "reserve") {
 		t.Fatalf("ConfigError %q: want the configuration's reason without the state error's prefix", r.ConfigError)
 	}
 }

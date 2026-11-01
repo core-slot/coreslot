@@ -31,11 +31,13 @@ type TicketInfo struct {
 	Dead bool
 }
 
-// MemInfo is the memory budget in a snapshot, in MiB.
+// MemInfo is the memory in a snapshot, in MiB. Known is false when the headroom could not be read
+// or the configuration is invalid, and the sizes are then 0.
 type MemInfo struct {
-	SizeMiB     int64 // the configured size
+	Known       bool
+	SizeMiB     int64 // what the live holds reserve and the room they leave add up to
 	ReservedMiB int64 // what the live holds reserve
-	FreeMiB     int64 // max(0, SizeMiB - ReservedMiB)
+	FreeMiB     int64 // the room a new job may take: max(0, SizeMiB - ReservedMiB)
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.
@@ -68,8 +70,8 @@ type Report struct {
 	FormatErr        error  // the error FormatError is the text of
 	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)
 	ReconciledNS     int64
-	Mem              MemInfo        // zero when the size could not be computed
-	ConfigError      string         // set when the size could not be computed
+	Mem              MemInfo
+	ConfigError      string         // set when the memory could not be read
 	ConfigErr        error          // the error ConfigError is the reason of
 	Tickets          []TicketInfo   // in queue order
 	Holds            []HolderInfo   // live holds, in name order

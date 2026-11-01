@@ -13,8 +13,9 @@ import (
 // runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the
 // CLI is not part of the protocol).
 type runOptions struct {
-	need        int64 // MiB: --mem, then the needs file, then spec.DefaultNeedMiB
+	need        int64 // MiB, once resolveNeed ran
 	mem         int64 // MiB from --mem, 0 when not given
+	pinned      bool  // need is --mem or the needs file's pin: learning leaves it alone
 	label       string
 	timeout     time.Duration
 	onTimeout   string // "fail" (the default) or "run"
@@ -34,12 +35,13 @@ const runHelp = runUsage + `
 
 Runs COMMAND once the budget grants it the memory it needs.
 
-  --mem SIZE            memory the command needs, such as 3G or 768M, more than 0. A labelled
-                        run takes it from the label's entry in needs.toml, beside the
-                        configuration; with neither, 128M
+  --mem SIZE            memory the command needs, such as 3G or 768M, more than 0. Without it
+                        the run takes the label's entry in needs.toml, beside the
+                        configuration, else what the label's last 20 runs needed, else the
+                        smaller of 4G and a quarter of the machine's memory
   --label L             a name for the request, shown by status and kept in the run log, so
                         never a secret; it names the request's entry in needs.toml (default
-                        none)
+                        the command's shape and its repository, such as "go test@proj")
   --timeout D           stop waiting after D, for example 90s or 10m (default 0, no limit)
   --on-timeout run|fail when --timeout passes: fail refuses, run runs the command outside the
                         budget (default fail)
@@ -61,10 +63,7 @@ var errHelp = errors.New("help requested")
 // parseRun parses the arguments of `coreslot run`. Every error is a *spec.UsageError (exit 64),
 // detected before anything queues: a bad flag value, a size that is not one, or a missing
 // command.
-//
-// lookup, when not nil, finds the needs file's entry for a label, whose mem the request takes
-// when --mem was not given.
-func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error) {
+func parseRun(args []string, streams IO) (runOptions, error) {
 	o := runOptions{onTimeout: "fail", refusalCode: exitRefusal}
 	fs := flag.NewFlagSet("coreslot run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -95,17 +94,9 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 	if len(o.argv) == 0 {
 		return o, usagef("no command given\n%s", runUsage)
 	}
-	mib := o.mem
-	if mib == 0 && o.label != "" && lookup != nil {
-		if e, ok := lookup(o.label); ok {
-			mib = e.MemMiB
-		}
-	}
-	req := spec.Normalize(spec.Request{Label: o.label, NeedMiB: mib})
-	if err := req.Validate(); err != nil {
+	if err := spec.ValidateLabel(o.label); err != nil {
 		return o, err
 	}
-	o.need = req.NeedMiB
 	switch {
 	case o.onTimeout != "fail" && o.onTimeout != "run":
 		return o, usagef("--on-timeout %q: want run or fail", o.onTimeout)

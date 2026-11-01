@@ -33,7 +33,6 @@ func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) 
 	if reason == "" || reason == "format" {
 		return nil, fmt.Errorf("engine: unbudgeted reason %q: want non-empty text other than \"format\"", reason)
 	}
-	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}

@@ -38,7 +38,7 @@ func TestVersionListsEveryImplementedFormat(t *testing.T) {
 // A real client paused inside the section: status names its pid. FORMAT exists already, so the
 // first point is the ticket's publication, after the entry wrote admit.lock's body.
 func TestStatusNamesSectionHolderOfPausedRun(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}

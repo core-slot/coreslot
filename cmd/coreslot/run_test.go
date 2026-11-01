@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,8 +38,9 @@ import (
 // CORESLOT_CLI_TEST_HELPER selects a helper, and otherwise CORESLOT_CLI_TEST_AS_MAIN makes it
 // coreslot itself, so nested runs started by a command reach the same binary.
 const (
-	helperEnv = "CORESLOT_CLI_TEST_HELPER"
-	asMainEnv = "CORESLOT_CLI_TEST_AS_MAIN"
+	helperEnv   = "CORESLOT_CLI_TEST_HELPER"
+	asMainEnv   = "CORESLOT_CLI_TEST_AS_MAIN"
+	headroomEnv = "CORESLOT_CLI_TEST_HEADROOM_MIB" // the headroom coreslot reads, in MiB
 )
 
 func TestMain(m *testing.M) {
@@ -51,6 +53,14 @@ func TestMain(m *testing.M) {
 		os.Exit(runHelper(strings.TrimPrefix(os.Args[1], "helper:"), os.Args[2:]))
 	}
 	if os.Getenv(asMainEnv) != "" {
+		if v := os.Getenv(headroomEnv); v != "" {
+			mib, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, headroomEnv+":", err)
+				os.Exit(1)
+			}
+			readMachine = machineWithHeadroom(mib)
+		}
 		main()
 	}
 	// A CI runner hands its job steps descriptors that are not close-on-exec. Every process a test
@@ -238,8 +248,29 @@ func stateDir(t *testing.T, cfg string) string {
 	return dir
 }
 
+// machineWithHeadroom reads the machine with its headroom replaced by mib.
+func machineWithHeadroom(mib int64) func() (config.Machine, error) {
+	return func() (config.Machine, error) {
+		m, err := config.ReadMachine()
+		m.HeadroomMiB, m.HeadroomOK = mib, true
+		return m, err
+	}
+}
+
+// budgetRoom is the room each budgetDir state directory offers, in MiB.
+var budgetRoom sync.Map
+
+// budgetDir creates a state directory with no reserve, whose headroom is roomMiB for every
+// coreslot baseEnv starts on it: the room an idle machine offers, which the live holds then use up.
+func budgetDir(t *testing.T, roomMiB int64) string {
+	t.Helper()
+	dir := stateDir(t, "[memory]\nreserve = \"0\"\n")
+	budgetRoom.Store(dir, roomMiB)
+	return dir
+}
+
 // baseEnv is the test's environment without any coreslot context, plus the state directory
-// and the switch that makes the test binary coreslot.
+// and the switch that makes the test binary coreslot, with the headroom of a budgetDir.
 func baseEnv(dir string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
@@ -247,7 +278,11 @@ func baseEnv(dir string) []string {
 			env = append(env, kv)
 		}
 	}
-	return append(env, "CORESLOT_STATE_DIR="+dir, asMainEnv+"=1")
+	env = append(env, "CORESLOT_STATE_DIR="+dir, asMainEnv+"=1")
+	if mib, ok := budgetRoom.Load(dir); ok {
+		env = append(env, fmt.Sprintf("%s=%d", headroomEnv, mib))
+	}
+	return env
 }
 
 // cliCmd is a coreslot invocation in its own process group, killed with its group when the
@@ -530,7 +565,7 @@ func TestRunPassesExitStatus(t *testing.T) {
 }
 
 func TestRunMissingCommandFreesEverything(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	for _, cmd := range []string{"coreslot-no-such-command", filepath.Join(dir, "missing")} {
 		r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", cmd)
 		if r.code != 127 {
@@ -553,7 +588,7 @@ func TestRunMissingCommandFreesEverything(t *testing.T) {
 }
 
 func TestCtrlCWhileWaitingExits130(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"128M\"\n")
+	dir := budgetDir(t, 128)
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -585,7 +620,7 @@ func TestCtrlCWhileWaitingExits130(t *testing.T) {
 }
 
 func TestNoWaitAdmitsAtOnce(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	r := cli(t, baseEnv(dir), "run", "--no-wait", "--mem", "384M", "--", "sh", "-c", "echo $CORESLOT_GRANTED_MEM")
 	if r.code != 0 || strings.TrimSpace(r.stdout) != "384" {
 		t.Errorf("exit %d stdout %q stderr %q, want 0 and a grant of 384 MiB", r.code, r.stdout, r.stderr)
@@ -594,7 +629,7 @@ func TestNoWaitAdmitsAtOnce(t *testing.T) {
 }
 
 func TestNoWaitRefusesWithin2s(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -628,7 +663,7 @@ func TestNoWaitRefusesWithin2s(t *testing.T) {
 }
 
 func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"128M\"\n")
+	dir := budgetDir(t, 128)
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
@@ -693,7 +728,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 	})
 
 	t.Run("invalid configuration", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"bogus\"\n")
+		dir := stateDir(t, "[memory]\nreserve = \"bogus\"\n")
 		r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "sh", "-c",
 			show+`; ls "$CORESLOT_STATE_DIR/holds"`)
 		if r.code != 0 {
@@ -719,7 +754,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 	})
 
 	t.Run("strict refuses", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"bogus\"\n")
+		dir := stateDir(t, "[memory]\nreserve = \"bogus\"\n")
 		marker := filepath.Join(t.TempDir(), "ran")
 		r := cli(t, baseEnv(dir), "run", "--strict", "--", "touch", marker)
 		if r.code != 75 {
@@ -732,7 +767,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 }
 
 func TestRunAppendsOneLogLine(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	env := append(baseEnv(dir), "CORESLOT_TEST_SECRET=env-secret-value")
 	r := cli(t, env, "run", "--mem", "384M", "--label", "gate:unit", "--", "sh", "-c", "exit 0", "argv-secret-value")
 	if r.code != 0 {
@@ -794,7 +829,7 @@ func checkUsage(t *testing.T, what string, line map[string]any) {
 func TestRunLogRecordsUsage(t *testing.T) {
 	burn := helper(t, "burn")
 	t.Run("command", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+		dir := budgetDir(t, 512)
 		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "128M", "--"}, burn...)...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -806,7 +841,7 @@ func TestRunLogRecordsUsage(t *testing.T) {
 		checkUsage(t, "the command", lines[0])
 	})
 	t.Run("waited-for descendant", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+		dir := budgetDir(t, 512)
 		args := append([]string{"run", "--mem", "128M", "--", "sh", "-c", `"$@"; :`, "sh"}, burn...)
 		r := cli(t, baseEnv(dir), args...)
 		if r.code != 0 {
@@ -819,7 +854,7 @@ func TestRunLogRecordsUsage(t *testing.T) {
 		checkUsage(t, "the shell that waited for it", lines[0])
 	})
 	t.Run("fail-open", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"bogus\"\n")
+		dir := stateDir(t, "[memory]\nreserve = \"bogus\"\n")
 		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "128M", "--"}, burn...)...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -831,7 +866,7 @@ func TestRunLogRecordsUsage(t *testing.T) {
 		checkUsage(t, "the fail-open run", lines[0])
 	})
 	t.Run("pass-through", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+		dir := budgetDir(t, 512)
 		args := append([]string{"run", "--mem", "256M", "--label", "outer", "--", cliBinary(t),
 			"run", "--mem", "128M", "--label", "inner", "--"}, burn...)
 		r := cli(t, baseEnv(dir), args...)
@@ -882,7 +917,7 @@ func TestRunLogsTreePeak(t *testing.T) {
 //
 // Mutation: in recordUsage, record zeros when ps is nil.
 func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	notExec := filepath.Join(dir, "not-executable")
 	if err := os.WriteFile(notExec, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -909,25 +944,24 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 	}
 }
 
-// A clamped mem need is reported in bytes. [memory] live = false keeps the clamp at the static
-// size, so that it never depends on the test machine's memory. Mutation: printing the clamp
-// notice's amounts in MiB turns it red.
-func TestClampNoticeMem(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"9.5G\"\n[memory]\nlive = false\n")
-	r := cli(t, baseEnv(dir), "run", "--mem", "10G", "--", "true")
+// A need above what the machine has is said once, in GiB, and runs alone when nothing else holds.
+// Mutation: saying it for every wait line turns the count red.
+func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
+	dir := budgetDir(t, 512)
+	r := cli(t, baseEnv(dir), "run", "--mem", "1000G", "--", "true")
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	want := "coreslot: mem: requested 10 GiB, budget is 9.5 GiB; running alone with 9.5 GiB\n"
-	if !strings.Contains(r.stderr, want) {
-		t.Errorf("stderr %q, want the notice %q", r.stderr, want)
+	re := regexp.MustCompile(`coreslot: needs 1000\.0 GiB of \d+\.\d GiB; runs only alone\n`)
+	if got := re.FindAllString(r.stderr, -1); len(got) != 1 {
+		t.Errorf("stderr %q, want the notice once", r.stderr)
 	}
 }
 
 // A run's hold says that its process tree carries the work, so that the live mem size may
 // measure it. Mutation: the run's request not setting Tree.
 func TestRunHoldHasTree(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"8G\"\n[memory]\nlive = false\n")
+	dir := budgetDir(t, 8192)
 	cmd := cliCmd(t, baseEnv(dir), "run", "--mem", "1G", "--", "sleep", "1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -955,7 +989,7 @@ func TestRunHoldHasTree(t *testing.T) {
 }
 
 func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	tmp := t.TempDir()
 	closed, release := filepath.Join(tmp, "closed"), filepath.Join(tmp, "release")
 	args := append([]string{"run", "--mem", "256M", "--"}, helper(t, "close-and-wait", closed, release)...)

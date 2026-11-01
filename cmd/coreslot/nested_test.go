@@ -61,7 +61,7 @@ func nestedLines(t *testing.T, dir string) []map[string]any {
 }
 
 func TestNestedPassThrough(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	dir := budgetDir(t, 1024)
 	d := t.TempDir()
 	r := outer(t, dir, "1G", `
 		ln "$CORESLOT_STATE_DIR/holds/$CORESLOT_HOLD" "$D/held"
@@ -97,14 +97,14 @@ func TestNestedPassThrough(t *testing.T) {
 // isAncestor reddens "not an ancestor".
 func TestNestedRunsInsideParent(t *testing.T) {
 	t.Run("live ancestor", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+		dir := budgetDir(t, 256)
 		r := outer(t, dir, "256M", `env -u CORESLOT_TOKEN_FDS "$BIN" run --no-wait --mem 256M -- true; echo "code=$?"`)
 		if r.code != 0 || strings.TrimSpace(r.stdout) != "code=0" {
 			t.Errorf("exit %d stdout %q stderr %q: want the nested run inside its parent, not queued", r.code, r.stdout, r.stderr)
 		}
 	})
 	t.Run("not an ancestor", func(t *testing.T) {
-		dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+		dir := budgetDir(t, 256)
 		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 			t.Fatalf("setup run: %d %q", r.code, r.stderr)
 		}
@@ -136,7 +136,7 @@ func TestNestedRunsInsideParent(t *testing.T) {
 }
 
 func TestNestedSiblingsBothRun(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	dir := budgetDir(t, 1024)
 	r := outer(t, dir, "1G", `
 		"$BIN" run --mem 1G -- sh -c 'echo $CORESLOT_GRANTED_MEM > "$D/a"; sleep 1' &
 		"$BIN" run --mem 1G -- sh -c 'echo $CORESLOT_GRANTED_MEM > "$D/b"; sleep 1' &
@@ -153,7 +153,7 @@ func TestNestedSiblingsBothRun(t *testing.T) {
 // The pass-through's clamp notice reads mem in bytes. Mutation: printing its amounts in MiB
 // turns it red.
 func TestNestedNoticeMem(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"8G\"\n")
+	dir := budgetDir(t, 8192)
 	r := outer(t, dir, "1G", `"$BIN" run --mem 3G -- true`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -164,7 +164,7 @@ func TestNestedNoticeMem(t *testing.T) {
 }
 
 func TestNestedClampsAboveHeld(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	dir := budgetDir(t, 1024)
 	r := outer(t, dir, "512M", `"$BIN" run --mem 1G -- sh -c 'echo $CORESLOT_GRANTED_MEM'`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -178,7 +178,7 @@ func TestNestedClampsAboveHeld(t *testing.T) {
 }
 
 func TestIndependentQueues(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	r := outer(t, dir, "256M", `"$BIN" run --independent --timeout 1s -- true; echo "code=$?"`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -189,7 +189,7 @@ func TestIndependentQueues(t *testing.T) {
 }
 
 func TestIndependentDropsInheritedContext(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := budgetDir(t, 512)
 	d := t.TempDir()
 	r := outer(t, dir, "256M", `echo "$CORESLOT_HOLD" > "$D/hold"; ln "$CORESLOT_STATE_DIR/holds/$CORESLOT_HOLD" "$D/held"
 		exec 7</dev/null; "$BIN" run --independent --mem 128M -- $FDS`, "D="+d)

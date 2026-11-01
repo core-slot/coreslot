@@ -12,18 +12,11 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// liveMem is the seam for the live capacity's readings; tests replace it. Under the test hook's
+// liveMem is the seam for the reading of a holder's tree; tests replace it. Under the test hook's
 // headroom it measures no tree.
 var liveMem = struct {
-	headroom func() (mib int64, ok bool)
-	use      func(roots map[int]int64, stop map[int]bool) map[int]int64 // nil map: nothing measured
+	use func(roots map[int]int64, stop map[int]bool) map[int]int64 // nil map: nothing measured
 }{
-	headroom: func() (int64, bool) {
-		if mib, set := testhooks.Headroom(); set {
-			return mib, true
-		}
-		return memsample.Headroom()
-	},
 	use: func(roots map[int]int64, stop map[int]bool) map[int]int64 {
 		if _, set := testhooks.Headroom(); set {
 			return nil
@@ -36,24 +29,6 @@ var liveMem = struct {
 	},
 }
 
-// capacityFor is mem's capacity, in MiB, for an attempt of need beside the live holds, which
-// reserve reserved: the configured sizeMiB, unless live sizing is on and need does not fit in
-// what the holds leave of it; then the reservations plus the room the holds leave of the
-// headroom (state.Room), when that is more (raised). A failed headroom read keeps sizeMiB.
-func capacityFor(sizeMiB int64, live bool, holds []memHold, reserved, need int64) (capacity int64, raised bool) {
-	if !live || reserved+need <= sizeMiB {
-		return sizeMiB, false
-	}
-	headroom, ok := liveMem.headroom()
-	if !ok {
-		return sizeMiB, false
-	}
-	if c := reserved + state.Room(headroom, measure(holds)); c > sizeMiB {
-		return c, true
-	}
-	return sizeMiB, false
-}
-
 // memHold is one live hold as admission reads it.
 type memHold struct {
 	pid       int
@@ -63,19 +38,12 @@ type memHold struct {
 	footprint int64 // MiB, as its run last wrote it
 }
 
-// reservedMiB is what holds reserve: the sum of their needs.
-func reservedMiB(holds []memHold) int64 {
-	var n int64
-	for _, h := range holds {
-		n += h.needMiB
-	}
-	return n
-}
-
 // liveHolds lists holds/ and returns the live holds, a lock probe each, as Ticket.Holders does;
-// malformed and stray holds are left out. It fails when holds/ or a body cannot be read. It takes
-// no lock of its own: admit runs under stepMu, which Ticket.Holders takes.
-func liveHolds(st *store.Store) ([]memHold, error) {
+// stray holds are left out. A live hold whose body does not parse (its run rewrites it in place,
+// so a read can be torn) reserves coldStartMiB: unknown is not zero. It fails when holds/ or a
+// body cannot be read. It takes no lock of its own: admit runs under stepMu, which
+// Ticket.Holders takes.
+func liveHolds(st *store.Store, coldStartMiB int64) ([]memHold, error) {
 	entries, _, err := st.List(store.HoldsDir)
 	if err != nil {
 		return nil, err
@@ -90,15 +58,16 @@ func liveHolds(st *store.Store) ([]memHold, error) {
 			return nil, err
 		}
 		info := holderInfo(en, body)
-		if info == nil {
-			continue
-		}
 		dead, err := probe(st, store.HoldsDir, en.Name)
 		if gone(err) || stray(err) || (err == nil && dead) {
 			continue
 		}
 		if err != nil {
 			return nil, err
+		}
+		if info == nil {
+			live = append(live, memHold{pid: en.ID.PID, startNS: int64(en.ID.OrderKey), needMiB: coldStartMiB})
+			continue
 		}
 		live = append(live, memHold{pid: info.PID, startNS: info.StartNS, tree: info.Tree,
 			needMiB: info.NeedMiB, footprint: info.FootprintMiB})

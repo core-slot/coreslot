@@ -4,6 +4,7 @@ package engine
 
 import (
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
@@ -38,9 +39,9 @@ func (e *Engine) Snapshot() (Report, error) {
 	}
 	r.Gen, r.ReconciledNS = g.N, g.ReconciledNS
 
-	sizeMiB, _, sizeErr := e.memSize()
-	if sizeErr != nil {
-		r.ConfigError, r.ConfigErr = reasonOf(sizeErr), sizeErr
+	cfg, machine, memErr := e.reading()
+	if memErr != nil {
+		r.ConfigError, r.ConfigErr = reasonOf(memErr), memErr
 	}
 
 	tickets, ignored, err := e.st.List(store.QueueDir)
@@ -120,12 +121,16 @@ func (e *Engine) Snapshot() (Report, error) {
 			r.Holds = append(r.Holds, *info)
 		}
 	}
-	if sizeErr == nil {
-		r.Mem.SizeMiB = sizeMiB
+	if memErr == nil && machine.HeadroomOK {
+		held := make([]state.MemHold, 0, len(r.Holds))
 		for _, h := range r.Holds {
 			r.Mem.ReservedMiB += h.NeedMiB
+			if h.NeedMiB > 0 {
+				held = append(held, state.MemHold{NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB})
+			}
 		}
-		r.Mem.FreeMiB = max(0, sizeMiB-r.Mem.ReservedMiB)
+		room := state.Room(machine.HeadroomMiB, cfg.ReserveMiB, held)
+		r.Mem.Known, r.Mem.SizeMiB, r.Mem.FreeMiB = true, r.Mem.ReservedMiB+room, max(0, room)
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
 	// descriptor. An unreadable process table reports nothing: unknown is not exited.

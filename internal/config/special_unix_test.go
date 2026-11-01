@@ -86,15 +86,15 @@ func TestLoadDanglingSymlinkIsAMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a dangling symlink must read as a missing file: %v", err)
 	}
-	if got := c.MemMiB(m16); got != 9830 {
-		t.Errorf("a dangling symlink did not give the defaults: mem %d", got)
+	if got := c.ReserveMiB; got != DefaultReserveMiB {
+		t.Errorf("a dangling symlink did not give the defaults: reserve %d", got)
 	}
 }
 
 func TestLoadReadsThroughASymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.toml")
-	if err := os.WriteFile(target, []byte("[resources]\nmem = \"384M\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("[memory]\nreserve = \"384M\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "config.toml")
@@ -102,7 +102,7 @@ func TestLoadReadsThroughASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := loadWithin(t, path)
-	if err != nil || c.MemMiB(m16) != 384 {
-		t.Errorf("Load through a symlink = mem %d, %v; want 384", c.MemMiB(m16), err)
+	if err != nil || c.ReserveMiB != 384 {
+		t.Errorf("Load through a symlink = reserve %d, %v; want 384", c.ReserveMiB, err)
 	}
 }

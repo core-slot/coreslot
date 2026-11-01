@@ -78,7 +78,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
+			dir := capped(t, 512)
 			e := newEngine(t, dir, nil)
 			hold(t, e, need("mem=1")).Close() // FORMAT, gen and a hold exist
 			c.live(t, e, dir)
@@ -104,7 +104,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 // A refusal names each live hold and ticket by its label, escaped for a terminal, not by the
 // display slug of its file name.
 func TestResetRefusalNamesLabels(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, needLabel("mem=1", "hold:three"))
 	enqueue(t, e, needLabel("mem=1", "ci:o-r\x1b[2J"))
@@ -131,7 +131,7 @@ func TestResetRefusalNamesLabels(t *testing.T) {
 // its pid had) with a fresh entry time. The section is kept after Reset returns, as it is while
 // the removals run.
 func TestAcceptedResetNamesItselfHolder(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, need("mem=1")).Close()
 	setOtherLengthHolder(t, dir)
@@ -154,7 +154,7 @@ func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 
 // With nothing alive a reset empties the state and leaves a directory a client can use again.
 func TestResetThenUse(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, need("mem=2")).Close()
 	removed, err := e.Reset(context.Background())
@@ -176,7 +176,7 @@ func TestResetThenUse(t *testing.T) {
 // A reset under a well-formed FORMAT this client does not implement recreates the directory as
 // format 2, an entry of that format's queue included.
 func TestResetRecreatesAForeignFormat(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
+	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, need("mem=1")).Close()
 	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 3\n"), 0o600); err != nil {

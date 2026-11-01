@@ -132,8 +132,22 @@ func killAll() {
 	}
 }
 
+// confHeadroomMiB is the headroom every process of the traces reads, through the test hook, so
+// that a state directory's capacity is its configuration's, not the machine's: the capacity is
+// the headroom less the configuration's reserve (capacityConfig).
+const confHeadroomMiB = 1 << 17
+
+// capacityConfig is the configuration that makes the capacity sizeMiB.
+func capacityConfig(sizeMiB int64) string {
+	return fmt.Sprintf("[memory]\nreserve = \"%dM\"\n", confHeadroomMiB-sizeMiB)
+}
+
 func TestMain(m *testing.M) {
 	flag.Parse()
+	if err := os.Setenv("CORESLOT_TESTHOOK_HEADROOM_MIB", strconv.Itoa(confHeadroomMiB)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	// A run passes every inherited descriptor its grant variables do not name on to the command
 	// (PROTOCOL.md section 17), so a descriptor this binary inherited without close-on-exec (a CI
 	// runner hands its job steps some) would reach every command a trace starts and read there
@@ -282,7 +296,8 @@ func (e Env) environ() []string {
 			env = append(env, kv)
 		}
 	}
-	env = append(env, "CORESLOT_STATE_DIR="+e.Dir, "CORESLOT_TESTHOOK_DIR="+e.HookDir)
+	env = append(env, "CORESLOT_STATE_DIR="+e.Dir, "CORESLOT_TESTHOOK_DIR="+e.HookDir,
+		"CORESLOT_TESTHOOK_HEADROOM_MIB="+strconv.Itoa(confHeadroomMiB))
 	if len(e.pause) > 0 {
 		env = append(env, "CORESLOT_TESTHOOK_PAUSE="+strings.Join(e.pause, ","))
 	}

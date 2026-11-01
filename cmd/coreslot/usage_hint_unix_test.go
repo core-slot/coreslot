@@ -18,23 +18,20 @@ func TestMemHint(t *testing.T) {
 	for _, c := range []struct {
 		label    string
 		grantMiB int64
-		clamped  bool
 		peakKiB  int64
 		ranS     float64
 		want     string // "" for no hint
-		not      string
 	}{
-		{"a", 2048, false, 5 * gib / 2, 3, "peaked at 2.5 GiB on a 2 GiB mem grant; coreslot stats --label a", ""},
-		{"a", 2048, false, 21 * gib / 10, 3, "", ""},
-		{"a", 0, false, 3 * gib / 2, 3, "peaked at 1.5 GiB with no mem need; coreslot stats --label a", ""},
-		{"a", 0, false, 900 * 1024, 3, "", ""},
-		{"a", 9728, true, 11 * gib, 3, "clamped to the budget's 9.5 GiB", "stats"},
-		{"a", 0, false, 3 * gib, 0.5, "", ""},
-		{"", 0, false, 3 * gib, 3, "", ""},
+		{"a", 2048, 5 * gib / 2, 3, "peaked at 2.5 GiB on a 2 GiB mem grant; coreslot stats --label a"},
+		{"a", 2048, 21 * gib / 10, 3, ""},
+		{"a", 0, 3 * gib / 2, 3, "peaked at 1.5 GiB with no mem need; coreslot stats --label a"},
+		{"a", 0, 900 * 1024, 3, ""},
+		{"a", 0, 3 * gib, 0.5, ""},
+		{"", 0, 3 * gib, 3, ""},
 	} {
-		got := memHint(c.label, c.grantMiB, c.clamped, c.peakKiB, c.ranS)
-		if c.want == "" && got != "" || !strings.Contains(got, c.want) || c.not != "" && strings.Contains(got, c.not) {
-			t.Errorf("memHint(%q, %d, %v, %d, %v) = %q, want it to contain %q", c.label, c.grantMiB, c.clamped, c.peakKiB, c.ranS, got, c.want)
+		got := memHint(c.label, c.grantMiB, c.peakKiB, c.ranS)
+		if c.want == "" && got != "" || !strings.Contains(got, c.want) {
+			t.Errorf("memHint(%q, %d, %d, %v) = %q, want it to contain %q", c.label, c.grantMiB, c.peakKiB, c.ranS, got, c.want)
 		}
 	}
 }

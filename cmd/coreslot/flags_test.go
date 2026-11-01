@@ -20,10 +20,11 @@ func TestMemFlag(t *testing.T) {
 		{"768M", 768, "mem 768 MiB"},
 		{"2.5G", 2560, "mem 2.5 GiB"},
 	} {
-		o, err := parseRun([]string{"--mem", c.arg, "--", "true"}, IO{}, nil)
+		o, err := parseRun([]string{"--mem", c.arg, "--", "true"}, IO{})
 		if err != nil {
 			t.Fatalf("--mem %s: %v", c.arg, err)
 		}
+		o.resolveNeed(nil, noLearned, 32768)
 		if o.mem != c.mib {
 			t.Errorf("--mem %s: mem = %d, want %d", c.arg, o.mem, c.mib)
 		}
@@ -32,7 +33,7 @@ func TestMemFlag(t *testing.T) {
 		}
 	}
 	for _, arg := range []string{"0", "0M", "x", "-1G", "3 G"} {
-		_, err := parseRun([]string{"--mem", arg, "--", "true"}, IO{}, nil)
+		_, err := parseRun([]string{"--mem", arg, "--", "true"}, IO{})
 		var ue *spec.UsageError
 		if !errors.As(err, &ue) {
 			t.Errorf("--mem %q: parseRun = %v, want a usage error", arg, err)
@@ -40,25 +41,22 @@ func TestMemFlag(t *testing.T) {
 	}
 }
 
-// A run without --mem asks for the default 128 MiB, and a brace in an argument is the command's own.
+// A brace in an argument is the command's own.
 // Mutation: substitute {n} in parseRun's argv, and the case reddens.
 func TestBracesReachTheChild(t *testing.T) {
-	o, err := parseRun([]string{"--", "echo", "{n}", "-j{n}", "{n:mem}"}, IO{}, nil)
+	o, err := parseRun([]string{"--", "echo", "{n}", "-j{n}", "{n:mem}"}, IO{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"echo", "{n}", "-j{n}", "{n:mem}"}; !slices.Equal(o.argv, want) {
 		t.Errorf("argv = %q, want %q", o.argv, want)
 	}
-	if got := o.needText(); got != "mem 128 MiB" {
-		t.Errorf("needText = %q, want mem 128 MiB", got)
-	}
 }
 
 // A flag the command does not have is a usage error, whatever it is called.
 func TestUnknownFlagIsUsage(t *testing.T) {
 	for _, flag := range []string{"--nonesuch", "--nonesuch=1", "-x"} {
-		_, err := parseRun([]string{flag, "--", "true"}, IO{}, nil)
+		_, err := parseRun([]string{flag, "--", "true"}, IO{})
 		var ue *spec.UsageError
 		if !errors.As(err, &ue) {
 			t.Errorf("parseRun(%s) = %v, want a usage error", flag, err)

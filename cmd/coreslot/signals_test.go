@@ -290,7 +290,7 @@ func budgetFree(t *testing.T, dir string) {
 func TestTermAndHupToWrapperTerminalMode(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
 		t.Run(sig.String(), func(t *testing.T) {
-			dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+			dir := budgetDir(t, 256)
 			pidFile := filepath.Join(t.TempDir(), "pid")
 			cmd := exec.Command(cliBinary(t), "run", "--mem", "256M", "--", "sh", "-c",
 				`echo $$ > "$0"; exec sleep 60`, pidFile)
@@ -314,7 +314,7 @@ func TestTermAndHupToWrapperTerminalMode(t *testing.T) {
 }
 
 func TestCtrlCTerminalReachesChildOnce(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	tmp := t.TempDir()
 	ready, count := filepath.Join(tmp, "ready"), filepath.Join(tmp, "count")
 	cmd := exec.Command(cliBinary(t), append([]string{"run", "--mem", "256M", "--"}, helper(t, "count-int", ready, count)...)...)
@@ -338,7 +338,7 @@ func TestCtrlCTerminalReachesChildOnce(t *testing.T) {
 }
 
 func TestCtrlZAndFg(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	tmp := t.TempDir()
 	pidFile, ticks, release := filepath.Join(tmp, "pid"), filepath.Join(tmp, "ticks"), filepath.Join(tmp, "release")
 	sh := shell(t, dir)
@@ -382,7 +382,7 @@ func TestCtrlZAndFg(t *testing.T) {
 // SIGTSTP to the command's own group and stops too, so the shell sees the whole job stopped and
 // prompts again; fg continues coreslot, which forwards SIGCONT to the command's group.
 func TestPipelineCtrlZAndFg(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	tmp := t.TempDir()
 	pidFile, ticks, release := filepath.Join(tmp, "pid"), filepath.Join(tmp, "ticks"), filepath.Join(tmp, "release")
 	sh := shell(t, dir)
@@ -440,7 +440,7 @@ func TestPipelineCtrlZAndFg(t *testing.T) {
 }
 
 func TestPipelineCtrlCTerminatesChildGroup(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	sh := shell(t, dir)
 	// Stdin is a pipe, so coreslot is not in terminal mode although its group is the
@@ -487,7 +487,7 @@ func TestIntQuitToNonTerminalWrapperPID(t *testing.T) {
 // signalNonTerminal sends sig to the pid of a coreslot whose stdin is not a terminal: it must
 // reach the command's own group, and coreslot exits with the command's status.
 func signalNonTerminal(t *testing.T, sig syscall.Signal) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	cmd := cliCmd(t, baseEnv(dir), "run", "--mem", "256M", "--", "sh", "-c",
 		`ulimit -c 0; echo $$ > "$0"; exec sleep 60`, pidFile)
@@ -586,7 +586,7 @@ func sameGroupTree(t *testing.T, dir string, sameGroup bool, attrs *syscall.SysP
 	if sameGroup {
 		args = append(args, "--same-group")
 	}
-	args = append(args, "--mem", "256M", "--", "sh", "-c",
+	args = append(args, "--mem", "256M", "--label", "tree", "--", "sh", "-c",
 		`echo $$ > "$0"; sh -c 'echo $$ > "$0"; exec sleep 300' "$1"; :`, shFile, gcFile)
 	cmd = cliCmd(t, baseEnv(dir), args...)
 	cmd.SysProcAttr = attrs
@@ -606,7 +606,7 @@ func sameGroupTree(t *testing.T, dir string, sameGroup bool, attrs *syscall.SysP
 // reaches the whole command tree with --same-group and frees the grant's hold: the command
 // stays in coreslot's group, which SIGKILL reaches although coreslot cannot relay it.
 func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	cmd, sh, gc := sameGroupTree(t, dir, true, &syscall.SysProcAttr{Setsid: true})
 	if pg, _ := unix.Getpgid(sh); pg != cmd.Process.Pid {
 		t.Errorf("the command's group is %d, want coreslot's %d", pg, cmd.Process.Pid)
@@ -626,7 +626,7 @@ func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
 // own group, holding the grant's inherited descriptors: status shows the hold as owned by an
 // exited process and held by a descendant, and doctor notes it without counting a problem.
 func TestOwnerExitedHoldHeldByDescendant(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+	dir := budgetDir(t, 256)
 	cmd, _, gc := sameGroupTree(t, dir, false, &syscall.SysProcAttr{Setsid: true})
 	if err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL); err != nil {
 		t.Fatal(err)
@@ -645,7 +645,7 @@ func TestOwnerExitedHoldHeldByDescendant(t *testing.T) {
 		t.Errorf("status --json holds %v, want one with owner_exited true", holds)
 	}
 	r := cli(t, baseEnv(dir), "doctor")
-	want := fmt.Sprintf("\nnote: a hold whose owner exited is held by a descendant ((no label), pid %d); its reservation frees when that process exits\n", cmd.Process.Pid)
+	want := fmt.Sprintf("\nnote: a hold whose owner exited is held by a descendant (tree, pid %d); its reservation frees when that process exits\n", cmd.Process.Pid)
 	if r.code != 0 || !strings.Contains(r.stdout, want) || !strings.Contains(r.stdout, "no problems found") {
 		t.Errorf("doctor exited %d, want 0 with %q and no problems:\n%s", r.code, strings.TrimSpace(want), r.stdout)
 	}
@@ -668,7 +668,7 @@ func TestSignalToWrapperPIDWithGrandchild(t *testing.T) {
 		{"same-group SIGTERM", true, syscall.SIGTERM},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+			dir := budgetDir(t, 256)
 			cmd, sh, gc := sameGroupTree(t, dir, c.sameGroup, &syscall.SysProcAttr{Setpgid: true})
 			if err := unix.Kill(cmd.Process.Pid, c.sig); err != nil {
 				t.Fatal(err)

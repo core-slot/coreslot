@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"os/signal"
 
-	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
 )
 
@@ -24,13 +23,7 @@ func shieldInherited() {}
 // command runs at once, after one warning unless the configuration
 // silences it; --strict refuses instead.
 func runCommand(args []string, io IO) int {
-	var lookup needsLookup
-	if path, err := config.Path(); err == nil {
-		lookup = newNeedsLookup(path, func(format string, args ...any) {
-			fmt.Fprintf(io.Stderr, "coreslot: "+format+"\n", args...)
-		})
-	}
-	o, err := parseRun(args, io, lookup)
+	o, err := parseRun(args, io)
 	if errors.Is(err, errHelp) {
 		return 0
 	}
@@ -48,7 +41,7 @@ func runCommand(args []string, io IO) int {
 	argv := o.argv
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = io.Stdin, io.Stdout, io.Stderr
-	cmd.Env = append(os.Environ(), engine.ChildEnv(o.need, "", "")...)
+	cmd.Env = append(os.Environ(), engine.ChildEnv(o.mem, "", "")...)
 	// The console delivers Ctrl-C to the command too; the run only waits for it.
 	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	if err := cmd.Start(); err != nil {

@@ -217,8 +217,9 @@ func doctorReport(loc location, io IO) int {
 			state = "absent, the defaults apply"
 		}
 		line("configuration: %s (%s)", text(cfgPath), state)
-		m := rep.Mem
-		line("mem: size %s, reserved %s, free %s", spec.FormatMiB(m.SizeMiB), spec.FormatMiB(m.ReservedMiB), spec.FormatMiB(m.FreeMiB))
+		if m := rep.Mem; m.Known {
+			line("mem: size %s, reserved %s, free %s", spec.FormatMiB(m.SizeMiB), spec.FormatMiB(m.ReservedMiB), spec.FormatMiB(m.FreeMiB))
+		}
 	}
 
 	if err == nil {

@@ -2,7 +2,8 @@
 
 // Package engine runs the protocol's transitions (PROTOCOL.md sections 10 to 15): enqueue,
 // observed-freshness waiting and election, cancellation and withdrawal, admission on the holds'
-// reservations with clamping, and inspection, and the decision of a nested run (section 18).
+// reservations against the room the headroom leaves, and inspection, and the decision of a nested
+// run (section 18).
 // It composes the pure state machine (internal/state) with the filesystem layer
 // (internal/store). It never prints, never installs signal handlers, never chooses exit codes and
 // never decides on its own to run unbudgeted: errors go to the caller.
@@ -123,19 +124,25 @@ func (e *Engine) Config() (config.Config, error) {
 	return c, nil
 }
 
-// memSize recomputes the mem size, in MiB, from the configuration and the machine (PROTOCOL.md
-// section 5.2), and returns its LiveMem. An invalid configuration or an unknown memory is a
-// *store.StateError.
-func (e *Engine) memSize() (int64, bool, error) {
+// reading reads the configuration and the machine's memory afresh, as every admission does
+// (PROTOCOL.md section 5.2). An invalid configuration or an unknown memory is a *store.StateError.
+func (e *Engine) reading() (config.Config, config.Machine, error) {
 	c, err := e.Config()
 	if err != nil {
-		return 0, false, err
+		return config.Config{}, config.Machine{}, err
 	}
 	m, err := e.machine()
 	if err != nil {
-		return 0, false, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
+		return config.Config{}, config.Machine{}, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
 	}
-	return c.MemMiB(m), c.LiveMem, nil
+	return c, m, nil
+}
+
+// Oversized reports, with the machine's memory, a need of needMiB that no moment can satisfy:
+// more than the machine has less the reserve. Such a need starts only when no hold is live.
+func (e *Engine) Oversized(needMiB int64) (totalMiB int64, ok bool) {
+	c, m, err := e.reading()
+	return m.MemMiB, err == nil && needMiB > m.MemMiB-c.ReserveMiB
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,
@@ -193,7 +200,6 @@ func (e *Engine) enterUntil(ctx context.Context) (*store.Section, error) {
 // *SectionBusyError matching ctx.Err() (or ctx.Err() itself when ctx had already ended) having
 // published nothing. Once inside the section it completes.
 func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket, error) {
-	req = spec.Normalize(req)
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}

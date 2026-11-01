@@ -12,7 +12,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -21,20 +20,10 @@ const memSampleEvery = time.Second
 
 // admitted runs the command on an admitted grant.
 func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
-	if asked := g.ClampedMiB(); asked > 0 {
-		n := spec.FormatMiB(g.GrantMiB())
-		if g.LiveMem() {
-			r.notice("mem: requested %s, more than the budget and free memory allow; running alone with %s",
-				spec.FormatMiB(asked), n)
-		} else {
-			r.notice("mem: requested %s, budget is %s; running alone with %s", spec.FormatMiB(asked), n, n)
-		}
-	}
 	c := child{
 		env:      append(slices.Clone(r.env), g.Env()...),
 		files:    g.Files(),
 		grantMiB: g.GrantMiB(),
-		clamped:  g.ClampedMiB() > 0,
 		release:  g.Close,
 		log:      e.Store(), // FORMAT was understood in the admitting section
 	}
@@ -46,7 +35,6 @@ type child struct {
 	env      []string
 	files    []*os.File // ExtraFiles: fd 3, nil without a hold
 	grantMiB int64
-	clamped  bool
 	failOpen string
 	nested   bool
 	release  func() error // closes the run's copies of the grant once the command exited
@@ -108,7 +96,7 @@ func (r *run) runChild(c child) int {
 		rec.WaitedFreeS = &free
 	}
 	if !c.nested && c.failOpen == "" && rec.MemPeakKiB != nil {
-		if h := memHint(r.o.label, c.grantMiB, c.clamped, *rec.MemPeakKiB, rec.RanS); h != "" {
+		if h := memHint(r.o.label, c.grantMiB, *rec.MemPeakKiB, rec.RanS); h != "" {
 			r.notice("%s", h)
 		}
 	}
