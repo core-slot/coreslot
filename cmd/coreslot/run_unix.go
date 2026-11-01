@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -61,6 +62,10 @@ func runCommand(args []string, io IO) int {
 	if err != nil {
 		fmt.Fprintf(io.Stderr, "coreslot: %v\n", err)
 		return exitUsage
+	}
+	if o.label == "" {
+		cwd, _ := os.Getwd()
+		o.label = autoLabel(o.argv, cwd)
 	}
 	var lookup needsLookup
 	if loc.err == nil {

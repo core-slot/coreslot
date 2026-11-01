@@ -71,7 +71,7 @@ func NeedMiB(window []store.RunRecord) (mib int64, ok bool) {
 	return (peaks[min(len(peaks)-1, len(peaks)*9/10)] + 1023) / 1024, true
 }
 
-// NormalShare is the median share of the window's runs' CPU time spent in the system,
+// NormalShare is the median share of the window's runs' rusage time spent in the system,
 // sys_s/(user_s+sys_s); ok is false when no run has a measured, non-zero time.
 func NormalShare(window []store.RunRecord) (share float64, ok bool) {
 	var shares []float64
