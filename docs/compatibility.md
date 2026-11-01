@@ -54,7 +54,7 @@ Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite is:
   processes at named points inside the protocol's steps, stop, continue or kill them there, and
   check the state directory and what the other clients do meanwhile;
 - the kill storm there, which for 60 s kills, stops, resumes and cancels 50 CLI
-  clients, some of them nested and some in token-only mode, while it shrinks and grows the
+  clients, some of them nested, while it shrinks and grows the
   budget and a sampler checks invariants I1, I2, I3 and I7 of
   [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants);
 
@@ -91,7 +91,7 @@ before ([`PROTOCOL.md` section 7.2](../PROTOCOL.md#72-rules-for-every-body) and
 [section 20](../PROTOCOL.md#20-run-log)). A key a reader must understand, a key removed, renamed
 or given another type or meaning, and any change to names or layout bump the number. The bump is
 what tells older clients apart: a client compares the number in `FORMAT` with the formats it
-implements, and an unknown number is what puts it in token-only mode (below). Two things never
+implements, and an unknown number is what makes it run unbudgeted (below). Two things never
 change with a format, so a format change never creates a second budget
 ([`PROTOCOL.md` section 15.1](../PROTOCOL.md#151-what-every-format-keeps)):
 
@@ -106,13 +106,11 @@ That adds no key, file, name or layout, since every ticket already carries its `
 format change. An older client on the same machine conforms: it may see a newer waiter behind it
 admitted first, and such a waiter never takes what the older client's minimum needs.
 
-A client that finds a format it does not implement runs in **token-only** mode ([`PROTOCOL.md`
-section 15.2](../PROTOCOL.md#152-token-only-mode)): under `admit.lock` it takes the minimum of each
-declared resource if that many tokens are free, publishes nothing (no ticket, hold, log line or
-degraded record), prints a diagnostic and exports `CORESLOT_UNBUDGETED=format` to the command. Its
-tokens are counted by every other client, so the budget still holds, but it has no place in the
-queue and gets no elastic share. Mixing releases across a format change is therefore safe but
-degrades the older clients; upgrade every client of a machine together. The release that introduces
+A client that finds a format it does not implement ([`PROTOCOL.md`
+section 15.2](../PROTOCOL.md#152-a-format-this-client-does-not-implement)) publishes nothing (no
+ticket, hold, log line or degraded record) and its run fails open: the command runs outside the
+budget, with a diagnostic. Mixing releases across a format change is therefore safe but leaves the
+older clients unbudgeted; upgrade every client of a machine together. The release that introduces
 a format writes its number, and its notes say so.
 
 ## CLI
@@ -156,8 +154,8 @@ While at `v0`:
   keeps working for at least one further minor release before it is removed.
 - The deprecation window does not apply to the on-disk format, because an older client is never
   cut off: a release that changes the metadata bumps the `FORMAT` number (above), is announced in
-  `CHANGELOG.md` and `PROTOCOL.md`, and from then on older clients on the same machine run in
-  token-only mode, degraded but still counted in the one budget. Before `v1.0.0` this may happen
+  `CHANGELOG.md` and `PROTOCOL.md`, and from then on older clients on the same machine run
+  unbudgeted. Before `v1.0.0` this may happen
   in any minor release; from `v1.0.0` it needs a new major version.
 - `status --json` changes follow the schema rule above.
 

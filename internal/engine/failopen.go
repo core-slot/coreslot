@@ -15,8 +15,7 @@ import (
 // FailOpen publishes the hold of a run its caller has decided to run unbudgeted (PROTOCOL.md
 // section 14): "unbudgeted": true, an empty grant, every requested resource in
 // unbudgeted_resources, and the reason recorded in degraded, in one section entered within 2 s.
-// The engine never makes that decision itself. reason is informational, non-empty text and is
-// never "format", which marks a token-only run.
+// The engine never makes that decision itself. reason is informational, non-empty text.
 //
 // The returned grant is always usable: its Env carries CORESLOT_UNBUDGETED=reason and each
 // resource's min. When nothing could be written (the section stayed busy, a state error, or a

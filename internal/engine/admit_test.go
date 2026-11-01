@@ -263,106 +263,40 @@ func writeFormat(t *testing.T, dir, body string) {
 	}
 }
 
-// PROTOCOL.md section 15.2: under a format this client does not implement it takes min of
-// each declared resource and writes nothing; other clients count its locks.
-func TestTokenOnlyUnderUnknownFormat(t *testing.T) {
-	dir := newStateDir(t, "")
-	e := newEngine(t, dir, newFakeClock())
-	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 3))
-	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 4, 7)).stop() // create every token file
-	writeFormat(t, dir, "coreslot-protocol 2\n")
-	before := listing(t, dir)
-
-	tk, err := e.EnqueueContext(context.Background(), need("mem=2..6"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tk.Withdraw()
-	if !tk.TokenOnly() || tk.Name() != "" {
-		t.Fatalf("token-only %v, ticket %q: want token-only without a ticket", tk.TokenOnly(), tk.Name())
-	}
-	g := admitted(t, step(t, tk))
-	if !g.TokenOnly() || g.Grant()["mem"] != 2 {
-		t.Errorf("token-only %v grant %v, want token-only with min 2", g.TokenOnly(), g.Grant())
-	}
-	if files := g.Files(); len(files) != 3 || files[0] != nil {
-		t.Errorf("files %v, want nil then 2 tokens", files)
-	}
-	env := strings.Join(g.Env(), " ")
-	if env != "CORESLOT_GRANTED_MEM=256 CORESLOT_TOKEN_FDS=4-5 CORESLOT_UNBUDGETED=format" {
-		t.Errorf("env %q", env)
-	}
-	if after := listing(t, dir); after != before {
-		t.Errorf("token-only admission wrote to the state directory:\nbefore:\n%s\nafter:\n%s", before, after)
-	}
-	other := newEngine(t, dir, nil)
-	if n := lockedCount(t, other, "mem"); n != 6 {
-		t.Errorf("another client counts %d locked, want 6", n)
-	}
-	if free, err := other.Free("mem"); err != nil || free != 2 {
-		t.Errorf("Free = %d, %v; want 2", free, err)
-	}
-	for _, d := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.LogDir} {
-		if exists(filepath.Join(dir, d)) {
-			t.Errorf("%s/ exists under an unknown format", d)
+// Under a format this client does not implement, an enqueue refuses and writes nothing, and so
+// does a waiter that finds the format changed.
+func TestUnknownFormatRefuses(t *testing.T) {
+	refused := func(t *testing.T, err error) {
+		t.Helper()
+		var fe *store.FormatError
+		if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != 2 {
+			t.Fatalf("%v, want a refusal naming format 2", err)
 		}
 	}
-}
-
-// PROTOCOL.md section 15.2: a token-only client that finds a format it implements enqueues instead
-// of bypassing the queue.
-func TestTokenOnlyEnqueuesWhenFormatIsUnderstood(t *testing.T) {
-	dir := newStateDir(t, "")
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
-	writeFormat(t, dir, "coreslot-protocol 2\n")
-	tk, err := e.EnqueueContext(context.Background(), need("mem=1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tk.Withdraw()
-	step(t, tk)
-	if !tk.TokenOnly() {
-		t.Fatal("not token-only under format 2")
-	}
-	if err := os.Remove(filepath.Join(dir, store.FormatFile)); err != nil {
-		t.Fatal(err)
-	}
-	clk.advance(time.Second)
-	step(t, tk)
-	if tk.TokenOnly() || !exists(filepath.Join(dir, store.QueueDir, tk.Name())) {
-		t.Fatalf("token-only %v, ticket %q: want a queued ticket once FORMAT is absent", tk.TokenOnly(), tk.Name())
-	}
-	if body, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(body) != "coreslot-protocol 1\n" {
-		t.Errorf("FORMAT %q, want format 1 written", body)
-	}
-}
-
-// PROTOCOL.md section 15.2: a waiter that finds the format changed withdraws and continues in
-// token-only mode, writing nothing.
-func TestFormatChangeWhileWaitingGoesTokenOnly(t *testing.T) {
-	dir := newStateDir(t, "")
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	lock := startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
-	tk := enqueue(t, e, need("mem=1"))
-	name := tk.Name()
-	step(t, tk)
-	writeFormat(t, dir, "coreslot-protocol 2\n")
-	clk.advance(time.Second)
-	step(t, tk)
-	if !tk.TokenOnly() {
-		t.Fatal("still queued under format 2")
-	}
-	if dead, err := e.st.Probe(store.QueueDir, name); err != nil || !dead {
-		t.Errorf("the old ticket: dead %v, %v; want withdrawn (dead) and left in place", dead, err)
-	}
-	lock.stop()
-	clk.advance(time.Second)
-	if g := admitted(t, step(t, tk)); !g.TokenOnly() {
-		t.Error("admitted, but not token-only")
-	}
+	t.Run("enqueue", func(t *testing.T) {
+		dir := newStateDir(t, "")
+		e := newEngine(t, dir, newFakeClock())
+		startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7)).stop() // create every token file
+		writeFormat(t, dir, "coreslot-protocol 2\n")
+		before := listing(t, dir)
+		_, err := e.EnqueueContext(context.Background(), need("mem=1"))
+		refused(t, err)
+		if after := listing(t, dir); after != before {
+			t.Errorf("a refused enqueue wrote to the state directory:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+	})
+	t.Run("waiting", func(t *testing.T) {
+		dir := newStateDir(t, "")
+		clk := newFakeClock()
+		e := newEngine(t, dir, clk)
+		startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
+		tk := enqueue(t, e, need("mem=1"))
+		step(t, tk)
+		writeFormat(t, dir, "coreslot-protocol 2\n")
+		clk.advance(time.Second)
+		_, err := tk.Step(context.Background())
+		refused(t, err)
+	})
 }
 
 func TestFreeCountsAllLocks(t *testing.T) {

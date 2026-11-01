@@ -15,6 +15,6 @@ import (
 func Formats() []int { return testhooks.Formats() }
 
 // Understood reports whether this client implements format n. A FORMAT naming any other format is
-// not understood: a client writes nothing into that directory and admits in token-only mode
+// not understood: a client writes nothing into that directory and refuses
 // (PROTOCOL.md sections 14 and 15.2).
 func Understood(n int) bool { return slices.Contains(Formats(), n) }

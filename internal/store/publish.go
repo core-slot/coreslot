@@ -313,7 +313,7 @@ const formatPrefix = "coreslot-protocol "
 // 8). When FORMAT is absent it writes `coreslot-protocol 1`. It reports the format n and
 // whether this client implements it (Understood). A malformed FORMAT is a *StateError. When the
 // format is understood it also rewrites admit.lock's informational body to name this holder; when
-// it is not, it writes nothing at all (a token-only client changes nothing but token locks).
+// it is not, it writes nothing at all.
 func (sec *Section) Format() (n int, understood bool, err error) {
 	return sec.format(Understood)
 }
@@ -352,9 +352,9 @@ func (sec *Section) format(implements func(int) bool) (n int, understood bool, e
 // and 10.4): it reads FORMAT as Format does, and when the format is understood it reconciles if
 // that is due at nowNS. n, understood and a FORMAT that cannot be read, written or parsed are
 // Format's; when the format is not understood nothing is reconciled or written, and the caller
-// refuses (a *FormatError) or turns token-only. An understood format with an error is a failure
-// of the admit.lock body or of reconciliation. Admission and token-only admission never
-// reconcile and call Format alone.
+// refuses (a *FormatError). An understood format with an error is a failure
+// of the admit.lock body or of reconciliation. Admission never reconciles and
+// calls Format alone.
 func (sec *Section) Prepare(nowNS int64) (n int, understood bool, err error) {
 	n, understood, err = sec.Format()
 	if err != nil || !understood {

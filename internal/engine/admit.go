@@ -31,13 +31,12 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Format()
+	n, understood, err := sec.Format()
 	if err != nil {
 		return nil, err
 	}
 	if !understood {
-		t.toTokenOnly()
-		return nil, nil
+		return nil, refuseFormat(n, "")
 	}
 
 	// 1. A cancel request published before this section wins.
@@ -189,7 +188,7 @@ func (t *Ticket) reelect(sizes map[string]int) (ahead []map[string]spec.Range, f
 }
 
 // countLocked counts the locked tokens of every resource of eff at every index (PROTOCOL.md
-// section 12.1 step 4, I3), as admission and token-only admission both size from it.
+// section 12.1 step 4, I3), as admission sizes from it.
 func countLocked(sec *store.Section, eff map[string]spec.Range) (map[string]int, error) {
 	locked := make(map[string]int, len(eff))
 	for name := range eff {
@@ -204,7 +203,7 @@ func countLocked(sec *store.Section, eff map[string]spec.Range) (map[string]int,
 
 // takeMins is the minimum pass of PROTOCOL.md section 12.1 step 6: it takes every effective min,
 // and if any resource ends below it (a non-queued taker won a race) it closes everything it took
-// and ok is false. Token-only admission takes this pass alone (section 15.2).
+// and ok is false.
 func takeMins(sec *store.Section, eff map[string]spec.Range, sizes map[string]int) (*store.TokenSet, bool, error) {
 	mins := make(map[string]int, len(eff))
 	for name, r := range eff {
@@ -272,9 +271,8 @@ func mergeTokens(sets ...*store.TokenSet) *store.TokenSet {
 	return out
 }
 
-// Grant is what an admission or a token-only admission holds: the hold's lock-carrying
-// descriptor (none in token-only mode) and the token descriptors. Its methods are safe for
-// concurrent use.
+// Grant is what an admission holds: the hold's lock-carrying descriptor and the token
+// descriptors. Its methods are safe for concurrent use.
 type Grant struct {
 	e          *Engine
 	hold       *os.File
@@ -283,7 +281,6 @@ type Grant struct {
 	need       map[string]spec.Range
 	clamped    map[string]int
 	unbudgeted []string
-	tokenOnly  bool
 	liveMem    bool   // the attempt that admitted it used a raised mem size
 	failOpen   string // the reason of a fail-open run's grant
 
@@ -336,9 +333,6 @@ func (g *Grant) Clamped() map[string]int { return maps.Clone(g.clamped) }
 // requested resource for a fail-open grant).
 func (g *Grant) Unbudgeted() []string { return slices.Clone(g.unbudgeted) }
 
-// TokenOnly reports a token-only grant: no hold, CORESLOT_UNBUDGETED=format.
-func (g *Grant) TokenOnly() bool { return g.tokenOnly }
-
 // LiveMem reports that the attempt that admitted g used a raised mem size.
 func (g *Grant) LiveMem() bool { return g.liveMem }
 
@@ -358,13 +352,9 @@ func (g *Grant) Files() []*os.File {
 // CORESLOT_GRANTED_*, CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS and CORESLOT_UNBUDGETED before
 // appending it (PROTOCOL.md section 17). It holds CORESLOT_GRANTED_<RES> for every requested
 // resource, CORESLOT_HELD_FD=3 with a hold, CORESLOT_TOKEN_FDS when tokens are passed, and
-// CORESLOT_UNBUDGETED=format in token-only mode (the reason for a fail-open grant).
+// CORESLOT_UNBUDGETED with the reason of a fail-open grant.
 func (g *Grant) Env() []string {
-	unbudgeted := g.failOpen
-	if g.tokenOnly {
-		unbudgeted = "format"
-	}
-	return ChildEnv(g.Grant(), g.hold != nil, len(g.tokens.Files), unbudgeted)
+	return ChildEnv(g.Grant(), g.hold != nil, len(g.tokens.Files), g.failOpen)
 }
 
 // Close closes this process's copies of the grant's descriptors, the hold before the tokens; it

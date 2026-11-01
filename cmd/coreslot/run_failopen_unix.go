@@ -83,12 +83,12 @@ const timeoutReason = "timeout"
 // timeoutRun is --on-timeout run: the ticket is withdrawn and the command runs with min of each
 // resource outside the budget. Its unbudgeted hold shows it in status and its run-log line gives
 // the reason, but a timeout is not a state error: nothing is recorded as degraded.
-func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
+func (r *run) timeoutRun(e *engine.Engine) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
 		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
 	g, herr := e.UnbudgetedHold(r.o.request(), timeoutReason)
 	c := r.unbudgetedChild(timeoutReason, g)
-	if timeoutLogs(g != nil && g.HoldName() != "", herr, t != nil && !t.TokenOnly()) {
+	if timeoutLogs(g != nil && g.HoldName() != "", herr) {
 		c.log = e.Store()
 	}
 	if herr != nil {
@@ -102,7 +102,7 @@ func (r *run) timeoutRun(e *engine.Engine, t *engine.Ticket) int {
 // found a FORMAT it does not understand (ErrRefused) or a malformed one (a state error), it
 // writes nothing; otherwise (the section stayed busy) the FORMAT understood when its ticket was
 // published still counts.
-func timeoutLogs(holdPublished bool, holdErr error, ticketUnderstood bool) bool {
+func timeoutLogs(holdPublished bool, holdErr error) bool {
 	var se *store.StateError
 	switch {
 	case holdPublished:
@@ -110,5 +110,5 @@ func timeoutLogs(holdPublished bool, holdErr error, ticketUnderstood bool) bool 
 	case errors.Is(holdErr, engine.ErrRefused), errors.As(holdErr, &se):
 		return false
 	}
-	return ticketUnderstood
+	return true
 }

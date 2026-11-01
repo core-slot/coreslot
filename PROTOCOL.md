@@ -43,7 +43,7 @@ Every shared file, field, environment variable and transition of format 1, and w
 
 | Item | Kind | Defined in |
 |---|---|---|
-| `FORMAT` | file | [7.6](#76-format), [15](#15-formats-and-token-only-mode) |
+| `FORMAT` | file | [7.6](#76-format), [15](#15-formats-and-an-unimplemented-format) |
 | `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) |
 | `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
 | `res/` | directory of token files | [6](#6-tokens-and-descriptor-ownership) |
@@ -71,8 +71,7 @@ Every shared file, field, environment variable and transition of format 1, and w
 | cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
 | withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
 | reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
-| token-only admission | transition | [15.2](#152-token-only-mode), example [21.7](#217-token-only-admission) |
-| pass-through | transition | [18](#18-nested-runs-pass-through), example [21.8](#218-pass-through) |
+| pass-through | transition | [18](#18-nested-runs-pass-through), example [21.7](#217-pass-through) |
 
 ## 3. State machine and invariants
 
@@ -87,7 +86,6 @@ critical section (section 8).
      for 10 s (10.2)       ▼   │
                          STALLED
  WAITING/STALLED ── cancel or owner gone (descriptor closed) ──▶ (none)
- (none) ── token-only admission† (format not understood; nothing published) ──▶ held tokens
 ```
 
 WAITING and STALLED are the same file; STALLED is a verdict each observer reaches on its own
@@ -102,9 +100,8 @@ Every conforming client MUST preserve these invariants:
   and again at release (section 12.3); a holder that finds `st_nlink == 0` or a different inode at
   its token's path has a state error (section 14) and reports degraded mode to its user.
 - **I2 truthful grant:** a live hold's body lists exactly the tokens it locks. Tokens may be locked
-  without a published hold only inside the admission section, by a token-only client
-  (section 15.2), momentarily by a probe (section 6, inside or outside the section), or between a
-  holder's last close and the next reconciliation.
+  without a published hold only momentarily by a probe (section 6, inside or outside the
+  section), or between a holder's last close and the next reconciliation.
 - **I3 bounded admission:** an admission never brings the number of locked tokens of a
   resource — at **any** index that exists, including indices at or above the current size — above
   that resource's current size. A later shrink may leave locked tokens above the new size; no
@@ -116,8 +113,7 @@ Every conforming client MUST preserve these invariants:
   tickets were published before the election (section 10.3), with one bounded exception: a waiter
   in the front window MAY be admitted ahead of live tickets under the rule of section 10.3,
   minimums before extras. Otherwise the head blocks every waiter behind it, and a waiter is passed
-  over only while it is STALLED, dead or canceled. Token-only admission is outside the queue by
-  definition.
+  over only while it is STALLED, dead or canceled.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's minimum is free and no process is stopped inside the admission section, the head is
   admitted within 3 s; up to 4 consecutive stopped tickets at the front of the queue stop blocking
@@ -322,8 +318,7 @@ room = max(0, headroom − unrealised − unlisted)
   `tokens` is the number of `mem` tokens the hold lists and `used` the resident memory of the
   hold's process tree; a hold whose tree is not measured counts its whole reservation
   (`used = 0`), and malformed and stray holds are left out, so their tokens count as unlisted;
-- `unlisted` is 128 MiB for each locked `mem` token that no live hold lists (a token-only client's,
-  a probe's).
+- `unlisted` is 128 MiB for each locked `mem` token that no live hold lists (a probe's).
 
 A hold's tree is measured only when its body says `"tree": true` (section 7.4), it lists `mem`
 tokens, no other live hold with `"tree": true` names the same pid, and the process with that pid
@@ -652,8 +647,7 @@ does not define (section 15.2). Section 15 defines what a client does with it.
 `0600`) and never deleted, renamed or replaced. Its body is informational: on entering the section
 the holder SHOULD rewrite it in place through its locked descriptor (truncate, then write) as the
 JSON object `{"pid": <integer>, "entered_ns": <integer>}`. Readers MUST NOT rely on it for anything
-but display, and MUST tolerate an empty, stale or malformed body. A token-only client
-(section 15.2) does not rewrite it.
+but display, and MUST tolerate an empty, stale or malformed body.
 
 ### 7.8 gen
 
@@ -690,7 +684,7 @@ parse.
 ## 8. The admission critical section
 
 `admit.lock` is the protocol's linearization point. Enqueue, admission, cancellation publication,
-token-only admission, reconciliation and run-log rotation MUST happen while holding
+reconciliation and run-log rotation MUST happen while holding
 `flock(LOCK_EX)` on it; so does every other publication (section 11) and every removal of a
 ticket, hold, cancel request or temporary file. A refresh (section 10.2), a token probe and a
 run-log append happen outside it.
@@ -842,13 +836,12 @@ waiter that passes under the rule above is admitted before its position reaches 
 ### 10.4 Reconciliation
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
-client that enters the section for any purpose other than admission and token-only admission
+client that enters the section for any purpose other than admission
 (enqueue, cancellation publication, removal of its own ticket or hold, a resume bump,
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
 reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
-finds it missing and does not by itself make that entry reconcile. Admission and token-only
-admission never reconcile, and neither does a reset (section 4.4). Reconciliation:
+finds it missing and does not by itself make that entry reconcile. Admission never reconciles, and neither does a reset (section 4.4). Reconciliation:
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
@@ -1050,8 +1043,7 @@ unknown format (section 15.2).
 
 The reason, in `CORESLOT_UNBUDGETED` and in `degraded`'s `reason`, is informational text that no
 client interprets: section 18 acts on the variable being set, never on its value. Any non-empty
-text conforms, except that a fail-open run MUST NOT use `format`, which marks a token-only run
-(section 15.2).
+text conforms.
 
 A state error found at release (section 12.3) is not a fail-open: the command has already run with
 its grant. It is reported and nothing is written; the rules above do not apply to it.
@@ -1074,7 +1066,7 @@ whose wait timed out, with the same unbudgeted hold, `CORESLOT_UNBUDGETED=<reaso
 `status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record. It
 also exits 3 while a state error makes runs fail open (section 19).
 
-## 15. Formats and token-only mode
+## 15. Formats and an unimplemented format
 
 ### 15.1 What every format keeps
 
@@ -1088,40 +1080,25 @@ the layout other than `admit.lock` and `res/`). Format 1 fixes, for every future
 A client that finds no `FORMAT` writes `coreslot-protocol 1` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
-### 15.2 Token-only mode
+### 15.2 A format this client does not implement
 
-A client that finds a format it does not implement runs in **token-only** mode:
+A client that finds a format it does not implement leaves the state directory as it found it and
+takes no part in the budget: it publishes nothing and writes nothing (no ticket, hold, log,
+degraded record, `gen` bump or `admit.lock` body), and its run fails open (section 14), with the
+refusal as the reason. The decision is made at every section entry from the `FORMAT` read there
+(section 8).
 
-- it enters the section, computes sizes from its own configuration, counts locked tokens as in
-  section 12.1 step 4, and takes `min` (clamped as in section 12.2) of each declared resource if
-  that many are free, in the order of step 6, and checks I1 for them as step 6 does; otherwise it
-  leaves and retries with the head's backoff;
-- it publishes nothing and writes nothing in the state directory (no ticket, hold, log, degraded
-  record, `gen` bump or `admit.lock` body) except creating what the format-stable namespace
-  (section 15.1) needs: missing token files, `res/` and `res/<name>/` for them (mode `0700`), and
-  `admit.lock` when it is missing (`O_CREAT` without `O_TRUNC`). It never creates `queue/`,
-  `holds/`, `cancel/` or `log/`. It prints a diagnostic and exports `CORESLOT_UNBUDGETED=format`;
-- because every format counts locks, its tokens are counted by every other client (I6); it has no
-  place in the queue, so ordering does not apply to it.
-
-The mode is decided at every section entry from the `FORMAT` read there (section 8). A client in
-token-only mode that, on a later entry before it holds tokens, finds a format it implements, or no
-`FORMAT` (which it then writes, as every entry does), is no longer token-only: it enqueues in that
-section as a new request (section 10.1, with a fresh `arrival_ns`) and waits in the queue, so it
-never bypasses the queue of a format it understands (I4).
-
-A waiting client reads `FORMAT` at every section entry and MAY also read it on its polls; one that
-finds the format changed under it withdraws its ticket (section 13.2) and continues in token-only
-mode. It only closes the ticket's descriptor: removing the file would be a write into a format it
-does not implement, so the file is left to a client of that format.
+A waiting client reads `FORMAT` at every section entry; one that finds the format changed under
+it closes its ticket's descriptor, so the ticket is dead at once, and fails open. It does not
+remove the file: that would be a write into a format it does not implement, so the file is left to
+a client of that format.
 
 Every other operation that would write follows the same rule. Under a format it does not implement,
-a client publishes no cancel request or unbudgeted hold, records and clears no
-`degraded`, and does not remove its own hold after a run. A fail-open run still runs its command
-but writes nothing.
+a client publishes no cancel request or unbudgeted hold, records and clears no `degraded`, and does
+not remove its own hold after a run. A fail-open run still runs its command but writes nothing.
 
-> **Implementation note.** The Go CLI refuses cancellation, `doctor --clear` and `doctor --reset` under a
-> format it does not implement.
+> **Implementation note.** The Go CLI refuses cancellation, `doctor --clear` and `doctor --reset`
+> under a format it does not implement.
 
 ## 16. Windows
 
@@ -1149,7 +1126,7 @@ and this environment:
 | `CORESLOT_GRANTED_<RES>` | for each resource the request names, in environment form (section 5.1): the number of tokens granted, or, for a resource run unbudgeted, its requested `min`; `CORESLOT_GRANTED_MEM` is that count in MiB (tokens × 128) |
 | `CORESLOT_HELD_FD` | `3`, when the run passes a hold descriptor |
 | `CORESLOT_TOKEN_FDS` | the token descriptors' numbers, when it passes any |
-| `CORESLOT_UNBUDGETED` | the reason, for a fail-open, token-only (`format`) or unbudgeted pass-through run |
+| `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 
 ```
 token-fds = item *( "," item )
@@ -1166,7 +1143,7 @@ A launcher that starts nested runs passes these
 descriptors through (Python: `subprocess.run(..., pass_fds=...)`; Go: `exec.Cmd.ExtraFiles`).
 
 A run that is not a pass-through (section 18 rules 1 and 2) builds this contract from its own grant
-only. An ordinary or `--independent` request, a fail-open run and a token-only run remove every
+only. An ordinary or `--independent` request, a fail-open run removes every
 inherited `CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS` and `CORESLOT_UNBUDGETED`
 from the command's environment before setting their own, and close (do not pass on) exactly the
 inherited descriptors those inherited variables name: the `CORESLOT_HELD_FD` descriptor and every
@@ -1253,7 +1230,7 @@ during the run (section 14); a run whose release found a mismatch writes no line
 immediately before the write, and writes no line when it is absent, malformed or names a format
 the writer does not implement. A pass-through (section 18), valid or unbudgeted, appends too: that
 read is its only one (it never writes a missing `FORMAT`, and then writes no line), it marks its
-line `"nested": true`, and it never rotates the log. A token-only run writes no log. A line that
+line `"nested": true`, and it never rotates the log. A line that
 would exceed 4 KiB MAY be fitted by shortening an informative string; a writer that cannot fit it
 writes no line. The object carries:
 
@@ -1302,7 +1279,7 @@ was at least its `mem` need, read at most once per second. It informs; no admiss
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
 inside the section: re-checks the size, then renames it to `runs.1.jsonl` (replacing the previous
-generation). One generation is kept. A token-only client writes no log.
+generation). One generation is kept.
 
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open`. It samples
 > memory on macOS and Linux and writes `mem_peak_source` `max_rss` elsewhere when it knows the
@@ -1527,35 +1504,7 @@ queue/01791721150000000000-0000006100-000002-lint          [L]
 queue/01791721200000000000-0000009200-000001-gate          [L]
 ```
 
-### 21.7 Token-only admission
-
-`FORMAT` contains `coreslot-protocol 2`. Pid 9100, which implements only format 1, runs
-`coreslot run --need cpu=2..6 -- ...`. `cpu` 0-3 are held by format-2 clients.
-
-Before:
-
-```
-FORMAT                                                 coreslot-protocol 2
-res/cpu/0 ... res/cpu/3                                [L] (format-2 holders)
-res/cpu/4 ... res/cpu/9                                (not locked)
-```
-
-Pid 9100 enters the section, does not rewrite `admit.lock`, computes size 10 from its own
-configuration, counts 4 locked (`free = 6`), takes `min = 2`: tokens 4 and 5, and leaves. It writes
-no ticket, hold, `gen`, log or degraded record. It prints a diagnostic and starts the command with
-fds 4-5 (no fd 3), `CORESLOT_GRANTED_CPU=2`, `CORESLOT_TOKEN_FDS=4-5` and
-`CORESLOT_UNBUDGETED=format`.
-
-After (no file was created, renamed or rewritten; only locks changed):
-
-```
-FORMAT                                                 coreslot-protocol 2
-res/cpu/0 ... res/cpu/3                                [L] (format-2 holders)
-res/cpu/4, res/cpu/5                                   [L] (pid 9100)
-res/cpu/6 ... res/cpu/9                                (not locked)
-```
-
-### 21.8 Pass-through
+### 21.7 Pass-through
 
 Under the run of section 21.3 (fd 3 = hold, fds 4-13 = `cpu` 0-9, fd 14 = `pg-local` 0,
 `CORESLOT_TOKEN_FDS=4-14`), the command starts
@@ -1572,7 +1521,7 @@ A pass-through does not enter the section or lock anything. After `make` exits i
 (`coreslot-protocol 1`, understood) and appends one run-log line marked `"nested": true`
 (section 20); apart from that line, `$S` is unchanged before and after.
 
-### 21.9 Admission with mem
+### 21.8 Admission with mem
 
 Pid 7500 runs `coreslot run --need cpu=2 --need mem=3G --label gate:mem -- ./build` at 12:40:00
 with no ticket ahead and no hold. `mem=3G` is 3 072 MiB, 24 tokens, so the ticket's `need` is
@@ -1601,7 +1550,7 @@ and `CORESLOT_GRANTED_CPU=2`, `CORESLOT_GRANTED_MEM=3072`, `CORESLOT_HELD_FD=3`,
  "exit": 0, "load1": 3.2, "fail_open": ""}
 ```
 
-### 21.10 Admission above the static size
+### 21.9 Admission above the static size
 
 The configuration declares `mem = "1G"` (size 8) beside the sizes above and `[memory] live = true`,
 `/proc/meminfo` says `MemAvailable: 4194304 kB` (4 096 MiB), and no cgroup limits memory. A

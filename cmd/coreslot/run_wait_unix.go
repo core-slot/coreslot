@@ -161,10 +161,6 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 // mem 3 GiB: position 2 (1m00s); holders: gate pid 4711 mem 1 GiB (3m12s)`, where 1m00s is how
 // long the run has waited.
 func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited time.Duration) string {
-	if w.Position == 0 {
-		return fmt.Sprintf("coreslot: waiting for %s: token-only mode, the state directory's format is not implemented here (%s)",
-			r.o.needText(), duration(waited))
-	}
 	return fmt.Sprintf("coreslot: waiting for %s: position %d (%s)%s%s", r.o.needText(), w.Position,
 		duration(waited), holderList(holders, time.Now().UnixNano()), r.pipeNote())
 }

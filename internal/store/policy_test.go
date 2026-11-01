@@ -109,7 +109,7 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	if n, understood, err := sec.Format(); n != 2 || understood || err != nil {
 		t.Fatalf("Format = %d, %v, %v", n, understood, err)
 	}
-	// What a token-only client reads must work without the directories it may not create.
+	// What a client of a foreign format reads must work without the directories it may not create.
 	if e, ignored, err := s.List(QueueDir); len(e) != 0 || ignored != 0 || err != nil {
 		t.Errorf("List of an absent queue/ = %v, %d, %v", e, ignored, err)
 	}

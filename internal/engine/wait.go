@@ -23,8 +23,7 @@ type StepResult interface{ stepResult() }
 // Waiting reports a ticket still waiting. Position is 1 when the last election made it the
 // head, otherwise 1 plus the number of tickets ahead of it that the election did not pass over:
 // the election stops at the first live, non-STALLED ticket, so the tickets beyond it are
-// counted unexamined and Position is an upper bound. It is 0 in token-only mode, which has no
-// place in the queue. A Step lists no holds: Ticket.Holders lists the live holds when a caller
+// counted unexamined and Position is an upper bound. A Step lists no holds: Ticket.Holders lists the live holds when a caller
 // needs them (the CLI's waiting line, every 30 s).
 type Waiting struct {
 	Position int
@@ -37,13 +36,6 @@ type Admitted struct {
 
 func (Waiting) stepResult()  {}
 func (Admitted) stepResult() {}
-
-type mode int
-
-const (
-	modeQueued    mode = iota // a published ticket waits in the queue
-	modeTokenOnly             // the format is not understood: no ticket, token-only admission
-)
 
 type status int
 
@@ -69,7 +61,7 @@ var (
 	checkCancel = (*Ticket).cancelRequested
 )
 
-// Ticket is one request waiting in the queue (or, in token-only mode, waiting for tokens). Its
+// Ticket is one request waiting in the queue. Its
 // methods are safe for concurrent use: Steps are serialized, and Withdraw never waits for one.
 type Ticket struct {
 	e   *Engine
@@ -87,8 +79,7 @@ type Ticket struct {
 	name string
 
 	// Everything below is guarded by stepMu.
-	mode mode
-	key  state.Key
+	key state.Key
 
 	lastRefreshMono time.Duration
 	lastRefreshReal int64
@@ -113,23 +104,16 @@ func newTicket(e *Engine, req spec.Request) *Ticket {
 		last: Waiting{Position: 1}}
 }
 
-// ID is the ticket's id, what a cancel request names; the zero ID in token-only mode.
+// ID is the ticket's id, what a cancel request names.
 func (t *Ticket) ID() wire.ID {
 	_, id := t.ownName()
 	return id
 }
 
-// Name is the ticket's file name in queue/; empty in token-only mode.
+// Name is the ticket's file name in queue/.
 func (t *Ticket) Name() string {
 	name, _ := t.ownName()
 	return name
-}
-
-// TokenOnly reports whether the ticket waits in token-only mode.
-func (t *Ticket) TokenOnly() bool {
-	t.stepMu.Lock()
-	defer t.stepMu.Unlock()
-	return t.mode == modeTokenOnly
 }
 
 // Step is one iteration of waiting (PROTOCOL.md section 10): refresh the ticket when due (and
@@ -156,7 +140,7 @@ func (t *Ticket) Poll() (StepResult, error) {
 }
 
 // Due is how long from now until the ticket next has work due: the next election or head
-// attempt (token-only: the next attempt) or the next refresh, whichever is first; 0 when it is
+// attempt or the next refresh, whichever is first; 0 when it is
 // due now or the ticket is settled. A caller that Steps after Due checks cancel/ on each of
 // those Steps, so a waiter that is not the head does all of its work once per second: refresh,
 // cancel check, gen read and election.
@@ -166,10 +150,7 @@ func (t *Ticket) Due() time.Duration {
 	if _, done, _ := t.settled(); done {
 		return 0
 	}
-	next := t.nextElection
-	if t.mode == modeQueued {
-		next = min(next, t.lastRefreshMono+RefreshEvery/2)
-	}
+	next := min(t.nextElection, t.lastRefreshMono+RefreshEvery/2)
 	return max(0, next-t.e.clock.Monotonic())
 }
 
@@ -228,10 +209,6 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		return r, err
 	}
 	now := t.e.clock.Monotonic()
-	if t.mode == modeTokenOnly {
-		return t.stepTokenOnly(ctx, single, now)
-	}
-
 	if now-t.lastRefreshMono >= RefreshEvery/2 {
 		if err := t.refresh(now); err != nil {
 			return t.settledOr(err)
@@ -239,9 +216,6 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		if t.needBump {
 			if err := t.resumeBump(); err != nil {
 				return t.settledOr(err)
-			}
-			if t.mode == modeTokenOnly {
-				return t.last, nil
 			}
 		}
 	}
@@ -285,9 +259,6 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	}
 	if g != nil {
 		return Admitted{g}, nil
-	}
-	if t.mode == modeTokenOnly {
-		return t.last, nil // the format changed under the ticket: token-only from the next Step
 	}
 	if !head {
 		return t.last, nil
@@ -350,13 +321,12 @@ func (t *Ticket) resumeBump() error {
 		return err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Prepare(t.e.clock.Realtime())
+	n, understood, err := sec.Prepare(t.e.clock.Realtime())
 	if err != nil {
 		return err
 	}
 	if !understood {
-		t.toTokenOnly()
-		return nil
+		return refuseFormat(n, "")
 	}
 	if err := sec.BumpGen(); err != nil {
 		return err
@@ -544,9 +514,6 @@ func (t *Ticket) ticketBody(name string) (need map[string]spec.Range, malformed 
 func (t *Ticket) Holders() ([]HolderInfo, error) {
 	t.stepMu.Lock()
 	defer t.stepMu.Unlock()
-	if t.mode == modeTokenOnly {
-		return nil, nil
-	}
 	holds, _, err := t.e.st.List(store.HoldsDir)
 	if err != nil {
 		return nil, err

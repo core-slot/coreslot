@@ -621,23 +621,17 @@ func layout(t *testing.T, e Env) map[string]string {
 }
 
 // FORMAT 2, a format this client does not implement, is written while one run holds and two
-// wait. The waiters switch to token-only mode as they next enter the section: the head
-// withdraws (its ticket is dead) and the one behind it takes its token outside the queue. A run
-// that arrives afterwards never queues. Locked tokens never exceed the size, and the token-only
-// clients write nothing: no ticket, hold, gen bump, admit.lock body, degraded record or run-log
-// line. The format-1 holder's release, whose section finds FORMAT 2, leaves its hold in place
-// rather than removing it under a format it does not implement, and the holder writes no
-// run-log line either: it re-reads FORMAT just before the append (PROTOCOL.md section 20). The
-// run log never comes to exist.
+// wait. The waiters find it as they next enter the section and fail open: their commands run
+// unbudgeted, holding no token. A run that arrives afterwards does the same without queueing.
+// Locked tokens never exceed the size, and nobody writes anything: no ticket, hold, gen bump,
+// admit.lock body, degraded record or run-log line. The format-1 holder's release, whose section
+// finds FORMAT 2, leaves its hold in place rather than removing it under a format it does not
+// implement, and the holder writes no run-log line either: it re-reads FORMAT just before the
+// append (PROTOCOL.md section 20). The run log never comes to exist.
 //
-// Mutation: a token-only run appends its run-log line (runChild given the store's log for a
-// token-only grant): lines for W1, W2 and N appear.
 // Mutation: skip the re-read of FORMAT before the append (appendRunLog appends after the
 // rotation check alone): H's line appears.
-// Mutation: token-only admission is not bounded by the size (tokenOnlyAttempt skips the free
-// check and takes at indices up to the size plus 4): W1 takes indices 3 and 4 while H and W2
-// hold the other three, and the sampler sees 5 locked under a size of 3.
-func TestUnknownFormatTokenOnly(t *testing.T) {
+func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(3))
 	h := e.Run("H", "--mem", "256M")
@@ -664,55 +658,32 @@ func TestUnknownFormatTokenOnly(t *testing.T) {
 	}
 	s.ExitCode(0)
 
-	// W2 runs, token-only, on the free token; W1 (needing two) waits token-only, its ticket dead.
-	r2 := e.WaitStarted("W2")
-	if r2.Env["CORESLOT_UNBUDGETED"] != "format" || r2.Env["CORESLOT_GRANTED_MEM"] != "128" ||
-		r2.Env["CORESLOT_HELD_FD"] != "" || !slices.Contains([]string{"4", "4-4"}, r2.Env["CORESLOT_TOKEN_FDS"]) {
-		t.Errorf("token-only command environment %v", r2.Env)
-	}
-	if _, ok := r2.FDs[3]; ok {
-		t.Errorf("the token-only command has fd 3 open: %v", r2.FDs)
-	}
-	if got := stableLocked(e); got != 3 {
-		t.Errorf("%d tokens locked, want 3 (H's two and W2's one)", got)
-	}
-	e.Eventually(startWait, "W1's ticket is dead", func() bool {
-		tk, ok := e.Ticket("W1")
-		return ok && tk.Dead
-	})
-
-	// A run arriving under FORMAT 2 waits token-only, outside the queue.
 	n := e.Run("N", "--mem", "128M")
-	time.Sleep(observeWait)
+	for name, want := range map[string]string{"W1": "256", "W2": "128", "N": "128"} {
+		r := e.WaitStarted(name)
+		if r.Env["CORESLOT_UNBUDGETED"] == "" || r.Env["CORESLOT_GRANTED_MEM"] != want || r.Env["CORESLOT_HELD_FD"] != "" {
+			t.Errorf("%s's command environment %v", name, r.Env)
+		}
+		if _, ok := r.FDs[3]; ok {
+			t.Errorf("%s's command has fd 3 open: %v", name, r.FDs)
+		}
+	}
 	if _, ok := e.Ticket("N"); ok {
 		t.Error("N published a ticket under FORMAT 2")
 	}
-	for _, name := range []string{"W1", "N"} {
-		if _, ok := e.Started(name); ok {
-			t.Errorf("%s ran with no token free", name)
-		}
+	if got := stableLocked(e); got != 2 {
+		t.Errorf("%d tokens locked, want 2 (H's)", got)
 	}
-
-	// H finishes and W2 too: W1 and N, both token-only, take what frees up.
-	e.ReleaseChild("H")
-	h.ExitCode(0)
-	e.ReleaseChild("W2")
-	w2.ExitCode(0)
-	r1 := e.WaitStarted("W1")
-	rn := e.WaitStarted("N")
-	for name, r := range map[string]ChildReport{"W1": r1, "N": rn} {
-		if r.Env["CORESLOT_UNBUDGETED"] != "format" {
-			t.Errorf("%s's command environment %v", name, r.Env)
-		}
+	for _, name := range []string{"H", "W1", "W2", "N"} {
+		e.ReleaseChild(name)
 	}
-	e.ReleaseChild("W1")
-	e.ReleaseChild("N")
-	w1.ExitCode(0)
-	n.ExitCode(0)
-	sampler.check(t, 20)
+	for _, p := range []*Proc{h, w1, w2, n} {
+		p.ExitCode(0)
+	}
+	sampler.check(t, 5)
 	for _, p := range []*Proc{w1, w2, n} {
-		if !strings.Contains(p.Stderr(), "token-only") {
-			t.Errorf("%s printed no token-only diagnostic: %q", p.name, p.Stderr())
+		if !strings.Contains(p.Stderr(), "format 2") {
+			t.Errorf("%s did not name format 2: %q", p.name, p.Stderr())
 		}
 	}
 

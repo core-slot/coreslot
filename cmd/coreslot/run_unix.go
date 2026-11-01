@@ -122,13 +122,13 @@ func (r *run) ordinary() int {
 		return code
 	}
 	if err != nil {
-		return r.notAdmitted(e, t, err)
+		return r.notAdmitted(e, err)
 	}
 	return r.admitted(e, g)
 }
 
 // notAdmitted handles a wait that ended without a grant.
-func (r *run) notAdmitted(e *engine.Engine, t *engine.Ticket, err error) int {
+func (r *run) notAdmitted(e *engine.Engine, err error) int {
 	switch {
 	case errors.Is(err, engine.ErrCanceled):
 		return r.refuse("the request was cancelled")
@@ -137,7 +137,7 @@ func (r *run) notAdmitted(e *engine.Engine, t *engine.Ticket, err error) int {
 		return r.o.refusalCode
 	case errors.Is(err, context.DeadlineExceeded):
 		if r.o.onTimeout == "run" {
-			return r.timeoutRun(e, t)
+			return r.timeoutRun(e)
 		}
 		return r.refuse("not admitted within %v (--timeout); refusing", r.o.timeout)
 	}

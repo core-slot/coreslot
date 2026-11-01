@@ -45,13 +45,6 @@ func setLiveMem(t *testing.T, headroomMiB, useKiB int64) *int {
 const staticCfg = "[resources]\nmem = \"1G\"\n"       // 8 mem tokens
 const liveCfg = staticCfg + "[memory]\nlive = true\n" // the live size is off unless turned on
 
-// treeNeed is a request for spec whose hold claims this process's tree.
-func treeNeed(spec string) spec.Request {
-	r := need(spec)
-	r.Tree = true
-	return r
-}
-
 // A fixed mem need above what the static size leaves free is admitted from the headroom: 4096
 // MiB less A's unmeasured 1 GiB is 24 tokens on top of A's 8. Mutation: attemptSizes returning
 // sizes unchanged, and B waits.

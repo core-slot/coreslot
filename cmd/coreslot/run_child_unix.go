@@ -32,18 +32,13 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		}
 		r.notice("%s: requested %s, budget is %s; running alone with %s", name, amount(name, g.Clamped()[name]), n, n)
 	}
-	if g.TokenOnly() {
-		r.notice("the state directory's format is not implemented here; running in token-only mode, outside the queue")
-	}
 	c := child{
 		env:     append(slices.Clone(r.env), g.Env()...),
 		files:   g.Files(),
 		grant:   g.Grant(),
 		clamped: slices.Sorted(maps.Keys(g.Clamped())),
 		release: g.Close,
-	}
-	if !g.TokenOnly() {
-		c.log = e.Store() // FORMAT was understood in the admitting section
+		log:     e.Store(), // FORMAT was understood in the admitting section
 	}
 	return r.runChild(c)
 }

@@ -30,9 +30,7 @@ type TicketInfo struct {
 	CreatedNS int64
 	MtimeNS   int64 // the last refresh, as a value; never compare it with a clock
 	// Dead: the ticket's lock probe succeeded, so nobody holds its descriptor: its owner exited,
-	// withdrew, or switched to token-only mode under a format it does not implement, in which
-	// case it still runs but writes nothing, not even the removal of this file (PROTOCOL.md
-	// section 15.2). Dead says nothing about the owner process.
+	// withdrew. Dead says nothing about the owner process.
 	Dead bool
 }
 

@@ -6,7 +6,7 @@ import (
 )
 
 // ChildEnv is the one builder of a command's CORESLOT_* environment (PROTOCOL.md section 17): an
-// admitted grant, a token-only grant, a fail-open grant with and without its hold, a timeout
+// admitted grant, a fail-open grant with and without its hold, a timeout
 // run, a pass-through's narrowed grant and a Windows run all get their variables from it, so
 // each case pins the bytes those callers produced before they shared it. Mutation: sorting by
 // environment form instead of resource name reddens "resource-name order"; dropping the case of a
@@ -30,8 +30,6 @@ func TestChildEnv(t *testing.T) {
 			want: "CORESLOT_GRANTED_DB=3 CORESLOT_GRANTED_PG_LOCAL=1 CORESLOT_HELD_FD=3 CORESLOT_TOKEN_FDS=4-7"},
 		{name: "one token", granted: map[string]int{"db": 1}, held: true, tokens: 1,
 			want: "CORESLOT_GRANTED_DB=1 CORESLOT_HELD_FD=3 CORESLOT_TOKEN_FDS=4"},
-		{name: "token-only", granted: map[string]int{"db": 2}, tokens: 2, unbudgeted: "format",
-			want: "CORESLOT_GRANTED_DB=2 CORESLOT_TOKEN_FDS=4-5 CORESLOT_UNBUDGETED=format"},
 		{name: "fail-open with its hold", granted: map[string]int{"db": 2, "gpu": 1}, held: true, unbudgeted: "state dir gone",
 			want: "CORESLOT_GRANTED_DB=2 CORESLOT_GRANTED_GPU=1 CORESLOT_HELD_FD=3 CORESLOT_UNBUDGETED=state dir gone"},
 		{name: "fail-open without a hold", granted: map[string]int{"db": 2}, unbudgeted: "timeout",

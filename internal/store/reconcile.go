@@ -181,7 +181,7 @@ func removeIfDead(path string) (removed, gone bool, err error) {
 // their grammar, and stray entries of queue/, holds/ and cancel/ that fail the section 4.2
 // checks, are left alone; a stray temporary file in the state directory itself is a *StateError.
 // The caller is inside the section and reconciles before its own
-// change; admission and token-only admission never call it.
+// change; admission never calls it.
 func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	if err := sec.live(); err != nil {
 		return 0, err

@@ -22,14 +22,11 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
-// The kill-storm: randomized CLI clients, some of them nested runs and some token-only, queue
-// for mem while the storm kills them with SIGKILL, stops and continues them, cancels them, and
+// The kill-storm: randomized CLI clients, some of them nested runs, queue for mem while the storm kills them with SIGKILL, stops and continues them, cancels them, and
 // shrinks and grows the sizes through the configuration. A sampler checks I1, I2, I3 and I7
 // throughout. Each client runs with its headroom pinned through the test hook, so that the
 // clients size mem from it when the static size falls short; I3 then bounds mem by the
@@ -81,7 +78,7 @@ func stormRequest(label string) (map[string]spec.Range, bool) {
 	return map[string]spec.Range{"mem": {Min: lo, Max: hi}}, true
 }
 
-// ---------------------------------------------------------------- token-only runs
+// ---------------------------------------------------------------- reports
 
 // readReport reads the report of the command named name, without failing the test: it is
 // called off the test goroutine.
@@ -97,110 +94,11 @@ func readReport(markDir, name string) (ChildReport, bool) {
 	return r, true
 }
 
-// tokenOnlyRun is a token-only run the test started: it publishes nothing. The run is known to
-// be admitted once the CLI prints its token-only admission notice on stderr, or once its
-// command creates NAME.begun in the marker directory as its very first action; the command
-// then reports the descriptors it inherited in NAME.started.
-type tokenOnlyRun struct {
-	name   string
-	stderr string // the run's stderr file, "" when there is none
-	need   map[string]spec.Range
-	start  time.Time                                 // taken before the run's process started
-	alive  func(rep ChildReport, reported bool) bool // the run, or its reported command, lives
-}
-
-// tokenOnlyRuns are the token-only runs of one state directory, for the sampler's TokenOnly.
-type tokenOnlyRuns struct {
-	markDir string
-
-	mu   sync.Mutex
-	runs []*tokenOnlyRun
-}
-
-func (r *tokenOnlyRuns) add(name, stderr string, need map[string]spec.Range, start time.Time,
-	alive func(ChildReport, bool) bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.runs = append(r.runs, &tokenOnlyRun{name: name, stderr: stderr, need: need, start: start, alive: alive})
-}
-
-// tokenOnlyAdmitted is the notice the CLI prints once it is admitted token-only, before it
-// starts its command. A waiting token-only run prints another line ("waiting for …: token-only
-// mode, …"), which never contains this one.
-const tokenOnlyAdmitted = "running in token-only mode, outside the queue"
-
-// admitted reports whether run was admitted: its command wrote the start marker, or the CLI
-// printed its token-only admission notice, which comes earlier (before the command starts).
-func (r *tokenOnlyRuns) admitted(run *tokenOnlyRun) bool {
-	if _, err := os.Stat(begunPath(r.markDir, run.name)); err == nil {
-		return true
-	}
-	if run.stderr == "" {
-		return false
-	}
-	data, err := os.ReadFile(run.stderr)
-	return err == nil && strings.Contains(string(data), tokenOnlyAdmitted)
-}
-
-// begunPath is the start marker of the token-only command named name.
-func begunPath(markDir, name string) string { return filepath.Join(markDir, name+".begun") }
-
-// grants is the sampler's TokenOnly: the inodes the live runs' commands reported, and the
-// minimums of the live runs that were admitted (admitted reports it) and have not reported.
-// A run still waiting has neither.
-func (r *tokenOnlyRuns) grants() TokenOnly {
-	r.mu.Lock()
-	runs := slices.Clone(r.runs)
-	r.mu.Unlock()
-	out := TokenOnly{Inodes: map[[2]uint64]time.Time{}}
-	for _, run := range runs {
-		rep, reported := readReport(r.markDir, run.name)
-		if !run.alive(rep, reported) {
-			continue
-		}
-		if reported {
-			for fd, id := range rep.FDs {
-				if fd >= 3 {
-					out.Inodes[id] = run.start
-				}
-			}
-			continue
-		}
-		if !r.admitted(run) {
-			continue // waiting: no grant
-		}
-		mins := map[string]int{}
-		for res, rg := range run.need {
-			mins[res] = rg.Min
-		}
-		out.Admitted = append(out.Admitted, mins)
-	}
-	return out
-}
-
-// reportLatency is the longest time, over the runs that reported, from a command's start
-// marker to its report.
-func (r *tokenOnlyRuns) reportLatency() (longest time.Duration, runs int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, run := range r.runs {
-		b, err1 := os.Stat(begunPath(r.markDir, run.name))
-		s, err2 := os.Stat(filepath.Join(r.markDir, run.name+".started"))
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		runs++
-		longest = max(longest, s.ModTime().Sub(b.ModTime()))
-	}
-	return longest, runs
-}
-
 // ---------------------------------------------------------------- the storm
 
 type stormClient struct {
 	id          int
-	kind        string // cli or tok; nested runs are "<outer>-<inner>", like cli-go
-	outer       string // cli or tok
+	kind        string // cli, or cli-go for a nested run
 	inner       string // "" or go: the nested run
 	name        string // the label, and the marker name of its command
 	need        map[string]spec.Range
@@ -231,7 +129,6 @@ type storm struct {
 	seed    uint64
 	short   bool
 	started time.Time
-	tok     *tokenOnlyRuns
 	shrunk  chan struct{} // closed after the first shrink, or when the storm ends without it
 
 	mu      sync.Mutex
@@ -265,9 +162,8 @@ func (st *storm) victimID() int {
 
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
 // not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
-// one admission of each kind (CLI, CLI, a CLI run with a nested run, token-only), each
-// holding mem until the first shrink: 1 token each, but 6 for the two CLI runs, so the
-// first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
+// four CLI admissions, the third with a nested run, each holding mem until the first shrink:
+// 1 token each, but 6 for the first and the third, so the first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
 // the one victimID picks, which is killed while it holds. The memFlood clients after them are
 // CLI runs of 8 mem tokens and nothing else, each holding for a second, which arrive while the
 // first wave holds and find nothing ahead of them: a live size admits one beside the first wave's 14 and
@@ -277,17 +173,15 @@ func (st *storm) victimID() int {
 func (st *storm) plan(id int) *stormClient {
 	r := rand.New(rand.NewPCG(st.seed, uint64(id)))
 	c := &stormClient{id: id, need: map[string]spec.Range{}}
-	outers := []string{"cli", "cli", "cli", "cli", "cli", "cli", "tok"}
-	c.outer = outers[r.IntN(len(outers))]
-	if c.outer != "tok" && r.IntN(6) == 0 {
+	if r.IntN(6) == 0 {
 		c.inner = "go"
 	}
 	// A mem need is fixed (min = max), as the CLI takes one size, and a client without one asks
 	// for the default of one token.
-	if n := 1 + r.IntN(8); c.outer == "tok" || r.IntN(8) != 0 {
+	if n := 1 + r.IntN(8); r.IntN(8) != 0 {
 		c.need["mem"] = spec.Range{Min: n, Max: n}
 	}
-	if c.outer != "tok" && r.IntN(5) == 0 {
+	if r.IntN(5) == 0 {
 		c.timeout = time.Second + time.Duration(r.IntN(5000))*time.Millisecond
 	}
 	switch x := r.IntN(100); {
@@ -302,9 +196,6 @@ func (st *storm) plan(id int) *stormClient {
 	default:
 		c.fate = "cancel"
 	}
-	if c.outer == "tok" && (c.fate == "stop" || c.fate == "cancel") {
-		c.fate = "release" // a token-only run has no ticket, and stopping it proves nothing more
-	}
 	c.at = time.Duration(r.IntN(4000)) * time.Millisecond
 	c.stopFor = 100*time.Millisecond + time.Duration(r.IntN(2900))*time.Millisecond
 	if !st.short && r.IntN(12) == 0 {
@@ -313,7 +204,6 @@ func (st *storm) plan(id int) *stormClient {
 	c.hold = 50*time.Millisecond + time.Duration(r.IntN(1950))*time.Millisecond
 
 	if id <= firstWave {
-		c.outer = []string{"cli", "cli", "cli", "tok"}[id-1]
 		c.inner = ""
 		if id == 3 {
 			c.inner = "go"
@@ -328,14 +218,14 @@ func (st *storm) plan(id int) *stormClient {
 		}
 	}
 	if id > firstWave && id <= firstWave+memFlood {
-		c.outer, c.inner = "cli", ""
+		c.inner = ""
 		c.need = map[string]spec.Range{"mem": {Min: 8, Max: 8}}
 		c.timeout, c.fate, c.hold = 0, "release", time.Second
 	}
 	if id == firstWave+memFlood+1 {
 		c.fate, c.at, c.stopFor = "stop", 500*time.Millisecond, 1500*time.Millisecond
 	}
-	c.kind = c.outer
+	c.kind = "cli"
 	if c.inner != "" {
 		c.kind += "-" + c.inner
 	}
@@ -359,19 +249,11 @@ func (st *storm) argv(c *stormClient) []string {
 
 func (st *storm) clientArgv(c *stormClient) []string {
 	leaf := []string{bins.child, "hold", st.e.MarkDir, c.name}
-	if c.outer == "tok" {
-		// The start marker first, then the command that reports its descriptors.
-		leaf = append([]string{"/bin/sh", "-c", `: > "$0" && exec "$@"`, begunPath(st.e.MarkDir, c.name)}, leaf...)
-	}
 	cmd := leaf
 	if c.inner == "go" {
 		cmd = append([]string{bins.coreslot, "run", "--mem", "128M", "--"}, leaf...)
 	}
 	a := []string{bins.coreslot, "run", "--label", c.name}
-	if c.outer == "tok" {
-		// A client implementing only format 2 finds format 1 and runs token-only.
-		a = append([]string{"CORESLOT_TESTHOOK_FORMATS=2"}, a...)
-	}
 	if c.timeout > 0 {
 		a = append(a, "--timeout", c.timeout.String())
 	}
@@ -437,17 +319,11 @@ func (st *storm) life(ctx context.Context, c *stormClient) {
 	st.mu.Lock()
 	st.labels[c.name] = maps.Clone(c.need)
 	st.mu.Unlock()
-	start := time.Now()
 	c.proc = st.e.StartCommand(st.argv(c)...)
 	c.proc.name = c.name
 	st.mu.Lock()
 	st.live[c] = true
 	st.mu.Unlock()
-	if c.outer == "tok" {
-		st.tok.add(c.name, c.proc.stderr.Name(), c.need, start, func(rep ChildReport, reported bool) bool {
-			return !c.proc.Exited() || (reported && pidAlive(rep.PID))
-		})
-	}
 	st.count("client " + c.kind)
 	defer st.finish(c)
 
@@ -554,8 +430,7 @@ func (st *storm) cancel(ctx context.Context, c *stormClient) {
 }
 
 // cancelledMessage is what a client prints on stderr when a cancel request ended its wait: the
-// evidence, besides the refusal code, that the cancel acted. Token-only clients are never queued
-// and have none.
+// evidence, besides the refusal code, that the cancel acted.
 const cancelledMessage = "coreslot: the request was cancelled"
 
 // canceller cancels one client while it is seen queued: it picks a live CLI
@@ -576,9 +451,8 @@ func (st *storm) canceller(ctx context.Context) {
 		var queued []*stormClient
 		st.mu.Lock()
 		for c := range st.live {
-			// A client with a timeout could exit with the refusal code on its own, and a
-			// token-only one has no ticket.
-			if c.outer == "tok" || c.timeout > 0 || c.stopped.Load() || c.cancelled.Load() || c.proc.Exited() ||
+			// A client with a timeout could exit with the refusal code on its own.
+			if c.timeout > 0 || c.stopped.Load() || c.cancelled.Load() || c.proc.Exited() ||
 				st.holding(c) {
 				continue
 			}
@@ -652,7 +526,7 @@ func (st *storm) finish(c *stormClient) {
 	c.proc.stdout.Close()
 	c.proc.stderr.Close()
 	if res.admitted {
-		st.count("admitted " + c.outer)
+		st.count("admitted cli")
 		if c.inner != "" {
 			st.count("admitted nested")
 		}
@@ -733,11 +607,6 @@ func (st *storm) sizer(ctx context.Context) {
 	}
 }
 
-func pidAlive(pid int) bool {
-	err := unix.Kill(pid, 0)
-	return err == nil || errors.Is(err, unix.EPERM)
-}
-
 func (st *storm) request(label string) (map[string]spec.Range, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -795,7 +664,7 @@ func TestKillStorm(t *testing.T) {
 	}
 	e := State(t)
 	st := &storm{t: t, e: e, seed: seed, short: testing.Short(),
-		tok: &tokenOnlyRuns{markDir: e.MarkDir}, shrunk: make(chan struct{}),
+		shrunk: make(chan struct{}),
 		labels: map[string]map[string]spec.Range{}, live: map[*stormClient]bool{}, counts: map[string]int{}}
 	banner := fmt.Sprintf("kill-storm seed %d (%s=%d replays the schedule; -short=%v), %d clients for %v; load: %s",
 		seed, stormSeedEnv, seed, testing.Short(), clients, dur, uptime())
@@ -810,7 +679,6 @@ func TestKillStorm(t *testing.T) {
 	sizes := map[string]int{"mem": stormMemMin}
 	st.s = NewSampler(t, e, sizes, map[string]int{"mem": stormHeadroomMiB / spec.MemTokenMiB})
 	st.s.Request = st.request
-	st.s.TokenOnly = st.tok.grants
 
 	sctx, stopSampler := context.WithCancel(context.Background())
 	sampled := make(chan struct{})
@@ -912,9 +780,9 @@ func TestKillStorm(t *testing.T) {
 
 	codes := map[string]int{}
 	for _, r := range st.results {
-		key := fmt.Sprintf("%s exit %d", r.c.outer, r.code)
+		key := fmt.Sprintf("%s exit %d", r.c.kind, r.code)
 		if r.c.killed {
-			key = r.c.outer + " killed"
+			key = r.c.kind + " killed"
 		}
 		codes[key]++
 		refusalExpected := r.c.fate == "cancel" || r.c.timeout > 0 || r.c.cancelled.Load()
@@ -935,30 +803,12 @@ func TestKillStorm(t *testing.T) {
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	latency, reportedRuns := st.tok.reportLatency()
-	reportAge := st.s.TokenOnlyReportAge()
 	summary := fmt.Sprintf("kill-storm seed %d: %d clients in %v, %d samples (%d missed), %d violations; "+
-		"token-only marker-to-report latency max %v over %d runs, unlisted-to-report age max %v (bound %v); "+
 		"holder killed: %s; samples above a static size %v; events %v; endings %v; load after: %s",
 		seed, len(st.results), time.Since(st.started).Round(time.Second), samples, missed, len(violations),
-		latency, reportedRuns, reportAge, st.s.TokenOnlyBound, st.victim, st.s.AboveStatic(), st.counts, codes, uptime())
+		st.victim, st.s.AboveStatic(), st.counts, codes, uptime())
 	t.Log(summary)
 	fmt.Fprintln(os.Stderr, summary)
-
-	// The sampler's token-only bound must cover each run's lock-to-report latency: from the
-	// token lock inside the admission section, through the section's end, the CLI's start of
-	// its command and the shell, to the report. The sampler measures it from the first sample
-	// that saw the token unlisted to the one that saw it reported (a confirmed I2 for such a
-	// token is relabeled as this failure above); the marker-to-report part is measured from
-	// the files. Either reaching the bound fails here by name, not as an I2 of the client.
-	if reportAge >= st.s.TokenOnlyBound {
-		t.Errorf("%s: a token-only token was unlisted for %v before its report (bound %v)",
-			tokenOnlyLate, reportAge, st.s.TokenOnlyBound)
-	}
-	if latency >= st.s.TokenOnlyBound {
-		t.Errorf("%s: a token-only command took %v from its start marker to its report (bound %v)",
-			tokenOnlyLate, latency, st.s.TokenOnlyBound)
-	}
 
 	// The run exercised what it is for: floors on what happened, scaled for -short. The first
 	// shrink is deterministic (mem 4 to 2 while the first wave holds 4), so the floor on a
@@ -976,7 +826,7 @@ func TestKillStorm(t *testing.T) {
 	if admitted < minAdmitted {
 		t.Errorf("%d admissions, want at least %d", admitted, minAdmitted)
 	}
-	floors := []string{"admitted cli", "admitted tok", "admitted nested", "SIGKILL of a holder",
+	floors := []string{"admitted cli", "admitted nested", "SIGKILL of a holder",
 		"SIGSTOP", "cancel took effect", "shrink below the locked count", "growth"}
 	floorFailed := false
 	for _, what := range floors {

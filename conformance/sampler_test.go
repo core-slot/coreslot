@@ -4,7 +4,6 @@ package conformance
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,8 +29,7 @@ import (
 // I7 is reported only when the same violation is found by two samples at least sampleGap
 // apart: releases happen outside the section, and so do probes (a probe's momentary lock makes
 // a free token look locked). I2 is checked as follows: every locked token must
-// be listed by a live hold, or be inside a token-only grant the test itself started, or be
-// released by the next sample; a token locked and listed by no live hold in two consecutive
+// be listed by a live hold or be released by the next sample; a token locked and listed by no live hold in two consecutive
 // samples is reported. The sampler owns the configuration: Resize rewrites it inside the
 // section, so that every admission is linearized before or after the size change and the I3
 // bound can follow it. Because Resize writes the configuration inside the section, a client
@@ -53,22 +50,11 @@ func (k Token) String() string { return fmt.Sprintf("%s/%d", k.Res, k.Idx) }
 
 // Violation is one invariant violation found by two consecutive samples.
 type Violation struct {
-	Invariant string // I1, I2, I3, I7, "fail-open" for an unbudgeted hold, or tokenOnlyLate
+	Invariant string // I1, I2, I3, I7, or "fail-open" for an unbudgeted hold
 	Key       string // the identity compared between samples
 	Msg       string
 	At        time.Time
-
-	unlisted *Token // for "I2 unlisted <token>": the token
-	ageOnly  bool   // that I2 was found only because the token outlived TokenOnlyBound
 }
-
-// tokenOnlyLate relabels a confirmed "I2 unlisted" violation that is the oracle's own failure:
-// the I2 was confirmed only because the token outlived TokenOnlyBound while an admitted,
-// unreported token-only run could hold it, and a token-only command started no later than
-// the token was first seen unlisted reported it afterwards, while it stayed unlisted. The
-// bound was too short for that run's lock-to-report latency; the client did nothing wrong. Any
-// other confirmed I2 keeps its label, even when some later run reports the token.
-const tokenOnlyLate = "token-only start latency exceeded the bound"
 
 func (v Violation) String() string {
 	return fmt.Sprintf("%s at %s: %s", v.Invariant, v.At.Format("15:04:05.000"), v.Msg)
@@ -90,32 +76,8 @@ type observation struct {
 	malformed   []string // live holds whose body does not decode
 }
 
-// TokenOnly is what the test knows, at one sample, of the token-only runs it started: they
-// publish nothing, so no hold lists their tokens.
-type TokenOnly struct {
-	// Inodes are the token files that live token-only commands reported among their
-	// descriptors, each with the time the reporting run started: those tokens are accounted
-	// for.
-	Inodes map[[2]uint64]time.Time
-	// Admitted lists, for each live token-only run that has been admitted (the CLI printed its
-	// token-only admission notice, or its command started) and whose command has not reported its descriptors yet, the minimum of each
-	// resource it requested. A waiting run is not here: it has no grant. The minimum is the
-	// requested one, an upper bound on what the run took (min(min, size at its admission)):
-	// the test does not know the size its run saw.
-	Admitted []map[string]int
-}
-
-// DefaultTokenOnlyBound is the default of Sampler.TokenOnlyBound.
-const DefaultTokenOnlyBound = 2 * time.Second
-
 // Sampler samples one state directory. Its methods are safe for concurrent use.
 type Sampler struct {
-	// TokenOnly returns the token-only runs the test started. Nil means there are none.
-	TokenOnly func() TokenOnly
-	// TokenOnlyBound is how long a locked token listed by no live hold may be put down to an
-	// admitted token-only run whose command has not reported yet: a started command reports
-	// within milliseconds. NewSampler sets DefaultTokenOnlyBound.
-	TokenOnlyBound time.Duration
 	// Request returns the request behind a hold's label, for I7. Holds whose label it does not
 	// know are not checked for I7.
 	Request func(label string) (map[string]spec.Range, bool)
@@ -131,9 +93,6 @@ type Sampler struct {
 	sizes       map[string]int
 	ceiling     map[string]int            // I3 bound: the size, or the locked count a shrink left above it
 	inodes      map[Token][2]uint64       // each token file's inode when the sampler first saw it
-	unlisted    map[Token]time.Time       // since when each locked token is listed by no live hold
-	confirmedAt map[Token]int             // index in violations of each unlisted token's confirmed I2
-	reportAge   time.Duration             // the longest unlisted-to-report age of a token-only token
 	window      map[string]int            // the smallest size in effect since the previous sample
 	admitMin    map[string]map[string]int // per live hold, window when the hold was first seen
 	prev        map[string]Violation      // candidates of the previous sample
@@ -147,16 +106,15 @@ type Sampler struct {
 }
 
 // NewSampler writes the configuration sizes into e's state directory, with the live memory size on
-// when liveBound (the Sampler's LiveBound) is not nil, makes sure FORMAT names format 1 (so that a
-// client implementing another format runs token-only instead of writing its own), and returns a
-// sampler of the directory.
+// when liveBound (the Sampler's LiveBound) is not nil, makes sure FORMAT names format 1 and
+// returns a sampler of the directory.
 func NewSampler(t *testing.T, e Env, sizes map[string]int, liveBound map[string]int) *Sampler {
 	t.Helper()
 	if err := os.MkdirAll(e.Dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := &Sampler{TokenOnlyBound: DefaultTokenOnlyBound, LiveBound: liveBound, dir: e.Dir, scratch: t.TempDir(),
-		inodes: map[Token][2]uint64{}, unlisted: map[Token]time.Time{}, confirmedAt: map[Token]int{}, aboveStatic: map[string]int{}, admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
+	s := &Sampler{LiveBound: liveBound, dir: e.Dir, scratch: t.TempDir(),
+		inodes: map[Token][2]uint64{}, aboveStatic: map[string]int{}, admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
 	var err error
 	if s.st, err = store.Open(e.Dir); err != nil {
 		t.Fatal(err)
@@ -289,12 +247,7 @@ func (s *Sampler) Sample(ctx context.Context) ([]Violation, error) {
 	}
 	slices.SortFunc(confirmed, func(a, b Violation) int { return strings.Compare(a.Key, b.Key) })
 	s.prev = found
-	for _, v := range confirmed {
-		if v.unlisted != nil && v.ageOnly {
-			s.confirmedAt[*v.unlisted] = len(s.violations)
-		}
-		s.violations = append(s.violations, v)
-	}
+	s.violations = append(s.violations, confirmed...)
 	return confirmed, nil
 }
 
@@ -421,77 +374,11 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		}
 	}
 
-	// I2: a locked token is listed by a live hold, or inside a token-only grant of the test.
-	// Tokens a live token-only command reported are accounted for. Beyond them, a token may
-	// be put down to a token-only run only while all of these hold: some run that requested
-	// its resource has been admitted (TokenOnly.Admitted) and has not reported yet; the
-	// token has been unlisted for less than TokenOnlyBound; and the resource has no more such
-	// tokens than those runs' minimums sum to. Every other unlisted token is reported on its
-	// own; tokens over the count are reported together, as the same set in both samples.
-	var tokenOnly TokenOnly
-	if s.TokenOnly != nil {
-		tokenOnly = s.TokenOnly()
-	}
-	allowance := map[string]int{}
-	for _, run := range tokenOnly.Admitted {
-		for r, n := range run {
-			allowance[r] += n
-		}
-	}
-	for k := range s.unlisted {
-		if !obs.locked[k] || len(listed[k]) > 0 {
-			delete(s.unlisted, k)
-			delete(s.confirmedAt, k)
-		}
-	}
-	eligible := map[string][]Token{}
+	// I2: a locked token is listed by a live hold.
 	for k := range obs.locked {
-		if len(listed[k]) > 0 {
-			continue
+		if len(listed[k]) == 0 {
+			add("I2", "I2 unlisted "+k.String(), "token %s is locked and listed by no live hold", k)
 		}
-		if runStart, reported := tokenOnly.Inodes[obs.inodes[k]]; reported {
-			// A token-only command reported it. When the token was first seen unlisted no
-			// earlier than that run started, the time it was unlisted until now bounds the
-			// run's lock-to-report latency, and an I2 confirmed for it only by the age bound
-			// was that latency exceeding the bound. A token unlisted before the run existed
-			// is not the run's. Its unlisted time ends here, so a later run that takes the
-			// token over starts its own.
-			if since, seen := s.unlisted[k]; seen && !since.Before(runStart) {
-				s.reportAge = max(s.reportAge, obs.at.Sub(since))
-				if i, ok := s.confirmedAt[k]; ok {
-					v := &s.violations[i]
-					v.Invariant = tokenOnlyLate
-					v.Msg = fmt.Sprintf("%s: token %s was unlisted for %v before a token-only command reported it "+
-						"(bound %v)", tokenOnlyLate, k, obs.at.Sub(since).Round(time.Millisecond), s.TokenOnlyBound)
-				}
-			}
-			delete(s.unlisted, k)
-			delete(s.confirmedAt, k)
-			continue
-		}
-		since, seen := s.unlisted[k]
-		if !seen {
-			since = obs.at
-			s.unlisted[k] = since
-		}
-		if allowance[k.Res] > 0 && obs.at.Sub(since) < s.TokenOnlyBound {
-			eligible[k.Res] = append(eligible[k.Res], k)
-			continue
-		}
-		add("I2", "I2 unlisted "+k.String(), "token %s is locked and listed by no live hold", k)
-		tok := k
-		v := found["I2 unlisted "+k.String()]
-		v.unlisted = &tok
-		v.ageOnly = allowance[k.Res] > 0 && obs.at.Sub(since) >= s.TokenOnlyBound
-		found["I2 unlisted "+k.String()] = v
-	}
-	for r, ks := range eligible {
-		if len(ks) <= allowance[r] {
-			continue
-		}
-		slices.SortFunc(ks, func(a, b Token) int { return a.Idx - b.Idx })
-		add("I2", fmt.Sprintf("I2 unlisted %s %v", r, ks), "%d tokens of %s are locked and listed by no live "+
-			"hold (%v), more than the %d the admitted, unreported token-only runs take", len(ks), r, ks, allowance[r])
 	}
 
 	// I3: the locked count of a resource, at every index, stays within the bound, or within
@@ -567,14 +454,6 @@ func (s *Sampler) AboveStatic() map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return maps.Clone(s.aboveStatic)
-}
-
-// TokenOnlyReportAge returns the longest time a token stayed unlisted, as the sampler saw it,
-// before a token-only command reported it: a bound on the runs' lock-to-report latency.
-func (s *Sampler) TokenOnlyReportAge() time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.reportAge
 }
 
 // Leftovers returns, from one observation inside the section, the locked tokens and the live
@@ -692,44 +571,10 @@ func inSection(t *testing.T, e Env, build func(*store.Section) *store.TokenSet) 
 	return ts
 }
 
-// begin writes the start marker of the token-only command named name: its run is admitted.
-func begin(t *testing.T, e Env, name string) {
-	t.Helper()
-	if err := os.WriteFile(begunPath(e.MarkDir, name), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// report writes the report of the token-only command named name, listing the tokens ks among
-// its descriptors from fd 4 on.
-func report(t *testing.T, e Env, name string, ks ...Token) {
-	t.Helper()
-	r := ChildReport{PID: os.Getpid(), FDs: map[int][2]uint64{}}
-	for i, k := range ks {
-		var st unix.Stat_t
-		if err := unix.Stat(filepath.Join(e.Dir, store.ResDir, k.Res, fmt.Sprint(k.Idx)), &st); err != nil {
-			t.Fatal(err)
-		}
-		r.FDs[4+i] = [2]uint64{uint64(st.Dev), uint64(st.Ino)}
-	}
-	data, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(e.MarkDir, name+".started")
-	if err := os.WriteFile(path+".partial", data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(path+".partial", path); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestSamplerCatchesAViolation passes the sampler a valid history of real runs, then builds
 // real violations of I1, I2, I3 and I7, a fail-open hold and a malformed one in the state
 // directory and checks that the sampler reports each one, and only it, once two samples saw
-// it; a momentary one, locks a shrink left above the size and the tokens of an unreported
-// token-only run are not reported.
+// it; a momentary one and the locks a shrink left above the size are not reported.
 func TestSamplerCatchesAViolation(t *testing.T) {
 	e := State(t)
 	s := NewSampler(t, e, map[string]int{"mem": 4}, nil)
@@ -809,179 +654,6 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		if got := sample(); len(got) != 0 {
 			t.Errorf("the sample after mem/2 was released reported %v", got)
 		}
-	})
-	t.Run("a waiting token-only run exempts nothing (I2)", func(t *testing.T) {
-		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("tw.tok.m1_1", "", map[string]spec.Range{"mem": {Min: 1, Max: 1}}, time.Now(),
-			func(ChildReport, bool) bool { return true })
-		s.TokenOnly = runs.grants
-		defer func() { s.TokenOnly = nil }()
-		fd := lockToken(t, e, Token{"mem", 0})
-		expect("a mem token while a token-only run waits (no start marker)", "I2 unlisted mem/0")
-		unix.Close(fd)
-		settle()
-	})
-	t.Run("an admitted, unreported token-only run exempts its minimum, within the bound (I2)", func(t *testing.T) {
-		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("ta.tok.m1_1", "", map[string]spec.Range{"mem": {Min: 1, Max: 1}}, time.Now(),
-			func(ChildReport, bool) bool { return true })
-		if err := os.WriteFile(begunPath(e.MarkDir, "ta.tok.m1_1"), nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		s.TokenOnly = runs.grants
-		defer func() { s.TokenOnly = nil }()
-		fd0 := lockToken(t, e, Token{"mem", 0})
-		expect("its one mem token, within the bound")
-		time.Sleep(s.TokenOnlyBound)
-		expect("its mem token, past the bound", "I2 unlisted mem/0")
-		unix.Close(fd0)
-		settle()
-		fd1 := lockToken(t, e, Token{"mem", 1})
-		fd2 := lockToken(t, e, Token{"mem", 2})
-		fdIO := lockToken(t, e, Token{"io", 0})
-		expect("two mem tokens for a minimum of one, and an io token it did not request",
-			"I2 unlisted mem [mem/1 mem/2]", "I2 unlisted io/0")
-		for _, fd := range []int{fd1, fd2, fdIO} {
-			unix.Close(fd)
-		}
-		settle()
-	})
-	t.Run("a token-only run's admission notice grants its allowance; its waiting line does not (I2)", func(t *testing.T) {
-		need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
-		stderr := func(name, text string) string {
-			path := filepath.Join(t.TempDir(), name)
-			if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			return path
-		}
-		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		s.TokenOnly = runs.grants
-		defer func() { s.TokenOnly = nil }()
-
-		runs.add("tn.tok.m1_1", stderr("waiting", "coreslot: waiting for mem 1..1: token-only mode, "+
-			"the state directory's format is not implemented here (30s)\n"), need, time.Now(),
-			func(ChildReport, bool) bool { return true })
-		fd := lockToken(t, e, Token{"mem", 0})
-		expect("a mem token while the only token-only run prints its waiting line", "I2 unlisted mem/0")
-		unix.Close(fd)
-		settle()
-
-		runs.add("tm.tok.m1_1", stderr("admitted", "coreslot: the state directory's format is not "+
-			"implemented here; running in token-only mode, outside the queue\n"), need, time.Now(),
-			func(ChildReport, bool) bool { return true })
-		fd = lockToken(t, e, Token{"mem", 1})
-		expect("a mem token of a run that printed its admission notice, before any start marker")
-		unix.Close(fd)
-		settle()
-	})
-	t.Run("a token-only report after the bound is the oracle's latency failure, not an I2", func(t *testing.T) {
-		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("tl.tok.m1_1", "", map[string]spec.Range{"mem": {Min: 1, Max: 1}}, time.Now(),
-			func(ChildReport, bool) bool { return true })
-		begin(t, e, "tl.tok.m1_1")
-		s.TokenOnly = runs.grants
-		defer func() { s.TokenOnly = nil }()
-		fd := lockToken(t, e, Token{"mem", 0})
-		expect("its mem token, within the bound")
-		time.Sleep(s.TokenOnlyBound)
-		expect("its mem token, past the bound, still unreported", "I2 unlisted mem/0")
-		report(t, e, "tl.tok.m1_1", Token{"mem", 0})
-		settle()
-		vs, _, _ := s.Violations()
-		if last := vs[len(vs)-1]; last.Invariant != tokenOnlyLate || !strings.Contains(last.Msg, "mem/0") {
-			t.Errorf("the I2 confirmed before the report reads %v; want it relabelled %q", last, tokenOnlyLate)
-		}
-		if age := s.TokenOnlyReportAge(); age < s.TokenOnlyBound {
-			t.Errorf("unlisted-to-report age %v; want at least the bound %v", age, s.TokenOnlyBound)
-		}
-		unix.Close(fd)
-		settle()
-	})
-	t.Run("a client's I2 keeps its label when a token-only run reports the token later", func(t *testing.T) {
-		need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
-		stillI2 := func(what string, k Token) {
-			t.Helper()
-			vs, _, _ := s.Violations()
-			if last := vs[len(vs)-1]; last.Invariant != "I2" || last.Key != "I2 unlisted "+k.String() {
-				t.Errorf("%s: the confirmed I2 now reads %v; want it to stay a client I2", what, last)
-			}
-		}
-		defer func() { s.TokenOnly = nil }()
-
-		// No token-only run at all when the I2 is confirmed; a run started afterwards
-		// reports the token.
-		fd := lockToken(t, e, Token{"mem", 0})
-		expect("mem/0 locked with no hold and no token-only run", "I2 unlisted mem/0")
-		late := &tokenOnlyRuns{markDir: e.MarkDir}
-		late.add("tp.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "tp.tok.m1_1")
-		report(t, e, "tp.tok.m1_1", Token{"mem", 0})
-		s.TokenOnly = late.grants
-		settle()
-		stillI2("reported by a run started after the lock", Token{"mem", 0})
-		unix.Close(fd)
-		s.TokenOnly = nil
-		settle()
-
-		// Confirmed by the age bound while an admitted run could hold it, but reported by a
-		// run that started after the token was first seen unlisted.
-		admitted := &tokenOnlyRuns{markDir: e.MarkDir}
-		admitted.add("tq.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "tq.tok.m1_1")
-		s.TokenOnly = admitted.grants
-		fd = lockToken(t, e, Token{"mem", 1})
-		expect("mem/1 within the bound of the admitted run")
-		time.Sleep(s.TokenOnlyBound)
-		expect("mem/1 past the bound", "I2 unlisted mem/1")
-		admitted.add("tr.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "tr.tok.m1_1")
-		report(t, e, "tr.tok.m1_1", Token{"mem", 1})
-		settle()
-		stillI2("past the bound, reported by a run started after the lock", Token{"mem", 1})
-		unix.Close(fd)
-		s.TokenOnly = nil
-		settle()
-
-		// Reported by a run started before the lock, but the I2 was confirmed with no
-		// admitted run to hold the token (the run had not begun), not by the age bound.
-		early := &tokenOnlyRuns{markDir: e.MarkDir}
-		early.add("ts.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		s.TokenOnly = early.grants
-		fd = lockToken(t, e, Token{"mem", 2})
-		expect("mem/2 while the run has not begun", "I2 unlisted mem/2")
-		begin(t, e, "ts.tok.m1_1")
-		report(t, e, "ts.tok.m1_1", Token{"mem", 2})
-		settle()
-		stillI2("confirmed with no admitted run, reported by a run started before the lock", Token{"mem", 2})
-		unix.Close(fd)
-		settle()
-	})
-	t.Run("a token handed between token-only runs starts a new unlisted time (I2)", func(t *testing.T) {
-		var aLive atomic.Bool
-		aLive.Store(true)
-		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
-		runs.add("ha.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return aLive.Load() })
-		begin(t, e, "ha.tok.m1_1")
-		s.TokenOnly = runs.grants
-		defer func() { s.TokenOnly = nil }()
-		fd := lockToken(t, e, Token{"mem", 0})
-		if got := sample(); len(got) != 0 {
-			t.Errorf("the token of an admitted run, just locked: reported %v", got)
-		}
-		report(t, e, "ha.tok.m1_1", Token{"mem", 0})
-		expect("the token reported by run A")
-		time.Sleep(s.TokenOnlyBound)
-		settle()
-		// A ends; B, admitted and not reported yet, holds the same token (the lock stands in
-		// for B's).
-		aLive.Store(false)
-		runs.add("hb.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "hb.tok.m1_1")
-		expect("the token taken over by run B, within the bound")
-		unix.Close(fd)
-		settle()
 	})
 	t.Run("more tokens locked than the size is reported (I3)", func(t *testing.T) {
 		release := fakeHolds(t, e, 6, 8, fakeHold("x.lib.m6_6", 0, 1, 2, 3, 4, 5))

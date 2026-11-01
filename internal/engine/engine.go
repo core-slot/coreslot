@@ -2,7 +2,7 @@
 
 // Package engine runs the protocol's transitions (PROTOCOL.md sections 10 to 15): enqueue,
 // observed-freshness waiting and election, cancellation and withdrawal, admission with clamping,
-// token-only mode and inspection, and the pass-through of nested requests (section 18).
+// and inspection, and the pass-through of nested requests (section 18).
 // It composes the pure state machine (internal/state) with the filesystem layer
 // (internal/store). It never prints, never installs signal handlers, never chooses exit codes and
 // never decides on its own to run unbudgeted: errors go to the caller, and a pass-through under a
@@ -188,9 +188,8 @@ func (e *Engine) enterUntil(ctx context.Context) (*store.Section, error) {
 
 // EnqueueContext enters the section, reads FORMAT, reconciles if due, publishes a ticket for
 // req (PROTOCOL.md section 10.1) keeping its lock-carrying descriptor, bumps gen and leaves. When
-// the format is not one this client implements, nothing is written and the returned ticket is
-// in token-only mode (section 15.2): its Step tries token-only admission. An invalid request
-// is a *spec.UsageError. Its wait for the section ends with ctx: it then returns a
+// the format is not one this client implements, nothing is written and the error matches
+// ErrRefused. An invalid request is a *spec.UsageError. Its wait for the section ends with ctx: it then returns a
 // *SectionBusyError matching ctx.Err() (or ctx.Err() itself when ctx had already ended) having
 // published nothing. Once inside the section it completes.
 func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket, error) {
@@ -203,16 +202,14 @@ func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket,
 		return nil, err
 	}
 	defer sec.Leave()
-	_, understood, err := sec.Format()
+	n, understood, err := sec.Format()
 	if err != nil {
 		return nil, err
 	}
-	t := newTicket(e, req)
 	if !understood {
-		t.mode = modeTokenOnly
-		t.last = Waiting{}
-		return t, nil
+		return nil, refuseFormat(n, "")
 	}
+	t := newTicket(e, req)
 	if err := t.publish(sec); err != nil {
 		return nil, err
 	}
@@ -246,17 +243,10 @@ func (t *Ticket) publish(sec *store.Section) error {
 		return err
 	}
 	t.mu.Lock()
-	if t.status != statusWaiting {
-		// Withdrawn while re-enqueueing from token-only mode: the new ticket is dead at once.
-		t.mu.Unlock()
-		f.Close()
-		return ErrCanceled
-	}
 	t.f, t.id, t.name = f, id, name
 	t.mu.Unlock()
 	t.key = state.Key(id)
 	t.lastRefreshMono, t.lastRefreshReal = e.clock.Monotonic(), arrival
-	t.mode = modeQueued
 	return nil
 }
 

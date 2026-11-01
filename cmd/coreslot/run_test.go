@@ -1557,19 +1557,18 @@ func TestRunLogRotationReconcilesWhenDue(t *testing.T) {
 
 func TestTimeoutLogGate(t *testing.T) {
 	cases := []struct {
-		name                      string
-		holdPublished             bool
-		holdErr                   error
-		ticketUnderstood, wantLog bool
+		name          string
+		holdPublished bool
+		holdErr       error
+		wantLog       bool
 	}{
-		{"hold published", true, nil, true, true},
-		{"section busy, ticket published in format 1", false, context.DeadlineExceeded, true, true},
-		{"format no longer understood", false, fmt.Errorf("%w: format 2", engine.ErrRefused), true, false},
-		{"FORMAT now malformed", false, &store.StateError{Reason: "malformed FORMAT"}, true, false},
-		{"token-only ticket", false, context.DeadlineExceeded, false, false},
+		{"hold published", true, nil, true},
+		{"section busy, ticket published in format 1", false, context.DeadlineExceeded, true},
+		{"format no longer understood", false, fmt.Errorf("%w: format 2", engine.ErrRefused), false},
+		{"FORMAT now malformed", false, &store.StateError{Reason: "malformed FORMAT"}, false},
 	}
 	for _, c := range cases {
-		if got := timeoutLogs(c.holdPublished, c.holdErr, c.ticketUnderstood); got != c.wantLog {
+		if got := timeoutLogs(c.holdPublished, c.holdErr); got != c.wantLog {
 			t.Errorf("%s: timeoutLogs = %v, want %v", c.name, got, c.wantLog)
 		}
 	}

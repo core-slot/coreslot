@@ -1392,7 +1392,7 @@ func TestStatusWithMalformedFormat(t *testing.T) {
 }
 
 // FORMAT naming format 0 is a format this client does not implement (PROTOCOL.md section 7.6),
-// not an absent FORMAT: status and doctor say so, as run's token-only mode does. Mutation: take
+// not an absent FORMAT: status and doctor say so. Mutation: take
 // Format == 0 for absence again, before FormatUnderstood, in either command and its case turns red.
 func TestStatusAndDoctorReportFormatZero(t *testing.T) {
 	dir := stateDir(t, "")
@@ -1400,11 +1400,11 @@ func TestStatusAndDoctorReportFormatZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r := cli(t, baseEnv(dir), "status"); r.code != 0 ||
-		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement (token-only mode)\n") {
+		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement\n") {
 		t.Errorf("status: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
 	}
 	if r := cli(t, baseEnv(dir), "doctor"); r.code != 0 ||
-		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement; runs use token-only mode\n") {
+		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement; runs refuse\n") {
 		t.Errorf("doctor: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
 	}
 	doc := statusDoc(t, dir, 0)

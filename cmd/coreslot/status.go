@@ -237,7 +237,7 @@ func (v statusView) human() string {
 	case r.FormatError != "":
 		p("format: MALFORMED (%s)", text(r.FormatError))
 	case !r.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
-		p("format: %d, which this client does not implement (token-only mode)", r.Format)
+		p("format: %d, which this client does not implement", r.Format)
 	case !r.FormatPresent:
 		p("format: not written yet (the first client writes 1)")
 	default:
@@ -306,7 +306,7 @@ func (v statusView) human() string {
 	}
 
 	if len(v.unlisted) > 0 {
-		p("locked tokens no hold lists: %s (token-only runs, or a hold in transition)", tokenList(v.unlisted))
+		p("locked tokens no hold lists: %s (a hold in transition)", tokenList(v.unlisted))
 	}
 
 	if len(v.tickets) == 0 {
