@@ -1,15 +1,16 @@
 # coreslot protocol, format 2
 
 This document is the normative definition of the coreslot on-disk protocol, format 2: the state
-directory, its files and their bodies, the admission critical section, and the descriptor and
-environment contract between a run and the command it starts. A client written from this document
-alone, in any language, shares one budget with every other conforming client on the machine.
+directory, its files and their bodies, the admission critical section, the watchdog that keeps
+memory pressure from stalling the work the clients started, and the descriptor and environment
+contract between a run and the command it starts. Memory is the only resource. A client written
+from this document alone, in any language, shares one memory budget and one watchdog with every
+other conforming client on the machine.
 
 Format 2's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
-no admission reads, as the needs file, its lock and its temporary files are (section 5.4). Until
-`v1.0.0` a minor release may
+no admission reads, as the needs file is (section 5.4). Until `v1.0.0` a minor release may
 introduce such a number, and may change what format 2 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
@@ -21,11 +22,11 @@ OPTIONAL are to be interpreted as described in RFC 2119. Passages marked **Imple
 are informative: they say what a particular implementation or test does, and impose no
 requirement on a client.
 
-- **Client:** any process that reads or changes the state directory: the `coreslot` CLI, a program
-  embedding a library, an independent implementation.
+- **Client:** any process that reads or changes the state directory: the `coreslot` CLI or an
+  independent implementation.
 - **`$S`:** the state directory (section 4.1).
-- **Wall clock:** `CLOCK_REALTIME`. Every `*_ns` value is nanoseconds since the Unix epoch on the
-  wall clock of the process that wrote it.
+- **Wall clock:** `CLOCK_REALTIME`. Every `*_ns` value of a body is nanoseconds since the Unix epoch
+  on the wall clock of the process that wrote it, except where section 7.11 says otherwise.
 - **Monotonic clock:** the observing process's own monotonic clock (`CLOCK_MONOTONIC`, or any clock
   that does not step with the wall clock). It is never written to disk.
 - **Lock:** `flock(2)` on an open file description. "Probe" means: open the file, try
@@ -35,7 +36,9 @@ requirement on a client.
   64-bit range. `1.0` and `1e3` are not integers.
 - **Set** (an environment variable): present with a non-empty value. A variable whose value is
   empty is treated exactly as an absent one, everywhere in this document.
-- Sizes: `KiB` = 1 024 bytes, `MiB` = 1 048 576 bytes.
+- Sizes: `KiB` = 1 024 bytes, `MiB` = 1 048 576 bytes, `GiB` = 1 024 MiB.
+- **Need:** the memory a run asks for, in MiB. **Footprint:** the memory the run's process tree
+  uses, in MiB. **Room:** what the live holds leave of the machine's free memory (section 12.1).
 
 ## 2. Contract inventory
 
@@ -46,6 +49,7 @@ Every shared file, field, environment variable and transition of format 2, and w
 | `FORMAT` | file | [7.6](#76-format), [15](#15-formats-and-an-unimplemented-format) |
 | `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) |
 | `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
+| `watch.json` | file | [7.11](#711-watchjson), [23](#23-the-watchdog) |
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
@@ -53,20 +57,22 @@ Every shared file, field, environment variable and transition of format 2, and w
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
 | `config.toml` (under the override only) | file | [5.3](#53-configuration-file) |
 | `needs.toml` (under the override only) | file | [5.4](#54-needs-file) |
-| `mem` | resource | [5.2](#52-sizes) |
 | ticket body | body | [7.3](#73-ticket) |
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
 | run-log memory keys | field | [20](#20-run-log) |
-| `CORESLOT_GRANTED_*` | environment | [17](#17-descriptor-and-environment-contract) |
+| `CORESLOT_GRANTED_MEM` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_STATE_DIR` | environment | [4.1](#41-location) |
 | enqueue | transition | [10.1](#101-enqueue), example [21.1](#211-enqueue) |
 | refresh | transition | [10.2](#102-refresh-and-stalled), example [21.2](#212-refresh) |
-| admission | transition | [12](#12-admission), example [21.3](#213-admission-with-clamp) |
-| clamp | transition | [12.2](#122-effective-request-and-clamp), example [21.3](#213-admission-with-clamp) |
+| admission | transition | [12](#12-admission), example [21.3](#213-admission) |
+| level gate | transition | [12.4](#124-the-level-gate), example [21.8](#218-tick-and-level) |
+| tick | transition | [23.1](#231-the-tick), example [21.8](#218-tick-and-level) |
+| stop round | transition | [23.5](#235-stop-rounds), example [21.9](#219-stop-round-and-restart) |
+| restart | transition | [24](#24-restart-of-a-stopped-run), example [21.9](#219-stop-round-and-restart) |
 | cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
 | withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
 | reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
@@ -85,6 +91,7 @@ critical section (section 8).
      for 10 s (10.2)       ▼   │
                          STALLED
  WAITING/STALLED ── cancel or owner gone (descriptor closed) ──▶ (none)
+ HELD ── stopped for memory, fewer than 3 times (24) ──▶ WAITING (enqueue† at its first arrival)
 ```
 
 WAITING and STALLED are the same file; STALLED is a verdict each observer reaches on its own
@@ -98,30 +105,28 @@ Every conforming client MUST preserve these invariants:
   place, never replaced (section 7.4). A holder checks this when it rewrites its body and at
   release (section 12.3); a holder that finds `st_nlink == 0` or a different inode at its hold's
   path has a state error (section 14) and reports degraded mode to its user.
-- **I2 truthful grant:** a live hold's body says what it reserves (`need_mib`, section 7.4), and
-  nothing is reserved without a live hold.
-- **I3 bounded admission:** an admission never brings the number of locked tokens of a
-  resource — at **any** index that exists, including indices at or above the current size — above
-  that resource's current size. A later shrink may leave locked tokens above the new size; no
-  admission happens until they fall below it. For `mem` the current size of an attempt may be its
-  live size (section 5.2), which is never below the configured size; a client that sizes `mem`
-  from the configuration alone sees the tokens a live size admitted as locked above its size, as
-  after a shrink, and waits until they fall below it.
+- **I2 truthful reservation:** a live hold's body says what it reserves (`need_mib`, section 7.4),
+  and nothing is reserved without a live hold.
+- **I3 soft room:** an ordinary admission starts a request only when its need fits the room
+  (section 12.1). The budget is soft: the room is computed from the kernel's readings and the hold
+  bodies, and is not a cap. The exceptions are the idle rule (a head starts when no hold is live)
+  and an unreadable headroom (nothing gates the head), both of section 12.1.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3), with one bounded exception: a waiter
-  in the front window MAY be admitted ahead of live tickets under the rule of section 10.3,
-  minimums before extras. Otherwise the head blocks every waiter behind it, and a waiter is passed
-  over only while it is STALLED, dead or canceled.
+  in the front window MAY be admitted ahead of live tickets under the rule of section 10.3.
+  Otherwise the head blocks every waiter behind it, and a waiter is passed over only while it is
+  STALLED, dead or canceled.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
-  head's minimum is free and no process is stopped inside the admission section, the head is
-  admitted within 3 s; up to 4 consecutive stopped tickets at the front of the queue stop blocking
-  it within ≈ 11 s (10 s without an observed change plus one poll). A stopped ticket further back
-  stops blocking a waiter within 11 s of becoming the nearest ticket that waiter has not passed
-  over.
-- **I6 one budget:** every client of every format counts the same token files under the same
-  admission lock.
-- **I7 minimum:** an ordinary admission grants at least `min(min, size)` of every declared resource
-  it names. The only grants below a request's `min` are clamped requests (section 12.2).
+  head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
+  no process is stopped inside the admission section, the head is admitted within 3 s; up to 4
+  consecutive stopped tickets at the front of the queue stop blocking it within ≈ 11 s (10 s
+  without an observed change plus one poll). A stopped ticket further back stops blocking a waiter
+  within 11 s of becoming the nearest ticket that waiter has not passed over.
+- **I6 one budget:** every client of format 2 reads the same holds and the same
+  `watch.json` under the same admission lock.
+- **I7 own children only:** a stop round never lists the oldest live hold, a hold whose `victim` is
+  false or one whose command has exited, and a run signals only the process group of its own
+  command, only while it has not reaped it (section 23.5).
 
 ## 4. State directory and filesystem policy
 
@@ -140,10 +145,10 @@ Every conforming client MUST preserve these invariants:
   > resolves through NSS as `getpwuid` does. That matters most to a cgo-free build for Linux (the
   > release archives), which reads `/etc/passwd` alone; a cgo build has asked NSS already, and
   > getent asks it a second time.
-- The only override is the environment variable `CORESLOT_STATE_DIR` (a library MAY offer the same
-  override as an option). When it is set and non-empty, its value is the state directory; it MUST
-  be an absolute path, and a relative value is a state error (section 14). The override is for
-  tests: it creates a separate budget, and it also moves the configuration (section 5.3).
+- The only override is the environment variable `CORESLOT_STATE_DIR`. When it is set and
+  non-empty, its value is the state directory; it MUST be an absolute path, and a relative value is
+  a state error (section 14). The override is for tests: it creates a separate budget, and it also
+  moves the configuration (section 5.3).
 
 ### 4.2 Modes, types and ownership
 
@@ -154,21 +159,20 @@ Every conforming client MUST preserve these invariants:
   is a state error (section 14). "Owned by the user" means owned by the process's real user id
   (`getuid()`, the id section 4.1 resolves the home from); a client whose effective user id
   differs from its real one is unsupported. "Group- or world-writable" means
-  `mode & 0o022 != 0`. The check applies to `$S`, to every file and directory of the layout
-  (section 4.4), and to every token file (section 6) that the client opens, probes or removes; a
-  directory or top-level file of the layout, a temporary file in `$S` or a token file that is a
-  symlink, a directory, another user's, or group- or world-writable is a state error. Inside
-  `queue/`, `holds/` and `cancel/` the rule is different: an entry whose name matches the
-  directory's grammar (section 7.1, temporaries included) but whose type, owner or mode fails the
-  checks above is not a state error. It is a **stray**: ignored and counted exactly like an entry
-  with a malformed body (section 7.2): never trusted, never opened or probed, never removed
-  (reconciliation skips it and goes on), and `status` and `doctor` report it in the ignored count.
-  An entry whose name does not match its directory's grammar is ignored whatever its type
-  (sections 4.4 and 6).
+  `mode & 0o022 != 0`. The check applies to `$S` and to every file and directory of the layout
+  (section 4.4) that the client opens, probes or removes; a directory or top-level file of the
+  layout, or a temporary file in `$S`, that is a symlink, a directory, another user's, or group- or
+  world-writable is a state error. Inside `queue/`, `holds/` and `cancel/` the rule is different:
+  an entry whose name matches the directory's grammar (section 7.1, temporaries included) but whose
+  type, owner or mode fails the checks above is not a state error. It is a **stray**: ignored and
+  counted exactly like an entry with a malformed body (section 7.2): never trusted, never opened
+  or probed, never removed (reconciliation skips it and goes on), and `status` and `doctor` report
+  it in the ignored count. An entry whose name does not match its directory's grammar is ignored
+  whatever its type (section 4.4).
   These directories are `0700` and the user's own, so only the user (or the superuser) can place an
   entry in them; a hostile same-user process is outside the threat model.
 - Every descriptor a client opens on a file under `$S` MUST be close-on-exec (`O_CLOEXEC`), except
-  the copies it deliberately passes to a child (section 17). A leaked descriptor keeps a lock alive
+  the copy it deliberately passes to a child (section 17). A leaked descriptor keeps a lock alive
   for as long as the process that inherited it.
 
 ### 4.3 Host-local filesystems only
@@ -196,6 +200,7 @@ take part through a client on the host.
 FORMAT           metadata format (section 7.6)
 admit.lock       the admission lock (section 7.7); never deleted, semantics fixed for every format
 gen              {"gen": n, "reconciled_ns": t} (section 7.8)
+watch.json       the shared watchdog state (section 7.11)
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
@@ -205,15 +210,13 @@ config.toml      configuration (section 5.3); optional, present only under the o
 needs.toml       needs file (section 5.4); optional, present only under the override; never checked
 ```
 
-`log/` may also contain `runs.1.jsonl`. Each of `queue/`, `holds/`, `cancel/` and `$S` itself may
-contain temporary files named `.tmp-<pid>-<seq>` (section 11). Under the override, `$S` may also
-contain `needs.toml.lock` and the needs file's temporary files (section 5.4); like `needs.toml`,
-they are not checked as in section 4.2. A client creates a directory of the layout when it first
-needs it, with mode `0700`; `EEXIST` is not an error, and the existing entry is checked as in
-section 4.2. Missing ancestors of `$S` (`~/.local/state/` often does not exist) are created with
-mode `0700` and are not checked: the policy of section 4.2 starts at `$S`. `queue/`, `holds/`,
-`cancel/` and `log/` are created only by a client that has read a `FORMAT` it understands (section
-15.2).
+`log/` may also contain `runs.1.jsonl` and `watch.jsonl` (section 23.6). Each of `queue/`,
+`holds/`, `cancel/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>` (section
+11). A client creates a directory of the layout when it first needs it, with mode `0700`;
+`EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
+of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
+the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/` and `log/` are created only
+by a client that has read a `FORMAT` it understands (section 15.2).
 
 Directory listings are bounded: a directory holds at most 65 536 entries. A reader MUST NOT read
 more than 65 537 entries of one directory, and a directory with more than 65 536 is a state error.
@@ -223,119 +226,48 @@ count); they are never removed except by reconciliation's rules (section 10.4).
 
 The directory is not a cache: liveness is decided by locks. Deleting or resetting `$S` while any
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
---reset` runs inside the admission section and checks that no holds, tickets or other section
-holder exist; only then does it remove the entries of `queue/`, `holds/` and `cancel/`, `gen`,
-`degraded`, `log/` and an earlier format's `res/`, and writes `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml`, `needs.toml` and
-`needs.toml.lock`: the format-stable file (section 15.1), whose inode live clients may hold open,
-and the configuration. The run history the needs file is learned from goes with `log/`. A reset
-never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or
-another format, it recreates the directory as format 2; a live hold or ticket of any format stops
-it. It does not reconcile first (section 10.4):
-it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation would remove, and more.
-Temporary files directly in `$S` (section 11) are not entries it removes; the next
-reconciliation removes them once they are older than 30 s.
+--reset` runs inside the admission section and checks that no holds or tickets exist that some
+process still locks; only then does it remove the entries of `queue/`, `holds/` and `cancel/`,
+`gen`, `watch.json`, `degraded`, `log/` and a `res/` directory of an earlier format, and writes
+`FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the format-stable
+file (section 15.1), whose inode live clients may hold open, and the configuration. The run
+history that needs are learned from goes with `log/`. A reset never deletes, renames or
+replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
+the directory as format 2; a live hold or ticket of any format stops it. It does not reconcile
+first (section 10.4): it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation
+would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
+the next reconciliation removes them once they are older than 30 s.
 
-## 5. Resources, sizes and configuration
+## 5. Sizes and configuration
 
-### 5.1 Resource names
+### 5.1 The machine's memory
 
-A resource name matches `^[a-z][a-z0-9-]{0,31}$`. Its **environment form** upper-cases it and maps
-`-` to `_` (`pg-local` → `PG_LOCAL`); the grammar admits no `_`, so two names never share a form.
-The resource `cpu` always exists, and so does `mem` unless the configuration switches it off
-(section 5.3); other resources exist when the configuration declares them.
+Two readings of the machine decide admission, both in MiB:
+
+- **`memory`**, the physical memory, rounded down: the `hw.memsize` sysctl on macOS; `MemTotal` in
+  `/proc/meminfo` on Linux, never a cgroup's limit. On another system, the system's physical
+  memory; a client that cannot obtain it treats that as a state error.
+- **`headroom`**, the memory the kernel can hand out now without paging anonymous memory out. On
+  macOS, the free, speculative, purgeable and file-backed pageable pages times the page size. On
+  Linux, `MemAvailable` of `/proc/meminfo`, and inside a memory-limited cgroup v2 at most the room
+  under the tightest limit, the least `memory.max` less `memory.current` of the client's cgroup and
+  its ancestors. A headroom that cannot be read is **unknown**.
+
+A client reads both at every admission attempt (section 12.1). The **cold start** need, for a label
+nothing is known of, is `max(1, min(4096, memory / 4))` MiB.
 
 ### 5.2 Sizes
 
-A size is an integer in `[1, 4096]`. A configured size of every resource but `mem` is one of:
+A size, in the configuration's `reserve` and `floor`, the needs file's `mem` and the CLI's
+`--mem`, is a number of 1 to 6 ASCII decimal digits, optionally followed by `.` and 1 to 3 digits,
+then optionally `G` (GiB, also meant without a suffix) or `M` (MiB). Its value is the number in
+MiB, rounded up to a whole MiB (`"9.5G"` is 9 728 MiB, `"768M"` is 768 MiB, `"3"` is 3 072 MiB). In
+a TOML file a size may also be an integer, which counts GiB. A size of 0 is valid where the key
+allows it (`reserve`, `floor`) and invalid where it does not (a need). Any other value (a negative
+number, `"1.5T"`, more than 6 digits or 3 decimals, a boolean, a float, a table) is invalid.
 
-| Configured as | Size |
-|---|---|
-| an integer `n`, `1 ≤ n ≤ 4096` | `n` |
-| a string `"N%"`, `N` an integer `1..400` | `max(1, ⌊cpus × N / 100⌋)` |
-| a string `"-K"`, `K` a non-negative integer | `max(1, cpus − K)` |
-
-In both string forms, `N` and `K` are written as 1 to 9 ASCII decimal digits, leading zeros allowed
-(`"05%"` means `"5%"`, `"-007"` means `"-7"`), with nothing else in the string: no sign before the
-digits, no space.
-
-Any other value (an integer outside `[1, 4096]` such as `0`, `4097` or `-3`, `"0%"`, `"401%"`,
-`"+5%"`, `" 5%"`, a digit string longer than 9, a string of another shape, a boolean, a float, a
-table) is invalid. A computed size above 4096 is 4096.
-
-The `mem` resource counts memory in tokens of 128 MiB. Its configured size is one of:
-
-| Configured as | Size |
-|---|---|
-| an integer `n`, `1 ≤ n ≤ 999999` | `n × 8`: `n` GiB |
-| a string `"N%"`, `N` an integer `1..100` | `max(1, ⌊⌊memory × N / 100⌋ / 128⌋)`: `N` % of the physical memory |
-| a size string: 1 to 6 digits, optionally `.` and 1 to 3 digits, then optionally `G` (GiB, also meant without a suffix) or `M` (MiB) | `max(1, ⌊mib / 128⌋)`, `mib` the size in MiB rounded up to a whole MiB (`"9.5G"` is 9 728 MiB, size 76; `"768M"` is size 6) |
-| the integer `0`, or a size string of value 0 (`"0"`, `"0G"`, `"0M"`) | `mem` is switched off: it is not declared |
-
-`N` is written as in the other resources' `"N%"`. Any other value (a negative integer or one above
-999999, `"0%"`, `"101%"`, `"-2"`, `"1.5T"`, a size with more than 6 digits or 3 decimals, a boolean,
-a float, a table) is invalid. A computed size above 4096 is 4096.
-
-`memory` is the machine's physical memory in MiB, rounded down:
-
-| System | Source |
-|---|---|
-| macOS | the `hw.memsize` sysctl |
-| Linux | `MemTotal` in `/proc/meminfo`; never a cgroup's limit |
-| other systems | the system's physical memory; a client that cannot obtain it while the configuration declares `mem` treats it as a state error, and resolves the other resources without it otherwise |
-
-`cpus` is the machine-wide online CPU count:
-
-| System | Source |
-|---|---|
-| macOS | the `hw.logicalcpu` sysctl |
-| Linux | `/sys/devices/system/cpu/online`: a comma-separated list of `a` or `a-b` (`a ≤ b`) items, for example `0-3,8-11` (8 CPUs); the count is the number of CPUs the list covers |
-| other systems | the system's machine-wide online processor count; a client that cannot obtain one treats it as a state error |
-
-`cpus` is never a process's affinity mask or cgroup quota (for example Go's `runtime.NumCPU` is not
-used). Clients MUST recompute sizes from the configuration, `cpus` and `memory` at every admission
-attempt.
-
-**Live size of `mem`.** A client MAY, for one admission attempt, size `mem` from the
-memory the kernel can still hand out instead of from the configuration alone. It does so only when
-`mem` is declared, the request's `mem` is fixed (`min = max`), the configuration's `[memory] live`
-is `true` (section 5.3; it defaults to `false`), and the configured size less the locked count of
-`mem` is below that `min`; otherwise the size is the configured one. The **live size** is
-
-```
-size = max(static, min(4096, locked + ⌊room / 128 MiB⌋))
-room = max(0, headroom − unrealised − unlisted)
-```
-
-- `static` is the configured size and `locked` the locked count of `mem` (section 6), read inside
-  the section;
-- `headroom` is the memory, in MiB, that the kernel can hand out now without paging anonymous
-  memory out, and inside a memory-limited cgroup at most the room under its tightest limit;
-- `unrealised` sums, over the live holds of `holds/`, `max(0, tokens × 128 MiB − used)`, where
-  `tokens` is the number of `mem` tokens the hold lists and `used` the resident memory of the
-  hold's process tree; a hold whose tree is not measured counts its whole reservation
-  (`used = 0`), and malformed and stray holds are left out, so their tokens count as unlisted;
-- `unlisted` is 128 MiB for each locked `mem` token that no live hold lists (a probe's).
-
-A hold's tree is measured only when its body says `"tree": true` (section 7.4), it lists `mem`
-tokens, no other live hold with `"tree": true` names the same pid, and the process with that pid
-started no more than 1 s after the hold's `start_ns` (so a reused pid is not measured); the tree is
-that process and its descendants, less the subtree of every other live hold's pid, whether or not
-that hold says `"tree": true` or is measured, so memory a hold inside the tree uses never realises
-two reservations. A hold that lists no `mem` tokens is not read. The configured size is a floor:
-the live size never lowers it, and a hold's reservation stays counted until its tree uses it, so
-two admissions never promise the same free memory twice. A configuration,
-headroom or `holds/` read that fails leaves the configured size; a process listing that fails
-counts every hold whole. A client that does not implement the live size sizes `mem` from the
-configuration and conforms; it waits while live admissions keep more `mem` locked than its size
-(section 3, I3).
-
-> **Implementation note.** The Go client reads the headroom on macOS as the free, speculative,
-> purgeable and file-backed pageable pages times the page size, and on Linux as `MemAvailable` of
-> `/proc/meminfo`, or, when smaller, the least `memory.max` less `memory.current` of its cgroup v2
-> and that cgroup's ancestors. A tree's resident memory is the physical footprint of its processes
-> on macOS, and their `RssAnon` plus the largest `RssShmem` among them once on Linux, from one
-> listing of the process table per attempt (on Linux a start time is field 22 of
-> `/proc/<pid>/stat`, in ticks of 1/100 s after `btime` of `/proc/stat`).
+A need is at most `1073741824` MiB (1 PiB; section 7.3). Memory has no granularity: a need is
+reserved as it is written.
 
 ### 5.3 Configuration file
 
@@ -346,143 +278,70 @@ Under the override, `config.toml` is a permitted top-level entry of `$S`, checke
 (regular file, owned by the user, not a symlink, not group- or world-writable). The real
 configuration file lies outside `$S` and is not checked that way: it is read through symbolic links
 (dotfile managers link it), with no owner or mode check. A path that does not exist, including a
-dangling symbolic link, reads as a missing file (the defaults above). A path that resolves to
-anything but a regular file that can be read (a directory, a FIFO, a device) is an invalid
-configuration, and a client detects that without blocking (it never waits on a FIFO).
+dangling symbolic link, reads as a missing file (the defaults). A path that resolves to anything
+but a regular file that can be read (a directory, a FIFO, a device) is an invalid configuration,
+and a client detects that without blocking (it never waits on a FIFO).
 
 The file is TOML 1.0:
 
 ```toml
-[resources]
-cpu = "-2"        # integer; "N%" of the machine-wide CPU count; or "-K"; default "140%"
-mem = "9.5G"      # integer GiB; "N%" of physical memory; or a size; 0 switches it off; default "60%"
-pg-local = 2      # any declared resource
+[memory]
+reserve = "1G"        # memory admission keeps free beyond every need (section 12.1)
 
-[priorities]      # label prefix -> priority; --priority overrides
-"ci:" = 0
-"interactive:" = 10
+[watch]
+mode = "enforce"      # or "observe": everything but the stop (section 23.6)
+sample_log = false    # true: log every machine sample (section 23.6)
+yellow_points = 10    # the thresholds of section 23.4
+red_points = 30
+red_samples = 10
+gate_pages_s = 1000
+floor = "2G"          # a size
+calm_s = 30           # the waits of sections 12.4 and 23.5, in seconds
+post_kill_s = 15
+spacing_s = 3
 
 [platform]
 windows_warning = false   # default true (section 16)
-
-[memory]
-live = true       # default false: the live size of mem (section 5.2)
 ```
 
-- `[resources]`: each key MUST be a resource name (section 5.1) and each value a size (section
-  5.2). `cpu` is `"140%"` when not declared, and `mem` is `"60%"`; `mem = 0` switches memory off,
-  and a request naming `mem` then finds it undeclared (section 12.1).
-- `[priorities]`: each key is a label prefix and each value an integer in `[-1000, 1000]`. A request
-  without an explicit priority takes the value of the longest prefix of its label; with no matching
-  prefix its priority is 0. This applies where a request can leave its priority unset (the CLI
-  without `--priority`).
+- `[memory]`: `reserve`, a size (section 5.2), 0 allowed.
+- `[watch]`: `mode`, `"enforce"` or `"observe"`; `sample_log`, a boolean; `floor`, a size; the other
+  keys, numbers not below 0. A key that is absent takes the release's default. The defaults and
+  the values of the examples are not part of the format: a minor release may change them
+  (introduction).
 - `[platform]`: `windows_warning`, a boolean.
-- `[memory]`: `live`, a boolean, `false` when absent; `false` sizes `mem` from the configuration
-  alone, and a client that implements the live size (section 5.2) then never computes it; `true`
-  lets such a client compute it.
-- `resources`, `priorities`, `platform` and `memory`, when present, MUST be tables; any other value
-  of one of them is invalid. Other tables and keys are ignored.
+- `memory`, `watch` and `platform`, when present, MUST be tables; any other value of one of them is
+  invalid. Other tables and keys are ignored.
 
-A missing file means `cpu = "140%"` and `mem = "60%"` and nothing else, with no notice. A file that
-is not valid TOML or violates the rules above is an invalid configuration: a state error (section
-14). Clients re-read the file when its mtime changes, at the next admission attempt.
+A missing file means the defaults, with no notice. A file that is not valid TOML or violates the
+rules above is an invalid configuration: a state error (section 14). Clients read the file afresh
+at every admission attempt.
 
 ### 5.4 Needs file
 
 The needs file is `needs.toml` in the configuration's directory: `<home>/.config/coreslot/needs.toml`,
-or `$S/needs.toml` under the override. It says what a labelled request needs when its caller leaves
-a resource out. No client is required to read it, and none of the protocol's decisions depends on
-it; a client that reads it MUST NOT refuse a run because of it: a file or an entry that cannot be
-read is a notice, and the request goes on without it. It is read through symbolic links, as the
-real configuration is, and is not checked as in section 4.2, also under the override.
+or `$S/needs.toml` under the override. It says what a labelled request needs, and which labels a
+stop round must spare. No client is required to read it, and none of the protocol's decisions
+depends on it; a client that reads it MUST NOT refuse a run because of it: a file or an entry that
+cannot be read is a notice, and the request goes on without it. It is read through symbolic links,
+as the real configuration is, and is not checked as in section 4.2, also under the override.
 
 ```toml
-[needs."gate:unit"]
-cpu = "4"           # a need's value, as RES=... takes it: "N" or "MIN..MAX"; an integer is N..N
-mem = "3G"          # a size, as section 5.2 writes one; an integer is GiB
-pinned = true       # the user's entry: never rewritten from measurements
-evidence = "5 runs 2026-10-20..21: max 3.4 cores, 0 of 5 saturated, peak 2.7 GiB (footprint) at 22s"
-
-[needs."gate:pytest"]
-cpu_per_worker = 0.3  # cpu tokens per worker; then cpu, if present, is the worker width
-cpu = "2..10"         # the worker width, not a token count
-preemptible = false   # opts out of the automatic rule; true admits with one cpu token
+[needs."go test@proj"]
+mem = "3G"          # a size (section 5.2); the need, which learning never replaces
 
 [needs."gate:docker"]
-cpu = "8"
-mem = "6G"
-observed = false      # the label's work runs outside its process tree; default true
+no_restart = true   # a stop round never lists this label's runs (section 23.5)
 ```
 
-Each key of `[needs]` is a label without a final worker count: a label ending in `@` followed by
-digits or by `-` (`gate:unit@12`, `gate:unit@-`) finds the entry of what precedes the `@`, and a
-label that is empty without it finds none. A key the reader does not know is ignored.
+Each key of `[needs]` is a label, matched exactly. An entry's `mem` is a size above 0, and
+`no_restart` a boolean; a known key with another value makes the entry unreadable. A key the
+reader does not know is ignored.
 
-`cpu_per_worker = c`, a number above 0 (any other value is an entry that cannot be read), says
-that each worker of the labelled command takes `c` cpu tokens. When the label carries a final
-worker count `@K` (digits; `@-` carries none), the worker width `a..b` is `K..K` and the request
-is `max(1, ⌈c × K⌉)` cpu tokens. Without `@K`, the entry's `cpu`, if present, is the worker width
-`a..b` (`"N"` is `N..N`; default `1..` the machine's CPU count, section 5.2); the request is
-`max(1, ⌈c × a⌉)..max(1, ⌈c × b⌉)` cpu tokens, at most 256 each. A cpu placeholder (section 17)
-becomes `max(1, min(b, ⌊G / c⌋))` for a cpu grant of G tokens: K, or the width's workers the grant
-pays for, and fewer than `a` only when the grant was clamped (section 12.2), narrowed to a
-parent's (section 18), or capped at 256 tokens. A cpu need given by the caller (`--need cpu=…`)
-wins over the entry, and a cpu placeholder is then the token count.
-`CORESLOT_GRANTED_CPU` (section 17) is always the token count.
-
-`observed = false` says that the label's work runs outside its process tree (in a container or on
-another host), so a writer that learns entries from the run log (section 20) does not learn its
-`cpu`, `mem` or `cpu_per_worker`, and keeps the entry as written. Absent, it is `true`.
-
-`preemptible` is a boolean. When it is `true`, a client that reads the entry MAY admit the label's
-runs with one cpu token whatever their cpu request, run their command at a lower priority, and fill
-a cpu placeholder as the request's cpu max would rather than from the grant (for a `cpu_per_worker`
-entry, the worker count `K` or the width's max `b`). A command-line
-`--preemptible[=false]` wins over the key. When the key is absent, the Go CLI applies its automatic
-rule (the implementation note below); `preemptible = false` opts the label out of it. A preemptible
-run keeps its full `mem`: its cpu is not reserved, and its memory stays budgeted. This changes only
-how the client sizes its request and starts its command. The ticket and the hold carry the shrunk
-request (`cpu` `1..1`) and the one token granted, nothing is lent, rewritten or acquired again, and
-invariants I1 to I7 (section 3) hold as for any request. The mark applies only to a request the
-queue admits: a run that passes through on a parent's grant (section 18), runs at once outside
-the budget, fails open, or leaves the queue at its timeout to run unbudgeted runs as an unmarked
-one would.
-
-A writer replaces the file whole under `flock(LOCK_EX)` on `needs.toml.lock` beside the file it
-replaces (the file a symbolic link names, so that every link shares one lock): it writes a
-temporary file `.needs-<pid>-<seq>.tmp` in the same directory, syncs it and renames it over the
-file. The temporary name is outside the grammar of section 11, so reconciliation never removes one.
-A file that cannot be parsed is left as it is.
-
-> **Implementation note.** The Go CLI reads the entry of a run's `--label` for each resource its
-> `--need` leaves out, `cpu` and `mem`, and fills `{n}` (section 17) with the worker count of a
-> `cpu_per_worker` entry, or with the token count when `--need` names `cpu`. A run is preemptible
-> when its entry says `preemptible = true` or `run --preemptible` marks it, and the command line
-> wins over the entry, as `--need` does: `--preemptible` marks a run whose entry says `false`, and
-> `--preemptible=false` unmarks one whose entry says `true`. With neither a key nor a flag, the
-> automatic rule demotes a run that queues for admission (not `--light`, not inside another grant,
-> not in terminal mode) when its cpu max is at least half the cpu size (`⌈size / 2⌉`) and its label
-> has at least 5 counted runs, across both run-log generations, with a median `ran_s` of at least
-> 600 s; a run its record shows as preemptible counts only when its `ran_s` is under 600 s, since
-> the demotion may be what lengthened it. The size is checked first, so the run log is read only
-> for large requests. A label whose runs of at least 60 s averaged under 0.05 cores is excluded,
-> and so is an entry that says `observed = false`. On a label's first demotion the CLI prints one line about runs with
-> wall-clock deadlines and `preemptible = false`. The CLI sets
-> nice 10 on the command's process group right after starting it (in terminal mode, where the
-> group is the shell's job, and under `run --same-group`, where it is the CLI's own, on the
-> command's pid only); on macOS, which ignores nice for every thread with a QoS class, it also
-> starts the command under a utility QoS clamp (`taskpolicy -c utility`), unless the clamp would
-> change the command's environment or its failure status. It fills `{n}` from the
-> request's cpu max, so a `make -j{n}` keeps its width, and records the reason in the
-> `preemptible` key of the hold (section 7.4) and of the run log. `coreslot suggest --write` writes `cpu` (or `cpu_per_worker` for
-> an entry that has it, never both), `mem` and `evidence` from the run log (section 20) and keeps
-> pinned entries and every other key; it learns `cpu_per_worker` as the p90 of cores ÷ `workers`
-> over the window, rounded up to 0.05; it writes nothing for an entry with `observed = false`, and
-> only `evidence` for a label whose runs of at least 60 s averaged under 0.05 cores, a hint that
-> names `observed = false`. A range entry without `cpu_per_worker` whose unsaturated runs carry
-> `workers` is no longer narrowed: the suggestion keeps its max, and its evidence suggests
-> `cpu_per_worker`. Its suggested `mem` rests on the window's largest peak; when that run's cpu
-> grant is above the `cpu` max it suggests, the evidence names the grant.
+> **Implementation note.** The Go CLI takes a run's need from `--mem`, else the label's `mem`, else
+> the 90th percentile of the `mem_peak_kib` of the label's last 20 counted runs (section 20) rounded
+> up to a whole MiB, else the cold start (section 5.1). A run's `victim` (section 7.4) is false when
+> its label has `no_restart = true`.
 
 ## 6. Holds and descriptor ownership
 
@@ -517,7 +376,7 @@ display   = 1*32( ALPHA / DIGIT / "." / "_" )   ; sanitized label; informational
 temporary = ".tmp-" pid "-" seq
 ```
 
-All numbers in names are decimal and zero-padded to their width, so the byte order of the
+All numbers in names are decimal and zero-padded to a fixed length, so the byte order of the
 `order-key "-" pid "-" seq` prefix is the numeric order of (order-key, pid, seq). An order-key or
 start-ns is at most 18 446 744 073 709 551 615 (2^64 − 1); a 20-digit value above it makes the
 name invalid, as does any name that does not match the grammar. `display` contains
@@ -543,8 +402,8 @@ is its target's id, not its writer's `seq`; section 11 says what an existing one
   whitespace. A writer MUST write every key of its table.
 - A body is **malformed** when it is not such an object, exceeds 8 KiB, lacks a key of its table,
   has a key of the wrong type or outside its rule, or has a duplicate key at any depth. Keys are
-  compared after JSON unescaping: `"c\u0070u"` duplicates `"cpu"`, so a reader that compares raw
-  bytes is not conforming.
+  compared after JSON unescaping: `"label"` duplicates `"label"`, so a reader that compares
+  raw bytes is not conforming.
 - Nesting depth alone never makes a body malformed: a reader MUST accept any depth that fits in
   8 KiB (about 4 096 levels).
 - In particular, a body is malformed when a string anywhere in it contains an unpaired UTF-16
@@ -555,7 +414,8 @@ is its target's id, not its writer's `seq`; section 11 says what an existing one
   a table, so `1.5`, `1e999` or a 30-digit number under an unknown key is accepted. (The duplicate,
   surrogate and size rules still apply inside unknown keys.)
 - A malformed body makes its entry ignored and counted, never trusted. An ignored ticket takes no
-  place in the queue.
+  place in the queue. A live hold whose body is malformed is not ignored by admission: it reserves
+  the cold start need (section 12.1), since unknown is not zero.
 
 ### 7.3 Ticket
 
@@ -566,26 +426,27 @@ Body:
 |---|---|---|
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
 | `need_mib` | integer | `1..1073741824` (1 PiB); the memory the run needs, in MiB |
-| `created_ns` | integer | `≥ 0`; the wall clock read for `arrival_ns` (section 9) |
+| `created_ns` | integer | `≥ 0`; the wall clock when the ticket was published |
 
 ### 7.4 Hold
 
 `$S/holds/<hold>`, lock-carrying: the holder holds `flock(LOCK_EX)` on it for as long as it holds
-its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
+its reservation, and passes that descriptor to its command as fd 3 (section 17). Body:
 
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | as in the ticket |
 | `pid` | integer | `≥ 0`; equal to the name's pid |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns |
-| `arrival_ns` | integer | `≥ 0`; when the run first arrived in the queue |
-| `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB: the need asked, also when it was clamped (section 12.2); `0` for a run outside the budget (section 14), which reserves nothing |
-| `stops` | integer | `≥ 0`; how often the run was stopped for memory |
+| `arrival_ns` | integer | `≥ 0`; when the run first arrived in the queue, also after a restart (section 24) |
+| `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB: the need asked; `0` for a run outside the budget (section 14), which reserves nothing |
+| `stops` | integer | `≥ 0`; how often the run was stopped for memory before this attempt |
 | `footprint_mib` | integer | `0..1073741824`; the run's footprint as it last measured it; `0` when not measured |
-| `d_user_ns`, `d_sys_ns`, `d_pagewait_ns` | integer | `≥ 0`; the run's latest measured time deltas |
+| `d_user_ns`, `d_sys_ns`, `d_pagewait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_pagewait_ns` is `0` where the kernel reports no page wait (section 23.1) |
 | `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
-| `victim`, `child_exited` | boolean | the run's latest view of its command |
-| `tree` | boolean | `true` when the process whose pid the name carries, with its descendants, carries the grant's work, so that its tree's resident memory measures the hold (section 5.2). The CLI's run writes it (its command is its child) |
+| `victim` | boolean | `true` when a stop round may list the hold: its label has no `no_restart` (section 5.4) and its command does not share coreslot's process group |
+| `child_exited` | boolean | `true` once the run's command has exited |
+| `tree` | boolean | `true` when the process whose pid the name carries, with its descendants, carries the reservation's work. The CLI's run writes it (its command is its child) |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -593,9 +454,11 @@ as large as 2^64 − 1 (section 7.1) while `start_ns` is a signed 64-bit integer
 carries a start-ns above 2^63 − 1 never has a well-formed body and is ignored and counted. No
 writer produces one, because the wall clock is a signed 64-bit value.
 
-Only the holder writes its body, at publication and then in place: one write at offset 0 of the
-whole body, padded with spaces to the length it replaces, so that the file and its lock keep their
-inode and the file never shrinks (I1). It keeps `label`, `pid` and `start_ns`.
+Only the holder writes its body, at publication and then in place at every tick (section 23.1):
+one write at offset 0 of the whole body, padded with spaces to the length it replaces, so that the
+file and its lock keep their inode and the file never shrinks (I1). It keeps `label`, `pid` and
+`start_ns` as they were. A reader MAY still see a body that does not parse; it then treats the
+live hold as section 7.2 says.
 
 ### 7.5 Cancel request
 
@@ -636,9 +499,9 @@ admission (12.1), publication of an unbudgeted hold (14), and removal of the
 client's own ticket after cancellation or withdrawal (13) or of its own hold (12.3); the resume bump
 of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
 removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
-itself), nor does writing `FORMAT`, `degraded`, `admit.lock` or the run log. A crash can separate a
-removal from its bump, so a reader never relies on a bump to learn that an entry is gone (section
-10.3).
+itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `admit.lock` or the run log, nor the
+holder's rewrite of its own hold's body. A crash can separate a removal from its bump, so a reader
+never relies on a bump to learn that an entry is gone (section 10.3).
 
 ### 7.9 degraded
 
@@ -655,35 +518,63 @@ starts a new record: `first_ns` is now and `count` is 1.
 `$S/log/runs.jsonl` holds one JSON object per line (section 20). Readers MUST skip lines they cannot
 parse.
 
+### 7.11 watch.json
+
+`$S/watch.json` is the watchdog's shared state (section 23): the last machine sample, the detector
+that has advanced on it, and the last stop list. It is written only inside the section and replaced
+with a plain `rename` (section 11), without a `gen` bump. It is one JSON object of at most 1 MiB,
+but it is not a strict body: a missing, unreadable, oversized or malformed file reads as the empty
+state (no sample, level green, no stop list), and a key a reader does not know is ignored. Every
+client that does not run the detector needs only these keys:
+
+| Key | Type | Content |
+|---|---|---|
+| `sampled_ns` | integer | the wall clock of the client that took the sample, when it did; `0` with no sample |
+| `sample.host.WallNS` | integer | the sample's host clock, on a clock that counts the time the machine slept (section 23.2); the readings under `sample.host` carry their Go field names |
+| `detector.level` | integer | `0` green, `1` unknown, `2` yellow, `3` red, `4` floor (section 23.4) |
+| `detector.yellow_cleared_ns` | integer | the host clock when the level last fell from yellow, red or floor to green; `0` before |
+| `detector.calm_since_ns` | integer | the host clock since which the level has been green without a break; `0` while it is not green |
+| `detector.last_admit_ns` | integer | the host clock of the last admission recorded for spacing (section 12.4); `0` before |
+| `detector.last_round_ns` | integer | the host clock of the last stop round (section 23.5); `0` before |
+| `detector.stop` | array of strings | the hold names the last stop round listed |
+
+The other keys under `sample` and `detector` are the detector's own state (the readings, the
+window, the rates, the excess, the leaky bucket, the yellow latch, the episode count). A detector
+that finds them missing starts afresh; a client that does not run the detector ignores them.
+Times named `…_ns` under `detector` are on the host clock of the sample, not on the wall clock: a
+reader brings one to the present by adding the sample's age, `host_now = sample.host.WallNS + (now
+− sampled_ns)`.
+
 ## 8. The admission critical section
 
 `admit.lock` is the protocol's linearization point. Enqueue, admission, cancellation publication,
 reconciliation and run-log rotation MUST happen while holding
-`flock(LOCK_EX)` on it; so does every other publication (section 11) and every removal of a
-ticket, hold, cancel request or temporary file. A refresh (section 10.2), a token probe and a
-run-log append happen outside it.
+`flock(LOCK_EX)` on it; so does every other publication (section 11), every write of `watch.json`
+and every removal of a ticket, hold, cancel request or temporary file. A refresh (section 10.2), a
+probe, the rewrite of a hold's own body and a run-log append happen outside it.
 
 - **Entry is non-blocking.** A client tries `LOCK_EX|LOCK_NB` and retries with backoff from 10 ms
   up to 250 ms, checking its own deadline or cancellation between tries; it MUST NOT sleep inside
-  `flock`. A single-attempt operation (a library `Poll`) makes one try. A client that cannot enter
+  `flock`. A single-attempt operation (a no-wait try) makes one try. A client that cannot enter
   by its deadline gives up without having changed anything.
-- **The section never waits** for anything but the filesystem: no sleeping for capacity, no lock
-  other than non-blocking ones, bounded work.
+- **The section never waits** for anything but the filesystem: no sleeping for memory, no lock
+  other than non-blocking ones, bounded work. Reading the machine's memory and the host readings
+  (section 23.2) is bounded work: a few sysctls or `/proc` reads, no subprocess.
 - A client SHOULD prevent its own job-control stop while it holds any lock it took only
-  momentarily: while inside the section, and while it holds the probe lock of a token, ticket or
-  hold (section 6), inside the section or outside it. A process stopped holding a probe lock makes
-  every other client count that token as locked, or that ticket or hold as live, until it
-  continues, so a head whose minimum needs that token is not admitted although nobody is stopped
-  inside the section. The locks a client owns (its ticket while it waits, its hold and tokens
-  while its grant lives) are not momentary: a stopped holder keeps only its own grant. The CLI
+  momentarily: while inside the section, and while it holds the probe lock of a ticket or hold
+  (section 6), inside the section or outside it. A process stopped holding a probe lock makes
+  every other client count that ticket or hold as live until it continues, so a head whose need
+  that hold's reservation keeps out is not admitted although nobody is stopped inside the section.
+  The locks a client owns (its ticket while it waits, its hold while its reservation lives) are not
+  momentary: a stopped holder keeps only its own reservation. The CLI
   ignores `SIGTSTP`, `SIGTTIN` and `SIGTTOU` from each try to take such a lock until it has
   closed the descriptor that took it, but not while it sleeps between tries to enter the section;
-  a library never installs signal handlers. `SIGSTOP` cannot be ignored: a process stopped inside
-  the section blocks every admission on the machine until it continues or dies. This is the one
-  exception to I5. The CLI's stop is deferred, not lost: in non-terminal mode without
-  `run --same-group` it forwards
-  `SIGTSTP` to its command's process group and then stops itself, once it holds no momentary
-  lock, and forwards `SIGCONT` to that group when it is continued.
+  a client never installs signal handlers on behalf of its caller. `SIGSTOP` cannot be ignored: a
+  process stopped inside the section blocks every admission on the machine until it continues or
+  dies. This is the one exception to I5. The CLI's stop is deferred, not lost: in non-terminal mode
+  without `run --same-group` it forwards `SIGTSTP` to its command's process group and then stops
+  itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
+  continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
   says; when `FORMAT` is missing it writes `coreslot-protocol 2` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
@@ -698,9 +589,10 @@ The queue orders by arrival alone:
 order-key = max(0, arrival_ns)      (ascending; ties by pid, then seq)
 ```
 
-`arrival_ns` is the wall clock read inside the enqueue section. A ticket is **ahead** of another
-when its (order-key, pid, seq) is smaller. A wall-clock step misorders the tickets enqueued across
-it by at most the size of the step and affects nothing else.
+`arrival_ns` is the wall clock read inside the enqueue section, except for a run that comes back
+after a stop: its `arrival_ns` is its first arrival, and so it keeps its place (section 24). A
+ticket is **ahead** of another when its (order-key, pid, seq) is smaller. A wall-clock step
+misorders the tickets enqueued across it by at most the size of the step and affects nothing else.
 
 ## 10. Liveness, waiting and reconciliation
 
@@ -724,10 +616,9 @@ until the observer next examines it is not counted towards the 10 s, though a va
 meanwhile still counts as a change. Nor is the observer's own absence counted: when more than 3 s
 pass between its last examination and its next election (it was stopped, suspended or starved),
 that interval is not counted towards the 10 s for any ticket it observes. The 3 s are 1.5 times
-the longest a conforming waiter leaves between elections, 2 s, the interval of its refreshes (the Go
-library likewise asks for a Poll at least every 2 s), so that a waiter electing at that interval,
-with scheduling jitter on top, still watches. The head's maximum backoff, 0.5 s (section 10.3), is
-shorter and stays inside it.
+the longest a conforming waiter leaves between elections, 2 s, the interval of its refreshes, so
+that a waiter electing at that interval, with scheduling jitter on top, still watches. The head's
+maximum backoff, 0.5 s (section 10.3), is shorter and stays inside it.
 
 When a waiter's own refresh gap exceeded 10 s on either its monotonic or its wall clock (it was
 suspended), it bumps `gen` in the section after refreshing. The bump never delays a refresh: a
@@ -757,52 +648,39 @@ A waiter:
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.
 
-> **Implementation note.** The conformance traces' 22 s bound cannot tell a waiter that watches the
-> front window from one that does not; the Go unit tests enforce it.
+**Passing.** A waiter whose own ticket is among the first 4 tickets of the queue that are not gone,
+counted as the front window counts them, MAY be admitted while live tickets are ahead of it, when
+its need fits `room − Σ need_ahead`: the room of section 12.1 less the `need_mib` of every counted
+ticket ahead. Every ticket ahead counts except one the election passes over as STALLED, dead or
+canceled; a ticket the waiter has never observed counts as live. A waiter whose headroom is unknown
+does not pass. An entry ahead whose name matches the ticket grammar but whose body cannot be read
+or is malformed, or that is a stray (section 4.2), makes the waiter not pass. This fails closed,
+unlike the election, where such an entry takes no place in the queue (section 7.2): the waiter goes
+on waiting and is elected as before. The idle rule of section 12.1 does not apply to a passer. The
+decision is made inside the section (section 12.1 step 5); a waiter MAY make the same check
+outside the section first, to enter only when it would pass, but that check decides nothing.
 
-**Minimums before extras.** A waiter whose own ticket is among the first 4 tickets of the queue
-that are not gone, counted as the front window counts them, MAY be admitted while live tickets are
-ahead of it, when for every declared resource it requests its plan fits in `free − Σ min_ahead`:
-the minimum and extra passes of section 12.1 step 6 are made against that reduced free.
-`min_ahead` is, for each counted ticket ahead, the effective minimum (section 12.2, against the
-same sizes) of that resource in its `need`; a ticket that does not name the resource contributes
-nothing, and neither does a resource that is not declared. Every ticket ahead counts except one
-the election passes over as STALLED, dead or canceled; a ticket the waiter has never observed
-counts as live. A waiter whose `mem` is sized from the live size (section 5.2) does not pass: the
-minimums ahead are counted against the configured size. An entry ahead whose name matches the
-ticket grammar but whose body cannot be read or is malformed, or that is a stray (section 4.2),
-makes the waiter not pass. This fails closed,
-unlike the election, where such an entry takes no place in the queue (section 7.2): the waiter
-goes on waiting and is elected as before. The decision is made inside the section (section 12.1
-step 5); a waiter MAY make the same check outside the section first, to enter only when it would
-pass, but that check decides nothing.
-
-The rule never lets a waiter past a ticket ahead on a resource that ticket is short of and the
-waiter names: there `free − Σ min_ahead` is below zero. It moves work past a head that is short of
-a resource the waiter does not name, such as cpu-only runs past a head waiting for a `pg-local`
-slot. Nor does it starve a ticket ahead on the configured size: a passer takes nothing of a
-resource whose free is already below the minimums ahead and leaves at least those minimums free of
-every other, so tokens released later reach the tickets ahead as before, and I5 holds. Where a
-client uses the live size of `mem` (section 5.2), a passer that names no `mem` still uses memory
-that is in no reservation, so it can lower the headroom a head's live size would use. A client
-that does not implement the rule waits for its election and conforms.
+The rule moves a small request past a head that waits for a large one only while the room still
+covers the small one after the whole of every need ahead: it takes nothing from the tickets
+ahead, so memory released later reaches them as before, and I5 holds. A client that does not
+implement the rule waits for its election and conforms.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
-whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting, and
-the budget stays safe: it is counted from token locks, not tickets, so I3 and I7 still hold. The
-waiter does lose its place, though. No other client sees the ticket any more, so waiters behind it
-may be elected and admitted first, `status` does not show it, and it cannot be canceled by label;
-a cancel request naming its exact id may still reach it, but only from a canceller that publishes
-without checking `queue/` first (section 13.1), and only until a reconciliation removes the request,
-whose ticket name is gone (section 10.4, step 2). When it later removes its ticket
-(admission, cancellation, withdrawal), `ENOENT` counts as success.
+whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting. It
+loses its place, though. No other client sees the ticket any more, so waiters behind it may be
+elected and admitted first, `status` does not show it, and it cannot be canceled by label; a cancel
+request naming its exact id may still reach it, but only from a canceller that publishes without
+checking `queue/` first (section 13.1), and only until a reconciliation removes the request, whose
+ticket name is gone (section 10.4, step 2). When it later removes its ticket (admission,
+cancellation, withdrawal), `ENOENT` counts as success.
 
-A waiting CLI prints one line every 30 s, for example `coreslot: waiting for cpu 4..12: position 2
-(1m30s); holders: gate:unit pid 4711 cpu12 (3m12s), ci:o-r pid 5120 cpu3 (1m05s)`: the request, its
-position, how long it has waited and the live holds with their grants and ages (informative).
-The position is one plus the tickets ahead that the examination has not passed over, an upper
-bound: tickets beyond the one that ended the examination are counted without being examined. A
-waiter that passes under the rule above is admitted before its position reaches 1.
+A waiting CLI prints a line when it begins to wait and then every 30 s, for example
+`coreslot: waiting for mem 3 GiB: position 2 (1m30s); holders: gate:unit pid 4711 mem 2 GiB
+(3m12s), ci:o-r pid 5120 mem 1 GiB (1m05s)`: the request, its position, how long it has waited and
+the live holds with their needs and ages (informative). The position is one plus the tickets ahead
+that the examination has not passed over, an upper bound: tickets beyond the one that ended the
+examination are counted without being examined. A waiter that passes under the rule above is
+admitted before its position reaches 1.
 
 ### 10.4 Reconciliation
 
@@ -812,7 +690,8 @@ client that enters the section for any purpose other than admission
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
 reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
-finds it missing and does not by itself make that entry reconcile. Admission never reconciles, and neither does a reset (section 4.4). Reconciliation:
+finds it missing and does not by itself make that entry reconcile. Admission never reconciles, and
+neither does a reset (section 4.4), and neither does a watchdog tick (section 23.1). Reconciliation:
 
 1. probes every ticket in `queue/` and every hold in `holds/`; for each probe that succeeds, unlinks
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
@@ -832,7 +711,8 @@ whole machine.
 
 ## 11. Atomic publication
 
-Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FORMAT` or `degraded`:
+Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FORMAT`, `degraded`
+or `watch.json`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
    target's directory; on `EEXIST` (a young leftover of an earlier process with the same pid) the
@@ -851,7 +731,7 @@ Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FOR
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
      already requested, which is not an error (section 13.1);
-   - `gen`, `FORMAT`, `degraded`: with a plain `rename`.
+   - `gen`, `FORMAT`, `degraded`, `watch.json`: with a plain `rename`.
 
 The writer keeps its original descriptor: writing the body never closes the only lock-carrying
 descriptor. Temporary files are created only inside the section. A writer whose publication fails
@@ -866,17 +746,30 @@ older than 30 s (section 10.4).
 
 ### 12.1 Steps
 
+The room is
+
+```
+room = headroom − reserve − Σ over live holds of max(0, need − footprint)
+```
+
+where `headroom` and `reserve` are the readings of section 5.1 and the configuration (section 5.3),
+and a **live hold** is a well-formed hold of `holds/` whose probe fails because some process holds
+it. A live hold contributes its `need_mib` less its `footprint_mib`, and nothing when the footprint
+is the larger or `need_mib` is 0 (a run outside the budget). A live hold whose body does not
+parse contributes the cold start need (section 5.1) in full. Stray and gone holds are left out.
+The room may be negative. A request **fits** when its need is at most the room.
+
 Inside the section the head:
 
 1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1);
-2. recomputes sizes (section 5.2) from the configuration and `cpus`;
-3. computes the effective request of each requested declared resource (section 12.2);
-4. counts, for each such resource, the tokens locked at **every** existing index (section 6);
-   `free = size − locked`. A client that implements the live size of `mem` (section 5.2) computes
-   it here, after counting, from the configured size and this locked count; when it is above the
-   configured size, `mem`'s effective request (step 3) and `free` are computed again against it;
-5. if any resource's `free` is below its effective `min`, leaves the section and waits. Otherwise it
-   repeats the election (section 10.3) over a fresh listing of `queue/`, the **re-election**: every
+2. reads the configuration and the machine's memory (section 5.1); an invalid configuration or an
+   unknown `memory` is a state error (section 14);
+3. lists the live holds and computes the room;
+4. applies the **idle rule**: when no hold is live, the head starts whatever the numbers say; idle
+   means "no coreslot job running", never machine load. When a hold is live and the headroom is
+   known, the head leaves the section and waits unless its request fits. When the headroom is
+   unknown nothing gates the head;
+5. repeats the election (section 10.3) over a fresh listing of `queue/`, the **re-election**: every
    well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
    this observer (its mtime from the listing counts as an observation), the head leaves the section
    and waits. A ticket the head has never observed, such as one published after its election,
@@ -885,65 +778,38 @@ Inside the section the head:
    A waiter that entered the section to pass under section 10.3's rule, and a head whose
    re-election finds a live ticket ahead (one published since its election), take these steps as
    the head does, except that at the re-election, instead of leaving when a live ticket is ahead, it
-   checks on the fresh listing that its own ticket is in the front window, reads the `need` of
-   every ticket ahead that counts, and leaves and waits if its ticket is not in the window or if
-   any entry ahead makes it not pass (section 10.3). Otherwise it reduces each resource's `free`
-   by `Σ min_ahead` and goes on to step 6 only if its effective `min` of every resource fits in
-   the reduced free; step 6 then takes against the reduced free;
-6. otherwise takes tokens with `LOCK_EX|LOCK_NB` at indices below the size, creating missing token
-   files and skipping a token that turns out locked, in two passes, each in ascending resource name
-   and then ascending index:
-   1. the **minimum pass** takes the effective `min` of every resource; if any resource ends it
-      below its effective `min` (a race with a non-queued taker), the head closes everything it
-      took this round, leaves the section and waits;
-   2. the **extra pass** takes further tokens of each resource, up to `min(effective max, free)`
-      for that resource, while the grant holds fewer than 512 tokens in total;
+   checks on the fresh listing that its own ticket is in the front window, reads the need of every
+   ticket ahead that counts, and leaves and waits if its ticket is not in the window, if the
+   headroom is unknown, if any entry ahead makes it not pass (section 10.3), or if its need does
+   not fit the room less those needs;
+6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
+   request back;
+7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket, bumps `gen`,
+   and leaves the section.
 
-   and checks I1 for every token it now holds: the held file is still linked (`st_nlink > 0`) and
-   `(st_dev, st_ino)` of its path is the held file's. A mismatch (the token file was deleted or
-   replaced) is a state error (section 14): the head closes every token it took and leaves the
-   section without publishing anything. The check MAY be made per token as it is taken;
-7. publishes its hold listing exactly the indices it holds, closes its ticket descriptor, unlinks
-   its ticket, bumps `gen`, and leaves the section.
+> **Implementation note.** For a live hold that says `"tree": true` and whose pid no other live
+> hold names, the Go client may measure the tree's footprint itself at admission and use it in
+> place of the body's `footprint_mib`: the tree is the process with that pid and its descendants,
+> less the subtree of every other live hold's pid. A process listing that fails leaves the body's
+> value.
 
-Resources the request names that the configuration does not declare are not budgeted: they take
-no tokens, appear in the hold's `unbudgeted_resources`, and the run prints one notice line; this is
-not degraded mode.
+### 12.2 Oversized request
 
-Taking every minimum first means the 512-token cap can never starve a later resource below its
-minimum. For example, with sizes of at least 256 and everything free, `cpu=100..256`,
-`db=100..256` and `gpu=100..256` take 100 each in the minimum pass; the extra pass then gives `cpu`
-156 more (256) and `db` the remaining 56 (156), and `gpu` stays at 100: 512 in total.
-
-A 1-token request on a free 8-token resource leaves 7 acquirable (I2). After a shrink from 14 to 12
-with a live hold on indices 10-13, the next request sees `locked = 4`, `free = 8`, and can take at
-most 8 tokens from indices 0-9 (I3).
-
-### 12.2 Effective request and clamp
-
-For each requested declared resource of size `s` with request `min..max`:
-
-- when `min > s`, the effective request is `s..s` and the resource is **clamped**: it waits for the
-  whole resource, runs alone on it, and its hold's `clamped` records the requested `min`;
-- otherwise the effective request is `min..min(max, s)`.
-
-`mem` clamps like any other resource. A clamped CLI run prints a notice (`coreslot: cpu: requested
-16, budget is 10; running alone with 10`, or for `mem` in bytes, `coreslot: mem: requested 10 GiB,
-budget is 9.5 GiB; running alone with 9.5 GiB`; against a live size of 96, section 5.2,
-`coreslot: mem: requested 20 GiB, more than the budget and free memory allow; running alone with
-12 GiB`), and its
-`{n}` is the clamped grant (for a `cpu_per_worker` entry, the workers it pays for, section 5.4). A `mem` need
-above 32 GiB, the 256 tokens a range may name (section 7.3), reserves 32 GiB.
+A need above `memory` less `reserve` fits no room, since the room never exceeds the headroom less
+the reserve. Such a request starts only under the idle rule, when no hold is live, and runs alone:
+its remaining growth, the need less its footprint, keeps the room of every later request negative.
+The hold's `need_mib` is the need asked, and so is `CORESLOT_GRANTED_MEM`. A CLI run says so once, before it queues
+(`coreslot: needs 40.0 GiB of 32.0 GiB; runs only alone`).
 
 ### 12.3 After the command exits
 
-At release, before it closes anything, a holder MUST check the identity of its hold and of every
-token it holds, comparing `fstat` of each descriptor with its path. A **mismatch** is any of: a held
-file with `st_nlink == 0`; a path whose `(st_dev, st_ino)` is not the held file's; a hold or token
-path that is missing or cannot be stat'ed. A mismatch is a state error (section 14): the grant's
-paths no longer name the files it holds, because the directory, or an entry in it, was removed or
-replaced. On a mismatch the holder MUST close every descriptor of the grant, the hold's first, and
-MUST NOT write anything into the state directory as it now exists:
+At release, before it closes anything, a holder MUST check the identity of its hold, comparing
+`fstat` of its descriptor with its path. A **mismatch** is any of: a held file with
+`st_nlink == 0`; a path whose `(st_dev, st_ino)` is not the held file's; a hold path that is
+missing or cannot be stat'ed. A mismatch is a state error (section 14): the hold's path no longer
+names the file it holds, because the directory, or an entry in it, was removed or replaced. On a
+mismatch the holder MUST close its descriptor of the hold, and MUST NOT write anything into the
+state directory as it now exists:
 
 - it MUST NOT remove its hold by path;
 - it MUST NOT enter the admission section: entering may write `FORMAT` (section 15.1) into a
@@ -951,17 +817,36 @@ MUST NOT write anything into the state directory as it now exists:
 - it MUST NOT write a `degraded` record;
 - it MUST NOT append a run-log line (section 20).
 
-It reports the state error to its caller (a library) or on stderr (the CLI); the CLI still exits
-with the command's own status (section 19). Reporting degraded mode at release therefore means
-telling the user, not writing a `degraded` record.
+It reports the state error to its caller on stderr; the CLI still exits with the command's own
+status (section 19). Reporting degraded mode at release therefore means telling the user, not
+writing a `degraded` record.
 
-Without a mismatch, the run closes its copies of the grant's descriptors, the hold's before any
-token's, so that a live hold never lists a token nobody locks (I1, I2). The CLI then enters the
+Without a mismatch, the run closes its copy of the hold's descriptor. The CLI then enters the
 section if it can within 2 s, probes its hold and unlinks it only if the probe succeeds (no
 descendant still holds it), bumping `gen` when it did (section 7.8); otherwise reconciliation
-removes the hold later.
-Other clients MAY remove their hold the same way, or leave it to reconciliation. This applies to
-every hold a run published, including a fail-open run's unbudgeted hold (section 14).
+removes the hold later. Other clients MAY remove their hold the same way, or leave it to
+reconciliation. This applies to every hold a run published, including a fail-open run's unbudgeted
+hold (section 14), and to the hold of a stopped attempt (section 24).
+
+### 12.4 The level gate
+
+The gate reads `watch.json` (section 7.11) inside the section, and only while a hold is live. The
+stored sample is **fresh** when `0 < sampled_ns ≤ now` and `now − sampled_ns ≤ 6 s` on the wall
+clock, three tick periods; a stale or absent sample is no reading. With `host_now` as section 7.11
+defines it:
+
+- not fresh: the gate holds nothing back, except from a restarted run (below);
+- fresh and `detector.level` is yellow, red or floor: nothing new starts. Unknown does not hold a
+  request back;
+- otherwise (green, or unknown): after a level that was yellow, red or floor has cleared, at most
+  one request starts per `spacing_s`. For `spacing_s` after `yellow_cleared_ns`, an admission is recorded in
+  `detector.last_admit_ns`, and no further request starts until `spacing_s` has passed since the
+  recorded one.
+
+A **restarted** run (section 24) that finds a hold live additionally needs a fresh sample, the
+level green, the level calm for `calm_s` (`host_now − calm_since_ns ≥ calm_s`), and, when the
+headroom is known, a room of at least its need plus `max(256 MiB, need / 10)`. With no hold live,
+the idle rule starts it like any other.
 
 ## 13. Cancellation and withdrawal
 
@@ -972,11 +857,11 @@ section. It MAY first check, in that section, that `queue/` holds a ticket with 
 nothing when it does not; a request whose ticket is gone is removed by reconciliation either way
 (section 10.4, step 2). The owner checks `cancel/` for its id on every poll and again at admission
 step 1, so a cancel published before the owner's admitting section wins; one published later finds
-no ticket and has no effect: cancellation never revokes a grant. A canceller that finds the request
-already published (section 11) treats the cancellation as already requested; that is not an error.
-On finding it, the owner closes its ticket descriptor (the ticket is dead at once), removes the
-ticket and the cancel request in its next section if it can enter one (bumping `gen`, section 7.8),
-and stops: the CLI exits with the refusal code, a library returns its cancellation error.
+no ticket and has no effect: cancellation never revokes a hold, and never stops a command. A
+canceller that finds the request already published (section 11) treats the cancellation as already
+requested; that is not an error. On finding it, the owner closes its ticket descriptor (the ticket
+is dead at once), removes the ticket and the cancel request in its next section if it can enter one
+(bumping `gen`, section 7.8), and stops: the CLI exits with the refusal code.
 
 > **Implementation note.** The Go CLI checks `queue/` first and refuses, with a diagnostic that no
 > such ticket is waiting, when there is none.
@@ -992,20 +877,18 @@ remove its ticket in a section, bumping `gen` (section 7.8); otherwise reconcili
 
 | Class | Examples | Outcome |
 |---|---|---|
-| usage | malformed need, `min > max`, `max > 256`, more than 8 resources, minimums summing above 512, duplicate resource, unknown flag | exit 64; nothing runs |
-| refusal | a no-wait or fail-on-timeout request expiring, cancellation, invalid nested context (section 18), strict mode turning any of the next row into a refusal | the refusal code (section 19); nothing runs |
-| state error | unusable directory, refused filesystem, unexpected file types or owners, directory full, malformed `FORMAT`, invalid configuration, an inode mismatch at a held token (I1) | fail-open unless strict |
+| usage | a need of 0 or above 1 PiB, a size that is not one, a label above 128 bytes, a flag the command does not know, no command | exit 64; nothing runs |
+| refusal | a no-wait or fail-on-timeout request expiring, cancellation, strict mode turning any of the next row into a refusal, giving up after 3 stops (section 24) | the refusal code (section 19); nothing runs, or the run ends |
+| state error | unusable directory, refused filesystem, unexpected file types or owners, directory full, malformed `FORMAT`, invalid configuration, an inode mismatch at a held hold (I1) | fail-open unless strict |
 | internal | the command cannot be started | exit 70, or 126 / 127 |
 
-Two cases are deliberately **not** state errors: an undeclared resource (section 12.1) and an
-unknown format (section 15.2).
+An unknown format (section 15.2) is deliberately **not** a state error.
 
-**Fail-open** runs the command at once with `min` of each named resource, and:
+**Fail-open** runs the command at once, outside the budget, and:
 
 - prints a diagnostic to stderr immediately, always;
-- publishes a hold with `"unbudgeted": true`, an empty `grant` and every resource it names in
-  `unbudgeted_resources` when the directory is usable and its format understood, so `status` shows
-  it, and bumps `gen` in that section (section 7.8);
+- publishes a hold with `"need_mib": 0` when the directory is usable and its format understood, so
+  `status` shows the run, and bumps `gen` in that section (section 7.8);
 - records the reason in the run log and in `degraded` when those are writable, and says on stderr
   when they are not;
 - exports `CORESLOT_UNBUDGETED=<reason>` to the command, so nested runs pass through (section 18);
@@ -1017,22 +900,14 @@ client interprets: section 18 acts on the variable being set, never on its value
 text conforms.
 
 A state error found at release (section 12.3) is not a fail-open: the command has already run with
-its grant. It is reported and nothing is written; the rules above do not apply to it.
+its reservation. It is reported and nothing is written; the rules above do not apply to it.
 
 A run whose wait timed out and that runs anyway (the CLI's `--on-timeout run`) withdraws its ticket
-(section 13.2) and runs with `min` of each named resource outside the budget. It is not a state
-error: it publishes the same unbudgeted hold, exports `CORESLOT_UNBUDGETED=<reason>` and records
-the reason in its run-log line's `fail_open`, but it writes no `degraded` record. The same `FORMAT`
-rule applies.
+(section 13.2) and runs outside the budget. It is not a state error: it publishes the same
+unbudgeted hold, exports `CORESLOT_UNBUDGETED=<reason>` and records the reason in its run-log
+line's `fail_open`, but it writes no `degraded` record. The same `FORMAT` rule applies.
 
 > **Implementation note.** The Go CLI's reason for such a run is `timeout`.
-
-A **light** run (the CLI's `--light`) is one its caller declares too light to budget: it publishes
-no ticket and runs at once with `min` of each named resource outside the budget, exactly as a run
-whose wait timed out, with the same unbudgeted hold, `CORESLOT_UNBUDGETED=<reason>`, run-log
-`fail_open` and `FORMAT` rule, and no `degraded` record.
-
-> **Implementation note.** The Go CLI's reason for a light run is `light`.
 
 `status` reports degraded mode and exits 3 until `coreslot doctor --clear` removes the record. It
 also exits 3 while a state error makes runs fail open (section 19).
@@ -1052,10 +927,10 @@ A client that finds no `FORMAT` writes `coreslot-protocol 2` inside the section.
 
 A state directory whose format is not 2 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
-writes nothing (no ticket, hold, log, degraded record, `gen` bump or `admit.lock` body), and its
-run fails open (section 14) with the one notice `state format <n> is not supported; run coreslot
-doctor --reset`; under `--strict` it refuses with that notice. The decision is made at every
-section entry from the `FORMAT` read there (section 8).
+writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json` or `admit.lock`
+body), and its run fails open (section 14) with the one notice `state format <n> is not supported;
+run coreslot doctor --reset`; under `--strict` it refuses with that notice. The decision is made at
+every section entry from the `FORMAT` read there (section 8).
 
 A waiting client reads `FORMAT` at every section entry; one that finds the format changed under
 it closes its ticket's descriptor, so the ticket is dead at once, and fails open. It does not
@@ -1063,9 +938,9 @@ remove the file: that would be a write into a format it does not implement.
 
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
 another format a client publishes no cancel request or unbudgeted hold, records and clears no
-`degraded`, and does not remove its own hold after a run. A fail-open run still runs its command
-but writes nothing. `coreslot doctor --reset` recreates the directory as format 2 when nothing of
-either format is live.
+`degraded`, and does not remove its own hold after a run. A fail-open run still
+runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 2
+when nothing of either format is live.
 
 > **Implementation note.** The Go CLI refuses cancellation and `doctor --clear` under another
 > format, with the same notice.
@@ -1075,25 +950,27 @@ either format is live.
 The CLI runs the command without a budget and prints one warning per run; `[platform]
 windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel` and `doctor`
 exit 70 on Windows (there is no budget to inspect, cancel or repair), and their `--help` exits 0.
+There is no watchdog on Windows.
 
 ## 17. Descriptor and environment contract
 
-A run that starts a command with a grant gives it fd 3, the hold's lock-carrying descriptor, when
-the run has a hold; otherwise fd 3 is closed in the child (a Go launcher passes a nil
-`ExtraFiles[0]`). An inherited descriptor at 3 is not passed on, so a launcher that needs its own
-descriptors in the command places them above. It sets this environment:
+A run that starts a command with a hold gives it fd 3, the hold's lock-carrying descriptor;
+otherwise fd 3 is closed in the child (a Go launcher passes a nil `ExtraFiles[0]`). An inherited
+descriptor at 3 is not passed on, so a launcher that needs its own descriptors in the command
+places them above. It sets this environment:
 
 | Variable | Value |
 |---|---|
-| `CORESLOT_GRANTED_MEM` | the memory granted, in MiB: the need, or the capacity that clamped it, or, for a run outside the budget, its need |
+| `CORESLOT_GRANTED_MEM` | the memory the run reserves, in MiB: its need, also for a run outside the budget |
 | `CORESLOT_HELD_FD` | `3`, when the run passes a hold descriptor |
 | `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 
 Every descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section
-4.2).
+4.2). A run that starts its command again after a stop (section 24) builds the contract from the
+hold of the new attempt: `CORESLOT_HOLD` names that hold.
 
-A run that is not a pass-through (section 18 rules 1 and 2) builds this contract from its own grant
+A run that is not a pass-through (section 18 rules 1 and 2) builds this contract from its own hold
 only. An ordinary or `--independent` request, a fail-open run removes every inherited
 `CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_HOLD` and `CORESLOT_UNBUDGETED` from the
 command's environment before setting their own, and closes (does not pass on) exactly the
@@ -1101,21 +978,15 @@ inherited descriptor `CORESLOT_HELD_FD` names, so that a grandchild does not kee
 not its parent's alive. A named descriptor that is a standard stream (0, 1 or 2) or not a regular
 file cannot be a hold's (its number was reused after a launcher closed the original), and a client
 SHOULD leave it open. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
-user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not grant context and
+user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not hold context and
 is passed on.
 
 > **Implementation note.** The Go CLI closes the named descriptor only when it is a regular file at
 > fd 3 or above.
 
-**Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
-`cpu` (or of `RES`), and `{n:mem}` by the `mem` grant in MiB, as `CORESLOT_GRANTED_MEM` gives it.
-A client that sized `cpu` from a `cpu_per_worker` entry fills `{n}` with the worker count instead
-(section 5.4), and a preemptible run fills it from its request before it shrank to one token.
-`{{n}}` is a literal `{n}` and `{{n:RES}}` a literal `{n:RES}`; with `--subst`, placeholders inside
-arguments are replaced too (`make -j{n}`). The grant of a resource run unbudgeted is the value of
-its `CORESLOT_GRANTED_<RES>`. A placeholder naming a resource the
-request does not name (`{n}` in a request without `cpu`, `{n:RES}` for another `RES`) is a usage
-error, detected before the request queues.
+On Linux a run SHOULD set its own `oom_score_adj` to 500 before it starts the command, which
+inherits it, so that the kernel's or systemd-oomd's out-of-memory kill takes a restartable job
+rather than the desktop.
 
 ## 18. Nested runs: pass-through
 
@@ -1123,8 +994,7 @@ A run decides its context from the environment it inherited ("set" as defined in
 empty variable is absent), in this order:
 
 1. `CORESLOT_UNBUDGETED` is set (and the run is not `--independent`): it runs unbudgeted with its
-   `min` of each resource, prints a notice, passes the variable on, and writes no degraded record
-   of its own.
+   need, prints a notice, passes the variable on, and writes no degraded record of its own.
 2. `CORESLOT_HOLD` names a hold (and the run is not `--independent`) whose pid is an ancestor of
    the run and whose fresh probe in `$S/holds/` fails (some process holds it): it is a
    **pass-through**, inside its parent's reservation. It does not queue, enter the section or lock
@@ -1136,15 +1006,13 @@ empty variable is absent), in this order:
 3. Otherwise, or with `--independent`, it is an ordinary request.
 
 A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and writes nothing under
-`$S` but its run-log line (section 20): no ticket, hold, `gen` bump or degraded record.
+`$S` but its run-log line (section 20): no ticket, hold, `gen` bump or degraded record. It has no
+hold of its own, so it neither ticks nor is listed by a stop round; the memory it uses is part of
+its parent's footprint.
 
-Nested runs are **not** budgeted against each other: two siblings started together under a 1 GiB
-grant both run with 1 GiB. A parent that wants concurrent children partitions its grant itself.
-
-A preemptible parent (section 5.4) that names `cpu` holds one cpu token, so a pass-through under
-it runs with one cpu token, and its cpu placeholder is what one token gives (1, or the workers one
-token pays for under a `cpu_per_worker` entry), whatever its request; the parent's own
-placeholders keep its request's width.
+Nested runs are **not** budgeted against each other: two siblings started together under a 3 GiB
+reservation both run with 3 GiB. A parent that wants concurrent children partitions its reservation
+itself.
 
 ## 19. Exit status
 
@@ -1152,7 +1020,7 @@ placeholders keep its request's width.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1161,20 +1029,21 @@ placeholders keep its request's width.
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
 `status` exits 3, `doctor` exits 1 and `cancel` refuses with 75. `--help` prints on stdout and exits
-0 for every command.
+0 for every command. A command's own exit 75 is its status like any other: the run prints no marker
+for it, and only a give-up (section 24.2) prints one.
 
 ## 20. Run log
 
 Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` with a single
 `O_APPEND` write (outside the section), into a directory whose `FORMAT` it has read and understood
-during the run (section 14); a run whose release found a mismatch writes no line (section 12.3).
-`FORMAT` may change while the command runs, so the writer reads it again, outside the section,
-immediately before the write, and writes no line when it is absent, malformed or names a format
-the writer does not implement. A pass-through (section 18), valid or unbudgeted, appends too: that
-read is its only one (it never writes a missing `FORMAT`, and then writes no line), it marks its
-line `"nested": true`, and it never rotates the log. A line that
-would exceed 4 KiB MAY be fitted by shortening an informative string; a writer that cannot fit it
-writes no line. The object carries:
+during the run (section 14); a run whose release found a mismatch writes no line (section 12.3). A
+run that was stopped for memory appends one for each attempt (section 24). `FORMAT` may change
+while the command runs, so the writer reads it again, outside the section, immediately before the
+write, and writes no line when it is absent, malformed or names a format the writer does not
+implement. A pass-through (section 18), valid or unbudgeted, appends too: that read is its only one
+(it never writes a missing `FORMAT`, and then writes no line), it marks its line `"nested": true`,
+and it never rotates the log. A line that would exceed 4 KiB MAY be fitted by shortening an
+informative string; a writer that cannot fit it writes no line. The object carries:
 
 | Key | Type | Content |
 |---|---|---|
@@ -1188,6 +1057,7 @@ writes no line. The object carries:
 | `mem_peak_source` | string | optional; what `mem_peak_kib` measured: `footprint`, `anon` or `max_rss` (below) |
 | `peak_after_s` | number | optional; seconds from the command's start to the reading of `mem_peak_kib` |
 | `waited_free_s` | number | optional; seconds of `waited_s` during which the memory the request needs was free (below) |
+| `stops` | integer | optional; how often the run had been stopped for memory when the line was written, this attempt's stop included; written only above 0 |
 | `exit` | integer | the run's exit status |
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
@@ -1198,7 +1068,8 @@ whose value it does not know rather than write a zero: a run whose command could
 an absent key as unknown, never as zero. The values are the command's resource usage as the
 wait that reaped it reports (`wait4(2)`'s `struct rusage`, or the same from `waitid`): they cover
 the command and every descendant it waited for, but not a descendant it left running when it exited.
-The same rusage's `ru_maxrss` is the peak of the largest single process among those, not a sum. It
+They serve one reader: the stall baseline of a label (section 23.3). The same rusage's `ru_maxrss`
+is the peak of the largest single process among those, not a sum. It
 is in KiB on Linux and the BSDs but in bytes on macOS; a writer MUST convert it to KiB (1 024
 bytes), and MUST NOT use it on a platform whose unit it does not know. As in a body (section 7.2), a reader
 MUST ignore a key it does not know: lines only gain optional keys within a format.
@@ -1212,11 +1083,14 @@ largest `RssShmem` among them added once, since shared memory is held once (sour
 process that exits between the listing and its reading is skipped. `mem_peak_kib` is the largest
 sum and `peak_after_s` when it was read. When no reading succeeded, or the rusage's `ru_maxrss` is
 larger, `mem_peak_kib` is `ru_maxrss`, `mem_peak_source` is `max_rss` and `peak_after_s` is absent.
-`waited_free_s` is written by a run whose request names `mem`: the part of its wait during which
-the memory the kernel can hand out without paging anything anonymous out (on macOS the free,
-speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable` of `/proc/meminfo`
-or, when smaller, the room under the tightest cgroup v2 limit, the headroom of section 5.2)
-was at least its `mem` need, read at most once per second. It informs; no admission reads it.
+`waited_free_s` is written by a run that waited: the part of its wait during which the memory the
+kernel can hand out without paging anything anonymous out (the headroom of section 5.1) was at
+least its need, read at most once per second. It informs; no admission reads it.
+
+The line of a stopped attempt carries the attempt's own peak, and `stops` above 0 marks every line
+of a run that was stopped, the stopped attempts' and the last one's. A **counted** run is one that
+is labelled, not a pass-through, not run outside the budget (`fail_open` empty) and has no `stops`:
+only counted runs say what a label needs (section 5.4) or what its stall baseline is.
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
@@ -1225,83 +1099,65 @@ generation). One generation is kept.
 
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open`. It samples
 > memory on macOS and Linux and writes `mem_peak_source` `max_rss` elsewhere when it knows the
-> rusage's peak. `coreslot stats` reads both
-> generations of the log, skips lines that do not parse, and learns a label from its last 5 runs
-> that were labelled, not a pass-through and not run outside the budget.
+> rusage's peak. `coreslot stats` reads both generations of the log and skips lines that do not
+> parse. A label's need is the 90th percentile of the `mem_peak_kib` of its last 20 counted runs.
 
 ## 21. Worked examples
 
-All examples use one Linux machine: `/sys/devices/system/cpu/online` is `0-13` (`cpus = 14`),
-`MemTotal` is 16 GiB (`memory = 16384`), the configuration declares `cpu = "-4"` (size 10) and
-`pg-local = 2` and leaves `mem` at `"60%"` (9 830 MiB, size 76), and `$S` is
-`/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 2` unless stated. Listings show
-the entries under `$S` that matter; `[L]` marks a file whose lock is held by a live process.
-`T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is independent of the others;
-except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old when the example starts, so
-reconciliation is not due. The writers in these examples number ticket and hold names and their
-temporaries from one counter and the temporaries of `gen`, `FORMAT` and `degraded` from another;
-any numbering conforms (section 7.1).
+All examples use one Linux machine: `MemTotal` is 16 GiB (`memory = 16384`), the configuration
+declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 10`, `red_points = 30`,
+`red_samples = 10`, `gate_pages_s = 1000`, `floor = "2G"`, `calm_s = 30`, `post_kill_s = 15` and
+`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 2`
+unless stated. Listings show the entries under `$S` that matter; `[L]` marks a file whose lock is
+held by a live process. `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is
+independent of the others; except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old
+when the example starts, so reconciliation is not due. The writers in these examples number ticket
+and hold names and their temporaries from one counter and the temporaries of `gen`, `FORMAT`,
+`degraded` and `watch.json` from another; any numbering conforms (section 7.1).
 
-The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run
-[--need RES=MIN..MAX]... [--label L] [--priority P] [--timeout D] [--on-timeout run|fail]
-[--no-wait] [--strict] [--independent] [--same-group] [--light] [--subst] [--refusal-code N]
-[--preemptible[=false]] -- COMMAND...`. `RES=N` means `N..N`, `RES=MIN..` means
-`MIN..max(MIN, 16)` and `RES=..MAX` means `1..MAX`; `RES=..` is a usage error, and every form keeps
-the bounds of section 7.3. With no `--need` the request is `cpu=1..1` unless COMMAND carries a
-`cpu` placeholder (section 17: `{n}` or `{n:cpu}` as an argument, or inside one with `--subst`; the
-escape `{{n}}` is not one), and then `cpu=1..M`, where M is 16 or the
-machine's CPU count (section 5.2) if that is smaller; a CLI that cannot read the count uses 16
-here rather than failing the run. A command that cannot learn its grant would leave every token
-beyond its first idle, and one that can never starts more workers than the machine has CPUs,
-which a cpu size above 100 % would otherwise grant. `--need mem=SIZE` takes one size, a size
-string of section 5.2 above 0 and never a range, and asks for that many 128 MiB tokens rounded up
-as a fixed range, at most 256. A labelled run takes each of `cpu` and `mem` that its
-`--need` leaves out from the needs file's entry for its label (section 5.4), and only a run with no
-`--need` and no `cpu` from that entry gets the default `cpu` above. The effective request caps
-the max at the size (section 12.2), so `cpu=1..16` on a budget of 8 takes at most 8. A run log's
-`need` (section 20) and the waiting line (section 10.3) show the request as these rules complete
-it. `--timeout` defaults to 0, no limit, and a negative one is a usage error; `--on-timeout`
-defaults to `fail`, so a `--timeout` that expires refuses; `--light` is a light run (section 14),
-and with `--priority`, `--timeout`, `--on-timeout` or `--no-wait`, which shape a wait it does not
-have, a usage error; strict mode is `--strict`;
-`--refusal-code` defaults to 75. The other commands are
-`coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
+The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run [--mem SIZE]
+[--label L] [--timeout D] [--on-timeout run|fail] [--no-wait] [--strict] [--independent]
+[--same-group] [--refusal-code N] -- COMMAND...`. Without `--mem` the need is the label's entry in
+the needs file (section 5.4), else what the label's last counted runs needed (section 20), else the
+cold start (section 5.1). `--timeout` defaults to 0, no limit, covers the whole run (restarts
+included), and a negative one is a usage error; `--on-timeout` defaults to `fail`, so a `--timeout`
+that expires refuses; strict mode is `--strict`; `--refusal-code` defaults to 75. The other
+commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
 `coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]`,
-`coreslot stats [--label LABEL] [--json]`, `coreslot suggest [--label LABEL] [--write]` and
-`coreslot version`.
+`coreslot stats [--label LABEL] [--json]` and `coreslot version`.
 
 ### 21.1 Enqueue
 
-Pid 4711 runs `coreslot run --need cpu=4..12 --label gate:unit -- pytest -n {n}` at `T0`. The
-ticket of pid 5120 (label `ci:o-r`, priority 10, enqueued at 11:59:05) is already waiting.
+Pid 4711 runs `coreslot run --mem 3G --label gate:unit -- pytest` at `T0`. The ticket of pid 5120
+(label `ci:o-r`, enqueued at 11:59:05) is already waiting.
 
 Before:
 
 ```
 gen                                                   {"gen": 41, "reconciled_ns": 1791719990000000000}
-queue/01791719345000000000-0000005120-000007-ci_o_r   [L]
+queue/01791719945000000000-0000005120-000007-ci_o_r   [L]
 ```
 
 Pid 4711 enters the section (rewrites `admit.lock` with `{"pid": 4711, "entered_ns": ...}`), reads
-`FORMAT`; reconciliation is not due (10 s old). `arrival_ns = 1791720000000000000`, priority 0, so
-the order key is `01791720000000000000`. It creates `queue/.tmp-0000004711-000001`, locks it,
-writes the body, renames it without replacement, bumps `gen`, and leaves.
+`FORMAT`; reconciliation is not due (10 s old). `arrival_ns = 1791720000000000000`, so the order
+key is `01791720000000000000`. It creates `queue/.tmp-0000004711-000001`, locks it, writes the body,
+renames it without replacement, bumps `gen`, and leaves.
 
 After:
 
 ```
 gen                                                    {"gen": 42, "reconciled_ns": 1791719990000000000}
-queue/01791719345000000000-0000005120-000007-ci_o_r    [L]
+queue/01791719945000000000-0000005120-000007-ci_o_r    [L]
 queue/01791720000000000000-0000004711-000001-gate_unit [L]
 ```
 
 Body of the new ticket:
 
 ```json
-{"label": "gate:unit", "priority": 0, "need": {"cpu": [4, 12]}, "created_ns": 1791720000000000000}
+{"label": "gate:unit", "need_mib": 3072, "created_ns": 1791720000000000000}
 ```
 
-The ticket of pid 5120 sorts first: its key is its arrival (11:59:05) minus 10 × 60 s.
+The ticket of pid 5120 sorts first: it arrived first.
 
 ### 21.2 Refresh
 
@@ -1320,62 +1176,61 @@ observes the mtime once per second on its own monotonic clock `m`:
 Pid 4711, resuming after a gap above 10 s, refreshes and then bumps `gen` in the section:
 `{"gen": 42, ...}` becomes `{"gen": 43, ...}`; the files are otherwise unchanged.
 
-### 21.3 Admission with clamp
+### 21.3 Admission
 
-Pid 7300 runs `coreslot run --need cpu=16..16 --need pg-local=1 --label gate:big -- ...` and is
-head at 12:10:00. Token files 0-13 of `cpu` exist from before the size dropped from 14 to 10; none
-is locked. `pg-local` has only token 0.
+Pid 7300 runs `coreslot run --mem 3G --label gate:big -- ./build`, enqueued at 12:09:00, and is head
+at 12:10:00. Pid 6500 holds 4 GiB for `pool:a`; its tree uses 1 536 MiB of them. The kernel's
+headroom reads 7 168 MiB.
 
 Before:
 
 ```
 gen                                                   {"gen": 57, "reconciled_ns": ...}
 queue/01791720540000000000-0000007300-000003-gate_big [L]
-res/cpu/0 ... res/cpu/13                              (14 files, none locked)
-res/pg-local/0
+holds/01791719000000000000-0000006500-000002-pool_a   [L]
+watch.json                                            (sampled 1.2 s ago, level green)
 ```
 
-Inside the section: no `cancel/01791720540000000000-0000007300-000003`; sizes `cpu = 10`,
-`pg-local = 2`; `cpu` `min = 16 > 10`, so the effective request is `10..10`, clamped; `pg-local` is
-`1..1`. Locked counts: `cpu` 0 over 14 indices (`free = 10`), `pg-local` 0 (`free = 2`). The
-re-election (section 12.1 step 5) lists `queue/` again and finds no ticket ahead of its own. It
-takes `cpu` 0-9 and `pg-local` 0, publishes `holds/.tmp-0000007300-000004` as the hold below,
-closes and unlinks its ticket, bumps `gen`, and leaves.
+Inside the section: no `cancel/01791720540000000000-0000007300-000003`. The room is `7168 − 1024 −
+max(0, 4096 − 1536) = 3584` MiB; the need, 3 072 MiB, fits. The re-election (section 12.1 step 5)
+lists `queue/` again and finds no ticket ahead of its own. The stored sample is fresh and green, and
+no level has cleared lately, so the gate holds nothing back. It publishes
+`holds/.tmp-0000007300-000004` as the hold below, closes and unlinks its ticket, bumps `gen`, and
+leaves.
 
 After:
 
 ```
 gen                                                   {"gen": 58, "reconciled_ns": ...}
+holds/01791719000000000000-0000006500-000002-pool_a   [L]
 holds/01791720600000000000-0000007300-000004-gate_big [L]
-res/cpu/0 ... res/cpu/9                               [L] (held by pid 7300)
-res/cpu/10 ... res/cpu/13                             (not locked)
-res/pg-local/0                                        [L]
 ```
 
 ```json
-{"label": "gate:big", "grant": {"cpu": [0,1,2,3,4,5,6,7,8,9], "pg-local": [0]},
- "start_ns": 1791720600000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {"cpu": 16}, "tree": true}
+{"label": "gate:big", "pid": 7300, "start_ns": 1791720600000000000,
+ "arrival_ns": 1791720540000000000, "need_mib": 3072, "stops": 0, "footprint_mib": 0,
+ "d_user_ns": 0, "d_sys_ns": 0, "d_pagewait_ns": 0, "sampled_ns": 0, "victim": true,
+ "child_exited": false, "tree": true}
 ```
 
-The CLI prints `coreslot: cpu: requested 16, budget is 10; running alone with 10` and starts the
-command with fd 3 = the hold, fds 4-13 = `cpu` tokens 0-9, fd 14 = `pg-local` token 0, and
-`CORESLOT_GRANTED_CPU=10`, `CORESLOT_GRANTED_PG_LOCAL=1`, `CORESLOT_HELD_FD=3`,
-`CORESLOT_TOKEN_FDS=4-14`.
+The CLI starts the command with fd 3 = the hold and `CORESLOT_GRANTED_MEM=3072`,
+`CORESLOT_HELD_FD=3`, `CORESLOT_HOLD=01791720600000000000-0000007300-000004-gate_big`. Had no hold
+been live, the idle rule would have started the request whatever the headroom said; had the room
+been 3 000 MiB, the head would have left the section and tried again at its next election.
 
 ### 21.4 Cancellation
 
-Pid 8000 runs `coreslot cancel 01791719345000000000-0000005120-000007` at 12:01:00.
+Pid 8000 runs `coreslot cancel 01791719945000000000-0000005120-000007` at 12:01:00.
 
 Before:
 
 ```
 gen                                                   {"gen": 44, "reconciled_ns": ...}
-queue/01791719345000000000-0000005120-000007-ci_o_r   [L]
+queue/01791719945000000000-0000005120-000007-ci_o_r   [L]
 cancel/                                               (empty)
 ```
 
-Pid 8000 publishes, inside the section, `cancel/01791719345000000000-0000005120-000007` with
+Pid 8000 publishes, inside the section, `cancel/01791719945000000000-0000005120-000007` with
 `{"requested_ns": 1791720060000000000, "requester_pid": 8000}`. Publishing a cancel request does
 not bump `gen` (section 7.8).
 
@@ -1383,8 +1238,8 @@ After publication:
 
 ```
 gen                                                   {"gen": 44, "reconciled_ns": ...}
-queue/01791719345000000000-0000005120-000007-ci_o_r   [L]
-cancel/01791719345000000000-0000005120-000007
+queue/01791719945000000000-0000005120-000007-ci_o_r   [L]
+cancel/01791719945000000000-0000005120-000007
 ```
 
 Pid 5120 finds the request on its next poll, closes its ticket descriptor (the ticket is dead at
@@ -1448,87 +1303,73 @@ queue/01791721200000000000-0000009200-000001-gate          [L]
 
 ### 21.7 Pass-through
 
-Under the run of section 21.3 (fd 3 = hold, fds 4-13 = `cpu` 0-9, fd 14 = `pg-local` 0,
-`CORESLOT_TOKEN_FDS=4-14`), the command starts
-`coreslot run --need cpu=2..4 --subst -- make -j{n}` (`--subst`, because `{n}` is inside the
-argument `-j{n}`; section 17).
+Under the run of section 21.3 (fd 3 = hold, `CORESLOT_GRANTED_MEM=3072`,
+`CORESLOT_HOLD=01791720600000000000-0000007300-000004-gate_big`), the command starts
+`coreslot run --mem 4G -- make test`.
 
-The nested run checks fds 4-14: each is open, each matches the inode of a token file
-(`res/cpu/0` ... `res/cpu/9`, `res/pg-local/0`), and a fresh probe of each path fails. `held` for
-`cpu` is 10, so it runs with `min(4, 10) = 4`. It starts `make -j4` with the same descriptors and
-`CORESLOT_GRANTED_CPU=4`; `CORESLOT_GRANTED_PG_LOCAL=1`, `CORESLOT_HELD_FD=3` and
-`CORESLOT_TOKEN_FDS=4-14` are passed on unchanged.
+The nested run finds `CORESLOT_HOLD` set, pid 7300 among its ancestors, and a fresh probe of
+`holds/01791720600000000000-0000007300-000004-gate_big` that fails: some process holds it. It runs
+with `min(4096, 3072) = 3072` MiB, saying so because its need was given as `--mem`, starts
+`make test` with the same descriptor, and passes `CORESLOT_HOLD` on unchanged with
+`CORESLOT_GRANTED_MEM=3072`.
 
 A pass-through does not enter the section or lock anything. After `make` exits it reads `FORMAT`
-(`coreslot-protocol 1`, understood) and appends one run-log line marked `"nested": true`
+(`coreslot-protocol 2`, understood) and appends one run-log line marked `"nested": true`
 (section 20); apart from that line, `$S` is unchanged before and after.
 
-### 21.8 Admission with mem
+### 21.8 Tick and level
 
-Pid 7500 runs `coreslot run --need cpu=2 --need mem=3G --label gate:mem -- ./build` at 12:40:00
-with no ticket ahead and no hold. `mem=3G` is 3 072 MiB, 24 tokens, so the ticket's `need` is
-`{"cpu": [2, 2], "mem": [24, 24]}`.
+The run of section 21.3 ticks at 12:10:02 (`1791720602000000000`). The kernel reports no page wait.
 
-Inside the section the sizes are `cpu = 10`, `pg-local = 2` and `mem = 76`; nothing is locked. It
-takes `cpu` 0-1 and `mem` 0-23 and publishes the hold:
+1. It lists its command's tree once: the footprint is 1 984 MiB; in the last period the tree spent
+   1.6 s in user mode and 0.3 s in system mode. It rewrites its hold in place:
 
-```json
-{"label": "gate:mem",
- "grant": {"cpu": [0, 1], "mem": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
- "start_ns": 1791722400000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {}, "tree": true}
-```
+   ```json
+   {"label": "gate:big", "pid": 7300, "start_ns": 1791720600000000000,
+    "arrival_ns": 1791720540000000000, "need_mib": 3072, "stops": 0, "footprint_mib": 1984,
+    "d_user_ns": 1600000000, "d_sys_ns": 300000000, "d_pagewait_ns": 0,
+    "sampled_ns": 1791720602000000000, "victim": true, "child_exited": false, "tree": true}
+   ```
+2. It enters the section. The stored sample of `watch.json` is 3.2 s old, more than one period, so
+   it takes the machine sample: the paging counters rose by 40 pages per second (below
+   `gate_pages_s`, so the gate is closed), and the two live holds report their deltas. For this hold
+   `S = 0.3 / 1.9 = 15.8 %`, below the 25 % a label without history is assumed to have, so its
+   excess is 0, and so is `E`. The detector stays green, and the bucket stays 0. The run replaces
+   `watch.json` with the new sample (`sampled_ns` = `1791720602000000000`, `detector.level` 0) and
+   leaves. A stop round was not due.
+3. It finds no hold of its own name in `detector.stop`.
 
-The command starts with fd 3 = the hold, fds 4-5 = `cpu` tokens 0-1, fds 6-29 = `mem` tokens 0-23,
-and `CORESLOT_GRANTED_CPU=2`, `CORESLOT_GRANTED_MEM=3072`, `CORESLOT_HELD_FD=3`,
-`CORESLOT_TOKEN_FDS=4-29`. Its tree's largest reading, 22 s after the start, is 2 831 155 KiB
-(2.7 GiB), within its grant. After it exits, the run appends:
+### 21.9 Stop round and restart
 
-```json
-{"time_ns": 1791722400000000000, "label": "gate:mem", "need": {"cpu": [2, 2], "mem": [24, 24]},
- "grant": {"cpu": 2, "mem": 24}, "clamped": [], "unbudgeted_resources": [], "waited_s": 0.01,
- "ran_s": 41.2, "cpu_user_s": 70.3, "cpu_sys_s": 4.1, "max_rss_kib": 1903412,
- "mem_peak_kib": 2831155, "mem_peak_source": "anon", "peak_after_s": 22.0, "waited_free_s": 0,
- "exit": 0, "load1": 3.2, "fail_open": ""}
-```
+At 12:14:40 the detector's bucket reaches `red_samples` and the sample leaves the level red. Four
+holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB), `gate:big`
+(arrival 12:09:00, 3 072 / 1 984), `lint` (pid 7400, arrival 12:13:00, 2 048 / 2 300) and `watcher`
+(pid 7500, arrival 12:14:00, 1 024 / 900), whose label has `no_restart = true`. The headroom reads
+2 600 MiB, so the room is `2600 − 1024 − (2560 + 1088 + 0 + 124) = −2196` MiB: a deficit of
+2 196 MiB.
 
-### 21.9 Admission above the static size
+1. The ticker that took the sample builds the stop list from the victims, newest arrival first,
+   never the oldest live hold: `watcher` is not a victim; `lint` is next and its footprint, 2 300
+   MiB, covers the deficit. It writes `detector.stop` =
+   `["01791720781000000000-0000007400-000009-lint"]` and `detector.last_round_ns` into
+   `watch.json`.
+2. Pid 7400's next tick finds its own hold in the list. It sends SIGKILL to the process group of
+   its command, which it has not reaped, reaps it, and sets `child_exited` in its hold.
+3. No new round starts until `lint`'s hold reports `child_exited` and 15 s have passed.
+4. Pid 7400 appends the stopped attempt's run-log line, closes its hold, and enqueues again:
 
-The configuration declares `mem = "1G"` (size 8) beside the sizes above and `[memory] live = true`,
-`/proc/meminfo` says `MemAvailable: 4194304 kB` (4 096 MiB), and no cgroup limits memory. A
-client, pid 7600, holds `mem` 0-7 for `pool:a`; its hold has no `tree` key. Pid 7700 runs
-`coreslot run --need mem=2G --label gate:b -- ./build` at 12:50:00 with no ticket ahead: 2 048 MiB
-is 16 tokens, so its ticket's `need` is `{"mem": [16, 16]}`.
+   ```json
+   {"time_ns": 1791720780000000000, "label": "lint", "waited_s": 1.0, "ran_s": 99.0,
+    "mem_peak_kib": 2355200, "mem_peak_source": "anon", "peak_after_s": 97.0, "stops": 1,
+    "exit": 137, "fail_open": ""}
+   ```
 
-Before:
-
-```
-holds/01791722700000000000-0000007600-000002-pool_a   [L]
-queue/01791723000000000000-0000007700-000001-gate_b   [L]
-res/mem/0 ... res/mem/7                               [L] (held by pid 7600)
-```
-
-Inside the section the configured size of `mem` is 8 and 8 tokens are locked, so `free = 0`, below
-the `min` of 16. The request is fixed and `[memory] live` is `true`, so the run computes the
-live size (sections 5.2 and 12.1 step 4): the headroom is 4 096 MiB; `pool:a`'s tree is not
-measured, so its 8 tokens are unrealised whole, 1 024 MiB; no locked token is unlisted; `room =
-4096 − 1024 − 0 = 3072` MiB, 24 tokens; `size = max(8, min(4096, 8 + 24)) = 32`. The effective
-request is `16..16`, not clamped, and `free = 32 − 8 = 24`. The re-election finds no ticket ahead,
-and it takes `mem` 8-23, below the size of 32, and publishes:
-
-```json
-{"label": "gate:b",
- "grant": {"mem": [8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
- "start_ns": 1791723000000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {}, "tree": true}
-```
-
-The command starts with fd 3 = the hold, fds 4-19 = `mem` tokens 8-23, and
-`CORESLOT_GRANTED_MEM=2048`, `CORESLOT_HELD_FD=3`, `CORESLOT_TOKEN_FDS=4-19`. `coreslot status`
-now shows `mem` at a size of 1 GiB with 3 GiB locked and 0 free. A client that sizes `mem` from the
-configuration alone (one that does not implement the live size, or any client under a
-configuration without `[memory] live = true`) asking for `mem` 1..1 meanwhile finds size 8 with
-24 locked, and waits until the locked count falls below 8.
+   Its new ticket is `queue/01791720780000000000-0000007400-000010-lint`, the order key being its
+   first arrival, with `need_mib` 2 300 (the larger of its peak and its learned need). It starts
+   again when it is admitted, the level has been green for 30 s and the room is at least `2 300 +
+   max(256, 230) = 2 556` MiB. The new hold has `"stops": 1` and `"arrival_ns": 1791720780000000000`.
+   After a third stop the run prints `coreslot: gave up after 3 memory stops (run
+   01791720781000000000-0000007400-000009-lint)` and exits 75.
 
 ## 22. Timing constants
 
@@ -1543,7 +1384,157 @@ configuration without `[memory] live = true`) asking for `mem` 1..1 meanwhile fi
 | section entry retry | `LOCK_NB`, backoff from 10 ms up to 250 ms |
 | reconciliation | at most once per 30 s machine-wide; temporary files older than 30 s |
 | hold removal after exit | section entry within 2 s, else left to reconciliation |
-| waiting line (CLI) | every 30 s |
+| waiting line (CLI) | when the wait begins, then every 30 s |
 | run-log rotation | at 10 MiB, one generation |
-| `mem` token | 128 MiB |
 | memory sampling (CLI) | every 1 s while the command runs |
+| tick | every 2 s while the command runs; one machine sample per period |
+| stored sample | the period's below 2 s; fresh up to 6 s; a gap above 6 s or a 1 s clock skew |
+| restart | gives up after 3 stops; margin `max(256 MiB, need / 10)` |
+
+## 23. The watchdog
+
+The watchdog keeps memory pressure from stalling the work coreslot started. It is not a process:
+every run that has a command running measures its own work, one shared detector turns the
+measurements into a level, and a run stops only its own command. All its state lives in hold bodies
+(section 7.4) and `watch.json` (section 7.11). It writes only under `$S`; it starts no subprocess.
+
+### 23.1 The tick
+
+A run with a command running under a hold that reserves memory ticks every 2 s, from the command's
+start until it exits, in both modes of section 23.6. Each tick:
+
+1. **Measures.** Outside the section the run lists its command's process tree once and reads, per
+   process, user time, system time and, where the kernel reports it (macOS 27 and later), the time
+   spent waiting for pages (`ri_page_wait_time_mach` of `proc_pid_rusage`; `/proc/<pid>/stat`
+   `utime` and `stime` on Linux). It rewrites its own hold's body in place (section 7.4):
+   `footprint_mib` (the tree's footprint, as section 20 measures it), `d_user_ns`, `d_sys_ns` and
+   `d_pagewait_ns` (the tree's times since the run's previous tick), `sampled_ns`, `victim` and
+   `child_exited`.
+2. **Samples.** It enters the section briefly (section 8) and reads `watch.json`. If the stored
+   sample is at least one period (2 s) old, or lies in the future, it takes a new machine sample
+   (section 23.2), advances the detector (section 23.4) and, when a stop round is due, writes the
+   stop list (section 23.5); otherwise it only reads. One sample is taken per period machine-wide,
+   one bucket step per sample, and no writer races another: the section serializes them.
+3. **Acts.** It looks for its own hold's name in `detector.stop` (section 23.5 step 2).
+
+A stored sample more than 3 periods (6 s) old is no reading: admission ignores the level (section
+12.4), and the next ticker takes a fresh sample.
+
+### 23.2 The machine sample
+
+A **machine sample** is the host readings, the live holds' latest measurements and the room (section
+12.1), taken together. The host readings, which a sample takes in well under a millisecond with no
+subprocess:
+
+| Reading | macOS | Linux |
+|---|---|---|
+| decompressions and swap-ins, cumulative | `host_statistics64` (`HOST_VM_INFO64`) | swap-ins: `pswpin` of `/proc/vmstat`; no decompressions |
+| memory stall (PSI) | none | the `total` of the `some` line of `/proc/pressure/memory`, in µs; absent or `EOPNOTSUPP` when the kernel does not report it, and then not used |
+| swap used, swap free | `vm.swapusage` | `SwapTotal − SwapFree` and `SwapFree` of `/proc/meminfo` |
+| free space of the volume that holds the swap files | `/System/Volumes/VM` | none |
+| the sleep-inclusive clock, the **host clock** | `CLOCK_MONOTONIC_RAW` | `CLOCK_BOOTTIME` |
+| the sleep-exclusive clock | `CLOCK_UPTIME_RAW` | `CLOCK_MONOTONIC` |
+
+Two consecutive samples are a **gap**, and cannot be compared, when the host clock advanced by more
+than 6 s, when the two clocks advanced by amounts more than 1 s apart (the machine slept in the
+period), or when the host clock went back (a reboot). A counter that went back also makes them not
+comparable. A reading that cannot be read is no sample: the detector stores an empty sample, so
+that the next comparison starts afresh.
+
+### 23.3 The stall measure
+
+For each live hold with a measurement, `S = (d_sys + d_pagewait) / (d_user + d_sys + d_pagewait)`
+over its latest tick period. Its normal share `S0` is the median of `sys_s / (user_s + sys_s)` over
+the last 20 counted runs of its label (section 20) that report both times, and 0.25 when there are
+none: the highest normal measured, so that a command nothing is known of needs more evidence. The
+machine's **excess** `E`, in percentage points, is
+
+```
+E = 100 × Σ wᵢ · max(0, Sᵢ − S0ᵢ) / Σ wᵢ      wᵢ = d_userᵢ + d_sysᵢ + d_pagewaitᵢ
+```
+
+over the holds with `wᵢ > 0`, and 0 when there are none. The **paging gate** is open when the
+decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
+where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
+other system time.
+
+### 23.4 Levels
+
+The detector turns each comparable pair of samples into a level, from `E`, the gate and the swap
+room. Its state is in `watch.json`. The levels, in increasing order, are green, unknown, yellow,
+red and floor. A sample that is unknown has that level; any other has the highest of the levels
+below that applies.
+
+- **Unknown:** a gap, a counter that went back, an empty sample, or a reading that cannot be read.
+  It never counts towards calm and never stops anything; the bucket and the yellow latch are kept
+  as they were. An optional reading the platform lacks (the memory stall, page wait) is not unknown.
+- **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
+  stays below `yellow_points` for 15 samples in a row.
+- **Red:** a leaky bucket, per episode: +1 for a sample with `E ≥ red_points` and the gate open,
+  −0.5 for any other comparable sample, never below 0 and never reset. Red when it reaches
+  `red_samples`.
+- **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
+  `SwapFree` on Linux) is under `floor`, and swap used grew by at least 256 MiB over the last 20 s.
+  It is an edge: a calm machine with little room never reaches it.
+- **Green** otherwise.
+
+`calm_since_ns` is the host clock of the sample that made the level green, kept while it stays
+green, and 0 while it is not. `yellow_cleared_ns` is that of the sample at which the level fell from
+yellow, red or floor to green. An **episode** counts the entries into red or floor.
+
+### 23.5 Stop rounds
+
+A **round** is due when a sample leaves the level at red or floor, `post_kill_s` has passed since
+the last round, and every hold the last round listed is gone or reports `child_exited`. Rounds are
+one at a time.
+
+1. The ticker that advanced the detector writes the stop list into `detector.stop`, and the round's
+   time into `detector.last_round_ns`. The list holds the **victims** from the newest arrival to the
+   oldest: live holds whose `victim` is true and whose `child_exited` is false, never the oldest live
+   hold by arrival (ties by hold name). It takes victims until their footprints sum to at least the
+   deficit `max(−room, 0)` MiB of the sample it just took, and at least one. With only the oldest
+   hold or holds that are not victims left, the list is empty.
+2. A run kills only its own command, only when its own hold's name is in the list. It sends
+   `SIGKILL` to the command's process group, and only while it has not reaped the command, so the
+   group id cannot have been reused. The kill and the reap are serialized under one lock in the
+   run's supervisor. That is the one control: no other signal, no pid list.
+3. No new round starts until every listed hold reports `child_exited` or is gone and `post_kill_s`
+   has passed.
+
+The oldest live hold, a hold whose label has `no_restart` and a run that shares coreslot's process
+group are never victims. A run that finds its command ended by a `SIGKILL` it did not send does not
+restart it (section 24.3).
+
+### 23.6 Observe mode and the sample log
+
+With `mode = "observe"` every step runs, the stop list included, except the kill: a run whose hold
+is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
+the ticker that takes a machine sample appends one JSON line to `$S/log/watch.jsonl` with the
+readings, `E`, the level and the bucket, in either mode. The file informs and nothing reads it but
+the calibration harness; a writer appends under the rules of the run log, and a reader skips lines
+it cannot parse.
+
+## 24. Restart of a stopped run
+
+### 24.1 A stopped run comes back
+
+The `coreslot run` of a stopped command keeps running. It reaps the command, closes its hold
+(section 12.3), appends one run-log line for the stopped attempt with `stops` (section 20) and
+enqueues again (section 10.1) with its **first arrival**: the order key of the new ticket and the
+`arrival_ns` of its next hold are those of its first attempt, so it keeps its place. Its need is
+the larger of the peak footprint the stopped attempt reached and the need it had learned. It waits
+as any request does and, in addition, under the restart conditions of section 12.4; on admission it
+starts the same command again, under a new hold whose `stops` is the number of stops so far.
+
+### 24.2 Giving up
+
+After the third stop the run does not restart. It prints, first, the marker line `coreslot: gave up
+after 3 memory stops (run <hold>)`, where `<hold>` is the name of the hold of the last attempt,
+then the reasons of the three stops and the advice to run the command alone or to narrow it, and
+exits with the refusal code (section 19).
+
+### 24.3 A kill from outside
+
+A command that ends by `SIGKILL` which the run did not send, the kernel's out-of-memory killer or
+another user's kill, is not restarted: the run reports that the command was ended by SIGKILL from
+outside coreslot and not restarted, and exits with the command's status.
