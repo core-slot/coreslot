@@ -68,19 +68,19 @@ func admitted(t *testing.T, r StepResult) *Grant {
 func TestAdmitTakesExactlyGrant(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	g := admitted(t, step(t, enqueue(t, e, need("cpu=2..3"))))
+	g := admitted(t, step(t, enqueue(t, e, need("mem=2..3"))))
 	h := readHold(t, e, g)
-	if !reflect.DeepEqual(h.Grant, map[string][]int{"cpu": {0, 1, 2}}) {
-		t.Errorf("hold grant %v, want cpu [0 1 2]", h.Grant)
+	if !reflect.DeepEqual(h.Grant, map[string][]int{"mem": {0, 1, 2}}) {
+		t.Errorf("hold grant %v, want mem [0 1 2]", h.Grant)
 	}
-	if got := lockedIndices(t, e, "cpu", testCPUs); !reflect.DeepEqual(got, h.Grant["cpu"]) {
-		t.Errorf("locked %v, hold lists %v: want exactly the same tokens", got, h.Grant["cpu"])
+	if got := lockedIndices(t, e, "mem", testTokens); !reflect.DeepEqual(got, h.Grant["mem"]) {
+		t.Errorf("locked %v, hold lists %v: want exactly the same tokens", got, h.Grant["mem"])
 	}
-	if got := g.Grant(); got["cpu"] != 3 {
-		t.Errorf("Grant() = %v, want cpu 3", got)
+	if got := g.Grant(); got["mem"] != 3 {
+		t.Errorf("Grant() = %v, want mem 3", got)
 	}
 	g.Close()
-	if got := lockedIndices(t, e, "cpu", testCPUs); len(got) != 0 {
+	if got := lockedIndices(t, e, "mem", testTokens); len(got) != 0 {
 		t.Errorf("after Close, locked %v", got)
 	}
 	if entries, _, _ := e.st.List(store.HoldsDir); len(entries) != 0 {
@@ -92,40 +92,40 @@ func TestAdmitElasticGrant(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 4)) // 5 of 8 held: 3 free
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 4)) // 5 of 8 held: 3 free
 
-	big := enqueue(t, e, need("cpu=4..6"))
+	big := enqueue(t, e, need("mem=4..6"))
 	if r := step(t, big); isAdmitted(r) {
 		t.Fatal("4..6 admitted with 3 free")
 	}
 	big.Withdraw()
-	g := admitted(t, step(t, enqueue(t, e, need("cpu=2..6"))))
-	if h := readHold(t, e, g); !reflect.DeepEqual(h.Grant["cpu"], []int{5, 6, 7}) {
-		t.Errorf("2..6 with 3 free: hold %v, want cpu [5 6 7]", h.Grant)
+	g := admitted(t, step(t, enqueue(t, e, need("mem=2..6"))))
+	if h := readHold(t, e, g); !reflect.DeepEqual(h.Grant["mem"], []int{5, 6, 7}) {
+		t.Errorf("2..6 with 3 free: hold %v, want mem [5 6 7]", h.Grant)
 	}
 }
 
 // PROTOCOL.md section 12.2: a request above the size waits for the whole resource, runs alone, and
 // records it.
 func TestOversizeIsClampedAndRunsAlone(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 10\n")
+	dir := newStateDir(t, "[resources]\nmem = \"1280M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	other := startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 9, 9))
-	tk := enqueue(t, e, need("cpu=16..16"))
+	other := startHelper(t, "lock", dir, tokenPaths(dir, "mem", 9, 9))
+	tk := enqueue(t, e, need("mem=16..16"))
 	if r := step(t, tk); isAdmitted(r) {
 		t.Fatal("clamped request admitted with 9 of 10 free")
 	}
 	other.stop()
 	clk.advance(time.Second)
 	g := admitted(t, step(t, tk))
-	if g.Grant()["cpu"] != 10 || !reflect.DeepEqual(g.Clamped(), map[string]int{"cpu": 16}) {
-		t.Errorf("grant %v clamped %v, want cpu 10 and clamped cpu 16", g.Grant(), g.Clamped())
+	if g.Grant()["mem"] != 10 || !reflect.DeepEqual(g.Clamped(), map[string]int{"mem": 16}) {
+		t.Errorf("grant %v clamped %v, want mem 10 and clamped mem 16", g.Grant(), g.Clamped())
 	}
-	if h := readHold(t, e, g); !reflect.DeepEqual(h.Clamped, map[string]int{"cpu": 16}) || len(h.Grant["cpu"]) != 10 {
-		t.Errorf("hold %+v, want 10 tokens and clamped cpu 16", h)
+	if h := readHold(t, e, g); !reflect.DeepEqual(h.Clamped, map[string]int{"mem": 16}) || len(h.Grant["mem"]) != 10 {
+		t.Errorf("hold %+v, want 10 tokens and clamped mem 16", h)
 	}
-	if n := lockedCount(t, e, "cpu"); n != 10 {
+	if n := lockedCount(t, e, "mem"); n != 10 {
 		t.Errorf("locked %d, want the whole resource", n)
 	}
 }
@@ -135,9 +135,9 @@ func TestOversizeIsClampedAndRunsAlone(t *testing.T) {
 func TestUndeclaredResourceIsUnbudgeted(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	g := admitted(t, step(t, enqueue(t, e, need("cpu=1,gpu=2"))))
-	if !reflect.DeepEqual(g.Unbudgeted(), []string{"gpu"}) || g.Grant()["gpu"] != 2 || g.Grant()["cpu"] != 1 {
-		t.Errorf("unbudgeted %v grant %v, want [gpu] and cpu 1 gpu 2", g.Unbudgeted(), g.Grant())
+	g := admitted(t, step(t, enqueue(t, e, need("mem=1,gpu=2"))))
+	if !reflect.DeepEqual(g.Unbudgeted(), []string{"gpu"}) || g.Grant()["gpu"] != 2 || g.Grant()["mem"] != 1 {
+		t.Errorf("unbudgeted %v grant %v, want [gpu] and mem 1 gpu 2", g.Unbudgeted(), g.Grant())
 	}
 	h := readHold(t, e, g)
 	if !reflect.DeepEqual(h.UnbudgetedResources, []string{"gpu"}) || h.Unbudgeted {
@@ -154,15 +154,15 @@ func TestUndeclaredResourceIsUnbudgeted(t *testing.T) {
 	}
 }
 
-// I4: a waiter behind a blocked head whose minimum is every cpu takes nothing, through Step or
+// I4: a waiter behind a blocked head whose minimum is every token takes nothing, through Step or
 // Poll: passing the head (PROTOCOL.md section 10.3) never takes what the head is short of.
 func TestOnlyHeadTakesTokens(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 0))
-	head := enqueue(t, e, need("cpu=8")) // cannot be admitted: 7 of 8 free
-	behind := enqueue(t, e, need("cpu=1"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 0))
+	head := enqueue(t, e, need("mem=8")) // cannot be admitted: 7 of 8 free
+	behind := enqueue(t, e, need("mem=1"))
 	for round := 0; round < 6; round++ {
 		clk.advance(time.Second)
 		step(t, head)
@@ -180,7 +180,7 @@ func TestOnlyHeadTakesTokens(t *testing.T) {
 			admitted(t, r).Close()
 			t.Fatalf("round %d: the waiter behind the head was admitted (backfill)", round)
 		}
-		if n := lockedCount(t, e, "cpu"); n != 1 {
+		if n := lockedCount(t, e, "mem"); n != 1 {
 			t.Fatalf("round %d: %d tokens locked, want only the helper's 1", round, n)
 		}
 	}
@@ -189,156 +189,11 @@ func TestOnlyHeadTakesTokens(t *testing.T) {
 	}
 }
 
-// passConfig declares a database slot beside the cpus: a head waiting for the slot, which a
-// helper holds, leaves cpus free that a waiter naming no slot may take behind its minimums.
-const passConfig = "[resources]\ncpu = 8\npg-local = 1\n"
-
-// A waiter in the front window that fits behind every minimum ahead is admitted while the live
-// head keeps waiting, and its extra pass leaves those minimums free; one outside the front window
-// does not even enter the section. The head is admitted as soon as its slot frees.
-//
-// Mutations: dropping the front-window check outside the section makes W enter the section from
-// position 5; Plan in place of state.PlanBehind grants W all 8 cpus, and the head then waits on.
-func TestPasserAdmittedInFrontWindow(t *testing.T) {
-	dir := newStateDir(t, passConfig)
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	slot := startHelper(t, "lock", dir, tokenPaths(dir, "pg-local", 0, 0))
-	var heads []*Ticket
-	for i := 0; i < FrontWindow; i++ {
-		heads = append(heads, enqueue(t, e, need("cpu=1,pg-local=1")))
-	}
-	w := enqueue(t, e, need("cpu=1..8"))
-	second := func() StepResult {
-		t.Helper()
-		for i, h := range heads {
-			if r := step(t, h); isAdmitted(r) {
-				t.Fatalf("ticket %d, waiting for the slot, was admitted", i)
-			}
-		}
-		enters, tryEnters := countEntries(t)
-		r := step(t, w)
-		if !isAdmitted(r) && (*enters != 0 || *tryEnters != 0) && len(heads) >= FrontWindow {
-			t.Fatalf("W, outside the front window, entered the section (%d, %d times)", *enters, *tryEnters)
-		}
-		clk.advance(time.Second)
-		return r
-	}
-	for sec := 0; sec < 3; sec++ {
-		if r := second(); isAdmitted(r) {
-			t.Fatalf("%d s: W admitted from position %d, outside the front window", sec, FrontWindow+1)
-		}
-	}
-	if err := heads[FrontWindow-1].Withdraw(); err != nil {
-		t.Fatal(err)
-	}
-	heads = heads[:FrontWindow-1]
-	g := admitted(t, second())
-	if got := g.Grant()["cpu"]; got != 8-len(heads) {
-		t.Fatalf("W was granted %d cpus, want %d: every cpu minimum ahead stays free", got, 8-len(heads))
-	}
-	slot.stop()
-	if r := step(t, heads[0]); !isAdmitted(r) {
-		t.Fatalf("the head was not admitted once its slot freed: %#v", r)
-	}
-}
-
-// writeTicket publishes body as a ticket at the front of the queue, without bumping gen, and
-// keeps it locked by a helper, as a live client's ticket is.
-func writeTicket(t *testing.T, dir, body string) (path string, h *helper) {
-	t.Helper()
-	path = filepath.Join(dir, store.QueueDir, wire.TicketName(wire.ID{OrderKey: 1, PID: 1, Seq: 1}, ""))
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path, startHelper(t, "lock", dir, path)
-}
-
-// A ticket ahead whose body is malformed makes the waiter not pass, where it would fit behind the
-// live head: inside the section when it appeared after the waiter's last rescan, and without
-// entering the section once a rescan found it. Removed, it no longer blocks.
-//
-// Mutations: the in-section check ignoring malformed bodies admits W on the first Step after the
-// cpus free; rescan forgetting malformed names makes W enter the section after the gen bump.
-func TestMalformedTicketAheadBlocksPassing(t *testing.T) {
-	dir := newStateDir(t, passConfig)
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "pg-local", 0, 0))
-	busy := startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 6)) // 1 cpu free: the head's minimum
-	head := enqueue(t, e, need("cpu=1,pg-local=1"))
-	w := enqueue(t, e, need("cpu=1"))
-	second := func() (r StepResult, entries int) {
-		t.Helper()
-		step(t, head)
-		enters, tryEnters := countEntries(t)
-		r = step(t, w)
-		clk.advance(time.Second)
-		return r, *enters + *tryEnters
-	}
-	if r, _ := second(); isAdmitted(r) {
-		t.Fatal("W admitted with no cpu free beyond the head's minimum")
-	}
-	path, bad := writeTicket(t, dir, "{}")
-	busy.stop()
-	for sec := 0; sec < 3; sec++ {
-		r, entries := second()
-		if isAdmitted(r) {
-			t.Fatalf("%d s: W passed the head with a malformed ticket ahead (unseen at its rescan)", sec)
-		}
-		if entries != 1 {
-			t.Fatalf("%d s: W entered the section %d times, want 1 (the check inside it decides)", sec, entries)
-		}
-	}
-	enqueue(t, e, need("cpu=1")) // bumps gen: W rescans and finds the malformed name
-	for sec := 0; sec < 3; sec++ {
-		if r, entries := second(); isAdmitted(r) || entries != 0 {
-			t.Fatalf("%d s: behind a malformed ticket W was admitted (%v) or entered the section %d times, want neither",
-				sec, isAdmitted(r), entries)
-		}
-	}
-	bad.stop()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	enqueue(t, e, need("cpu=1")) // bumps gen
-	if r, _ := second(); !isAdmitted(r) {
-		t.Fatalf("the malformed ticket removed: W was not admitted behind the head (%#v)", r)
-	}
-}
-
-// A STALLED ticket ahead does not count: its minimum is not subtracted. The stopped ticket S needs
-// every cpu, so W cannot pass while S is live; once S is STALLED, W passes the live head L.
-//
-// Mutation: counting STALLED tickets in the minimums ahead leaves W waiting.
-func TestStalledTicketAheadIsIgnoredByPasser(t *testing.T) {
-	dir := newStateDir(t, passConfig)
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "pg-local", 0, 0))
-	startHelper(t, "enqueue", dir, "cpu=8") // S: the real clock sorts it ahead of L, stopped
-	l := enqueue(t, e, need("cpu=1,pg-local=1"))
-	w := enqueue(t, e, need("cpu=1"))
-	for sec := 0; sec <= 10; sec++ {
-		if r := step(t, l); isAdmitted(r) {
-			t.Fatalf("%d s: L, waiting for the slot, was admitted", sec)
-		}
-		r := step(t, w)
-		if sec < 10 && isAdmitted(r) {
-			t.Fatalf("%d s: W passed the live S, whose minimum is every cpu", sec)
-		}
-		if sec == 10 && !isAdmitted(r) {
-			t.Fatalf("10 s: S is STALLED, yet W did not pass L (%#v)", r)
-		}
-		clk.advance(time.Second)
-	}
-}
-
 // PROTOCOL.md section 13.1: a cancel published before the head's admitting section wins.
 func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	head := enqueue(t, e, need("cpu=2"))
+	head := enqueue(t, e, need("mem=2"))
 
 	reached, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
@@ -371,7 +226,7 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 		}
 		t.Fatalf("head Step: %#v, %v; want ErrCanceled", res.r, res.err)
 	}
-	if n := lockedCount(t, e, "cpu"); n != 0 {
+	if n := lockedCount(t, e, "mem"); n != 0 {
 		t.Errorf("%d tokens locked by a cancelled head", n)
 	}
 	if exists(filepath.Join(dir, store.CancelDir, head.ID().String())) {
@@ -380,41 +235,41 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 }
 
 func TestAdoptReportsShortfall(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 10\n")
+	dir := newStateDir(t, "[resources]\nmem = \"1280M\"\n")
 	e := newEngine(t, dir, newFakeClock())
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
-	enqueue(t, e, need("cpu=1")) // a waiter: adoption does not queue behind it
-	g, err := e.AdoptContext(context.Background(), need("cpu=3"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
+	enqueue(t, e, need("mem=1")) // a waiter: adoption does not queue behind it
+	g, err := e.AdoptContext(context.Background(), need("mem=3"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer g.Close()
 	h := readHold(t, e, g)
-	if !reflect.DeepEqual(h.Grant, map[string][]int{"cpu": {8, 9}}) || !h.Adopted {
-		t.Errorf("hold %+v, want adopted cpu [8 9]", h)
+	if !reflect.DeepEqual(h.Grant, map[string][]int{"mem": {8, 9}}) || !h.Adopted {
+		t.Errorf("hold %+v, want adopted mem [8 9]", h)
 	}
-	if short := g.Shortfall(); !reflect.DeepEqual(short, map[string]int{"cpu": 1}) {
-		t.Errorf("shortfall %v, want cpu 1", short)
+	if short := g.Shortfall(); !reflect.DeepEqual(short, map[string]int{"mem": 1}) {
+		t.Errorf("shortfall %v, want mem 1", short)
 	}
-	if n := lockedCount(t, e, "cpu"); n > 10 {
+	if n := lockedCount(t, e, "mem"); n > 10 {
 		t.Errorf("I3: %d locked, size 10", n)
 	}
 }
 
 // I3 for adoption: locks at or above the size count, so a shrink leaves less to adopt.
 func TestAdoptCountsLocksAboveSize(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 10\n")
+	dir := newStateDir(t, "[resources]\nmem = \"1280M\"\n")
 	e := newEngine(t, dir, newFakeClock())
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 4)+"\n"+tokenPaths(dir, "cpu", 10, 13))
-	g, err := e.AdoptContext(context.Background(), need("cpu=3..5"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 4)+"\n"+tokenPaths(dir, "mem", 10, 13))
+	g, err := e.AdoptContext(context.Background(), need("mem=3..5"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer g.Close()
-	if got, short := g.Grant()["cpu"], g.Shortfall(); got != 1 || !reflect.DeepEqual(short, map[string]int{"cpu": 2}) {
-		t.Errorf("grant %d shortfall %v, want 1 and cpu 2", got, short)
+	if got, short := g.Grant()["mem"], g.Shortfall(); got != 1 || !reflect.DeepEqual(short, map[string]int{"mem": 2}) {
+		t.Errorf("grant %d shortfall %v, want 1 and mem 2", got, short)
 	}
-	if n := lockedCount(t, e, "cpu"); n != 10 {
+	if n := lockedCount(t, e, "mem"); n != 10 {
 		t.Errorf("I3: %d locked at every index, want exactly the size 10", n)
 	}
 }
@@ -453,12 +308,12 @@ func writeFormat(t *testing.T, dir, body string) {
 func TestTokenOnlyUnderUnknownFormat(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 3))
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 4, 7)).stop() // create every token file
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 3))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 4, 7)).stop() // create every token file
 	writeFormat(t, dir, "coreslot-protocol 2\n")
 	before := listing(t, dir)
 
-	tk, err := e.EnqueueContext(context.Background(), need("cpu=2..6"))
+	tk, err := e.EnqueueContext(context.Background(), need("mem=2..6"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,24 +322,24 @@ func TestTokenOnlyUnderUnknownFormat(t *testing.T) {
 		t.Fatalf("token-only %v, ticket %q: want token-only without a ticket", tk.TokenOnly(), tk.Name())
 	}
 	g := admitted(t, step(t, tk))
-	if !g.TokenOnly() || g.Grant()["cpu"] != 2 {
+	if !g.TokenOnly() || g.Grant()["mem"] != 2 {
 		t.Errorf("token-only %v grant %v, want token-only with min 2", g.TokenOnly(), g.Grant())
 	}
 	if files := g.Files(); len(files) != 3 || files[0] != nil {
 		t.Errorf("files %v, want nil then 2 tokens", files)
 	}
 	env := strings.Join(g.Env(), " ")
-	if env != "CORESLOT_GRANTED_CPU=2 CORESLOT_TOKEN_FDS=4-5 CORESLOT_UNBUDGETED=format" {
+	if env != "CORESLOT_GRANTED_MEM=256 CORESLOT_TOKEN_FDS=4-5 CORESLOT_UNBUDGETED=format" {
 		t.Errorf("env %q", env)
 	}
 	if after := listing(t, dir); after != before {
 		t.Errorf("token-only admission wrote to the state directory:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 	other := newEngine(t, dir, nil)
-	if n := lockedCount(t, other, "cpu"); n != 6 {
+	if n := lockedCount(t, other, "mem"); n != 6 {
 		t.Errorf("another client counts %d locked, want 6", n)
 	}
-	if free, err := other.Free("cpu"); err != nil || free != 2 {
+	if free, err := other.Free("mem"); err != nil || free != 2 {
 		t.Errorf("Free = %d, %v; want 2", free, err)
 	}
 	for _, d := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.LogDir} {
@@ -500,9 +355,9 @@ func TestTokenOnlyEnqueuesWhenFormatIsUnderstood(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
 	writeFormat(t, dir, "coreslot-protocol 2\n")
-	tk, err := e.EnqueueContext(context.Background(), need("cpu=1"))
+	tk, err := e.EnqueueContext(context.Background(), need("mem=1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,8 +385,8 @@ func TestFormatChangeWhileWaitingGoesTokenOnly(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	lock := startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
-	tk := enqueue(t, e, need("cpu=1"))
+	lock := startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
+	tk := enqueue(t, e, need("mem=1"))
 	name := tk.Name()
 	step(t, tk)
 	writeFormat(t, dir, "coreslot-protocol 2\n")
@@ -551,11 +406,11 @@ func TestFormatChangeWhileWaitingGoesTokenOnly(t *testing.T) {
 }
 
 func TestFreeCountsAllLocks(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 12\n")
+	dir := newStateDir(t, "[resources]\nmem = \"1536M\"\n")
 	e := newEngine(t, dir, newFakeClock())
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 10, 13)) // above the size after a shrink
-	startHelper(t, "lock", dir, filepath.Join(dir, store.ResDir, "cpu", "007"))
-	if free, err := e.Free("cpu"); err != nil || free != 8 {
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 10, 13)) // above the size after a shrink
+	startHelper(t, "lock", dir, filepath.Join(dir, store.ResDir, "mem", "007"))
+	if free, err := e.Free("mem"); err != nil || free != 8 {
 		t.Errorf("Free = %d, %v; want 12 - 4 = 8 (007 is not a token)", free, err)
 	}
 	if _, err := e.Free("gpu"); err == nil {
@@ -568,19 +423,19 @@ func TestFreeCountsAllLocks(t *testing.T) {
 func TestFailOpenHold(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	if _, err := e.FailOpen(need("cpu=2"), "format"); err == nil {
+	if _, err := e.FailOpen(need("mem=2"), "format"); err == nil {
 		t.Error(`FailOpen with the reason "format": want an error`)
 	}
-	g, err := e.FailOpen(need("cpu=2"), "configuration invalid")
+	g, err := e.FailOpen(need("mem=2"), "configuration invalid")
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := readHold(t, e, g)
-	if !h.Unbudgeted || len(h.Grant) != 0 || !reflect.DeepEqual(h.UnbudgetedResources, []string{"cpu"}) {
-		t.Errorf("hold %+v, want unbudgeted, empty grant, unbudgeted_resources [cpu]", h)
+	if !h.Unbudgeted || len(h.Grant) != 0 || !reflect.DeepEqual(h.UnbudgetedResources, []string{"mem"}) {
+		t.Errorf("hold %+v, want unbudgeted, empty grant, unbudgeted_resources [mem]", h)
 	}
 	env := strings.Join(g.Env(), " ")
-	if env != "CORESLOT_GRANTED_CPU=2 CORESLOT_HELD_FD=3 CORESLOT_UNBUDGETED=configuration invalid" {
+	if env != "CORESLOT_GRANTED_MEM=256 CORESLOT_HELD_FD=3 CORESLOT_UNBUDGETED=configuration invalid" {
 		t.Errorf("env %q", env)
 	}
 	if rec, _ := e.st.Degraded(); rec == nil || rec.Reason != "configuration invalid" {
@@ -595,7 +450,7 @@ func TestFailOpenHold(t *testing.T) {
 	for _, format := range []string{"coreslot-protocol 2\n", "coreslot-protocol x\n"} {
 		writeFormat(t, dir, format)
 		before := listing(t, dir)
-		g, err := e.FailOpen(need("cpu=2"), "state error")
+		g, err := e.FailOpen(need("mem=2"), "state error")
 		if err == nil || g == nil || g.HoldName() != "" {
 			t.Errorf("FORMAT %q: grant %v err %v, want a hold-less grant and an error", format, g, err)
 		}
@@ -643,8 +498,8 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	g := admitted(t, step(t, enqueue(t, e, needLabel("cpu=3", "gate:\nunit"))))
-	waiter := enqueue(t, e, needLabel("cpu=8", "ci"))
+	g := admitted(t, step(t, enqueue(t, e, needLabel("mem=3", "gate:\nunit"))))
+	waiter := enqueue(t, e, needLabel("mem=8", "ci"))
 	startHelper(t, "section", dir, "")
 	before := listing(t, dir)
 	r, err := e.Snapshot()
@@ -657,14 +512,14 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	if !r.Section.Held || r.Section.PID == 0 {
 		t.Errorf("section %+v, want held by the helper", r.Section)
 	}
-	if len(r.Holds) != 1 || r.Holds[0].Label != "gate:\nunit" || r.Holds[0].Grant["cpu"] != 3 || r.Holds[0].Name != g.HoldName() {
+	if len(r.Holds) != 1 || r.Holds[0].Label != "gate:\nunit" || r.Holds[0].Grant["mem"] != 3 || r.Holds[0].Name != g.HoldName() {
 		t.Errorf("holds %+v", r.Holds)
 	}
 	if len(r.Tickets) != 1 || r.Tickets[0].Name != waiter.Name() || r.Tickets[0].Dead {
 		t.Errorf("tickets %+v", r.Tickets)
 	}
-	if ri := r.Resources["cpu"]; ri.Size != testCPUs || ri.Locked != 3 || ri.Available != 5 {
-		t.Errorf("cpu %+v, want size 8, locked 3, free 5", ri)
+	if ri := r.Resources["mem"]; ri.Size != testTokens || ri.Locked != 3 || ri.Available != 5 {
+		t.Errorf("mem %+v, want size 8, locked 3, free 5", ri)
 	}
 	if r.Format != 1 || !r.FormatUnderstood {
 		t.Errorf("format %d understood %v", r.Format, r.FormatUnderstood)
@@ -678,7 +533,7 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 func TestSnapshotOwnerExited(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	admitted(t, step(t, enqueue(t, e, need("cpu=2"))))
+	admitted(t, step(t, enqueue(t, e, need("mem=2"))))
 	r, err := e.Snapshot()
 	if err != nil || len(r.Holds) != 1 {
 		t.Fatalf("holds %+v, %v; want one", r.Holds, err)
@@ -740,11 +595,11 @@ func liveHoldIndices(t *testing.T, e *Engine) map[string][]string {
 // lists a token nobody locks; a head admitted in between can never publish a second live hold
 // over the same indices (I1).
 func TestCloseReleasesHoldBeforeTokens(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 2\n")
+	dir := newStateDir(t, "[resources]\nmem = \"256M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	g := admitted(t, step(t, enqueue(t, e, need("cpu=2"))))
-	w := enqueue(t, e, need("cpu=2"))
+	g := admitted(t, step(t, enqueue(t, e, need("mem=2"))))
+	w := enqueue(t, e, need("mem=2"))
 	if isAdmitted(step(t, w)) {
 		t.Fatal("admitted while the grant holds every token")
 	}
@@ -794,15 +649,15 @@ func TestCloseReleasesHoldBeforeTokens(t *testing.T) {
 // the section repeats the election over a fresh listing, where a ticket the head has never
 // watched counts as live (PROTOCOL.md section 12.1 step 5).
 func TestReelectionInsideTheSection(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	h := enqueue(t, e, need("cpu=1"))
+	h := enqueue(t, e, need("mem=1"))
 	var p *Ticket
 	defaultPoint := point
 	point = func(name string) {
 		if name == "admit.before-enter" && p == nil {
-			req := needLabel("cpu=1", "p")
+			req := needLabel("mem=1", "p")
 			req.Priority = 10 // ahead of h
 			p = enqueue(t, newEngine(t, dir, clk), req)
 		}
@@ -828,16 +683,16 @@ func TestReelectionInsideTheSection(t *testing.T) {
 // and, as it is never refreshed, passes it over once it is STALLED instead of being kept out
 // for ever.
 func TestReelectionWatchesATicketPublishedWithoutBump(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	holder := startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 0))
-	h := enqueue(t, e, need("cpu=1"))
+	holder := startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 0))
+	h := enqueue(t, e, need("mem=1"))
 	if pos := position(t, step(t, h)); pos != 1 { // elected, gen known; the token is held
 		t.Fatalf("h at position %d, want the head", pos)
 	}
 	// x: a well-formed, live ticket ahead of h, published without bumping gen.
-	body, err := wire.Encode(wire.Ticket{Label: "x", Need: need("cpu=1").Need, CreatedNS: 1})
+	body, err := wire.Encode(wire.Ticket{Label: "x", Need: need("mem=1").Need, CreatedNS: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,12 +36,11 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		r.notice("the state directory's format is not implemented here; running in token-only mode, outside the queue")
 	}
 	c := child{
-		env:        append(slices.Clone(r.env), g.Env()...),
-		files:      g.Files(),
-		grant:      g.Grant(),
-		clamped:    slices.Sorted(maps.Keys(g.Clamped())),
-		unbudgeted: g.Unbudgeted(),
-		release:    g.Close,
+		env:     append(slices.Clone(r.env), g.Env()...),
+		files:   g.Files(),
+		grant:   g.Grant(),
+		clamped: slices.Sorted(maps.Keys(g.Clamped())),
+		release: g.Close,
 	}
 	if !g.TokenOnly() {
 		c.log = e.Store() // FORMAT was understood in the admitting section
@@ -59,15 +58,14 @@ func grantText(grant map[string]int, names []string) string {
 
 // child is what a run starts its command with.
 type child struct {
-	env        []string
-	files      []*os.File // ExtraFiles: fd 3 (nil without a hold), then the tokens
-	grant      map[string]int
-	clamped    []string
-	unbudgeted []string
-	failOpen   string
-	nested     bool
-	release    func() error // closes the run's copies of the grant once the command exited
-	log        *store.Store // the run log to append to; nil writes none
+	env      []string
+	files    []*os.File // ExtraFiles: fd 3 (nil without a hold), then the tokens
+	grant    map[string]int
+	clamped  []string
+	failOpen string
+	nested   bool
+	release  func() error // closes the run's copies of the grant once the command exited
+	log      *store.Store // the run log to append to; nil writes none
 }
 
 // runChild starts the command with c, waits for it, releases the grant and appends the run
@@ -120,13 +118,11 @@ func (r *run) runChild(c child) int {
 		return status
 	}
 	rec := store.RunRecord{
-		TimeNS: r.startNS, Label: r.o.label, Need: r.o.need, Grant: c.grant, Clamped: c.clamped,
-		UnbudgetedResources: c.unbudgeted, WaitedS: r.waited.Seconds(),
-		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen,
-		Nested: c.nested,
+		TimeNS: r.startNS, Label: r.o.label, WaitedS: r.waited.Seconds(),
+		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen, Nested: c.nested,
 	}
-	recordUsage(&rec, cmd.ProcessState) // nil when the command never started
-	setMemPeak(&rec, peakKiB, peakAfterS, sampled)
+	maxRSS := recordUsage(&rec, cmd.ProcessState) // nil when the command never started
+	setMemPeak(&rec, maxRSS, peakKiB, peakAfterS, sampled)
 	if r.freeWait != nil {
 		free := r.freeWait.total().Seconds()
 		rec.WaitedFreeS = &free
@@ -151,25 +147,27 @@ func (r *run) runChild(c child) int {
 	return status
 }
 
-// recordUsage copies the command's CPU time and peak resident set size from its wait4 rusage
-// into rec (PROTOCOL.md section 20). The rusage covers the command and the descendants it waited
-// for, not the ones it left running. A command that never started has no ProcessState and gets
-// none of the keys, as does a platform whose wait reports no rusage: an unknown value is left out
-// rather than written as zero. The seconds are not rounded, like ran_s and waited_s.
-func recordUsage(rec *store.RunRecord, ps *os.ProcessState) {
+// recordUsage copies the command's user and system seconds from its wait4 rusage into rec
+// (PROTOCOL.md section 20) and returns its peak resident set size in KiB. The rusage covers the
+// command and the descendants it waited for, not the ones it left running. A command that never
+// started has no ProcessState and gets no keys and a nil peak, as does a platform whose wait
+// reports no rusage: an unknown value is left out rather than written as zero. The seconds are
+// not rounded, like ran_s and waited_s.
+func recordUsage(rec *store.RunRecord, ps *os.ProcessState) (maxRSS *int64) {
 	if ps == nil {
-		return
+		return nil
 	}
 	ru, ok := ps.SysUsage().(*syscall.Rusage)
 	if !ok || ru == nil {
-		return
+		return nil
 	}
 	user := time.Duration(ru.Utime.Nano()).Seconds()
 	sys := time.Duration(ru.Stime.Nano()).Seconds()
-	rec.CPUUserS, rec.CPUSysS = &user, &sys
+	rec.UserS, rec.SysS = &user, &sys
 	if kib, known := maxRSSKiB(int64(ru.Maxrss)); known {
-		rec.MaxRSSKiB = &kib
+		return &kib
 	}
+	return nil
 }
 
 // releaseFailed reports a release that returned err and says whether the run must stop writing.

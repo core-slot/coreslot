@@ -19,14 +19,14 @@ import (
 func TestEnqueueContextEndsWhileSectionIsHeld(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	enqueue(t, e, need("cpu=1")) // FORMAT and queue/ exist
+	enqueue(t, e, need("mem=1")) // FORMAT and queue/ exist
 	startHelper(t, "section", dir, "")
 	before, _, _ := e.st.List(store.QueueDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	tk, err := e.EnqueueContext(ctx, need("cpu=1"))
+	tk, err := e.EnqueueContext(ctx, need("mem=1"))
 	if !errors.Is(err, context.DeadlineExceeded) || tk != nil {
 		t.Fatalf("EnqueueContext = %v, %v; want the context's deadline and no ticket", tk, err)
 	}
@@ -45,7 +45,7 @@ func TestEnqueueContextEndsWhileSectionIsHeld(t *testing.T) {
 func TestBoundedEntriesNameTheSectionHolder(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	tk := enqueue(t, e, need("cpu=1")) // FORMAT and queue/ exist
+	tk := enqueue(t, e, need("mem=1")) // FORMAT and queue/ exist
 	h := startHelper(t, "section-marked", dir, "")
 	pid := h.cmd.Process.Pid
 	before := listing(t, dir)
@@ -53,8 +53,8 @@ func TestBoundedEntriesNameTheSectionHolder(t *testing.T) {
 		name string
 		op   func(ctx context.Context) error
 	}{
-		{"EnqueueContext", func(ctx context.Context) error { _, err := e.EnqueueContext(ctx, need("cpu=1")); return err }},
-		{"AdoptContext", func(ctx context.Context) error { _, err := e.AdoptContext(ctx, need("cpu=1")); return err }},
+		{"EnqueueContext", func(ctx context.Context) error { _, err := e.EnqueueContext(ctx, need("mem=1")); return err }},
+		{"AdoptContext", func(ctx context.Context) error { _, err := e.AdoptContext(ctx, need("mem=1")); return err }},
 		{"CancelContext", func(ctx context.Context) error { return e.CancelContext(ctx, tk.ID()) }},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -83,22 +83,22 @@ func TestBoundedEntriesNameTheSectionHolder(t *testing.T) {
 func TestUnbudgetedHoldRecordsNoDegraded(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	if _, err := e.UnbudgetedHold(need("cpu=2"), "format"); err == nil {
+	if _, err := e.UnbudgetedHold(need("mem=2"), "format"); err == nil {
 		t.Error(`UnbudgetedHold with the reason "format": want an error`)
 	}
 	before := readGen(t, e)
-	g, err := e.UnbudgetedHold(need("cpu=2"), "timeout")
+	g, err := e.UnbudgetedHold(need("mem=2"), "timeout")
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := readHold(t, e, g)
-	if !h.Unbudgeted || len(h.Grant) != 0 || !reflect.DeepEqual(h.UnbudgetedResources, []string{"cpu"}) {
-		t.Errorf("hold %+v, want unbudgeted, empty grant, unbudgeted_resources [cpu]", h)
+	if !h.Unbudgeted || len(h.Grant) != 0 || !reflect.DeepEqual(h.UnbudgetedResources, []string{"mem"}) {
+		t.Errorf("hold %+v, want unbudgeted, empty grant, unbudgeted_resources [mem]", h)
 	}
 	if readGen(t, e) != before+1 {
 		t.Errorf("gen %d -> %d, want one bump", before, readGen(t, e))
 	}
-	if env := strings.Join(g.Env(), " "); env != "CORESLOT_GRANTED_CPU=2 CORESLOT_HELD_FD=3 CORESLOT_UNBUDGETED=timeout" {
+	if env := strings.Join(g.Env(), " "); env != "CORESLOT_GRANTED_MEM=256 CORESLOT_HELD_FD=3 CORESLOT_UNBUDGETED=timeout" {
 		t.Errorf("env %q", env)
 	}
 	if rec, err := e.st.Degraded(); rec != nil || err != nil {
@@ -117,12 +117,12 @@ func TestUnbudgetedHoldRecordsNoDegraded(t *testing.T) {
 // A configuration the snapshot cannot use is reported by its reason alone: the caller prints it
 // under its own heading, so it carries no "coreslot state error:" prefix.
 func TestSnapshotConfigErrorIsTheReason(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 0\n")
+	dir := newStateDir(t, "[resources]\nmem = \"0M\"\n")
 	r, err := newEngine(t, dir, nil).Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.ConfigError == "" || strings.Contains(r.ConfigError, "state error") || !strings.Contains(r.ConfigError, "cpu") {
+	if r.ConfigError == "" || strings.Contains(r.ConfigError, "state error") || !strings.Contains(r.ConfigError, "mem") {
 		t.Fatalf("ConfigError %q: want the configuration's reason without the state error's prefix", r.ConfigError)
 	}
 }

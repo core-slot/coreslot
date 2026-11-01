@@ -210,11 +210,10 @@ func (r *run) passThrough(held map[string][]*os.File) int {
 		}
 	}
 	return r.runChild(child{
-		env:        withGrant(grant),
-		grant:      grant,
-		clamped:    slices.Sorted(maps.Keys(clamped)),
-		unbudgeted: unbudgeted,
-		nested:     true,
+		env:     withGrant(grant),
+		grant:   grant,
+		clamped: slices.Sorted(maps.Keys(clamped)),
+		nested:  true,
 		release: func() error {
 			runtime.KeepAlive(held)
 			return nil
@@ -229,11 +228,10 @@ func (r *run) passThroughUnbudgeted(reason string) int {
 	r.notice("the parent run is unbudgeted (%s); running unbudgeted with %s", text(reason),
 		grantText(grant, r.o.sortedNeed()))
 	return r.runChild(child{
-		env:        withGrant(grant),
-		grant:      grant,
-		unbudgeted: r.o.sortedNeed(),
-		nested:     true,
-		release:    func() error { return nil },
+		env:     withGrant(grant),
+		grant:   grant,
+		nested:  true,
+		release: func() error { return nil },
 	})
 }
 

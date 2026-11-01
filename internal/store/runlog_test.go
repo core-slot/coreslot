@@ -14,8 +14,6 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
-
-	"github.com/core-slot/coreslot/internal/spec"
 )
 
 func readLines(t *testing.T, path string) []string {
@@ -42,16 +40,11 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 	s := open(t, dir)
 	logPath := filepath.Join(dir, LogDir, RunLog)
 	r := RunRecord{
-		TimeNS:              1791720000000000000,
-		Label:               "gate:unit\nsecond line \x1b[31mred\x1b[0m",
-		Need:                map[string]spec.Range{"cpu": {Min: 4, Max: 12}, "pg-local": {Min: 1, Max: 1}},
-		Grant:               map[string]int{"cpu": 10, "pg-local": 1},
-		Clamped:             []string{"cpu"},
-		UnbudgetedResources: nil,
-		WaitedS:             1.5,
-		RanS:                12.25,
-		Exit:                0,
-		Load1:               3.5,
+		TimeNS:  1791720000000000000,
+		Label:   "gate:unit\nsecond line \x1b[31mred\x1b[0m",
+		WaitedS: 1.5,
+		RanS:    12.25,
+		Exit:    0,
 	}
 	if err := s.AppendRun(r); err != nil {
 		t.Fatal(err)
@@ -65,8 +58,7 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
 	}
-	wantKeys := []string{"clamped", "exit", "fail_open", "grant", "label", "load1", "need", "ran_s",
-		"time_ns", "unbudgeted_resources", "waited_s"}
+	wantKeys := []string{"exit", "fail_open", "label", "ran_s", "time_ns", "waited_s"}
 	for i, line := range lines {
 		if len(line)+1 > MaxRunLine {
 			t.Errorf("line %d is %d bytes with its LF, more than %d", i, len(line)+1, MaxRunLine)
@@ -81,12 +73,6 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 		if m["label"] != r.Label {
 			t.Errorf("line %d label %q, want %q", i, m["label"], r.Label)
 		}
-		if need, _ := json.Marshal(m["need"]); string(need) != `{"cpu":[4,12],"pg-local":[1,1]}` {
-			t.Errorf("need %s", need)
-		}
-		if ub, ok := m["unbudgeted_resources"].([]any); !ok || len(ub) != 0 {
-			t.Errorf("unbudgeted_resources %v, want []", m["unbudgeted_resources"])
-		}
 	}
 	var second map[string]any
 	_ = json.Unmarshal([]byte(lines[1]), &second)
@@ -95,17 +81,7 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 		t.Errorf("fail_open was not truncated to a valid prefix: %d bytes", len(fo))
 	}
 	tooLong := r
-	tooLong.Label = strings.Repeat("\x01", 128)
-	tooLong.Need = map[string]spec.Range{}
-	for _, c := range "abcdefghijklmnopqrstuvwxyz" {
-		tooLong.Need[strings.Repeat(string(c), 32)] = spec.Range{Min: 256, Max: 256}
-	}
-	tooLong.Grant = map[string]int{}
-	for name := range tooLong.Need {
-		tooLong.Grant[name] = 256
-		tooLong.Clamped = append(tooLong.Clamped, name)
-		tooLong.UnbudgetedResources = append(tooLong.UnbudgetedResources, name)
-	}
+	tooLong.Label = strings.Repeat("x", MaxRunLine) // a label no request carries: nothing to shorten
 	if err := s.AppendRun(tooLong); err == nil {
 		t.Error("AppendRun wrote a record that cannot fit 4 KiB")
 	}
@@ -297,13 +273,7 @@ func TestWriteOnceIssuesOneWrite(t *testing.T) {
 func TestRunLogNestedMarkerIsEncodedOnlyWhenTrue(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	r := RunRecord{
-		TimeNS: 1791720000000000000,
-		Label:  "nested:child",
-		Need:   map[string]spec.Range{"cpu": {Min: 2, Max: 2}},
-		Grant:  map[string]int{"cpu": 2},
-		Exit:   0,
-	}
+	r := RunRecord{TimeNS: 1791720000000000000, Label: "nested:child"}
 	if err := s.AppendRun(r); err != nil {
 		t.Fatal(err)
 	}
@@ -337,19 +307,18 @@ func TestRunLogNestedMarkerIsEncodedOnlyWhenTrue(t *testing.T) {
 	}
 }
 
-// PROTOCOL.md section 20: cpu_user_s, cpu_sys_s and max_rss_kib are encoded exactly when they
-// are known, a measured zero included, and a line shortened to fit 4 KiB keeps them.
+// PROTOCOL.md section 20: user_s and sys_s are encoded exactly when they are known, a measured
+// zero included, and a line shortened to fit 4 KiB keeps them.
 //
-// Mutation: encode the three fields without omitempty (an unknown value is written as null), or
-// as plain numbers with omitempty (a measured zero disappears).
+// Mutation: encode the two fields without omitempty (an unknown value is written as null), or as
+// plain numbers with omitempty (a measured zero disappears).
 func TestRunLogUsageKeys(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	user, sys, rss := 1.25, 0.0, int64(65536)
-	r := RunRecord{TimeNS: 1791720000000000000, Label: "usage",
-		Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, Grant: map[string]int{"cpu": 1}}
+	user, sys := 1.25, 0.0
+	r := RunRecord{TimeNS: 1791720000000000000, Label: "usage"}
 	measured := r
-	measured.CPUUserS, measured.CPUSysS, measured.MaxRSSKiB = &user, &sys, &rss
+	measured.UserS, measured.SysS = &user, &sys
 	long := measured
 	long.FailOpen = strings.Repeat("x", 5000)
 	for _, rec := range []RunRecord{r, measured, long} {
@@ -361,12 +330,12 @@ func TestRunLogUsageKeys(t *testing.T) {
 	if len(lines) != 3 {
 		t.Fatalf("%d lines, want 3: %q", len(lines), lines)
 	}
-	for _, key := range []string{"cpu_user_s", "cpu_sys_s", "max_rss_kib"} {
+	for _, key := range []string{"user_s", "sys_s"} {
 		if strings.Contains(lines[0], `"`+key+`"`) {
 			t.Errorf("a line without usage has %s: %s", key, lines[0])
 		}
 	}
-	const want = `"ran_s":0,"cpu_user_s":1.25,"cpu_sys_s":0,"max_rss_kib":65536,"exit":0`
+	const want = `"ran_s":0,"user_s":1.25,"sys_s":0,"exit":0`
 	for i, line := range lines[1:] {
 		if !strings.Contains(line, want) {
 			t.Errorf("line %d = %s; want it to contain %s", i+1, line, want)
@@ -485,7 +454,7 @@ func TestReadRunsSkipsMalformed(t *testing.T) {
 		t.Fatalf("ReadRuns = %d runs, %d skipped, %v; want 1 run, 2 skipped", len(runs), skipped, err)
 	}
 	r := runs[0]
-	if r.Label != "old:tests" || r.Need["cpu"] != (spec.Range{Min: 1, Max: 4}) || r.CPUUserS == nil || *r.CPUUserS != 20 {
+	if r.Label != "old:tests" || r.WaitedS != 0.5 || r.RanS != 10 {
 		t.Errorf("old run %+v", r)
 	}
 	if r.MemPeakKiB != nil || r.MemPeakSource != "" || r.PeakAfterS != nil || r.WaitedFreeS != nil {
@@ -493,62 +462,44 @@ func TestReadRunsSkipsMalformed(t *testing.T) {
 	}
 }
 
-// What AppendRun writes, ReadRuns gives back field for field.
-// Mutation: leave MemPeakKiB out of the reader's conversion.
-func TestReadRunsRoundTrip(t *testing.T) {
+// A record encodes exactly the run log's keys, and reads back field for field; stops is written
+// only above 0. Mutation: drop a key from the encoder, or encode stops without omitempty.
+func TestRunRecordKeys(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	user, sys, rss, peak, after, free := 3.5, 0.25, int64(65536), int64(2831156), 22.0, 4.0
+	user, sys, peak, after, free := 3.5, 0.25, int64(2831156), 22.0, 4.0
 	want := RunRecord{
-		TimeNS:              1791720000000000000,
-		Label:               "fastapi:tests@10",
-		Need:                map[string]spec.Range{"cpu": {Min: 1, Max: 16}, "mem": {Min: 22, Max: 22}},
-		Grant:               map[string]int{"cpu": 10, "mem": 22},
-		Clamped:             []string{"cpu"},
-		UnbudgetedResources: []string{"gpu"},
-		WaitedS:             1.5,
-		RanS:                12.25,
-		Exit:                1,
-		Load1:               3.5,
-		FailOpen:            "light",
-		Nested:              true,
-		CPUUserS:            &user,
-		CPUSysS:             &sys,
-		MaxRSSKiB:           &rss,
-		MemPeakKiB:          &peak,
-		MemPeakSource:       "footprint",
-		PeakAfterS:          &after,
-		WaitedFreeS:         &free,
-		Workers:             new(10),
-		Preemptible:         "auto: median 14m >= 10m, cpu 12 >= 7",
+		TimeNS: 1791720000000000000, Label: "fastapi:tests", WaitedS: 1.5, RanS: 12.25, Exit: 1,
+		FailOpen: "timeout", Nested: true, MemPeakKiB: &peak, MemPeakSource: "footprint", PeakAfterS: &after,
+		WaitedFreeS: &free, UserS: &user, SysS: &sys, Stops: 2,
 	}
-	if err := s.AppendRun(want); err != nil {
-		t.Fatal(err)
-	}
-	runs, skipped, err := s.ReadRuns()
-	if err != nil || skipped != 0 || len(runs) != 1 {
-		t.Fatalf("ReadRuns = %d runs, %d skipped, %v", len(runs), skipped, err)
-	}
-	if !reflect.DeepEqual(runs[0], want) {
-		t.Errorf("read back\n%+v\nwant\n%+v", runs[0], want)
-	}
-}
-
-// The preemptible key is written only for a run with a reason (TestReadRunsRoundTrip reads it
-// back). Mutation: encode it without omitempty → a plain run's line has the key, red.
-func TestRunLogPreemptibleKey(t *testing.T) {
-	dir := newDir(t)
-	s := open(t, dir)
-	r := RunRecord{TimeNS: 1791720000000000000, Label: "x", Need: map[string]spec.Range{"cpu": {Min: 1, Max: 8}}, Grant: map[string]int{"cpu": 1}}
-	if err := s.AppendRun(r); err != nil {
-		t.Fatal(err)
-	}
-	r.Preemptible = "flag"
-	if err := s.AppendRun(r); err != nil {
-		t.Fatal(err)
+	plain := RunRecord{TimeNS: want.TimeNS, Label: "plain"}
+	for _, r := range []RunRecord{want, plain} {
+		if err := s.AppendRun(r); err != nil {
+			t.Fatal(err)
+		}
 	}
 	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
-	if len(lines) != 2 || strings.Contains(lines[0], "preemptible") || !strings.Contains(lines[1], `"preemptible":"flag"`) {
-		t.Errorf("lines %q, want the key on the second only", lines)
+	if len(lines) != 2 {
+		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
+	}
+	keys := func(line string) []string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		return slices.Sorted(maps.Keys(m))
+	}
+	full := []string{"exit", "fail_open", "label", "mem_peak_kib", "mem_peak_source", "nested", "peak_after_s",
+		"ran_s", "stops", "sys_s", "time_ns", "user_s", "waited_free_s", "waited_s"}
+	if got := keys(lines[0]); !slices.Equal(got, full) {
+		t.Errorf("a full record's keys %v, want %v", got, full)
+	}
+	if got, want := keys(lines[1]), []string{"exit", "fail_open", "label", "ran_s", "time_ns", "waited_s"}; !slices.Equal(got, want) {
+		t.Errorf("a plain record's keys %v, want %v", got, want)
+	}
+	runs, skipped, err := s.ReadRuns()
+	if err != nil || skipped != 0 || len(runs) != 2 || !reflect.DeepEqual(runs[0], want) {
+		t.Errorf("read back %+v (%d skipped, %v), want %+v", runs, skipped, err, want)
 	}
 }

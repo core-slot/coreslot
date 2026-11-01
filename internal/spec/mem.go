@@ -65,19 +65,3 @@ func NeedText(mib int64) string {
 	}
 	return fmt.Sprintf("%dM", mib)
 }
-
-// parseMemNeed is ParseNeed for the mem resource: one size, never a range, more than 0.
-func parseMemNeed(arg, value string) (Range, error) {
-	if strings.Contains(value, "..") {
-		return Range{}, usagef("invalid need %q: mem takes one size, such as mem=3G or mem=768M, not a range", arg)
-	}
-	mib, err := ParseBytes(value)
-	if err != nil {
-		return Range{}, usagef("invalid need %q: %v", arg, err)
-	}
-	if mib == 0 {
-		return Range{}, usagef("invalid need %q: mem needs more than 0", arg)
-	}
-	t := MemTokensCeil(mib)
-	return Range{Min: t, Max: t}, nil
-}

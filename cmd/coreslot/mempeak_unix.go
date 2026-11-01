@@ -52,14 +52,14 @@ func (p *peakSampler) stop() (kib int64, afterS float64, ok bool) {
 	return b.kib, b.afterS, b.ok
 }
 
-// setMemPeak records the larger of the sampled peak and the rusage's MaxRSSKiB as the run's
-// memory peak. The rusage is a floor: it sees one process at a time, never a tree's sum.
-func setMemPeak(rec *store.RunRecord, kib int64, afterS float64, sampled bool) {
+// setMemPeak records the larger of the sampled peak and the rusage's maxRSSKiB (nil when unknown)
+// as the run's memory peak. The rusage is a floor: it sees one process at a time, never a tree's
+// sum.
+func setMemPeak(rec *store.RunRecord, maxRSSKiB *int64, kib int64, afterS float64, sampled bool) {
 	switch {
-	case sampled && (rec.MaxRSSKiB == nil || kib >= *rec.MaxRSSKiB):
+	case sampled && (maxRSSKiB == nil || kib >= *maxRSSKiB):
 		rec.MemPeakKiB, rec.MemPeakSource, rec.PeakAfterS = &kib, memsample.Source, &afterS
-	case rec.MaxRSSKiB != nil:
-		rss := *rec.MaxRSSKiB
-		rec.MemPeakKiB, rec.MemPeakSource = &rss, "max_rss"
+	case maxRSSKiB != nil:
+		rec.MemPeakKiB, rec.MemPeakSource = maxRSSKiB, "max_rss"
 	}
 }

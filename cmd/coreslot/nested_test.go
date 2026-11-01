@@ -110,8 +110,8 @@ func TestNestedPassThrough(t *testing.T) {
 		}
 	}
 	lines := nestedLines(t, dir)
-	if len(lines) != 1 || lines[0]["label"] != "inner" || fmt.Sprint(lines[0]["grant"]) != "map[mem:8]" {
-		t.Errorf("nested run-log lines %v: want one for inner with mem 8", lines)
+	if len(lines) != 1 || lines[0]["label"] != "inner" {
+		t.Errorf("nested run-log lines %v: want one for inner", lines)
 	}
 	tokensFree(t, dir, 8)
 }
@@ -291,7 +291,7 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 			t.Error("the pass-through wrote a degraded record")
 		}
 		lines := nestedLines(t, dir)
-		if len(lines) != 1 || lines[0]["label"] != "nested-unbudgeted" || fmt.Sprint(lines[0]["unbudgeted_resources"]) != "[mem]" {
+		if len(lines) != 1 || lines[0]["label"] != "nested-unbudgeted" {
 			t.Errorf("nested run-log lines %v", lines)
 		}
 	})

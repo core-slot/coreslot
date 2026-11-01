@@ -3,11 +3,8 @@
 package runstats
 
 import (
-	"slices"
-	"strings"
 	"testing"
 
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -20,15 +17,10 @@ func k(v int64) *int64     { return &v }
 // gib is size GiB in KiB, rounded up.
 func gib(size float64) *int64 { return k(int64(size*1024*1024 + 0.999)) }
 
-// run is a counted run of label at t0+i seconds that used cores over 10 s, with a cpu need of
-// need and a grant of grant.
-func run(label string, i int64, cores float64, need spec.Range, grant int) store.RunRecord {
-	return store.RunRecord{TimeNS: t0 + i*1e9, Label: label, RanS: 10, CPUUserS: f(cores * 10), CPUSysS: f(0),
-		Need: map[string]spec.Range{"cpu": need}, Grant: map[string]int{"cpu": grant}}
+// run is a counted run of label at t0+i seconds.
+func run(label string, i int64) store.RunRecord {
+	return store.RunRecord{TimeNS: t0 + i*1e9, Label: label, RanS: 10}
 }
-
-// per is r with a worker count.
-func per(r store.RunRecord, workers int) store.RunRecord { r.Workers = &workers; return r }
 
 func only(t *testing.T, stats []Stats) Stats {
 	t.Helper()
@@ -43,9 +35,9 @@ func only(t *testing.T, stats []Stats) Stats {
 func TestWindowIsLastFive(t *testing.T) {
 	var runs []store.RunRecord
 	for _, i := range []int64{6, 0, 1, 2, 3, 4, 5} {
-		runs = append(runs, run("x", i, float64(i+1), spec.Range{Min: 1, Max: 1}, 1))
+		runs = append(runs, run("x", i))
 	}
-	s := only(t, Summarize(runs, 16))
+	s := only(t, Summarize(runs))
 	if s.Runs != 7 || len(s.Window) != 5 {
 		t.Fatalf("Runs %d, window %d; want 7 and 5", s.Runs, len(s.Window))
 	}
@@ -54,180 +46,64 @@ func TestWindowIsLastFive(t *testing.T) {
 			t.Errorf("window[%d] at %d, want %d", n, r.TimeNS, want)
 		}
 	}
-	if want := []float64{3, 4, 5, 6, 7}; !slices.Equal(s.CoresUsed, want) {
-		t.Errorf("CoresUsed %v, want %v", s.CoresUsed, want)
-	}
 }
 
 // mem is the window's largest peak, a failed run's included, rounded up to a whole token.
 // Mutation: leave failed runs out of the peak, or round to the nearest token.
 func TestMemIsMaxRoundedUp(t *testing.T) {
-	r1, r2, r3 := run("x", 1, 1, spec.Range{Min: 1, Max: 1}, 1), run("x", 2, 1, spec.Range{Min: 1, Max: 1}, 1), run("x", 3, 1, spec.Range{Min: 1, Max: 1}, 1)
+	r1, r2, r3 := run("x", 1), run("x", 2), run("x", 3)
 	r1.MemPeakKiB, r2.MemPeakKiB, r3.MemPeakKiB = gib(2.1), gib(2.7), gib(3.0)
 	r3.Exit = 1
-	s := only(t, Summarize([]store.RunRecord{r1, r2, r3}, 16))
+	s := only(t, Summarize([]store.RunRecord{r1, r2, r3}))
 	if s.Suggest.MemMiB != 3072 || s.MemPeakKiB != *gib(3.0) {
 		t.Errorf("mem %d MiB, peak %d KiB; want 3072 and %d", s.Suggest.MemMiB, s.MemPeakKiB, *gib(3.0))
 	}
-	s = only(t, Summarize([]store.RunRecord{r2}, 16))
+	s = only(t, Summarize([]store.RunRecord{r2}))
 	if s.Suggest.MemMiB != 2816 {
 		t.Errorf("mem %d MiB, want 2816", s.Suggest.MemMiB)
 	}
-	s = only(t, Summarize([]store.RunRecord{run("x", 1, 1, spec.Range{Min: 1, Max: 1}, 1)}, 16))
+	s = only(t, Summarize([]store.RunRecord{run("x", 1)}))
 	if s.Suggest.MemMiB != 0 || s.MemPeakKiB != 0 {
 		t.Errorf("no peak recorded, yet mem %d MiB, peak %d KiB", s.Suggest.MemMiB, s.MemPeakKiB)
 	}
 }
 
-// When the window's largest peak was taken with a cpu grant above the suggested cpu max, mem still
-// rests on it, and the evidence names that grant: a pytest run granted 14 workers peaks at 3.1 GiB,
-// one granted 6 at 1.4 GiB, and the suggestion is cpu 1..6, so the reader learns the peak may not
-// hold at the grant the label will get. Mutation: drop the grant from the evidence, and the first
-// case reddens; name it whatever the grant, and the second does.
-func TestEvidenceNamesALargerGrant(t *testing.T) {
-	cold := run("x", 1, 5.6, spec.Range{Min: 1, Max: 14}, 14)
-	cold.MemPeakKiB = gib(3.1)
-	warm := run("x", 2, 5.2, spec.Range{Min: 1, Max: 6}, 6)
-	warm.MemPeakKiB = gib(1.4)
-	s := only(t, Summarize([]store.RunRecord{cold, warm}, 14))
-	if c := s.Suggest.CPU; c == nil || *c != (spec.Range{Min: 1, Max: 6}) {
-		t.Fatalf("cpu %v, want 1..6", c)
+// The evidence names the window, the peak with its measure and when it was read.
+// Mutation: drop the source, or the time, from the peak.
+func TestEvidenceNamesThePeak(t *testing.T) {
+	r1, r2 := run("x", 1), run("x", 2)
+	r1.MemPeakKiB, r1.MemPeakSource, r1.PeakAfterS = gib(1.0), "footprint", f(3)
+	r2.MemPeakKiB, r2.MemPeakSource, r2.PeakAfterS = gib(2.7), "footprint", f(22.4)
+	s := only(t, Summarize([]store.RunRecord{r1, r2}))
+	if want := "2 runs 2026-10-20: peak 2.7 GiB (footprint) at 22s"; s.Suggest.Reason != want {
+		t.Errorf("reason %q, want %q", s.Suggest.Reason, want)
 	}
-	if s.Suggest.MemMiB != 3200 || s.MemPeakKiB != *gib(3.1) {
-		t.Errorf("mem %d MiB, peak %d KiB; want 3200 and %d, the window's largest", s.Suggest.MemMiB, s.MemPeakKiB, *gib(3.1))
-	}
-	if !strings.Contains(s.Suggest.Reason, "with cpu 14") {
-		t.Errorf("reason %q does not say the peak was taken with cpu 14", s.Suggest.Reason)
-	}
-
-	cold.MemPeakKiB = gib(1.0)
-	s = only(t, Summarize([]store.RunRecord{cold, warm}, 14))
-	if strings.Contains(s.Suggest.Reason, "with cpu") {
-		t.Errorf("reason %q names a grant, though the peak came from a run granted 6", s.Suggest.Reason)
-	}
-}
-
-// cpu is the window's most cores used, rounded up and clamped to the cpu size; a range need stays
-// a range from 1.
-// Mutation: round the cores to the nearest integer, or drop the clamp to cpuSize.
-func TestCPUIsMaxCeilClamped(t *testing.T) {
-	ranged := []store.RunRecord{run("x", 1, 3.2, spec.Range{Min: 4, Max: 4}, 4), run("x", 2, 5.6, spec.Range{Min: 1, Max: 16}, 10)}
-	if c := only(t, Summarize(ranged, 16)).Suggest.CPU; c == nil || *c != (spec.Range{Min: 1, Max: 6}) {
-		t.Errorf("cpu %v, want 1..6", c)
-	}
-	if c := only(t, Summarize(ranged, 4)).Suggest.CPU; c == nil || *c != (spec.Range{Min: 1, Max: 4}) {
-		t.Errorf("cpu on a size of 4: %v, want 1..4", c)
-	}
-	fixed := []store.RunRecord{ranged[1], run("x", 3, 3.2, spec.Range{Min: 4, Max: 4}, 4)}
-	if c := only(t, Summarize(fixed, 16)).Suggest.CPU; c == nil || *c != (spec.Range{Min: 6, Max: 6}) {
-		t.Errorf("cpu after a fixed need: %v, want 6..6", c)
-	}
-	unmeasured := run("x", 1, 0, spec.Range{Min: 1, Max: 1}, 1)
-	unmeasured.CPUUserS = nil
-	if c := only(t, Summarize([]store.RunRecord{unmeasured}, 16)).Suggest.CPU; c != nil {
-		t.Errorf("cpu %v without a measured run, want none", c)
-	}
-}
-
-// A run that used 0.8 of its cpu grant or more is saturated, and the suggestion is its grant.
-// Mutation: compare with the need's max instead of the grant.
-func TestSaturationKeepsTheGrant(t *testing.T) {
-	s := only(t, Summarize([]store.RunRecord{run("x", 1, 3.9, spec.Range{Min: 1, Max: 16}, 4), run("x", 2, 3.1, spec.Range{Min: 1, Max: 16}, 4)}, 16))
-	if s.Saturated != 1 {
-		t.Errorf("Saturated %d, want 1", s.Saturated)
-	}
-	if c := s.Suggest.CPU; c == nil || c.Max != 4 {
-		t.Errorf("cpu %v, want a max of 4", c)
-	}
-}
-
-// A preemptible run's 12 cores on its 1-token grant is not saturation. Mutation: count it → 1, red.
-func TestPreemptibleIsNotSaturated(t *testing.T) {
-	r := run("x", 1, 12, spec.Range{Min: 1, Max: 12}, 1)
-	if s := only(t, Summarize([]store.RunRecord{r}, 16)); s.Saturated != 1 {
-		t.Fatalf("Saturated %d without the mark, want 1 (the control)", s.Saturated)
-	}
-	r.Preemptible = "flag"
-	if s := only(t, Summarize([]store.RunRecord{r}, 16)); s.Saturated != 0 {
-		t.Errorf("Saturated %d for a preemptible run, want 0", s.Saturated)
+	if s := only(t, Summarize([]store.RunRecord{run("x", 1)})); s.Suggest.Reason != "1 run 2026-10-20" {
+		t.Errorf("reason %q without a peak, want the window alone", s.Suggest.Reason)
 	}
 }
 
 // Unlabelled, pass-through and fail-open runs say nothing about what a label needs.
 // Mutation: count fail-open runs.
 func TestUncountedSkipped(t *testing.T) {
-	unlabelled := run("", 1, 1, spec.Range{Min: 1, Max: 1}, 1)
-	nested := run("x", 2, 1, spec.Range{Min: 1, Max: 1}, 1)
+	unlabelled := run("", 1)
+	nested := run("x", 2)
 	nested.Nested = true
-	light := run("y", 3, 1, spec.Range{Min: 1, Max: 1}, 1)
-	light.FailOpen = "light"
-	timeout := run("z", 4, 1, spec.Range{Min: 1, Max: 1}, 1)
+	timeout := run("z", 4)
 	timeout.FailOpen = "timeout"
-	workersOnly := run("@5", 5, 1, spec.Range{Min: 1, Max: 1}, 1)
-	if stats := Summarize([]store.RunRecord{unlabelled, nested, light, timeout, workersOnly}, 16); len(stats) != 0 {
+	if stats := Summarize([]store.RunRecord{unlabelled, nested, timeout}); len(stats) != 0 {
 		t.Errorf("Stats %+v, want none", stats)
-	}
-}
-
-// A worker count at the end of a label does not make another label.
-// Mutation: group by the full label.
-func TestWorkerSuffixGroups(t *testing.T) {
-	stats := Summarize([]store.RunRecord{run("x@10", 1, 1, spec.Range{Min: 1, Max: 1}, 1), run("x@4", 2, 1, spec.Range{Min: 1, Max: 1}, 1)}, 16)
-	if s := only(t, stats); s.Label != "x" || s.Runs != 2 {
-		t.Errorf("Stats %q with %d runs, want \"x\" with 2", s.Label, s.Runs)
 	}
 }
 
 // Waiting is summed over the window; a run without waited_free_s adds 0.
 // Mutation: take the last run's waited_free_s instead of the sum.
 func TestWaitedFreeSummed(t *testing.T) {
-	a, b, c := run("x", 1, 1, spec.Range{Min: 1, Max: 1}, 1), run("x", 2, 1, spec.Range{Min: 1, Max: 1}, 1), run("x", 3, 1, spec.Range{Min: 1, Max: 1}, 1)
+	a, b, c := run("x", 1), run("x", 2), run("x", 3)
 	a.WaitedFreeS, b.WaitedFreeS = f(3), f(4)
 	a.WaitedS, b.WaitedS, c.WaitedS = 5, 6, 1
-	s := only(t, Summarize([]store.RunRecord{a, b, c}, 16))
+	s := only(t, Summarize([]store.RunRecord{a, b, c}))
 	if s.WaitedFreeS != 7 || s.WaitedS != 12 {
 		t.Errorf("waited %v, waited while free %v; want 12 and 7", s.WaitedS, s.WaitedFreeS)
 	}
-}
-
-// wantPerWorker fails unless s suggests cpu and c cores per worker, with evidence naming
-// cpu_per_worker exactly when c is above 0.
-func wantPerWorker(t *testing.T, s Stats, c float64, cpu spec.Range) {
-	t.Helper()
-	got := s.Suggest
-	if got.CPUPerWorker != c || got.CPU == nil || *got.CPU != cpu || strings.Contains(got.Reason, "cpu_per_worker") != (c > 0) {
-		t.Errorf("cpu per worker %v, cpu %v, reason %q; want %v and %v", got.CPUPerWorker, got.CPU, got.Reason, c, cpu)
-	}
-}
-
-// The p90 of 1.0 / 4 and 3.1 / 12 cores per worker, rounded up to 0.05, is 0.3; an unsaturated
-// range keeps its max (its {n} follows the grant). Mutation: round to the nearest 0.05, or narrow
-// the range → red.
-func TestSuggestPerWorkerFromWorkers(t *testing.T) {
-	s := only(t, Summarize([]store.RunRecord{per(run("x", 1, 1.0, spec.Range{Min: 1, Max: 16}, 4), 4),
-		per(run("x", 2, 3.1, spec.Range{Min: 1, Max: 16}, 12), 12)}, 16))
-	wantPerWorker(t, s, 0.3, spec.Range{Min: 1, Max: 16})
-}
-
-// 0.27 cores per worker on 3 tokens over a width of 1..10, the workers being what {n} gives at c:
-// c1 learned from 0.5 and c2 from c1 are within 0.05. Mutation: divide by the grant → red.
-func TestSuggestPerWorkerNoSwing(t *testing.T) {
-	learnFrom := func(c float64) float64 {
-		workers := min(10, max(1, int(3/c+1e-9)))
-		var runs []store.RunRecord
-		for i := range int64(WindowRuns) {
-			runs = append(runs, per(run("x", i, float64(workers)*0.27, spec.Range{Min: 1, Max: 5}, 3), workers))
-		}
-		return only(t, Summarize(runs, 16)).Suggest.CPUPerWorker
-	}
-	c1 := learnFrom(0.5)
-	if c2 := learnFrom(c1); c1 <= 0 || c2-c1 > 0.05+1e-9 || c1-c2 > 0.05+1e-9 {
-		t.Errorf("c1 %v, c2 %v; want them within 0.05", c1, c2)
-	}
-}
-
-// Without workers (a go test ./... that parallelises itself) a range still narrows to the cores
-// used. Mutation: keep the max of every range → red.
-func TestSuggestStillNarrowsWithoutPlaceholder(t *testing.T) {
-	wantPerWorker(t, only(t, Summarize([]store.RunRecord{run("x", 1, 3, spec.Range{Min: 1, Max: 16}, 16)}, 16)), 0, spec.Range{Min: 1, Max: 3})
 }

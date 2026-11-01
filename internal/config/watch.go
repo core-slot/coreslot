@@ -1,7 +1,5 @@
 package config
 
-import "maps"
-
 // Watcher returns the configuration at Path, read afresh at every call: sizes are recomputed at
 // every admission attempt (PROTOCOL.md section 5.2), and no file attribute (mtime, size, inode,
 // ctime) reliably tells a replaced configuration from the one read before, since a copy that
@@ -13,11 +11,5 @@ type Watcher struct {
 
 // Current reads and returns the configuration; an invalid one is a *Error.
 func (w *Watcher) Current() (Config, error) {
-	c, err := Load(w.Path)
-	if err != nil {
-		return Config{}, err
-	}
-	c.Resources = maps.Clone(c.Resources)
-	c.Priorities = maps.Clone(c.Priorities)
-	return c, nil
+	return Load(w.Path)
 }

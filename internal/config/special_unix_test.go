@@ -86,15 +86,15 @@ func TestLoadDanglingSymlinkIsAMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a dangling symlink must read as a missing file: %v", err)
 	}
-	if got := c.Sizes(Machine{CPUs: 8})["cpu"]; got != 11 || len(c.Resources) != 2 {
-		t.Errorf("a dangling symlink did not give the defaults: cpu %d, resources %v", got, c.Resources)
+	if got := c.Sizes(m16)["mem"]; got != 76 {
+		t.Errorf("a dangling symlink did not give the defaults: mem %d", got)
 	}
 }
 
 func TestLoadReadsThroughASymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.toml")
-	if err := os.WriteFile(target, []byte("[resources]\ncpu = 3\n"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("[resources]\nmem = \"384M\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "config.toml")
@@ -102,7 +102,7 @@ func TestLoadReadsThroughASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := loadWithin(t, path)
-	if err != nil || c.Sizes(Machine{CPUs: 8})["cpu"] != 3 {
-		t.Errorf("Load through a symlink = cpu %d, %v; want 3", c.Sizes(Machine{CPUs: 8})["cpu"], err)
+	if err != nil || c.Sizes(m16)["mem"] != 3 {
+		t.Errorf("Load through a symlink = mem %d, %v; want 3", c.Sizes(m16)["mem"], err)
 	}
 }

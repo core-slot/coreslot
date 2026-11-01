@@ -42,8 +42,7 @@ type Hold struct {
 	UnbudgetedResources []string
 	Clamped             map[string]int
 	Adopted             bool
-	Tree                bool   // the process tree at the hold's pid carries the grant's work
-	Preemptible         string // why the run is preemptible (a run-log reason), "" when it is not
+	Tree                bool // the process tree at the hold's pid carries the grant's work
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -70,7 +69,6 @@ type holdJSON struct {
 	Clamped             map[string]int   `json:"clamped"`
 	Adopted             bool             `json:"adopted"`
 	Tree                bool             `json:"tree,omitempty"`
-	Preemptible         string           `json:"preemptible,omitempty"`
 }
 
 type cancelJSON struct {
@@ -284,8 +282,6 @@ func DecodeHold(body []byte) (Hold, error) {
 	}
 	// tree is optional: absent or not a boolean, it reads as false.
 	h.Tree, _ = o["tree"].(bool)
-	// preemptible is optional too: absent or not a string, it reads as empty.
-	h.Preemptible, _ = o["preemptible"].(string)
 	grant, err := o.object("grant")
 	if err != nil {
 		return Hold{}, err

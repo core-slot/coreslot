@@ -27,11 +27,11 @@ func onPoint(t *testing.T, name string, fn func()) {
 	t.Cleanup(func() { point = old })
 }
 
-// swapToken replaces res/cpu/0 with a new file, keeping the old inode reachable at a second
+// swapToken replaces res/mem/0 with a new file, keeping the old inode reachable at a second
 // name, which it returns, so that the test can probe whether anyone still locks it.
 func swapToken(t *testing.T, dir string) (kept string) {
 	t.Helper()
-	tok := filepath.Join(dir, store.ResDir, "cpu", "0")
+	tok := filepath.Join(dir, store.ResDir, "mem", "0")
 	kept = filepath.Join(t.TempDir(), "old-token")
 	if err := os.Link(tok, kept); err != nil {
 		t.Fatal(err)
@@ -51,16 +51,16 @@ func swapToken(t *testing.T, dir string) (kept string) {
 func TestIdentityCheckAfterTakingTokens(t *testing.T) {
 	cases := map[string]func(t *testing.T, e *Engine, dir string) error{
 		"admission": func(t *testing.T, e *Engine, dir string) error {
-			_, err := enqueue(t, e, need("cpu=2")).Step(t.Context())
+			_, err := enqueue(t, e, need("mem=2")).Step(t.Context())
 			return err
 		},
 		"adoption": func(t *testing.T, e *Engine, dir string) error {
-			_, err := e.AdoptContext(context.Background(), need("cpu=2"))
+			_, err := e.AdoptContext(context.Background(), need("mem=2"))
 			return err
 		},
 		"token-only admission": func(t *testing.T, e *Engine, dir string) error {
 			writeFormat(t, dir, "coreslot-protocol 99\n")
-			_, err := enqueue(t, e, need("cpu=2")).Step(t.Context())
+			_, err := enqueue(t, e, need("mem=2")).Step(t.Context())
 			return err
 		},
 	}
@@ -84,8 +84,8 @@ func TestIdentityCheckAfterTakingTokens(t *testing.T) {
 			if locked, err := store.ProbeLocked(kept); err != nil || locked {
 				t.Errorf("the replaced token is still locked (%v, %v): the tokens taken were not closed", locked, err)
 			}
-			if n := lockedCount(t, e, "cpu"); n != 0 {
-				t.Errorf("%d cpu tokens still locked, want 0", n)
+			if n := lockedCount(t, e, "mem"); n != 0 {
+				t.Errorf("%d mem tokens still locked, want 0", n)
 			}
 		})
 	}
@@ -95,12 +95,12 @@ func TestIdentityCheckAfterTakingTokens(t *testing.T) {
 // section 12.1 step 6, I7) leaves the minimum short: the attempt closes what it took, publishes
 // no hold, and the head keeps waiting.
 func TestMinimumPassShortfallKeepsWaiting(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 2\n")
+	dir := newStateDir(t, "[resources]\nmem = \"256M\"\n")
 	e := newEngine(t, dir, newFakeClock())
-	tk := enqueue(t, e, need("cpu=2"))
+	tk := enqueue(t, e, need("mem=2"))
 	var taker *os.File
 	onPoint(t, "admit.planned", func() {
-		p := filepath.Join(dir, store.ResDir, "cpu", "1")
+		p := filepath.Join(dir, store.ResDir, "mem", "1")
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -124,8 +124,8 @@ func TestMinimumPassShortfallKeepsWaiting(t *testing.T) {
 	if holds, _ := filepath.Glob(filepath.Join(dir, store.HoldsDir, "*")); len(holds) != 0 {
 		t.Errorf("holds published: %v", holds)
 	}
-	if n := lockedCount(t, e, "cpu"); n != 1 {
-		t.Errorf("%d cpu tokens locked, want only the taker's 1 (the attempt's token closed again)", n)
+	if n := lockedCount(t, e, "mem"); n != 1 {
+		t.Errorf("%d mem tokens locked, want only the taker's 1 (the attempt's token closed again)", n)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestMinimumPassShortfallKeepsWaiting(t *testing.T) {
 func TestAdmissionDoesNotReconcile(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	tk := enqueue(t, e, need("cpu=1")) // reconciles once, as enqueue does
+	tk := enqueue(t, e, need("mem=1")) // reconciles once, as enqueue does
 	g, err := e.st.ReadGen()
 	if err != nil {
 		t.Fatal(err)

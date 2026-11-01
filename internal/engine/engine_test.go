@@ -63,11 +63,11 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.real += int64(d)
 }
 
-// testCPUs is the default cpu size on testMachine: 140% of its 6 CPUs, rounded down.
-const testCPUs = 8
+// testTokens is the default mem size on testMachine: 60% of its memory, in whole tokens.
+const testTokens = 8
 
-// testMachine is the machine every test engine resolves sizes against: 6 CPUs and 16 GiB.
-func testMachine(bool) (config.Machine, error) { return config.Machine{CPUs: 6, MemMiB: 16384}, nil }
+// testMachine is the machine every test engine resolves sizes against: 1707 MiB.
+func testMachine() (config.Machine, error) { return config.Machine{MemMiB: 1707}, nil }
 
 // newStateDir creates a state directory whose config.toml holds cfg (none when cfg is empty).
 func newStateDir(t *testing.T, cfg string) string {
@@ -102,14 +102,33 @@ func need(spec string) spec.Request {
 	return needLabel(spec, "")
 }
 
+// needLabel is a request for arg, a comma-separated list of RES=N and RES=MIN..MAX in tokens, or
+// mem=SIZE with a size such as 1G or 768M.
 func needLabel(arg, label string) spec.Request {
-	var args []string
-	if arg != "" {
-		args = strings.Split(arg, ",")
-	}
-	n, err := spec.ParseNeeds(args)
-	if err != nil {
-		panic(err)
+	n := map[string]spec.Range{}
+	for _, a := range strings.FieldsFunc(arg, func(r rune) bool { return r == ',' }) {
+		name, v, _ := strings.Cut(a, "=")
+		lo, hi, ranged := strings.Cut(v, "..")
+		if name == "mem" && (strings.HasSuffix(v, "G") || strings.HasSuffix(v, "M")) {
+			mib, err := spec.ParseBytes(v)
+			if err != nil {
+				panic(err)
+			}
+			t := spec.MemTokensCeil(mib)
+			n[name] = spec.Range{Min: t, Max: t}
+			continue
+		}
+		from, err := strconv.Atoi(lo)
+		if err != nil {
+			panic(err)
+		}
+		to := from
+		if ranged {
+			if to, err = strconv.Atoi(hi); err != nil {
+				panic(err)
+			}
+		}
+		n[name] = spec.Range{Min: from, Max: to}
 	}
 	return spec.Request{Label: label, Need: n}
 }
@@ -351,43 +370,15 @@ func tokenPaths(dir, res string, from, to int) string {
 
 // ---------------------------------------------------------------- ordering, cancel, reconcile
 
-// Sizes read the machine's memory only when the configuration declares mem: with mem = 0 a
-// machine whose memory cannot be read still resolves cpu, and with the default mem it is a state
-// error. Mutation: read memory whatever the configuration declares, and mem = 0 is a state error.
-func TestSizesReadMemoryOnlyForMem(t *testing.T) {
-	noMem := func(mem bool) (config.Machine, error) {
-		if mem {
-			return config.Machine{}, errors.New("no memory reading here")
-		}
-		return config.Machine{CPUs: 6}, nil
-	}
-	sizes := func(cfg string) (map[string]int, error) {
-		dir := newStateDir(t, cfg)
-		st, err := store.Open(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sizes, _, err := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}, noMem, SystemClock()).sizes()
-		return sizes, err
-	}
-	if got, err := sizes("[resources]\nmem = 0\n"); err != nil || len(got) != 1 || got["cpu"] != testCPUs {
-		t.Errorf("mem = 0: sizes %v, %v; want cpu %d alone", got, err, testCPUs)
-	}
-	var se *store.StateError
-	if _, err := sizes(""); !errors.As(err, &se) {
-		t.Errorf("default mem on a machine without a memory reading: %v, want a state error", err)
-	}
-}
-
 func TestFIFOAtEqualPriority(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	a := enqueue(t, e, needLabel("cpu=1", "a"))
+	a := enqueue(t, e, needLabel("mem=1", "a"))
 	clk.advance(time.Millisecond)
-	b := enqueue(t, e, needLabel("cpu=1", "b"))
+	b := enqueue(t, e, needLabel("mem=1", "b"))
 	clk.advance(time.Millisecond)
-	c := enqueue(t, e, needLabel("cpu=1", "c"))
+	c := enqueue(t, e, needLabel("mem=1", "c"))
 
 	var order []string
 	grants := map[string]*Grant{}
@@ -421,23 +412,23 @@ func TestFIFOAtEqualPriority(t *testing.T) {
 }
 
 func TestPriorityAgingViaKey(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	blocker := enqueue(t, e, needLabel("cpu=1", "blocker"))
+	blocker := enqueue(t, e, needLabel("mem=1", "blocker"))
 	r := step(t, blocker)
 	if !isAdmitted(r) {
 		t.Fatal("blocker not admitted")
 	}
 	holder := r.(Admitted).Grant
 
-	a := enqueue(t, e, needLabel("cpu=1", "a")) // priority 0 at r0
+	a := enqueue(t, e, needLabel("mem=1", "a")) // priority 0 at r0
 	clk.advance(30 * time.Second)
-	reqB := needLabel("cpu=1", "b")
+	reqB := needLabel("mem=1", "b")
 	reqB.Priority = 1 // arrives 30 s later with one point: key r0-30 s, ahead of a
 	b := enqueue(t, e, reqB)
 	clk.advance(31 * time.Second)
-	reqC := needLabel("cpu=1", "c")
+	reqC := needLabel("mem=1", "c")
 	reqC.Priority = 1 // arrives 61 s after a with one point: key r0+1 s, behind a
 	c := enqueue(t, e, reqC)
 	if !(b.key.Less(a.key) && a.key.Less(c.key)) {
@@ -472,9 +463,9 @@ func TestStoppedHeadIsPassedOver(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	// It enqueues and never refreshes; it needs every cpu, so the successor cannot pass it.
-	h := startHelper(t, "enqueue", dir, "cpu=8")
-	s := enqueue(t, e, need("cpu=1"))
+	// It enqueues and never refreshes; it needs every token, so the successor cannot pass it.
+	h := startHelper(t, "enqueue", dir, "mem=8")
+	s := enqueue(t, e, need("mem=1"))
 
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d behind a fresh ticket, want 2", p)
@@ -501,8 +492,8 @@ func TestWaiterAbsenceIsNotWatched(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "cpu=8") // never refreshes; needs every cpu, so s cannot pass it
-	s := enqueue(t, e, need("cpu=1"))
+	startHelper(t, "enqueue", dir, "mem=8") // never refreshes; needs every token, so s cannot pass it
+	s := enqueue(t, e, need("mem=1"))
 
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d behind a fresh ticket, want 2", p)
@@ -527,9 +518,9 @@ func TestStalledTicketResumesItsPlace(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 0)) // the successor cannot be admitted
-	h := startHelper(t, "enqueue", dir, "cpu=1")
-	s := enqueue(t, e, need("cpu=8"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 0)) // the successor cannot be admitted
+	h := startHelper(t, "enqueue", dir, "mem=1")
+	s := enqueue(t, e, need("mem=8"))
 
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d, want 2", p)
@@ -565,8 +556,8 @@ func TestDeadTicketPassedOverImmediately(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	h := startHelper(t, "enqueue", dir, "cpu=8") // needs every cpu: s cannot pass it while it lives
-	s := enqueue(t, e, need("cpu=1"))
+	h := startHelper(t, "enqueue", dir, "mem=8") // needs every token: s cannot pass it while it lives
+	s := enqueue(t, e, need("mem=1"))
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d, want 2", p)
 	}
@@ -577,14 +568,14 @@ func TestDeadTicketPassedOverImmediately(t *testing.T) {
 	}
 }
 
-// blocked returns a ticket that cannot be admitted because a helper holds the only cpu token.
+// blocked returns a ticket that cannot be admitted because a helper holds the only mem token.
 func blocked(t *testing.T, cfg string) (dir string, e *Engine, clk *fakeClock, tk *Ticket) {
 	t.Helper()
 	dir = newStateDir(t, cfg)
 	clk = newFakeClock()
 	e = newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 0))
-	tk = enqueue(t, e, need("cpu=1"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 0))
+	tk = enqueue(t, e, need("mem=1"))
 	if r := step(t, tk); isAdmitted(r) {
 		t.Fatal("admitted while the only token is held")
 	}
@@ -592,7 +583,7 @@ func blocked(t *testing.T, cfg string) (dir string, e *Engine, clk *fakeClock, t
 }
 
 func TestCancelThroughFile(t *testing.T) {
-	dir, _, clk, tk := blocked(t, "[resources]\ncpu = 1\n")
+	dir, _, clk, tk := blocked(t, "[resources]\nmem = \"128M\"\n")
 	other := newEngine(t, dir, nil) // another client
 	if err := other.CancelContext(context.Background(), tk.ID()); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -620,7 +611,7 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	tk := enqueue(t, e, need("cpu=2"))
+	tk := enqueue(t, e, need("mem=2"))
 	id := tk.ID()
 	r := step(t, tk)
 	if !isAdmitted(r) {
@@ -633,7 +624,7 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 	if exists(filepath.Join(dir, store.CancelDir, id.String())) {
 		t.Error("a cancel request was published for an admitted ticket")
 	}
-	if n := lockedCount(t, other, "cpu"); n != 2 {
+	if n := lockedCount(t, other, "mem"); n != 2 {
 		t.Errorf("locked %d after the late cancel, want the grant's 2", n)
 	}
 	r2, err := tk.Step(context.Background())
@@ -643,7 +634,7 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 	if err := tk.Withdraw(); !errors.Is(err, ErrAlreadyAdmitted) {
 		t.Errorf("Withdraw after admission: %v, want ErrAlreadyAdmitted", err)
 	}
-	if n := lockedCount(t, other, "cpu"); n != 2 {
+	if n := lockedCount(t, other, "mem"); n != 2 {
 		t.Errorf("locked %d after Withdraw, want 2", n)
 	}
 }
@@ -651,7 +642,7 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 func TestWithdrawNeedsNoSection(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	tk := enqueue(t, e, need("cpu=1"))
+	tk := enqueue(t, e, need("mem=1"))
 	startHelper(t, "section", dir, "")
 
 	done := make(chan error, 1)
@@ -679,7 +670,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 	e := newEngine(t, dir, clk)
 	start := clk.clock().Realtime()
 
-	first := enqueue(t, e, need("cpu=1")) // gen is absent: this section reconciles
+	first := enqueue(t, e, need("mem=1")) // gen is absent: this section reconciles
 	g, err := e.st.ReadGen()
 	if err != nil || g.ReconciledNS != start {
 		t.Fatalf("first section: reconciled_ns %d (%v), want %d", g.ReconciledNS, err, start)
@@ -688,7 +679,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 
 	// A dead ticket that only reconciliation removes.
 	deadID := wire.ID{OrderKey: 1, PID: 999999, Seq: 1}
-	body, _ := wire.Encode(wire.Ticket{Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}})
+	body, _ := wire.Encode(wire.Ticket{Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}})
 	deadPath := filepath.Join(dir, store.QueueDir, wire.TicketName(deadID, ""))
 	if err := os.WriteFile(deadPath, body, 0o600); err != nil {
 		t.Fatal(err)
@@ -697,7 +688,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 	sections := 2 // the enqueue and the withdrawal above
 	for sections < 100 {
 		clk.advance(250 * time.Millisecond) // 100 sections in under 25 s
-		tk := enqueue(t, e, need("cpu=1"))
+		tk := enqueue(t, e, need("mem=1"))
 		if err := tk.Withdraw(); err != nil {
 			t.Fatal(err)
 		}
@@ -712,7 +703,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 		t.Fatal("the dead ticket was removed within 30 s of the last reconciliation")
 	}
 	clk.advance(30*time.Second - time.Duration(clk.clock().Realtime()-start) + time.Millisecond)
-	enqueue(t, e, need("cpu=1"))
+	enqueue(t, e, need("mem=1"))
 	if g, _ := e.st.ReadGen(); g.ReconciledNS == start {
 		t.Fatal("no reconciliation more than 30 s after the last one")
 	}
@@ -735,7 +726,7 @@ func TestSeqWraps(t *testing.T) {
 	}
 	var ids []wire.ID
 	for i := 0; i < 3; i++ {
-		ids = append(ids, enqueue(t, e, need("cpu=1")).ID())
+		ids = append(ids, enqueue(t, e, need("mem=1")).ID())
 	}
 	for i, want := range []int{999999, 0, 1} {
 		if ids[i].Seq != want {
@@ -752,7 +743,7 @@ func TestSeqWraps(t *testing.T) {
 	mu.Lock()
 	next = 999998
 	mu.Unlock()
-	tk := enqueue(t, e, need("cpu=1"))
+	tk := enqueue(t, e, need("mem=1"))
 	if tk.ID().Seq != 2 {
 		t.Errorf("after collisions on 999999, 0 and 1: seq %d, want 2", tk.ID().Seq)
 	}
@@ -776,11 +767,11 @@ func readGen(t *testing.T, e *Engine) int64 {
 // Every section that publishes or removes a ticket or hold bumps gen once; a cancel publication
 // does not (PROTOCOL.md section 7.8).
 func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 1\n")
+	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 
-	w := enqueue(t, e, need("cpu=1"))
+	w := enqueue(t, e, need("mem=1"))
 	before := readGen(t, e)
 	if err := w.Withdraw(); err != nil {
 		t.Fatal(err)
@@ -789,9 +780,9 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 		t.Errorf("withdrawal with removal: gen %d -> %d, want one bump", before, got)
 	}
 
-	holder := enqueue(t, e, need("cpu=1"))
+	holder := enqueue(t, e, need("mem=1"))
 	g := step(t, holder).(Admitted).Grant
-	c := enqueue(t, e, need("cpu=1"))
+	c := enqueue(t, e, need("mem=1"))
 	step(t, c)
 	before = readGen(t, e)
 	if err := newEngine(t, dir, nil).CancelContext(context.Background(), c.ID()); err != nil {
@@ -820,7 +811,7 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 // A cancel request that already exists means the cancellation is already requested: not an
 // error, and no second request (PROTOCOL.md section 11).
 func TestCancelAlreadyRequestedIsNotAnError(t *testing.T) {
-	_, e, _, tk := blocked(t, "[resources]\ncpu = 1\n")
+	_, e, _, tk := blocked(t, "[resources]\nmem = \"128M\"\n")
 	for i := 0; i < 2; i++ {
 		if err := e.CancelContext(context.Background(), tk.ID()); err != nil {
 			t.Fatalf("Cancel #%d: %v", i+1, err)
@@ -854,9 +845,9 @@ func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7)) // nobody can be admitted
-	ahead := enqueue(t, e, need("cpu=1"))
-	tk := enqueue(t, e, need("cpu=1"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7)) // nobody can be admitted
+	ahead := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need("mem=1"))
 	step(t, ahead)
 	step(t, tk)
 	section := startHelper(t, "section", dir, "")
@@ -906,7 +897,7 @@ func TestRefreshCadenceWithBusySection(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	tk := enqueue(t, e, need("cpu=1"))
+	tk := enqueue(t, e, need("mem=1"))
 
 	oldEnter := enterSection
 	enterSection = func(st *store.Store, ctx context.Context) (*store.Section, error) {
@@ -957,7 +948,7 @@ func TestRefreshCadenceWithBusySection(t *testing.T) {
 func TestRefreshCadenceWithBusySectionRealClockSmoke(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	tk := enqueue(t, e, need("cpu=1"))
+	tk := enqueue(t, e, need("mem=1"))
 	startHelper(t, "section", dir, "")
 	var mu sync.Mutex
 	var refreshes []time.Time
@@ -997,8 +988,8 @@ func TestOwnTicketRemovedKeepsWaiting(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	lock := startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
-	tk := enqueue(t, e, need("cpu=1"))
+	lock := startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
+	tk := enqueue(t, e, need("mem=1"))
 	if err := os.Remove(filepath.Join(dir, store.QueueDir, tk.Name())); err != nil {
 		t.Fatal(err)
 	}
@@ -1036,11 +1027,11 @@ func TestHoldStartMismatchIsIgnored(t *testing.T) {
 	good := write(1000, 1000, "good")
 	bad := write(2000, 2001, "bad")
 	startHelper(t, "lock", dir, good+"\n"+bad) // both live
-	tk := enqueue(t, e, need("cpu=1"))
+	tk := enqueue(t, e, need("mem=1"))
 	clk.advance(time.Second)
 	// The ticket is head and admitted; a second ticket behind it reports the holders.
 	step(t, tk)
-	behind := enqueue(t, e, need("cpu=8"))
+	behind := enqueue(t, e, need("mem=8"))
 	step(t, behind)
 	holders, err := behind.Holders()
 	if err != nil {
@@ -1061,8 +1052,8 @@ func TestStrayEntriesAreIgnored(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7))
-	tk := enqueue(t, e, need("cpu=1"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
+	tk := enqueue(t, e, need("mem=1"))
 	for _, d := range []string{store.HoldsDir, store.CancelDir} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			t.Fatal(err)

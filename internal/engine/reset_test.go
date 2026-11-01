@@ -69,22 +69,22 @@ func TestResetRefusesLiveState(t *testing.T) {
 		live func(t *testing.T, e *Engine, dir string)
 		want string
 	}{
-		{"ticket", func(t *testing.T, e *Engine, dir string) { startHelper(t, "enqueue", dir, "cpu=1") }, "1 live ticket (pid"},
+		{"ticket", func(t *testing.T, e *Engine, dir string) { startHelper(t, "enqueue", dir, "mem=1") }, "1 live ticket (pid"},
 		{"hold", func(t *testing.T, e *Engine, dir string) {
-			g, err := e.AdoptContext(context.Background(), needLabel("cpu=2", "gate"))
+			g, err := e.AdoptContext(context.Background(), needLabel("mem=2", "gate"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { g.Close() })
 		}, "1 live hold (pid"},
-		{"token", func(t *testing.T, e *Engine, dir string) { startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 2)) }, "locked tokens (cpu 3)"},
+		{"token", func(t *testing.T, e *Engine, dir string) { startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 2)) }, "locked tokens (mem 3)"},
 		{"section", func(t *testing.T, e *Engine, dir string) { startHelper(t, "section", dir, "") }, "another client is inside the admission section"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			dir := newStateDir(t, "[resources]\ncpu = 4\n")
+			dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 			e := newEngine(t, dir, nil)
-			g, err := e.AdoptContext(context.Background(), need("cpu=1")) // FORMAT, gen and a hold exist
+			g, err := e.AdoptContext(context.Background(), need("mem=1")) // FORMAT, gen and a hold exist
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,14 +112,14 @@ func TestResetRefusesLiveState(t *testing.T) {
 // A refusal names each live hold and ticket by its label, escaped for a terminal, not by the
 // display slug of its file name.
 func TestResetRefusalNamesLabels(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), needLabel("cpu=1", "hold:three"))
+	g, err := e.AdoptContext(context.Background(), needLabel("mem=1", "hold:three"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { g.Close() })
-	enqueue(t, e, needLabel("cpu=1", "ci:o-r\x1b[2J"))
+	enqueue(t, e, needLabel("mem=1", "ci:o-r\x1b[2J"))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	_, err = e.Reset(ctx)
@@ -143,9 +143,9 @@ func TestResetRefusalNamesLabels(t *testing.T) {
 // its pid had) with a fresh entry time. The section is kept after Reset returns, as it is while
 // the removals run.
 func TestAcceptedResetNamesItselfHolder(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), need("cpu=1"))
+	g, err := e.AdoptContext(context.Background(), need("mem=1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,9 +170,9 @@ func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 
 // With nothing alive a reset empties the state and leaves a directory a client can use again.
 func TestResetThenUse(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), need("cpu=2"))
+	g, err := e.AdoptContext(context.Background(), need("mem=2"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestResetThenUse(t *testing.T) {
 			t.Errorf("%s survived", f)
 		}
 	}
-	tk := enqueue(t, e, need("cpu=1"))
+	tk := enqueue(t, e, need("mem=1"))
 	if !isAdmitted(step(t, tk)) {
 		t.Error("a request is not admitted after the reset")
 	}
@@ -194,9 +194,9 @@ func TestResetThenUse(t *testing.T) {
 
 // A reset under a well-formed FORMAT this client does not implement refuses and names it.
 func TestResetRefusesForeignFormat(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), need("cpu=1"))
+	g, err := e.AdoptContext(context.Background(), need("mem=1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +248,8 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 			if rep.StateDirExists != (name == "empty") || rep.Section.Held || len(rep.Holds)+len(rep.Tickets) != 0 {
 				t.Errorf("report %+v", rep)
 			}
-			if rep.Resources["cpu"].Size != testCPUs {
-				t.Errorf("resources %v, want the default cpu budget", rep.Resources)
+			if rep.Resources["mem"].Size != testTokens {
+				t.Errorf("resources %v, want the default mem budget", rep.Resources)
 			}
 			if after := treeContent(t, root); after != before {
 				t.Errorf("Snapshot created entries:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -259,7 +259,7 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 }
 
 func TestSnapshotReportsUndeclaredLockedTokens(t *testing.T) {
-	dir := newStateDir(t, "[resources]\ncpu = 4\n")
+	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
 	startHelper(t, "lock", dir, tokenPaths(dir, "old-gpu", 0, 1))
 	rep, err := e.Snapshot()

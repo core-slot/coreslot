@@ -55,11 +55,11 @@ func TestElectionStopsAtFirstLiveTicket(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7)) // nobody is admitted
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7)) // nobody is admitted
 	const k = 20
 	var tks []*Ticket
 	for i := 0; i < k; i++ {
-		tks = append(tks, enqueue(t, e, need("cpu=1"))) // same order key: ascending seq
+		tks = append(tks, enqueue(t, e, need("mem=1"))) // same order key: ascending seq
 	}
 	last := tks[k-1]
 	work := countWaitWork(t)
@@ -85,10 +85,10 @@ func TestConsecutiveStoppedTickets(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	// Each needs every cpu, so s cannot pass them while they are live (PROTOCOL.md section 10.3).
-	startHelper(t, "enqueue", dir, "cpu=8") // the head, stopped
-	startHelper(t, "enqueue", dir, "cpu=8") // the next, stopped
-	s := enqueue(t, e, need("cpu=1"))
+	// Each needs every token, so s cannot pass them while they are live (PROTOCOL.md section 10.3).
+	startHelper(t, "enqueue", dir, "mem=8") // the head, stopped
+	startHelper(t, "enqueue", dir, "mem=8") // the next, stopped
+	s := enqueue(t, e, need("mem=1"))
 	if p := position(t, step(t, s)); p != 3 {
 		t.Fatalf("position %d behind two fresh tickets, want 3", p)
 	}
@@ -112,8 +112,8 @@ func TestStoppedHeadPassedByEverySuccessor(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "cpu=8") // the head, stopped; needs every cpu, so none passes it
-	ws := []*Ticket{enqueue(t, e, need("cpu=1")), enqueue(t, e, need("cpu=1")), enqueue(t, e, need("cpu=1"))}
+	startHelper(t, "enqueue", dir, "mem=8") // the head, stopped; needs every token, so none passes it
+	ws := []*Ticket{enqueue(t, e, need("mem=1")), enqueue(t, e, need("mem=1")), enqueue(t, e, need("mem=1"))}
 	admitted := map[int]int{} // waiter -> second
 	for sec := 0; sec <= 11 && len(admitted) < len(ws); sec++ {
 		for i, w := range ws {
@@ -139,11 +139,11 @@ func TestUnwatchedIntervalIsNotAStall(t *testing.T) {
 	e := newEngine(t, dir, clk)
 	var front []*helper
 	for i := 0; i < FrontWindow; i++ { // the front window, kept fresh
-		front = append(front, startHelper(t, "enqueue", dir, "cpu=1"))
+		front = append(front, startHelper(t, "enqueue", dir, "mem=1"))
 	}
-	startHelper(t, "enqueue", dir, "cpu=1")      // x: stopped, beyond the front window
-	y := startHelper(t, "enqueue", dir, "cpu=1") // y: between x and s, refreshed on command
-	s := enqueue(t, e, need("cpu=1"))
+	startHelper(t, "enqueue", dir, "mem=1")      // x: stopped, beyond the front window
+	y := startHelper(t, "enqueue", dir, "mem=1") // y: between x and s, refreshed on command
+	s := enqueue(t, e, need("mem=1"))
 	at := func(sec, want int) {
 		t.Helper()
 		for _, f := range front {
@@ -205,14 +205,14 @@ func TestNonHeadWorksOncePerSecond(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	if !isAdmitted(step(t, enqueue(t, e, need("cpu=1")))) { // a live hold
+	if !isAdmitted(step(t, enqueue(t, e, need("mem=1")))) { // a live hold
 		t.Fatal("not admitted on a free budget")
 	}
 	var ahead []*Ticket // the front window: never stepped, kept fresh below
 	for i := 0; i < FrontWindow; i++ {
-		ahead = append(ahead, enqueue(t, e, need("cpu=1")))
+		ahead = append(ahead, enqueue(t, e, need("mem=1")))
 	}
-	w := enqueue(t, e, need("cpu=1"))
+	w := enqueue(t, e, need("mem=1"))
 	refreshes := 0
 	defaultPoint := point
 	point = func(name string) {
@@ -252,8 +252,8 @@ func TestHeadRetriesOnBackoff(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "cpu", 0, 7)) // the head cannot be admitted
-	tk := enqueue(t, e, need("cpu=1"))
+	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7)) // the head cannot be admitted
+	tk := enqueue(t, e, need("mem=1"))
 	at := drive(t, clk, tk, 2*time.Second, func() {})
 	if len(at) < 2 || at[1] != HeadFirstBackoff {
 		t.Fatalf("Steps at %v, want the second at %v", at, HeadFirstBackoff)
@@ -270,7 +270,7 @@ func TestRefreshCadenceWhenDue(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	tk := enqueue(t, e, need("cpu=1"))
+	tk := enqueue(t, e, need("mem=1"))
 	oldEnter := enterSection
 	enterSection = func(st *store.Store, ctx context.Context) (*store.Section, error) {
 		dl, ok := ctx.Deadline()
@@ -316,15 +316,15 @@ func TestHoldersOnlyOnRequest(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	if !isAdmitted(step(t, enqueue(t, e, need("cpu=1")))) { // a live hold
+	if !isAdmitted(step(t, enqueue(t, e, need("mem=1")))) { // a live hold
 		t.Fatal("not admitted on a free budget")
 	}
-	ahead := enqueue(t, e, need("cpu=8")) // w cannot pass it (PROTOCOL.md section 10.3)
-	w := enqueue(t, e, need("cpu=1"))
+	ahead := enqueue(t, e, need("mem=8")) // w cannot pass it (PROTOCOL.md section 10.3)
+	w := enqueue(t, e, need("mem=1"))
 	work := countWaitWork(t)
 	for i := 0; i < 5; i++ {
 		before := readGen(t, e)
-		if err := enqueue(t, e, need("cpu=1")).Withdraw(); err != nil { // gen changes
+		if err := enqueue(t, e, need("mem=1")).Withdraw(); err != nil { // gen changes
 			t.Fatal(err)
 		}
 		if readGen(t, e) == before {
@@ -352,11 +352,11 @@ func TestElectionPassesDeadAndStalledUpToTheFirstLive(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	live := startHelper(t, "enqueue", dir, "cpu=8") // farthest ahead, refreshed on command; s cannot pass it
-	dead := startHelper(t, "enqueue", dir, "cpu=1") // killed: dead at once
-	startHelper(t, "enqueue", dir, "cpu=1")         // nearest ahead, stopped: STALLED after 10 s
-	s := enqueue(t, e, need("cpu=1"))
-	behind := enqueue(t, e, need("cpu=1")) // a live waiter behind s
+	live := startHelper(t, "enqueue", dir, "mem=8") // farthest ahead, refreshed on command; s cannot pass it
+	dead := startHelper(t, "enqueue", dir, "mem=1") // killed: dead at once
+	startHelper(t, "enqueue", dir, "mem=1")         // nearest ahead, stopped: STALLED after 10 s
+	s := enqueue(t, e, need("mem=1"))
+	behind := enqueue(t, e, need("mem=1")) // a live waiter behind s
 	dead.kill(t)
 	if p := position(t, step(t, s)); p != 4 {
 		t.Fatalf("0 s: position %d, want 4 (the fresh nearest ticket ends the scan)", p)
@@ -392,10 +392,10 @@ func TestFrontWindowCoversFourStoppedTickets(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	for i := 0; i < 4; i++ {
-		startHelper(t, "enqueue", dir, "cpu=1") // stopped
+		startHelper(t, "enqueue", dir, "mem=1") // stopped
 	}
-	w1 := enqueue(t, e, need("cpu=1"))
-	w2 := enqueue(t, e, need("cpu=1"))
+	w1 := enqueue(t, e, need("mem=1"))
+	w2 := enqueue(t, e, need("mem=1"))
 	at := map[string]int{}
 	// The waiters step in a fixed order, W1 then W2, so W2 steps after W1 in every second,
 	// including the one that admits W1.

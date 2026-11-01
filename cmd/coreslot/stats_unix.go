@@ -31,9 +31,9 @@ type learned struct {
 	needsErr  error
 }
 
-// learn reads the run log under the state directory, sizes cpu from the configuration and the
-// machine, summarizes the runs (only label's base, when label is not empty) and loads the needs
-// file. Each failure but the needs file's is a state error for the caller to report.
+// learn reads the run log under the state directory, summarizes the runs (only label's, when
+// label is not empty) and loads the needs file. Each failure but the needs file's is a state
+// error for the caller to report.
 func learn(label string) (learned, error) {
 	loc := locate()
 	if loc.err != nil {
@@ -50,16 +50,11 @@ func learn(label string) (learned, error) {
 			return learned{}, err
 		}
 	}
-	cfg, err := config.Load(loc.cfgPath)
-	if err != nil {
+	if _, err := config.Load(loc.cfgPath); err != nil {
 		return learned{}, err
 	}
-	m, err := config.ReadMachine(false) // only the cpu size is read below
-	if err != nil {
-		return learned{}, fmt.Errorf("machine: %w", err)
-	}
-	for _, s := range runstats.Summarize(runs, cfg.Sizes(m)["cpu"]) {
-		if label == "" || s.Label == needs.BaseLabel(label) {
+	for _, s := range runstats.Summarize(runs) {
+		if label == "" || s.Label == label {
 			l.stats = append(l.stats, s)
 		}
 	}
@@ -93,14 +88,6 @@ func parseOnly(fs *flag.FlagSet, args []string, name, usage string, io IO) (int,
 	return 0, true
 }
 
-// cpuText is a cpu need as the needs file writes it: "N" for N..N, else "MIN..MAX".
-func cpuText(r spec.Range) string {
-	if r.Min == r.Max {
-		return fmt.Sprint(r.Min)
-	}
-	return fmt.Sprintf("%d..%d", r.Min, r.Max)
-}
-
 // statsCommand is `coreslot stats [--label L] [--json]`: per label, what its last runs used and
 // what they suggest. It exits 1 when the state directory, the run log or the configuration cannot
 // be read (a state error, PROTOCOL.md section 19); a needs file that cannot be read is a notice,
@@ -131,13 +118,6 @@ func statsCommand(args []string, io IO) int {
 	for _, s := range l.stats {
 		fmt.Fprintf(&b, "%s  %d %s\n", text(s.Label), s.Runs, plural(int64(s.Runs), "run", "runs"))
 		line("evidence", text(s.Suggest.Reason))
-		if len(s.CoresUsed) > 0 {
-			cores := make([]string, len(s.CoresUsed))
-			for i, c := range s.CoresUsed {
-				cores[i] = fmt.Sprintf("%.1f", c)
-			}
-			line("cores used", strings.Join(cores, " "))
-		}
 		line("waited", fmt.Sprintf("%.0fs, %.0fs of it while the memory was free", s.WaitedS, s.WaitedFreeS))
 		line("suggest", suggestionText(s.Suggest))
 		line("current", currentText(l.needs, s.Label))
@@ -150,20 +130,10 @@ func statsCommand(args []string, io IO) int {
 }
 
 func suggestionText(sg runstats.Suggestion) string {
-	var parts []string
-	if sg.CPU != nil {
-		parts = append(parts, fmt.Sprintf("cpu = %q", cpuText(*sg.CPU)))
-	}
-	if sg.CPUPerWorker > 0 {
-		parts = append(parts, fmt.Sprintf("cpu_per_worker = %g", sg.CPUPerWorker))
-	}
-	if sg.MemMiB > 0 {
-		parts = append(parts, fmt.Sprintf("mem = %q", spec.NeedText(sg.MemMiB)))
-	}
-	if len(parts) == 0 {
+	if sg.MemMiB == 0 {
 		return "nothing measured"
 	}
-	return strings.Join(parts, "  ")
+	return fmt.Sprintf("mem = %q", spec.NeedText(sg.MemMiB))
 }
 
 func currentText(f needs.File, label string) string {
@@ -175,20 +145,11 @@ func currentText(f needs.File, label string) string {
 		return "none"
 	}
 	var parts []string
-	if e.CPU != nil {
-		parts = append(parts, fmt.Sprintf("cpu = %q", cpuText(*e.CPU)))
-	}
-	if e.CPUPerWorker > 0 {
-		parts = append(parts, fmt.Sprintf("cpu_per_worker = %g", e.CPUPerWorker))
-	}
 	if e.MemMiB > 0 {
 		parts = append(parts, fmt.Sprintf("mem = %q (%s)", spec.NeedText(e.MemMiB), spec.FormatMiB(e.MemMiB)))
 	}
-	if e.Pinned {
-		parts = append(parts, "pinned")
-	}
-	if !e.Observed {
-		parts = append(parts, "observed = false")
+	if e.NoRestart {
+		parts = append(parts, "no_restart")
 	}
 	if len(parts) == 0 {
 		return "an entry that sets nothing"
@@ -210,8 +171,6 @@ type jsonLabelStats struct {
 	WindowRuns    int            `json:"window_runs"`
 	FirstNS       int64          `json:"first_ns"`
 	LastNS        int64          `json:"last_ns"`
-	CoresUsed     []float64      `json:"cores_used"`
-	Saturated     int            `json:"saturated"`
 	MemPeakKiB    *int64         `json:"mem_peak_kib"`
 	MemPeakSource string         `json:"mem_peak_source"`
 	PeakAfterS    *float64       `json:"peak_after_s"`
@@ -222,18 +181,14 @@ type jsonLabelStats struct {
 }
 
 type jsonSuggestion struct {
-	CPU            *string  `json:"cpu"`
-	Mem            *string  `json:"mem"`
-	CoresPerWorker *float64 `json:"cores_per_worker"` // null when no run carries workers
-	Evidence       string   `json:"evidence"`
+	Mem      *string `json:"mem"`
+	Evidence string  `json:"evidence"`
 }
 
 type jsonCurrent struct {
-	CPU          *string `json:"cpu"`
-	Mem          *string `json:"mem"`
-	CPUPerWorker bool    `json:"cpu_per_worker"`
-	Pinned       bool    `json:"pinned"`
-	Error        string  `json:"error,omitempty"`
+	Mem       *string `json:"mem"`
+	NoRestart bool    `json:"no_restart"`
+	Error     string  `json:"error,omitempty"`
 }
 
 func writeStatsJSON(io IO, l learned) error {
@@ -241,33 +196,20 @@ func writeStatsJSON(io IO, l learned) error {
 	for _, s := range l.stats {
 		j := jsonLabelStats{Label: s.Label, Runs: s.Runs, WindowRuns: len(s.Window),
 			FirstNS: s.Window[0].TimeNS, LastNS: s.Window[len(s.Window)-1].TimeNS,
-			CoresUsed: s.CoresUsed, Saturated: s.Saturated, MemPeakSource: s.MemPeakSource,
-			PeakAfterS: s.PeakAfterS, WaitedS: s.WaitedS, WaitedFreeS: s.WaitedFreeS,
-			Suggestion: jsonSuggestion{Evidence: s.Suggest.Reason}}
-		if j.CoresUsed == nil {
-			j.CoresUsed = []float64{}
-		}
+			MemPeakSource: s.MemPeakSource, PeakAfterS: s.PeakAfterS, WaitedS: s.WaitedS,
+			WaitedFreeS: s.WaitedFreeS, Suggestion: jsonSuggestion{Evidence: s.Suggest.Reason}}
 		if s.MemPeakKiB > 0 {
 			j.MemPeakKiB = &s.MemPeakKiB
 		}
-		if s.Suggest.CPU != nil {
-			j.Suggestion.CPU = new(cpuText(*s.Suggest.CPU))
-		}
 		if s.Suggest.MemMiB > 0 {
 			j.Suggestion.Mem = new(spec.NeedText(s.Suggest.MemMiB))
-		}
-		if s.Suggest.CPUPerWorker > 0 {
-			j.Suggestion.CoresPerWorker = &s.Suggest.CPUPerWorker
 		}
 		e, ok, err := l.needs.Lookup(s.Label)
 		switch {
 		case err != nil:
 			j.Current = &jsonCurrent{Error: err.Error()}
 		case ok:
-			j.Current = &jsonCurrent{CPUPerWorker: e.CPUPerWorker > 0, Pinned: e.Pinned}
-			if e.CPU != nil {
-				j.Current.CPU = new(cpuText(*e.CPU))
-			}
+			j.Current = &jsonCurrent{NoRestart: e.NoRestart}
 			if e.MemMiB > 0 {
 				j.Current.Mem = new(spec.NeedText(e.MemMiB))
 			}

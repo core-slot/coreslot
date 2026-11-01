@@ -14,7 +14,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -24,104 +23,31 @@ const (
 	RotateRunLogAt = 10 << 20 // 10 MiB
 )
 
-// RunRecord is one run-log line. It has no field for argv or the environment, which the log
-// never contains.
+// RunRecord is one run-log line, its keys in the order of the fields. It has no field for argv or
+// the environment, which the log never contains.
 type RunRecord struct {
-	TimeNS              int64
-	Label               string
-	Need                map[string]spec.Range
-	Grant               map[string]int
-	Clamped             []string
-	UnbudgetedResources []string
-	WaitedS             float64
-	RanS                float64
-	Exit                int
-	Load1               float64
-	FailOpen            string
-	Nested              bool // a pass-through run (PROTOCOL.md section 18); encoded only when true
-	// CPUUserS, CPUSysS and MaxRSSKiB are the command's user and system CPU seconds and its peak
-	// resident set size in KiB, from its wait4 rusage (PROTOCOL.md section 20). Each is nil when
-	// it is not known (the command never started, or the platform does not report it) and is
-	// then not encoded, so that an unknown value is never written as a measured zero.
-	CPUUserS  *float64
-	CPUSysS   *float64
-	MaxRSSKiB *int64
+	TimeNS  int64   `json:"time_ns"`
+	Label   string  `json:"label"`
+	WaitedS float64 `json:"waited_s"`
+	RanS    float64 `json:"ran_s"`
+	// UserS and SysS are the command's user and system seconds from its wait4 rusage (PROTOCOL.md
+	// section 20). Each is nil when it is not known (the command never started, or the platform
+	// does not report it) and is then not encoded, so that an unknown value is never written as a
+	// measured zero.
+	UserS *float64 `json:"user_s,omitempty"`
+	SysS  *float64 `json:"sys_s,omitempty"`
 	// MemPeakKiB is the command tree's memory peak in KiB and MemPeakSource its measure: the
 	// sampler's (memsample.Source) or "max_rss"; PeakAfterS is when the sampler read it, in
 	// seconds after the start. WaitedFreeS is how long the run waited while the memory it needs
 	// was free. Each is nil or empty when unknown, and is then not encoded.
-	MemPeakKiB    *int64
-	MemPeakSource string
-	PeakAfterS    *float64
-	WaitedFreeS   *float64
-	// Workers is the command's worker count: the value its cpu placeholder took, or the label's
-	// @K. It is nil when the command had neither, and is then not encoded.
-	Workers *int
-	// Preemptible is why the run was preemptible: "flag" (--preemptible), "entry" (the needs
-	// entry's key) or "auto: ..." (the automatic rule); empty when it was not, and then not
-	// encoded.
-	Preemptible string
-}
-
-type runJSON struct {
-	TimeNS              int64             `json:"time_ns"`
-	Label               string            `json:"label"`
-	Need                map[string][2]int `json:"need"`
-	Grant               map[string]int    `json:"grant"`
-	Clamped             []string          `json:"clamped"`
-	UnbudgetedResources []string          `json:"unbudgeted_resources"`
-	WaitedS             float64           `json:"waited_s"`
-	RanS                float64           `json:"ran_s"`
-	CPUUserS            *float64          `json:"cpu_user_s,omitempty"`
-	CPUSysS             *float64          `json:"cpu_sys_s,omitempty"`
-	MaxRSSKiB           *int64            `json:"max_rss_kib,omitempty"`
-	MemPeakKiB          *int64            `json:"mem_peak_kib,omitempty"`
-	MemPeakSource       string            `json:"mem_peak_source,omitempty"`
-	PeakAfterS          *float64          `json:"peak_after_s,omitempty"`
-	WaitedFreeS         *float64          `json:"waited_free_s,omitempty"`
-	Workers             *int              `json:"workers,omitempty"`
-	Preemptible         string            `json:"preemptible,omitempty"`
-	Exit                int               `json:"exit"`
-	Load1               float64           `json:"load1"`
-	FailOpen            string            `json:"fail_open"`
-	Nested              bool              `json:"nested,omitempty"`
-}
-
-func (r RunRecord) wire() runJSON {
-	need := make(map[string][2]int, len(r.Need))
-	for name, rg := range r.Need {
-		need[name] = [2]int{rg.Min, rg.Max}
-	}
-	j := runJSON{TimeNS: r.TimeNS, Label: r.Label, Need: need, Grant: r.Grant,
-		Clamped: r.Clamped, UnbudgetedResources: r.UnbudgetedResources, WaitedS: r.WaitedS,
-		RanS: r.RanS, CPUUserS: r.CPUUserS, CPUSysS: r.CPUSysS, MaxRSSKiB: r.MaxRSSKiB,
-		MemPeakKiB: r.MemPeakKiB, MemPeakSource: r.MemPeakSource, PeakAfterS: r.PeakAfterS,
-		WaitedFreeS: r.WaitedFreeS, Workers: r.Workers, Preemptible: r.Preemptible, Exit: r.Exit,
-		Load1: r.Load1, FailOpen: r.FailOpen, Nested: r.Nested}
-	if j.Grant == nil {
-		j.Grant = map[string]int{}
-	}
-	if j.Clamped == nil {
-		j.Clamped = []string{}
-	}
-	if j.UnbudgetedResources == nil {
-		j.UnbudgetedResources = []string{}
-	}
-	return j
-}
-
-// record is the inverse of wire.
-func (j runJSON) record() RunRecord {
-	need := make(map[string]spec.Range, len(j.Need))
-	for name, rg := range j.Need {
-		need[name] = spec.Range{Min: rg[0], Max: rg[1]}
-	}
-	return RunRecord{TimeNS: j.TimeNS, Label: j.Label, Need: need, Grant: j.Grant,
-		Clamped: j.Clamped, UnbudgetedResources: j.UnbudgetedResources, WaitedS: j.WaitedS,
-		RanS: j.RanS, CPUUserS: j.CPUUserS, CPUSysS: j.CPUSysS, MaxRSSKiB: j.MaxRSSKiB,
-		MemPeakKiB: j.MemPeakKiB, MemPeakSource: j.MemPeakSource, PeakAfterS: j.PeakAfterS,
-		WaitedFreeS: j.WaitedFreeS, Workers: j.Workers, Preemptible: j.Preemptible, Exit: j.Exit,
-		Load1: j.Load1, FailOpen: j.FailOpen, Nested: j.Nested}
+	MemPeakKiB    *int64   `json:"mem_peak_kib,omitempty"`
+	MemPeakSource string   `json:"mem_peak_source,omitempty"`
+	PeakAfterS    *float64 `json:"peak_after_s,omitempty"`
+	WaitedFreeS   *float64 `json:"waited_free_s,omitempty"`
+	Stops         int      `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
+	Exit          int      `json:"exit"`
+	FailOpen      string   `json:"fail_open"`
+	Nested        bool     `json:"nested,omitempty"` // a pass-through run (PROTOCOL.md section 18)
 }
 
 // ReadRuns reads the run log, the rotated generation (log/runs.1.jsonl) first and then
@@ -142,12 +68,12 @@ func (s *Store) ReadRuns() (runs []RunRecord, skipped int, err error) {
 			return nil, 0, err
 		}
 		for line := range bytes.Lines(data) {
-			var j runJSON
-			if json.Unmarshal(line, &j) != nil {
+			var r RunRecord
+			if json.Unmarshal(line, &r) != nil {
 				skipped++
 				continue
 			}
-			runs = append(runs, j.record())
+			runs = append(runs, r)
 		}
 	}
 	return runs, skipped, nil
@@ -156,25 +82,24 @@ func (s *Store) ReadRuns() (runs []RunRecord, skipped int, err error) {
 // line encodes r as one JSON line of at most MaxRunLine bytes, LF included, shortening the
 // fail-open reason when that alone makes it fit.
 func (r RunRecord) line() ([]byte, error) {
-	j := r.wire()
 	for {
-		b, err := encodeJSON(j)
+		b, err := encodeJSON(r)
 		if err != nil {
 			return nil, err
 		}
 		if len(b)+1 <= MaxRunLine {
 			return append(b, '\n'), nil
 		}
-		if j.FailOpen == "" {
+		if r.FailOpen == "" {
 			return nil, fmt.Errorf("store: run record is %d bytes, more than %d", len(b)+1, MaxRunLine)
 		}
 		// Drop at least the excess, on a rune boundary; escaping can make the next pass shorter
 		// than needed, so loop until it fits.
-		cut := max(len(j.FailOpen)-(len(b)+1-MaxRunLine), 0)
-		for cut > 0 && !utf8.RuneStart(j.FailOpen[cut]) {
+		cut := max(len(r.FailOpen)-(len(b)+1-MaxRunLine), 0)
+		for cut > 0 && !utf8.RuneStart(r.FailOpen[cut]) {
 			cut--
 		}
-		j.FailOpen = j.FailOpen[:cut]
+		r.FailOpen = r.FailOpen[:cut]
 	}
 }
 

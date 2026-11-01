@@ -1,10 +1,6 @@
 package spec
 
-import (
-	"errors"
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestParseBytes(t *testing.T) {
 	for in, want := range map[string]int64{"3": 3072, "3G": 3072, "3.1G": 3175, "768M": 768,
@@ -20,22 +16,17 @@ func TestParseBytes(t *testing.T) {
 	}
 }
 
-// A mem need is one size, rounded up to whole 128 MiB tokens and capped at MaxPerResource.
-// Mutation: round down in MemTokensCeil, and mem=700M and mem=1M redden.
-func TestParseNeedMem(t *testing.T) {
-	for in, want := range map[string]Range{"mem=3G": {24, 24}, "mem=700M": {6, 6}, "mem=1M": {1, 1},
-		"mem=40G": {256, 256}, "mem=2.5": {20, 20}} {
-		name, r, err := ParseNeed(in)
-		if err != nil || name != "mem" || r != want {
-			t.Errorf("ParseNeed(%q) = %q, %+v, %v; want mem, %+v", in, name, r, err, want)
+// A mem need of n MiB asks for n/128 tokens rounded up, capped at MaxPerResource, and a size
+// floors to whole tokens. Mutation: round down in MemTokensCeil, and 700 and 1 redden.
+func TestMemTokens(t *testing.T) {
+	for mib, want := range map[int64]int{3072: 24, 700: 6, 1: 1, 40960: 256, 2560: 20} {
+		if got := MemTokensCeil(mib); got != want {
+			t.Errorf("MemTokensCeil(%d) = %d, want %d", mib, got, want)
 		}
 	}
-	for in, msg := range map[string]string{"mem=0": "more than 0", "mem=1..4": "not a range",
-		"mem=..4G": "not a range", "mem=2G..": "not a range"} {
-		_, _, err := ParseNeed(in)
-		var ue *UsageError
-		if !errors.As(err, &ue) || !strings.Contains(err.Error(), msg) {
-			t.Errorf("ParseNeed(%q): got %v, want a *UsageError containing %q", in, err, msg)
+	for mib, want := range map[int64]int{3072: 24, 700: 5, 127: 0, -5: 0} {
+		if got := MemTokensFloor(mib); got != want {
+			t.Errorf("MemTokensFloor(%d) = %d, want %d", mib, got, want)
 		}
 	}
 }

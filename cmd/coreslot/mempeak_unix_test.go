@@ -45,8 +45,8 @@ func TestPeakSamplerKeepsMax(t *testing.T) {
 
 func TestSetMemPeakFloorWins(t *testing.T) {
 	rss := int64(500)
-	rec := store.RunRecord{MaxRSSKiB: &rss}
-	setMemPeak(&rec, 100, 1.5, true)
+	var rec store.RunRecord
+	setMemPeak(&rec, &rss, 100, 1.5, true)
 	if rec.MemPeakKiB == nil || *rec.MemPeakKiB != 500 || rec.MemPeakSource != "max_rss" || rec.PeakAfterS != nil {
 		t.Errorf("mem peak %v, %q, %v; want 500, max_rss, no time", rec.MemPeakKiB, rec.MemPeakSource, rec.PeakAfterS)
 	}
@@ -54,8 +54,8 @@ func TestSetMemPeakFloorWins(t *testing.T) {
 
 func TestSetMemPeakSampledWins(t *testing.T) {
 	rss := int64(500)
-	rec := store.RunRecord{MaxRSSKiB: &rss}
-	setMemPeak(&rec, 900, 2.5, true)
+	var rec store.RunRecord
+	setMemPeak(&rec, &rss, 900, 2.5, true)
 	if rec.MemPeakKiB == nil || *rec.MemPeakKiB != 900 || rec.MemPeakSource != memsample.Source ||
 		rec.PeakAfterS == nil || *rec.PeakAfterS != 2.5 {
 		t.Errorf("mem peak %v, %q, %v; want 900, %q, 2.5", rec.MemPeakKiB, rec.MemPeakSource, rec.PeakAfterS, memsample.Source)
@@ -65,7 +65,7 @@ func TestSetMemPeakSampledWins(t *testing.T) {
 // Mutation: record a zero peak when nothing was measured.
 func TestSetMemPeakUnknown(t *testing.T) {
 	var rec store.RunRecord
-	setMemPeak(&rec, 0, 0, false)
+	setMemPeak(&rec, nil, 0, 0, false)
 	if rec.MemPeakKiB != nil || rec.MemPeakSource != "" || rec.PeakAfterS != nil {
 		t.Errorf("mem peak %v, %q, %v; want none", rec.MemPeakKiB, rec.MemPeakSource, rec.PeakAfterS)
 	}

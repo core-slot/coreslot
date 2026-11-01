@@ -658,8 +658,8 @@ func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
 		t.Fatalf("run log has %d lines, want %d", len(lines), before+1)
 	}
 	last := lines[len(lines)-1]
-	if fmt.Sprint(last["unbudgeted_resources"]) != "[mem]" || last["fail_open"] != "timeout" {
-		t.Errorf("run log line %v: want unbudgeted_resources [mem] and the reason timeout", last)
+	if last["fail_open"] != "timeout" {
+		t.Errorf("run log line %v: want the reason timeout", last)
 	}
 	if h := entries(t, dir, "holds"); len(h) != 0 {
 		t.Errorf("the unbudgeted hold outlived the run: %q", h)
@@ -752,8 +752,7 @@ func TestRunAppendsOneLogLine(t *testing.T) {
 		}
 	}
 	line := runLog(t, dir)[0]
-	if line["label"] != "gate:unit" || fmt.Sprint(line["need"]) != "map[mem:[3 3]]" ||
-		fmt.Sprint(line["grant"]) != "map[mem:3]" || line["exit"] != float64(0) {
+	if line["label"] != "gate:unit" || line["exit"] != float64(0) {
 		t.Errorf("run log line %v", line)
 	}
 	if _, nested := line["nested"]; nested {
@@ -768,27 +767,28 @@ const (
 )
 
 // checkUsage asserts that a run-log line carries the burn helper's usage (PROTOCOL.md section
-// 20): CPU seconds at least burnCPU, and a peak resident set size in KiB of at least half of
-// burnBytes and below 10 GiB. The upper bound catches ru_maxrss written in bytes, which is
-// macOS's unit: 64 MiB in bytes is more than 10 GiB in KiB.
+// 20): user and system seconds adding up to at least burnCPU, and a memory peak in KiB of at least
+// half of burnBytes and below 10 GiB. A command this short ends before the sampler's first
+// reading, so the peak is the rusage's, and the upper bound catches ru_maxrss written in bytes,
+// which is macOS's unit: 64 MiB in bytes is more than 10 GiB in KiB.
 func checkUsage(t *testing.T, what string, line map[string]any) {
 	t.Helper()
-	user, uok := line["cpu_user_s"].(float64)
-	sys, sok := line["cpu_sys_s"].(float64)
+	user, uok := line["user_s"].(float64)
+	sys, sok := line["sys_s"].(float64)
 	if !uok || !sok || user < 0 || sys < 0 || user+sys < burnCPU.Seconds() {
-		t.Errorf("%s: cpu_user_s %v, cpu_sys_s %v; want numbers adding up to at least %v",
-			what, line["cpu_user_s"], line["cpu_sys_s"], burnCPU.Seconds())
+		t.Errorf("%s: user_s %v, sys_s %v; want numbers adding up to at least %v",
+			what, line["user_s"], line["sys_s"], burnCPU.Seconds())
 	}
-	rss, ok := line["max_rss_kib"].(float64)
+	rss, ok := line["mem_peak_kib"].(float64)
 	if !ok || rss != float64(int64(rss)) || rss < burnBytes/2/1024 || rss >= 10<<20 {
-		t.Errorf("%s: max_rss_kib %v; want an integer from %d KiB to below 10 GiB",
-			what, line["max_rss_kib"], burnBytes/2/1024)
+		t.Errorf("%s: mem_peak_kib %v; want an integer from %d KiB to below 10 GiB",
+			what, line["mem_peak_kib"], burnBytes/2/1024)
 	}
 }
 
-// Every run that started its command records the command's CPU time and peak resident set size
-// from its wait4 rusage, which also covers the descendants the command waited for: an ordinary
-// run, a fail-open run, and a pass-through, whose parent's line covers it too.
+// Every run that started its command records the command's user and system seconds and its peak
+// resident set size from its wait4 rusage, which also covers the descendants the command waited
+// for: an ordinary run, a fail-open run, and a pass-through, whose parent's line covers it too.
 //
 // Mutation: drop the recordUsage call in runChild (the keys are absent), or return ru_maxrss
 // unconverted in sys_darwin.go's maxRSSKiB (bytes, above 10 GiB in KiB).
@@ -902,7 +902,7 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 		t.Fatalf("run log %v: want a line for each run", lines)
 	}
 	for _, line := range lines {
-		for _, key := range []string{"cpu_user_s", "cpu_sys_s", "max_rss_kib"} {
+		for _, key := range []string{"user_s", "sys_s", "mem_peak_kib"} {
 			if v, ok := line[key]; ok {
 				t.Errorf("%v (exit %v): %s is %v; want it absent", line["label"], line["exit"], key, v)
 			}

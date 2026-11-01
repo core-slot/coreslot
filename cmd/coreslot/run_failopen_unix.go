@@ -46,7 +46,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 // resource: g's environment and descriptors when its unbudgeted hold g was published (g may be
 // nil), else the unbudgeted environment engine.ChildEnv builds. The caller decides whether it logs.
 func (r *run) unbudgetedChild(reason string, g *engine.Grant) child {
-	c := child{grant: r.o.minGrant(), unbudgeted: r.o.sortedNeed(), failOpen: reason, release: func() error { return nil }}
+	c := child{grant: r.o.minGrant(), failOpen: reason, release: func() error { return nil }}
 	if g != nil {
 		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
 	} else {
