@@ -559,5 +559,5 @@ func holderInfo(en store.Entry, body []byte) *HolderInfo {
 		return nil
 	}
 	return &HolderInfo{Name: en.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS, ArrivalNS: h.ArrivalNS,
-		NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, Tree: h.Tree}
+		NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops}
 }

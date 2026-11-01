@@ -10,7 +10,6 @@ type HolderInfo struct {
 	NeedMiB      int64  // what the hold reserves; 0 for a run outside the budget
 	FootprintMiB int64  // what its run last measured
 	Stops        int
-	Tree         bool // the process tree at PID carries the grant's work; status does not show it
 	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
 	// still held, so a descendant that inherited the hold's descriptor holds the reservation. Only
 	// Snapshot sets it, and only when the process table can be read.

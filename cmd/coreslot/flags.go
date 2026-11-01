@@ -115,7 +115,7 @@ func usagef(format string, args ...any) error {
 
 // request is the request of the run. Its hold says that the run's process tree carries the work.
 func (o runOptions) request() spec.Request {
-	return spec.Request{Label: o.label, NeedMiB: o.need, Tree: true}
+	return spec.Request{Label: o.label, NeedMiB: o.need}
 }
 
 // needText is the request in the form of the waiting line: `mem 3 GiB`.

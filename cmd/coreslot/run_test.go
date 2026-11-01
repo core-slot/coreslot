@@ -992,36 +992,6 @@ func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
 	}
 }
 
-// A run's hold says that its process tree carries the work, so that the live mem size may
-// measure it. Mutation: the run's request not setting Tree.
-func TestRunHoldHasTree(t *testing.T) {
-	dir := budgetDir(t, 8192)
-	cmd := cliCmd(t, baseEnv(dir), "run", "--mem", "1G", "--", "sleep", "1")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cmd.Wait() }()
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("no hold published within 10 s")
-		}
-		entries, _ := os.ReadDir(filepath.Join(dir, store.HoldsDir))
-		for _, en := range entries {
-			if strings.HasPrefix(en.Name(), ".") {
-				continue
-			}
-			body, err := os.ReadFile(filepath.Join(dir, store.HoldsDir, en.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(body), `"tree":true`) {
-				t.Errorf("hold body %s, want \"tree\":true", body)
-			}
-			return
-		}
-	}
-}
-
 func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 	dir := budgetDir(t, 256)
 	tmp := t.TempDir()

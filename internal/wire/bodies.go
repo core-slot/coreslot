@@ -41,7 +41,6 @@ type Hold struct {
 	DUserNS, DSysNS, DPageWaitNS int64
 	SampledNS                    int64
 	Victim, ChildExited          bool
-	Tree                         bool // the process tree at the hold's pid carries the grant's work
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -72,7 +71,6 @@ type holdJSON struct {
 	SampledNS    int64  `json:"sampled_ns"`
 	Victim       bool   `json:"victim"`
 	ChildExited  bool   `json:"child_exited"`
-	Tree         bool   `json:"tree"`
 }
 
 type cancelJSON struct {
@@ -221,7 +219,7 @@ func DecodeHold(body []byte) (Hold, error) {
 	for _, f := range []struct {
 		key string
 		dst *bool
-	}{{"victim", &h.Victim}, {"child_exited", &h.ChildExited}, {"tree", &h.Tree}} {
+	}{{"victim", &h.Victim}, {"child_exited", &h.ChildExited}} {
 		if *f.dst, err = o.boolean(f.key); err != nil {
 			return Hold{}, err
 		}

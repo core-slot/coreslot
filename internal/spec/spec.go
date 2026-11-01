@@ -24,7 +24,6 @@ func ColdStartMiB(totalMiB int64) int64 { return max(1, min(4096, totalMiB/4)) }
 type Request struct {
 	Label     string
 	NeedMiB   int64
-	Tree      bool  // the process tree at the requester's pid carries the grant's work; only the CLI sets it
 	ArrivalNS int64 // a stopped command's first arrival, which keeps its place; 0 arrives now
 	Restart   bool  // a stopped command coming back: it waits for calm and a margin over its need
 }

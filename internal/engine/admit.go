@@ -225,7 +225,7 @@ type Grant struct {
 func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64) error {
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, PID: os.Getpid(), StartNS: start, ArrivalNS: max(arrivalNS, 0),
-		NeedMiB: needMiB, Tree: req.Tree}
+		NeedMiB: needMiB}
 	f, name, err := sec.PublishHold(h, g.e.seq())
 	if err != nil {
 		return err
