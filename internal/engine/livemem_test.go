@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"context"
 	"reflect"
 	"testing"
 	"time"
@@ -178,43 +177,6 @@ func TestLiveClampAgainstLiveSize(t *testing.T) {
 	if g.Grant()["mem"] != 24 || !reflect.DeepEqual(g.Clamped(), map[string]int{"mem": 32}) || !g.LiveMem() {
 		t.Errorf("grant %v, clamped %v, LiveMem %v; want mem 24, clamped mem 32, true",
 			g.Grant(), g.Clamped(), g.LiveMem())
-	}
-}
-
-// An adoption sizes mem from the headroom as an admission does. Mutation: calling attemptSizes
-// only from admit, and the adoption takes 0.
-func TestAdoptLive(t *testing.T) {
-	dir := newStateDir(t, liveCfg)
-	e := newEngine(t, dir, newFakeClock())
-	setLiveMem(t, 4096, -1)
-	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
-	g, err := e.AdoptContext(context.Background(), need("mem=2G"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer g.Close()
-	if g.Grant()["mem"] != 16 || !g.LiveMem() {
-		t.Errorf("adopted %v, LiveMem %v; want mem 16 and true", g.Grant(), g.LiveMem())
-	}
-}
-
-// An adopted hold carries no tree, so its whole reservation counts even when its pid's tree is
-// measured: 2560 MiB less 1 GiB leaves 12 tokens, too few for 16. Mutation: publishHold writing
-// the request's tree for an adoption too, and B is admitted.
-func TestLiveAdoptedHoldCountsWhole(t *testing.T) {
-	dir := newStateDir(t, liveCfg)
-	e := newEngine(t, dir, newFakeClock())
-	setLiveMem(t, 2560, 1<<20)
-	g, err := e.AdoptContext(context.Background(), treeNeed("mem=1G"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer g.Close()
-	if got := readHold(t, e, g); got.Tree || len(got.Grant["mem"]) != 8 {
-		t.Fatalf("adopted hold %+v, want 8 mem tokens and no tree", got)
-	}
-	if r := step(t, enqueue(t, e, need("mem=2G"))); isAdmitted(r) {
-		t.Fatal("mem=2G admitted: the adopted hold's reservation was measured")
 	}
 }
 

@@ -55,7 +55,7 @@ type hookPair struct{ enter, leave func() }
 // may probe while another holds the section, so the hooks must count rather than toggle, and
 // must be safe for concurrent use. They must be cheap, since a snapshot probes every token, and
 // must not take a lock of the state directory themselves. A program installs them once, before
-// it first takes such a lock; the library never does, and without them nothing runs.
+// it first takes such a lock; the engine never does, and without them nothing runs.
 func SetLockHooks(enter, leave func()) {
 	lockHooks.Store(&hookPair{enter: enter, leave: leave})
 }
@@ -127,7 +127,7 @@ func (s *Store) Enter(ctx context.Context) (*Section, error) {
 	}
 }
 
-// TryEnter makes one attempt to enter the admission section (a library Poll's single try).
+// TryEnter makes one attempt to enter the admission section (a Poll's single try).
 func (s *Store) TryEnter() (*Section, bool, error) {
 	f, err := OpenFile(s.path(AdmitLock), os.O_RDWR|os.O_CREATE)
 	if err != nil {

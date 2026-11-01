@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -17,7 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
@@ -120,8 +122,8 @@ type bench struct {
 	p      params
 	run    int
 	state  string
-	client *coreslot.Client
-	grants []*coreslot.Grant
+	client *engine.Engine
+	grants []*engine.Grant
 	rng    *rand.Rand
 
 	inR, inW, outR, outW, errFile *os.File
@@ -183,10 +185,12 @@ func runOnce(p params, run int) (result, error) {
 	if err := syscall.Getrusage(syscall.RUSAGE_CHILDREN, &ru0); err != nil {
 		return result{}, err
 	}
-	if b.client, err = coreslot.Open(coreslot.Options{StateDir: b.state}); err != nil {
+	st, err := store.Open(b.state)
+	if err != nil {
 		return result{}, err
 	}
-	if err := b.adoptAll(10 * time.Second); err != nil {
+	b.client = engine.New(st, &config.Watcher{Path: filepath.Join(b.state, store.ConfigFile)}, config.ReadMachine, engine.Clock{})
+	if err := b.holdAll(10 * time.Second); err != nil {
 		return result{}, err
 	}
 	defer func() {
@@ -603,52 +607,59 @@ func (b *bench) burst() error {
 		}
 	}
 	now := time.Now()
-	b.at(now.Add(b.p.AdmitWindow), b.readopt)
+	b.at(now.Add(b.p.AdmitWindow), b.retake)
 	b.at(now.Add(b.p.AdmitWindow+time.Second), b.stallSome)
 	return nil
 }
 
-// readopt takes the budget back, retrying every second until it holds all of it.
-func (b *bench) readopt() error {
-	if err := b.adoptAll(time.Second); err != nil {
+// retake takes the budget back, retrying every second until it holds all of it.
+func (b *bench) retake() error {
+	if err := b.holdAll(time.Second); err != nil {
 		return err
 	}
 	if len(b.grants) < b.p.Size {
-		b.at(time.Now().Add(time.Second), b.readopt)
+		b.at(time.Now().Add(time.Second), b.retake)
 	}
 	return nil
 }
 
-func (b *bench) adoptAll(within time.Duration) error {
+// holdAll requests one token at a time, at the top priority so that it is the head of the queue
+// whatever the waiters are, until the harness holds the whole budget or within passes.
+func (b *bench) holdAll(within time.Duration) error {
 	deadline := time.Now().Add(within)
 	for len(b.grants) < b.p.Size && time.Now().Before(deadline) {
-		// Adopt only a token that is free: an adoption that comes up short publishes and removes
-		// a hold, two gen bumps that make every waiter rescan, so it is not retried blindly.
-		free, err := b.client.Available("mem")
+		// Request only a token that is free: a request that has to wait publishes a ticket and
+		// withdraws it, two gen bumps that make every waiter rescan, so it is not retried blindly.
+		free, err := b.client.Free("mem")
 		if err != nil {
 			return err
 		}
 		if free == 0 {
 			if b.inWin {
-				break // readopt tries again in a second
+				break // retake tries again in a second
 			}
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
-		g, err := b.client.Adopt(context.Background(), coreslot.Request{Label: "bench-harness",
-			Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}})
+		t, err := b.client.EnqueueContext(context.Background(), spec.Request{Label: "bench-harness",
+			Priority: spec.MaxPriority, Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}})
 		if err != nil {
 			return err
 		}
-		if g.Shortfall()["mem"] > 0 {
-			g.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		g, err := t.Wait(ctx)
+		cancel()
+		switch {
+		case err == nil:
+			b.grants = append(b.grants, g)
+		case errors.Is(err, context.DeadlineExceeded): // a waiter took the free token first
 			time.Sleep(20 * time.Millisecond)
-			continue
+		default:
+			return err
 		}
-		b.grants = append(b.grants, g)
 	}
 	if len(b.grants) == 0 && b.p.Size > 0 && !b.inWin {
-		return fmt.Errorf("could not adopt the budget")
+		return fmt.Errorf("could not take the budget")
 	}
 	return nil
 }

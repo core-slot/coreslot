@@ -71,11 +71,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 	}{
 		{"ticket", func(t *testing.T, e *Engine, dir string) { startHelper(t, "enqueue", dir, "mem=1") }, "1 live ticket (pid"},
 		{"hold", func(t *testing.T, e *Engine, dir string) {
-			g, err := e.AdoptContext(context.Background(), needLabel("mem=2", "gate"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { g.Close() })
+			hold(t, e, needLabel("mem=2", "gate"))
 		}, "1 live hold (pid"},
 		{"token", func(t *testing.T, e *Engine, dir string) { startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 2)) }, "locked tokens (mem 3)"},
 		{"section", func(t *testing.T, e *Engine, dir string) { startHelper(t, "section", dir, "") }, "another client is inside the admission section"},
@@ -84,11 +80,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 			e := newEngine(t, dir, nil)
-			g, err := e.AdoptContext(context.Background(), need("mem=1")) // FORMAT, gen and a hold exist
-			if err != nil {
-				t.Fatal(err)
-			}
-			g.Close()
+			hold(t, e, need("mem=1")).Close() // FORMAT, gen and a hold exist
 			c.live(t, e, dir)
 			setOtherLengthHolder(t, dir)
 			before := treeContent(t, dir)
@@ -114,15 +106,11 @@ func TestResetRefusesLiveState(t *testing.T) {
 func TestResetRefusalNamesLabels(t *testing.T) {
 	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), needLabel("mem=1", "hold:three"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { g.Close() })
+	hold(t, e, needLabel("mem=1", "hold:three"))
 	enqueue(t, e, needLabel("mem=1", "ci:o-r\x1b[2J"))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	_, err = e.Reset(ctx)
+	_, err := e.Reset(ctx)
 	var le *LiveError
 	if !errors.As(err, &le) {
 		t.Fatalf("Reset = %v, want a *LiveError", err)
@@ -145,11 +133,7 @@ func TestResetRefusalNamesLabels(t *testing.T) {
 func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), need("mem=1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	g.Close()
+	hold(t, e, need("mem=1")).Close()
 	setOtherLengthHolder(t, dir)
 	sec, err := e.st.Enter(context.Background())
 	if err != nil {
@@ -172,11 +156,7 @@ func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 func TestResetThenUse(t *testing.T) {
 	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), need("mem=2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	g.Close()
+	hold(t, e, need("mem=2")).Close()
 	removed, err := e.Reset(context.Background())
 	if err != nil || removed == 0 {
 		t.Fatalf("Reset = %d, %v", removed, err)
@@ -196,11 +176,7 @@ func TestResetThenUse(t *testing.T) {
 func TestResetRefusesForeignFormat(t *testing.T) {
 	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
-	g, err := e.AdoptContext(context.Background(), need("mem=1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	g.Close()
+	hold(t, e, need("mem=1")).Close()
 	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +188,7 @@ func TestResetRefusesForeignFormat(t *testing.T) {
 	}
 	setOtherLengthHolder(t, dir)
 	before := treeContent(t, dir)
-	_, err = e.Reset(context.Background())
+	_, err := e.Reset(context.Background())
 	var le *LiveError
 	if !errors.As(err, &le) || !errors.Is(err, ErrRefused) ||
 		!strings.Contains(err.Error(), "format 2 is not implemented by this client; use a coreslot that implements it") {

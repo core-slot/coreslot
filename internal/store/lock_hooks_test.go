@@ -220,7 +220,7 @@ func TestLockHooksBracketEveryProbe(t *testing.T) {
 	r := recordHooks(t)
 
 	// Outside the section: the reader's probes (status, doctor, a cancel by label, the --no-wait
-	// refusal, a library Step) and the election's.
+	// refusal, a Step) and the election's.
 	if n, err := s.CountLockedProbe("mem"); err != nil || n != 1 {
 		t.Fatalf("CountLockedProbe = %d, %v; want 1", n, err)
 	}

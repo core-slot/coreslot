@@ -234,46 +234,6 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	}
 }
 
-func TestAdoptReportsShortfall(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"1280M\"\n")
-	e := newEngine(t, dir, newFakeClock())
-	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7))
-	enqueue(t, e, need("mem=1")) // a waiter: adoption does not queue behind it
-	g, err := e.AdoptContext(context.Background(), need("mem=3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer g.Close()
-	h := readHold(t, e, g)
-	if !reflect.DeepEqual(h.Grant, map[string][]int{"mem": {8, 9}}) || !h.Adopted {
-		t.Errorf("hold %+v, want adopted mem [8 9]", h)
-	}
-	if short := g.Shortfall(); !reflect.DeepEqual(short, map[string]int{"mem": 1}) {
-		t.Errorf("shortfall %v, want mem 1", short)
-	}
-	if n := lockedCount(t, e, "mem"); n > 10 {
-		t.Errorf("I3: %d locked, size 10", n)
-	}
-}
-
-// I3 for adoption: locks at or above the size count, so a shrink leaves less to adopt.
-func TestAdoptCountsLocksAboveSize(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"1280M\"\n")
-	e := newEngine(t, dir, newFakeClock())
-	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 4)+"\n"+tokenPaths(dir, "mem", 10, 13))
-	g, err := e.AdoptContext(context.Background(), need("mem=3..5"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer g.Close()
-	if got, short := g.Grant()["mem"], g.Shortfall(); got != 1 || !reflect.DeepEqual(short, map[string]int{"mem": 2}) {
-		t.Errorf("grant %d shortfall %v, want 1 and mem 2", got, short)
-	}
-	if n := lockedCount(t, e, "mem"); n != 10 {
-		t.Errorf("I3: %d locked at every index, want exactly the size 10", n)
-	}
-}
-
 // listing is a recursive listing of dir with every attribute a write would change.
 func listing(t *testing.T, dir string) string {
 	t.Helper()

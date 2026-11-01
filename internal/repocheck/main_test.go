@@ -1,6 +1,6 @@
-// Package repocheck holds the repository's own checks: the pinned exported API, the library's
-// purity, PROTOCOL.md's contract inventory and the hygiene of the repository's files. It has no
-// code of its own, only tests, and they read the repository rather than import it.
+// Package repocheck holds the repository's own checks: the purity of the engine's packages,
+// PROTOCOL.md's contract inventory and the hygiene of the repository's files. It has no code of
+// its own, only tests, and they read the repository rather than import it.
 package repocheck
 
 import (

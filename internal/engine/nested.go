@@ -81,7 +81,7 @@ type devIno struct{ dev, ino uint64 }
 // its number.
 const reusedCause = "a launcher between the parent run and this one probably closed it and the number was reused"
 
-// NestedKind is what a run, or a library request, does with the grant context it inherited
+// NestedKind is what a run does with the grant context it inherited
 // (PROTOCOL.md section 18).
 type NestedKind int
 
@@ -102,15 +102,11 @@ type Nested struct {
 	Reason string
 	// Held is ValidateInherited's held of a NestedPassThrough decision.
 	Held map[string][]*os.File
-
-	env map[string]string // the environment decided from
-	dir string            // NestedPassThrough: the state directory the context was checked in
 }
 
 // DecideNested decides, from the environment a run inherited, what it does with the grant
-// context in it (PROTOCOL.md section 18; an empty variable is unset), for the CLI and the library
-// alike. Unless independent: a set CORESLOT_UNBUDGETED is rule 1; otherwise a set
-// CORESLOT_TOKEN_FDS is rule 2, and when that context does not validate (ValidateInherited) err
+// context in it (PROTOCOL.md section 18; an empty variable is unset). Unless independent: a set
+// CORESLOT_UNBUDGETED is rule 1; otherwise a set CORESLOT_TOKEN_FDS is rule 2, and when that context does not validate (ValidateInherited) err
 // says why and the caller refuses, never queueing behind a parent that may hold the whole budget.
 // Anything else, or independent, is an ordinary request (rule 3). It writes nothing and closes
 // nothing: dropping the inherited context of an ordinary request is its caller's business.
@@ -118,41 +114,22 @@ type Nested struct {
 // budget is the state directory of the caller's own budget, or empty for the one env names, which
 // is then resolved here (the CLI's case: its state directory is always that one). A context is a
 // parent's only in the budget it came from, the directory env's CORESLOT_STATE_DIR (or the
-// default) names, since a run passes CORESLOT_STATE_DIR on to its command; a library client may
-// open another (a test's Options.StateDir), and there the inherited context belongs to another
+// default) names, since a run passes CORESLOT_STATE_DIR on to its command; a caller may
+// open another, and there the inherited context belongs to another
 // budget, whose tokens this one never counts, so the request is ordinary.
 //
 // When budget is set and the directory env names cannot be resolved (CORESLOT_STATE_DIR is not
 // an absolute path, or it is unset and the home directory cannot be learned), whether the context
 // is this budget's cannot be told, and err says so: the caller refuses. Taking it for another
 // budget would queue the request, and when budget is in fact the directory env names (a caller
-// that spells out the default in Options.StateDir) it would queue behind its own parent, which
+// that spells out the default) it would queue behind its own parent, which
 // may hold the whole budget; a refusal cannot hang, and independent is the way to queue anyway.
-// A client whose directory is the one env names by construction calls DecideNestedNamed instead,
-// which resolves nothing.
 func DecideNested(env map[string]string, independent bool, budget string) (Nested, error) {
-	return decideNested(env, independent, budget, false)
-}
-
-// DecideNestedNamed is DecideNested for a caller whose state directory dir is the one env names
-// by construction: it resolved dir from this process's environment by the rule of PROTOCOL.md
-// section 4.1, as a library Client opened without Options.StateDir does, and env is that
-// environment. It does not resolve the directory again: a second home-directory lookup may run
-// getent again and fail where the first succeeded (a timeout), and the request must then not be
-// taken for another budget's and queue behind its own parent.
-func DecideNestedNamed(env map[string]string, independent bool, dir string) (Nested, error) {
-	return decideNested(env, independent, dir, true)
-}
-
-func decideNested(env map[string]string, independent bool, budget string, named bool) (Nested, error) {
 	if independent || (env[EnvUnbudgeted] == "" && env[EnvTokenFDs] == "") {
 		return Nested{}, nil
 	}
 	dir := "" // the directory env names, when known: validateInherited resolves it otherwise
-	switch {
-	case named:
-		dir = filepath.Clean(budget)
-	case budget != "":
+	if budget != "" {
 		envDir, err := stateDirOf(env)
 		if err != nil {
 			return Nested{}, fmt.Errorf("the state directory the inherited context names cannot be resolved, so "+
@@ -164,13 +141,13 @@ func decideNested(env map[string]string, independent bool, budget string, named 
 		dir = envDir
 	}
 	if reason := env[EnvUnbudgeted]; reason != "" {
-		return Nested{Kind: NestedUnbudgeted, Reason: reason, env: env}, nil
+		return Nested{Kind: NestedUnbudgeted, Reason: reason}, nil
 	}
-	held, dir, err := validateInherited(env, dir)
+	held, _, err := validateInherited(env, dir)
 	if err != nil {
 		return Nested{}, err
 	}
-	return Nested{Kind: NestedPassThrough, Held: held, env: env, dir: dir}, nil
+	return Nested{Kind: NestedPassThrough, Held: held}, nil
 }
 
 // sameDir reports whether dir is budget: the same path, or the same directory reached through
@@ -222,7 +199,7 @@ func NestedGrant(req spec.Request, held map[string]int) (grant map[string]int, c
 // held maps each resource to the descriptors of its tokens, in ascending index. They wrap the
 // inherited descriptors, which stay open (and inheritable) for the caller's command, through
 // inheritedFile: one *os.File per descriptor for the life of the process, so that a later
-// validation (a second library request, or another Client) gets the same files, and none is ever
+// validation (a second validation) gets the same files, and none is ever
 // collected, which would close the descriptor under the grant. The caller must not close them.
 // Each error names the likely cause.
 func ValidateInherited(env map[string]string) (held map[string][]*os.File, err error) {
@@ -289,7 +266,7 @@ func validateInherited(env map[string]string, dir string) (held map[string][]*os
 // of the process. An *os.File that is collected closes its descriptor, and two of them for one
 // descriptor would each close it, the second time perhaps a descriptor that has since reused the
 // number; the inherited grant must instead stay open for every later pass-through of this
-// process, the library's included, and for the commands they start.
+// process, and for the commands they start.
 var inherited struct {
 	mu    sync.Mutex
 	files map[int]*os.File

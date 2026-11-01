@@ -1,7 +1,6 @@
 # coreslot
 
 [![CI](https://github.com/core-slot/coreslot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/core-slot/coreslot/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/core-slot/coreslot.svg)](https://pkg.go.dev/github.com/core-slot/coreslot)
 [![Release](https://img.shields.io/github/v/release/core-slot/coreslot?sort=semver)](https://github.com/core-slot/coreslot/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/core-slot/coreslot)](LICENSE)
 
@@ -50,7 +49,7 @@ same budget.
 Other agents get the same rule as a line in their instructions
 ([the snippet](integrations/claude-code/README.md#other-coding-agents)).
 
-**Status:** `v0`. Before `v1.0.0` the CLI and the library may still change, and a release may
+**Status:** `v0`. Before `v1.0.0` the CLI may still change, and a release may
 introduce a new on-disk format; the [compatibility policy](docs/compatibility.md) says how.
 
 ## Why not ...
@@ -179,7 +178,7 @@ request as if it had arrived `P` minutes earlier.
 queue: it runs on its parent's tokens, with `min(max, held)`. Nested runs are not budgeted against
 each other: two siblings started together under an 8-core grant both run with 8. A parent that
 wants concurrent children partitions its grant itself. `--independent` queues as an unrelated
-request instead. The Go library applies the same rule ([below](#go-library)).
+request instead.
 
 **Stop a run by killing its process group.** Without a terminal, `run` starts its command in a
 process group of its own and relays signals to it, which a SIGKILL of coreslot's group cannot do:
@@ -408,45 +407,6 @@ another host looks idle to it. `coreslot suggest` does not lower the cpu and mem
 last runs of at least 60 s averaged under 0.05 cores: its evidence says the work may run outside
 the process tree, and the run is never refused. Put `observed = false` in the entry to say so, and
 `suggest` keeps that entry's cpu and mem as they are.
-
-## Go library
-
-The module's root package implements the protocol for other Go programs, such as a CI runner pool:
-
-```go
-c, err := coreslot.Open(coreslot.Options{})
-if err != nil {
-	return err // a *StateError or ErrUnsupported: the caller decides whether to run unbudgeted
-}
-defer c.Close()
-w, err := c.Enqueue(ctx, coreslot.Request{Label: "make test",
-	Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 8}}})
-if err != nil {
-	return err
-}
-g, err := w.Wait(ctx) // or Poll at least every 2 s
-if err != nil {
-	return err
-}
-defer g.Close()
-cmd := exec.CommandContext(ctx, "make", "test", "-j", strconv.Itoa(g.Granted()["cpu"]))
-cmd.ExtraFiles, cmd.Env = g.Files(), g.Environ(os.Environ())
-return cmd.Run()
-```
-
-Like a nested `coreslot run`, an `Enqueue` made inside another run's grant passes through: a
-test suite run under `coreslot run --need cpu=8` that asks the library for cores gets them from
-its parent at once instead of queueing behind it. `Options.Independent` queues anyway, like
-`--independent`; so does a client opened on another state directory, and `Adopt` never passes
-through.
-
-The library never prints, never installs signal handlers and never decides on its own to run
-unbudgeted: a `*StateError` tells the caller the budget is unusable. `Open` checks the state
-directory before any request, so it returns one even where the parent runs unbudgeted because
-that directory is unusable; a caller that wants to follow its parent reads `CORESLOT_UNBUDGETED`.
-The [package documentation](https://pkg.go.dev/github.com/core-slot/coreslot) has runnable
-examples of `Enqueue`, `Poll`, `Adopt` and `Snapshot`, and of running unbudgeted when the budget
-cannot be used; [`api/v0.txt`](api/v0.txt) is the exported API.
 
 ## Protocol
 

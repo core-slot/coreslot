@@ -28,7 +28,7 @@ import (
 	"github.com/core-slot/coreslot/internal/store"
 )
 
-// The kill-storm: randomized CLI, library and independent Python clients,
+// The kill-storm: randomized CLI and independent Python clients,
 // some of them nested runs and some token-only, queue for mem while the storm kills
 // them with SIGKILL, stops and continues them, cancels them, and shrinks and grows the sizes
 // through the configuration. A sampler checks I1, I2, I3 and I7 throughout. Each client runs
@@ -80,39 +80,6 @@ func stormRequest(label string) (map[string]spec.Range, bool) {
 	lo, _ := strconv.Atoi(m[1])
 	hi, _ := strconv.Atoi(m[2])
 	return map[string]spec.Range{"mem": {Min: lo, Max: hi}}, true
-}
-
-// ---------------------------------------------------------------- the library client binary
-
-var libBuild struct {
-	once sync.Once
-	path string
-	err  error
-}
-
-// buildLibClient builds conformance/libclient beside the harness's binaries.
-func buildLibClient(t *testing.T) string {
-	t.Helper()
-	Build(t)
-	libBuild.once.Do(func() {
-		root, err := moduleRoot()
-		if err != nil {
-			libBuild.err = err
-			return
-		}
-		out := filepath.Join(buildDir, "libclient")
-		cmd := exec.Command("go", "build", "-tags", "coreslot_testhooks", "-o", out, "./conformance/libclient")
-		cmd.Dir = root
-		if msg, err := cmd.CombinedOutput(); err != nil {
-			libBuild.err = fmt.Errorf("go build ./conformance/libclient: %v\n%s", err, msg)
-			return
-		}
-		libBuild.path = out
-	})
-	if libBuild.err != nil {
-		t.Fatal(libBuild.err)
-	}
-	return libBuild.path
 }
 
 // pyClient returns the interpreter and the independent client's path, or why there are none.
@@ -249,8 +216,8 @@ func (r *tokenOnlyRuns) reportLatency() (longest time.Duration, runs int) {
 
 type stormClient struct {
 	id          int
-	kind        string // cli, py, lib, tok; nested runs are "<outer>-<inner>", like cli-py
-	outer       string // cli, py, lib or tok
+	kind        string // cli, py, tok; nested runs are "<outer>-<inner>", like cli-py
+	outer       string // cli, py or tok
 	inner       string // "", go or py: the nested run's client
 	name        string // the label, and the marker name of its command
 	need        map[string]spec.Range
@@ -283,7 +250,6 @@ type storm struct {
 	short   bool
 	py      string // "" without Python 3.11+
 	pyc     string
-	libBin  string
 	started time.Time
 	tok     *tokenOnlyRuns
 	shrunk  chan struct{} // closed after the first shrink, or when the storm ends without it
@@ -319,11 +285,11 @@ func (st *storm) victimID() int {
 
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
 // not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
-// one admission of each kind (CLI, Python, a library run with a nested Go run, token-only), each
-// holding mem until the first shrink: 1 token each, but 6 for the CLI and the library run, so the
+// one admission of each kind (CLI, Python, a CLI run with a nested Go run, token-only), each
+// holding mem until the first shrink: 1 token each, but 6 for the two CLI runs, so the
 // first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
 // the one victimID picks, which is killed while it holds. The memFlood clients after them are
-// library runs of 8 mem tokens and nothing else, each holding for a second, which arrive while the
+// CLI runs of 8 mem tokens and nothing else, each holding for a second, which arrive while the
 // first wave holds and find nothing ahead of them: a live size admits one beside the first wave's 14 and
 // holds the others back at the headroom's 24 tokens, while a size that forgets the holds'
 // reservations admits all three. Client firstWave+memFlood+1 is stopped and continued.
@@ -331,7 +297,7 @@ func (st *storm) victimID() int {
 func (st *storm) plan(id int) *stormClient {
 	r := rand.New(rand.NewPCG(st.seed, uint64(id)))
 	c := &stormClient{id: id, need: map[string]spec.Range{}}
-	outers := []string{"cli", "cli", "cli", "lib", "lib", "lib", "tok"}
+	outers := []string{"cli", "cli", "cli", "cli", "cli", "cli", "tok"}
 	inners := []string{"go"}
 	if st.py != "" {
 		outers = append(outers, "py", "py", "py")
@@ -377,7 +343,7 @@ func (st *storm) plan(id int) *stormClient {
 		if st.py == "" {
 			py = "cli"
 		}
-		c.outer = []string{"cli", py, "lib", "tok"}[id-1]
+		c.outer = []string{"cli", py, "cli", "tok"}[id-1]
 		c.inner = ""
 		if id == 3 {
 			c.inner = "go"
@@ -392,7 +358,7 @@ func (st *storm) plan(id int) *stormClient {
 		}
 	}
 	if id > firstWave && id <= firstWave+memFlood {
-		c.outer, c.inner = "lib", ""
+		c.outer, c.inner = "cli", ""
 		c.need = map[string]spec.Range{"mem": {Min: 8, Max: 8}}
 		c.timeout, c.fate, c.hold = 0, "release", time.Second
 	}
@@ -408,15 +374,11 @@ func (st *storm) plan(id int) *stormClient {
 }
 
 // needFlags writes need as flag options. The Python client takes mem as one size in MiB, never a
-// range; the library client (-need) takes every resource as a token range.
-func needFlags(need map[string]spec.Range, flag string) []string {
+// range.
+func needFlags(need map[string]spec.Range) []string {
 	var out []string
 	for _, r := range slices.Sorted(maps.Keys(need)) {
-		if flag == "--need" {
-			out = append(out, flag, fmt.Sprintf("%s=%dM", r, need[r].Min*spec.MemTokenMiB))
-			continue
-		}
-		out = append(out, flag, fmt.Sprintf("%s=%d..%d", r, need[r].Min, need[r].Max))
+		out = append(out, "--need", fmt.Sprintf("%s=%dM", r, need[r].Min*spec.MemTokenMiB))
 	}
 	return out
 }
@@ -465,17 +427,10 @@ func (st *storm) clientArgv(c *stormClient) []string {
 		if c.timeout > 0 {
 			a = append(a, "--timeout", strconv.FormatFloat(c.timeout.Seconds(), 'f', 3, 64))
 		}
-		a = append(a, needFlags(c.need, "--need")...)
+		a = append(a, needFlags(c.need)...)
 		return append(append(a, "--"), cmd...)
-	default: // lib
-		a := []string{st.libBin, "-dir", st.e.Dir, "-mark", st.e.MarkDir, "-name", c.name, "-label", c.name,
-			"-timeout", c.timeout.String()}
-		a = append(a, needFlags(c.need, "-need")...)
-		if c.inner != "" {
-			a = append(append(a, "--"), cmd...)
-		}
-		return a
 	}
+	panic("unknown storm client " + c.outer)
 }
 
 // after waits d while c's process lives: false when the storm ended or the process exited.
@@ -662,12 +617,11 @@ func (st *storm) cancel(ctx context.Context, c *stormClient) {
 // wait: the evidence, besides the refusal code, that the cancel acted. Token-only clients are
 // never queued and have none.
 var cancelledMessage = map[string]string{
-	"cli": "coreslot: the request was cancelled",  // the Go CLI
-	"py":  " was cancelled",                       // the Python client: "coreslot: ticket <id> was cancelled"
-	"lib": "libclient: the request was cancelled", // conformance/libclient on coreslot.ErrCanceled
+	"cli": "coreslot: the request was cancelled", // the Go CLI
+	"py":  " was cancelled",                      // the Python client: "coreslot: ticket <id> was cancelled"
 }
 
-// canceller cancels one client while it is seen queued: it picks a live CLI, Python or library
+// canceller cancels one client while it is seen queued: it picks a live CLI or Python
 // client with a ticket, no timeout and a command that does not run, publishes a cancel request
 // for it by label, and checks that the client then exits with the refusal code and its kind's
 // canceled message. A request that loses the race (the client was admitted first) is retried
@@ -903,7 +857,7 @@ func TestKillStorm(t *testing.T) {
 		}
 	}
 	e := State(t)
-	st := &storm{t: t, e: e, seed: seed, short: testing.Short(), libBin: buildLibClient(t),
+	st := &storm{t: t, e: e, seed: seed, short: testing.Short(),
 		tok: &tokenOnlyRuns{markDir: e.MarkDir}, shrunk: make(chan struct{}),
 		labels: map[string]map[string]spec.Range{}, live: map[*stormClient]bool{}, counts: map[string]int{}}
 	py, pyc, err := pyClient(t)
@@ -1091,7 +1045,7 @@ func TestKillStorm(t *testing.T) {
 	if admitted < minAdmitted {
 		t.Errorf("%d admissions, want at least %d", admitted, minAdmitted)
 	}
-	floors := []string{"admitted cli", "admitted lib", "admitted tok", "admitted nested", "SIGKILL of a holder",
+	floors := []string{"admitted cli", "admitted tok", "admitted nested", "SIGKILL of a holder",
 		"SIGSTOP", "cancel took effect", "shrink below the locked count", "growth"}
 	if st.py != "" {
 		floors = append(floors, "admitted py")

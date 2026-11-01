@@ -38,7 +38,7 @@ func TestEnqueueContextEndsWhileSectionIsHeld(t *testing.T) {
 	}
 }
 
-// Every operation that waits for the section as long as its caller lets it (enqueue, adoption,
+// Every operation that waits for the section as long as its caller lets it (enqueue,
 // cancellation) gives up when ctx ends while a process holds the section, for example one
 // stopped inside it: it changes nothing, and its error matches the context's and names the pid
 // admit.lock records.
@@ -54,7 +54,6 @@ func TestBoundedEntriesNameTheSectionHolder(t *testing.T) {
 		op   func(ctx context.Context) error
 	}{
 		{"EnqueueContext", func(ctx context.Context) error { _, err := e.EnqueueContext(ctx, need("mem=1")); return err }},
-		{"AdoptContext", func(ctx context.Context) error { _, err := e.AdoptContext(ctx, need("mem=1")); return err }},
 		{"CancelContext", func(ctx context.Context) error { return e.CancelContext(ctx, tk.ID()) }},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

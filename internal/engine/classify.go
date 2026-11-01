@@ -11,7 +11,7 @@ import (
 )
 
 // StateReason classifies an error of the engine or the store under the error contract of
-// PROTOCOL.md section 14, for the library and the CLI alike. The classes a caller acts on stay
+// PROTOCOL.md section 14, for the CLI. The classes a caller acts on stay
 // distinct, and ok is false for them: nil, a *spec.UsageError, the end of a context (canceled
 // or past its deadline) and the engine's sentinels (ErrCanceled, ErrRefused, ErrAlreadyAdmitted,
 // ErrNoTicket), matched with errors.Is and errors.As. Every other error means the budget cannot

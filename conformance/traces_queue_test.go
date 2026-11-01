@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/core-slot/coreslot"
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"golang.org/x/sys/unix"
@@ -33,7 +33,7 @@ import (
 // client's tests, not here.
 const (
 	stalledHeadBound = 22 * time.Second
-	pollBound        = 100 * time.Millisecond // a library Poll while the section is held
+	pollBound        = 100 * time.Millisecond // an engine Poll while the section is held
 	noWaitBound      = 2 * time.Second        // --no-wait refusing while the section is held
 	waitExpiryBound  = time.Second            // Wait returning after its deadline
 	// observeWait lets every waiter observe a change: a waiter elects once a second, and a
@@ -49,13 +49,13 @@ func memConfig(n int) string {
 	return fmt.Sprintf("[resources]\nmem = \"%dM\"\n", n*spec.MemTokenMiB)
 }
 
-func admittedAt(h coreslot.HoldInfo) time.Time { return h.Start }
+func admittedAt(h engine.HolderInfo) time.Time { return time.Unix(0, h.StartNS) }
 
 // noHold fails the test when a live hold labeled label exists.
 func noHold(t *testing.T, e Env, label, why string) {
 	t.Helper()
 	if h, ok := e.Hold(label); ok {
-		t.Fatalf("%s holds %v (admitted at %v): %s", label, h.Granted, admittedAt(h), why)
+		t.Fatalf("%s holds %v (admitted at %v): %s", label, h.Grant, admittedAt(h), why)
 	}
 }
 
@@ -276,7 +276,7 @@ func TestStateDirWithSpace(t *testing.T) {
 	}
 	// The canceled ticket stays dead until a reconciliation, at most once per 30 s.
 	rep := e.Status()
-	live := slices.DeleteFunc(rep.Tickets, func(tk coreslot.TicketInfo) bool { return tk.Dead })
+	live := slices.DeleteFunc(rep.Tickets, func(tk engine.TicketInfo) bool { return tk.Dead })
 	if len(rep.Holds) != 0 || len(live) != 0 || rep.Degraded != nil {
 		t.Errorf("state after the runs: holds %v, live tickets %v, degraded %v", rep.Holds, live, rep.Degraded)
 	}
@@ -327,7 +327,7 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if len(rep.Resources) != 1 || rep.Resources["mem"].Size != mem {
 		t.Errorf("resources %v, want mem of size %d", rep.Resources, mem)
 	}
-	if rep.Degraded != nil || rep.ConfigError != nil || rep.FormatError != nil || rep.Format != 1 {
+	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != 1 {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)
 	}
 	for _, name := range []string{store.ConfigFile, store.DegradedFile} {
@@ -365,7 +365,7 @@ func stopOutsideSection(e Env, p *Proc, autoRelease func()) (time.Time, int64) {
 	if !ok || tk.Dead {
 		e.t.Fatalf("the stopped head %s has no live ticket", p.name)
 	}
-	return at, tk.Refreshed.UnixNano()
+	return at, tk.MtimeNS
 }
 
 // waitRefreshed waits until the ticket labeled label carries an mtime other than before.
@@ -373,7 +373,7 @@ func waitRefreshed(e Env, label string, before int64) {
 	e.t.Helper()
 	e.Eventually(startWait, label+" refreshes its ticket", func() bool {
 		tk, ok := e.Ticket(label)
-		return ok && !tk.Dead && tk.Refreshed.UnixNano() != before
+		return ok && !tk.Dead && tk.MtimeNS != before
 	})
 }
 
@@ -475,11 +475,11 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 		t.Fatalf("D was admitted %v after the heads stopped, bound %v (load: %s)", dd, stalledHeadBound, uptime())
 	}
 	hc := e.WaitHold("C", stalledHeadBound+startWait)
-	if dc := admittedAt(hc).Sub(tkC.Created); dc > stalledHeadBound {
+	if dc := admittedAt(hc).Sub(time.Unix(0, tkC.CreatedNS)); dc > stalledHeadBound {
 		t.Fatalf("C was admitted %v after it arrived behind stopped tickets, bound %v (load: %s)", dc, stalledHeadBound, uptime())
 	}
 	t.Logf("D was admitted %v after the heads stopped; C %v after it arrived",
-		admittedAt(hd).Sub(stoppedAt), admittedAt(hc).Sub(tkC.Created))
+		admittedAt(hd).Sub(stoppedAt), admittedAt(hc).Sub(time.Unix(0, tkC.CreatedNS)))
 	if !admittedAt(hd).Before(admittedAt(hc)) {
 		t.Errorf("C (admitted %v) went before D (admitted %v), which is ahead of it", admittedAt(hc), admittedAt(hd))
 	}
@@ -492,7 +492,7 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 	defer a.AutoRelease("admit.before-enter")()
 	b.Cont()
 	waitRefreshed(e, "A", mtimeA)
-	waitRefreshed(e, "B", tkB.Refreshed.UnixNano())
+	waitRefreshed(e, "B", tkB.MtimeNS)
 	time.Sleep(observeWait)
 
 	// One token frees up: E would fit, A and B (needing three) do not, and E, which judged them
@@ -627,8 +627,8 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	defer h.AutoRelease("publish.after-create")()
 	hh := e.WaitHold("H", startWait)
 	tk2 := e.WaitTicket("P2")
-	if !admittedAt(hh).Before(tk2.Created.Add(time.Hour)) {
-		t.Errorf("P2 arrived at %v, before H's admission at %v", tk2.Created, admittedAt(hh))
+	if !admittedAt(hh).Before(time.Unix(0, tk2.CreatedNS).Add(time.Hour)) {
+		t.Errorf("P2 arrived at %v, before H's admission at %v", time.Unix(0, tk2.CreatedNS), admittedAt(hh))
 	}
 	noHold(t, e, "P2", "P2 was admitted beside H")
 	e.ReleaseChild("H")
@@ -690,9 +690,9 @@ func restored(t *testing.T, e Env, tickets, holds, cancels []string, locked int)
 	for _, h := range rep.Holds {
 		gotH = append(gotH, h.Label)
 	}
-	if !slices.Equal(gotT, tickets) || !slices.Equal(gotH, holds) || len(rep.DeadHolds) != 0 || !slices.Equal(rep.CancelRequests, cancels) {
+	if !slices.Equal(gotT, tickets) || !slices.Equal(gotH, holds) || len(rep.DeadHolds) != 0 || !slices.Equal(rep.Cancels, cancels) {
 		t.Errorf("tickets %v (want %v), holds %v (want %v), dead holds %v, cancels %v",
-			gotT, tickets, gotH, holds, rep.DeadHolds, rep.CancelRequests)
+			gotT, tickets, gotH, holds, rep.DeadHolds, rep.Cancels)
 	}
 	for dir, n := range rep.Ignored {
 		if n != 0 {
@@ -779,7 +779,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 		t.Errorf("the reconciliation removed %d entries with nothing dead", n)
 	}
 	h, ok := e.Hold("W")
-	if !ok || h.Granted["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
+	if !ok || h.Grant["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
 		t.Fatalf("after the reconciliation W's hold is %+v (present %v), its command saw %v", h, ok, r.Env)
 	}
 	restored(t, e, nil, []string{"W"}, nil, 1)
@@ -803,8 +803,8 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 
 	k := e.Pausing(point).StartChild("cancel", e.Dir, tk.ID)
 	k.CatchPublication(point, store.CancelDir)
-	if rep := e.Status(); len(rep.CancelRequests) != 0 {
-		t.Fatalf("a cancel request is visible before its publication completed: %v", rep.CancelRequests)
+	if rep := e.Status(); len(rep.Cancels) != 0 {
+		t.Fatalf("a cancel request is visible before its publication completed: %v", rep.Cancels)
 	}
 	if killed {
 		k.Kill()
@@ -826,8 +826,8 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 			t.Errorf("the reconciliation removed %d entries with nothing dead", n)
 		}
 		rep := e.Status()
-		if !slices.Contains(rep.CancelRequests, tk.ID) {
-			t.Fatalf("the reconciliation lost the cancel request of W's live ticket: cancels %v", rep.CancelRequests)
+		if !slices.Contains(rep.Cancels, tk.ID) {
+			t.Fatalf("the reconciliation lost the cancel request of W's live ticket: cancels %v", rep.Cancels)
 		}
 		restored(t, e, []string{"V", "W"}, []string{"X"}, []string{tk.ID}, 2)
 		w.Cont()
@@ -853,8 +853,8 @@ func TestOversizeIsClamped(t *testing.T) {
 	o := e.Run("O", "--mem", "2048M")
 	r := e.WaitStarted("O")
 	h := e.WaitHold("O", startWait)
-	if r.Env["CORESLOT_GRANTED_MEM"] != "1024" || h.Granted["mem"] != 8 || h.Clamped["mem"] != 16 {
-		t.Errorf("command environment %v; hold grant %v, clamped %v", r.Env, h.Granted, h.Clamped)
+	if r.Env["CORESLOT_GRANTED_MEM"] != "1024" || h.Grant["mem"] != 8 || h.Clamped["mem"] != 16 {
+		t.Errorf("command environment %v; hold grant %v, clamped %v", r.Env, h.Grant, h.Clamped)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
 	if got := e.Status().Resources["mem"].Locked; got != 8 {
@@ -895,7 +895,7 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 		r.Env["CORESLOT_UNBUDGETED"] == "format" || r.Env["CORESLOT_TOKEN_FDS"] != "" || r.Env["CORESLOT_HELD_FD"] != "3" {
 		t.Errorf("command environment %v", r.Env)
 	}
-	if !h.FailOpen || len(h.Granted) != 0 {
+	if !h.Unbudgeted || len(h.Grant) != 0 {
 		t.Errorf("hold %+v, want an unbudgeted hold with an empty grant", h)
 	}
 	rep := e.Status()
@@ -926,12 +926,12 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 func TestStoppedInSectionDoesNotHangCallers(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(1))
-	c := e.Client()
-	poller, err := c.Enqueue(context.Background(), coreslot.Request{Label: "poller"})
+	c := e.Engine()
+	poller, err := c.EnqueueContext(context.Background(), spec.Request{Label: "poller"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiter, err := c.Enqueue(context.Background(), coreslot.Request{Label: "waiter"})
+	waiter, err := c.EnqueueContext(context.Background(), spec.Request{Label: "waiter"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -951,15 +951,15 @@ func TestStoppedInSectionDoesNotHangCallers(t *testing.T) {
 	// backoff.
 	for i := range 6 {
 		start := time.Now()
-		g, err := poller.Poll()
+		r, err := poller.Poll()
 		d := time.Since(start)
 		if d >= pollBound {
 			t.Errorf("Poll %d took %v, bound %v (load: %s)", i, d, pollBound, uptime())
 		} else {
 			t.Logf("Poll %d took %v", i, d)
 		}
-		if g != nil || err != nil {
-			t.Fatalf("Poll %d: admitted %v, err %v", i, g, err)
+		if _, ok := r.(engine.Admitted); ok || err != nil {
+			t.Fatalf("Poll %d: admitted %v, err %v", i, ok, err)
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -983,7 +983,7 @@ func TestStoppedInSectionDoesNotHangCallers(t *testing.T) {
 	}
 
 	// The poller withdraws, so the waiter is the head and tries the section on every attempt.
-	if err := poller.Cancel(); err != nil {
+	if err := poller.Withdraw(); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)

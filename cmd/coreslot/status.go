@@ -282,9 +282,6 @@ func (v statusView) human() string {
 	for _, h := range r.Holds {
 		line := fmt.Sprintf("  %s  pid %d  %s  held %s", labelText(h.Label), h.PID, holdTokens(h.Grant),
 			duration(time.Duration(max(v.nowNS-h.StartNS, 0))))
-		if h.Adopted {
-			line += "  adopted"
-		}
 		if h.OwnerExited {
 			line += "  owner exited, held by a descendant"
 		}
@@ -456,7 +453,6 @@ type jsonHold struct {
 	Unbudgeted          bool           `json:"unbudgeted"`
 	UnbudgetedResources []string       `json:"unbudgeted_resources"`
 	Clamped             map[string]int `json:"clamped"`
-	Adopted             bool           `json:"adopted"`
 	OwnerExited         bool           `json:"owner_exited"` // the owner exited; a descendant holds the grant
 }
 
@@ -517,7 +513,7 @@ func (v statusView) document() jsonStatus {
 		d.Holds = append(d.Holds, jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), Grant: nonNilMap(h.Grant),
 			Unbudgeted: h.Unbudgeted, UnbudgetedResources: nonNil(h.UnbudgetedResources),
-			Clamped: nonNilMap(h.Clamped), Adopted: h.Adopted,
+			Clamped:     nonNilMap(h.Clamped),
 			OwnerExited: h.OwnerExited})
 	}
 	for _, t := range v.tickets {

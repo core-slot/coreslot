@@ -22,13 +22,11 @@ of the repository is. No contributor agreement or sign-off line is needed.
   user's state directory. Looking up the user's home directory goes through the system's name
   services, which may contact a directory service such as LDAP ([SECURITY.md](SECURITY.md)). The
   run log never records argv or the environment.
-- **The library stays quiet.** It never prints, never installs signal handlers, never chooses exit
-  codes and never decides on its own to run unbudgeted: when the state directory is unusable,
-  `Open` returns a `*StateError` even under a parent that runs unbudgeted, and the caller decides;
-  only an `Enqueue` on a budget `Open` could open passes through to such a parent, as a nested run
-  does (`internal/repocheck/library_purity_test.go` checks the first three).
-- **Windows builds.** `internal/store`, `internal/engine` and the root package's implementation are
-  `//go:build unix`; the Windows build must keep compiling.
+- **The internal packages stay quiet.** They never print, never install signal handlers and never
+  choose exit codes, and the engine never decides on its own to run unbudgeted
+  (`internal/repocheck/library_purity_test.go` checks the first three); the CLI does all of it.
+- **Windows builds.** `internal/store` and `internal/engine` are `//go:build unix`; the Windows
+  build must keep compiling.
 - **Every invariant-bearing test names the mutation that turns it red.** A mutation is one
   deliberate break of the code the test guards: invert a comparison, drop a check, skip an unlock.
   Make it, run the test, see it fail for that reason and no other, revert it, and paste both
@@ -85,10 +83,8 @@ release.
 - **Fuzzing.** CI discovers every `Fuzz` function in every package (`go test -list '^Fuzz'`) and
   fuzzes each for 30 s on Linux, so a new target needs no workflow change. One target runs with
   `go test -run '^$' -fuzz '^FuzzName$' -fuzztime 30s ./path/to/package/`.
-- **The exported API.** `api/v0.txt` pins the root package's API. After a deliberate API change,
-  `CORESLOT_UPDATE_API=1 go test -run TestExportedAPIGolden ./internal/repocheck/` rewrites it;
-  review the diff. `internal/repocheck` holds the repository's own checks (the API, the library's
-  purity, `PROTOCOL.md`'s contract inventory, local paths and dangling Markdown names); it has
+- **The repository's own checks.** `internal/repocheck` holds them (the purity of the internal
+  packages, `PROTOCOL.md`'s contract inventory, local paths and dangling Markdown names); it has
   only tests.
 - **Benchmarks.** `bench/waiters` and `bench/floor` build only with `-tags coreslot_bench`, so
   that `go install github.com/core-slot/coreslot/...@latest` installs `coreslot` alone;

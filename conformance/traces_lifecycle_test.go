@@ -17,7 +17,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 )
@@ -55,7 +56,7 @@ func writeFormat(e Env, n string) {
 }
 
 // memLocked is the number of locked mem tokens, at every index, probed by the test itself
-// rather than read through the library, so that a defect in the clients' counting cannot hide
+// rather than read through the engine, so that a defect in the clients' counting cannot hide
 // from it.
 func memLocked(e Env) int {
 	e.t.Helper()
@@ -119,7 +120,7 @@ func span(from, to int) []int {
 	return s
 }
 
-// lockedSampler samples the locked mem count and the size every 100 ms through the library's
+// lockedSampler samples the locked mem count and the size every 100 ms through the engine's
 // Snapshot, until stop is called. A count above the size is a violation only when it persists
 // across two consecutive samples: a client's probe locks a free token for an instant. It records
 // how many samples it took and every Snapshot error.
@@ -135,7 +136,7 @@ type lockedSampler struct {
 func sampleLocked(e Env) *lockedSampler {
 	s := &lockedSampler{}
 	quit, finished := make(chan struct{}), make(chan struct{})
-	c := e.Client()
+	c := e.Engine()
 	go func() {
 		defer close(finished)
 		prevOver, prev := false, -1
@@ -238,7 +239,7 @@ func TestClockStepThenHeadStops(t *testing.T) {
 				return queued && !tk.Dead || held
 			})
 			noHold(t, e, "B", "B passed the live head A")
-			waitRefreshed(e, "A", tkA.Refreshed.UnixNano())
+			waitRefreshed(e, "A", tkA.MtimeNS)
 
 			// catchRefreshed holds A just after a refresh; it returns that refresh's mtime.
 			catchRefreshed := func() int64 {
@@ -249,7 +250,7 @@ func TestClockStepThenHeadStops(t *testing.T) {
 				if !ok || tk.Dead {
 					t.Fatal("A, held after a refresh, has no live ticket")
 				}
-				return tk.Refreshed.UnixNano()
+				return tk.MtimeNS
 			}
 
 			// Phase 1: a step while A is live.
@@ -370,7 +371,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	before := map[string]int64{}
 	for _, name := range []string{"W1", "W2", "W3", "W4"} {
 		tk, _ := e.Ticket(name)
-		before[name] = tk.Refreshed.UnixNano()
+		before[name] = tk.MtimeNS
 	}
 	time.Sleep(time.Until(stoppedAt.Add(suspendFor)))
 	for _, p := range []*Proc{w4, w3, w2, w1} {
@@ -412,7 +413,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	e.SectionLeft()
 	w4.Stop()
 	sectionFreeOf(t, e, w4.PID())
-	if tk, ok := e.Ticket("W3"); !ok || tk.Refreshed.UnixNano() != mtimeW3 {
+	if tk, ok := e.Ticket("W3"); !ok || tk.MtimeNS != mtimeW3 {
 		t.Fatalf("the stopped W3's ticket changed or went away while W4 watched it (%v)", ok)
 	}
 	e.ReleaseChild("W2")
@@ -466,7 +467,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	w6.Cont()
 	w5.Cont()
 	resumedAt := time.Now()
-	var first coreslot.HoldInfo
+	var first engine.HolderInfo
 	e.Eventually(stalledHeadBound+startWait, "a waiter is admitted after the resumption", func() bool {
 		for _, name := range []string{"W5", "W6"} {
 			if h, ok := e.Hold(name); ok {
@@ -485,7 +486,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	// both are admitted within the bound of the resumption.
 	h5 := e.WaitHold("W5", stalledHeadBound+startWait)
 	h6 := e.WaitHold("W6", stalledHeadBound+startWait)
-	for _, h := range []coreslot.HoldInfo{h5, h6} {
+	for _, h := range []engine.HolderInfo{h5, h6} {
 		if d := admittedAt(h).Sub(resumedAt); d > stalledHeadBound {
 			t.Errorf("%s was admitted %v after the resumption, bound %v (load: %s)", h.Label, d, stalledHeadBound, uptime())
 		}
@@ -500,12 +501,11 @@ func TestSuspendAllWaiters(t *testing.T) {
 // ---------------------------------------------------------------- shrink
 
 // A shrink from 14 to 12 while holds sit on indices 10-13 (I3): locked tokens are counted at
-// every index, so the reduced budget is 12 minus all four, adoption takes only what is free,
-// and no admission brings the locked count above 12. Releasing the holds above the new size
+// every index, so the reduced budget is 12 minus all four, and no admission brings the locked count above 12. Releasing the holds above the new size
 // frees capacity again (partial release); growing back to 14 lets a request use 12 and 13.
 //
 // Mutation: count locked tokens only at indices below the size (in store.countLocked, skip
-// indices from 12 on): the adoption and R1 then take 10 between them and 14 tokens are locked
+// indices from 12 on): the 3-token request and R1 then take 10 between them and 14 tokens are locked
 // under a size of 12.
 func TestShrinkWithHighIndexHolds(t *testing.T) {
 	e := State(t)
@@ -530,15 +530,20 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 		t.Fatalf("after the shrink: size %d, %d tokens locked; want 12 and 4", r.Size, stableLocked(e))
 	}
 
-	// Adoption during the reduced period takes from what is free.
-	c := e.Client()
-	ga, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-a", Need: map[string]coreslot.Range{"mem": {Min: 2, Max: 3}}})
+	// A request during the reduced period takes from what is free.
+	w, err := e.Engine().EnqueueContext(context.Background(), spec.Request{Label: "held-a", Need: map[string]spec.Range{"mem": {Min: 3, Max: 3}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), startWait)
+	defer cancel()
+	ga, err := w.Wait(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ga.Close()
-	if ga.Granted()["mem"] != 3 || len(ga.Shortfall()) != 0 || !slices.Equal(indices(e, "adopt-a"), span(0, 2)) {
-		t.Fatalf("adoption: grant %v, shortfall %v, indices %v; want 3 at 0-2", ga.Granted(), ga.Shortfall(), indices(e, "adopt-a"))
+	if ga.Grant()["mem"] != 3 || !slices.Equal(indices(e, "held-a"), span(0, 2)) {
+		t.Fatalf("request: grant %v, indices %v; want 3 at 0-2", ga.Grant(), indices(e, "held-a"))
 	}
 
 	// A queued request may take at most what is left below the size: 5, from 3-7.
@@ -551,15 +556,7 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 		t.Errorf("%d tokens locked under a size of 12", got)
 	}
 
-	// Nothing is free: an adoption takes nothing and reports its shortfall; a request waits.
-	gb, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-b", Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 2}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer gb.Close()
-	if gb.Granted()["mem"] != 0 || gb.Shortfall()["mem"] != 1 {
-		t.Errorf("adoption with nothing free: grant %v, shortfall %v; want none and a shortfall of 1", gb.Granted(), gb.Shortfall())
-	}
+	// Nothing is free: a request waits.
 	r2 := e.Run("R2", "--mem", "128M")
 	e.WaitTicket("R2")
 	time.Sleep(observeWait)
@@ -797,10 +794,10 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		}
 		w.ExitCode(exitRefusal)
 		rep := e.Status()
-		if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || len(rep.CancelRequests) != 0 ||
+		if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || len(rep.Cancels) != 0 ||
 			rep.Resources["mem"].Locked != 0 {
 			t.Errorf("after the cancellation: holds %v, dead %v, tickets %v, cancels %v, locked %d",
-				rep.Holds, rep.DeadHolds, rep.Tickets, rep.CancelRequests, rep.Resources["mem"].Locked)
+				rep.Holds, rep.DeadHolds, rep.Tickets, rep.Cancels, rep.Resources["mem"].Locked)
 		}
 	})
 
@@ -831,8 +828,8 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		}
 		e.WaitStarted("V")
 		e.WaitHold("V", startWait)
-		if rep := e.Status(); len(rep.CancelRequests) != 0 {
-			t.Errorf("a cancel request was left for the admitted ticket: %v", rep.CancelRequests)
+		if rep := e.Status(); len(rep.Cancels) != 0 {
+			t.Errorf("a cancel request was left for the admitted ticket: %v", rep.Cancels)
 		}
 		e.ReleaseChild("V")
 		v.ExitCode(0)
@@ -856,8 +853,8 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 			!strings.Contains(c.Stderr(), "no cancel request was published") {
 			t.Errorf("cancel stderr %q, want a refusal naming %q", c.Stderr(), holder)
 		}
-		if rep := e.Status(); len(rep.CancelRequests) != 0 {
-			t.Errorf("a refused cancel published a request: %v", rep.CancelRequests)
+		if rep := e.Status(); len(rep.Cancels) != 0 {
+			t.Errorf("a refused cancel published a request: %v", rep.Cancels)
 		}
 		v.Release("publish.after-create")
 		defer v.AutoRelease("publish.after-create")()

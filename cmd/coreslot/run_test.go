@@ -24,7 +24,6 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot"
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
@@ -204,9 +203,6 @@ func runHelper(name string, args []string) int {
 		return 0
 	}
 	if code, ok := signalHelper(name, args); ok {
-		return code
-	}
-	if code, ok := libraryHelper(name, args); ok {
 		return code
 	}
 	fmt.Fprintln(os.Stderr, "unknown helper", name)
@@ -427,7 +423,7 @@ func envOf(out string) map[string]string {
 
 // ---------------------------------------------------------------- pure functions
 
-// The CLI's own state errors keep their cause, as the library's do: a location that failed and a
+// The CLI's own state errors keep their cause, as the store's do: a location that failed and a
 // state directory that cannot be created both still match the errno behind them.
 func TestOpenEngineStateErrorWrapsItsCause(t *testing.T) {
 	cause := &os.PathError{Op: "open", Path: "/etc/passwd", Err: syscall.EACCES}
@@ -459,11 +455,9 @@ func TestClassify(t *testing.T) {
 		{"usage", &spec.UsageError{Msg: "bad need"}, 64, false},
 		{"refusal", &refusalError{Msg: "cancelled"}, 75, false},
 		{"refusal code", &refusalError{Msg: "timeout", Code: 99}, 99, false},
-		{"library state error", &coreslot.StateError{Reason: "symlink"}, 0, true},
 		{"cli state error", &stateError{Reason: "unusable"}, 0, true},
 		{"cli state error with a cause", &stateError{Reason: "x", Err: &os.PathError{Op: "open", Path: "/s", Err: syscall.EACCES}}, 0, true},
-		{"wrapped state error", fmt.Errorf("open: %w", &coreslot.StateError{Reason: "x"}), 0, true},
-		{"strict turns a state error into a refusal", strictRefusal(&coreslot.StateError{Reason: "x"}, 75), 75, false},
+		{"strict turns a state error into a refusal", strictRefusal(&store.StateError{Reason: "x"}, 75), 75, false},
 		{"strict with --refusal-code", strictRefusal(&stateError{Reason: "x"}, 99), 99, false},
 		{"interrupted", &interruptError{Sig: syscall.SIGINT}, 130, false},
 		{"engine refusal", fmt.Errorf("%w: format 2", engine.ErrRefused), 75, false},

@@ -107,7 +107,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, ErrCanceled
 	}
 	g := &Grant{e: t.e, tokens: ts, need: t.req.Need, clamped: clamped, unbudgeted: undeclared, liveMem: live}
-	if err := g.publishHold(sec, t.req, false); err != nil {
+	if err := g.publishHold(sec, t.req); err != nil {
 		ts.Close()
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (t *Ticket) reelect(sizes map[string]int) (ahead []map[string]spec.Range, f
 }
 
 // countLocked counts the locked tokens of every resource of eff at every index (PROTOCOL.md
-// section 12.1 step 4, I3), as admission, token-only admission and adoption all size from it.
+// section 12.1 step 4, I3), as admission and token-only admission both size from it.
 func countLocked(sec *store.Section, eff map[string]spec.Range) (map[string]int, error) {
 	locked := make(map[string]int, len(eff))
 	for name := range eff {
@@ -272,7 +272,7 @@ func mergeTokens(sets ...*store.TokenSet) *store.TokenSet {
 	return out
 }
 
-// Grant is what an admission, adoption or token-only admission holds: the hold's lock-carrying
+// Grant is what an admission or a token-only admission holds: the hold's lock-carrying
 // descriptor (none in token-only mode) and the token descriptors. Its methods are safe for
 // concurrent use.
 type Grant struct {
@@ -284,7 +284,6 @@ type Grant struct {
 	clamped    map[string]int
 	unbudgeted []string
 	tokenOnly  bool
-	adopted    bool
 	liveMem    bool   // the attempt that admitted it used a raised mem size
 	failOpen   string // the reason of a fail-open run's grant
 
@@ -292,13 +291,11 @@ type Grant struct {
 	closed bool
 }
 
-// publishHold publishes the grant's hold for req inside sec and keeps its descriptor. An adopted
-// hold never claims a tree: the adopting process is not the one doing the work.
-func (g *Grant) publishHold(sec *store.Section, req spec.Request, adopted bool) error {
-	g.adopted = adopted
+// publishHold publishes the grant's hold for req inside sec and keeps its descriptor.
+func (g *Grant) publishHold(sec *store.Section, req spec.Request) error {
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, Grant: g.Indices(), StartNS: uint64(start), Unbudgeted: g.failOpen != "",
-		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Adopted: adopted, Tree: req.Tree && !adopted}
+		UnbudgetedResources: g.unbudgeted, Clamped: g.clamped, Tree: req.Tree}
 	f, name, err := sec.PublishHold(h, os.Getpid(), g.e.seq())
 	if err != nil {
 		return err
@@ -335,31 +332,12 @@ func (g *Grant) Grant() map[string]int {
 // Clamped maps each clamped resource to its requested min (PROTOCOL.md section 12.2).
 func (g *Grant) Clamped() map[string]int { return maps.Clone(g.clamped) }
 
-// Shortfall maps each requested resource the grant holds fewer than min tokens of, none
-// included, to min - held: an adoption's resource of which less than min was free (PROTOCOL.md
-// section 12.4), or a clamped one. A resource run unbudgeted is never in it.
-func (g *Grant) Shortfall() map[string]int {
-	out := map[string]int{}
-	for name, r := range g.need {
-		if slices.Contains(g.unbudgeted, name) {
-			continue
-		}
-		if short := r.Min - len(g.tokens.Indices[name]); short > 0 {
-			out[name] = short
-		}
-	}
-	return out
-}
-
 // Unbudgeted lists, sorted, the requested resources the configuration does not declare (every
 // requested resource for a fail-open grant).
 func (g *Grant) Unbudgeted() []string { return slices.Clone(g.unbudgeted) }
 
 // TokenOnly reports a token-only grant: no hold, CORESLOT_UNBUDGETED=format.
 func (g *Grant) TokenOnly() bool { return g.tokenOnly }
-
-// Adopted reports an adoption's grant.
-func (g *Grant) Adopted() bool { return g.adopted }
 
 // LiveMem reports that the attempt that admitted g used a raised mem size.
 func (g *Grant) LiveMem() bool { return g.liveMem }

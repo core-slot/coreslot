@@ -12,8 +12,7 @@ type HolderInfo struct {
 	Unbudgeted          bool           // a fail-open hold
 	UnbudgetedResources []string
 	Clamped             map[string]int // resource -> requested min, for clamped resources
-	Adopted             bool
-	Tree                bool // the process tree at PID carries the grant's work; status does not show it
+	Tree                bool           // the process tree at PID carries the grant's work; status does not show it
 	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
 	// still held, so a descendant that inherited the grant's descriptors holds the tokens. Only
 	// Snapshot sets it, and only when the process table can be read.
@@ -62,7 +61,7 @@ type DegradedInfo struct {
 
 // Report is a snapshot of the state directory: the data behind `status --json`, in its units
 // (times in Unix nanoseconds; each error both as the text the JSON carries and as the error, for
-// the library). It is read outside the admission section, so it can be momentarily
+// its callers). It is read outside the admission section, so it can be momentarily
 // inconsistent.
 type Report struct {
 	StateDir         string

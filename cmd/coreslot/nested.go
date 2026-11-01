@@ -29,7 +29,7 @@ func environ() map[string]string {
 }
 
 // decide decides the run's context from its inherited environment (PROTOCOL.md section 18, the
-// rule engine.DecideNested applies for the library too): an inherited CORESLOT_UNBUDGETED passes
+// rule engine.DecideNested applies): an inherited CORESLOT_UNBUDGETED passes
 // through unbudgeted, an inherited CORESLOT_TOKEN_FDS passes through on the parent's grant or
 // refuses when it does not validate, and anything else, or --independent, is an ordinary
 // request that drops the inherited context first.

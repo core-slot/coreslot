@@ -41,7 +41,6 @@ type Hold struct {
 	Unbudgeted          bool
 	UnbudgetedResources []string
 	Clamped             map[string]int
-	Adopted             bool
 	Tree                bool // the process tree at the hold's pid carries the grant's work
 }
 
@@ -67,7 +66,6 @@ type holdJSON struct {
 	Unbudgeted          bool             `json:"unbudgeted"`
 	UnbudgetedResources []string         `json:"unbudgeted_resources"`
 	Clamped             map[string]int   `json:"clamped"`
-	Adopted             bool             `json:"adopted"`
 	Tree                bool             `json:"tree,omitempty"`
 }
 
@@ -275,9 +273,6 @@ func DecodeHold(body []byte) (Hold, error) {
 	}
 	h.StartNS = uint64(start)
 	if h.Unbudgeted, err = o.boolean("unbudgeted"); err != nil {
-		return Hold{}, err
-	}
-	if h.Adopted, err = o.boolean("adopted"); err != nil {
 		return Hold{}, err
 	}
 	// tree is optional: absent or not a boolean, it reads as false.

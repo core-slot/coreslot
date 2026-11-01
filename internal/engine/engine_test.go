@@ -156,6 +156,16 @@ func step(t *testing.T, tk *Ticket) StepResult {
 	return r
 }
 
+// hold admits req at once and returns its grant, which the test closes at its end.
+func hold(t *testing.T, e *Engine, req spec.Request) *Grant {
+	t.Helper()
+	a, ok := step(t, enqueue(t, e, req)).(Admitted)
+	if !ok {
+		t.Fatalf("%v was not admitted at once", req.Need)
+	}
+	return a.Grant
+}
+
 func position(t *testing.T, r StepResult) int {
 	t.Helper()
 	w, ok := r.(Waiting)

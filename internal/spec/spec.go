@@ -1,4 +1,4 @@
-// Package spec holds the validated request types shared by the library, the engine and the CLI:
+// Package spec holds the validated request types shared by the engine and the CLI:
 // resource names, need ranges, priorities and labels, with the bounds of PROTOCOL.md.
 package spec
 

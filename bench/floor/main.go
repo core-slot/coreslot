@@ -2,7 +2,7 @@
 
 // Command floor measures what a waiting process costs before coreslot's own work: the CPU of
 // a Go process that only wakes once per second, of one that also makes, once per second, the
-// system calls a waiter that is not the head makes (without the engine), and of a real library
+// system calls a waiter that is not the head makes (without the engine), and of a real
 // waiter that is not the head, in a queue whose gen does not change. Each mode runs -procs
 // processes at once for -duration after -warmup and reports their CPU (getrusage RUSAGE_SELF,
 // user + system) per process-second.
@@ -39,7 +39,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // The once-per-second work of a non-head waiter, as system calls (internal/engine, Step):
@@ -141,7 +144,7 @@ func parent(args []string) int {
 
 // prepare builds what the children use. Syscall modes: a gen file, an own ticket file per
 // child (created by the child), and a ticket "ahead" whose lock this process holds, so a probe
-// finds it live. Waiter mode: a state directory with mem = 128M, the token adopted by this process
+// finds it live. Waiter mode: a state directory with mem = 128M, the token held by this process
 // and a ticket ahead of every child kept fresh by this process's Polls.
 func prepare(mode, dir string) (stop func(), err error) {
 	if mode != "waiter" && mode != "cli" {
@@ -160,16 +163,24 @@ func prepare(mode, dir string) (stop func(), err error) {
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"128M\"\n"), 0o600); err != nil {
 		return nil, err
 	}
-	c, err := coreslot.Open(coreslot.Options{StateDir: dir})
+	e, err := openEngine(dir)
 	if err != nil {
 		return nil, err
 	}
-	need := map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}
-	g, err := c.Adopt(context.Background(), coreslot.Request{Label: "floor-holder", Need: need})
+	need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
+	holder, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-holder", Need: need})
 	if err != nil {
 		return nil, err
 	}
-	head, err := c.Enqueue(context.Background(), coreslot.Request{Label: "floor-head", Need: need})
+	r, err := holder.Poll() // the queue is empty: admitted at once
+	if err != nil {
+		return nil, err
+	}
+	g, ok := r.(engine.Admitted)
+	if !ok {
+		return nil, fmt.Errorf("floor-holder was not admitted at once")
+	}
+	head, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-head", Need: need})
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +195,7 @@ func prepare(mode, dir string) (stop func(), err error) {
 			}
 		}
 	}()
-	return func() { close(done); _ = head.Cancel(); g.Close() }, nil
+	return func() { close(done); _ = head.Withdraw(); g.Close() }, nil
 }
 
 func child(args []string) int {
@@ -193,12 +204,12 @@ func child(args []string) int {
 	duration, _ := time.ParseDuration(args[3])
 	prof := args[4]
 	if mode == "waiter" {
-		c, err := coreslot.Open(coreslot.Options{StateDir: dir})
+		e, err := openEngine(dir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1
 		}
-		w, err := c.Enqueue(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}})
+		w, err := e.EnqueueContext(context.Background(), spec.Request{Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1
@@ -232,6 +243,17 @@ func child(args []string) int {
 	c1, w1 := selfCPU(), time.Now()
 	fmt.Printf("CPU %d %d\n", c1-c0, w1.Sub(w0).Nanoseconds())
 	return 0
+}
+
+// openEngine opens the engine over the state directory dir, with its configuration at
+// <dir>/config.toml.
+func openEngine(dir string) (*engine.Engine, error) {
+	st, err := store.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}
+	return engine.New(st, cfg, config.ReadMachine, engine.Clock{}), nil
 }
 
 // syscallWork returns the listed families of a non-head waiter's per-second system calls.

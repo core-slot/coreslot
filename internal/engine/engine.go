@@ -2,7 +2,7 @@
 
 // Package engine runs the protocol's transitions (PROTOCOL.md sections 10 to 15): enqueue,
 // observed-freshness waiting and election, cancellation and withdrawal, admission with clamping,
-// adoption, token-only mode and inspection, and the pass-through of nested requests (section 18).
+// token-only mode and inspection, and the pass-through of nested requests (section 18).
 // It composes the pure state machine (internal/state) with the filesystem layer
 // (internal/store). It never prints, never installs signal handlers, never chooses exit codes and
 // never decides on its own to run unbudgeted: errors go to the caller, and a pass-through under a
@@ -168,7 +168,7 @@ func (e *Engine) enter(ctx context.Context, single bool) (sec *store.Section, en
 }
 
 // enterUntil enters the section for an operation that waits as long as its caller lets it
-// (enqueue, adoption, cancellation): Enter's backoff from 10 ms up to 250 ms until ctx ends
+// (enqueue, cancellation): Enter's backoff from 10 ms up to 250 ms until ctx ends
 // (PROTOCOL.md section 8). A ctx that ends while another client holds the section is a
 // *SectionBusyError naming the pid admit.lock records; one that had ended before is ctx.Err().
 func (e *Engine) enterUntil(ctx context.Context) (*store.Section, error) {

@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,13 +32,6 @@ func TestReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 	grants := map[string]func(t *testing.T, e *Engine) *Grant{
 		"admitted": func(t *testing.T, e *Engine) *Grant {
 			return admitted(t, step(t, enqueue(t, e, need("mem=3"))))
-		},
-		"adopted": func(t *testing.T, e *Engine) *Grant {
-			g, err := e.AdoptContext(context.Background(), need("mem=2"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return g
 		},
 		"fail-open": func(t *testing.T, e *Engine) *Grant {
 			g, err := e.FailOpen(need("mem=2"), "test")

@@ -25,7 +25,7 @@ body:
     id: what-happened
     attributes:
       label: What happened
-      description: The command or library call, its output and exit code.
+      description: The command, its output and exit code.
     validations:
       required: true
   - type: textarea

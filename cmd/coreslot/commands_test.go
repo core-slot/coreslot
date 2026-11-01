@@ -20,8 +20,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot"
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -29,18 +29,18 @@ import (
 
 // ---------------------------------------------------------------- fixtures
 
-// openLib opens the library over dir, as the test's own client: what it adopts and enqueues is
+// openLib opens an engine over dir, as the test's own client: what it holds and enqueues is
 // held by the test process, so the CLI the test runs sees live holds and tickets.
-func openLib(t *testing.T, dir string) *coreslot.Client {
+func openLib(t *testing.T, dir string) *engine.Engine {
 	t.Helper()
-	c, err := coreslot.Open(coreslot.Options{StateDir: dir})
+	e, err := openEngine(location{dir: dir, cfgPath: filepath.Join(dir, store.ConfigFile)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return e
 }
 
-func rng(min, max int) coreslot.Range { return coreslot.Range{Min: min, Max: max} }
+func rng(min, max int) spec.Range { return spec.Range{Min: min, Max: max} }
 
 // recordDegraded writes a degraded record into st as a fail-open run does: inside the section,
 // after FORMAT and a due reconciliation.
@@ -64,25 +64,32 @@ func recordDegraded(t *testing.T, st *store.Store, reason string) {
 	}
 }
 
-// hold adopts a grant for the label and keeps it until the test ends.
-func hold(t *testing.T, c *coreslot.Client, label string, need map[string]coreslot.Range) *coreslot.Grant {
+// hold admits a request for the label at once, which the budget must have room for, and keeps
+// the grant until the test ends.
+func hold(t *testing.T, c *engine.Engine, label string, need map[string]spec.Range) *engine.Grant {
 	t.Helper()
-	g, err := c.Adopt(context.Background(), coreslot.Request{Label: label, Need: need})
-	if err != nil {
-		t.Fatal(err)
+	r, err := queue(t, c, label, need).Poll()
+	if err != nil || !admitted(r) {
+		t.Fatalf("hold %s: not admitted at once (%v, %v)", label, r, err)
 	}
+	g := r.(engine.Admitted).Grant
 	t.Cleanup(func() { g.Close() })
 	return g
 }
 
+func admitted(r engine.StepResult) bool {
+	_, ok := r.(engine.Admitted)
+	return ok
+}
+
 // queue enqueues a request and withdraws it when the test ends.
-func queue(t *testing.T, c *coreslot.Client, label string, need map[string]coreslot.Range) *coreslot.Waiter {
+func queue(t *testing.T, c *engine.Engine, label string, need map[string]spec.Range) *engine.Ticket {
 	t.Helper()
-	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: label, Need: need})
+	w, err := c.EnqueueContext(context.Background(), spec.Request{Label: label, Need: need})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = w.Cancel() })
+	t.Cleanup(func() { _ = w.Withdraw() })
 	return w
 }
 
@@ -177,8 +184,8 @@ func treeContent(t *testing.T, dir string) string {
 func TestStatusJSONSchema(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(3, 3)}) // tokens 0..2
-	queue(t, c, "waiting", map[string]coreslot.Range{"mem": rng(2, 4)})
+	hold(t, c, "gate", map[string]spec.Range{"mem": rng(3, 3)}) // tokens 0..2
+	queue(t, c, "waiting", map[string]spec.Range{"mem": rng(2, 4)})
 	holdToken(t, dir, "mem", 3) // locked, and no hold lists it
 
 	doc := statusDoc(t, dir, 0)
@@ -215,11 +222,11 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("holds = %v", holds)
 	}
 	h := holds[0].(map[string]any)
-	const holdKeys = "adopted clamped grant held_for_s label name owner_exited pid start_ns unbudgeted unbudgeted_resources"
+	const holdKeys = "clamped grant held_for_s label name owner_exited pid start_ns unbudgeted unbudgeted_resources"
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}
-	if h["label"] != "gate" || h["adopted"] != true || h["owner_exited"] != false || h["grant"].(map[string]any)["mem"] != float64(3) || h["pid"] != float64(os.Getpid()) {
+	if h["label"] != "gate" || h["owner_exited"] != false || h["grant"].(map[string]any)["mem"] != float64(3) || h["pid"] != float64(os.Getpid()) {
 		t.Errorf("hold = %v", h)
 	}
 
@@ -257,9 +264,9 @@ func TestStatusJSONSchema(t *testing.T) {
 func TestStatusObserveReportsStalled(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
-	queue(t, c, "idle", map[string]coreslot.Range{"mem": rng(1, 1)}) // never polled: nobody refreshes it
-	live := queue(t, c, "polled", map[string]coreslot.Range{"mem": rng(1, 1)})
+	hold(t, c, "gate", map[string]spec.Range{"mem": rng(4, 4)})
+	queue(t, c, "idle", map[string]spec.Range{"mem": rng(1, 1)}) // never polled: nobody refreshes it
+	live := queue(t, c, "polled", map[string]spec.Range{"mem": rng(1, 1)})
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -320,8 +327,8 @@ func TestStatusObserveReportsStalled(t *testing.T) {
 func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"2048M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(16, 16)})
-	queue(t, c, "wide", map[string]coreslot.Range{"mem": rng(4, 12)})
+	hold(t, c, "gate", map[string]spec.Range{"mem": rng(16, 16)})
+	queue(t, c, "wide", map[string]spec.Range{"mem": rng(4, 12)})
 	r := cli(t, baseEnv(dir), "status")
 	want := fmt.Sprintf("\n  1. wide  pid %d  priority 0  need mem 512 MiB..1.5 GiB  waiting ", os.Getpid())
 	if r.code != 0 || !strings.Contains(r.stdout, want) {
@@ -383,9 +390,9 @@ func TestStatusEscapesLabels(t *testing.T) {
 		`back\slash "quote" <tag>`,
 		"c1\u009bcontrol",
 	}
-	hold(t, c, labels[0], map[string]coreslot.Range{"mem": rng(4, 4)})
+	hold(t, c, labels[0], map[string]spec.Range{"mem": rng(4, 4)})
 	for _, l := range labels[1:] {
-		queue(t, c, l, map[string]coreslot.Range{"mem": rng(1, 1)})
+		queue(t, c, l, map[string]spec.Range{"mem": rng(1, 1)})
 	}
 
 	r := cli(t, baseEnv(dir), "status")
@@ -478,7 +485,7 @@ func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 	}
 
 	c := openLib(t, dir)
-	hold(t, c, label, map[string]coreslot.Range{"mem": rng(1, 1)})
+	hold(t, c, label, map[string]spec.Range{"mem": rng(1, 1)})
 	r := cli(t, baseEnv(dir), "status", "--json")
 	if r.code != 0 {
 		t.Fatalf("status --json: exit %d (stderr %q)", r.code, r.stderr)
@@ -605,7 +612,7 @@ func TestStatusStaleSectionHolder(t *testing.T) {
 func TestStatusShowsHoldFlagsStraysAndIgnored(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "big", map[string]coreslot.Range{"mem": rng(8, 8), "gpu": rng(1, 1)}) // mem clamped; gpu undeclared
+	hold(t, c, "big", map[string]spec.Range{"mem": rng(8, 8), "gpu": rng(1, 1)}) // mem clamped; gpu undeclared
 	for _, d := range []string{"queue", "holds"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			t.Fatal(err)
@@ -621,7 +628,7 @@ func TestStatusShowsHoldFlagsStraysAndIgnored(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
 	}
-	for _, want := range []string{"big  pid", "clamped mem (asked 1 GiB)", "unbudgeted gpu", "adopted", "ignored entries (malformed or stray): queue 1, holds 1"} {
+	for _, want := range []string{"big  pid", "clamped mem (asked 1 GiB)", "unbudgeted gpu", "ignored entries (malformed or stray): queue 1, holds 1"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("status lacks %q:\n%s", want, r.stdout)
 		}
@@ -800,18 +807,18 @@ func limitName(n uint64) string {
 func TestDoctorRefusesLiveReset(t *testing.T) {
 	cases := []struct {
 		name string
-		live func(t *testing.T, dir string, c *coreslot.Client)
+		live func(t *testing.T, dir string, c *engine.Engine)
 		want string
 	}{
-		{"hold", func(t *testing.T, dir string, c *coreslot.Client) {
-			hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(2, 2)})
+		{"hold", func(t *testing.T, dir string, c *engine.Engine) {
+			hold(t, c, "gate", map[string]spec.Range{"mem": rng(2, 2)})
 		}, "1 live hold (pid"},
-		{"ticket", func(t *testing.T, dir string, c *coreslot.Client) {
-			hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
-			queue(t, c, "waiting", map[string]coreslot.Range{"mem": rng(1, 1)})
+		{"ticket", func(t *testing.T, dir string, c *engine.Engine) {
+			hold(t, c, "gate", map[string]spec.Range{"mem": rng(4, 4)})
+			queue(t, c, "waiting", map[string]spec.Range{"mem": rng(1, 1)})
 		}, "1 live ticket (pid"},
-		{"token", func(t *testing.T, dir string, c *coreslot.Client) { holdToken(t, dir, "mem", 1) }, "locked tokens (mem 1)"},
-		{"section", func(t *testing.T, dir string, c *coreslot.Client) {
+		{"token", func(t *testing.T, dir string, c *engine.Engine) { holdToken(t, dir, "mem", 1) }, "locked tokens (mem 1)"},
+		{"section", func(t *testing.T, dir string, c *engine.Engine) {
 			st, err := store.Open(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -827,11 +834,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 			c := openLib(t, dir)
-			g, err := c.Adopt(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"mem": rng(1, 1)}})
-			if err != nil { // FORMAT, gen and the token files exist
-				t.Fatal(err)
-			}
-			g.Close()
+			hold(t, c, "", map[string]spec.Range{"mem": rng(1, 1)}).Close() // FORMAT, gen and the token files exist
 			tc.live(t, dir, c)
 			// A stale record of a pid with one digit: whatever pid the refusing process has, a
 			// reset that marked itself as holder would change the file's length as well as its
@@ -854,7 +857,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	g := hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(2, 2)})
+	g := hold(t, c, "gate", map[string]spec.Range{"mem": rng(2, 2)})
 	g.Close() // nothing is alive any more; FORMAT, gen, a hold-less queue and the tokens remain
 	st, err := store.Open(dir)
 	if err != nil {
@@ -939,10 +942,10 @@ func inodeOf(t *testing.T, path string) uint64 {
 func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
-	a := queue(t, c, "twin", map[string]coreslot.Range{"mem": rng(1, 1)})
-	b := queue(t, c, "twin", map[string]coreslot.Range{"mem": rng(1, 1)})
-	solo := queue(t, c, "solo", map[string]coreslot.Range{"mem": rng(1, 1)})
+	hold(t, c, "gate", map[string]spec.Range{"mem": rng(4, 4)})
+	a := queue(t, c, "twin", map[string]spec.Range{"mem": rng(1, 1)})
+	b := queue(t, c, "twin", map[string]spec.Range{"mem": rng(1, 1)})
+	solo := queue(t, c, "solo", map[string]spec.Range{"mem": rng(1, 1)})
 
 	r := cli(t, baseEnv(dir), "cancel", "--label", "twin")
 	if r.code != 75 || !strings.Contains(r.stderr, "2 waiting tickets have the label twin") {
@@ -951,28 +954,28 @@ func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
 	if got := entries(t, dir, "cancel"); len(got) != 0 {
 		t.Errorf("an ambiguous label published cancel requests: %v", got)
 	}
-	for _, w := range []*coreslot.Waiter{a, b, solo} {
-		if g, err := w.Poll(); g != nil || err != nil {
-			t.Errorf("a waiter was disturbed: admitted %v, %v", g, err)
+	for _, w := range []*engine.Ticket{a, b, solo} {
+		if r, err := w.Poll(); err != nil || admitted(r) {
+			t.Errorf("a waiter was disturbed: admitted %v, %v", admitted(r), err)
 		}
 	}
 
 	if r := cli(t, baseEnv(dir), "cancel", "--label", "solo"); r.code != 0 {
 		t.Fatalf("cancel --label solo: exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if _, err := solo.Poll(); err != coreslot.ErrCanceled {
+	if _, err := solo.Poll(); err != engine.ErrCanceled {
 		t.Errorf("the cancelled waiter's Poll = %v, want ErrCanceled", err)
 	}
-	if g, err := a.Poll(); g != nil || err != nil {
-		t.Errorf("a twin was disturbed: %v, %v", g, err)
+	if r, err := a.Poll(); err != nil || admitted(r) {
+		t.Errorf("a twin was disturbed: admitted %v, %v", admitted(r), err)
 	}
 }
 
 func TestCancelByIDAndRefusals(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "gate", map[string]coreslot.Range{"mem": rng(4, 4)})
-	w := queue(t, c, "victim", map[string]coreslot.Range{"mem": rng(1, 1)})
+	hold(t, c, "gate", map[string]spec.Range{"mem": rng(4, 4)})
+	w := queue(t, c, "victim", map[string]spec.Range{"mem": rng(1, 1)})
 
 	var id string
 	for _, tk := range statusDoc(t, dir, 0)["tickets"].([]any) {
@@ -984,7 +987,7 @@ func TestCancelByIDAndRefusals(t *testing.T) {
 	if r := cli(t, baseEnv(dir), "cancel", id); r.code != 0 {
 		t.Errorf("cancelling twice: exit %d, want 0 (already requested is not an error; stderr %q)", r.code, r.stderr)
 	}
-	if _, err := w.Poll(); err != coreslot.ErrCanceled {
+	if _, err := w.Poll(); err != engine.ErrCanceled {
 		t.Errorf("Poll = %v, want ErrCanceled", err)
 	}
 
@@ -1491,8 +1494,8 @@ func TestCancelRefusesWhileSectionHeld(t *testing.T) {
 func TestDoctorResetRefusalNamesLabels(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := openLib(t, dir)
-	hold(t, c, "hold:three", map[string]coreslot.Range{"mem": rng(4, 4)})
-	queue(t, c, "ticket:one", map[string]coreslot.Range{"mem": rng(1, 1)})
+	hold(t, c, "hold:three", map[string]spec.Range{"mem": rng(4, 4)})
+	queue(t, c, "ticket:one", map[string]spec.Range{"mem": rng(1, 1)})
 	r := cli(t, baseEnv(dir), "doctor", "--reset")
 	if r.code != 75 {
 		t.Fatalf("doctor --reset: exit %d, want 75 (stderr %q)", r.code, r.stderr)

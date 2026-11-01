@@ -1,7 +1,7 @@
 //go:build coreslot_bench && unix
 
 // Command waiters is the waiter benchmark, the release gate: waiters, each its own process on the
-// public library, wait against a held budget while the harness drives bursts of arrivals,
+// the engine, wait against a held budget while the harness drives bursts of arrivals,
 // admissions, cancellations and stall recoveries. It reports the waiters' aggregate CPU per second
 // of wall time, as a percentage of one core, for each run and the spread over the runs.
 //

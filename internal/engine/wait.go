@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -170,6 +171,44 @@ func (t *Ticket) Due() time.Duration {
 		next = min(next, t.lastRefreshMono+RefreshEvery/2)
 	}
 	return max(0, next-t.e.clock.Monotonic())
+}
+
+// Wait Steps the ticket whenever it next has work due until it is admitted. When ctx ends first
+// it withdraws the ticket and returns ctx.Err(); any other error withdraws it too, except
+// ErrCanceled, which a cancel request or a Withdraw already settled. An admission that wins the
+// race against the withdrawal is returned instead.
+func (t *Ticket) Wait(ctx context.Context) (*Grant, error) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	var werr error
+	for werr == nil {
+		select {
+		case <-ctx.Done():
+			werr = ctx.Err()
+		case <-timer.C:
+			r, err := t.Step(ctx)
+			if a, ok := r.(Admitted); ok && err == nil {
+				return a.Grant, nil
+			}
+			if werr = err; err == nil {
+				timer.Reset(t.Due())
+			}
+		}
+	}
+	if errors.Is(werr, ErrCanceled) {
+		return nil, werr
+	}
+	if errors.Is(t.Withdraw(), ErrAlreadyAdmitted) {
+		if r, err := t.Poll(); err == nil {
+			if a, ok := r.(Admitted); ok {
+				return a.Grant, nil
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return nil, werr
 }
 
 func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
@@ -566,5 +605,5 @@ func holderInfo(en store.Entry, body []byte) *HolderInfo {
 	}
 	return &HolderInfo{Name: en.Name, Label: h.Label, PID: en.ID.PID, StartNS: int64(en.ID.OrderKey),
 		Grant: grant, Unbudgeted: h.Unbudgeted, UnbudgetedResources: h.UnbudgetedResources,
-		Clamped: h.Clamped, Adopted: h.Adopted, Tree: h.Tree}
+		Clamped: h.Clamped, Tree: h.Tree}
 }

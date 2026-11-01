@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/core-slot/coreslot"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
 )
@@ -106,18 +105,12 @@ func classify(err error) (code int, failOpen bool) {
 }
 
 // stateReason reports whether err is a state error (PROTOCOL.md section 14) and gives its
-// reason: the CLI's and the library's own state errors, and on a platform with a budget whatever
-// the engine's error contract (engine.StateReason) calls one.
+// reason: the CLI's own state error, and on a platform with a budget whatever the engine's error
+// contract (engine.StateReason) calls one.
 func stateReason(err error) (reason string, ok bool) {
-	var (
-		state    *stateError
-		libState *coreslot.StateError
-	)
-	switch {
-	case errors.As(err, &state):
+	var state *stateError
+	if errors.As(err, &state) {
 		return state.Reason, true
-	case errors.As(err, &libState):
-		return libState.Reason, true
 	}
 	return engineStateReason(err)
 }

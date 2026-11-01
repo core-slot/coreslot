@@ -22,7 +22,8 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -197,7 +198,7 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 	r := e.WaitStarted("inner")
 	e.SectionLeft()
 	rep := e.Status()
-	if len(rep.Holds) != 1 || rep.Holds[0].Label != "parent" || !rep.Holds[0].FailOpen || len(rep.Tickets) != 0 {
+	if len(rep.Holds) != 1 || rep.Holds[0].Label != "parent" || !rep.Holds[0].Unbudgeted || len(rep.Tickets) != 0 {
 		t.Errorf("holds %+v, tickets %v: want only the parent's unbudgeted hold", rep.Holds, rep.Tickets)
 	}
 	if rep.Degraded == nil || rep.Degraded.Count != 1 {
@@ -327,12 +328,12 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 	one := e.Run("one", "--mem", "128M")
 	r := e.WaitStarted("one")
 	h := e.WaitHold("one", startWait)
-	if h.Granted["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" || !slices.Equal(indices(e, "one"), []int{0}) {
+	if h.Grant["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" || !slices.Equal(indices(e, "one"), []int{0}) {
 		t.Fatalf("hold %+v (indices %v), environment %v: want one token, index 0", h, indices(e, "one"), r.Env)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if free, err := e.Client().Available("mem"); err != nil || free != 7 {
-		t.Errorf("Available(mem) = %d, %v; want 7", free, err)
+	if free := e.Status().Resources["mem"].Available; free != 7 {
+		t.Errorf("Available(mem) = %d; want 7", free)
 	}
 	seven := e.Run("seven", "--no-wait", "--mem", "896M")
 	e.WaitStarted("seven") // no snapshot probes the tokens while seven takes them
@@ -415,10 +416,10 @@ func TestFailedSpawnFreesEverything(t *testing.T) {
 func TestRepeatedClose(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(2))
-	c := e.Client()
-	admit := func(label string) *coreslot.Grant {
+	c := e.Engine()
+	admit := func(label string) *engine.Grant {
 		t.Helper()
-		w, err := c.Enqueue(context.Background(), coreslot.Request{Label: label, Need: map[string]coreslot.Range{"mem": {Min: 2, Max: 2}}})
+		w, err := c.EnqueueContext(context.Background(), spec.Request{Label: label, Need: map[string]spec.Range{"mem": {Min: 2, Max: 2}}})
 		if err != nil {
 			t.Fatal(err)
 		}

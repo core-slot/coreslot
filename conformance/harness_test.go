@@ -4,7 +4,7 @@
 // and the helper in conformance/child, both built with the coreslot_testhooks tag, against
 // temporary state directories whose paths contain a space. A trace pauses a process at a named
 // test-hook point, stops, continues or kills it, and reads the state directory through the
-// library's Snapshot.
+// engine's Snapshot.
 package conformance
 
 import (
@@ -26,7 +26,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/testhooks"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -198,7 +199,7 @@ type Env struct {
 
 type shared struct {
 	once   sync.Once
-	client *coreslot.Client
+	engine *engine.Engine
 	err    error
 }
 
@@ -449,28 +450,34 @@ func (e Env) ReleaseChild(name string) {
 	}
 }
 
-// Client is the test process's own library client of the state directory.
-func (e Env) Client() *coreslot.Client {
+// Engine is the test process's own engine over the state directory.
+func (e Env) Engine() *engine.Engine {
 	e.t.Helper()
 	e.shared.once.Do(func() {
-		e.shared.client, e.shared.err = coreslot.Open(coreslot.Options{StateDir: e.Dir})
+		st, err := store.Open(e.Dir)
+		if err != nil {
+			e.shared.err = err
+			return
+		}
+		cfg := &config.Watcher{Path: filepath.Join(e.Dir, store.ConfigFile)}
+		e.shared.engine = engine.New(st, cfg, config.ReadMachine, engine.Clock{})
 	})
 	if e.shared.err != nil {
 		e.t.Fatalf("open %s: %v", e.Dir, e.shared.err)
 	}
-	return e.shared.client
+	return e.shared.engine
 }
 
-// Report is the library's snapshot of the state directory.
-type Report = coreslot.Report
+// Report is the engine's snapshot of the state directory.
+type Report = engine.Report
 
-// Status reads the state directory through the library's Snapshot. Snapshot reads outside the
+// Status reads the state directory through the engine's Snapshot. Snapshot reads outside the
 // section and only probes admit.lock with one non-blocking attempt to enter (left at once when
 // it succeeds), so it never waits and works while a process is stopped inside the section; the
 // probe can make another client's single attempt find the section busy for that instant.
 func (e Env) Status() Report {
 	e.t.Helper()
-	r, err := e.Client().Snapshot()
+	r, err := e.Engine().Snapshot()
 	if err != nil {
 		e.t.Fatalf("snapshot: %v", err)
 	}
@@ -478,31 +485,31 @@ func (e Env) Status() Report {
 }
 
 // Ticket returns the queue entry labeled label.
-func (e Env) Ticket(label string) (coreslot.TicketInfo, bool) {
+func (e Env) Ticket(label string) (engine.TicketInfo, bool) {
 	e.t.Helper()
 	for _, tk := range e.Status().Tickets {
 		if tk.Label == label {
 			return tk, true
 		}
 	}
-	return coreslot.TicketInfo{}, false
+	return engine.TicketInfo{}, false
 }
 
 // Hold returns the live hold labeled label.
-func (e Env) Hold(label string) (coreslot.HoldInfo, bool) {
+func (e Env) Hold(label string) (engine.HolderInfo, bool) {
 	e.t.Helper()
 	for _, h := range e.Status().Holds {
 		if h.Label == label {
 			return h, true
 		}
 	}
-	return coreslot.HoldInfo{}, false
+	return engine.HolderInfo{}, false
 }
 
 // WaitTicket waits until a live ticket labeled label is in the queue.
-func (e Env) WaitTicket(label string) coreslot.TicketInfo {
+func (e Env) WaitTicket(label string) engine.TicketInfo {
 	e.t.Helper()
-	var tk coreslot.TicketInfo
+	var tk engine.TicketInfo
 	e.Eventually(startWait, "the ticket of "+label+" is queued", func() bool {
 		var ok bool
 		tk, ok = e.Ticket(label)
@@ -512,9 +519,9 @@ func (e Env) WaitTicket(label string) coreslot.TicketInfo {
 }
 
 // WaitHold waits until a live hold labeled label exists.
-func (e Env) WaitHold(label string, within time.Duration) coreslot.HoldInfo {
+func (e Env) WaitHold(label string, within time.Duration) engine.HolderInfo {
 	e.t.Helper()
-	var h coreslot.HoldInfo
+	var h engine.HolderInfo
 	e.Eventually(within, "the hold of "+label+" is published", func() bool {
 		var ok bool
 		h, ok = e.Hold(label)

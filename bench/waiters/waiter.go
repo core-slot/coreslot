@@ -15,20 +15,23 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // Waiter exit codes, read by the harness.
 const (
 	exitAdmitted  = 0
 	exitError     = 1
-	exitWithdrawn = 3 // SIGTERM ended the Wait context: the library withdrew the ticket
+	exitWithdrawn = 3 // SIGTERM ended the Wait context: Wait withdrew the ticket
 	exitCancelled = 4 // a cancel request was found
 	exitOrphaned  = 5 // the harness's pipe closed
 )
 
-// waiterMain is one waiter: Open (the state directory from CORESLOT_STATE_DIR, with its
-// config.toml), Enqueue mem=1, then Wait, the library's polling loop. Admitted, it closes the
+// waiterMain is one waiter: open the engine (the state directory from CORESLOT_STATE_DIR, with its
+// config.toml), enqueue mem=1, then Wait, the engine's polling loop. Admitted, it closes the
 // grant and exits. It writes "E <pid>" once enqueued and, on SIGUSR1, "B <pid> <cpu-ns>": its
 // own CPU so far, the baseline the harness subtracts. SIGTERM withdraws. Stdin is the harness's
 // pipe: its end means the harness is gone.
@@ -49,13 +52,19 @@ func waiterMain(args []string) int {
 	}()
 	pid := os.Getpid()
 
-	c, err := coreslot.Open(coreslot.Options{})
+	dir, cfgPath, err := config.Locate()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "waiter %d: open: %v\n", pid, err)
 		return exitError
 	}
-	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: *label,
-		Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}})
+	st, err := store.Open(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "waiter %d: open: %v\n", pid, err)
+		return exitError
+	}
+	e := engine.New(st, &config.Watcher{Path: cfgPath}, config.ReadMachine, engine.Clock{})
+	w, err := e.EnqueueContext(context.Background(), spec.Request{Label: *label,
+		Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "waiter %d: enqueue: %v\n", pid, err)
 		return exitError
@@ -65,7 +74,7 @@ func waiterMain(args []string) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	type outcome struct {
-		g   *coreslot.Grant
+		g   *engine.Grant
 		err error
 	}
 	done := make(chan outcome, 1)
@@ -117,7 +126,7 @@ func waiterMain(args []string) int {
 					fmt.Fprintf(os.Stderr, "waiter %d: close: %v\n", pid, err)
 				}
 				return exitAdmitted
-			case errors.Is(o.err, coreslot.ErrCanceled):
+			case errors.Is(o.err, engine.ErrCanceled):
 				return exitCancelled
 			case errors.Is(o.err, context.Canceled):
 				return exitWithdrawn

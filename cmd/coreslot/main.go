@@ -4,7 +4,7 @@
 //	coreslot run [--mem SIZE] [flags] -- COMMAND...
 //	coreslot status | cancel | doctor | stats | version
 //
-// All printing, signal handling and exit statuses live here; the library does none of them.
+// All printing, signal handling and exit statuses live here; the engine does none of them.
 package main
 
 import (

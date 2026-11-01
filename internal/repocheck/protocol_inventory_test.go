@@ -44,7 +44,6 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"cancellation", "Cancellation", "cancel/<ticket-id>"},
 	{"withdrawal", "Withdrawal", "withdraws"},
 	{"reconciliation", "Reconciliation", "reconciled_ns"},
-	{"adoption", "Adoption", "\"adopted\": true"},
 	{"token-only admission", "Token-only mode", "CORESLOT_UNBUDGETED=format"},
 	{"pass-through", "Nested runs: pass-through", "pass-through"},
 }

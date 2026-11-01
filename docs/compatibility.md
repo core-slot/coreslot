@@ -53,12 +53,12 @@ Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite is:
 - the deterministic traces in [`conformance/`](../conformance), which pause real CLI and helper
   processes at named points inside the protocol's steps, stop, continue or kill them there, and
   check the state directory and what the other clients do meanwhile;
-- the kill storm there, which for 60 s kills, stops, resumes and cancels 50 CLI, library and
+- the kill storm there, which for 60 s kills, stops, resumes and cancels 50 CLI and
   Python clients, some of them nested and some in token-only mode, while it shrinks and grows the
   budget and a sampler checks invariants I1, I2, I3 and I7 of
   [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants);
-- the interoperability test there, which queues the Python client, the CLI and the library in one
-  FIFO order and checks that the Go and Python decoders agree on every wire fixture;
+- the interoperability test there, which queues the Python client and the CLI in one FIFO order
+  and checks that the Go and Python decoders agree on every wire fixture;
 - the Python client's own tests in [`conformance/pyclient`](../conformance/pyclient).
 
 At full length means without `-short` and with the Python client required:
@@ -74,10 +74,9 @@ runs 20 clients for 10 s, `TestClockStepThenHeadStops` skips its forward clock s
 newer is found, which CI provides but does not require. What is still missing is a full-length pass
 on each system, which is recorded in [`evidence/README.md`](../evidence/README.md) when it is made.
 
-Until `v1.0.0` a minor release (`0.x`) may change the CLI surface and the library API within the
+Until `v1.0.0` a minor release (`0.x`) may change the CLI surface within the
 deprecation window, and may introduce a new format number (below). `v1.0.0` freezes the format then
-current (format 1, unless a `v0` release introduced a newer one), the CLI surface and the library
-API listed here; after it, an incompatible change to any of them needs a new major version.
+current (format 1, unless a `v0` release introduced a newer one) and the CLI surface listed here; after it, an incompatible change to any of them needs a new major version.
 
 ## On-disk formats
 
@@ -138,7 +137,7 @@ contract and may change in any release; parse `status --json` instead.
 | `suggest` | `--label LABEL`, `--write` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
 | configuration | `<home>/.config/coreslot/config.toml`: `[resources]` (with `cpu` and `mem` declared by default), `[priorities]`, `[platform] windows_warning`, `[memory] live`; `needs.toml` beside it: `[needs."<label>"]` with `cpu`, `mem`, `pinned`, `evidence`, `cpu_per_worker`, `observed`, `preemptible` |
-| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>` (`CORESLOT_GRANTED_MEM` in MiB), `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs and by the library) |
+| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_<RES>` (`CORESLOT_GRANTED_MEM` in MiB), `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs) |
 | descriptors | the hold at fd 3, tokens from fd 4 in ascending resource name and index |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
 
@@ -154,25 +153,11 @@ and `observed_s`. A ticket's `stalled` is `null` unless `--observe` ran. Counts 
 everywhere; the `mem` resource alone adds `size_mib`, `locked_mib` and `free_mib`, the same amounts
 in MiB. Labels are carried exactly, JSON-encoded.
 
-## Go library
-
-The exported API of the root package, `github.com/core-slot/coreslot`, is the contract, and
-[`api/v0.txt`](../api/v0.txt) is its golden file: one line per exported identifier, method
-signature and struct field. A test fails when the API and the file differ, or when the Linux,
-macOS and Windows builds export different APIs, so every API change is a reviewed change to that
-file. Packages under `internal/` are not part of it.
-
-On a target without Unix (Windows among them), `Open` returns `ErrUnsupported`, so no `Client`,
-`Waiter` or `Grant` ever exists there. Their methods are declared so that portable programs
-compile; each returns `ErrUnsupported` where it returns an error, `Grant.Environ` returns a copy
-of its argument, and the others return zero values. AIX is not supported: although it is Unix, the
-package does not build there.
-
 ## Deprecation window
 
 While at `v0`:
 
-- A flag, command, configuration key, environment variable or exported library identifier is
+- A flag, command, configuration key or environment variable is
   first marked **Deprecated** in `CHANGELOG.md` (and, for the CLI, warns on stderr when used), and
   keeps working for at least one further minor release before it is removed.
 - The deprecation window does not apply to the on-disk format, because an older client is never

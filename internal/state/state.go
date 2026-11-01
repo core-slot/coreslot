@@ -103,21 +103,6 @@ func PlanBehind(eff map[string]spec.Range, sizes, locked map[string]int, ahead [
 	return Plan(eff, sizes, reserved)
 }
 
-// AdoptPlan sizes an adoption (PROTOCOL.md section 12.4), which has no minimum: the minimum pass
-// takes min(min, free) of each resource (free = size - locked, never below 0), and the extra
-// pass takes further tokens up to min(max, free) per resource, in ascending resource name,
-// while the grant holds fewer than spec.MaxPerGrant tokens in total. The caller reports
-// max(0, requested min - take) as the shortfall.
-func AdoptPlan(eff map[string]spec.Range, sizes, locked map[string]int) (take map[string]int) {
-	free := make(map[string]int, len(eff))
-	mins := make(map[string]int, len(eff))
-	for name, r := range eff {
-		free[name] = max(sizes[name]-locked[name], 0)
-		mins[name] = min(r.Min, free[name])
-	}
-	return fill(eff, free, mins)
-}
-
 // fill starts from the minimum pass's mins and adds the extra pass: in ascending resource name,
 // up to min(max, free) per resource while the total stays at most spec.MaxPerGrant.
 func fill(eff map[string]spec.Range, free, mins map[string]int) map[string]int {

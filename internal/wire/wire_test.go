@@ -315,18 +315,18 @@ func TestDecodeStrict(t *testing.T) {
 	}
 
 	// Hold: duplicate resource inside grant, and the grant rules.
-	const okHold = `{"label":"x","grant":{"mem":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
+	const okHold = `{"label":"x","grant":{"mem":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{}}`
 	if _, err := DecodeHold([]byte(okHold)); err != nil {
 		t.Fatalf("baseline hold rejected: %v", err)
 	}
 	holdWith := func(key, val string) string {
 		m := map[string]string{
 			"label": `"x"`, "grant": `{"mem":[0,1]}`, "start_ns": `5`, "unbudgeted": `false`,
-			"unbudgeted_resources": `[]`, "clamped": `{}`, "adopted": `false`,
+			"unbudgeted_resources": `[]`, "clamped": `{}`,
 		}
 		m[key] = val
 		var parts []string
-		for _, k := range []string{"label", "grant", "start_ns", "unbudgeted", "unbudgeted_resources", "clamped", "adopted"} {
+		for _, k := range []string{"label", "grant", "start_ns", "unbudgeted", "unbudgeted_resources", "clamped"} {
 			if m[k] != "" {
 				parts = append(parts, strconv.Quote(k)+":"+m[k])
 			}
@@ -336,7 +336,7 @@ func TestDecodeStrict(t *testing.T) {
 	badHold := map[string]string{
 		"duplicate resource in grant":   holdWith("grant", `{"mem":[0],"mem":[1]}`),
 		"duplicate resource in clamped": holdWith("clamped", `{"mem":4,"mem":5}`),
-		"duplicate top-level key":       strings.Replace(okHold, `"adopted":false`, `"adopted":false,"adopted":true`, 1),
+		"duplicate top-level key":       strings.Replace(okHold, `"clamped":{}`, `"clamped":{},"clamped":{}`, 1),
 		"grant unsorted":                holdWith("grant", `{"mem":[1,0]}`),
 		"grant repeated index":          holdWith("grant", `{"mem":[1,1]}`),
 		"grant empty array":             holdWith("grant", `{"mem":[]}`),
@@ -366,14 +366,12 @@ func TestDecodeStrict(t *testing.T) {
 		"unbudgeted_resources name":     holdWith("unbudgeted_resources", `["Bad Name"]`),
 		"clamped string":                holdWith("clamped", `{"mem":"4"}`),
 		"clamped float":                 holdWith("clamped", `{"mem":4.0}`),
-		"adopted string":                holdWith("adopted", `"true"`),
 		"missing label":                 holdWith("label", ``),
 		"missing grant":                 holdWith("grant", ``),
 		"missing start_ns":              holdWith("start_ns", ``),
 		"missing unbudgeted":            holdWith("unbudgeted", ``),
 		"missing unbudgeted_resources":  holdWith("unbudgeted_resources", ``),
 		"missing clamped":               holdWith("clamped", ``),
-		"missing adopted":               holdWith("adopted", ``),
 	}
 	for why, body := range badHold {
 		if _, err := DecodeHold([]byte(body)); !errors.Is(err, ErrMalformed) {
@@ -466,7 +464,7 @@ func TestEncodeShapeAndRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"label":"","grant":{},"start_ns":7,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`; string(b) != want {
+	if want := `{"label":"","grant":{},"start_ns":7,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{}}`; string(b) != want {
 		t.Errorf("hold body = %s, want %s", b, want)
 	}
 	b, err = Encode(Cancel{RequestedNS: 9, RequesterPID: 4711})
@@ -561,7 +559,7 @@ func TestLargestGrantFitsBody(t *testing.T) {
 		clamped[r] = 256
 	}
 	h := Hold{Label: lbl, Grant: grant, StartNS: math.MaxInt64, Unbudgeted: true,
-		UnbudgetedResources: res, Clamped: clamped, Adopted: true}
+		UnbudgetedResources: res, Clamped: clamped}
 	b, err := Encode(h)
 	if err != nil {
 		t.Fatalf("largest hold refused: %v", err)
@@ -604,7 +602,7 @@ func TestEncodeCanonicalAndStable(t *testing.T) {
 			t.Fatalf("Encode is not deterministic: %s vs %s", a, b)
 		}
 	}
-	if want := `{"label":"x","grant":{"gpu":[0],"mem":[1,2]},"start_ns":3,"unbudgeted":false,"unbudgeted_resources":["zz","aa"],"clamped":{"mem":16},"adopted":false}`; string(a) != want {
+	if want := `{"label":"x","grant":{"gpu":[0],"mem":[1,2]},"start_ns":3,"unbudgeted":false,"unbudgeted_resources":["zz","aa"],"clamped":{"mem":16}}`; string(a) != want {
 		t.Errorf("hold body = %s\nwant        %s", a, want)
 	}
 }
@@ -831,7 +829,7 @@ func TestNameDisplay(t *testing.T) {
 // reads as false and leaves the body well-formed. Mutation: dropping omitempty from the tree key
 // reddens the exact-encoding tests, whose bodies carry no tree.
 func TestHoldTreeKey(t *testing.T) {
-	const okHold = `{"label":"x","grant":{"mem":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
+	const okHold = `{"label":"x","grant":{"mem":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{}}`
 	for body, want := range map[string]bool{
 		okHold:                                   false,
 		okHold[:len(okHold)-1] + `,"tree":true}`: true,
@@ -849,7 +847,7 @@ func TestHoldTreeKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `,"adopted":false,"tree":true}`; !strings.HasSuffix(string(b), want) {
+	if want := `,"clamped":{},"tree":true}`; !strings.HasSuffix(string(b), want) {
 		t.Errorf("hold body = %s, want it to end %s", b, want)
 	}
 }

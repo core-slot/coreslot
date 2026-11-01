@@ -71,9 +71,8 @@ Every shared file, field, environment variable and transition of format 1, and w
 | cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
 | withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
 | reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
-| adoption | transition | [12.4](#124-adoption), example [21.7](#217-adoption) |
-| token-only admission | transition | [15.2](#152-token-only-mode), example [21.8](#218-token-only-admission) |
-| pass-through | transition | [18](#18-nested-runs-pass-through), example [21.9](#219-pass-through) |
+| token-only admission | transition | [15.2](#152-token-only-mode), example [21.7](#217-token-only-admission) |
+| pass-through | transition | [18](#18-nested-runs-pass-through), example [21.8](#218-pass-through) |
 
 ## 3. State machine and invariants
 
@@ -88,7 +87,6 @@ critical section (section 8).
      for 10 s (10.2)       ▼   │
                          STALLED
  WAITING/STALLED ── cancel or owner gone (descriptor closed) ──▶ (none)
- (none) ── adopt† (already-running work; bypasses the queue) ──▶ HELD
  (none) ── token-only admission† (format not understood; nothing published) ──▶ held tokens
 ```
 
@@ -107,7 +105,7 @@ Every conforming client MUST preserve these invariants:
   without a published hold only inside the admission section, by a token-only client
   (section 15.2), momentarily by a probe (section 6, inside or outside the section), or between a
   holder's last close and the next reconciliation.
-- **I3 bounded admission:** an admission or adoption never brings the number of locked tokens of a
+- **I3 bounded admission:** an admission never brings the number of locked tokens of a
   resource — at **any** index that exists, including indices at or above the current size — above
   that resource's current size. A later shrink may leave locked tokens above the new size; no
   admission happens until they fall below it. For `mem` the current size of an attempt may be its
@@ -118,8 +116,8 @@ Every conforming client MUST preserve these invariants:
   tickets were published before the election (section 10.3), with one bounded exception: a waiter
   in the front window MAY be admitted ahead of live tickets under the rule of section 10.3,
   minimums before extras. Otherwise the head blocks every waiter behind it, and a waiter is passed
-  over only while it is STALLED, dead or canceled. Adoption and token-only admission are outside
-  the queue by definition.
+  over only while it is STALLED, dead or canceled. Token-only admission is outside the queue by
+  definition.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's minimum is free and no process is stopped inside the admission section, the head is
   admitted within 3 s; up to 4 consecutive stopped tickets at the front of the queue stop blocking
@@ -129,8 +127,7 @@ Every conforming client MUST preserve these invariants:
 - **I6 one budget:** every client of every format counts the same token files under the same
   admission lock.
 - **I7 minimum:** an ordinary admission grants at least `min(min, size)` of every declared resource
-  it names. The only grants below a request's `min` are clamped requests (section 12.2) and
-  adoptions with a reported shortfall (section 12.4).
+  it names. The only grants below a request's `min` are clamped requests (section 12.2).
 
 ## 4. State directory and filesystem policy
 
@@ -143,7 +140,7 @@ Every conforming client MUST preserve these invariants:
   `XDG_*` variable, so a shell, a cron job, a user service and an ssh session of the same user
   resolve the same directory.
 
-  > **Implementation note.** On every Unix, when the Go CLI's or library's lookup reports no entry
+  > **Implementation note.** On every Unix, when the Go CLI's lookup reports no entry
   > for the uid, or finds no `/etc/passwd`, it runs `getent passwd <uid>` from a fixed system path,
   > never through `$PATH`, for at most 5 s and takes the home directory from its answer, which
   > resolves through NSS as `getpwuid` does. That matters most to a cgo-free build for Linux (the
@@ -306,7 +303,7 @@ a float, a table) is invalid. A computed size above 4096 is 4096.
 used). Clients MUST recompute sizes from the configuration, `cpus` and `memory` at every admission
 attempt.
 
-**Live size of `mem`.** A client MAY, for one admission or adoption attempt, size `mem` from the
+**Live size of `mem`.** A client MAY, for one admission attempt, size `mem` from the
 memory the kernel can still hand out instead of from the configuration alone. It does so only when
 `mem` is declared, the request's `mem` is fixed (`min = max`), the configuration's `[memory] live`
 is `true` (section 5.3; it defaults to `false`), and the configured size less the locked count of
@@ -387,11 +384,7 @@ live = true       # default false: the live size of mem (section 5.2)
 - `[priorities]`: each key is a label prefix and each value an integer in `[-1000, 1000]`. A request
   without an explicit priority takes the value of the longest prefix of its label; with no matching
   prefix its priority is 0. This applies where a request can leave its priority unset (the CLI
-  without `--priority`); a library whose request always carries a priority MAY use that value as
-  given.
-
-  > **Implementation note.** The Go library uses `Request.Priority` as given and does not read
-  > `[priorities]`; the Go CLI applies it when `--priority` is absent.
+  without `--priority`).
 - `[platform]`: `windows_warning`, a boolean.
 - `[memory]`: `live`, a boolean, `false` when absent; `false` sizes `mem` from the configuration
   alone, and a client that implements the live size (section 5.2) then never computes it; `true`
@@ -522,8 +515,7 @@ while the run or any process that inherited the copies is alive. Processes that 
 
 A grant holds at most 256 tokens of one resource and at most 512 in total, so a run never needs more
 than 513 inherited descriptors. A request whose minimums sum above 512 is invalid (a usage error,
-section 14); admission (section 12.1) and adoption (section 12.4) never take more than 512 tokens in
-total. A run SHOULD raise the soft `RLIMIT_NOFILE` it passes to the command
+section 14); admission (section 12.1) never takes more than 512 tokens in total. A run SHOULD raise the soft `RLIMIT_NOFILE` it passes to the command
 to at least the inherited count plus 256 when the hard limit allows.
 
 > **Implementation note.** The Go runtime raises its own soft limit at start-up, so the Go CLI
@@ -622,8 +614,7 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | `unbudgeted` | boolean | `true` for a run outside the budget: a fail-open run, a run whose wait timed out and that runs anyway, or a light run (section 14) |
 | `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a run outside the budget could not budget (section 14); writers list distinct names in ascending order, readers check neither |
 | `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
-| `adopted` | boolean | `true` for an adoption (section 12.4) |
-| `tree` | boolean | optional: `true` when the process whose pid the name carries, with its descendants, carries the grant's work, so that its tree's resident memory measures the hold (section 5.2); absent means `false`. The CLI's run writes it (its command is its child); a library's grant and an adoption leave it out |
+| `tree` | boolean | optional: `true` when the process whose pid the name carries, with its descendants, carries the grant's work, so that its tree's resident memory measures the hold (section 5.2); absent means `false`. The CLI's run writes it (its command is its child) |
 | `preemptible` | string | optional: why the run is preemptible, as the run log's `preemptible` (section 20); absent or not a string reads as empty, which never makes a body malformed. `status` shows it on the hold |
 
 `tree` is an exception to section 7.2's "a writer MUST write every key of its table": a writer MAY
@@ -673,7 +664,7 @@ only inside the section and replaced with a plain `rename` (section 11). `gen` i
 `gen` increased by one, or 0 when it was 2^63 − 1, and `reconciled_ns` unchanged.
 
 A section bumps `gen` once when it publishes or removes a ticket or hold: enqueue (section 10.1),
-admission (12.1), adoption (12.4), publication of an unbudgeted hold (14), and removal of the
+admission (12.1), publication of an unbudgeted hold (14), and removal of the
 client's own ticket after cancellation or withdrawal (13) or of its own hold (12.3); the resume bump
 of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
 removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
@@ -699,7 +690,7 @@ parse.
 ## 8. The admission critical section
 
 `admit.lock` is the protocol's linearization point. Enqueue, admission, cancellation publication,
-adoption, token-only admission, reconciliation and run-log rotation MUST happen while holding
+token-only admission, reconciliation and run-log rotation MUST happen while holding
 `flock(LOCK_EX)` on it; so does every other publication (section 11) and every removal of a
 ticket, hold, cancel request or temporary file. A refresh (section 10.2), a token probe and a
 run-log append happen outside it.
@@ -852,7 +843,7 @@ waiter that passes under the rule above is admitted before its position reaches 
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
 client that enters the section for any purpose other than admission and token-only admission
-(enqueue, cancellation publication, removal of its own ticket or hold, a resume bump, adoption,
+(enqueue, cancellation publication, removal of its own ticket or hold, a resume bump,
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
 reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
@@ -1008,20 +999,6 @@ removes the hold later.
 Other clients MAY remove their hold the same way, or leave it to reconciliation. This applies to
 every hold a run published, including a fail-open run's unbudgeted hold (section 14).
 
-### 12.4 Adoption
-
-Adoption admits already-running work without queueing (for example containers that survived a pool
-restart). Inside the section the adopter recomputes sizes, counts locked tokens as in step 4 (and
-sizes `mem` from them the same way, section 5.2), and
-takes tokens from what is free, under I3 (indices below the size, `free = size − locked`), in the
-two passes of step 6: the minimum pass takes up to `min(min, size)` of each requested declared
-resource (as many as are free), the extra pass takes more up to `max` per resource while the grant
-holds fewer than 512 tokens in total. It checks I1 for the tokens it took, as in step 6, then
-publishes a hold with `"adopted": true` listing exactly what it took, and bumps `gen` (section 7.8).
-Adoption reconciles first when it is due (section 10.4). It has no minimum: the **shortfall** is
-`max(0, min − granted)` per resource, reported to the caller, and the survivor runs partly
-unbudgeted.
-
 ## 13. Cancellation and withdrawal
 
 ### 13.1 Cancellation
@@ -1037,9 +1014,8 @@ On finding it, the owner closes its ticket descriptor (the ticket is dead at onc
 ticket and the cancel request in its next section if it can enter one (bumping `gen`, section 7.8),
 and stops: the CLI exits with the refusal code, a library returns its cancellation error.
 
-> **Implementation note.** The Go CLI and library check `queue/` first and refuse, with a
-> diagnostic that no such ticket is waiting, when there is none; the independent Python client in
-> `conformance/pyclient` publishes without checking.
+> **Implementation note.** The Go CLI checks `queue/` first and refuses, with a diagnostic that no
+> such ticket is waiting, when there is none.
 
 ### 13.2 Withdrawal
 
@@ -1140,20 +1116,18 @@ mode. It only closes the ticket's descriptor: removing the file would be a write
 does not implement, so the file is left to a client of that format.
 
 Every other operation that would write follows the same rule. Under a format it does not implement,
-a client publishes no cancel request, adoption hold or unbudgeted hold, records and clears no
+a client publishes no cancel request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still runs its command
 but writes nothing.
 
-> **Implementation note.** The Go CLI and library refuse cancellation, adoption, `doctor --clear`
-> and `doctor --reset` under a format they do not implement.
+> **Implementation note.** The Go CLI refuses cancellation, `doctor --clear` and `doctor --reset` under a
+> format it does not implement.
 
 ## 16. Windows
 
 The CLI runs the command without a budget and prints one warning per run; `[platform]
 windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel` and `doctor`
-exit 70 on Windows (there is no budget to inspect, cancel or repair), and their `--help` exits 0. A
-library's open operation returns its unsupported error; no other library function is reachable on
-Windows.
+exit 70 on Windows (there is no budget to inspect, cancel or repair), and their `--help` exits 0.
 
 ## 17. Descriptor and environment contract
 
@@ -1253,23 +1227,6 @@ it runs with one cpu token, and its cpu placeholder is what one token gives (1, 
 token pays for under a `cpu_per_worker` entry), whatever its request; the parent's own
 placeholders keep its request's width.
 
-> **Implementation note.** The Go library applies these rules to `Client.Enqueue`, with
-> `Options.Independent` as its `--independent`: rules 1 and 2 admit the request at once, and a
-> context that does not validate is a refusal (`ErrRefused`). `Adopt` never passes through. The
-> rules apply only to a client whose state directory is the one the inherited environment names
-> (`CORESLOT_STATE_DIR`, or the default); a client opened on another directory
-> (`Options.StateDir`) is another budget and queues, unless the directory the environment names
-> cannot be resolved: then the request is refused (`ErrRefused`), since it might be the same
-> budget and queueing could wait behind its own parent. `Open` locates and opens the state directory
-> before any request, so where the parent runs unbudgeted because the directory is unusable (a
-> relative `CORESLOT_STATE_DIR`, a refused filesystem, wrong owners or modes, a failed
-> home-directory lookup), `Open` returns a `*StateError` instead of following rule 1, and the
-> caller decides: the library never decides on its own to run unbudgeted. A caller that wants to
-> follow its parent then reads `CORESLOT_UNBUDGETED`. A pass-through's descriptors for the command
-> are the parent's hold at fd 3 and every token the parent passed on from fd 4, renumbered by the
-> launcher, with `CORESLOT_HELD_FD` and `CORESLOT_TOKEN_FDS` naming the new numbers; the library
-> writes no run log, for a pass-through as for any other grant.
-
 ## 19. Exit status
 
 | Status | Meaning |
@@ -1347,11 +1304,9 @@ secrets. A client that finds `runs.jsonl` at or above 10 MiB before appending ro
 inside the section: re-checks the size, then renames it to `runs.1.jsonl` (replacing the previous
 generation). One generation is kept. A token-only client writes no log.
 
-> **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open` and the
-> independent Python client shortens `label`. The Go CLI writes the seconds unrounded and the
-> Python client rounds them to milliseconds, as each does `waited_s` and `ran_s`. The Go CLI samples
+> **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open`. It samples
 > memory on macOS and Linux and writes `mem_peak_source` `max_rss` elsewhere when it knows the
-> rusage's peak; the Python client writes none of the memory keys. `coreslot stats` reads both
+> rusage's peak. `coreslot stats` reads both
 > generations of the log, skips lines that do not parse, and learns a label from its last 5 runs
 > that were labelled, not a pass-through and not run outside the budget.
 
@@ -1481,7 +1436,7 @@ res/pg-local/0                                        [L]
 ```json
 {"label": "gate:big", "grant": {"cpu": [0,1,2,3,4,5,6,7,8,9], "pg-local": [0]},
  "start_ns": 1791720600000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {"cpu": 16}, "adopted": false, "tree": true}
+ "clamped": {"cpu": 16}, "tree": true}
 ```
 
 The CLI prints `coreslot: cpu: requested 16, budget is 10; running alone with 10` and starts the
@@ -1572,38 +1527,7 @@ queue/01791721150000000000-0000006100-000002-lint          [L]
 queue/01791721200000000000-0000009200-000001-gate          [L]
 ```
 
-### 21.7 Adoption
-
-At 12:30:00 a restarted CI pool (pid 6001) adopts a surviving job container with need
-`cpu=3..3`. A live hold holds `cpu` 0-7.
-
-Before:
-
-```
-gen                                                    {"gen": 80, "reconciled_ns": ...}
-holds/01791721500000000000-0000007400-000002-gate      [L] (grant: cpu 0-7)
-res/cpu/0 ... res/cpu/7                                [L]
-res/cpu/8, res/cpu/9                                   (not locked)
-```
-
-Inside the section, without a ticket: size 10, locked 8, `free = 2`. It takes `cpu` 8 and 9,
-publishes the hold and bumps `gen`; the shortfall `max(0, 3 − 2) = 1` is returned to the caller.
-
-After:
-
-```
-gen                                                    {"gen": 81, "reconciled_ns": ...}
-holds/01791721500000000000-0000007400-000002-gate      [L]
-holds/01791721800000000000-0000006001-000012-ci_o_r    [L]
-res/cpu/0 ... res/cpu/9                                [L]
-```
-
-```json
-{"label": "ci:o-r", "grant": {"cpu": [8, 9]}, "start_ns": 1791721800000000000,
- "unbudgeted": false, "unbudgeted_resources": [], "clamped": {}, "adopted": true}
-```
-
-### 21.8 Token-only admission
+### 21.7 Token-only admission
 
 `FORMAT` contains `coreslot-protocol 2`. Pid 9100, which implements only format 1, runs
 `coreslot run --need cpu=2..6 -- ...`. `cpu` 0-3 are held by format-2 clients.
@@ -1631,7 +1555,7 @@ res/cpu/4, res/cpu/5                                   [L] (pid 9100)
 res/cpu/6 ... res/cpu/9                                (not locked)
 ```
 
-### 21.9 Pass-through
+### 21.8 Pass-through
 
 Under the run of section 21.3 (fd 3 = hold, fds 4-13 = `cpu` 0-9, fd 14 = `pg-local` 0,
 `CORESLOT_TOKEN_FDS=4-14`), the command starts
@@ -1648,7 +1572,7 @@ A pass-through does not enter the section or lock anything. After `make` exits i
 (`coreslot-protocol 1`, understood) and appends one run-log line marked `"nested": true`
 (section 20); apart from that line, `$S` is unchanged before and after.
 
-### 21.10 Admission with mem
+### 21.9 Admission with mem
 
 Pid 7500 runs `coreslot run --need cpu=2 --need mem=3G --label gate:mem -- ./build` at 12:40:00
 with no ticket ahead and no hold. `mem=3G` is 3 072 MiB, 24 tokens, so the ticket's `need` is
@@ -1661,7 +1585,7 @@ takes `cpu` 0-1 and `mem` 0-23 and publishes the hold:
 {"label": "gate:mem",
  "grant": {"cpu": [0, 1], "mem": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
  "start_ns": 1791722400000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {}, "adopted": false, "tree": true}
+ "clamped": {}, "tree": true}
 ```
 
 The command starts with fd 3 = the hold, fds 4-5 = `cpu` tokens 0-1, fds 6-29 = `mem` tokens 0-23,
@@ -1677,11 +1601,11 @@ and `CORESLOT_GRANTED_CPU=2`, `CORESLOT_GRANTED_MEM=3072`, `CORESLOT_HELD_FD=3`,
  "exit": 0, "load1": 3.2, "fail_open": ""}
 ```
 
-### 21.11 Admission above the static size
+### 21.10 Admission above the static size
 
 The configuration declares `mem = "1G"` (size 8) beside the sizes above and `[memory] live = true`,
 `/proc/meminfo` says `MemAvailable: 4194304 kB` (4 096 MiB), and no cgroup limits memory. A
-library client, pid 7600, holds `mem` 0-7 for `pool:a`; its hold has no `tree` key. Pid 7700 runs
+client, pid 7600, holds `mem` 0-7 for `pool:a`; its hold has no `tree` key. Pid 7700 runs
 `coreslot run --need mem=2G --label gate:b -- ./build` at 12:50:00 with no ticket ahead: 2 048 MiB
 is 16 tokens, so its ticket's `need` is `{"mem": [16, 16]}`.
 
@@ -1705,7 +1629,7 @@ and it takes `mem` 8-23, below the size of 32, and publishes:
 {"label": "gate:b",
  "grant": {"mem": [8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
  "start_ns": 1791723000000000000, "unbudgeted": false, "unbudgeted_resources": [],
- "clamped": {}, "adopted": false, "tree": true}
+ "clamped": {}, "tree": true}
 ```
 
 The command starts with fd 3 = the hold, fds 4-19 = `mem` tokens 8-23, and

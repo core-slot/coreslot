@@ -3,7 +3,6 @@
 package engine
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -46,16 +45,12 @@ func swapToken(t *testing.T, dir string) (kept string) {
 }
 
 // A token file replaced between taking the tokens and the I1 check (PROTOCOL.md section 12.1
-// step 6) fails admission, adoption and token-only admission alike: a state error, no hold
+// step 6) fails admission and token-only admission alike: a state error, no hold
 // published, and every token taken closed again.
 func TestIdentityCheckAfterTakingTokens(t *testing.T) {
 	cases := map[string]func(t *testing.T, e *Engine, dir string) error{
 		"admission": func(t *testing.T, e *Engine, dir string) error {
 			_, err := enqueue(t, e, need("mem=2")).Step(t.Context())
-			return err
-		},
-		"adoption": func(t *testing.T, e *Engine, dir string) error {
-			_, err := e.AdoptContext(context.Background(), need("mem=2"))
 			return err
 		},
 		"token-only admission": func(t *testing.T, e *Engine, dir string) error {

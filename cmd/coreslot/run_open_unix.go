@@ -15,7 +15,7 @@ type location struct {
 	err          error
 }
 
-// locate finds the state directory as the library's Open does: CORESLOT_STATE_DIR (with its
+// locate finds the state directory as the engine's callers do: CORESLOT_STATE_DIR (with its
 // configuration at <statedir>/config.toml) or the default of PROTOCOL.md section 4.1.
 func locate() location {
 	var loc location
@@ -53,5 +53,5 @@ func asState(err error) error {
 }
 
 // engineStateReason is the engine's error contract (engine.StateReason), which stateReason
-// applies to every error that is not the CLI's or the library's own state error.
+// applies to every error that is not the CLI's own state error.
 func engineStateReason(err error) (string, bool) { return engine.StateReason(err) }
