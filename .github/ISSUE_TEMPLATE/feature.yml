@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        coreslot is deliberately small: a cooperative, machine-wide core budget built on `flock(2)`.
+        coreslot is deliberately small: a cooperative memory guard for heavy commands, built on `flock(2)`.
         Describe the problem before the solution.
   - type: textarea
     id: problem

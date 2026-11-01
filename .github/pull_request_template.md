@@ -16,4 +16,4 @@ The checks `CONTRIBUTING.md` lists under "Test", in the order CI runs them:
 - [ ] `GOOS=windows go build ./...` passes
 - [ ] On-disk format or `PROTOCOL.md` changes are called out above
 - [ ] No new dependency (or a maintainer approved it)
-- [ ] User-visible changes have an entry under **Unreleased** in `CHANGELOG.md`
+- [ ] User-visible changes have an entry in the unreleased section of `CHANGELOG.md`

@@ -23,13 +23,14 @@ Only the latest release is supported while coreslot is at `v0`
 coreslot is **cooperative admission control for one user on one host**. It is not a security
 boundary and does not enforce anything.
 
-- **Cooperative.** A process receives a grant because it asked. Nothing stops a process that never
-  asks, or one that uses more cores than it was granted: coreslot sets no cgroup quota, `nice`
-  value or CPU affinity.
+- **Cooperative.** A process is admitted because it asked. Nothing stops a process that never
+  asks, or one that uses more memory than its need: coreslot sets no cgroup limit. Its watchdog
+  kills only a command that its own `coreslot run` started and has not reaped, by `SIGKILL` to the
+  command's own process group.
 - **Same user, trusted.** The state directory belongs to one user, and every process of that user
-  can read and write it. Any same-user process can hoard tokens (lock them and never release),
-  stop inside the admission section and block every admission (`coreslot status` names it), or
-  corrupt the state. coreslot detects many forms of corruption and fails open or refuses, but it
+  can read and write it. Any same-user process can fill a hold with false numbers, keep a hold
+  it never releases, stop inside the admission section and block every admission (`coreslot status`
+  names it), or corrupt the state, `watch.json` included. coreslot detects many forms of corruption and fails open or refuses, but it
   does not defend against a hostile process of the same user. Such a process already has the
   user's whole account.
 - **One host, one user.** Never share the state directory across users or hosts. Locks on network
@@ -61,8 +62,8 @@ The full rules are in
   `queue/`, `holds/` or `cancel/` that fails these checks is ignored and counted, never trusted or
   removed.
 - A process whose effective user id differs from its real one (setuid) is unsupported.
-- Descriptors on state files are close-on-exec, except the hold and token descriptors deliberately
-  passed to the command, which keep the grant alive for as long as any process holds them.
+- Descriptors on state files are close-on-exec, except the hold descriptor deliberately passed to
+  the command, which keeps the reservation alive for as long as any process holds it.
 - The run log (`log/runs.jsonl`) never records the command line or the environment. It does record
   labels, so a label must not carry a secret.
 - Deleting or resetting the directory while anything is live creates a second budget;
@@ -70,9 +71,9 @@ The full rules are in
 
 ### Out of scope
 
-Denial of service by a same-user process (hoarding, stopping inside the section), anything that
-requires write access to the user's state directory or configuration, and a command that ignores
-its grant. Reports about them are welcome as ordinary issues when coreslot could detect or report
+Denial of service by a same-user process (a hold that is never released, stopping inside the
+section), anything that requires write access to the user's state directory or configuration, and
+a command that uses more than its need. Reports about them are welcome as ordinary issues when coreslot could detect or report
 the situation better.
 
 coreslot sends no telemetry and opens no network connection itself. Looking up the user's home

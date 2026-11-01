@@ -111,13 +111,13 @@ budget and moves the configuration to `$CORESLOT_STATE_DIR/config.toml` with it:
 
 ```sh
 CORESLOT_STATE_DIR="$(mktemp -d)/state" \
-  ./coreslot run --need cpu=2 -- sh -c 'echo $CORESLOT_GRANTED_CPU'
+  ./coreslot run --mem 512M -- sh -c 'echo $CORESLOT_GRANTED_MEM'
 ```
 
 ## Pull requests
 
 Fill in the template: what changed and why, the commands you ran with what they printed, and the
-mutation that reddens each new invariant test. Add an entry under **Unreleased** in
+mutation that reddens each new invariant test. Add an entry in the unreleased section of
 [`CHANGELOG.md`](CHANGELOG.md) for anything a user or a client implementer would notice.
 
 ## Releases

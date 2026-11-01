@@ -4,33 +4,42 @@
 [![Release](https://img.shields.io/github/v/release/core-slot/coreslot?sort=semver)](https://github.com/core-slot/coreslot/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/core-slot/coreslot)](LICENSE)
 
-Several coding agents on one laptop, each running its own test suite, melt it. On the Claude Code
-tracker, 11 agents and a workflow drove an 11-core, 18 GB Mac to a load average of about 726 with
+Several coding agents on one laptop each run their own test suite, type check or build, and each of
+those sizes itself to the whole machine. Together they use more memory than the machine has: it
+swaps, the work slows to a crawl, and in the end the machine freezes or the kernel kills something
+you cared about. On the Claude Code tracker, a Mac running a workflow of many agents ended with its
 swap full ([anthropics/claude-code#101193](https://github.com/anthropics/claude-code/issues/101193)).
-Every `pytest -n auto`, `make -j`, `go test ./...` and `cargo build` sizes itself to the whole
-machine, and none of them knows about the others: tests time out and fail falsely, and every gate
-runs slower than it would alone.
 
-`coreslot` gives them one machine-wide core budget. A command asks for `min..max` cores, waits in
-one queue until `min` is free, and runs with what it got:
+`coreslot` is a memory guard for those heavy commands. Put it in front of one:
 
 ```sh
 brew install core-slot/tap/coreslot
 ```
 
 ```sh
-coreslot run --need cpu=2..16 --subst -- make -j{n}  # waits for 2 cores, runs with up to 16
-coreslot run --label gate:unit -- pytest -n 12       # needs from `coreslot suggest --write`, else cpu=1
-coreslot status                                      # who holds what, who waits
+coreslot run -- go test ./...    # starts when the machine has the memory for it
+coreslot status                  # what runs, what waits, whether the watchdog is protecting
 ```
 
-There is no daemon: the budget is a directory of token files and `flock(2)` locks, so a killed
-client never leaks its share, and any client written from [`PROTOCOL.md`](PROTOCOL.md) shares the
-same budget.
+- **It starts a command when the memory is there.** A command starts when the memory the machine
+  can really hand out, less what running commands are still expected to grow into and a small
+  reserve, covers what that command typically needs, learned from its earlier runs. Otherwise it
+  waits in one first-in, first-out queue. When no coreslot command is running, the head of the queue
+  always starts.
+- **It stops the newest commands only under real danger.** A little swap is survivable, so it does
+  not kill for a full memory. It kills when the machine is paging and coreslot's own commands are
+  losing a large share of their time to it, or when swap is about to run out
+  ([exact conditions](#when-it-kills)), and it starts with the newest. It restarts each one by itself
+  once memory is calm.
+- **It never touches what it did not start.** It kills only the process group of a command that its
+  own `coreslot run` started and has not yet reaped.
+- **There is no daemon, no root and no setup.** State is a directory of files and `flock(2)` locks,
+  so a killed run never leaks its reservation, and a client written from
+  [`PROTOCOL.md`](PROTOCOL.md) shares the same budget.
 
 **For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
-`go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as `coreslot run --label
-... -- <the same command>`:
+`go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as
+`coreslot run -- <the same command>`:
 
 ```text
 /plugin marketplace add core-slot/coreslot
@@ -40,20 +49,71 @@ same budget.
 Other agents get the same rule as a line in their instructions
 ([the snippet](integrations/claude-code/README.md#other-coding-agents)).
 
-**Status:** `v0`. Before `v1.0.0` the CLI may still change, and a release may
-introduce a new on-disk format; the [compatibility policy](docs/compatibility.md) says how.
+**Status:** `v0`. macOS on Apple silicon is the supported platform; Linux and Intel Macs are
+experimental, and Windows runs commands unbudgeted. The watchdog's defaults are interim until
+calibration, and the CLI may still change before `v1.0.0`: the
+[compatibility policy](docs/compatibility.md) says how.
+
+## When you do not need coreslot
+
+- One agent, or work that never overlaps, on a machine with plenty of memory.
+- Work that runs elsewhere (CI, a cloud sandbox) and never shares your laptop.
+- A tool that already queues its own heavy work and is the only one that does.
 
 ## Why not ...
 
 | Instead of coreslot | Good at | Where it stops |
 |---|---|---|
-| `make -j` and its jobserver | Sharing N job slots inside one build tree; Ninja, Cargo and GCC speak it | Each top-level build has its own pool: four agents at `-j12` are 48 jobs. coreslot can hand each one its `-j{n}`. |
-| A system-wide jobserver (Gentoo's steve) | One token pool for every jobserver-aware tool | Linux with CUSE, and jobserver-aware clients only; memory is not counted. |
-| GNU `sem`, a semaphore script | Simple, and as fast as coreslot when the slot count fits the mix | A fixed slot count for every command; no ranges, no memory, no strict queue order. |
-| cgroups, `systemd-run -p CPUQuota=` | Hard limits the kernel enforces | Everyone runs slower at once instead of waiting, a memory cap kills rather than waits, and macOS has neither. Pair one with coreslot for a hard cap. |
-| `nice`, `taskpolicy` | Keeping the desktop responsive | Lower priority still oversubscribes; on Linux autogroup confines it to one session. |
-| Bazel, Nx, Turborepo concurrency limits | Scheduling inside one invocation | Per invocation: two worktrees each take their share of the whole machine. |
+| cgroup memory limits (`systemd-run -p MemoryMax=`) | A hard cap the kernel enforces | A command over its cap is killed, not queued; Linux only. Pair one with coreslot for a hard cap: coreslot decides when to start, the cap bounds what one command may take. |
+| `earlyoom`, `systemd-oomd` | Keeping a Linux machine alive when memory runs out | They kill whatever their policy picks, anywhere on the machine, with no queue and no restart. |
+| `make -j` and its jobserver | Sharing job slots inside one build tree | Each top-level build has its own pool, and memory is not counted. |
+| GNU `sem`, a semaphore script | Simple, and fine when one slot count fits every command | A fixed slot count for all commands: it does not know what a command needs or how much memory is free. |
 | Running agents in the cloud | Not sharing a laptop at all | Do it where you can; coreslot is for work that stays on your machine. |
+
+## How it decides
+
+**Admission.** A command's need is `--mem`, else the `mem` of its label in
+[`needs.toml`](#configuration), else the 90th percentile of the memory peaks of the label's last 20
+runs, else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
+(on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
+less the reserve, less what each running command still has to grow into (its need less what it uses
+now). A command starts when its need fits the room. A need larger than the machine's memory less the
+reserve runs only alone. Waiting runs say why and where they stand when they begin to wait and every 30 s; a tool with
+a time limit of its own can expire first, so run coreslot in the background or raise the limit.
+
+**Labels are automatic.** Without `--label`, the label is the command's shape (its executable and
+up to two leading word-like arguments: `go test`, `npm run test`) and the name of the git repository
+it runs in, such as `go test@proj`. The worktrees of one repository share it, so a label's history
+and its `needs.toml` entry follow the project, not the directory.
+
+### When it kills
+
+Every running `coreslot run` measures how much of its command's time goes to memory work: system
+time, plus page-wait time where macOS reports it, as a share of the command's running time, beyond
+what that label normally spends. One shared state turns those measurements into a level, only while the
+kernel is actually paging:
+
+| Level | When | Effect |
+|---|---|---|
+| yellow | the commands lose noticeably more time to memory than their normal | nothing new starts; starts resume one at a time after it clears |
+| red | they lose a large share of it for tens of seconds | a stop round: the newest commands are killed until their footprints cover the shortfall |
+| floor | swap is nearly out of room and still growing | the same stop round, at once |
+
+A stopped command is killed with `SIGKILL` and put back in the queue at its **first arrival**, so it
+keeps its place; it starts again once memory has been calm for a while and there is room for it
+with a margin. After the third stop it gives up with the refusal code and prints `coreslot: gave up
+after 3 memory stops`.
+
+Never stopped: the oldest running command, a command whose label has `no_restart = true` in
+`needs.toml`, a command that shares coreslot's process group (a run in a terminal, or `--same-group`)
+and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
+and not restarted. The thresholds are `[watch]` keys with interim defaults; see
+[`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
+[the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
+the kill and says what it would have stopped.
+
+On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
+takes a restartable coreslot command before your desktop.
 
 ## Install
 
@@ -88,321 +148,108 @@ the extracted binary, clear the attribute once:
 xattr -d com.apple.quarantine ./coreslot
 ```
 
-`coreslot version` prints the version and the protocol formats it implements.
+`coreslot version` prints the version and the protocol formats it implements. A state directory of
+another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`.
 
-### Upgrading to v0.3.0
-
-Two defaults change:
-
-- The live size of `mem` is off: memory is sized from the configuration alone, and a `mem` need
-  above that size waits instead of being admitted from the memory the kernel can still hand out.
-  To turn it back on:
-
-  ```toml
-  [memory]
-  live = true
-  ```
-
-- Long, large runs are [preemptible](#choosing-a-range) by themselves: a run that asks for at least
-  half the cpu budget, whose label's runs take 10 minutes or more, is admitted with one cpu token
-  and runs at a lower priority (nice 10, or a utility QoS clamp on macOS). For a label with
-  wall-clock deadlines (test timeouts, browser or end-to-end tests, agent tool timeouts), opt out in
-  its `needs.toml` entry:
-
-  ```toml
-  [needs."gate:e2e"]
-  preemptible = false
-  ```
-
-Upgrade every client on a machine together; [the compatibility policy](docs/compatibility.md) says
-what an older one does differently.
-
-## Quick start
-
-Run a test gate, asking for the cores it keeps busy rather than one per worker. A pytest worker
-that mostly waits on I/O uses a fraction of a core; here twelve workers keep about four busy
-([choosing a range](#choosing-a-range) says how to measure it):
+## Usage
 
 ```sh
-coreslot run --need cpu=6 --label gate:unit -- pytest -n 12
+coreslot run -- pytest -n 8                     # label "pytest@proj", need learned from earlier runs
+coreslot run --mem 3G -- make test              # say what it needs when it has no history
+coreslot run --label gate:unit -- npm test      # a label of your own
+coreslot status            # the watchdog's level, running commands, the queue; --json for scripts
+coreslot stats             # per label, what the need is learned from
+coreslot doctor            # state directory, filesystem, permissions, format, readings
+coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
 ```
 
-When the workers are CPU-bound, let the grant set their number instead; an argument that is
-exactly `{n}` becomes the number of cores granted (for an entry that sizes its request per worker,
-the number of workers instead; [see below](#memory)):
+`--no-wait` refuses at once instead of queueing, `--timeout D` bounds the waiting (restarts
+included; it never stops a running command), and `--on-timeout run` runs the command without the
+budget when the timeout passes. The command receives `CORESLOT_GRANTED_MEM` (its need, in MiB) and
+inherits the descriptor that holds its reservation
+([`PROTOCOL.md` section 17](PROTOCOL.md#17-descriptor-and-environment-contract)).
 
-```sh
-coreslot run --need cpu=4..12 --label gate:unit -- pytest -n {n}
-```
-
-Run a build; `--subst` also replaces `{n}` inside an argument ([choosing a
-range](#choosing-a-range) below says how to pick `2..16`):
-
-```sh
-coreslot run --need cpu=2..16 --subst -- make -j{n}
-```
-
-Two runs that do not fit side by side queue. On a 10-core budget the second waits until the
-first exits, then runs:
-
-```sh
-coreslot run --need cpu=8 --label gate:a -- make test &
-coreslot run --need cpu=8 --label gate:b -- make test
-```
-
-See who holds what and who waits:
-
-```sh
-coreslot status            # one line per hold and per ticket; labels are escaped
-coreslot status --json     # the same report, "schema": 1
-coreslot doctor            # state directory, filesystem, permissions, format, configuration
-```
-
-A request whose minimum exceeds the whole budget (`cpu=16..16` on a 10-core budget) is clamped: it
-waits for the whole resource, runs alone with all of it, and says so on stderr. `--no-wait` refuses
-at once instead of queueing, `--timeout D` bounds the wait, and `--priority P` (from -1000 to 1000;
-by default the `[priorities]` entry of the label's longest matching prefix, else 0) places a
-request as if it had arrived `P` minutes earlier.
-`coreslot cancel <ticket-id>` or `coreslot cancel --label L` withdraws a waiting request.
-
-**Nested runs are pass-through.** A `coreslot run` started inside another run's grant does not
-queue: it runs on its parent's tokens, with `min(max, held)`. Nested runs are not budgeted against
-each other: two siblings started together under an 8-core grant both run with 8. A parent that
-wants concurrent children partitions its grant itself. `--independent` queues as an unrelated
-request instead.
+**Nested runs are pass-through.** A `coreslot run` started inside another run's reservation does not
+queue: it runs inside its parent's, with `min(need, parent's)`, and its memory counts in the
+parent's footprint. `--independent` queues it as an unrelated request.
 
 **Stop a run by killing its process group.** Without a terminal, `run` starts its command in a
 process group of its own and relays signals to it, which a SIGKILL of coreslot's group cannot do:
-the command would live on with the grant's tokens. `coreslot run --same-group` keeps the command in
-coreslot's group, so a `killpg` reaches the whole tree. A SIGINT or SIGQUIT sent to coreslot's pid
-alone is then dropped and a SIGTERM or SIGHUP reaches only the command's pid, as in a terminal:
-signal the group, not coreslot's pid.
+the command would live on holding the reservation. `coreslot run --same-group` keeps the command in
+coreslot's group, so a `killpg` reaches the whole tree (a command there is never a stop-round
+victim). A SIGINT or SIGQUIT sent to coreslot's pid alone is then dropped and a SIGTERM or SIGHUP
+reaches only the command's pid, as in a terminal: signal the group, not coreslot's pid.
 
-The command receives `CORESLOT_GRANTED_CPU` (and one `CORESLOT_GRANTED_<RES>` per resource,
-memory in MiB) and inherits the descriptors that hold its grant
-([`PROTOCOL.md` section 17](PROTOCOL.md#17-descriptor-and-environment-contract)). The tokens stay
-held until the command exits and coreslot closes its copies; a daemon the command leaves behind
-with inherited descriptors keeps them.
-
-### Choosing a range
-
-A token is a core, not a worker. Start a command you have not measured low, at `cpu=1` or
-`cpu=2`, rather than at a guess of 4 or 8: a request too large holds cores nobody uses while the
-other gates wait, and a request too small costs only its own speed until it is corrected. After
-any run of a minute or more whose use does not match its tokens, coreslot prints one line saying
-so and what would fit, for example `coreslot: gate:unit used 1.15 of 8 cpu over 1h07m54s;
---need cpu=2 would fit`, or `... used 3.20 cpu on 1 over 10m00s; --need cpu=4 would cover it`.
-The line counts what the run log counts (below), so a command whose work runs in a container or
-a daemon it talks to looks idle to it. Ask for the cores a command keeps busy, measured on this machine:
-each run appends a line to the run log, `log/runs.jsonl` in the state directory, and
-(`cpu_user_s` + `cpu_sys_s`) ÷ `ran_s` in it is the cores the run used (the command and the
-descendants it waited for; not a database or daemon it talks to). Ask for that times about 1.2.
-
-A command that keeps well under one core busy for a long time, such as a download or a stream
-that waits on the network, needs no token: `coreslot run --light -- curl -O URL` runs at once
-outside the budget, with `CORESLOT_GRANTED_CPU=1`. `status` still shows it, as an unbudgeted hold,
-and the run log still records what it used, so the line above says when a light run was not
-(`... used 3.20 cpu outside the budget ...; --need cpu=4 would count it`). A run under 0.25 cores
-on its tokens is pointed at `--light`. A nested run inside a light run passes through unbudgeted,
-as inside any run outside the budget.
-
-`coreslot run --preemptible` (or `preemptible = true` in the label's `needs.toml` entry;
-`--preemptible=false` overrides the entry) marks a batch run. It is admitted with one cpu token
-whatever its cpu request, and with its full memory, and its command runs at a lower priority for the
-whole run. On Linux and the BSDs coreslot sets nice 10 on the command's process group right after
-the start, so every process of the command and everything it forks later has it. macOS ignores nice
-for every ordinary thread, so there coreslot starts the command through
-`/usr/sbin/taskpolicy -c utility`: a utility QoS clamp that every thread and every process of the
-command inherits from its first instruction. The command keeps its pid, sees its resolved path as
-`argv[0]`, and its disk I/O gets a lower tier too, as any utility work does. taskpolicy is a
-restricted binary, whose start drops every `DYLD_*` variable, so a command whose environment has one
-runs unclamped, and the run log's reason says so (`flag; unclamped: DYLD_* in the environment`). A
-path that is not an executable file runs unwrapped too and fails with coreslot's 126 or 127; a
-script whose `#!` interpreter is missing still fails with taskpolicy's own status and message. Other
-runs are admitted because the cpu tokens it leaves are free, and the scheduler gives them the cores
-first; the batch run takes the whole machine only when nothing else wants it. Its cpu is not
-reserved, so it over-commits cpu by design and pays in time only: mark batch work, not tests with
-timers, network or a database. `{n}` keeps the width of the request you wrote (`cpu = "1..8"` gives
-8), `CORESLOT_GRANTED_CPU` is the real grant, 1, and the run log records the request as `need`, the
-grant, and a `preemptible` key with the reason (`flag`, `entry` or `auto: ...`); `status` shows the
-reason on the hold. A run that the queue does not admit (inside another run's grant, `--light`,
-outside an unusable budget, or at its `--timeout` under `--on-timeout run`) ignores the mark.
-
-A run that nothing marked becomes preemptible by itself when it queues for admission (not
-`--light`, not inside another run's grant, not in a terminal), its request's cpu max is at least
-half the cpu size, and its label (without a worker count) has at least 5 recorded runs with a
-median of 10 minutes or more, in both generations of the run log. A run that was itself demoted
-counts only when it took under 10 minutes, since its demotion may be what made it long. No
-history, no demotion, and a label whose runs of a minute or more averaged under 0.05 cores is left
-alone, since its work looks to run outside the process tree. The first time a label is demoted, coreslot prints a line saying
-that runs with wall-clock deadlines can fail when demoted; `preemptible = false` in the entry opts
-out. An entry that says `observed = false` is never demoted by itself either.
-
-Four limits. Outside macOS, in terminal mode the group is the shell's job, so only the command's own
-process is lowered, and processes it forked before that are missed. On Linux, nice compares
-processes only within one autogroup (one session, on by default) or cpu cgroup, so the demotion
-reaches another session's work only where autogroup is off. And a command whose work runs outside
-its process tree, such as a Docker container, has nothing in that tree to lower, and the mark frees
-tokens that work still uses. And a preemptible run holds one cpu token, so a `coreslot run` nested
-inside its command gets 1 cpu, and `{n}` is what one token gives; `preemptible = false` on the outer
-label avoids it.
-
-**Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time, so a
-budget that admits `a` and makes `b` wait leaves `a` blocked on the full pipe until `b` reads it:
-the two wait on each other until a `--timeout`. Write `coreslot run --need cpu=2 -- sh -c 'a | b'`,
-or give the light stages `--light`. A waiting run whose stdin is a pipe says so once.
-
-`min` is the least the command can usefully run with; `max` is the point past which more
-parallelism stops paying, which you find by measuring. `cpu=4..` means `4..16` and `cpu=..8` means
-`1..8`; a `max` above the budget simply takes at most the budget.
-
-Keep `min` small. A request waits until `min` tokens are free at once, and while it waits at the
-head of the queue nobody behind it is admitted on the resources it waits for
-([`PROTOCOL.md` section 12.1](PROTOCOL.md#121-steps), step 5; a run among the first 4 may pass it
-only within what every minimum ahead leaves free, section 10.3), so tokens freed in the meantime
-stay idle until `min` of them have accumulated. On 8 tokens, a queue of five requests of fixed
-sizes 1, 8, 1, 8, 1 runs one after another, with 7 tokens idle during every 1-token run. With the
-8-token requests written `4..8`, the first starts at once with 7 beside the 1-token run, and
-nothing idles. A grant is fixed for the run's lifetime: it does not grow when tokens free up
-later.
-
-Without `--need` (and without `cpu` in its [needs file](#memory) entry), a run whose command has
-`{n}` (or `{n:cpu}`, or one inside an argument with `--subst`) asks for `cpu=1..16`, or up to the
-machine's CPU count when it has fewer, and any other run for `cpu=1..1`: a command that cannot
-learn its grant would hold tokens it leaves idle. A command that parallelizes itself without
-`{n}`, such as `go test ./...` or `cargo build`, should say `--need cpu=1..16` (or `cpu=1..`) so
-that it is counted honestly.
-
-### Memory
-
-Memory is a budget too: by default 60 % of the machine's physical memory, counted in tokens of
-128 MiB. A run that names memory waits until that much is free beside everything else:
-
-```sh
-coreslot run --need cpu=4 --need mem=3G --label gate:unit -- pytest -n 12
-```
-
-A memory need is one size (`mem=3G`, `mem=768M`), not a range. The command gets
-`CORESLOT_GRANTED_MEM=3072`, in MiB, and `{n:mem}` is the same number. A need larger than the
-budget is clamped like cpu; one above 32 GiB reserves 32 GiB. A run that names no memory is not
-counted against it, and nothing limits what a command uses.
-
-Rather than a `--need` on every run, keep each label's needs in `needs.toml`, beside the
-configuration (`~/.config/coreslot/needs.toml`). A labelled run takes from its entry each resource
-its `--need` leaves out; a final worker count in the label does not change which entry applies,
-so `gate:unit@12` uses the entry of `gate:unit`:
-
-```toml
-[needs."gate:unit"]
-cpu = "4"
-mem = "3G"
-```
-
-An entry can instead say how many cores one worker keeps busy, with `cpu_per_worker`, and let the
-number of workers set the request:
-
-```toml
-[needs."gate:unit"]
-cpu_per_worker = 0.35
-cpu = "4..24"   # the worker width, not tokens; the default is 1 to the CPU count
-mem = "3G"
-```
-
-With `@K` in the label (`gate:unit@12`) the request is `ceil(c × K)` tokens, here 5, and `{n}` is
-`K`. Without it, `cpu` is the worker width `a..b`: the request is `ceil(c × a)..ceil(c × b)`
-tokens, here 2 to 9, and `{n}` is `max(1, min(b, floor(grant / c)))`, the workers the grant pays
-for, which is below `a` (or `K`) only when the budget clamped the request or a parent run holds
-less. A `--need cpu=…` on the command line wins over the entry, and `{n}` is then the token count.
-`CORESLOT_GRANTED_CPU` stays the token count either way, so a script that read it as a worker
-count should read `{n}` instead.
-
-coreslot measures every run: the run log records the memory peak of the command and all its
-descendants, sampled every second. `coreslot stats` shows, per label, what its last 5 runs used;
-`coreslot suggest` prints the entries they suggest (the most cores and the largest peak among
-them; when that peak was taken with more cpu than it suggests, its evidence says so, since a
-command with `{n}` uses memory per worker and the peak may be smaller at the new grant), and
-`coreslot suggest --write` writes them into `needs.toml` with their evidence, leaving an entry
-marked `pinned = true` as it is. A run records `workers` when its command took a cpu placeholder
-or its label carried `@K`; `suggest` then learns the cores one worker keeps busy (the p90 of cores
-÷ workers over the window, rounded up to 0.05) and writes it as `cpu_per_worker` into an entry
-that has one, never touching its `cpu`. For a range entry (`cpu = "1..16"`) whose runs carry
-`workers`, it no longer narrows the max to the cores used when no run saturated its grant, and its
-evidence suggests `cpu_per_worker`. After a run whose peak outgrew its memory need by more than
-one token, or passed 1 GiB with none, coreslot says so on stderr, for example
-`coreslot: gate:unit peaked at 2.5 GiB on a 2 GiB mem grant; coreslot suggest --write --label
-gate:unit`.
+**Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time: write
+`coreslot run -- sh -c 'a | b'` so that they are one command with one need.
 
 ### Exit status
 
 A run exits with its command's own status. Otherwise 75 means refused (`--no-wait`,
-`--on-timeout fail`, cancellation, `--strict`; `--refusal-code N` changes it), 64 a usage error,
-130 `Ctrl-C` while waiting, 126 / 127 a command that is not executable / not found, and 70 an
-internal error. `status` exits 3 while runs fail open, and `doctor` 1 when it finds a problem;
-`cancel`, `doctor --clear` and `doctor --reset` exit 75 when they refuse.
-[`PROTOCOL.md` section 19](PROTOCOL.md#19-exit-status) has the full table.
+`--on-timeout fail`, cancellation, `--strict`, giving up after 3 stops; `--refusal-code N` changes
+it), 64 a usage error, 130 `Ctrl-C` while waiting, 126 / 127 a command that is not executable / not
+found, and 70 an internal error. `status` exits 3 while runs fail open, and `doctor` 1 when it finds
+a problem. [`PROTOCOL.md` section 19](PROTOCOL.md#19-exit-status) has the full table.
 
 When the state directory cannot be used (a network filesystem, wrong permissions, an invalid
-configuration), `run` fails open: it runs the command at once with its minimum, says so on stderr,
-records degraded mode, and exports `CORESLOT_UNBUDGETED`. `--strict` refuses instead.
+configuration), `run` fails open: it runs the command at once, says so on stderr, records degraded
+mode, and exports `CORESLOT_UNBUDGETED`. `--strict` refuses instead.
 
 ## Configuration
 
-Without a configuration file the budget is `cpu = "140%"` of the CPU count and `mem = "60%"` of
-the physical memory. To change it, write `~/.config/coreslot/config.toml` (the home directory comes
-from the password database, not `$HOME`):
+Every key is optional. `~/.config/coreslot/config.toml` (the home directory comes from the password
+database, not `$HOME`):
 
 ```toml
-[resources]
-cpu = "-2"        # an integer; "N%" of the CPU count, N up to 400; or "-K" for all but K
-mem = "16G"       # GiB as an integer; "N%" of physical memory; a size such as "768M"; 0 turns it off
-pg-local = 2      # any other resource, for example a shared local database
+[memory]
+reserve = "1G"        # memory kept free beyond every need
 
-[priorities]      # label prefix -> priority; --priority overrides
-"ci:" = 0
-"interactive:" = 10
+[watch]
+mode = "enforce"      # "observe": everything but the kill
+sample_log = false    # true: log every machine sample to log/watch.jsonl
 ```
 
-A suite that also needs the shared database adds `--need pg-local=1`. The state lives in
-`~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/` on Linux.
-`CORESLOT_STATE_DIR` overrides it for tests and moves the configuration to
+`[watch]` also takes the thresholds and waits
+([`PROTOCOL.md` section 5.3](PROTOCOL.md#53-configuration-file)); their defaults are interim until
+calibration.
+
+`needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
+space or an `@` is not a bare TOML key, so quote it:
+
+```toml
+[needs."go test@proj"]
+mem = "3G"            # a pin: learning never replaces it
+
+[needs."gate:docker"]
+no_restart = true     # a stop round never kills this label's commands
+```
+
+The state lives in `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`
+on Linux. `CORESLOT_STATE_DIR` overrides it for tests and moves the configuration to
 `$CORESLOT_STATE_DIR/config.toml` with it: an override is a separate budget.
 
 ## What it is not
 
-- **Not enforcement.** coreslot is cooperative admission control. It sets no cgroup quota or CPU
-  affinity, and lowers no priority but a preemptible run's; a command that ignores its grant, or a
-  tool that never asks, is not stopped or counted. A hostile process of the same user can hoard
-  tokens or corrupt the state ([SECURITY.md](SECURITY.md)).
+- **Not enforcement.** coreslot is cooperative admission control. It caps nothing: a command may use
+  more than its need, and a tool that never goes through `coreslot run` is neither queued nor
+  stopped. Work you run outside it is your own priority. A hostile process of the same user can
+  corrupt the state ([SECURITY.md](SECURITY.md)).
 - **Not a daemon.** Nothing runs between commands; there is no network and no distribution of work
   across machines.
 - **Not multi-user.** One budget per user; never share the state directory across users or hosts.
-- **Not a memory limit.** A memory need reserves part of the budget; it does not cap what the
-  command uses, and a run that names no memory is not counted against it.
 - **Not for Windows.** coreslot builds there, but runs every command at once, without a budget,
   with a warning.
 
-### Containers
-
 A `coreslot run` inside a container sees the container's filesystem and therefore its own budget.
-Containers take part through a client on the host. On Docker Desktop for macOS a lock the host
-holds on a bind-mounted file is not visible inside the container.
-
-The run log counts the command's process tree, so a run whose work happens in a container or on
-another host looks idle to it. `coreslot suggest` does not lower the cpu and mem of a label whose
-last runs of at least 60 s averaged under 0.05 cores: its evidence says the work may run outside
-the process tree, and the run is never refused. Put `observed = false` in the entry to say so, and
-`suggest` keeps that entry's cpu and mem as they are.
-
-## Protocol
-
-[`PROTOCOL.md`](PROTOCOL.md) is the normative definition of format 1: the state directory, its
-files and bodies, the admission critical section, and the descriptor and environment contract. Any
-client written from it alone shares one budget with every other.
+Containers take part through a client on the host. The memory a run measures is its process tree's,
+so a command whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md)
+- [Protocol](PROTOCOL.md), the normative definition of format 2
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
+- [Calibration](calibration/README.md), where the watchdog's defaults come from
+- [Running a command on another machine under its budget](docs/remote.md)
 - [Contributing](CONTRIBUTING.md), [security](SECURITY.md), [code of conduct](CODE_OF_CONDUCT.md)
 - [Third-party licenses](THIRD_PARTY_LICENSES.md)
 

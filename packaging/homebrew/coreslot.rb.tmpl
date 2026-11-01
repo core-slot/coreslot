@@ -11,7 +11,7 @@
 #
 # and commit Formula/coreslot.rb to the tap repository (core-slot/homebrew-tap).
 class Coreslot < Formula
-  desc "One core budget for every test suite, build and agent on your machine"
+  desc "A memory guard for the heavy commands of coding agents"
   homepage "https://github.com/core-slot/coreslot"
   url "https://github.com/core-slot/coreslot/archive/refs/tags/v@VERSION@.tar.gz"
   sha256 "@SHA256@"
@@ -29,7 +29,7 @@ class Coreslot < Formula
   end
 
   test do
-    assert_match "coreslot #{version} (protocol formats: 1)", shell_output("#{bin}/coreslot version")
+    assert_match "coreslot #{version} (protocol formats: 2)", shell_output("#{bin}/coreslot version")
     # A separate budget under the test's own directory, never the user's.
     ENV["CORESLOT_STATE_DIR"] = (testpath/"state").to_s
     system bin/"coreslot", "run", "--", "true"
