@@ -129,9 +129,10 @@ func (t *Ticket) watchWait(sec *store.Section, c watch.Config, need, room int64,
 		return false, nil
 	case d.Level >= watch.Yellow:
 		return true, nil
-	case d.LastAdmitNS >= d.YellowClearedNS && mono-d.LastAdmitNS < spacing: // spaced after a clear
+	case mono-d.YellowClearedNS >= int64(c.CalmS*1e9): // no clear within calm_s: no spacing
+	case d.LastAdmitNS >= d.YellowClearedNS && mono-d.LastAdmitNS < spacing:
 		return true, nil
-	case mono-d.YellowClearedNS < spacing:
+	default:
 		d.LastAdmitNS = mono
 		_ = sec.SetWatch(d, s, at) // a start it could not record only spaces the next less
 	}

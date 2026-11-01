@@ -53,19 +53,26 @@ func TestIdleIgnoresLevel(t *testing.T) {
 	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
 }
 
-// After the level clears, one job starts per spacing_s.
+// For calm_s after the level clears, each job starts at least spacing_s after the previous one;
+// after that, none waits. Mutation: recording only the first start after the clear admits the
+// third job at once.
 func TestSpacingAfterClear(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
 	hold(t, e, need("mem=1"))
 	setWatch(t, e, clk, watch.Detector{YellowClearedNS: sampleWallNS - 1e9}, 0)
 	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
-	tk := enqueue(t, e, need("mem=1"))
-	if isAdmitted(step(t, tk)) {
-		t.Fatal("a second job started within spacing_s of the first after the clear")
+	for i := 2; i <= 3; i++ {
+		tk := enqueue(t, e, need("mem=1"))
+		if isAdmitted(step(t, tk)) {
+			t.Fatalf("job %d started within spacing_s of the previous one after the clear", i)
+		}
+		clk.advance(3 * time.Second)
+		admitted(t, step(t, tk))
 	}
-	clk.advance(3 * time.Second)
-	admitted(t, step(t, tk))
+	clk.advance(24 * time.Second) // 31 s after the clear
+	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
 }
 
 // A restarted job waits for calm_s of green and for room of its need plus max(256 MiB, need/10),
