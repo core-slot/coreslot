@@ -45,7 +45,9 @@ const exitRefusal = 75
 
 // ---------------------------------------------------------------- helpers
 
-func cpuConfig(n int) string { return fmt.Sprintf("[resources]\ncpu = %d\n", n) }
+func memConfig(n int) string {
+	return fmt.Sprintf("[resources]\nmem = \"%dM\"\n", n*spec.MemTokenMiB)
+}
 
 func admittedAt(h coreslot.HoldInfo) time.Time { return h.Start }
 
@@ -177,18 +179,18 @@ func TestStateDirWithSpace(t *testing.T) {
 	if !strings.Contains(e.Dir, " ") {
 		t.Fatalf("state directory %q has no space", e.Dir)
 	}
-	e.WriteConfig(cpuConfig(2))
+	e.WriteConfig(memConfig(2))
 
-	g := e.Run("go", "--need", "cpu=2")
+	g := e.Run("go", "--mem", "256M")
 	r := e.WaitStarted("go")
 	h := e.WaitHold("go", startWait)
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if r.Env["CORESLOT_GRANTED_CPU"] != "2" || r.Env["CORESLOT_STATE_DIR"] != e.Dir {
+	if r.Env["CORESLOT_GRANTED_MEM"] != "256" || r.Env["CORESLOT_STATE_DIR"] != e.Dir {
 		t.Errorf("environment %v", r.Env)
 	}
 
 	// status, human and --json, while one run holds and one waits.
-	w := e.Run("waiting", "--need", "cpu=1")
+	w := e.Run("waiting", "--mem", "128M")
 	tkW := e.WaitTicket("waiting")
 	st := e.Start("status")
 	st.ExitCode(0)
@@ -213,7 +215,7 @@ func TestStateDirWithSpace(t *testing.T) {
 	if err := json.Unmarshal([]byte(sj.Stdout()), &doc); err != nil {
 		t.Fatalf("status --json: %v\n%s", err, sj.Stdout())
 	}
-	if doc.StateDir != e.Dir || len(doc.Holds) != 1 || doc.Holds[0].Label != "go" || doc.Holds[0].Grant["cpu"] != 2 ||
+	if doc.StateDir != e.Dir || len(doc.Holds) != 1 || doc.Holds[0].Label != "go" || doc.Holds[0].Grant["mem"] != 2 ||
 		len(doc.Tickets) != 1 || doc.Tickets[0].ID != tkW.ID {
 		t.Errorf("status --json: %+v", doc)
 	}
@@ -221,7 +223,7 @@ func TestStateDirWithSpace(t *testing.T) {
 	// cancel, by id and by label.
 	e.Start("cancel", tkW.ID).ExitCode(0)
 	w.ExitCode(exitRefusal)
-	w2 := e.Run("waiting2", "--need", "cpu=1")
+	w2 := e.Run("waiting2", "--mem", "128M")
 	e.WaitTicket("waiting2")
 	e.Start("cancel", "--label", "waiting2").ExitCode(0)
 	w2.ExitCode(exitRefusal)
@@ -240,14 +242,14 @@ func TestStateDirWithSpace(t *testing.T) {
 			t.Fatal(err)
 		}
 		client := filepath.Join(root, "conformance", "pyclient", "coreslot_client.py")
-		p := e.StartCommand(py, client, "run", "--need", "cpu=1", "--label", "py", "--",
+		p := e.StartCommand(py, client, "run", "--need", "mem=128M", "--label", "py", "--",
 			bins.child, "hold", e.MarkDir, "py")
 		e.WaitTicket("py")
 
 		// The Python client cancels a Go run's ticket in the same directory. The run, held after a
 		// refresh until the request is published, then finds the admission section busy: it
 		// withdraws and leaves its ticket dead for a reconciliation (PROTOCOL.md section 13.2).
-		v := e.Pausing("ticket.refreshed").Run("victim", "--need", "cpu=1")
+		v := e.Pausing("ticket.refreshed").Run("victim", "--mem", "128M")
 		tk := e.WaitTicket("victim")
 		v.WaitReached("ticket.refreshed")
 		e.StartCommand(py, client, "cancel", tk.ID).ExitCode(0)
@@ -299,8 +301,8 @@ func holdSection(e Env) (leave func()) {
 	return func() { f.Close() }
 }
 
-// With no configuration file at all the budget is cpu = 140% and mem = 60%, there is no degraded
-// mode, and a run prints nothing.
+// With no configuration file at all the budget is mem = 60%, there is no degraded mode, and a
+// run prints nothing.
 func TestFreshMachineRunsQuietly(t *testing.T) {
 	e := State(t)
 	if _, err := os.Stat(e.Dir); !errors.Is(err, os.ErrNotExist) {
@@ -313,17 +315,17 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if got := p.Stderr() + p.Stdout(); got != "" {
 		t.Errorf("a run on a fresh machine printed %q", got)
 	}
-	if r.Env["CORESLOT_GRANTED_CPU"] != "1" || r.Env["CORESLOT_UNBUDGETED"] != "" {
+	if r.Env["CORESLOT_GRANTED_MEM"] != "128" || r.Env["CORESLOT_UNBUDGETED"] != "" {
 		t.Errorf("environment %v", r.Env)
 	}
-	m, err := config.ReadMachine(true)
+	m, err := config.ReadMachine()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cpu, mem := m.CPUs*140/100, spec.MemTokensFloor(m.MemMiB*60/100)
+	mem := spec.MemTokensFloor(m.MemMiB * 60 / 100)
 	rep := e.Status()
-	if len(rep.Resources) != 2 || rep.Resources["cpu"].Size != cpu || rep.Resources["mem"].Size != mem {
-		t.Errorf("resources %v, want cpu of size %d and mem of size %d", rep.Resources, cpu, mem)
+	if len(rep.Resources) != 1 || rep.Resources["mem"].Size != mem {
+		t.Errorf("resources %v, want mem of size %d", rep.Resources, mem)
 	}
 	if rep.Degraded != nil || rep.ConfigError != nil || rep.FormatError != nil || rep.Format != 1 {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)
@@ -379,17 +381,17 @@ func waitRefreshed(e Env, label string, before int64) {
 // within the bound, and once continued the old head takes its place again and is admitted next.
 func TestStoppedHeadNoOtherChange(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(2))
-	x := e.Run("X", "--need", "cpu=1")
+	e.WriteConfig(memConfig(2))
+	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 
 	// A needs both tokens and waits at the head; B and C need one, which is free, but there is
 	// no backfill: they wait behind the live head.
-	a, autoA := startStoppableHead(e, "A", "--need", "cpu=2")
+	a, autoA := startStoppableHead(e, "A", "--mem", "256M")
 	e.WaitTicket("A")
-	b := e.Run("B", "--need", "cpu=1")
+	b := e.Run("B", "--mem", "128M")
 	e.WaitTicket("B")
-	c := e.Run("C", "--need", "cpu=1")
+	c := e.Run("C", "--mem", "128M")
 	e.WaitTicket("C")
 	noHold(t, e, "B", "B was backfilled past the live head A")
 
@@ -441,15 +443,15 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 // one that first sees them already stopped; continued, they are admitted in their order again.
 func TestConsecutiveStalledTickets(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(3))
-	x := e.Run("X", "--need", "cpu=1")
+	e.WriteConfig(memConfig(3))
+	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 
-	a, autoA := startStoppableHead(e, "A", "--need", "cpu=3")
+	a, autoA := startStoppableHead(e, "A", "--mem", "384M")
 	e.WaitTicket("A")
-	b := e.Run("B", "--need", "cpu=3")
+	b := e.Run("B", "--mem", "384M")
 	e.WaitTicket("B")
-	d := e.Run("D", "--need", "cpu=1")
+	d := e.Run("D", "--mem", "128M")
 	e.WaitTicket("D")
 	noHold(t, e, "D", "D was backfilled past the live head A")
 
@@ -463,9 +465,9 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 
 	// C arrives after both stopped: its first sighting of them is already stale. E arrives too,
 	// and finds no token left once C and D are admitted.
-	c := e.Run("C", "--need", "cpu=1")
+	c := e.Run("C", "--mem", "128M")
 	tkC := e.WaitTicket("C")
-	f := e.Run("E", "--need", "cpu=1")
+	f := e.Run("E", "--mem", "128M")
 	e.WaitTicket("E")
 
 	hd := e.WaitHold("D", stalledHeadBound+startWait)
@@ -521,25 +523,26 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 
 // ---------------------------------------------------------------- order
 
-// A higher-priority ticket published after the head won an election, while the head waits
-// before a section that cannot admit it, is admitted first: the head repeats the election
-// before its next attempt (PROTOCOL.md section 10.3). One published after the head's election
-// but before the section that could admit it is admitted first too: that section repeats the
-// election (section 12.1 step 5), where a ticket first seen counts as live. One published while
-// the head is inside the section that admits it is admitted after it.
+// A ticket that sorts ahead of the head (its client's clock runs an hour behind), published after
+// the head won an election, while the head waits before a section that cannot admit it, is
+// admitted first: the head repeats the election before its next attempt (PROTOCOL.md section
+// 10.3). One published after the head's election but before the section that could admit it is
+// admitted first too: that section repeats the election (section 12.1 step 5), where a ticket
+// first seen counts as live. One published while the head is inside the section that admits it
+// is admitted after it.
 func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	t.Run("admissible P published between H's election and its admitting section", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(cpuConfig(1))
-		h := e.Pausing("admit.before-enter", "section.entered").Run("H", "--need", "cpu=1")
+		e.WriteConfig(memConfig(1))
+		h := e.Pausing("admit.before-enter", "section.entered").Run("H", "--mem", "128M")
 		autoSec := h.AutoRelease("section.entered")
 		e.WaitTicket("H")
 		h.WaitReached("admit.before-enter") // H won an election with the token free
 		autoSec()
 
-		// P (priority 10), ahead of H, is published and elected too, and is held before its
-		// own admitting section.
-		p := e.Pausing("admit.before-enter").Run("P", "--priority", "10", "--need", "cpu=1")
+		// P, ahead of H, is published and elected too, and is held before its own admitting
+		// section.
+		p := e.Offset(-time.Hour).Pausing("admit.before-enter").Run("P", "--mem", "128M")
 		e.WaitTicket("P")
 		p.WaitReached("admit.before-enter")
 		if rep := e.Status(); len(rep.Tickets) != 2 || rep.Tickets[0].Label != "P" {
@@ -566,27 +569,27 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 		h.ExitCode(0)
 	})
 	e := State(t)
-	e.WriteConfig("[resources]\ncpu = 1\npg = 1\n")
-	x := e.Run("X", "--need", "cpu=1")
+	e.WriteConfig(memConfig(2))
+	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
-	y := e.Run("Y", "--need", "pg=1")
+	y := e.Run("Y", "--mem", "128M")
 	e.WaitHold("Y", startWait)
 
-	h := e.Pausing("admit.before-enter", "section.entered", "publish.after-create").Run("H", "--need", "cpu=1")
+	h := e.Pausing("admit.before-enter", "section.entered", "publish.after-create").Run("H", "--mem", "128M")
 	autoPub := h.AutoRelease("publish.after-create")
 	autoSec := h.AutoRelease("section.entered")
 	e.WaitTicket("H")
 	h.WaitReached("admit.before-enter") // H won an election: it is the head
 	autoSec()
 
-	// Before H's next section, P (priority 10) is published, ahead of H in the order.
-	p := e.Run("P", "--priority", "10", "--need", "cpu=1", "--need", "pg=1")
+	// Before H's next section, P, which needs both tokens, is published ahead of H in the order.
+	p := e.Offset(-time.Hour).Run("P", "--mem", "256M")
 	e.WaitTicket("P")
 	if rep := e.Status(); len(rep.Tickets) != 2 || rep.Tickets[0].Label != "P" {
 		t.Fatalf("queue %v: P is not ahead of H", rep.Tickets)
 	}
 
-	// H goes on into the section it was elected for; X holds the cpu token, so it is not
+	// H goes on into the section it was elected for; X and Y hold both tokens, so it is not
 	// admitted and leaves.
 	h.Release("admit.before-enter")
 	h.WaitReached("section.entered")
@@ -595,7 +598,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	defer h.AutoRelease("section.entered")()
 	e.Eventually(startWait, "H leaves its section", func() bool { return !e.Status().Section.Held })
 
-	// The cpu token frees up. P cannot be admitted (Y holds pg) and H, behind the live P, must
+	// One token frees up. P cannot be admitted (it needs both) and H, behind the live P, must
 	// not be: it repeats the election before each attempt.
 	e.ReleaseChild("X")
 	x.ExitCode(0)
@@ -606,13 +609,13 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	e.WaitHold("P", startWait)
 	noHold(t, e, "H", "H was admitted beside P")
 
-	// H is the head again. P2 (priority 10) arrives while H is paused inside the section that
-	// admits it: H's admission stands, and P2 is admitted after H.
+	// H is the head again. P2, ahead of H and needing both tokens, arrives while H is paused
+	// inside the section that admits it: H's admission stands, and P2 is admitted after H.
 	autoPub()
 	e.ReleaseChild("P")
 	p.ExitCode(0)
 	h.CatchPublication("publish.after-create", store.HoldsDir)
-	p2 := e.Run("P2", "--priority", "10", "--need", "cpu=1")
+	p2 := e.Offset(-time.Hour).Run("P2", "--mem", "256M")
 	time.Sleep(time.Second) // P2 starts and tries to enter the section H holds
 	if rep := e.Status(); !rep.Section.Held || rep.Section.PID != h.PID() {
 		t.Fatalf("section %+v: H (pid %d) is not inside its admitting section", rep.Section, h.PID())
@@ -624,7 +627,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	defer h.AutoRelease("publish.after-create")()
 	hh := e.WaitHold("H", startWait)
 	tk2 := e.WaitTicket("P2")
-	if !admittedAt(hh).Before(tk2.Created) {
+	if !admittedAt(hh).Before(tk2.Created.Add(time.Hour)) {
 		t.Errorf("P2 arrived at %v, before H's admission at %v", tk2.Created, admittedAt(hh))
 	}
 	noHold(t, e, "P2", "P2 was admitted beside H")
@@ -652,7 +655,7 @@ func TestPublishPausedAtEveryPoint(t *testing.T) {
 				}
 				t.Run(kind+"/"+strings.TrimPrefix(point, "publish.")+"/"+outcome, func(t *testing.T) {
 					e := State(t)
-					e.WriteConfig(cpuConfig(2))
+					e.WriteConfig(memConfig(2))
 					// FORMAT and gen exist, and a reconciliation just ran.
 					e.Start("run", "--no-wait", "--", "true").ExitCode(0)
 					switch kind {
@@ -696,15 +699,15 @@ func restored(t *testing.T, e Env, tickets, holds, cancels []string, locked int)
 			t.Errorf("%d ignored entries in %s", n, dir)
 		}
 	}
-	if got := rep.Resources["cpu"].Locked; got != locked {
-		t.Errorf("%d cpu tokens locked, want %d", got, locked)
+	if got := rep.Resources["mem"].Locked; got != locked {
+		t.Errorf("%d mem tokens locked, want %d", got, locked)
 	}
 }
 
 func publishTicket(t *testing.T, e Env, point string, killed bool) {
-	x := e.Run("X", "--need", "cpu=2")
+	x := e.Run("X", "--mem", "256M")
 	e.WaitHold("X", startWait)
-	w := e.Pausing(point).Run("W", "--need", "cpu=1")
+	w := e.Pausing(point).Run("W", "--mem", "128M")
 	w.CatchPublication(point, store.QueueDir)
 	if _, ok := e.Ticket("W"); ok {
 		t.Fatal("W's ticket is visible before its publication completed")
@@ -718,7 +721,7 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 			t.Errorf("the reconciliation removed %d entries", n)
 		}
 		restored(t, e, nil, []string{"X"}, nil, 2)
-		z := e.Run("Z", "--need", "cpu=1")
+		z := e.Run("Z", "--mem", "128M")
 		e.WaitTicket("Z")
 		e.ReleaseChild("X")
 		x.ExitCode(0)
@@ -748,7 +751,7 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 }
 
 func publishHold(t *testing.T, e Env, point string, killed bool) {
-	w := e.Pausing(point).Run("W", "--need", "cpu=1")
+	w := e.Pausing(point).Run("W", "--mem", "128M")
 	w.CatchPublication(point, store.HoldsDir) // inside the admitting section, tokens taken
 	if rep := e.Status(); len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 {
 		t.Fatalf("a hold is visible before W's publication completed: holds %v, dead %v", rep.Holds, rep.DeadHolds)
@@ -765,7 +768,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 			t.Errorf("the reconciliation removed %d entries, want the ticket and the temporary", n)
 		}
 		restored(t, e, nil, nil, nil, 0)
-		e.Start("run", "--no-wait", "--need", "cpu=2", "--", "true").ExitCode(0)
+		e.Start("run", "--no-wait", "--mem", "256M", "--", "true").ExitCode(0)
 		return
 	}
 	w.Release(point)
@@ -776,7 +779,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 		t.Errorf("the reconciliation removed %d entries with nothing dead", n)
 	}
 	h, ok := e.Hold("W")
-	if !ok || h.Granted["cpu"] != 1 || r.Env["CORESLOT_GRANTED_CPU"] != "1" {
+	if !ok || h.Granted["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
 		t.Fatalf("after the reconciliation W's hold is %+v (present %v), its command saw %v", h, ok, r.Env)
 	}
 	restored(t, e, nil, []string{"W"}, nil, 1)
@@ -785,11 +788,11 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 }
 
 func publishCancel(t *testing.T, e Env, point string, killed bool) {
-	x := e.Run("X", "--need", "cpu=2")
+	x := e.Run("X", "--mem", "256M")
 	e.WaitHold("X", startWait)
-	v := e.Run("V", "--need", "cpu=1")
+	v := e.Run("V", "--mem", "128M")
 	e.WaitTicket("V")
-	w := e.Run("W", "--need", "cpu=1")
+	w := e.Run("W", "--mem", "128M")
 	tk := e.WaitTicket("W")
 	// W waits behind the head V and never enters the section once its enqueue section has
 	// ended. Stopped, it cannot act on its cancel request, so the request must survive the
@@ -846,71 +849,35 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 // alone with it, says so once, and records the requested minimum.
 func TestOversizeIsClamped(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(10))
-	o := e.Run("O", "--need", "cpu=16")
+	e.WriteConfig(memConfig(8))
+	o := e.Run("O", "--mem", "2048M")
 	r := e.WaitStarted("O")
 	h := e.WaitHold("O", startWait)
-	if r.Env["CORESLOT_GRANTED_CPU"] != "10" || h.Granted["cpu"] != 10 || h.Clamped["cpu"] != 16 {
+	if r.Env["CORESLOT_GRANTED_MEM"] != "1024" || h.Granted["mem"] != 8 || h.Clamped["mem"] != 16 {
 		t.Errorf("command environment %v; hold grant %v, clamped %v", r.Env, h.Granted, h.Clamped)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if got := e.Status().Resources["cpu"].Locked; got != 10 {
-		t.Errorf("%d cpu tokens locked, want 10", got)
+	if got := e.Status().Resources["mem"].Locked; got != 8 {
+		t.Errorf("%d mem tokens locked, want 8", got)
 	}
-	y := e.Run("Y", "--need", "cpu=1")
+	y := e.Run("Y", "--mem", "128M")
 	e.WaitTicket("Y")
 	noHold(t, e, "Y", "Y ran beside the clamped run")
 	e.ReleaseChild("O")
 	o.ExitCode(0)
-	if want := "coreslot: cpu: requested 16, budget is 10; running alone with 10\n"; o.Stderr() != want {
+	if want := "coreslot: mem: requested 2 GiB, budget is 1 GiB; running alone with 1 GiB\n"; o.Stderr() != want {
 		t.Errorf("stderr %q, want %q", o.Stderr(), want)
-	}
-	if l := logLine(t, e, "O"); fmt.Sprint(l["clamped"]) != "[cpu]" {
-		t.Errorf("run log line %v", l)
 	}
 	e.WaitHold("Y", startWait)
 	e.ReleaseChild("Y")
 	y.ExitCode(0)
 }
 
-// A resource the configuration does not declare is not budgeted: the run is budgeted on its
-// declared resources, lists the other in its hold, prints one notice, and records no degraded
-// mode.
-func TestUndeclaredResourceIsUnbudgeted(t *testing.T) {
-	e := State(t)
-	e.WriteConfig(cpuConfig(4))
-	u := e.Run("U", "--need", "cpu=2", "--need", "pg-local=1")
-	r := e.WaitStarted("U")
-	h := e.WaitHold("U", startWait)
-	if r.Env["CORESLOT_GRANTED_CPU"] != "2" || r.Env["CORESLOT_GRANTED_PG_LOCAL"] != "1" || r.Env["CORESLOT_UNBUDGETED"] != "" {
-		t.Errorf("command environment %v", r.Env)
-	}
-	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if h.FailOpen || !slices.Equal(h.Unbudgeted, []string{"pg-local"}) || len(h.Granted) != 1 {
-		t.Errorf("hold %+v", h)
-	}
-	if _, err := os.Stat(filepath.Join(e.Dir, store.ResDir, "pg-local")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("res/pg-local exists (%v)", err)
-	}
-	e.ReleaseChild("U")
-	u.ExitCode(0)
-	lines := strings.Split(strings.TrimSuffix(u.Stderr(), "\n"), "\n")
-	if len(lines) != 1 || !strings.Contains(lines[0], "pg-local") || !strings.Contains(lines[0], "not declared") {
-		t.Errorf("stderr %q, want one notice naming pg-local", u.Stderr())
-	}
-	if rep := e.Status(); rep.Degraded != nil {
-		t.Errorf("degraded %+v", rep.Degraded)
-	}
-	if l := logLine(t, e, "U"); fmt.Sprint(l["unbudgeted_resources"]) != "[pg-local]" || l["fail_open"] != "" {
-		t.Errorf("run log line %v", l)
-	}
-}
-
 // A queue directory that already holds 65 536 entries cannot take a ticket: a state error, so
 // the run fails open (or refuses under --strict).
 func TestFullDirectoryFailsOpen(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(4))
+	e.WriteConfig(memConfig(4))
 	e.Start("run", "--no-wait", "--", "true").ExitCode(0)
 	q := filepath.Join(e.Dir, store.QueueDir)
 	for i := range store.MaxEntries {
@@ -921,10 +888,10 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 		f.Close()
 	}
 
-	f := e.Run("F", "--need", "cpu=2")
+	f := e.Run("F", "--mem", "256M")
 	r := e.WaitStarted("F")
 	h := e.WaitHold("F", startWait)
-	if r.Env["CORESLOT_GRANTED_CPU"] != "2" || r.Env["CORESLOT_UNBUDGETED"] == "" ||
+	if r.Env["CORESLOT_GRANTED_MEM"] != "256" || r.Env["CORESLOT_UNBUDGETED"] == "" ||
 		r.Env["CORESLOT_UNBUDGETED"] == "format" || r.Env["CORESLOT_TOKEN_FDS"] != "" || r.Env["CORESLOT_HELD_FD"] != "3" {
 		t.Errorf("command environment %v", r.Env)
 	}
@@ -958,7 +925,7 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 // Wait whose deadline passes returns within 1 s, leaving a dead ticket.
 func TestStoppedInSectionDoesNotHangCallers(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(1))
+	e.WriteConfig(memConfig(1))
 	c := e.Client()
 	poller, err := c.Enqueue(context.Background(), coreslot.Request{Label: "poller"})
 	if err != nil {

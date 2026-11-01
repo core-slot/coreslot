@@ -19,8 +19,8 @@ import (
 // and leave the machine's budget alone; a program opens coreslot.Options{} instead, the budget
 // every other client of the user shares.
 
-// Queue for one CPU core, wait for it, and run a command inside the grant: the command inherits
-// the grant's descriptors and learns what it may use from CORESLOT_GRANTED_CPU.
+// Queue for one memory token, wait for it, and run a command inside the grant: the command inherits
+// the grant's descriptors and learns what it may use from CORESLOT_GRANTED_MEM.
 func ExampleClient_Enqueue() {
 	dir, err := os.MkdirTemp("", "coreslot-example")
 	if err != nil {
@@ -36,7 +36,7 @@ func ExampleClient_Enqueue() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	w, err := c.Enqueue(ctx, coreslot.Request{Label: "example",
-		Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
+		Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -46,13 +46,13 @@ func ExampleClient_Enqueue() {
 	}
 	defer g.Close()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", `echo "the command may use $CORESLOT_GRANTED_CPU core"`)
+	cmd := exec.CommandContext(ctx, "sh", "-c", `echo "the command may use $CORESLOT_GRANTED_MEM MiB"`)
 	cmd.ExtraFiles, cmd.Env = g.Files(), g.Environ(os.Environ())
 	cmd.Stdout = os.Stdout
 	if err := cmd.Run(); err != nil {
 		log.Fatal(err)
 	}
-	// Output: the command may use 1 core
+	// Output: the command may use 128 MiB
 }
 
 // Poll instead of Wait, for a caller with a loop of its own: once at least every 2 s, or the
@@ -69,7 +69,7 @@ func ExampleWaiter_Poll() {
 		log.Fatal(err)
 	}
 	defer c.Close()
-	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: "example"}) // cpu 1..1
+	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: "example"}) // mem 1..1
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -81,13 +81,13 @@ func ExampleWaiter_Poll() {
 			log.Fatal(err) // the request is still queued: Cancel withdraws it
 		}
 		if g != nil {
-			fmt.Println("admitted with cpu", g.Granted()["cpu"])
+			fmt.Println("admitted with mem", g.Granted()["mem"])
 			g.Close()
 			return
 		}
 		<-tick.C // or do other work in between
 	}
-	// Output: admitted with cpu 1
+	// Output: admitted with mem 1
 }
 
 // Adopt work that is already running: it takes what is free, without queueing, and reports
@@ -98,8 +98,8 @@ func ExampleClient_Adopt() {
 		log.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
-	// A budget of two cores, whatever the machine has.
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 2\n"), 0o600); err != nil {
+	// A budget of two tokens, whatever the machine has.
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"256M\"\n"), 0o600); err != nil {
 		log.Fatal(err)
 	}
 
@@ -109,12 +109,12 @@ func ExampleClient_Adopt() {
 	}
 	defer c.Close()
 	g, err := c.Adopt(context.Background(), coreslot.Request{Label: "already running",
-		Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 4}}})
+		Need: map[string]coreslot.Range{"mem": {Min: 3, Max: 4}}})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer g.Close()
-	fmt.Printf("granted %d, short of the minimum by %d\n", g.Granted()["cpu"], g.Shortfall()["cpu"])
+	fmt.Printf("granted %d, short of the minimum by %d\n", g.Granted()["mem"], g.Shortfall()["mem"])
 	// Output: granted 2, short of the minimum by 1
 }
 
@@ -125,7 +125,7 @@ func ExampleClient_Snapshot() {
 		log.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 4\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"512M\"\n"), 0o600); err != nil {
 		log.Fatal(err)
 	}
 
@@ -135,7 +135,7 @@ func ExampleClient_Snapshot() {
 	}
 	defer c.Close()
 	g, err := c.Adopt(context.Background(), coreslot.Request{Label: "build",
-		Need: map[string]coreslot.Range{"cpu": {Min: 3, Max: 3}}})
+		Need: map[string]coreslot.Range{"mem": {Min: 3, Max: 3}}})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -145,15 +145,15 @@ func ExampleClient_Snapshot() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	cpu := r.Resources["cpu"]
-	fmt.Printf("cpu: size %d, locked %d, available %d\n", cpu.Size, cpu.Locked, cpu.Available)
+	mem := r.Resources["mem"]
+	fmt.Printf("mem: size %d, locked %d, available %d\n", mem.Size, mem.Locked, mem.Available)
 	for _, h := range r.Holds {
-		fmt.Printf("%s holds cpu %d (adopted %v)\n", h.Label, h.Granted["cpu"], h.Adopted)
+		fmt.Printf("%s holds mem %d (adopted %v)\n", h.Label, h.Granted["mem"], h.Adopted)
 	}
 	fmt.Println("queued:", len(r.Tickets))
 	// Output:
-	// cpu: size 4, locked 3, available 1
-	// build holds cpu 3 (adopted true)
+	// mem: size 4, locked 3, available 1
+	// build holds mem 3 (adopted true)
 	// queued: 0
 }
 
@@ -181,7 +181,7 @@ func Example_runUnbudgeted() {
 	// the command ran
 }
 
-// runBudgeted runs cmd inside a grant of cpu 1..1 from the budget o opens, or without the budget
+// runBudgeted runs cmd inside a grant of mem 1..1 from the budget o opens, or without the budget
 // when it cannot be used.
 func runBudgeted(ctx context.Context, o coreslot.Options, cmd *exec.Cmd) error {
 	g, err := grant(ctx, o)
@@ -198,7 +198,7 @@ func runBudgeted(ctx context.Context, o coreslot.Options, cmd *exec.Cmd) error {
 	return cmd.Run()
 }
 
-// grant opens the budget o names and waits for cpu 1..1 in it.
+// grant opens the budget o names and waits for mem 1..1 in it.
 func grant(ctx context.Context, o coreslot.Options) (*coreslot.Grant, error) {
 	c, err := coreslot.Open(o)
 	if err != nil {

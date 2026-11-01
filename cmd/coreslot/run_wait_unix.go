@@ -53,9 +53,8 @@ func (s ticketStepper) holders() ([]engine.HolderInfo, error) { return s.t.Holde
 
 // waitOneP runs wait with the Go runtime limited to one P (runtime.GOMAXPROCS(1)) and restores
 // the previous setting afterwards. A waiting process sleeps almost all the time, and with one P
-// its wake-ups do not wake idle threads of the other Ps: a CLI waiter in a quiet queue measured
-// 268 us of CPU per second against 453 us before, in one session (evidence/README.md, "Where a
-// waiter's CPU goes"). Only this process changes: GOMAXPROCS is not exported to the command.
+// its wake-ups do not wake idle threads of the other Ps, which cuts a waiter's own cost
+// (bench/floor measures it). Only this process changes: GOMAXPROCS is not exported to the command.
 func waitOneP(wait func() (*engine.Grant, error)) (*engine.Grant, error) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	return wait()
@@ -159,8 +158,8 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 }
 
 // waitingLine is the line a waiting run prints every 30 s, for example `coreslot: waiting for
-// cpu 4..12: position 2 (1m00s); holders: gate pid 4711 cpu12 (3m12s)`, where 1m00s is how long
-// the run has waited.
+// mem 3 GiB: position 2 (1m00s); holders: gate pid 4711 mem 1 GiB (3m12s)`, where 1m00s is how
+// long the run has waited.
 func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited time.Duration) string {
 	if w.Position == 0 {
 		return fmt.Sprintf("coreslot: waiting for %s: token-only mode, the state directory's format is not implemented here (%s)",
@@ -201,7 +200,7 @@ func (r *run) holdersText(e *engine.Engine) string {
 	return s
 }
 
-// holderList is `; holders: gate pid 4711 cpu12 mem 3 GiB (3m12s), ...`, or "" without holders. Labels
+// holderList is `; holders: gate pid 4711 mem 3 GiB (3m12s), ...`, or "" without holders. Labels
 // are escaped so that each holder stays on the line.
 func holderList(holders []engine.HolderInfo, nowNS int64) string {
 	if len(holders) == 0 {

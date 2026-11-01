@@ -19,10 +19,10 @@ func TestCountLockedProbeOutsideSection(t *testing.T) {
 	s := open(t, dir)
 	var paths []string
 	for i := 0; i < 6; i++ {
-		paths = append(paths, tokenPath(dir, "cpu", i))
+		paths = append(paths, tokenPath(dir, "mem", i))
 	}
-	paths = append(paths, filepath.Join(dir, ResDir, "cpu", "007"), filepath.Join(dir, ResDir, "cpu", "4096"))
-	if err := os.MkdirAll(filepath.Join(dir, ResDir, "cpu"), 0o700); err != nil {
+	paths = append(paths, filepath.Join(dir, ResDir, "mem", "007"), filepath.Join(dir, ResDir, "mem", "4096"))
+	if err := os.MkdirAll(filepath.Join(dir, ResDir, "mem"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range paths {
@@ -33,7 +33,7 @@ func TestCountLockedProbeOutsideSection(t *testing.T) {
 	// Lock tokens 2, 3 and 5 and both non-token names.
 	startHelper(t, "lock", dir, strings.Join([]string{paths[2], paths[3], paths[5], paths[6], paths[7]}, "\n"), nil)
 	startHelper(t, "section", dir, "", nil)
-	n, err := s.CountLockedProbe("cpu")
+	n, err := s.CountLockedProbe("mem")
 	if err != nil || n != 3 {
 		t.Fatalf("CountLockedProbe = %d, %v; want 3 (007 and 4096 are not tokens)", n, err)
 	}

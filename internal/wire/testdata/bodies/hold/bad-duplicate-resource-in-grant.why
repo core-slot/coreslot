@@ -1,1 +1,1 @@
-duplicate resource "cpu" inside grant
+duplicate resource "mem" inside grant

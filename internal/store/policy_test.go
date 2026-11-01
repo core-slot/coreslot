@@ -113,8 +113,8 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	if e, ignored, err := s.List(QueueDir); len(e) != 0 || ignored != 0 || err != nil {
 		t.Errorf("List of an absent queue/ = %v, %d, %v", e, ignored, err)
 	}
-	if n, err := sec.CountLocked("cpu"); n != 0 || err != nil {
-		t.Errorf("CountLocked with no res/cpu = %d, %v", n, err)
+	if n, err := sec.CountLocked("mem"); n != 0 || err != nil {
+		t.Errorf("CountLocked with no res/mem = %d, %v", n, err)
 	}
 	if err := sec.rotateLogIfNeeded(); err != nil {
 		t.Errorf("rotateLogIfNeeded with no log/: %v", err)
@@ -251,10 +251,10 @@ func TestOpenRejectsForeignFile(t *testing.T) {
 	// A symlinked token file is refused by OpenFile (O_NOFOLLOW) and by Open.
 	dir4 := newDir(t)
 	open(t, dir4)
-	if err := os.Mkdir(filepath.Join(dir4, "res", "cpu"), 0o700); err != nil {
+	if err := os.Mkdir(filepath.Join(dir4, "res", "mem"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	tok := filepath.Join(dir4, "res", "cpu", "0")
+	tok := filepath.Join(dir4, "res", "mem", "0")
 	if err := os.Symlink(filepath.Join(dir4, "admit.lock"), tok); err != nil {
 		t.Fatal(err)
 	}

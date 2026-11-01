@@ -146,15 +146,16 @@ type Sampler struct {
 	configMtime time.Time
 }
 
-// NewSampler writes the configuration sizes into e's state directory, makes sure FORMAT names
-// format 1 (so that a client implementing another format runs token-only instead of writing
-// its own), and returns a sampler of the directory.
-func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
+// NewSampler writes the configuration sizes into e's state directory, with the live memory size on
+// when liveBound (the Sampler's LiveBound) is not nil, makes sure FORMAT names format 1 (so that a
+// client implementing another format runs token-only instead of writing its own), and returns a
+// sampler of the directory.
+func NewSampler(t *testing.T, e Env, sizes map[string]int, liveBound map[string]int) *Sampler {
 	t.Helper()
 	if err := os.MkdirAll(e.Dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := &Sampler{TokenOnlyBound: DefaultTokenOnlyBound, dir: e.Dir, scratch: t.TempDir(),
+	s := &Sampler{TokenOnlyBound: DefaultTokenOnlyBound, LiveBound: liveBound, dir: e.Dir, scratch: t.TempDir(),
 		inodes: map[Token][2]uint64{}, unlisted: map[Token]time.Time{}, confirmedAt: map[Token]int{}, aboveStatic: map[string]int{}, admitMin: map[string]map[string]int{}, prev: map[string]Violation{}, reported: map[string]bool{}}
 	var err error
 	if s.st, err = store.Open(e.Dir); err != nil {
@@ -177,9 +178,9 @@ func NewSampler(t *testing.T, e Env, sizes map[string]int) *Sampler {
 	return s
 }
 
-// configBody is the configuration declaring sizes, with the live memory size on. mem is written
-// in MiB: a bare integer would be GiB.
-func configBody(sizes map[string]int) string {
+// configBody is the configuration declaring sizes, with the live memory size on when live. mem is
+// written in MiB: a bare integer would be GiB.
+func configBody(sizes map[string]int, live bool) string {
 	var b strings.Builder
 	b.WriteString("[resources]\n")
 	for _, r := range slices.Sorted(maps.Keys(sizes)) {
@@ -189,7 +190,7 @@ func configBody(sizes map[string]int) string {
 		}
 		fmt.Fprintf(&b, "%s = %d\n", r, sizes[r])
 	}
-	b.WriteString("[memory]\nlive = true\n")
+	fmt.Fprintf(&b, "[memory]\nlive = %v\n", live)
 	return b.String()
 }
 
@@ -197,7 +198,7 @@ func configBody(sizes map[string]int) string {
 // so that a client caching the configuration by mtime and size sees every change.
 func (s *Sampler) writeConfig(sizes map[string]int) error {
 	tmp := filepath.Join(s.scratch, "config.toml")
-	if err := os.WriteFile(tmp, []byte(configBody(sizes)), 0o600); err != nil {
+	if err := os.WriteFile(tmp, []byte(configBody(sizes, s.LiveBound != nil)), 0o600); err != nil {
 		return err
 	}
 	m := time.Now()
@@ -620,20 +621,20 @@ func lockToken(t *testing.T, e Env, k Token) int {
 	return fd
 }
 
-// fakeHold is the body of a constructed hold labeled label that lists the cpu indices idx.
+// fakeHold is the body of a constructed hold labeled label that lists the mem indices idx.
 func fakeHold(label string, idx ...int) wire.Hold {
-	return wire.Hold{Label: label, Grant: map[string][]int{"cpu": idx}}
+	return wire.Hold{Label: label, Grant: map[string][]int{"mem": idx}}
 }
 
-// fakeHolds takes take tokens of cpu at indices below below and publishes the holds, inside
+// fakeHolds takes take tokens of mem at indices below below and publishes the holds, inside
 // the section. The holds list what they are given, not what was taken: that is how a defective
 // client is built. close releases everything.
 func fakeHolds(t *testing.T, e Env, take, below int, holds ...wire.Hold) (close func()) {
 	t.Helper()
 	var files []*os.File
 	ts := inSection(t, e, func(sec *store.Section) *store.TokenSet {
-		ts, got, err := sec.TakeTokens(map[string]int{"cpu": take}, map[string]int{"cpu": below})
-		if err != nil || got["cpu"] != take {
+		ts, got, err := sec.TakeTokens(map[string]int{"mem": take}, map[string]int{"mem": below})
+		if err != nil || got["mem"] != take {
 			t.Fatalf("take %d tokens: got %v, %v", take, got, err)
 		}
 		for _, h := range holds {
@@ -731,7 +732,7 @@ func report(t *testing.T, e Env, name string, ks ...Token) {
 // token-only run are not reported.
 func TestSamplerCatchesAViolation(t *testing.T) {
 	e := State(t)
-	s := NewSampler(t, e, map[string]int{"cpu": 4})
+	s := NewSampler(t, e, map[string]int{"mem": 4}, nil)
 	s.Request = stormRequest
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -769,84 +770,84 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 	}
 	resize := func(n int) {
 		t.Helper()
-		if _, err := s.Resize(ctx, map[string]int{"cpu": n}); err != nil {
+		if _, err := s.Resize(ctx, map[string]int{"mem": n}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// A valid history: two runs hold, a third waits for more than is free, then each is
 	// released in turn, with samples throughout.
-	a := e.Run("v1.cli.c2_2", "--need", "cpu=2")
-	e.WaitHold("v1.cli.c2_2", startWait)
-	b := e.Run("v2.cli.c1_2", "--need", "cpu=1..2")
-	e.WaitHold("v2.cli.c1_2", startWait)
-	c := e.Run("v3.cli.c3_3", "--need", "cpu=3")
-	e.WaitTicket("v3.cli.c3_3")
+	a := e.Run("v1.cli.m2_2", "--mem", "256M")
+	e.WaitHold("v1.cli.m2_2", startWait)
+	b := e.Run("v2.cli.m1_2", "--mem", "256M")
+	e.WaitHold("v2.cli.m1_2", startWait)
+	c := e.Run("v3.cli.m3_3", "--mem", "384M")
+	e.WaitTicket("v3.cli.m3_3")
 	expect("two holds and a waiter")
-	e.ReleaseChild("v1.cli.c2_2")
+	e.ReleaseChild("v1.cli.m2_2")
 	a.ExitCode(0)
-	e.ReleaseChild("v2.cli.c1_2")
+	e.ReleaseChild("v2.cli.m1_2")
 	b.ExitCode(0)
-	e.WaitHold("v3.cli.c3_3", startWait)
+	e.WaitHold("v3.cli.m3_3", startWait)
 	expect("the waiter admitted")
-	e.ReleaseChild("v3.cli.c3_3")
+	e.ReleaseChild("v3.cli.m3_3")
 	c.ExitCode(0)
 	expect("everything released")
 
 	t.Run("an unlisted token held across samples is reported (I2)", func(t *testing.T) {
-		fd := lockToken(t, e, Token{"cpu", 3})
-		expect("cpu/3 locked outside the section", "I2 unlisted cpu/3")
+		fd := lockToken(t, e, Token{"mem", 3})
+		expect("mem/3 locked outside the section", "I2 unlisted mem/3")
 		unix.Close(fd)
 		settle()
 	})
 	t.Run("a momentary unlisted lock is not reported", func(t *testing.T) {
-		fd := lockToken(t, e, Token{"cpu", 2})
+		fd := lockToken(t, e, Token{"mem", 2})
 		if got := sample(); len(got) != 0 {
-			t.Errorf("the sample that saw cpu/2 locked reported %v", got)
+			t.Errorf("the sample that saw mem/2 locked reported %v", got)
 		}
 		unix.Close(fd)
 		if got := sample(); len(got) != 0 {
-			t.Errorf("the sample after cpu/2 was released reported %v", got)
+			t.Errorf("the sample after mem/2 was released reported %v", got)
 		}
 	})
 	t.Run("a waiting token-only run exempts nothing (I2)", func(t *testing.T) {
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("tw.tok.c1_1", "", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
+		runs.add("tw.tok.m1_1", "", map[string]spec.Range{"mem": {Min: 1, Max: 1}}, time.Now(),
 			func(ChildReport, bool) bool { return true })
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
-		fd := lockToken(t, e, Token{"cpu", 0})
-		expect("a cpu token while a token-only run waits (no start marker)", "I2 unlisted cpu/0")
+		fd := lockToken(t, e, Token{"mem", 0})
+		expect("a mem token while a token-only run waits (no start marker)", "I2 unlisted mem/0")
 		unix.Close(fd)
 		settle()
 	})
 	t.Run("an admitted, unreported token-only run exempts its minimum, within the bound (I2)", func(t *testing.T) {
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("ta.tok.c1_1", "", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
+		runs.add("ta.tok.m1_1", "", map[string]spec.Range{"mem": {Min: 1, Max: 1}}, time.Now(),
 			func(ChildReport, bool) bool { return true })
-		if err := os.WriteFile(begunPath(e.MarkDir, "ta.tok.c1_1"), nil, 0o600); err != nil {
+		if err := os.WriteFile(begunPath(e.MarkDir, "ta.tok.m1_1"), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
-		fd0 := lockToken(t, e, Token{"cpu", 0})
-		expect("its one cpu token, within the bound")
+		fd0 := lockToken(t, e, Token{"mem", 0})
+		expect("its one mem token, within the bound")
 		time.Sleep(s.TokenOnlyBound)
-		expect("its cpu token, past the bound", "I2 unlisted cpu/0")
+		expect("its mem token, past the bound", "I2 unlisted mem/0")
 		unix.Close(fd0)
 		settle()
-		fd1 := lockToken(t, e, Token{"cpu", 1})
-		fd2 := lockToken(t, e, Token{"cpu", 2})
+		fd1 := lockToken(t, e, Token{"mem", 1})
+		fd2 := lockToken(t, e, Token{"mem", 2})
 		fdIO := lockToken(t, e, Token{"io", 0})
-		expect("two cpu tokens for a minimum of one, and an io token it did not request",
-			"I2 unlisted cpu [cpu/1 cpu/2]", "I2 unlisted io/0")
+		expect("two mem tokens for a minimum of one, and an io token it did not request",
+			"I2 unlisted mem [mem/1 mem/2]", "I2 unlisted io/0")
 		for _, fd := range []int{fd1, fd2, fdIO} {
 			unix.Close(fd)
 		}
 		settle()
 	})
 	t.Run("a token-only run's admission notice grants its allowance; its waiting line does not (I2)", func(t *testing.T) {
-		need := map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
+		need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
 		stderr := func(name, text string) string {
 			path := filepath.Join(t.TempDir(), name)
 			if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -858,37 +859,37 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
 
-		runs.add("tn.tok.c1_1", stderr("waiting", "coreslot: waiting for cpu 1..1: token-only mode, "+
+		runs.add("tn.tok.m1_1", stderr("waiting", "coreslot: waiting for mem 1..1: token-only mode, "+
 			"the state directory's format is not implemented here (30s)\n"), need, time.Now(),
 			func(ChildReport, bool) bool { return true })
-		fd := lockToken(t, e, Token{"cpu", 0})
-		expect("a cpu token while the only token-only run prints its waiting line", "I2 unlisted cpu/0")
+		fd := lockToken(t, e, Token{"mem", 0})
+		expect("a mem token while the only token-only run prints its waiting line", "I2 unlisted mem/0")
 		unix.Close(fd)
 		settle()
 
-		runs.add("tm.tok.c1_1", stderr("admitted", "coreslot: the state directory's format is not "+
+		runs.add("tm.tok.m1_1", stderr("admitted", "coreslot: the state directory's format is not "+
 			"implemented here; running in token-only mode, outside the queue\n"), need, time.Now(),
 			func(ChildReport, bool) bool { return true })
-		fd = lockToken(t, e, Token{"cpu", 1})
-		expect("a cpu token of a run that printed its admission notice, before any start marker")
+		fd = lockToken(t, e, Token{"mem", 1})
+		expect("a mem token of a run that printed its admission notice, before any start marker")
 		unix.Close(fd)
 		settle()
 	})
 	t.Run("a token-only report after the bound is the oracle's latency failure, not an I2", func(t *testing.T) {
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		runs.add("tl.tok.c1_1", "", map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, time.Now(),
+		runs.add("tl.tok.m1_1", "", map[string]spec.Range{"mem": {Min: 1, Max: 1}}, time.Now(),
 			func(ChildReport, bool) bool { return true })
-		begin(t, e, "tl.tok.c1_1")
+		begin(t, e, "tl.tok.m1_1")
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
-		fd := lockToken(t, e, Token{"cpu", 0})
-		expect("its cpu token, within the bound")
+		fd := lockToken(t, e, Token{"mem", 0})
+		expect("its mem token, within the bound")
 		time.Sleep(s.TokenOnlyBound)
-		expect("its cpu token, past the bound, still unreported", "I2 unlisted cpu/0")
-		report(t, e, "tl.tok.c1_1", Token{"cpu", 0})
+		expect("its mem token, past the bound, still unreported", "I2 unlisted mem/0")
+		report(t, e, "tl.tok.m1_1", Token{"mem", 0})
 		settle()
 		vs, _, _ := s.Violations()
-		if last := vs[len(vs)-1]; last.Invariant != tokenOnlyLate || !strings.Contains(last.Msg, "cpu/0") {
+		if last := vs[len(vs)-1]; last.Invariant != tokenOnlyLate || !strings.Contains(last.Msg, "mem/0") {
 			t.Errorf("the I2 confirmed before the report reads %v; want it relabelled %q", last, tokenOnlyLate)
 		}
 		if age := s.TokenOnlyReportAge(); age < s.TokenOnlyBound {
@@ -898,7 +899,7 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		settle()
 	})
 	t.Run("a client's I2 keeps its label when a token-only run reports the token later", func(t *testing.T) {
-		need := map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
+		need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
 		stillI2 := func(what string, k Token) {
 			t.Helper()
 			vs, _, _ := s.Violations()
@@ -910,15 +911,15 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 
 		// No token-only run at all when the I2 is confirmed; a run started afterwards
 		// reports the token.
-		fd := lockToken(t, e, Token{"cpu", 0})
-		expect("cpu/0 locked with no hold and no token-only run", "I2 unlisted cpu/0")
+		fd := lockToken(t, e, Token{"mem", 0})
+		expect("mem/0 locked with no hold and no token-only run", "I2 unlisted mem/0")
 		late := &tokenOnlyRuns{markDir: e.MarkDir}
-		late.add("tp.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "tp.tok.c1_1")
-		report(t, e, "tp.tok.c1_1", Token{"cpu", 0})
+		late.add("tp.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
+		begin(t, e, "tp.tok.m1_1")
+		report(t, e, "tp.tok.m1_1", Token{"mem", 0})
 		s.TokenOnly = late.grants
 		settle()
-		stillI2("reported by a run started after the lock", Token{"cpu", 0})
+		stillI2("reported by a run started after the lock", Token{"mem", 0})
 		unix.Close(fd)
 		s.TokenOnly = nil
 		settle()
@@ -926,18 +927,18 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		// Confirmed by the age bound while an admitted run could hold it, but reported by a
 		// run that started after the token was first seen unlisted.
 		admitted := &tokenOnlyRuns{markDir: e.MarkDir}
-		admitted.add("tq.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "tq.tok.c1_1")
+		admitted.add("tq.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
+		begin(t, e, "tq.tok.m1_1")
 		s.TokenOnly = admitted.grants
-		fd = lockToken(t, e, Token{"cpu", 1})
-		expect("cpu/1 within the bound of the admitted run")
+		fd = lockToken(t, e, Token{"mem", 1})
+		expect("mem/1 within the bound of the admitted run")
 		time.Sleep(s.TokenOnlyBound)
-		expect("cpu/1 past the bound", "I2 unlisted cpu/1")
-		admitted.add("tr.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "tr.tok.c1_1")
-		report(t, e, "tr.tok.c1_1", Token{"cpu", 1})
+		expect("mem/1 past the bound", "I2 unlisted mem/1")
+		admitted.add("tr.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
+		begin(t, e, "tr.tok.m1_1")
+		report(t, e, "tr.tok.m1_1", Token{"mem", 1})
 		settle()
-		stillI2("past the bound, reported by a run started after the lock", Token{"cpu", 1})
+		stillI2("past the bound, reported by a run started after the lock", Token{"mem", 1})
 		unix.Close(fd)
 		s.TokenOnly = nil
 		settle()
@@ -945,14 +946,14 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		// Reported by a run started before the lock, but the I2 was confirmed with no
 		// admitted run to hold the token (the run had not begun), not by the age bound.
 		early := &tokenOnlyRuns{markDir: e.MarkDir}
-		early.add("ts.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
+		early.add("ts.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
 		s.TokenOnly = early.grants
-		fd = lockToken(t, e, Token{"cpu", 2})
-		expect("cpu/2 while the run has not begun", "I2 unlisted cpu/2")
-		begin(t, e, "ts.tok.c1_1")
-		report(t, e, "ts.tok.c1_1", Token{"cpu", 2})
+		fd = lockToken(t, e, Token{"mem", 2})
+		expect("mem/2 while the run has not begun", "I2 unlisted mem/2")
+		begin(t, e, "ts.tok.m1_1")
+		report(t, e, "ts.tok.m1_1", Token{"mem", 2})
 		settle()
-		stillI2("confirmed with no admitted run, reported by a run started before the lock", Token{"cpu", 2})
+		stillI2("confirmed with no admitted run, reported by a run started before the lock", Token{"mem", 2})
 		unix.Close(fd)
 		settle()
 	})
@@ -960,85 +961,85 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		var aLive atomic.Bool
 		aLive.Store(true)
 		runs := &tokenOnlyRuns{markDir: e.MarkDir}
-		need := map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
-		runs.add("ha.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return aLive.Load() })
-		begin(t, e, "ha.tok.c1_1")
+		need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
+		runs.add("ha.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return aLive.Load() })
+		begin(t, e, "ha.tok.m1_1")
 		s.TokenOnly = runs.grants
 		defer func() { s.TokenOnly = nil }()
-		fd := lockToken(t, e, Token{"cpu", 0})
+		fd := lockToken(t, e, Token{"mem", 0})
 		if got := sample(); len(got) != 0 {
 			t.Errorf("the token of an admitted run, just locked: reported %v", got)
 		}
-		report(t, e, "ha.tok.c1_1", Token{"cpu", 0})
+		report(t, e, "ha.tok.m1_1", Token{"mem", 0})
 		expect("the token reported by run A")
 		time.Sleep(s.TokenOnlyBound)
 		settle()
 		// A ends; B, admitted and not reported yet, holds the same token (the lock stands in
 		// for B's).
 		aLive.Store(false)
-		runs.add("hb.tok.c1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
-		begin(t, e, "hb.tok.c1_1")
+		runs.add("hb.tok.m1_1", "", need, time.Now(), func(ChildReport, bool) bool { return true })
+		begin(t, e, "hb.tok.m1_1")
 		expect("the token taken over by run B, within the bound")
 		unix.Close(fd)
 		settle()
 	})
 	t.Run("more tokens locked than the size is reported (I3)", func(t *testing.T) {
-		release := fakeHolds(t, e, 6, 8, fakeHold("x.lib.c6_6", 0, 1, 2, 3, 4, 5))
-		expect("6 tokens held under size 4", "I3 cpu")
+		release := fakeHolds(t, e, 6, 8, fakeHold("x.lib.m6_6", 0, 1, 2, 3, 4, 5))
+		expect("6 tokens held under size 4", "I3 mem")
 		release()
 		settle()
 	})
 	t.Run("a shrink leaves locks above the size; the bound falls with them (I3)", func(t *testing.T) {
-		releaseA := fakeHolds(t, e, 3, 4, fakeHold("ra.lib.c3_3", 0, 1, 2))
-		releaseB := fakeHolds(t, e, 1, 4, fakeHold("rb.lib.c1_1", 3))
+		releaseA := fakeHolds(t, e, 3, 4, fakeHold("ra.lib.m3_3", 0, 1, 2))
+		releaseB := fakeHolds(t, e, 1, 4, fakeHold("rb.lib.m1_1", 3))
 		resize(2)
 		expect("4 tokens held after a shrink to 2")
 		releaseB()
 		settle() // the bound falls to 3
-		releaseC := fakeHolds(t, e, 1, 4, fakeHold("rc.lib.c1_1", 3))
-		expect("a token taken while 3 are locked above size 2", "I3 cpu")
+		releaseC := fakeHolds(t, e, 1, 4, fakeHold("rc.lib.m1_1", 3))
+		expect("a token taken while 3 are locked above size 2", "I3 mem")
 		releaseA()
 		releaseC()
 		settle()
 		resize(4)
 	})
 	t.Run("a token listed by two live holds is reported (I1)", func(t *testing.T) {
-		release := fakeHolds(t, e, 1, 4, fakeHold("y.lib.c1_1", 0), fakeHold("z.lib.c1_1", 0))
-		expect("cpu/0 listed twice", "I1 shared cpu/0")
+		release := fakeHolds(t, e, 1, 4, fakeHold("y.lib.m1_1", 0), fakeHold("z.lib.m1_1", 0))
+		expect("mem/0 listed twice", "I1 shared mem/0")
 		release()
 		settle()
 	})
 	t.Run("a grant below its minimum is reported (I7)", func(t *testing.T) {
-		release := fakeHolds(t, e, 1, 4, fakeHold("w.lib.c3_3", 0))
-		expect("1 token granted for cpu=3", "I7 "+holdNamed(t, e, "w.lib.c3_3")+" cpu")
+		release := fakeHolds(t, e, 1, 4, fakeHold("w.lib.m3_3", 0))
+		expect("1 token granted for mem=3", "I7 "+holdNamed(t, e, "w.lib.m3_3")+" mem")
 		release()
 		settle()
 	})
 	t.Run("a clamped grant below the size is reported (I7)", func(t *testing.T) {
-		short := fakeHold("k.lib.c9_9", 0)
-		short.Clamped = map[string]int{"cpu": 9}
+		short := fakeHold("k.lib.m9_9", 0)
+		short.Clamped = map[string]int{"mem": 9}
 		release := fakeHolds(t, e, 1, 4, short)
-		expect("1 token of size 4 granted for a clamped cpu=9", "I7 "+holdNamed(t, e, "k.lib.c9_9")+" cpu")
+		expect("1 token of size 4 granted for a clamped mem=9", "I7 "+holdNamed(t, e, "k.lib.m9_9")+" mem")
 		release()
 		settle()
-		whole := fakeHold("kw.lib.c9_9", 0, 1, 2, 3)
-		whole.Clamped = map[string]int{"cpu": 9}
+		whole := fakeHold("kw.lib.m9_9", 0, 1, 2, 3)
+		whole.Clamped = map[string]int{"mem": 9}
 		release = fakeHolds(t, e, 4, 4, whole)
-		expect("the whole size 4 granted for a clamped cpu=9")
+		expect("the whole size 4 granted for a clamped mem=9")
 		release()
 		settle()
 	})
 	t.Run("a live hold listing a token nobody locks is reported (I2)", func(t *testing.T) {
-		release := fakeHolds(t, e, 1, 4, fakeHold("u.lib.c2_2", 0, 1))
-		expect("cpu/1 listed, not locked", "I2 unlocked "+holdNamed(t, e, "u.lib.c2_2")+" cpu/1")
+		release := fakeHolds(t, e, 1, 4, fakeHold("u.lib.m2_2", 0, 1))
+		expect("mem/1 listed, not locked", "I2 unlocked "+holdNamed(t, e, "u.lib.m2_2")+" mem/1")
 		release()
 		settle()
 	})
 	t.Run("an unbudgeted hold is reported (fail-open)", func(t *testing.T) {
-		h := fakeHold("f.lib.c1_1", 0)
+		h := fakeHold("f.lib.m1_1", 0)
 		h.Unbudgeted = true
 		release := fakeHolds(t, e, 1, 4, h)
-		expect("a fail-open hold", "fail-open "+holdNamed(t, e, "f.lib.c1_1"))
+		expect("a fail-open hold", "fail-open "+holdNamed(t, e, "f.lib.m1_1"))
 		release()
 		settle()
 	})
@@ -1057,17 +1058,17 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 	})
 	// Last: the replaced token file keeps its new inode.
 	t.Run("a token file replaced under its holder is reported (I1)", func(t *testing.T) {
-		release := fakeHolds(t, e, 1, 4, fakeHold("i.lib.c1_1", 0))
-		name := holdNamed(t, e, "i.lib.c1_1")
-		settle() // the sampler has seen cpu/0 as the hold locks it
-		dir := filepath.Join(e.Dir, store.ResDir, "cpu")
+		release := fakeHolds(t, e, 1, 4, fakeHold("i.lib.m1_1", 0))
+		name := holdNamed(t, e, "i.lib.m1_1")
+		settle() // the sampler has seen mem/0 as the hold locks it
+		dir := filepath.Join(e.Dir, store.ResDir, "mem")
 		if err := os.WriteFile(filepath.Join(dir, "replacement"), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Rename(filepath.Join(dir, "replacement"), filepath.Join(dir, "0")); err != nil {
 			t.Fatal(err)
 		}
-		expect("cpu/0 replaced by a new file", "I1 inode cpu/0", "I2 unlocked "+name+" cpu/0")
+		expect("mem/0 replaced by a new file", "I1 inode mem/0", "I2 unlocked "+name+" mem/0")
 		release()
 	})
 }

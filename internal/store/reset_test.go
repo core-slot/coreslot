@@ -60,14 +60,14 @@ func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	if err := os.WriteFile(filepath.Join(dir, LogDir, RunLog), []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte("[resources]\ncpu = 4\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte("[resources]\nmem = \"512M\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, ResDir, "cpu"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ResDir, "mem"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := os.WriteFile(tokenPath(dir, "cpu", i), nil, 0o600); err != nil {
+		if err := os.WriteFile(tokenPath(dir, "mem", i), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -87,7 +87,7 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 		}
 		return fi.Sys().(*syscall.Stat_t).Ino
 	}
-	lockBefore, tokenBefore := inode(filepath.Join(dir, AdmitLock)), inode(tokenPath(dir, "cpu", 0))
+	lockBefore, tokenBefore := inode(filepath.Join(dir, AdmitLock)), inode(tokenPath(dir, "mem", 0))
 
 	live, removed, err := sec.Reset()
 	if err != nil || !live.Empty() {
@@ -106,7 +106,7 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 			t.Errorf("%s survived the reset", f)
 		}
 	}
-	for _, f := range []string{AdmitLock, ConfigFile, filepath.Join(ResDir, "cpu", "0"), filepath.Join(ResDir, "cpu", "1")} {
+	for _, f := range []string{AdmitLock, ConfigFile, filepath.Join(ResDir, "mem", "0"), filepath.Join(ResDir, "mem", "1")} {
 		if !exists(filepath.Join(dir, f)) {
 			t.Errorf("%s was removed", f)
 		}
@@ -114,7 +114,7 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	if got := inode(filepath.Join(dir, AdmitLock)); got != lockBefore {
 		t.Errorf("admit.lock inode %d -> %d", lockBefore, got)
 	}
-	if got := inode(tokenPath(dir, "cpu", 0)); got != tokenBefore {
+	if got := inode(tokenPath(dir, "mem", 0)); got != tokenBefore {
 		t.Errorf("token inode %d -> %d", tokenBefore, got)
 	}
 }

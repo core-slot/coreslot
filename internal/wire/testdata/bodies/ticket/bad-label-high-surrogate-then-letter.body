@@ -1,1 +1,1 @@
-{"label":"\ud83d\u0041","priority":0,"need":{"cpu":[1,2]},"created_ns":5}
+{"label":"\ud83d\u0041","priority":0,"need":{"mem":[1,2]},"created_ns":5}

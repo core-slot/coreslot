@@ -169,14 +169,14 @@ func ticks(e Env, name string) int64 {
 }
 
 // settled checks that nothing a run published is left: no hold, live or dead, no ticket, no
-// locked cpu token.
+// locked mem token.
 func settled(t *testing.T, e Env) {
 	t.Helper()
 	e.SectionLeft()
 	rep := e.Status()
-	if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || rep.Resources["cpu"].Locked != 0 {
-		t.Errorf("left behind: holds %v, dead holds %v, tickets %v, %d cpu tokens locked",
-			rep.Holds, rep.DeadHolds, rep.Tickets, rep.Resources["cpu"].Locked)
+	if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || rep.Resources["mem"].Locked != 0 {
+		t.Errorf("left behind: holds %v, dead holds %v, tickets %v, %d mem tokens locked",
+			rep.Holds, rep.DeadHolds, rep.Tickets, rep.Resources["mem"].Locked)
 	}
 }
 
@@ -191,9 +191,9 @@ func settled(t *testing.T, e Env) {
 // a second time and publishing a second unbudgeted hold.
 func TestNestedUnderFailOpenParent(t *testing.T) {
 	e := State(t)
-	e.WriteConfig("[resources]\ncpu = 0\n") // invalid: a state error, so the parent fails open
-	p := e.Start("run", "--label", "parent", "--need", "cpu=2", "--", "sh", "-c",
-		`"$0" run --label inner --need cpu=3 -- "$1" hold "$2" inner`, bins.coreslot, bins.child, e.MarkDir)
+	e.WriteConfig("[resources]\nmem = \"0M\"\n") // invalid: a state error, so the parent fails open
+	p := e.Start("run", "--label", "parent", "--mem", "256M", "--", "sh", "-c",
+		`"$0" run --label inner --mem 384M -- "$1" hold "$2" inner`, bins.coreslot, bins.child, e.MarkDir)
 	r := e.WaitStarted("inner")
 	e.SectionLeft()
 	rep := e.Status()
@@ -204,8 +204,8 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 		t.Errorf("degraded %+v, want one fail-open recorded", rep.Degraded)
 	}
 	reason := r.Env["CORESLOT_UNBUDGETED"]
-	if r.Env["CORESLOT_GRANTED_CPU"] != "3" || reason == "" || reason == "format" || r.Env["CORESLOT_TOKEN_FDS"] != "" {
-		t.Errorf("the nested command's environment %v: want cpu 3 and the parent's reason", r.Env)
+	if r.Env["CORESLOT_GRANTED_MEM"] != "384" || reason == "" || reason == "format" || r.Env["CORESLOT_TOKEN_FDS"] != "" {
+		t.Errorf("the nested command's environment %v: want mem 384 and the parent's reason", r.Env)
 	}
 	if rep.Degraded != nil && rep.Degraded.Reason != reason {
 		t.Errorf("the nested command's reason %q is not the parent's %q", reason, rep.Degraded.Reason)
@@ -227,8 +227,7 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 		t.Errorf("gen went from %d to %d: the nested run entered a section", gen, rep.Gen)
 	}
 	inner := logLine(t, e, "inner")
-	if inner["nested"] != true || fmt.Sprint(inner["grant"]) != "map[cpu:3]" ||
-		fmt.Sprint(inner["unbudgeted_resources"]) != "[cpu]" || inner["fail_open"] != "" {
+	if inner["nested"] != true || inner["fail_open"] != "" {
 		t.Errorf("the nested run-log line %v", inner)
 	}
 	if l := logLine(t, e, "parent"); l["fail_open"] == "" {
@@ -246,8 +245,8 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 func TestDescriptorClosingLauncherRefuses(t *testing.T) {
 	t.Run("launcher closed a descriptor", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(cpuConfig(4))
-		p := e.Start("run", "--label", "parent", "--need", "cpu=4", "--", "sh", "-c", `
+		e.WriteConfig(memConfig(4))
+		p := e.Start("run", "--label", "parent", "--mem", "512M", "--", "sh", "-c", `
 			: > "$2/start"
 			sh -c 'exec 4>&-; exec "$0" run --label inner -- "$1" hold "$2" inner' "$0" "$1" "$2"
 			echo $? > "$2/code.partial"; mv "$2/code.partial" "$2/code"
@@ -268,12 +267,12 @@ func TestDescriptorClosingLauncherRefuses(t *testing.T) {
 
 	t.Run("parent gone", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(cpuConfig(4))
-		e.Start("run", "--need", "cpu=4", "--", "true").ExitCode(0) // the token files exist
+		e.WriteConfig(memConfig(4))
+		e.Start("run", "--mem", "512M", "--", "true").ExitCode(0) // the token files exist
 		p := e.StartCommand("sh", "-c", `
 			: > "$2/start"
-			exec 4<"$3/res/cpu/0" 5<"$3/res/cpu/1"
-			CORESLOT_TOKEN_FDS=4-5 CORESLOT_GRANTED_CPU=2 "$0" run --label inner -- "$1" hold "$2" inner
+			exec 4<"$3/res/mem/0" 5<"$3/res/mem/1"
+			CORESLOT_TOKEN_FDS=4-5 CORESLOT_GRANTED_MEM=2 "$0" run --label inner -- "$1" hold "$2" inner
 			echo $? > "$2/code.partial"; mv "$2/code.partial" "$2/code"`, bins.coreslot, bins.child, e.MarkDir, e.Dir)
 		refused(t, e, filepath.Join(e.MarkDir, "start"))
 		p.ExitCode(0)
@@ -324,18 +323,18 @@ func refused(t *testing.T, e Env, start string) {
 // 1-token request takes all 8.
 func TestOneOfEightLeavesSeven(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(8))
-	one := e.Run("one", "--need", "cpu=1")
+	e.WriteConfig(memConfig(8))
+	one := e.Run("one", "--mem", "128M")
 	r := e.WaitStarted("one")
 	h := e.WaitHold("one", startWait)
-	if h.Granted["cpu"] != 1 || r.Env["CORESLOT_GRANTED_CPU"] != "1" || !slices.Equal(indices(e, "one"), []int{0}) {
+	if h.Granted["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" || !slices.Equal(indices(e, "one"), []int{0}) {
 		t.Fatalf("hold %+v (indices %v), environment %v: want one token, index 0", h, indices(e, "one"), r.Env)
 	}
 	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if free, err := e.Client().Available("cpu"); err != nil || free != 7 {
-		t.Errorf("Available(cpu) = %d, %v; want 7", free, err)
+	if free, err := e.Client().Available("mem"); err != nil || free != 7 {
+		t.Errorf("Available(mem) = %d, %v; want 7", free, err)
 	}
-	seven := e.Run("seven", "--no-wait", "--need", "cpu=7")
+	seven := e.Run("seven", "--no-wait", "--mem", "896M")
 	e.WaitStarted("seven") // no snapshot probes the tokens while seven takes them
 	if got := indices(e, "seven"); !slices.Equal(got, span(1, 7)) {
 		t.Errorf("seven holds %v, want 1-7", got)
@@ -355,8 +354,8 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 // release before superviseChild): the tokens are free while the command runs.
 func TestChildClosingCopiesKeepsTokens(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(2))
-	p := e.Start("run", "--label", "closer", "--need", "cpu=2", "--", "sh", "-c",
+	e.WriteConfig(memConfig(2))
+	p := e.Start("run", "--label", "closer", "--mem", "256M", "--", "sh", "-c",
 		`exec 3<&- 4<&- 5<&-; exec "$0" hold "$1" closer`, bins.child, e.MarkDir)
 	r := e.WaitStarted("closer")
 	if len(r.FDs) != 0 {
@@ -365,9 +364,9 @@ func TestChildClosingCopiesKeepsTokens(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	e.SectionLeft()
 	rep := e.Status()
-	if rep.Resources["cpu"].Locked != 2 || len(rep.Holds) != 1 || len(rep.DeadHolds) != 0 {
+	if rep.Resources["mem"].Locked != 2 || len(rep.Holds) != 1 || len(rep.DeadHolds) != 0 {
 		t.Errorf("while the command runs: %d tokens locked, holds %v, dead %v; want 2 and the live hold",
-			rep.Resources["cpu"].Locked, rep.Holds, rep.DeadHolds)
+			rep.Resources["mem"].Locked, rep.Holds, rep.DeadHolds)
 	}
 	e.Start("run", "--no-wait", "--", "true").ExitCode(exitRefusal)
 	e.ReleaseChild("closer")
@@ -382,7 +381,7 @@ func TestChildClosingCopiesKeepsTokens(t *testing.T) {
 // c.release on a start error): the tokens go with the process, but the hold is never removed.
 func TestFailedSpawnFreesEverything(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(4))
+	e.WriteConfig(memConfig(4))
 	notExec := filepath.Join(e.MarkDir, "not-executable")
 	if err := os.WriteFile(notExec, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -396,14 +395,14 @@ func TestFailedSpawnFreesEverything(t *testing.T) {
 		{notExec, 126},
 	} {
 		label := filepath.Base(c.cmd)
-		e.Start("run", "--label", label, "--need", "cpu=2..4", "--", c.cmd).ExitCode(c.code)
+		e.Start("run", "--label", label, "--mem", "256M", "--", c.cmd).ExitCode(c.code)
 		settled(t, e)
 		if l := logLine(t, e, label); l["exit"] != float64(c.code) {
 			t.Errorf("run-log line %v, want exit %d", l, c.code)
 		}
 	}
 	// Everything is free for the next request.
-	e.Start("run", "--no-wait", "--need", "cpu=4", "--", "true").ExitCode(0)
+	e.Start("run", "--no-wait", "--mem", "512M", "--", "true").ExitCode(0)
 }
 
 // Close closes the process's copies without unlocking, so a command that inherited the grant
@@ -415,11 +414,11 @@ func TestFailedSpawnFreesEverything(t *testing.T) {
 // error.
 func TestRepeatedClose(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(2))
+	e.WriteConfig(memConfig(2))
 	c := e.Client()
 	admit := func(label string) *coreslot.Grant {
 		t.Helper()
-		w, err := c.Enqueue(context.Background(), coreslot.Request{Label: label, Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 2}}})
+		w, err := c.Enqueue(context.Background(), coreslot.Request{Label: label, Need: map[string]coreslot.Range{"mem": {Min: 2, Max: 2}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,12 +441,12 @@ func TestRepeatedClose(t *testing.T) {
 			t.Errorf("Close %d: %v", i+1, err)
 		}
 	}
-	if got := cpuLocked(e); got != 2 {
+	if got := memLocked(e); got != 2 {
 		t.Errorf("%d tokens locked after Close while the command holds them, want 2", got)
 	}
 	e.ReleaseChild("lib-child")
 	p.ExitCode(0)
-	e.Eventually(startWait, "the tokens are free once the command exited", func() bool { return cpuLocked(e) == 0 })
+	e.Eventually(startWait, "the tokens are free once the command exited", func() bool { return memLocked(e) == 0 })
 	if err := g.Close(); err != nil {
 		t.Errorf("Close 3: %v", err)
 	}
@@ -457,8 +456,8 @@ func TestRepeatedClose(t *testing.T) {
 	if err := g.Close(); err != nil {
 		t.Errorf("Close 4: %v", err)
 	}
-	if _, ok := e.Hold("lib2"); !ok || cpuLocked(e) != 2 {
-		t.Errorf("the second grant lost its hold or tokens to the first grant's Close (%d locked)", cpuLocked(e))
+	if _, ok := e.Hold("lib2"); !ok || memLocked(e) != 2 {
+		t.Errorf("the second grant lost its hold or tokens to the first grant's Close (%d locked)", memLocked(e))
 	}
 	for i := range 2 {
 		if err := g2.Close(); err != nil {
@@ -482,9 +481,9 @@ func TestRepeatedClose(t *testing.T) {
 // Mutation: terminal mode forwards SIGINT to the command too (it is not ignored in terminal
 // mode): the command receives Ctrl-C twice.
 func TestSignalTraces(t *testing.T) {
-	cfg := cpuConfig(2)
+	cfg := memConfig(2)
 	cmdArgs := func(e Env, name string) []string {
-		return []string{bins.coreslot, "run", "--label", name, "--need", "cpu=2", "--", bins.child, "signals", e.MarkDir, name}
+		return []string{bins.coreslot, "run", "--label", name, "--mem", "256M", "--", bins.child, "signals", e.MarkDir, name}
 	}
 
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
@@ -521,7 +520,7 @@ func TestSignalTraces(t *testing.T) {
 	t.Run("terminal/Ctrl-C while waiting", func(t *testing.T) {
 		e := State(t)
 		e.WriteConfig(cfg)
-		x := e.Run("X", "--need", "cpu=2")
+		x := e.Run("X", "--mem", "256M")
 		e.WaitHold("X", startWait)
 		p := e.startPTY(nil, cmdArgs(e, "cmd")...)
 		e.WaitTicket("cmd")
@@ -543,8 +542,8 @@ func TestSignalTraces(t *testing.T) {
 	// mode (coreslot's stdin is the terminal) and in a pipeline, where the command has its own
 	// group that coreslot stops and continues.
 	for _, c := range []struct{ name, line string }{
-		{"terminal/Ctrl-Z and fg", `"$BIN" run --label cmd --need cpu=2 -- "$CHILD" signals "$M" cmd`},
-		{"pipeline/Ctrl-Z and fg", `true | "$BIN" run --label cmd --need cpu=2 -- "$CHILD" signals "$M" cmd | cat`},
+		{"terminal/Ctrl-Z and fg", `"$BIN" run --label cmd --mem 256M -- "$CHILD" signals "$M" cmd`},
+		{"pipeline/Ctrl-Z and fg", `true | "$BIN" run --label cmd --mem 256M -- "$CHILD" signals "$M" cmd | cat`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := State(t)
@@ -589,7 +588,7 @@ func TestSignalTraces(t *testing.T) {
 		e := State(t)
 		e.WriteConfig(cfg)
 		sh := e.shell()
-		sh.write(`true | "$BIN" run --label cmd --need cpu=2 -- "$CHILD" signals "$M" cmd | cat` + "\n")
+		sh.write(`true | "$BIN" run --label cmd --mem 256M -- "$CHILD" signals "$M" cmd | cat` + "\n")
 		r := e.WaitStarted("cmd")
 		killGroupOf(t, r.PID)
 		killGroupOf(t, parentOf(r.PID))

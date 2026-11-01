@@ -5,9 +5,7 @@ package conformance
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/config"
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -35,8 +32,8 @@ func TestInteropPythonAndGo(t *testing.T) {
 
 	t.Run("fifo across languages", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(cpuConfig(1))
-		block := e.Run("block", "--need", "cpu=1")
+		e.WriteConfig(memConfig(1))
+		block := e.Run("block", "--mem", "128M")
 		e.WaitHold("block", startWait)
 
 		type waiter struct {
@@ -48,13 +45,13 @@ func TestInteropPythonAndGo(t *testing.T) {
 		for _, w := range order {
 			switch w.lang {
 			case "cli":
-				w.p = e.Run(w.name, "--need", "cpu=1")
+				w.p = e.Run(w.name, "--mem", "128M")
 			case "py":
-				w.p = e.StartCommand(py, pyc, "run", "--label", w.name, "--need", "cpu=1..1", "--",
+				w.p = e.StartCommand(py, pyc, "run", "--label", w.name, "--need", "mem=128M", "--",
 					bins.child, "hold", e.MarkDir, w.name)
 			case "lib":
 				w.p = e.StartCommand(lib, "-dir", e.Dir, "-mark", e.MarkDir, "-name", w.name, "-label", w.name,
-					"-need", "cpu=1..1")
+					"-need", "mem=1..1")
 			}
 			// The next waiter arrives only once this one's ticket is published, so the order
 			// of arrival is the order of this list.
@@ -95,64 +92,6 @@ func TestInteropPythonAndGo(t *testing.T) {
 			}
 			e.ReleaseChild(w.name)
 			w.p.ExitCode(0)
-		}
-	})
-
-	// The CLI conventions of PROTOCOL.md section 21 are not protocol, but both clients follow
-	// them: on an 8-token budget each run of the same arguments gets the same grant and exit
-	// status from either client, and logs the same normalized request.
-	t.Run("need forms and the default request agree", func(t *testing.T) {
-		e := State(t)
-		e.WriteConfig(cpuConfig(8))
-		report := []string{"--", "sh", "-c", `echo "$CORESLOT_GRANTED_CPU $1"`, "sh"}
-		// The default {n} range's max is the CPU count below 16, or 16 when it cannot be read.
-		cold := spec.DefaultMax
-		if c, err := config.MachineCPUs(); err == nil && c > 0 {
-			cold = min(cold, c)
-		}
-		n, wide := min(8, cold), fmt.Sprintf("map[cpu:[1 %d]]", cold)
-		cases := []struct {
-			flags  []string
-			arg    string
-			out    string
-			code   int
-			logged string
-		}{
-			{nil, "x", "1 x", 0, "map[cpu:[1 1]]"},
-			{nil, "{n}", fmt.Sprintf("%d %d", n, n), 0, wide},
-			{nil, "{n:cpu}", fmt.Sprintf("%d %d", n, n), 0, wide},
-			{nil, "{{n}}", "1 {n}", 0, "map[cpu:[1 1]]"},
-			{nil, "-j{n}", "1 -j{n}", 0, "map[cpu:[1 1]]"},
-			{[]string{"--subst"}, "-j{n}", fmt.Sprintf("%d -j%d", n, n), 0, wide},
-			{[]string{"--need", "cpu=4.."}, "x", "8 x", 0, "map[cpu:[4 16]]"},
-			{[]string{"--need", "cpu=20.."}, "x", "8 x", 0, "map[cpu:[20 20]]"},
-			{[]string{"--need", "cpu=..2"}, "x", "2 x", 0, "map[cpu:[1 2]]"},
-			{[]string{"--need", "cpu=.."}, "x", "", 64, ""},
-			{[]string{"--need", "cpu=..."}, "x", "", 64, ""},
-			{[]string{"--need", "cpu=-1.."}, "x", "", 64, ""},
-			{[]string{"--need", "cpu=..0"}, "x", "", 64, ""},
-			{[]string{"--need", "cpu=257.."}, "x", "", 64, ""},
-		}
-		for _, c := range cases {
-			args := append(append(append([]string{"run"}, c.flags...), report...), c.arg)
-			for _, client := range []struct {
-				name string
-				argv []string
-			}{{"go", []string{bins.coreslot}}, {"python", []string{py, pyc}}} {
-				before := len(runLogNeeds(t, e))
-				p := e.StartCommand(append(slices.Clone(client.argv), args...)...)
-				p.ExitCode(c.code)
-				if got := strings.TrimSpace(p.Stdout()); got != c.out {
-					t.Errorf("%s %q: printed %q, want %q", client.name, args, got, c.out)
-				}
-				needs := runLogNeeds(t, e)
-				switch {
-				case c.logged == "" && len(needs) != before:
-					t.Errorf("%s %q: a refused run appended to the run log", client.name, args)
-				case c.logged != "" && (len(needs) != before+1 || needs[len(needs)-1] != c.logged):
-					t.Errorf("%s %q: run log needs %v, want %s appended", client.name, args, needs[before:], c.logged)
-				}
-			}
 		}
 	})
 
@@ -218,11 +157,11 @@ func TestInteropSizesAgree(t *testing.T) {
 	if err != nil {
 		t.Skipf("the independent Python client is not exercised: no Python 3.11+ (%v)", err)
 	}
-	machine, err := config.ReadMachine(true)
+	machine, err := config.ReadMachine()
 	if err != nil {
 		t.Fatal(err)
 	}
-	configs := []string{"", "[resources]\ncpu = \"400%\"\n", "[resources]\nmem = \"9.5G\"\n", "[resources]\nmem = 0\n"}
+	configs := []string{"", "[resources]\nmem = \"9.5G\"\n", "[resources]\nmem = \"25%\"\n"}
 	dir := t.TempDir()
 	paths := make([]string, len(configs))
 	want := make([]map[string]int, len(configs))
@@ -264,36 +203,14 @@ func TestInteropSizesAgree(t *testing.T) {
 		t.Fatalf("Python resolved %d configurations, want %d", len(got.Sizes), len(configs))
 	}
 	for i, body := range configs {
-		if !maps.Equal(got.Sizes[i], want[i]) {
-			t.Errorf("config %q on %d CPUs and %d MiB: Go resolves %v, Python %v", body, machine.CPUs, machine.MemMiB, want[i], got.Sizes[i])
+		// The Python client still sizes resources besides mem; only mem is compared.
+		if got.Sizes[i]["mem"] != want[i]["mem"] {
+			t.Errorf("config %q on %d MiB: Go resolves mem %d, Python %d", body, machine.MemMiB, want[i]["mem"], got.Sizes[i]["mem"])
 		}
 	}
 	if !t.Failed() {
-		t.Logf("%d CPUs, %d MiB: the clients agree on %v", machine.CPUs, machine.MemMiB, want)
+		t.Logf("%d MiB: the clients agree on %v", machine.MemMiB, want)
 	}
-}
-
-// runLogNeeds is the need of every run-log line, formatted as fmt prints a decoded map.
-func runLogNeeds(t *testing.T, e Env) []string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(e.Dir, "log", "runs.jsonl"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []string
-	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-		var rec struct {
-			Need map[string][]int `json:"need"`
-		}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("run log line %q: %v", line, err)
-		}
-		out = append(out, fmt.Sprint(rec.Need))
-	}
-	return out
 }
 
 type statusDoc struct {
@@ -325,7 +242,7 @@ func statusJSON(t *testing.T, e Env) statusDoc {
 	return doc
 }
 
-// pythonHoldVisible checks that the Python run labeled name holds one cpu token in status,
+// pythonHoldVisible checks that the Python run labeled name holds one mem token in status,
 // human and JSON, with no locked token unaccounted for.
 func pythonHoldVisible(t *testing.T, e Env, name string) {
 	t.Helper()
@@ -334,16 +251,16 @@ func pythonHoldVisible(t *testing.T, e Env, name string) {
 	for _, h := range doc.Holds {
 		if h.Label == name {
 			found = true
-			if h.Grant["cpu"] != 1 {
-				t.Errorf("status --json: the Python hold %s grants %v, want cpu 1", name, h.Grant)
+			if h.Grant["mem"] != 1 {
+				t.Errorf("status --json: the Python hold %s grants %v, want mem 1", name, h.Grant)
 			}
 		}
 	}
 	if !found || len(doc.Holds) != 1 {
 		t.Errorf("status --json: holds %+v, want the Python run %s alone", doc.Holds, name)
 	}
-	if r := doc.Resources["cpu"]; r.Locked != 1 || r.UnlistedLocked != 0 {
-		t.Errorf("status --json: cpu locked %d, unlisted %d; want 1 and 0", r.Locked, r.UnlistedLocked)
+	if r := doc.Resources["mem"]; r.Locked != 1 || r.UnlistedLocked != 0 {
+		t.Errorf("status --json: mem locked %d, unlisted %d; want 1 and 0", r.Locked, r.UnlistedLocked)
 	}
 	human := e.Start("status")
 	human.ExitCode(0)

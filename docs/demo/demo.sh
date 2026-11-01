@@ -1,24 +1,24 @@
 #!/bin/sh
 # A 30-second demo of the queue, for a terminal recording (see docs/demo/README.md).
 #
-# Four "agents" each start a test gate that asks for 4 cores, on a budget of 8: two run, two
-# wait their turn, and `coreslot status` shows who holds what. The gates are `sleep`s, so the
-# demo shows the mechanics only; the measured effect on real suites is in evidence/README.md.
+# Four "agents" each start a test gate that asks for 1 GiB of memory, on a budget of 2 GiB: two
+# run, two wait their turn, and `coreslot status` shows who holds what. The gates are `sleep`s,
+# so the demo shows the mechanics only; the measured effect on real suites is in evidence/README.md.
 # It runs on a scratch budget of its own and never touches the machine's real one.
 set -eu
 
 CORESLOT_STATE_DIR="$(mktemp -d)/state"
 export CORESLOT_STATE_DIR
 mkdir -p "$CORESLOT_STATE_DIR"
-printf '[resources]\ncpu = 8\nmem = 0\n' >"$CORESLOT_STATE_DIR/config.toml"
+printf '[resources]\nmem = "2G"\n' >"$CORESLOT_STATE_DIR/config.toml"
 trap 'rm -rf "$(dirname "$CORESLOT_STATE_DIR")"' EXIT
 
 say() { printf '\n\033[1m$ %s\033[0m\n' "$*"; sleep 1; }
 
-say "# a budget of 8 cores; four agents each start a gate that asks for 4"
+say "# a budget of 2 GiB; four agents each start a gate that asks for 1 GiB"
 for agent in 1 2 3 4; do
-    printf '$ coreslot run --need cpu=4 --label agent-%s:tests -- sleep 8 &   # a test suite\n' "$agent"
-    coreslot run --need cpu=4 --label "agent-${agent}:tests" -- sleep 8 &
+    printf '$ coreslot run --mem 1G --label agent-%s:tests -- sleep 8 &   # a test suite\n' "$agent"
+    coreslot run --mem 1G --label "agent-${agent}:tests" -- sleep 8 &
     sleep 0.4
 done
 

@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-// Validate takes a request as Enqueue and Adopt do: an empty Need is cpu 1..1, not an error.
+// Validate takes a request as Enqueue and Adopt do: an empty Need is mem 1..1, not an error.
 func TestValidateNormalizes(t *testing.T) {
 	for _, r := range []Request{{}, {Label: "empty need", Need: map[string]Range{}}} {
 		if err := r.Validate(); err != nil {
-			t.Errorf("%+v.Validate() = %v, want nil: an empty Need is cpu 1..1", r, err)
+			t.Errorf("%+v.Validate() = %v, want nil: an empty Need is mem 1..1", r, err)
 		}
 	}
 	var ue *UsageError
-	if err := (Request{Need: map[string]Range{"cpu": {Min: 3, Max: 2}}}).Validate(); !errors.As(err, &ue) {
+	if err := (Request{Need: map[string]Range{"mem": {Min: 3, Max: 2}}}).Validate(); !errors.As(err, &ue) {
 		t.Errorf("min > max: %v, want a *UsageError", err)
 	}
 }

@@ -139,35 +139,35 @@ func TestObserverForget(t *testing.T) {
 
 func TestEffectiveClampsOversize(t *testing.T) {
 	need := map[string]spec.Range{
-		"cpu":      {Min: 16, Max: 16},
+		"cache":    {Min: 16, Max: 16},
 		"pg-local": {Min: 1, Max: 1},
 		"mem":      {Min: 2, Max: 8},
 	}
-	sizes := map[string]int{"cpu": 10, "pg-local": 2, "mem": 4}
+	sizes := map[string]int{"cache": 10, "pg-local": 2, "mem": 4}
 	eff, clamped, undeclared := Effective(need, sizes)
 	wantEff := map[string]spec.Range{
-		"cpu":      {Min: 10, Max: 10},
+		"cache":    {Min: 10, Max: 10},
 		"pg-local": {Min: 1, Max: 1},
 		"mem":      {Min: 2, Max: 4},
 	}
 	if !reflect.DeepEqual(eff, wantEff) {
 		t.Errorf("eff = %v, want %v", eff, wantEff)
 	}
-	if want := map[string]int{"cpu": 16}; !reflect.DeepEqual(clamped, want) {
+	if want := map[string]int{"cache": 16}; !reflect.DeepEqual(clamped, want) {
 		t.Errorf("clamped = %v, want %v", clamped, want)
 	}
 	if len(undeclared) != 0 {
 		t.Errorf("undeclared = %v, want none", undeclared)
 	}
-	if need["cpu"] != (spec.Range{Min: 16, Max: 16}) {
+	if need["cache"] != (spec.Range{Min: 16, Max: 16}) {
 		t.Error("Effective mutated its input")
 	}
 }
 
 func TestEffectiveMinEqualSizeIsNotClamped(t *testing.T) {
-	eff, clamped, _ := Effective(map[string]spec.Range{"cpu": {Min: 10, Max: 12}}, map[string]int{"cpu": 10})
-	if want := (spec.Range{Min: 10, Max: 10}); eff["cpu"] != want {
-		t.Errorf("eff = %v, want %v", eff["cpu"], want)
+	eff, clamped, _ := Effective(map[string]spec.Range{"cache": {Min: 10, Max: 12}}, map[string]int{"cache": 10})
+	if want := (spec.Range{Min: 10, Max: 10}); eff["cache"] != want {
+		t.Errorf("eff = %v, want %v", eff["cache"], want)
 	}
 	if len(clamped) != 0 {
 		t.Errorf("min == size must not be clamped, got %v", clamped)
@@ -177,10 +177,10 @@ func TestEffectiveMinEqualSizeIsNotClamped(t *testing.T) {
 func TestEffectiveMarksUndeclared(t *testing.T) {
 	need := map[string]spec.Range{
 		"pg-local": {Min: 1, Max: 1},
-		"cpu":      {Min: 2, Max: 4},
+		"cache":    {Min: 2, Max: 4},
 		"alpha":    {Min: 1, Max: 3},
 	}
-	eff, clamped, undeclared := Effective(need, map[string]int{"cpu": 8})
+	eff, clamped, undeclared := Effective(need, map[string]int{"cache": 8})
 	if want := []string{"alpha", "pg-local"}; !reflect.DeepEqual(undeclared, want) {
 		t.Errorf("undeclared = %v, want %v (sorted)", undeclared, want)
 	}
@@ -190,49 +190,49 @@ func TestEffectiveMarksUndeclared(t *testing.T) {
 	if _, ok := clamped["pg-local"]; ok {
 		t.Error("an undeclared resource is never clamped")
 	}
-	if want := (spec.Range{Min: 2, Max: 4}); eff["cpu"] != want || len(eff) != 1 {
-		t.Errorf("eff = %v, want only cpu %v", eff, want)
+	if want := (spec.Range{Min: 2, Max: 4}); eff["cache"] != want || len(eff) != 1 {
+		t.Errorf("eff = %v, want only cache %v", eff, want)
 	}
 }
 
 func TestPlanCountsAllLocks(t *testing.T) {
-	sizes := map[string]int{"cpu": 12}
-	eff := map[string]spec.Range{"cpu": {Min: 1, Max: 12}}
+	sizes := map[string]int{"cache": 12}
+	eff := map[string]spec.Range{"cache": {Min: 1, Max: 12}}
 
 	// After a shrink: size 12, a hold on indices 10-13 gives locked 4 (I3).
-	take, ok := Plan(eff, sizes, map[string]int{"cpu": 4})
-	if !ok || take["cpu"] != 8 {
-		t.Errorf("size 12 locked 4: take = %v ok = %v, want cpu 8", take, ok)
+	take, ok := Plan(eff, sizes, map[string]int{"cache": 4})
+	if !ok || take["cache"] != 8 {
+		t.Errorf("size 12 locked 4: take = %v ok = %v, want cache 8", take, ok)
 	}
 	// Locked equal to size: nothing free.
-	if take, ok := Plan(eff, sizes, map[string]int{"cpu": 12}); ok || take != nil {
+	if take, ok := Plan(eff, sizes, map[string]int{"cache": 12}); ok || take != nil {
 		t.Errorf("size 12 locked 12: take = %v ok = %v, want not ok", take, ok)
 	}
 	// Locks above the size can drive free below zero; still not ok, never a negative take.
-	if take, ok := Plan(eff, sizes, map[string]int{"cpu": 14}); ok || take != nil {
+	if take, ok := Plan(eff, sizes, map[string]int{"cache": 14}); ok || take != nil {
 		t.Errorf("locked above size: take = %v ok = %v, want not ok", take, ok)
 	}
 	// 4..12 with 5 free takes 5.
-	take, ok = Plan(map[string]spec.Range{"cpu": {Min: 4, Max: 12}}, sizes, map[string]int{"cpu": 7})
-	if !ok || take["cpu"] != 5 {
-		t.Errorf("4..12 with 5 free: take = %v ok = %v, want cpu 5", take, ok)
+	take, ok = Plan(map[string]spec.Range{"cache": {Min: 4, Max: 12}}, sizes, map[string]int{"cache": 7})
+	if !ok || take["cache"] != 5 {
+		t.Errorf("4..12 with 5 free: take = %v ok = %v, want cache 5", take, ok)
 	}
 	// Free below min.
-	if _, ok := Plan(map[string]spec.Range{"cpu": {Min: 6, Max: 12}}, sizes, map[string]int{"cpu": 7}); ok {
+	if _, ok := Plan(map[string]spec.Range{"cache": {Min: 6, Max: 12}}, sizes, map[string]int{"cache": 7}); ok {
 		t.Error("free 5 below min 6: want not ok")
 	}
 	// Max below free caps the take; a resource with no entry in locked has none locked.
-	take, ok = Plan(map[string]spec.Range{"cpu": {Min: 2, Max: 3}}, sizes, nil)
-	if !ok || take["cpu"] != 3 {
-		t.Errorf("2..3 on free 12: take = %v ok = %v, want cpu 3", take, ok)
+	take, ok = Plan(map[string]spec.Range{"cache": {Min: 2, Max: 3}}, sizes, nil)
+	if !ok || take["cache"] != 3 {
+		t.Errorf("2..3 on free 12: take = %v ok = %v, want cache 3", take, ok)
 	}
 }
 
 func TestPlanAllResourcesMustFit(t *testing.T) {
-	eff := map[string]spec.Range{"cpu": {Min: 2, Max: 4}, "pg-local": {Min: 1, Max: 1}}
-	sizes := map[string]int{"cpu": 8, "pg-local": 1}
-	take, ok := Plan(eff, sizes, map[string]int{"cpu": 1})
-	if !ok || take["cpu"] != 4 || take["pg-local"] != 1 {
+	eff := map[string]spec.Range{"cache": {Min: 2, Max: 4}, "pg-local": {Min: 1, Max: 1}}
+	sizes := map[string]int{"cache": 8, "pg-local": 1}
+	take, ok := Plan(eff, sizes, map[string]int{"cache": 1})
+	if !ok || take["cache"] != 4 || take["pg-local"] != 1 {
 		t.Errorf("take = %v ok = %v", take, ok)
 	}
 	if take, ok := Plan(eff, sizes, map[string]int{"pg-local": 1}); ok || take != nil {
@@ -244,31 +244,31 @@ func TestPlanAllResourcesMustFit(t *testing.T) {
 // only the minimums of the resources the head is short of; its extra pass stops there too.
 //
 // Mutation: PlanBehind subtracting only the minimums of the resources the head is short of (free
-// below its minimum) admits the cpu 5 waiter.
+// below its minimum) admits the cache 5 waiter.
 func TestPlanBehindSubtractsEveryMinimum(t *testing.T) {
-	sizes := map[string]int{"cpu": 14, "mem": 76}
+	sizes := map[string]int{"cache": 14, "mem": 76}
 	locked := map[string]int{"mem": 10}
-	head := map[string]spec.Range{"cpu": {Min: 10, Max: 10}, "mem": {Min: 70, Max: 70}} // short of mem only
+	head := map[string]spec.Range{"cache": {Min: 10, Max: 10}, "mem": {Min: 70, Max: 70}} // short of mem only
 	ahead := []map[string]spec.Range{head}
 	if _, ok := Plan(head, sizes, locked); ok {
 		t.Fatal("the head fits: the case does not test a head short of memory")
 	}
-	take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, sizes, locked, ahead)
-	if !ok || take["cpu"] != 1 {
-		t.Errorf("cpu 1 behind the head: take = %v ok = %v, want cpu 1", take, ok)
+	take, ok := PlanBehind(map[string]spec.Range{"cache": {Min: 1, Max: 1}}, sizes, locked, ahead)
+	if !ok || take["cache"] != 1 {
+		t.Errorf("cache 1 behind the head: take = %v ok = %v, want cache 1", take, ok)
 	}
-	if take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 5, Max: 5}}, sizes, locked, ahead); ok {
-		t.Errorf("cpu 5 with 14 free behind the head's cpu minimum of 10: take = %v, want not ok", take)
+	if take, ok := PlanBehind(map[string]spec.Range{"cache": {Min: 5, Max: 5}}, sizes, locked, ahead); ok {
+		t.Errorf("cache 5 with 14 free behind the head's cache minimum of 10: take = %v, want not ok", take)
 	}
 	if take, ok := PlanBehind(map[string]spec.Range{"mem": {Min: 10, Max: 10}}, sizes, locked, ahead); ok {
 		t.Errorf("mem 10 behind a head short of mem: take = %v, want not ok", take)
 	}
 	// The extra pass leaves the minimums ahead free: 1..14 takes the 4 above the head's 10.
-	if take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 1, Max: 14}}, sizes, locked, ahead); !ok || take["cpu"] != 4 {
-		t.Errorf("cpu 1..14 behind the head: take = %v ok = %v, want cpu 4", take, ok)
+	if take, ok := PlanBehind(map[string]spec.Range{"cache": {Min: 1, Max: 14}}, sizes, locked, ahead); !ok || take["cache"] != 4 {
+		t.Errorf("cache 1..14 behind the head: take = %v ok = %v, want cache 4", take, ok)
 	}
 	// With nothing ahead it is Plan.
-	eff := map[string]spec.Range{"cpu": {Min: 5, Max: 14}, "mem": {Min: 10, Max: 70}}
+	eff := map[string]spec.Range{"cache": {Min: 5, Max: 14}, "mem": {Min: 10, Max: 70}}
 	want, _ := Plan(eff, sizes, locked)
 	if take, ok := PlanBehind(eff, sizes, locked, nil); !ok || !reflect.DeepEqual(take, want) {
 		t.Errorf("nothing ahead: take = %v ok = %v, want Plan's %v", take, ok, want)
@@ -279,17 +279,17 @@ func TestPlanBehindSubtractsEveryMinimum(t *testing.T) {
 // database slot another run holds), never one short of a resource it names.
 //
 // Mutation: PlanBehind refusing a waiter when any resource a ticket ahead names has free below
-// that ticket's minimum refuses the cpu-only waiter.
+// that ticket's minimum refuses the cache-only waiter.
 func TestPlanBehindPassesAHeadShortOfAnotherResource(t *testing.T) {
-	sizes := map[string]int{"cpu": 14, "pg-local": 1}
+	sizes := map[string]int{"cache": 14, "pg-local": 1}
 	locked := map[string]int{"pg-local": 1} // held by another run
-	ahead := []map[string]spec.Range{{"cpu": {Min: 2, Max: 2}, "pg-local": {Min: 1, Max: 1}}}
-	if take, ok := PlanBehind(map[string]spec.Range{"cpu": {Min: 1, Max: 1}}, sizes, locked, ahead); !ok || take["cpu"] != 1 {
-		t.Errorf("cpu 1 behind a head waiting for pg-local: take = %v ok = %v, want cpu 1", take, ok)
+	ahead := []map[string]spec.Range{{"cache": {Min: 2, Max: 2}, "pg-local": {Min: 1, Max: 1}}}
+	if take, ok := PlanBehind(map[string]spec.Range{"cache": {Min: 1, Max: 1}}, sizes, locked, ahead); !ok || take["cache"] != 1 {
+		t.Errorf("cache 1 behind a head waiting for pg-local: take = %v ok = %v, want cache 1", take, ok)
 	}
-	both := map[string]spec.Range{"cpu": {Min: 1, Max: 1}, "pg-local": {Min: 1, Max: 1}}
+	both := map[string]spec.Range{"cache": {Min: 1, Max: 1}, "pg-local": {Min: 1, Max: 1}}
 	if take, ok := PlanBehind(both, sizes, locked, ahead); ok {
-		t.Errorf("cpu 1 and pg-local 1 behind a head waiting for pg-local: take = %v, want not ok", take)
+		t.Errorf("cache 1 and pg-local 1 behind a head waiting for pg-local: take = %v, want not ok", take)
 	}
 }
 
@@ -297,33 +297,33 @@ func TestPlanCapsGrantAt512(t *testing.T) {
 	// PROTOCOL.md section 12.1: every minimum first, then extra in ascending resource name while
 	// the grant holds fewer than 512 tokens.
 	eff := map[string]spec.Range{
-		"gpu": {Min: 100, Max: 256},
-		"cpu": {Min: 100, Max: 256},
-		"db":  {Min: 100, Max: 256},
+		"gpu":   {Min: 100, Max: 256},
+		"cache": {Min: 100, Max: 256},
+		"db":    {Min: 100, Max: 256},
 	}
-	sizes := map[string]int{"cpu": 300, "db": 300, "gpu": 300}
+	sizes := map[string]int{"cache": 300, "db": 300, "gpu": 300}
 	take, ok := Plan(eff, sizes, nil)
-	want := map[string]int{"cpu": 256, "db": 156, "gpu": 100}
+	want := map[string]int{"cache": 256, "db": 156, "gpu": 100}
 	if !ok || !reflect.DeepEqual(take, want) {
 		t.Errorf("take = %v ok = %v, want %v", take, ok, want)
 	}
 	// Below the cap nothing changes: each resource gets min(max, free).
-	take, ok = Plan(map[string]spec.Range{"cpu": {Min: 1, Max: 200}, "db": {Min: 1, Max: 200}},
-		map[string]int{"cpu": 300, "db": 150}, map[string]int{"cpu": 10})
-	if want := map[string]int{"cpu": 200, "db": 150}; !ok || !reflect.DeepEqual(take, want) {
+	take, ok = Plan(map[string]spec.Range{"cache": {Min: 1, Max: 200}, "db": {Min: 1, Max: 200}},
+		map[string]int{"cache": 300, "db": 150}, map[string]int{"cache": 10})
+	if want := map[string]int{"cache": 200, "db": 150}; !ok || !reflect.DeepEqual(take, want) {
 		t.Errorf("take = %v ok = %v, want %v", take, ok, want)
 	}
 }
 
 func TestAdoptPlanHasNoMinimum(t *testing.T) {
 	// PROTOCOL.md section 21.7: size 10, 8 locked, need 3..3: takes the 2 free.
-	eff := map[string]spec.Range{"cpu": {Min: 3, Max: 3}}
-	if take := AdoptPlan(eff, map[string]int{"cpu": 10}, map[string]int{"cpu": 8}); take["cpu"] != 2 {
-		t.Errorf("take = %v, want cpu 2", take)
+	eff := map[string]spec.Range{"cache": {Min: 3, Max: 3}}
+	if take := AdoptPlan(eff, map[string]int{"cache": 10}, map[string]int{"cache": 8}); take["cache"] != 2 {
+		t.Errorf("take = %v, want cache 2", take)
 	}
 	// Locks above the size never make free negative (I3).
-	if take := AdoptPlan(eff, map[string]int{"cpu": 10}, map[string]int{"cpu": 12}); take["cpu"] != 0 {
-		t.Errorf("locked above size: take = %v, want cpu 0", take)
+	if take := AdoptPlan(eff, map[string]int{"cache": 10}, map[string]int{"cache": 12}); take["cache"] != 0 {
+		t.Errorf("locked above size: take = %v, want cache 0", take)
 	}
 	// The minimum pass covers every resource before the extra pass, under the 512 cap.
 	eff = map[string]spec.Range{

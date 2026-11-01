@@ -12,7 +12,7 @@
 //	floor -mode waiter   -procs 20 -duration 60s [-cpuprofile DIR]
 //	floor -mode cli      -procs 20 -duration 60s -coreslot BIN
 //
-// The cli mode runs `coreslot run --need cpu=1 -- true` waiters, which cannot report their own
+// The cli mode runs `coreslot run --mem 128M -- true` waiters, which cannot report their own
 // CPU: it runs two batches, one for the warm-up alone and one for the warm-up plus the window,
 // ends each waiter with SIGINT (it withdraws and exits), and reports the difference of the
 // batches' mean wait4 rusage over the window.
@@ -141,7 +141,7 @@ func parent(args []string) int {
 
 // prepare builds what the children use. Syscall modes: a gen file, an own ticket file per
 // child (created by the child), and a ticket "ahead" whose lock this process holds, so a probe
-// finds it live. Waiter mode: a state directory with cpu = 1, the token adopted by this process
+// finds it live. Waiter mode: a state directory with mem = 128M, the token adopted by this process
 // and a ticket ahead of every child kept fresh by this process's Polls.
 func prepare(mode, dir string) (stop func(), err error) {
 	if mode != "waiter" && mode != "cli" {
@@ -157,14 +157,14 @@ func prepare(mode, dir string) (stop func(), err error) {
 		}
 		return func() { f.Close() }, nil
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"128M\"\n"), 0o600); err != nil {
 		return nil, err
 	}
 	c, err := coreslot.Open(coreslot.Options{StateDir: dir})
 	if err != nil {
 		return nil, err
 	}
-	need := map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}
+	need := map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}
 	g, err := c.Adopt(context.Background(), coreslot.Request{Label: "floor-holder", Need: need})
 	if err != nil {
 		return nil, err
@@ -198,7 +198,7 @@ func child(args []string) int {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1
 		}
-		w, err := c.Enqueue(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
+		w, err := c.Enqueue(context.Background(), coreslot.Request{Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1
@@ -288,7 +288,7 @@ func cliMode(bin, dir string, procs int, warmup, duration time.Duration) int {
 	batch := func(life time.Duration) (float64, error) {
 		var cmds []*exec.Cmd
 		for i := 0; i < procs; i++ {
-			cmd := exec.Command(bin, "run", "--need", "cpu=1", "--", "true")
+			cmd := exec.Command(bin, "run", "--mem", "128M", "--", "true")
 			cmd.Env = append(os.Environ(), "CORESLOT_STATE_DIR="+dir)
 			if err := cmd.Start(); err != nil {
 				return 0, err

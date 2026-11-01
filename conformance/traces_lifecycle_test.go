@@ -54,12 +54,12 @@ func writeFormat(e Env, n string) {
 	}
 }
 
-// cpuLocked is the number of locked cpu tokens, at every index, probed by the test itself
+// memLocked is the number of locked mem tokens, at every index, probed by the test itself
 // rather than read through the library, so that a defect in the clients' counting cannot hide
 // from it.
-func cpuLocked(e Env) int {
+func memLocked(e Env) int {
 	e.t.Helper()
-	dir := filepath.Join(e.Dir, store.ResDir, "cpu")
+	dir := filepath.Join(e.Dir, store.ResDir, "mem")
 	entries, err := os.ReadDir(dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		e.t.Fatal(err)
@@ -80,25 +80,25 @@ func cpuLocked(e Env) int {
 	return n
 }
 
-// stableLocked is the locked cpu count once it persists across two samples 100 ms apart. A client's
+// stableLocked is the locked mem count once it persists across two samples 100 ms apart. A client's
 // probe locks a free token for an instant (PROTOCOL.md section 6), so one sample taken while a
 // waiter counts tokens may read high; a real lock persists.
 func stableLocked(e Env) int {
 	e.t.Helper()
-	prev := cpuLocked(e)
+	prev := memLocked(e)
 	for range 20 {
 		time.Sleep(100 * time.Millisecond)
-		n := cpuLocked(e)
+		n := memLocked(e)
 		if n == prev {
 			return n
 		}
 		prev = n
 	}
-	e.t.Fatalf("the locked cpu count did not hold still across two samples 100 ms apart in 2 s (last %d)", prev)
+	e.t.Fatalf("the locked mem count did not hold still across two samples 100 ms apart in 2 s (last %d)", prev)
 	return 0
 }
 
-// indices are the cpu token indices the live hold labeled label lists. Call it only while no
+// indices are the mem token indices the live hold labeled label lists. Call it only while no
 // admission is in flight: a snapshot probes the tokens, and a probe can make an admitting
 // client skip a token (PROTOCOL.md section 6), so exact indices are read once the commands
 // started (WaitStarted reads marker files and probes nothing).
@@ -108,7 +108,7 @@ func indices(e Env, label string) []int {
 	if !ok {
 		e.t.Fatalf("no live hold labelled %s", label)
 	}
-	return e.HoldBody(h.Name).Grant["cpu"]
+	return e.HoldBody(h.Name).Grant["mem"]
 }
 
 func span(from, to int) []int {
@@ -119,7 +119,7 @@ func span(from, to int) []int {
 	return s
 }
 
-// lockedSampler samples the locked cpu count and the size every 100 ms through the library's
+// lockedSampler samples the locked mem count and the size every 100 ms through the library's
 // Snapshot, until stop is called. A count above the size is a violation only when it persists
 // across two consecutive samples: a client's probe locks a free token for an instant. It records
 // how many samples it took and every Snapshot error.
@@ -153,7 +153,7 @@ func sampleLocked(e Env) *lockedSampler {
 				s.mu.Unlock()
 				continue
 			}
-			r := rep.Resources["cpu"]
+			r := rep.Resources["mem"]
 			s.samples++
 			if prev >= 0 {
 				s.maxLocked = max(s.maxLocked, min(prev, r.Locked))
@@ -222,16 +222,16 @@ func TestClockStepThenHeadStops(t *testing.T) {
 				t.Skip("-short: the forward step is not run")
 			}
 			e := State(t)
-			e.WriteConfig(cpuConfig(2))
-			x := e.Run("X", "--need", "cpu=1")
+			e.WriteConfig(memConfig(2))
+			x := e.Run("X", "--mem", "128M")
 			e.WaitStarted("X")
 
-			a := e.Pausing("admit.before-enter", "ticket.refreshed").Run("A", "--need", "cpu=2")
+			a := e.Pausing("admit.before-enter", "ticket.refreshed").Run("A", "--mem", "256M")
 			defer a.AutoRelease("admit.before-enter")()
 			autoRefresh := a.AutoRelease("ticket.refreshed")
 			defer func() { autoRefresh() }()
 			tkA := e.WaitTicket("A")
-			b := e.Run("B", "--need", "cpu=1")
+			b := e.Run("B", "--mem", "128M")
 			e.Eventually(startWait, "B is queued", func() bool {
 				tk, queued := e.Ticket("B")
 				_, held := e.Hold("B")
@@ -341,19 +341,19 @@ func TestClockStepThenHeadStops(t *testing.T) {
 // -short skips the third phase.
 func TestSuspendAllWaiters(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(3))
-	x1 := e.Run("X1", "--need", "cpu=1")
+	e.WriteConfig(memConfig(3))
+	x1 := e.Run("X1", "--mem", "128M")
 	e.WaitHold("X1", startWait)
-	x2 := e.Run("X2", "--need", "cpu=2")
+	x2 := e.Run("X2", "--mem", "256M")
 	e.WaitHold("X2", startWait)
 
-	w1, autoW1 := startStoppableHead(e, "W1", "--need", "cpu=2")
+	w1, autoW1 := startStoppableHead(e, "W1", "--mem", "256M")
 	e.WaitTicket("W1")
-	w2 := e.Run("W2", "--need", "cpu=1")
+	w2 := e.Run("W2", "--mem", "128M")
 	e.WaitTicket("W2")
-	w3, autoW3 := startStoppableHead(e, "W3", "--need", "cpu=2")
+	w3, autoW3 := startStoppableHead(e, "W3", "--mem", "256M")
 	e.WaitTicket("W3")
-	w4 := e.Run("W4", "--need", "cpu=1")
+	w4 := e.Run("W4", "--mem", "128M")
 	e.WaitTicket("W4")
 
 	// Every waiter stops outside the section: W2-W4 wait behind the live head W1 and never enter
@@ -449,9 +449,9 @@ func TestSuspendAllWaiters(t *testing.T) {
 
 	// Phase 3: W3 and W4 hold every token. W5 is the head and W6 waits behind it; both stop and
 	// meanwhile W3 and W4 finish, freeing every token.
-	w5, autoW5 := startStoppableHead(e, "W5", "--need", "cpu=1")
+	w5, autoW5 := startStoppableHead(e, "W5", "--mem", "128M")
 	e.WaitTicket("W5")
-	w6 := e.Run("W6", "--need", "cpu=1")
+	w6 := e.Run("W6", "--mem", "128M")
 	e.WaitTicket("W6")
 	e.SectionLeft()
 	w6.Stop()
@@ -509,12 +509,12 @@ func TestSuspendAllWaiters(t *testing.T) {
 // under a size of 12.
 func TestShrinkWithHighIndexHolds(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(14))
-	l := e.Run("L", "--need", "cpu=10")
+	e.WriteConfig(memConfig(14))
+	l := e.Run("L", "--mem", "1280M")
 	e.WaitStarted("L")
-	h1 := e.Run("H1", "--need", "cpu=2")
+	h1 := e.Run("H1", "--mem", "256M")
 	e.WaitStarted("H1")
-	h2 := e.Run("H2", "--need", "cpu=2")
+	h2 := e.Run("H2", "--mem", "256M")
 	e.WaitStarted("H2")
 	if got := indices(e, "H1"); !slices.Equal(got, []int{10, 11}) {
 		t.Fatalf("H1 holds %v, want 10-11", got)
@@ -525,24 +525,24 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	e.ReleaseChild("L")
 	l.ExitCode(0)
 
-	writeConfigAtomic(e, cpuConfig(12)+"# shrunk\n")
-	if r := e.Status().Resources["cpu"]; r.Size != 12 || stableLocked(e) != 4 {
+	writeConfigAtomic(e, memConfig(12)+"# shrunk\n")
+	if r := e.Status().Resources["mem"]; r.Size != 12 || stableLocked(e) != 4 {
 		t.Fatalf("after the shrink: size %d, %d tokens locked; want 12 and 4", r.Size, stableLocked(e))
 	}
 
 	// Adoption during the reduced period takes from what is free.
 	c := e.Client()
-	ga, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-a", Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 3}}})
+	ga, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-a", Need: map[string]coreslot.Range{"mem": {Min: 2, Max: 3}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ga.Close()
-	if ga.Granted()["cpu"] != 3 || len(ga.Shortfall()) != 0 || !slices.Equal(indices(e, "adopt-a"), span(0, 2)) {
+	if ga.Granted()["mem"] != 3 || len(ga.Shortfall()) != 0 || !slices.Equal(indices(e, "adopt-a"), span(0, 2)) {
 		t.Fatalf("adoption: grant %v, shortfall %v, indices %v; want 3 at 0-2", ga.Granted(), ga.Shortfall(), indices(e, "adopt-a"))
 	}
 
 	// A queued request may take at most what is left below the size: 5, from 3-7.
-	r1 := e.Run("R1", "--need", "cpu=1..12")
+	r1 := e.Run("R1", "--mem", "640M")
 	e.WaitStarted("R1")
 	if got := indices(e, "R1"); !slices.Equal(got, span(3, 7)) {
 		t.Errorf("R1 holds %v, want 3-7", got)
@@ -552,15 +552,15 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	}
 
 	// Nothing is free: an adoption takes nothing and reports its shortfall; a request waits.
-	gb, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-b", Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 2}}})
+	gb, err := c.Adopt(context.Background(), coreslot.Request{Label: "adopt-b", Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 2}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer gb.Close()
-	if gb.Granted()["cpu"] != 0 || gb.Shortfall()["cpu"] != 1 {
+	if gb.Granted()["mem"] != 0 || gb.Shortfall()["mem"] != 1 {
 		t.Errorf("adoption with nothing free: grant %v, shortfall %v; want none and a shortfall of 1", gb.Granted(), gb.Shortfall())
 	}
-	r2 := e.Run("R2", "--need", "cpu=1")
+	r2 := e.Run("R2", "--mem", "128M")
 	e.WaitTicket("R2")
 	time.Sleep(observeWait)
 	noHold(t, e, "R2", "R2 was admitted with 12 tokens locked under a size of 12")
@@ -577,8 +577,8 @@ func TestShrinkWithHighIndexHolds(t *testing.T) {
 	}
 
 	// Growth back to 14: 9, 12 and 13 are free (10 and 11 are H1's).
-	writeConfigAtomic(e, cpuConfig(14))
-	r3 := e.Run("R3", "--need", "cpu=3")
+	writeConfigAtomic(e, memConfig(14))
+	r3 := e.Run("R3", "--mem", "384M")
 	e.WaitStarted("R3")
 	if got := indices(e, "R3"); !slices.Equal(got, []int{9, 12, 13}) {
 		t.Errorf("R3 holds %v, want 9, 12 and 13", got)
@@ -642,12 +642,12 @@ func layout(t *testing.T, e Env) map[string]string {
 // hold the other three, and the sampler sees 5 locked under a size of 3.
 func TestUnknownFormatTokenOnly(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(cpuConfig(3))
-	h := e.Run("H", "--need", "cpu=2")
+	e.WriteConfig(memConfig(3))
+	h := e.Run("H", "--mem", "256M")
 	hh := e.WaitHold("H", startWait)
-	w1 := e.Run("W1", "--need", "cpu=2")
+	w1 := e.Run("W1", "--mem", "256M")
 	e.WaitTicket("W1")
-	w2 := e.Run("W2", "--need", "cpu=1")
+	w2 := e.Run("W2", "--mem", "128M")
 	e.WaitTicket("W2")
 	sampler := sampleLocked(e)
 	defer sampler.stop()
@@ -669,7 +669,7 @@ func TestUnknownFormatTokenOnly(t *testing.T) {
 
 	// W2 runs, token-only, on the free token; W1 (needing two) waits token-only, its ticket dead.
 	r2 := e.WaitStarted("W2")
-	if r2.Env["CORESLOT_UNBUDGETED"] != "format" || r2.Env["CORESLOT_GRANTED_CPU"] != "1" ||
+	if r2.Env["CORESLOT_UNBUDGETED"] != "format" || r2.Env["CORESLOT_GRANTED_MEM"] != "128" ||
 		r2.Env["CORESLOT_HELD_FD"] != "" || !slices.Contains([]string{"4", "4-4"}, r2.Env["CORESLOT_TOKEN_FDS"]) {
 		t.Errorf("token-only command environment %v", r2.Env)
 	}
@@ -685,7 +685,7 @@ func TestUnknownFormatTokenOnly(t *testing.T) {
 	})
 
 	// A run arriving under FORMAT 2 waits token-only, outside the queue.
-	n := e.Run("N", "--need", "cpu=1")
+	n := e.Run("N", "--mem", "128M")
 	time.Sleep(observeWait)
 	if _, ok := e.Ticket("N"); ok {
 		t.Error("N published a ticket under FORMAT 2")
@@ -770,10 +770,10 @@ func mapsEqual(a, b map[string]string) bool {
 func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 	t.Run("before", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(cpuConfig(1))
-		x := e.Run("X", "--need", "cpu=1")
+		e.WriteConfig(memConfig(1))
+		x := e.Run("X", "--mem", "128M")
 		e.WaitHold("X", startWait)
-		w := e.Pausing("admit.before-enter").Run("W", "--need", "cpu=1")
+		w := e.Pausing("admit.before-enter").Run("W", "--mem", "128M")
 		autoW := w.AutoRelease("admit.before-enter")
 		tk := e.WaitTicket("W")
 		// W is caught after an election, before a section; X then frees the token, so that
@@ -782,8 +782,8 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		w.WaitReached("admit.before-enter")
 		e.ReleaseChild("X")
 		x.ExitCode(0)
-		if got := e.Status().Resources["cpu"].Available; got != 1 {
-			t.Fatalf("%d cpu free, want 1: W's attempt would not admit it", got)
+		if got := e.Status().Resources["mem"].Available; got != 1 {
+			t.Fatalf("%d mem free, want 1: W's attempt would not admit it", got)
 		}
 		e.Start("cancel", tk.ID).ExitCode(0)
 		w.Release("admit.before-enter")
@@ -798,16 +798,16 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		w.ExitCode(exitRefusal)
 		rep := e.Status()
 		if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || len(rep.CancelRequests) != 0 ||
-			rep.Resources["cpu"].Locked != 0 {
+			rep.Resources["mem"].Locked != 0 {
 			t.Errorf("after the cancellation: holds %v, dead %v, tickets %v, cancels %v, locked %d",
-				rep.Holds, rep.DeadHolds, rep.Tickets, rep.CancelRequests, rep.Resources["cpu"].Locked)
+				rep.Holds, rep.DeadHolds, rep.Tickets, rep.CancelRequests, rep.Resources["mem"].Locked)
 		}
 	})
 
 	t.Run("after", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(cpuConfig(1))
-		v := e.Pausing("publish.after-create").Run("V", "--need", "cpu=1")
+		e.WriteConfig(memConfig(1))
+		v := e.Pausing("publish.after-create").Run("V", "--mem", "128M")
 		// A hold is published only inside the section that admits it, so V is paused in it.
 		v.CatchPublication("publish.after-create", store.HoldsDir)
 		tk, ok := e.Ticket("V")
@@ -840,8 +840,8 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 
 	t.Run("after, past the bound", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(cpuConfig(1))
-		v := e.Pausing("publish.after-create").Run("V", "--need", "cpu=1")
+		e.WriteConfig(memConfig(1))
+		v := e.Pausing("publish.after-create").Run("V", "--mem", "128M")
 		v.CatchPublication("publish.after-create", store.HoldsDir)
 		tk, ok := e.Ticket("V")
 		if !ok {
@@ -866,64 +866,4 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 		e.ReleaseChild("V")
 		v.ExitCode(0)
 	})
-}
-
-// TestShortRunPassesMemoryWaiters: two runs wait at the front of the queue for memory another run
-// holds, and a 50 ms run third in the queue, naming cpu alone, is admitted at once behind every
-// minimum ahead (PROTOCOL.md section 10.3): its extra pass leaves the cpu both waiters need, so
-// it is granted 2 of the 4 cpus. Once the memory is released the head is admitted as it would be
-// without the rule, and the run behind it too. Under [memory] live = true the short run, which
-// names no mem, is admitted the same way, though its memory is in no reservation: that caveat is
-// accepted and pinned here. Every client runs with no live headroom, so the waiters wait for the
-// static size.
-//
-// Mutations: no passing outside the head leaves C queued while X holds the memory; Plan in place
-// of state.PlanBehind grants C all 4 cpus.
-func TestShortRunPassesMemoryWaiters(t *testing.T) {
-	for _, live := range []bool{false, true} {
-		t.Run(fmt.Sprintf("live = %v", live), func(t *testing.T) {
-			e := State(t)
-			e.WriteConfig(fmt.Sprintf("[resources]\ncpu = 4\nmem = \"1G\"\n\n[memory]\nlive = %v\n", live))
-			// run starts `coreslot run` of argv (a helper child that holds until released when
-			// argv is nil) needing each of needs.
-			run := func(name string, needs []string, argv ...string) *Proc {
-				if argv == nil {
-					argv = []string{bins.child, "hold", e.MarkDir, name}
-				}
-				args := []string{"/usr/bin/env", "CORESLOT_TESTHOOK_HEADROOM_MIB=0", bins.coreslot, "run", "--label", name}
-				for _, n := range needs {
-					args = append(args, "--need", n)
-				}
-				p := e.StartCommand(append(append(args, "--"), argv...)...)
-				p.name = name
-				return p
-			}
-			waiter := []string{"cpu=1", "mem=512M"}
-			x := run("X", []string{"mem=1G"})
-			e.WaitHold("X", startWait)
-			a := run("A", waiter)
-			e.WaitTicket("A")
-			b := run("B", waiter)
-			e.WaitTicket("B")
-
-			start := time.Now()
-			c := run("C", []string{"cpu=1..4"}, "sh", "-c", `echo $CORESLOT_GRANTED_CPU; sleep 0.05`)
-			c.ExitCode(0)
-			t.Logf("C ran %v after it started, behind A and B", time.Since(start))
-			if got := strings.TrimSpace(c.Stdout()); got != "2" {
-				t.Fatalf("C was granted %s cpus, want 2: the cpu minimums of A and B stay free", got)
-			}
-			noHold(t, e, "A", "X still holds every mem token")
-			noHold(t, e, "B", "X still holds every mem token")
-
-			e.ReleaseChild("X")
-			x.ExitCode(0)
-			e.WaitHold("A", startWait)
-			e.WaitHold("B", startWait)
-			for name, p := range map[string]*Proc{"A": a, "B": b} {
-				e.ReleaseChild(name)
-				p.ExitCode(0)
-			}
-		})
-	}
 }

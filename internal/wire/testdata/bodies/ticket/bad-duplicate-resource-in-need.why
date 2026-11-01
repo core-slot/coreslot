@@ -1,1 +1,1 @@
-duplicate resource "cpu" inside need
+duplicate resource "mem" inside need

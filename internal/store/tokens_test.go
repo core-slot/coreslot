@@ -42,23 +42,23 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
-	sizes := map[string]int{"cpu": 8}
-	one, got := take(t, sec, map[string]int{"cpu": 1}, sizes)
-	if got["cpu"] != 1 || !slices.Equal(one.Indices["cpu"], []int{0}) || len(one.Files) != 1 {
+	sizes := map[string]int{"mem": 8}
+	one, got := take(t, sec, map[string]int{"mem": 1}, sizes)
+	if got["mem"] != 1 || !slices.Equal(one.Indices["mem"], []int{0}) || len(one.Files) != 1 {
 		t.Fatalf("1-token take: got %v, indices %v, %d files", got, one.Indices, len(one.Files))
 	}
-	if n := countLocked(t, sec, "cpu"); n != 1 {
+	if n := countLocked(t, sec, "mem"); n != 1 {
 		t.Errorf("CountLocked after a 1-token take = %d, want 1", n)
 	}
-	rest, got := take(t, sec, map[string]int{"cpu": 8}, sizes)
-	if got["cpu"] != 7 || !slices.Equal(rest.Indices["cpu"], []int{1, 2, 3, 4, 5, 6, 7}) {
+	rest, got := take(t, sec, map[string]int{"mem": 8}, sizes)
+	if got["mem"] != 7 || !slices.Equal(rest.Indices["mem"], []int{1, 2, 3, 4, 5, 6, 7}) {
 		t.Errorf("the rest: got %v, indices %v; want 7 tokens 1-7", got, rest.Indices)
 	}
-	if n := countLocked(t, sec, "cpu"); n != 8 {
+	if n := countLocked(t, sec, "mem"); n != 8 {
 		t.Errorf("CountLocked = %d, want 8", n)
 	}
 	one.Close()
-	if n := countLocked(t, sec, "cpu"); n != 7 {
+	if n := countLocked(t, sec, "mem"); n != 7 {
 		t.Errorf("CountLocked after closing the 1-token set = %d, want 7", n)
 	}
 }
@@ -68,31 +68,31 @@ func TestTakeTokensCountsOverSizeHolds(t *testing.T) {
 	s := open(t, dir)
 	sec := enter(t, s)
 	// Size 14: create every token file, then a helper holds 10-13 from another process.
-	ts, _ := take(t, sec, map[string]int{"cpu": 14}, map[string]int{"cpu": 14})
+	ts, _ := take(t, sec, map[string]int{"mem": 14}, map[string]int{"mem": 14})
 	ts.Close()
 	var high []string
 	for i := 10; i <= 13; i++ {
-		high = append(high, tokenPath(dir, "cpu", i))
+		high = append(high, tokenPath(dir, "mem", i))
 	}
 	startHelper(t, "lock", dir, strings.Join(high, "\n"), nil)
 
 	// The size drops to 12: the hold above the new size still counts (I3).
 	const size = 12
-	locked := countLocked(t, sec, "cpu")
+	locked := countLocked(t, sec, "mem")
 	if locked != 4 {
 		t.Fatalf("CountLocked with 10-13 held = %d, want 4 (indices at or above the size count)", locked)
 	}
 	free := size - locked
-	got8, got := take(t, sec, map[string]int{"cpu": free}, map[string]int{"cpu": size})
-	if got["cpu"] != 8 || !slices.Equal(got8.Indices["cpu"], []int{0, 1, 2, 3, 4, 5, 6, 7}) {
+	got8, got := take(t, sec, map[string]int{"mem": free}, map[string]int{"mem": size})
+	if got["mem"] != 8 || !slices.Equal(got8.Indices["mem"], []int{0, 1, 2, 3, 4, 5, 6, 7}) {
 		t.Errorf("take of free=%d: got %v, indices %v; want 0-7", free, got, got8.Indices)
 	}
-	if n := countLocked(t, sec, "cpu"); n != size {
+	if n := countLocked(t, sec, "mem"); n != size {
 		t.Errorf("locked after the admission = %d, want the size %d, never above", n, size)
 	}
 	// Only indices below the size are taken, whatever is asked.
-	more, got := take(t, sec, map[string]int{"cpu": 4}, map[string]int{"cpu": size})
-	if got["cpu"] != 2 || !slices.Equal(more.Indices["cpu"], []int{8, 9}) {
+	more, got := take(t, sec, map[string]int{"mem": 4}, map[string]int{"mem": size})
+	if got["mem"] != 2 || !slices.Equal(more.Indices["mem"], []int{8, 9}) {
 		t.Errorf("take of 4 more below size 12: got %v, indices %v; want 8, 9", got, more.Indices)
 	}
 }
@@ -101,30 +101,30 @@ func TestTakeTokensSkipsRaceLocked(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
-	sizes := map[string]int{"cpu": 8, "pg-local": 2}
-	// A non-queued taker holds cpu 1 and pg-local 0 without the section's knowledge.
-	racer, _ := take(t, sec, map[string]int{"cpu": 2, "pg-local": 1}, sizes)
-	racer.Files[0].Close() // keep cpu 1 and pg-local 0 only
-	ts, got := take(t, sec, map[string]int{"cpu": 3, "pg-local": 2}, sizes)
-	want := map[string]int{"cpu": 3, "pg-local": 1}
+	sizes := map[string]int{"mem": 8, "pg-local": 2}
+	// A non-queued taker holds mem 1 and pg-local 0 without the section's knowledge.
+	racer, _ := take(t, sec, map[string]int{"mem": 2, "pg-local": 1}, sizes)
+	racer.Files[0].Close() // keep mem 1 and pg-local 0 only
+	ts, got := take(t, sec, map[string]int{"mem": 3, "pg-local": 2}, sizes)
+	want := map[string]int{"mem": 3, "pg-local": 1}
 	if !maps.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	if !slices.Equal(ts.Indices["cpu"], []int{0, 2, 3}) || !slices.Equal(ts.Indices["pg-local"], []int{1}) {
-		t.Errorf("indices %v, want cpu [0 2 3], pg-local [1]", ts.Indices)
+	if !slices.Equal(ts.Indices["mem"], []int{0, 2, 3}) || !slices.Equal(ts.Indices["pg-local"], []int{1}) {
+		t.Errorf("indices %v, want mem [0 2 3], pg-local [1]", ts.Indices)
 	}
-	// Files come in ascending resource name, then index: cpu 0, 2, 3, then pg-local 1.
+	// Files come in ascending resource name, then index: mem 0, 2, 3, then pg-local 1.
 	var order []string
 	for _, f := range ts.Files {
 		order = append(order, filepath.Base(filepath.Dir(f.Name()))+"/"+filepath.Base(f.Name()))
 	}
-	if want := []string{"cpu/0", "cpu/2", "cpu/3", "pg-local/1"}; !slices.Equal(order, want) {
+	if want := []string{"mem/0", "mem/2", "mem/3", "pg-local/1"}; !slices.Equal(order, want) {
 		t.Errorf("file order %v, want %v", order, want)
 	}
 	if _, _, err := sec.TakeTokens(map[string]int{"../x": 1}, map[string]int{"../x": 1}); err == nil {
 		t.Error("TakeTokens accepted a resource name that is not one")
 	}
-	if _, _, err := sec.TakeTokens(map[string]int{"cpu": 257}, map[string]int{"cpu": 4096}); err == nil {
+	if _, _, err := sec.TakeTokens(map[string]int{"mem": 257}, map[string]int{"mem": 4096}); err == nil {
 		t.Error("TakeTokens accepted more than 256 tokens of one resource")
 	}
 }
@@ -133,22 +133,22 @@ func TestCloseDoesNotRevokeChild(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
-	ts, _ := take(t, sec, map[string]int{"cpu": 2}, map[string]int{"cpu": 8})
+	ts, _ := take(t, sec, map[string]int{"mem": 2}, map[string]int{"mem": 8})
 	h := startHelper(t, "inherit", dir, "", ts.Files)
 	ts.Close()
 	ts.Close() // repeated Close only closes
 	for i := range 2 {
-		if !probeLocked(t, tokenPath(dir, "cpu", i)) {
-			t.Errorf("cpu %d was released by the parent's Close while the child holds it", i)
+		if !probeLocked(t, tokenPath(dir, "mem", i)) {
+			t.Errorf("mem %d was released by the parent's Close while the child holds it", i)
 		}
 	}
-	if n := countLocked(t, sec, "cpu"); n != 2 {
+	if n := countLocked(t, sec, "mem"); n != 2 {
 		t.Errorf("CountLocked while the child holds 2 = %d", n)
 	}
 	h.stop()
 	for i := range 2 {
-		if probeLocked(t, tokenPath(dir, "cpu", i)) {
-			t.Errorf("cpu %d still locked after the child exited", i)
+		if probeLocked(t, tokenPath(dir, "mem", i)) {
+			t.Errorf("mem %d still locked after the child exited", i)
 		}
 	}
 }
@@ -157,11 +157,11 @@ func TestInodeMismatchIsDegraded(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
-	ts, _ := take(t, sec, map[string]int{"cpu": 2}, map[string]int{"cpu": 8})
+	ts, _ := take(t, sec, map[string]int{"mem": 2}, map[string]int{"mem": 8})
 	if err := ts.CheckIdentity(); err != nil {
 		t.Fatalf("CheckIdentity of a fresh grant: %v", err)
 	}
-	p := tokenPath(dir, "cpu", 1)
+	p := tokenPath(dir, "mem", 1)
 	if err := os.Rename(p, p+".moved"); err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +184,8 @@ func TestProbeAndRemoveHoldKeepsInheritedHold(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
-	h := wire.Hold{Label: "gate:big", Grant: map[string][]int{"cpu": {0, 1}}, StartNS: 1791720600000000000,
-		Clamped: map[string]int{"cpu": 16}}
+	h := wire.Hold{Label: "gate:big", Grant: map[string][]int{"mem": {0, 1}}, StartNS: 1791720600000000000,
+		Clamped: map[string]int{"mem": 16}}
 	f, name, err := sec.PublishHold(h, 7300, 4)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestProbeAndRemoveHoldKeepsInheritedHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back, err := wire.DecodeHold(body); err != nil || back.Label != h.Label || !slices.Equal(back.Grant["cpu"], []int{0, 1}) {
+	if back, err := wire.DecodeHold(body); err != nil || back.Label != h.Label || !slices.Equal(back.Grant["mem"], []int{0, 1}) {
 		t.Errorf("hold body %s decodes to %+v, %v", body, back, err)
 	}
 	// A second hold with the same name takes the next seq instead of replacing the first.
@@ -239,25 +239,25 @@ func TestCountLockedIgnoresForeignNames(t *testing.T) {
 	if n := countLocked(t, sec, "gpu"); n != 0 {
 		t.Errorf("CountLocked of a resource with no files = %d", n)
 	}
-	take(t, sec, map[string]int{"cpu": 1}, map[string]int{"cpu": 1})
+	take(t, sec, map[string]int{"mem": 1}, map[string]int{"mem": 1})
 	for _, junk := range []string{"01", "x", "4096"} {
-		p := filepath.Join(dir, ResDir, "cpu", junk)
+		p := filepath.Join(dir, ResDir, "mem", junk)
 		if err := os.WriteFile(p, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		startHelper(t, "lock", dir, p, nil)
 	}
-	if n := countLocked(t, sec, "cpu"); n != 1 {
+	if n := countLocked(t, sec, "mem"); n != 1 {
 		t.Errorf("CountLocked counted files that are not token indices: %d, want 1", n)
 	}
-	if _, err := sec.CountLocked("CPU"); err == nil {
+	if _, err := sec.CountLocked("MEM"); err == nil {
 		t.Error("CountLocked accepted an invalid resource name")
 	}
 	var se *StateError
-	if err := os.Symlink(filepath.Join(dir, AdmitLock), filepath.Join(dir, ResDir, "cpu", "7")); err != nil {
+	if err := os.Symlink(filepath.Join(dir, AdmitLock), filepath.Join(dir, ResDir, "mem", "7")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sec.CountLocked("cpu"); !errors.As(err, &se) {
+	if _, err := sec.CountLocked("mem"); !errors.As(err, &se) {
 		t.Errorf("CountLocked over a symlinked token = %v, want a *StateError", err)
 	}
 }

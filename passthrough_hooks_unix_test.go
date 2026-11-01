@@ -38,9 +38,9 @@ func TestPassThroughDoesNotResolveTheDirectoryAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The parent's budget and the child's view of it: one cpu, which the parent holds.
+	// The parent's budget and the child's view of it: one mem, which the parent holds.
 	for _, p := range []string{filepath.Join(dir, "config.toml"), filepath.Join(cfgDir, "config.toml")} {
-		if err := os.WriteFile(p, []byte("[resources]\ncpu = 1\n"), 0o600); err != nil {
+		if err := os.WriteFile(p, []byte("[resources]\nmem = \"128M\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -56,8 +56,8 @@ echo "me:x:$2:$2:me:$GETENT_HOME:/bin/sh"
 	if err := os.WriteFile(getent, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	g := waitGrant(t, open(t, dir), Request{Label: "parent", Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
-	f := g.Files() // hold, cpu/0
+	g := waitGrant(t, open(t, dir), Request{Label: "parent", Need: map[string]Range{"mem": {Min: 1, Max: 1}}})
+	f := g.Files() // hold, mem/0
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.ExtraFiles = f
 	cmd.Env = append(withoutCoreslot(), nestedEnv+"=named", "CORESLOT_HELD_FD=3", "CORESLOT_TOKEN_FDS=4",
@@ -87,7 +87,7 @@ func passThroughNamedChild() error {
 	if got, want := c.e.Store().Dir(), os.Getenv("WANT_STATE_DIR"); got != want {
 		return fmt.Errorf("Open resolved %q, want %q", got, want)
 	}
-	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		return err
 	}
@@ -102,8 +102,8 @@ func passThroughNamedChild() error {
 		return err
 	}
 	defer g.Close()
-	if !g.PassThrough() || g.Granted()["cpu"] != 1 {
-		return fmt.Errorf("grant %v, pass-through %v; want the parent's cpu, passed through", g.Granted(), g.PassThrough())
+	if !g.PassThrough() || g.Granted()["mem"] != 1 {
+		return fmt.Errorf("grant %v, pass-through %v; want the parent's mem, passed through", g.Granted(), g.PassThrough())
 	}
 	fmt.Println("named: ok")
 	return nil

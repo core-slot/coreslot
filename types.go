@@ -32,7 +32,7 @@ type Request struct {
 	// (PROTOCOL.md section 9).
 	Priority int
 	// Need maps a resource name ([a-z][a-z0-9-]{0,31}) to its Range, for at most 8 resources.
-	// An empty Need means cpu 1..1.
+	// An empty Need means mem 1..1.
 	Need map[string]Range
 }
 
@@ -44,7 +44,7 @@ type Range struct {
 
 // Validate checks every bound of format 1 (PROTOCOL.md sections 5, 6 and 7) and returns a
 // [*UsageError] for the first one r breaks. It checks r as Enqueue and Adopt would take it, so an
-// empty Need is cpu 1..1 and Request{}.Validate() is nil. Enqueue and Adopt validate on their
+// empty Need is mem 1..1 and Request{}.Validate() is nil. Enqueue and Adopt validate on their
 // own; Validate is for a caller that wants to refuse a request before it opens a budget.
 func (r Request) Validate() error {
 	if err := spec.Normalize(r.spec()).Validate(); err != nil {
@@ -125,7 +125,7 @@ type Report struct {
 	// is set.
 	Resources map[string]ResourceInfo
 	// ConfigError is a [*StateError] when the sizes could not be computed (an invalid
-	// configuration, an unknown CPU count), and nil otherwise.
+	// configuration, an unknown memory size), and nil otherwise.
 	ConfigError error
 	// UndeclaredLocked maps each resource the configuration does not declare, but whose
 	// directory under res/ still has locked tokens, to the number locked.

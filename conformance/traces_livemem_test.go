@@ -25,7 +25,7 @@ func TestTraceLiveMemOlderClientWaits(t *testing.T) {
 	e.WriteConfig("[resources]\nmem = \"1G\"\n[memory]\nlive = true\n")
 
 	run := e.StartCommand("/usr/bin/env", "CORESLOT_TESTHOOK_HEADROOM_MIB=4096", bins.coreslot, "run",
-		"--label", "go", "--need", "mem=2G", "--", "sh", "-c", `echo $CORESLOT_GRANTED_MEM; sleep 5`)
+		"--label", "go", "--mem", "2G", "--", "sh", "-c", `echo $CORESLOT_GRANTED_MEM; sleep 5`)
 	e.WaitHold("go", startWait)
 
 	waiter := e.StartCommand(py, pyc, "run", "--label", "py", "--need", "mem=128M", "--",

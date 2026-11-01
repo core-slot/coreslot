@@ -69,15 +69,15 @@ func waitGrant(t *testing.T, c *Client, req Request) *Grant {
 // Min minus the whole size, an adoption by what was not free, and a grant that holds every Min, or
 // a resource run unbudgeted, is never short.
 func TestShortfall(t *testing.T) {
-	c := open(t, stateDir(t, "[resources]\ncpu = 4\n"))
-	clamped := waitGrant(t, c, Request{Need: map[string]Range{"cpu": {Min: 6, Max: 6}, "gpu": {Min: 1, Max: 1}}})
-	if got, want := clamped.Shortfall(), map[string]int{"cpu": 2}; !reflect.DeepEqual(got, want) {
+	c := open(t, stateDir(t, "[resources]\nmem = \"512M\"\n"))
+	clamped := waitGrant(t, c, Request{Need: map[string]Range{"mem": {Min: 6, Max: 6}, "gpu": {Min: 1, Max: 1}}})
+	if got, want := clamped.Shortfall(), map[string]int{"mem": 2}; !reflect.DeepEqual(got, want) {
 		t.Errorf("clamped admission: shortfall %v, want %v (gpu is unbudgeted, never short)", got, want)
 	}
 	clamped.Close()
 
 	ctx := context.Background()
-	full, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 2, Max: 3}}})
+	full, err := c.Adopt(ctx, Request{Need: map[string]Range{"mem": {Min: 2, Max: 3}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,20 +85,20 @@ func TestShortfall(t *testing.T) {
 	if got := full.Shortfall(); got == nil || len(got) != 0 {
 		t.Errorf("adoption of 3 with Min 2: shortfall %#v, want empty", got)
 	}
-	exact, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	exact, err := c.Adopt(ctx, Request{Need: map[string]Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := exact.Shortfall(); exact.Granted()["cpu"] != 1 || got == nil || len(got) != 0 {
+	if got := exact.Shortfall(); exact.Granted()["mem"] != 1 || got == nil || len(got) != 0 {
 		t.Errorf("adoption of exactly its Min: granted %v, shortfall %#v; want 1 and empty, no zero entry", exact.Granted(), got)
 	}
 	exact.Close()
-	short, err := c.Adopt(ctx, Request{Need: map[string]Range{"cpu": {Min: 2, Max: 2}}})
+	short, err := c.Adopt(ctx, Request{Need: map[string]Range{"mem": {Min: 2, Max: 2}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer short.Close()
-	if got, want := short.Shortfall(), map[string]int{"cpu": 1}; short.Granted()["cpu"] != 1 || !reflect.DeepEqual(got, want) {
+	if got, want := short.Shortfall(), map[string]int{"mem": 1}; short.Granted()["mem"] != 1 || !reflect.DeepEqual(got, want) {
 		t.Errorf("adoption with one token free: granted %v, shortfall %v; want 1 and %v", short.Granted(), got, want)
 	}
 }
@@ -293,40 +293,40 @@ func runChild(t *testing.T, dir string, g *Grant, tokens []string) {
 }
 
 func TestEnvMatchesFiles(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\npg-local = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := open(t, dir)
-	g := waitGrant(t, c, Request{Label: "gate", Need: map[string]Range{"cpu": {Min: 2, Max: 3}, "pg-local": {Min: 1, Max: 1}}})
+	g := waitGrant(t, c, Request{Label: "gate", Need: map[string]Range{"mem": {Min: 2, Max: 3}, "gpu": {Min: 1, Max: 1}}})
 	env := strings.Join(g.Env(), " ")
-	if env != "CORESLOT_GRANTED_CPU=3 CORESLOT_GRANTED_PG_LOCAL=1 CORESLOT_HELD_FD=3 CORESLOT_TOKEN_FDS=4-7" {
+	if env != "CORESLOT_GRANTED_GPU=1 CORESLOT_GRANTED_MEM=384 CORESLOT_HELD_FD=3 CORESLOT_TOKEN_FDS=4-6" {
 		t.Errorf("env %q", env)
 	}
-	if files := g.Files(); len(files) != 5 || files[0] == nil {
-		t.Fatalf("files %v, want the hold and 4 tokens", files)
+	if files := g.Files(); len(files) != 4 || files[0] == nil {
+		t.Fatalf("files %v, want the hold and 3 tokens", files)
 	}
-	runChild(t, dir, g, []string{"res/cpu/0", "res/cpu/1", "res/cpu/2", "res/pg-local/0"})
+	runChild(t, dir, g, []string{"res/mem/0", "res/mem/1", "res/mem/2"})
 
 	// Token-only: no hold, fd 3 closed, tokens still from fd 4.
 	g.Close()
 	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	to := waitGrant(t, c, Request{Need: map[string]Range{"cpu": {Min: 2, Max: 3}}})
+	to := waitGrant(t, c, Request{Need: map[string]Range{"mem": {Min: 2, Max: 3}}})
 	if !to.TokenOnly() || to.Files()[0] != nil {
 		t.Fatalf("token-only %v files %v", to.TokenOnly(), to.Files())
 	}
-	if env := strings.Join(to.Env(), " "); env != "CORESLOT_GRANTED_CPU=2 CORESLOT_TOKEN_FDS=4-5 CORESLOT_UNBUDGETED=format" {
+	if env := strings.Join(to.Env(), " "); env != "CORESLOT_GRANTED_MEM=256 CORESLOT_TOKEN_FDS=4-5 CORESLOT_UNBUDGETED=format" {
 		t.Errorf("token-only env %q", env)
 	}
-	runChild(t, dir, to, []string{"res/cpu/0", "res/cpu/1"})
+	runChild(t, dir, to, []string{"res/mem/0", "res/mem/1"})
 }
 
 // Environ is base without its grant context, followed by Env: an inherited CORESLOT_GRANTED_*,
 // CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS or CORESLOT_UNBUDGETED never reaches the command, while
 // CORESLOT_STATE_DIR and everything else does, in order.
 func TestEnvironReplacesGrantContext(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
-	g := waitGrant(t, open(t, dir), Request{Need: map[string]Range{"cpu": {Min: 2, Max: 2}}})
-	base := []string{"PATH=/bin", "CORESLOT_GRANTED_CPU=9", "CORESLOT_GRANTED_GPU=1", "CORESLOT_HELD_FD=7",
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	g := waitGrant(t, open(t, dir), Request{Need: map[string]Range{"mem": {Min: 2, Max: 2}}})
+	base := []string{"PATH=/bin", "CORESLOT_GRANTED_MEM=9", "CORESLOT_GRANTED_GPU=1", "CORESLOT_HELD_FD=7",
 		"CORESLOT_TOKEN_FDS=8-9", "CORESLOT_UNBUDGETED=state", "CORESLOT_STATE_DIR=" + dir, "LANG=C"}
 	orig := slices.Clone(base)
 	got := g.Environ(base)
@@ -346,12 +346,22 @@ func TestEnvironReplacesGrantContext(t *testing.T) {
 // tokens of a resource the configuration no longer declares, the section held, and a degraded
 // record, then a malformed one.
 func TestReportMatchesTheEngineSnapshot(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\npg = 1\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	c := open(t, dir)
 	ctx := context.Background()
-	waitGrant(t, c, Request{Label: "hold", Need: map[string]Range{"cpu": {Min: 5, Max: 5}, "gpu": {Min: 1, Max: 1},
-		"pg": {Min: 1, Max: 1}}})
-	w, err := c.Enqueue(ctx, Request{Label: "queued", Priority: 5, Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
+	waitGrant(t, c, Request{Label: "hold", Need: map[string]Range{"mem": {Min: 5, Max: 5}, "gpu": {Min: 1, Max: 1}}})
+	if err := os.MkdirAll(filepath.Join(dir, "res", "pg"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leftover, err := os.OpenFile(filepath.Join(dir, "res", "pg", "0"), os.O_RDONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { leftover.Close() })
+	if err := unix.Flock(int(leftover.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	w, err := c.Enqueue(ctx, Request{Label: "queued", Priority: 5, Need: map[string]Range{"mem": {Min: 1, Max: 2}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,12 +386,12 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fo, err := c.e.FailOpen(spec.Request{Label: "failed open", Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}}, "test")
+	fo, err := c.e.FailOpen(spec.Request{Label: "failed open", Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { fo.Close() })
-	dead, err := c.Adopt(ctx, Request{Label: "dead", Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	dead, err := c.Adopt(ctx, Request{Label: "dead", Need: map[string]Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +407,7 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	dead.Close()
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 4\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"512M\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -451,7 +461,7 @@ func TestReportMatchesTheEngineSnapshot(t *testing.T) {
 	var failOpen, clamped, unbudgeted, deadTicket bool
 	for _, h := range got.Holds {
 		failOpen = failOpen || h.FailOpen
-		clamped = clamped || h.Clamped["cpu"] == 5
+		clamped = clamped || h.Clamped["mem"] == 5
 		unbudgeted = unbudgeted || slices.Equal(h.Unbudgeted, []string{"gpu"})
 	}
 	for _, tk := range got.Tickets {
@@ -486,7 +496,7 @@ func TestReportErrorsAreStateErrors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("not a format\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 0\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"0M\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := c.Snapshot()
@@ -514,7 +524,7 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 	c := open(t, dir)
 	sawAdmitted, sawCancelled := false, false
 	for i := 0; i < 30; i++ {
-		w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+		w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"mem": {Min: 1, Max: 1}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -595,9 +605,9 @@ func TestConcurrentPollWaitCancel(t *testing.T) {
 // PROTOCOL.md section 5.3: Options.StateDir moves the configuration to <StateDir>/config.toml,
 // which must pass the state directory's policy.
 func TestStateDirOptionMovesConfiguration(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 3\n")
+	dir := stateDir(t, "[resources]\nmem = \"384M\"\n")
 	c := open(t, dir)
-	if n, err := c.Available("cpu"); err != nil || n != 3 {
+	if n, err := c.Available("mem"); err != nil || n != 3 {
 		t.Fatalf("Available = %d, %v; want the state directory's configuration (3)", n, err)
 	}
 	cfg := filepath.Join(dir, "config.toml")
@@ -605,7 +615,7 @@ func TestStateDirOptionMovesConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var se *StateError
-	if _, err := c.Available("cpu"); !errors.As(err, &se) {
+	if _, err := c.Available("mem"); !errors.As(err, &se) {
 		t.Errorf("group-writable config.toml: %v, want a *StateError", err)
 	}
 	if _, err := Open(Options{StateDir: dir}); !errors.As(err, &se) {
@@ -626,7 +636,7 @@ func TestClientClose(t *testing.T) {
 func TestUsageErrorBeforeQueueing(t *testing.T) {
 	c := open(t, stateDir(t, ""))
 	var ue *UsageError
-	if _, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 3, Max: 2}}}); !errors.As(err, &ue) {
+	if _, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"mem": {Min: 3, Max: 2}}}); !errors.As(err, &ue) {
 		t.Errorf("min > max: %v, want a *UsageError", err)
 	}
 	if r, err := c.Snapshot(); err != nil || len(r.Tickets) != 0 {
@@ -637,9 +647,9 @@ func TestUsageErrorBeforeQueueing(t *testing.T) {
 // A Wait that fails withdraws its ticket: it is dead at once to every other client instead of
 // blocking the queue until it stalls.
 func TestWaitWithdrawsOnStateError(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 0\n") // invalid: read only at admission
+	dir := stateDir(t, "[resources]\nmem = \"0M\"\n") // invalid: read only at admission
 	c := open(t, dir)
-	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}

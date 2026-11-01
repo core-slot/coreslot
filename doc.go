@@ -1,6 +1,6 @@
 // Package coreslot is the Go library of coreslot: a cooperative, daemon-less, machine-wide
-// budget of CPU cores (and other declared resources) shared by every process of one user
-// through a flock(2) file protocol, defined in [PROTOCOL.md].
+// memory budget shared by every process of one user through a flock(2) file protocol, defined in
+// [PROTOCOL.md].
 //
 //	c, err := coreslot.Open(coreslot.Options{})
 //	if err != nil {
@@ -8,7 +8,7 @@
 //	}
 //	defer c.Close()
 //	w, err := c.Enqueue(ctx, coreslot.Request{Label: "make test",
-//		Need: map[string]coreslot.Range{"cpu": {Min: 2, Max: 8}}})
+//		Need: map[string]coreslot.Range{"mem": {Min: 2, Max: 8}}})
 //	if err != nil {
 //		return err
 //	}
@@ -17,7 +17,7 @@
 //		return err
 //	}
 //	defer g.Close()
-//	cmd := exec.CommandContext(ctx, "make", "test", "-j", strconv.Itoa(g.Granted()["cpu"]))
+//	cmd := exec.CommandContext(ctx, "make", "test")
 //	cmd.ExtraFiles, cmd.Env = g.Files(), g.Environ(os.Environ())
 //	return cmd.Run()
 //

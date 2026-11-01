@@ -1,1 +1,1 @@
-duplicate resource "cpu" inside clamped
+duplicate resource "mem" inside clamped

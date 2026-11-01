@@ -203,25 +203,25 @@ func TestLockHooksBracketEveryProbe(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 
-	// Before recording: three token files of cpu, one of them locked by a description of the
+	// Before recording: three token files of mem, one of them locked by a description of the
 	// test's own, as another client's grant would be.
 	sec, err := s.Enter(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts, got, err := sec.TakeTokens(map[string]int{"cpu": 3}, map[string]int{"cpu": 3})
-	if err != nil || got["cpu"] != 3 {
+	ts, got, err := sec.TakeTokens(map[string]int{"mem": 3}, map[string]int{"mem": 3})
+	if err != nil || got["mem"] != 3 {
 		t.Fatalf("TakeTokens = %v, %v", got, err)
 	}
 	sec.Leave()
 	ts.Close()
-	other := lockOther(t, filepath.Join(dir, ResDir, "cpu", "1"))
+	other := lockOther(t, filepath.Join(dir, ResDir, "mem", "1"))
 
 	r := recordHooks(t)
 
 	// Outside the section: the reader's probes (status, doctor, a cancel by label, the --no-wait
 	// refusal, a library Step) and the election's.
-	if n, err := s.CountLockedProbe("cpu"); err != nil || n != 1 {
+	if n, err := s.CountLockedProbe("mem"); err != nil || n != 1 {
 		t.Fatalf("CountLockedProbe = %d, %v; want 1", n, err)
 	}
 	r.want(t, "CountLockedProbe of 3 tokens", 3, 1, 3)
@@ -236,7 +236,7 @@ func TestLockHooksBracketEveryProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, err := sec.CountLocked("cpu"); err != nil || n != 1 {
+	if n, err := sec.CountLocked("mem"); err != nil || n != 1 {
 		t.Fatalf("CountLocked = %d, %v; want 1", n, err)
 	}
 	ticket, tname, _, err := sec.PublishNamed(QueueDir, []byte(`{}`), 1, NextSeq, ticketName)
@@ -247,8 +247,8 @@ func TestLockHooksBracketEveryProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant, got, err := sec.TakeTokens(map[string]int{"cpu": 2}, map[string]int{"cpu": 3})
-	if err != nil || got["cpu"] != 2 {
+	grant, got, err := sec.TakeTokens(map[string]int{"mem": 2}, map[string]int{"mem": 3})
+	if err != nil || got["mem"] != 2 {
 		t.Fatalf("TakeTokens = %v, %v", got, err)
 	}
 	r.own(ticket, hold)

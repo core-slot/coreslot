@@ -29,7 +29,7 @@ import (
 )
 
 // The kill-storm: randomized CLI, library and independent Python clients,
-// some of them nested runs and some token-only, queue for cpu, io and mem while the storm kills
+// some of them nested runs and some token-only, queue for mem while the storm kills
 // them with SIGKILL, stops and continues them, cancels them, and shrinks and grows the sizes
 // through the configuration. A sampler checks I1, I2, I3 and I7 throughout. Each client runs
 // with its headroom pinned through the test hook, so that the Go clients size mem from it when
@@ -59,35 +59,27 @@ const (
 )
 
 // A storm label names its request, so that the sampler can check I7 from the hold alone:
-// s<id>.<kind>[.c<min>_<max>][.i<min>_<max>][.m<min>_<max>], cpu, io and mem. It uses only
-// characters a hold's display keeps, so the display of a ticket's name is the label itself.
-var labelNeed = regexp.MustCompile(`\.([cim])([0-9]+)_([0-9]+)`)
-
-var labelResource = map[string]string{"c": "cpu", "i": "io", "m": "mem"}
+// s<id>.<kind>[.m<min>_<max>], the mem tokens. It uses only characters a hold's display keeps, so
+// the display of a ticket's name is the label itself.
+var labelNeed = regexp.MustCompile(`\.m([0-9]+)_([0-9]+)`)
 
 func stormLabel(id int, kind string, need map[string]spec.Range) string {
 	l := fmt.Sprintf("s%05d.%s", id, kind)
-	for _, short := range []string{"c", "i", "m"} {
-		if rg, ok := need[labelResource[short]]; ok {
-			l += fmt.Sprintf(".%s%d_%d", short, rg.Min, rg.Max)
-		}
+	if rg, ok := need["mem"]; ok {
+		l += fmt.Sprintf(".m%d_%d", rg.Min, rg.Max)
 	}
 	return l
 }
 
 // stormRequest is the request a storm label names.
 func stormRequest(label string) (map[string]spec.Range, bool) {
-	ms := labelNeed.FindAllStringSubmatch(label, -1)
-	if len(ms) == 0 {
+	m := labelNeed.FindStringSubmatch(label)
+	if m == nil {
 		return nil, false
 	}
-	need := map[string]spec.Range{}
-	for _, m := range ms {
-		lo, _ := strconv.Atoi(m[2])
-		hi, _ := strconv.Atoi(m[3])
-		need[labelResource[m[1]]] = spec.Range{Min: lo, Max: hi}
-	}
-	return need, true
+	lo, _ := strconv.Atoi(m[1])
+	hi, _ := strconv.Atoi(m[2])
+	return map[string]spec.Range{"mem": {Min: lo, Max: hi}}, true
 }
 
 // ---------------------------------------------------------------- the library client binary
@@ -262,7 +254,6 @@ type stormClient struct {
 	inner       string // "", go or py: the nested run's client
 	name        string // the label, and the marker name of its command
 	need        map[string]spec.Range
-	priority    int
 	timeout     time.Duration
 	fate        string // release, kill (at a time), killheld (once it holds), killheld-after-shrink, stop or cancel
 	at          time.Duration
@@ -329,11 +320,11 @@ func (st *storm) victimID() int {
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
 // not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
 // one admission of each kind (CLI, Python, a library run with a nested Go run, token-only), each
-// holding one cpu token until the first shrink, the CLI and the library run 6 mem tokens each
-// too, 12 above the static 8, so that the second is sized live. Then each lets go, except the one
-// victimID picks, which is killed while it holds. The memFlood clients after them are library
-// runs of 8 mem tokens and nothing else, each holding for a second, which arrive while the first
-// wave holds and find nothing ahead of them: a live size admits one beside the first wave's 12 and
+// holding mem until the first shrink: 1 token each, but 6 for the CLI and the library run, so the
+// first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
+// the one victimID picks, which is killed while it holds. The memFlood clients after them are
+// library runs of 8 mem tokens and nothing else, each holding for a second, which arrive while the
+// first wave holds and find nothing ahead of them: a live size admits one beside the first wave's 14 and
 // holds the others back at the headroom's 24 tokens, while a size that forgets the holds'
 // reservations admits all three. Client firstWave+memFlood+1 is stopped and continued.
 // A mem need is fixed (min = max), so that it may be sized live.
@@ -350,28 +341,10 @@ func (st *storm) plan(id int) *stormClient {
 	if c.outer != "tok" && r.IntN(6) == 0 {
 		c.inner = inners[r.IntN(len(inners))]
 	}
-	switch {
-	case c.outer == "tok":
-		c.need["cpu"] = spec.Range{Min: 1, Max: 1 + r.IntN(2)}
-	case r.IntN(20) == 0:
-		c.need["cpu"] = spec.Range{Min: 9, Max: 9} // above every size the storm sets: clamped
-	default:
-		lo := 1 + r.IntN(3)
-		c.need["cpu"] = spec.Range{Min: lo, Max: lo + r.IntN(3)}
-	}
-	if c.outer != "tok" && r.IntN(10) < 4 {
-		lo := 1 + r.IntN(2)
-		c.need["io"] = spec.Range{Min: lo, Max: lo + r.IntN(2)}
-	}
-	if c.outer != "tok" && r.IntN(2) == 0 {
-		n := 2 + r.IntN(7)
+	// A mem need is fixed (min = max), as the CLIs take one size, and a client without one asks
+	// for the default of one token; the Python client's default is not mem, so it always names one.
+	if n := 1 + r.IntN(8); c.outer == "tok" || c.outer == "py" || r.IntN(8) != 0 {
 		c.need["mem"] = spec.Range{Min: n, Max: n}
-		if c.inner == "" && r.IntN(2) == 0 {
-			delete(c.need, "cpu")
-		}
-	}
-	if c.outer != "tok" && r.IntN(5) == 0 {
-		c.priority = r.IntN(5) - 2
 	}
 	if c.outer != "tok" && r.IntN(5) == 0 {
 		c.timeout = time.Second + time.Duration(r.IntN(5000))*time.Millisecond
@@ -409,11 +382,11 @@ func (st *storm) plan(id int) *stormClient {
 		if id == 3 {
 			c.inner = "go"
 		}
-		c.need = map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
+		c.need = map[string]spec.Range{"mem": {Min: 1, Max: 1}}
 		if id == 1 || id == 3 {
 			c.need["mem"] = spec.Range{Min: 6, Max: 6}
 		}
-		c.priority, c.timeout, c.fate, c.afterShrink = 0, 0, "release", true
+		c.timeout, c.fate, c.afterShrink = 0, "release", true
 		if id == st.victimID() {
 			c.fate = "killheld-after-shrink"
 		}
@@ -421,7 +394,7 @@ func (st *storm) plan(id int) *stormClient {
 	if id > firstWave && id <= firstWave+memFlood {
 		c.outer, c.inner = "lib", ""
 		c.need = map[string]spec.Range{"mem": {Min: 8, Max: 8}}
-		c.priority, c.timeout, c.fate, c.hold = 0, 0, "release", time.Second
+		c.timeout, c.fate, c.hold = 0, "release", time.Second
 	}
 	if id == firstWave+memFlood+1 {
 		c.fate, c.at, c.stopFor = "stop", 500*time.Millisecond, 1500*time.Millisecond
@@ -434,18 +407,26 @@ func (st *storm) plan(id int) *stormClient {
 	return c
 }
 
-// needFlags writes need as flag options. The CLIs take mem as one size in MiB, never a range;
-// the library client (-need) takes every resource as a token range.
+// needFlags writes need as flag options. The Python client takes mem as one size in MiB, never a
+// range; the library client (-need) takes every resource as a token range.
 func needFlags(need map[string]spec.Range, flag string) []string {
 	var out []string
 	for _, r := range slices.Sorted(maps.Keys(need)) {
-		if r == "mem" && flag == "--need" {
-			out = append(out, flag, fmt.Sprintf("mem=%dM", need[r].Min*spec.MemTokenMiB))
+		if flag == "--need" {
+			out = append(out, flag, fmt.Sprintf("%s=%dM", r, need[r].Min*spec.MemTokenMiB))
 			continue
 		}
 		out = append(out, flag, fmt.Sprintf("%s=%d..%d", r, need[r].Min, need[r].Max))
 	}
 	return out
+}
+
+// memFlags writes need as the CLI's one --mem size.
+func memFlags(need map[string]spec.Range) []string {
+	if r, ok := need["mem"]; ok {
+		return []string{"--mem", fmt.Sprintf("%dM", r.Min*spec.MemTokenMiB)}
+	}
+	return nil
 }
 
 // argv is c's command line, with the headroom pinned.
@@ -463,9 +444,9 @@ func (st *storm) clientArgv(c *stormClient) []string {
 	cmd := leaf
 	switch c.inner {
 	case "go":
-		cmd = append([]string{bins.coreslot, "run", "--need", "cpu=1..1", "--"}, leaf...)
+		cmd = append([]string{bins.coreslot, "run", "--mem", "128M", "--"}, leaf...)
 	case "py":
-		cmd = append([]string{st.py, st.pyc, "run", "--need", "cpu=1..1", "--"}, leaf...)
+		cmd = append([]string{st.py, st.pyc, "run", "--need", "mem=128M", "--"}, leaf...)
 	}
 	switch c.outer {
 	case "cli", "tok":
@@ -474,19 +455,13 @@ func (st *storm) clientArgv(c *stormClient) []string {
 			// A client implementing only format 2 finds format 1 and runs token-only.
 			a = append([]string{"CORESLOT_TESTHOOK_FORMATS=2"}, a...)
 		}
-		if c.priority != 0 {
-			a = append(a, "--priority", strconv.Itoa(c.priority))
-		}
 		if c.timeout > 0 {
 			a = append(a, "--timeout", c.timeout.String())
 		}
-		a = append(a, needFlags(c.need, "--need")...)
+		a = append(a, memFlags(c.need)...)
 		return append(append(a, "--"), cmd...)
 	case "py":
 		a := []string{st.py, st.pyc, "run", "--label", c.name}
-		if c.priority != 0 {
-			a = append(a, "--priority", strconv.Itoa(c.priority))
-		}
 		if c.timeout > 0 {
 			a = append(a, "--timeout", strconv.FormatFloat(c.timeout.Seconds(), 'f', 3, 64))
 		}
@@ -494,7 +469,7 @@ func (st *storm) clientArgv(c *stormClient) []string {
 		return append(append(a, "--"), cmd...)
 	default: // lib
 		a := []string{st.libBin, "-dir", st.e.Dir, "-mark", st.e.MarkDir, "-name", c.name, "-label", c.name,
-			"-priority", strconv.Itoa(c.priority), "-timeout", c.timeout.String()}
+			"-timeout", c.timeout.String()}
 		a = append(a, needFlags(c.need, "-need")...)
 		if c.inner != "" {
 			a = append(append(a, "--"), cmd...)
@@ -819,10 +794,9 @@ func (st *storm) resize(ctx context.Context, next map[string]int) bool {
 	return true
 }
 
-// sizer changes the configuration: first a shrink of cpu from 4 to 2 once the first wave holds
-// (or 5 s passed) and a sample saw it hold, then a growth to 6, then random sizes every 1.5 to
-// 4 s. mem stays 8 through the first two changes, then takes random static sizes of
-// stormMemMin..stormMemMax.
+// sizer changes the configuration: first a shrink of mem from 8 to 4 once the first wave holds
+// (or 5 s passed) and a sample saw it hold, then a growth back to 8, then random static sizes of
+// stormMemMin..stormMemMax every 1.5 to 4 s.
 func (st *storm) sizer(ctx context.Context) {
 	shrunk := false
 	defer func() {
@@ -851,19 +825,18 @@ func (st *storm) sizer(ctx context.Context) {
 		}
 	}
 	_, _ = st.s.Sample(ctx) // the first wave's 12 mem tokens above the static 8, before the shrink
-	if ctx.Err() != nil || !st.resize(ctx, map[string]int{"cpu": 2, "io": 2, "mem": stormMemMin}) {
+	if ctx.Err() != nil || !st.resize(ctx, map[string]int{"mem": stormMemMin / 2}) {
 		return
 	}
 	shrunk = true
 	close(st.shrunk)
 	r := rand.New(rand.NewPCG(st.seed, 0))
 	if !sleep(time.Second+time.Duration(r.IntN(1500))*time.Millisecond) ||
-		!st.resize(ctx, map[string]int{"cpu": 6, "io": 3, "mem": stormMemMin}) {
+		!st.resize(ctx, map[string]int{"mem": stormMemMin}) {
 		return
 	}
 	for sleep(1500*time.Millisecond + time.Duration(r.IntN(2500))*time.Millisecond) {
-		if !st.resize(ctx, map[string]int{"cpu": 2 + r.IntN(7), "io": 1 + r.IntN(3),
-			"mem": stormMemMin + r.IntN(stormMemMax-stormMemMin+1)}) {
+		if !st.resize(ctx, map[string]int{"mem": stormMemMin + r.IntN(stormMemMax-stormMemMin+1)}) {
 			return
 		}
 	}
@@ -949,9 +922,8 @@ func TestKillStorm(t *testing.T) {
 		}
 	}()
 
-	sizes := map[string]int{"cpu": 4, "io": 2, "mem": stormMemMin}
-	st.s = NewSampler(t, e, sizes)
-	st.s.LiveBound = map[string]int{"mem": stormHeadroomMiB / spec.MemTokenMiB}
+	sizes := map[string]int{"mem": stormMemMin}
+	st.s = NewSampler(t, e, sizes, map[string]int{"mem": stormHeadroomMiB / spec.MemTokenMiB})
 	st.s.Request = st.request
 	st.s.TokenOnly = st.tok.grants
 
@@ -1104,7 +1076,7 @@ func TestKillStorm(t *testing.T) {
 	}
 
 	// The run exercised what it is for: floors on what happened, scaled for -short. The first
-	// shrink is deterministic (cpu 4 to 2 while the first wave holds 4), so the floor on a
+	// shrink is deterministic (mem 4 to 2 while the first wave holds 4), so the floor on a
 	// shrink below the locked count checks that the schedule ran, not that chance produced one.
 	admitted := 0
 	for k, n := range st.counts {

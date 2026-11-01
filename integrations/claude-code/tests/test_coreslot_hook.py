@@ -78,7 +78,7 @@ class Splitting(unittest.TestCase):
         substitutes."""
         for command in ['echo "${x:-"a;go test ./...;b"}"', "[[ -n x && xcodebuild ]]",
                         "go test ./... -args '{n}'", "go test ./... \\{n\\}",
-                        'make -j4 "{n:mem}"', "cargo test -- '{n:cpu}'"]:
+                        'make -j4 "{n:mem}"', "cargo test -- '{n:gpu}'"]:
             with self.subTest(command=command):
                 self.assertIsNone(offered(command))
 
@@ -146,7 +146,7 @@ class ShapeFile(unittest.TestCase):
     def test_unknown_keys_and_empty_programs_are_refused(self) -> None:
         for document in [{"shape": []}, {"shapes": [{"label": "a", "programs": []}]},
                          {"shapes": [{"label": "a", "programs": [[]]}]},
-                         {"shapes": [{"label": "a", "programs": [["go"]], "need": "cpu=2"}]}]:
+                         {"shapes": [{"label": "a", "programs": [["go"]], "need": "mem=2"}]}]:
             with self.subTest(document=document):
                 with self.assertRaises(ValueError):
                     hook.load_shapes(self.write(document))

@@ -256,7 +256,7 @@ func (v statusView) human() string {
 	}
 	if r.ConfigError != "" {
 		// The file's own error already begins with "configuration <path>:", so under the label
-		// it goes on from the path; any other reason (the CPU count, say) is printed whole.
+		// it goes on from the path; any other reason (the machine's memory, say) is printed whole.
 		p("CONFIGURATION ERROR: %s", text(strings.TrimPrefix(r.ConfigError, "configuration ")))
 	}
 
@@ -359,7 +359,7 @@ func plural(n int64, one, many string) string {
 	return many
 }
 
-// holdTokens is `cpu 12, gpu 1, mem 3 GiB`, or `no tokens` for an unbudgeted hold.
+// holdTokens is `gpu 1, mem 3 GiB`, or `no tokens` for an unbudgeted hold.
 func holdTokens(grant map[string]int) string {
 	if len(grant) == 0 {
 		return "no tokens"
@@ -367,7 +367,7 @@ func holdTokens(grant map[string]int) string {
 	return tokenList(grant)
 }
 
-// tokenList is an amount per resource in name order: `cpu 12, gpu 1, mem 3 GiB`.
+// tokenList is an amount per resource in name order: `gpu 1, mem 3 GiB`.
 func tokenList(tokens map[string]int) string {
 	var parts []string
 	for _, name := range slices.Sorted(maps.Keys(tokens)) {

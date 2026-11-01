@@ -16,11 +16,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// waitErr enqueues a cpu=1 request, runs between before Wait, and returns Wait's error.
+// waitErr enqueues a mem=1 request, runs between before Wait, and returns Wait's error.
 func waitErr(t *testing.T, dir string, between func()) error {
 	t.Helper()
 	c := open(t, dir)
-	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,13 +108,13 @@ func TestConfigStateErrorWrapsItsCause(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores file permissions")
 	}
-	dir := stateDir(t, "[resources]\ncpu = 2\n")
+	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
 	c := open(t, dir)
 	if err := os.Chmod(filepath.Join(dir, "config.toml"), 0o000); err != nil {
 		t.Fatal(err)
 	}
 	var se *StateError
-	if _, err := c.Available("cpu"); !errors.As(err, &se) || !errors.Is(err, fs.ErrPermission) {
+	if _, err := c.Available("mem"); !errors.As(err, &se) || !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("Available with an unreadable config.toml: %v (%T), want a *StateError wrapping fs.ErrPermission", err, err)
 	}
 	r, err := c.Snapshot()
@@ -232,7 +232,7 @@ func TestBoundedEnqueueAndAdopt(t *testing.T) {
 func TestCloseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 	dir := stateDir(t, "")
 	c := open(t, dir)
-	g := waitGrant(t, c, Request{Need: map[string]Range{"cpu": {Min: 3, Max: 3}}})
+	g := waitGrant(t, c, Request{Need: map[string]Range{"mem": {Min: 3, Max: 3}}})
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}

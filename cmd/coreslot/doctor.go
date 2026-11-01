@@ -212,7 +212,7 @@ func doctorReport(loc location, io IO) int {
 		line("configuration: %s (not checked)", text(cfgPath))
 	case strings.HasPrefix(rep.ConfigError, "configuration "):
 		// The file's own error already names it ("configuration <path>: ..."), so it takes no
-		// second label; any other reason (the CPU count, say) keeps the label.
+		// second label; any other reason (the machine's memory, say) keeps the label.
 		problem("%s", text(rep.ConfigError))
 	case rep.ConfigError != "":
 		problem("configuration: %s", text(rep.ConfigError))

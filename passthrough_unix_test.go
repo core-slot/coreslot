@@ -75,12 +75,12 @@ func clearContext(t *testing.T) {
 // DecideNested reddens "another budget".
 func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 	clearContext(t)
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	t.Setenv("CORESLOT_STATE_DIR", dir)
 	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
-	t.Setenv("CORESLOT_GRANTED_CPU", "5")
+	t.Setenv("CORESLOT_GRANTED_MEM", "5")
 	t.Setenv("CORESLOT_GRANTED_GPU", "7")
-	req := Request{Need: map[string]Range{"cpu": {Min: 3, Max: 6}}}
+	req := Request{Need: map[string]Range{"mem": {Min: 3, Max: 6}}}
 
 	t.Run("pass-through", func(t *testing.T) {
 		c := open(t, dir)
@@ -99,11 +99,11 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 		if err := w.Cancel(); !errors.Is(err, ErrAlreadyAdmitted) {
 			t.Errorf("Cancel = %v, want ErrAlreadyAdmitted", err)
 		}
-		if !g.PassThrough() || !maps.Equal(g.Granted(), map[string]int{"cpu": 3}) ||
-			!slices.Equal(g.Unbudgeted(), []string{"cpu"}) || len(g.Clamped()) != 0 || g.Files() != nil {
+		if !g.PassThrough() || !maps.Equal(g.Granted(), map[string]int{"mem": 3}) ||
+			!slices.Equal(g.Unbudgeted(), []string{"mem"}) || len(g.Clamped()) != 0 || g.Files() != nil {
 			t.Errorf("grant: pass-through %v, %v, unbudgeted %v, clamped %v, files %v", g.PassThrough(), g.Granted(), g.Unbudgeted(), g.Clamped(), g.Files())
 		}
-		want := "CORESLOT_GRANTED_GPU=7 CORESLOT_UNBUDGETED=parent-reason CORESLOT_GRANTED_CPU=3"
+		want := "CORESLOT_GRANTED_GPU=7 CORESLOT_UNBUDGETED=parent-reason CORESLOT_GRANTED_MEM=384"
 		if env := strings.Join(g.Env(), " "); env != want {
 			t.Errorf("env %q, want %q", env, want)
 		}
@@ -128,13 +128,13 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 			t.Fatal(err)
 		}
 		g := waitGrant(t, c, req)
-		if g.PassThrough() || g.Granted()["cpu"] != 4 || strings.Contains(strings.Join(g.Env(), " "), "UNBUDGETED") {
+		if g.PassThrough() || g.Granted()["mem"] != 4 || strings.Contains(strings.Join(g.Env(), " "), "UNBUDGETED") {
 			t.Errorf("an Independent request: pass-through %v, grant %v, env %v; want an ordinary grant", g.PassThrough(), g.Granted(), g.Env())
 		}
 	})
 	t.Run("another budget", func(t *testing.T) {
-		g := waitGrant(t, open(t, stateDir(t, "[resources]\ncpu = 4\n")), req)
-		if g.PassThrough() || g.Granted()["cpu"] != 4 {
+		g := waitGrant(t, open(t, stateDir(t, "[resources]\nmem = \"512M\"\n")), req)
+		if g.PassThrough() || g.Granted()["mem"] != 4 {
 			t.Errorf("a Client on another state directory: pass-through %v, grant %v; want an ordinary grant", g.PassThrough(), g.Granted())
 		}
 	})
@@ -149,10 +149,10 @@ func TestPassThroughUnderUnbudgetedParent(t *testing.T) {
 // as an ordinary request, reddens it (an ordinary grant instead of the refusal).
 func TestPassThroughRefusesAContextOfUnknownDirectory(t *testing.T) {
 	clearContext(t)
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	t.Setenv("CORESLOT_STATE_DIR", "relative/state")
 	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
-	req := Request{Need: map[string]Range{"cpu": {Min: 1, Max: 1}}}
+	req := Request{Need: map[string]Range{"mem": {Min: 1, Max: 1}}}
 	c := open(t, dir)
 	before := tree(t, dir)
 	w, err := c.Enqueue(context.Background(), req)
@@ -228,7 +228,7 @@ func TestPassThroughRefusesAnInvalidContext(t *testing.T) {
 // once instead of the error).
 func TestPassThroughValidatesTheRequest(t *testing.T) {
 	clearContext(t)
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
 	t.Setenv("CORESLOT_STATE_DIR", dir)
 	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
 	c := open(t, dir)
@@ -236,7 +236,7 @@ func TestPassThroughValidatesTheRequest(t *testing.T) {
 		what string
 		req  Request
 	}{
-		{"min above max", Request{Need: map[string]Range{"cpu": {Min: 3, Max: 2}}}},
+		{"min above max", Request{Need: map[string]Range{"mem": {Min: 3, Max: 2}}}},
 		{"bad resource name", Request{Need: map[string]Range{"Bad Name": {Min: 1, Max: 1}}}},
 		{"over-long label", Request{Label: strings.Repeat("x", 129)}},
 	} {
@@ -266,14 +266,14 @@ func TestPassThroughOnTheSameDirectoryThroughAnotherPath(t *testing.T) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\ncpu = 4\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[resources]\nmem = \"512M\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CORESLOT_STATE_DIR", dir)
 	t.Setenv("CORESLOT_UNBUDGETED", "parent-reason")
-	g := waitGrant(t, open(t, filepath.Join(base, "link", "state dir")), Request{Need: map[string]Range{"cpu": {Min: 2, Max: 3}}})
-	if !g.PassThrough() || !maps.Equal(g.Granted(), map[string]int{"cpu": 2}) {
-		t.Errorf("a Client on %s through a symlink: pass-through %v, grant %v; want a pass-through of cpu 2", dir, g.PassThrough(), g.Granted())
+	g := waitGrant(t, open(t, filepath.Join(base, "link", "state dir")), Request{Need: map[string]Range{"mem": {Min: 2, Max: 3}}})
+	if !g.PassThrough() || !maps.Equal(g.Granted(), map[string]int{"mem": 2}) {
+		t.Errorf("a Client on %s through a symlink: pass-through %v, grant %v; want a pass-through of mem 2", dir, g.PassThrough(), g.Granted())
 	}
 }
 
@@ -285,9 +285,9 @@ func TestPassThroughOnTheSameDirectoryThroughAnotherPath(t *testing.T) {
 // file at fd 3, and CORESLOT_HELD_FD=3); dropping the replaced[EnvHeldFD] of PassThrough passes
 // the inherited CORESLOT_HELD_FD=6 on.
 func TestPassThroughSkipsAReusedHoldNumber(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\n")
-	g := waitGrant(t, open(t, dir), Request{Label: "parent", Need: map[string]Range{"cpu": {Min: 2, Max: 2}}})
-	f := g.Files() // hold, cpu/0, cpu/1
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	g := waitGrant(t, open(t, dir), Request{Label: "parent", Need: map[string]Range{"mem": {Min: 2, Max: 2}}})
+	f := g.Files() // hold, mem/0, mem/1
 	unrelated, err := os.Create(filepath.Join(t.TempDir(), "unrelated"))
 	if err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestPassThroughSkipsAReusedHoldNumber(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.ExtraFiles = []*os.File{nil, nil, nil, unrelated, nil, nil, f[1], f[2]}
 	cmd.Env = append(withoutCoreslot(), nestedEnv+"=reused", "CORESLOT_STATE_DIR="+dir,
-		"CORESLOT_HELD_FD=6", "CORESLOT_TOKEN_FDS=9-10", "CORESLOT_GRANTED_CPU=2")
+		"CORESLOT_HELD_FD=6", "CORESLOT_TOKEN_FDS=9-10", "CORESLOT_GRANTED_MEM=256")
 	out, err := cmd.CombinedOutput()
 	t.Logf("child:\n%s", out)
 	if err != nil {
@@ -304,25 +304,24 @@ func TestPassThroughSkipsAReusedHoldNumber(t *testing.T) {
 	}
 }
 
-// Rule 2 with a real inherited grant: the test takes a grant of cpu 0-2 and pg-local 0 and starts
-// the child with the hold at fd 6 and the tokens at fds 9 to 12 in another order (pg-local/0,
-// cpu/2, cpu/0, cpu/1), so that every number the child's command sees was renumbered. The child
+// Rule 2 with a real inherited grant: the test takes a grant of mem 0-2 and starts the child with
+// the hold at fd 6 and the tokens at fds 9 to 11 in another order (mem/2, mem/0, mem/1), so that
+// every number the child's command sees was renumbered. The child
 // (passThroughChild) checks the grant, starts the grandchild with Files and Env, and checks that
 // Close and a collection leave the inherited descriptors open for a second pass-through.
-// Mutation: an Env that names the inherited numbers (6 and 9-12) instead of the ones Files
+// Mutation: an Env that names the inherited numbers (6 and 9-11) instead of the ones Files
 // places the descriptors at reddens it in the grandchild; a Close that closes the descriptors
 // reddens it after the Close; wrapping each descriptor in a new *os.File at every validation
 // reddens it after the collection, which closes the first wrappers' descriptors.
 func TestPassThroughOnInheritedGrant(t *testing.T) {
-	dir := stateDir(t, "[resources]\ncpu = 4\npg-local = 2\n")
-	g := waitGrant(t, open(t, dir), Request{Label: "parent",
-		Need: map[string]Range{"cpu": {Min: 3, Max: 3}, "pg-local": {Min: 1, Max: 1}}})
-	f := g.Files() // hold, cpu/0, cpu/1, cpu/2, pg-local/0
+	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
+	g := waitGrant(t, open(t, dir), Request{Label: "parent", Need: map[string]Range{"mem": {Min: 3, Max: 3}}})
+	f := g.Files() // hold, mem/0, mem/1, mem/2
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	cmd.ExtraFiles = []*os.File{nil, nil, nil, f[0], nil, nil, f[4], f[3], f[1], f[2]}
+	cmd.ExtraFiles = []*os.File{nil, nil, nil, f[0], nil, nil, f[3], f[1], f[2]}
 	cmd.Env = append(withoutCoreslot(), nestedEnv+"=child", "CORESLOT_STATE_DIR="+dir,
-		"CORESLOT_HELD_FD=6", "CORESLOT_TOKEN_FDS=9-12",
-		"CORESLOT_GRANTED_CPU=3", "CORESLOT_GRANTED_PG_LOCAL=1", "CORESLOT_GRANTED_OTHER=9")
+		"CORESLOT_HELD_FD=6", "CORESLOT_TOKEN_FDS=9-11",
+		"CORESLOT_GRANTED_MEM=384", "CORESLOT_GRANTED_OTHER=9")
 	out, err := cmd.CombinedOutput()
 	t.Logf("child:\n%s", out)
 	if err != nil {
@@ -373,7 +372,7 @@ func passThroughChild() error {
 		return err
 	}
 	before := tree(nopTB{}, dir)
-	req := Request{Need: map[string]Range{"cpu": {Min: 1, Max: 2}, "pg-local": {Min: 2, Max: 2}, "gpu": {Min: 1, Max: 1}}}
+	req := Request{Need: map[string]Range{"mem": {Min: 4, Max: 4}, "gpu": {Min: 1, Max: 1}}}
 	enqueue := func() (*Grant, error) {
 		w, err := c.Enqueue(context.Background(), req)
 		if err != nil {
@@ -391,13 +390,13 @@ func passThroughChild() error {
 	if !g.PassThrough() {
 		return fmt.Errorf("not a pass-through")
 	}
-	if want := map[string]int{"cpu": 2, "pg-local": 1, "gpu": 1}; !maps.Equal(g.Granted(), want) {
+	if want := map[string]int{"mem": 3, "gpu": 1}; !maps.Equal(g.Granted(), want) {
 		return fmt.Errorf("grant %v, want %v: min(max, held), the clamp, and gpu unbudgeted with its min", g.Granted(), want)
 	}
-	if want := map[string]int{"pg-local": 2}; !maps.Equal(g.Clamped(), want) {
+	if want := map[string]int{"mem": 4}; !maps.Equal(g.Clamped(), want) {
 		return fmt.Errorf("clamped %v, want %v", g.Clamped(), want)
 	}
-	if want := map[string]int{"pg-local": 1}; !maps.Equal(g.Shortfall(), want) {
+	if want := map[string]int{"mem": 1}; !maps.Equal(g.Shortfall(), want) {
 		return fmt.Errorf("shortfall %v, want %v: the clamped Min less what the parent holds", g.Shortfall(), want)
 	}
 	if !slices.Equal(g.Unbudgeted(), []string{"gpu"}) {
@@ -408,7 +407,7 @@ func passThroughChild() error {
 	for _, f := range g.Files() {
 		fds = append(fds, f.Fd())
 	}
-	if want := []uintptr{6, 11, 12, 10, 9}; !slices.Equal(fds, want) {
+	if want := []uintptr{6, 10, 11, 9}; !slices.Equal(fds, want) {
 		return fmt.Errorf("Files are fds %v, want %v", fds, want)
 	}
 
@@ -428,8 +427,8 @@ func passThroughChild() error {
 	// The inherited CORESLOT_GRANTED_OTHER, which the request does not name, is passed on
 	// unchanged, as a nested `coreslot run` passes it.
 	env := strings.Join(g.Env(), " ")
-	if want := "CORESLOT_GRANTED_OTHER=9 CORESLOT_GRANTED_CPU=2 CORESLOT_GRANTED_GPU=1 CORESLOT_GRANTED_PG_LOCAL=1 " +
-		"CORESLOT_HELD_FD=3 CORESLOT_TOKEN_FDS=4-7"; env != want {
+	if want := "CORESLOT_GRANTED_OTHER=9 CORESLOT_GRANTED_GPU=1 CORESLOT_GRANTED_MEM=384 " +
+		"CORESLOT_HELD_FD=3 CORESLOT_TOKEN_FDS=4-6"; env != want {
 		return fmt.Errorf("env %q, want %q", env, want)
 	}
 
@@ -446,7 +445,7 @@ func passThroughChild() error {
 			runtime.GC()
 			time.Sleep(20 * time.Millisecond)
 		}
-		for _, fd := range []int{6, 9, 10, 11, 12} {
+		for _, fd := range []int{6, 9, 10, 11} {
 			var st unix.Stat_t
 			if err := unix.Fstat(fd, &st); err != nil {
 				return fmt.Errorf("round %d: after Close and a collection, inherited fd %d: %v", round, fd, err)
@@ -455,7 +454,7 @@ func passThroughChild() error {
 		if g, err = enqueue(); err != nil {
 			return fmt.Errorf("round %d: a pass-through after Close and a collection: %v", round, err)
 		}
-		if !g.PassThrough() || g.Granted()["cpu"] != 2 || g.Files()[1].Fd() != 11 {
+		if !g.PassThrough() || g.Granted()["mem"] != 3 || g.Files()[1].Fd() != 10 {
 			return fmt.Errorf("round %d: the pass-through's grant %v, files %v", round, g.Granted(), g.Files())
 		}
 	}
@@ -485,7 +484,7 @@ func passThroughGrandchild() error {
 	lo, hi, _ := strings.Cut(os.Getenv("CORESLOT_TOKEN_FDS"), "-")
 	a, _ := strconv.Atoi(lo)
 	b, _ := strconv.Atoi(hi)
-	tokens := []string{"res/cpu/0", "res/cpu/1", "res/cpu/2", "res/pg-local/0"}
+	tokens := []string{"res/mem/0", "res/mem/1", "res/mem/2"}
 	if b-a+1 != len(tokens) {
 		return fmt.Errorf("CORESLOT_TOKEN_FDS=%q for %d tokens", os.Getenv("CORESLOT_TOKEN_FDS"), len(tokens))
 	}
@@ -498,7 +497,7 @@ func passThroughGrandchild() error {
 	if err != nil {
 		return err
 	}
-	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 8}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"mem": {Min: 1, Max: 8}}})
 	if err != nil {
 		return err
 	}
@@ -506,8 +505,8 @@ func passThroughGrandchild() error {
 	if err != nil {
 		return err
 	}
-	if !g.PassThrough() || g.Granted()["cpu"] != 3 {
-		return fmt.Errorf("the grandchild's pass-through: %v, want cpu 3, every token the child passed on", g.Granted())
+	if !g.PassThrough() || g.Granted()["mem"] != 3 {
+		return fmt.Errorf("the grandchild's pass-through: %v, want mem 3, every token the child passed on", g.Granted())
 	}
 	fmt.Println("grandchild: ok")
 	return nil
@@ -521,7 +520,7 @@ func passThroughReused() error {
 	if err != nil {
 		return err
 	}
-	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"cpu": {Min: 1, Max: 2}}})
+	w, err := c.Enqueue(context.Background(), Request{Need: map[string]Range{"mem": {Min: 1, Max: 2}}})
 	if err != nil {
 		return err
 	}
@@ -529,8 +528,8 @@ func passThroughReused() error {
 	if g == nil || err != nil {
 		return fmt.Errorf("Poll = %v, %v; want the grant at once", g, err)
 	}
-	if !g.PassThrough() || g.Granted()["cpu"] != 2 {
-		return fmt.Errorf("pass-through %v, grant %v; want a pass-through of cpu 2", g.PassThrough(), g.Granted())
+	if !g.PassThrough() || g.Granted()["mem"] != 2 {
+		return fmt.Errorf("pass-through %v, grant %v; want a pass-through of mem 2", g.PassThrough(), g.Granted())
 	}
 	files := g.Files()
 	if len(files) != 3 || files[0] != nil {
@@ -539,7 +538,7 @@ func passThroughReused() error {
 	if fds := []uintptr{files[1].Fd(), files[2].Fd()}; !slices.Equal(fds, []uintptr{9, 10}) {
 		return fmt.Errorf("the tokens are fds %v, want [9 10]", fds)
 	}
-	if env, want := strings.Join(g.Env(), " "), "CORESLOT_GRANTED_CPU=2 CORESLOT_TOKEN_FDS=4-5"; env != want {
+	if env, want := strings.Join(g.Env(), " "), "CORESLOT_GRANTED_MEM=256 CORESLOT_TOKEN_FDS=4-5"; env != want {
 		return fmt.Errorf("env %q, want %q: no CORESLOT_HELD_FD without a hold", env, want)
 	}
 	fmt.Println("reused: ok")

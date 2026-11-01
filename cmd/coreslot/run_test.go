@@ -185,7 +185,7 @@ func runHelper(name string, args []string) int {
 		return 0
 	case "burn":
 		// Touch every page of burnBytes, so that they are resident, then spin until this process
-		// has used burnCPU of CPU time by its own rusage.
+		// has used burnCPU of user and system time by its own rusage.
 		b := make([]byte, burnBytes)
 		for i := 0; i < len(b); i += 4096 {
 			b[i] = 1
@@ -760,7 +760,7 @@ func TestRunAppendsOneLogLine(t *testing.T) {
 	}
 }
 
-// What the burn helper makes resident and how much CPU time it uses.
+// What the burn helper makes resident and how much user and system time it uses.
 const (
 	burnBytes = 64 << 20
 	burnCPU   = 50 * time.Millisecond

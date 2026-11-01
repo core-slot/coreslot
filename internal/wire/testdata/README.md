@@ -23,7 +23,7 @@ Everything is UTF-8 except a few bodies that are deliberately not (named `*inval
 
 Each file `bodies/<kind>/<name>.body` is one body, **exactly the bytes a client would find in the
 file**. Read it as bytes. Do not parse and rewrite it, and do not normalize newlines or whitespace:
-leading and trailing whitespace, key order, escaped spellings of keys (`"c\u0070u"` for `"cpu"`) and the exact
+leading and trailing whitespace, key order, escaped spellings of keys (`"m\u0065m"` for `"mem"`) and the exact
 length are the point of several fixtures. A `.body` file has no trailing newline unless the body
 itself has one.
 

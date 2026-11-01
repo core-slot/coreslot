@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -161,7 +162,7 @@ func runOnce(p params, run int) (result, error) {
 	if err := os.MkdirAll(b.state, 0o700); err != nil {
 		return result{}, err
 	}
-	cfg := fmt.Sprintf("[resources]\ncpu = %d\n", p.Size)
+	cfg := fmt.Sprintf("[resources]\nmem = \"%dM\"\n", p.Size*spec.MemTokenMiB)
 	if err := os.WriteFile(filepath.Join(b.state, "config.toml"), []byte(cfg), 0o600); err != nil {
 		return result{}, err
 	}
@@ -623,7 +624,7 @@ func (b *bench) adoptAll(within time.Duration) error {
 	for len(b.grants) < b.p.Size && time.Now().Before(deadline) {
 		// Adopt only a token that is free: an adoption that comes up short publishes and removes
 		// a hold, two gen bumps that make every waiter rescan, so it is not retried blindly.
-		free, err := b.client.Available("cpu")
+		free, err := b.client.Available("mem")
 		if err != nil {
 			return err
 		}
@@ -635,11 +636,11 @@ func (b *bench) adoptAll(within time.Duration) error {
 			continue
 		}
 		g, err := b.client.Adopt(context.Background(), coreslot.Request{Label: "bench-harness",
-			Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
+			Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}})
 		if err != nil {
 			return err
 		}
-		if g.Shortfall()["cpu"] > 0 {
+		if g.Shortfall()["mem"] > 0 {
 			g.Close()
 			time.Sleep(20 * time.Millisecond)
 			continue

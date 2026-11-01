@@ -1,1 +1,1 @@
-{"label":"x","priority":0,"need":{"cpu":2},"created_ns":5}
+{"label":"x","priority":0,"need":{"mem":2},"created_ns":5}

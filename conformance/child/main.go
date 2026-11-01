@@ -90,7 +90,7 @@ func fail(msg string) {
 }
 
 // openFDs lists the open descriptors from 3 on. On Linux the Go runtime itself keeps the
-// cgroup's cpu.max open (for its GOMAXPROCS) from before main runs; that descriptor is its own,
+// cgroup's mem.max open (for its GOMAXPROCS) from before main runs; that descriptor is its own,
 // not inherited, and is left out.
 func openFDs() map[int][2]uint64 {
 	fds := map[int][2]uint64{}

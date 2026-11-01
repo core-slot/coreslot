@@ -15,7 +15,7 @@ type object map[string]any
 
 // parseObject checks the body as a whole (size, UTF-8, one JSON object, nothing after it) and
 // builds its tree. Duplicate keys are refused at every depth, comparing keys after unescaping,
-// so `"c\u0070u"` repeats `"cpu"`. A string with an unpaired UTF-16 surrogate escape is refused too;
+// so `"m\u0065m"` repeats `"mem"`. A string with an unpaired UTF-16 surrogate escape is refused too;
 // Go's decoder would silently turn it into U+FFFD, so the scan reads the raw bytes.
 func parseObject(body []byte) (object, error) {
 	if len(body) > MaxBodyBytes {

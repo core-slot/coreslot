@@ -28,7 +28,7 @@ const (
 )
 
 // waiterMain is one waiter: Open (the state directory from CORESLOT_STATE_DIR, with its
-// config.toml), Enqueue cpu=1, then Wait, the library's polling loop. Admitted, it closes the
+// config.toml), Enqueue mem=1, then Wait, the library's polling loop. Admitted, it closes the
 // grant and exits. It writes "E <pid>" once enqueued and, on SIGUSR1, "B <pid> <cpu-ns>": its
 // own CPU so far, the baseline the harness subtracts. SIGTERM withdraws. Stdin is the harness's
 // pipe: its end means the harness is gone.
@@ -55,7 +55,7 @@ func waiterMain(args []string) int {
 		return exitError
 	}
 	w, err := c.Enqueue(context.Background(), coreslot.Request{Label: *label,
-		Need: map[string]coreslot.Range{"cpu": {Min: 1, Max: 1}}})
+		Need: map[string]coreslot.Range{"mem": {Min: 1, Max: 1}}})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "waiter %d: enqueue: %v\n", pid, err)
 		return exitError

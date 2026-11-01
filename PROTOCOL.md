@@ -59,7 +59,6 @@ Every shared file, field, environment variable and transition of format 1, and w
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
 | run-log memory keys | field | [20](#20-run-log) |
-| run-log `workers` and `preemptible` keys | field | [20](#20-run-log) |
 | `CORESLOT_GRANTED_*` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_TOKEN_FDS` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
@@ -1305,35 +1304,27 @@ writes no line. The object carries:
 |---|---|---|
 | `time_ns` | integer | wall clock at the run's start |
 | `label` | string | the request's label |
-| `need` | object | resource → `[min, max]` as requested, a CLI's defaults and one-sided ranges completed (section 21); for a preemptible run, the request before its cpu was reduced to one token |
-| `grant` | object | resource → number of tokens granted (or `min` when unbudgeted) |
-| `clamped` | array of resource names | clamped resources |
-| `unbudgeted_resources` | array of resource names | unbudgeted resources |
 | `waited_s` | number | seconds spent waiting |
 | `ran_s` | number | seconds the command ran |
-| `cpu_user_s` | number | optional; user CPU seconds of the command (below) |
-| `cpu_sys_s` | number | optional; system CPU seconds of the command (below) |
-| `max_rss_kib` | integer | optional; peak resident set size of the command, in KiB (below) |
+| `user_s` | number | optional; user seconds of the command (below) |
+| `sys_s` | number | optional; system seconds of the command (below) |
 | `mem_peak_kib` | integer | optional; memory peak of the command's process tree, in KiB (below) |
 | `mem_peak_source` | string | optional; what `mem_peak_kib` measured: `footprint`, `anon` or `max_rss` (below) |
 | `peak_after_s` | number | optional; seconds from the command's start to the reading of `mem_peak_kib` |
 | `waited_free_s` | number | optional; seconds of `waited_s` during which the memory the request needs was free (below) |
 | `exit` | integer | the run's exit status |
-| `load1` | number | one-minute load average at start |
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
-| `workers` | integer | optional; the command's worker count: the value a cpu placeholder took (section 17), else the label's final `@K`; absent when the command had neither |
-| `preemptible` | string | optional; why the run was admitted as preemptible: `flag`, `entry`, or the automatic rule's reason (`auto: median 14m >= 10m, cpu 12 >= 7`), followed by `; unclamped: ` and why when a client could not lower the command's priority; absent for any other run |
 
-The usage keys `cpu_user_s`, `cpu_sys_s` and `max_rss_kib` are OPTIONAL. A writer MUST omit a key
+The usage keys `user_s` and `sys_s` are OPTIONAL. A writer MUST omit a key
 whose value it does not know rather than write a zero: a run whose command could not be started
 (section 19) has none, and neither has a value the platform does not report. A reader MUST treat
 an absent key as unknown, never as zero. The values are the command's resource usage as the
 wait that reaped it reports (`wait4(2)`'s `struct rusage`, or the same from `waitid`): they cover
 the command and every descendant it waited for, but not a descendant it left running when it exited.
-`max_rss_kib` is the peak of the largest single process among those, not a sum. `ru_maxrss` is in
-KiB on Linux and the BSDs but in bytes on macOS; a writer MUST convert it to KiB (1 024 bytes), and
-MUST omit the key on a platform whose unit it does not know. As in a body (section 7.2), a reader
+The same rusage's `ru_maxrss` is the peak of the largest single process among those, not a sum. It
+is in KiB on Linux and the BSDs but in bytes on macOS; a writer MUST convert it to KiB (1 024
+bytes), and MUST NOT use it on a platform whose unit it does not know. As in a body (section 7.2), a reader
 MUST ignore a key it does not know: lines only gain optional keys within a format.
 
 The memory keys `mem_peak_kib`, `mem_peak_source`, `peak_after_s` and `waited_free_s` are OPTIONAL
@@ -1343,39 +1334,26 @@ unknown. A writer that samples reads the private memory of the command and every
 `footprint`); on Linux each process's `RssAnon` plus `VmSwap` from `/proc/<pid>/status`, with the
 largest `RssShmem` among them added once, since shared memory is held once (source `anon`). A
 process that exits between the listing and its reading is skipped. `mem_peak_kib` is the largest
-sum and `peak_after_s` when it was read. When no reading succeeded, or `max_rss_kib` is larger,
-`mem_peak_kib` is `max_rss_kib`, `mem_peak_source` is `max_rss` and `peak_after_s` is absent.
+sum and `peak_after_s` when it was read. When no reading succeeded, or the rusage's `ru_maxrss` is
+larger, `mem_peak_kib` is `ru_maxrss`, `mem_peak_source` is `max_rss` and `peak_after_s` is absent.
 `waited_free_s` is written by a run whose request names `mem`: the part of its wait during which
 the memory the kernel can hand out without paging anything anonymous out (on macOS the free,
 speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable` of `/proc/meminfo`
 or, when smaller, the room under the tightest cgroup v2 limit, the headroom of section 5.2)
 was at least its `mem` need, read at most once per second. It informs; no admission reads it.
-`need` and `grant` stay in tokens, `mem`'s included.
-
-The keys `workers` and `preemptible` are OPTIONAL too, under the same rule. `workers` is the
-worker count the run's command was given: the value the writer substituted for a cpu placeholder
-(section 17), else the label's final `@K` (section 5.4). `preemptible` gives the reason a
-preemptible run (section 5.4) is one: `entry` for the needs file's key, `flag` for a mark on the
-command line, or the automatic rule's own text. A preemptible run's `grant` is the real grant (one
-cpu token), while its `need` and `workers` keep the request's width, so `need` may name more cpu
-than the ticket did. A reader that learns needs from the log SHOULD leave such runs out of
-saturation counts: a preemptible command runs at a lower priority on the cores other runs leave
-idle, so its cpu use above its grant is not saturation.
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
-secrets. The log's `clamped` is an array of resource names, unlike the hold body's `clamped` object
-(section 7.4). A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
+secrets. A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
 inside the section: re-checks the size, then renames it to `runs.1.jsonl` (replacing the previous
 generation). One generation is kept. A token-only client writes no log.
 
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open` and the
-> independent Python client shortens `label`. Both write the usage keys on Linux, macOS and the
-> BSDs, and only `cpu_user_s` and `cpu_sys_s` elsewhere; the Go CLI writes the seconds unrounded
-> and the Python client rounds them to milliseconds, as each does `waited_s` and `ran_s`. The Go
-> CLI samples memory on macOS and Linux and writes `mem_peak_source` `max_rss` elsewhere when it
-> knows `max_rss_kib`; the Python client writes none of the memory keys. `coreslot stats` and
-> `coreslot suggest` read both generations of the log, skip lines that do not parse, and learn a
-> label from its last 5 runs that were labelled, not a pass-through and not run outside the budget.
+> independent Python client shortens `label`. The Go CLI writes the seconds unrounded and the
+> Python client rounds them to milliseconds, as each does `waited_s` and `ran_s`. The Go CLI samples
+> memory on macOS and Linux and writes `mem_peak_source` `max_rss` elsewhere when it knows the
+> rusage's peak; the Python client writes none of the memory keys. `coreslot stats` reads both
+> generations of the log, skips lines that do not parse, and learns a label from its last 5 runs
+> that were labelled, not a pass-through and not run outside the budget.
 
 ## 21. Worked examples
 

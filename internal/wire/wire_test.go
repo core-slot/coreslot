@@ -242,58 +242,58 @@ func TestEscapeHuman(t *testing.T) {
 }
 
 func TestDecodeStrict(t *testing.T) {
-	const okTicket = `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`
+	const okTicket = `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5}`
 	if _, err := DecodeTicket([]byte(okTicket)); err != nil {
 		t.Fatalf("baseline ticket rejected: %v", err)
 	}
 	long := func(n int) string { return strings.Repeat("a", n) }
 	nine := `{"r1":[1,1],"r2":[1,1],"r3":[1,1],"r4":[1,1],"r5":[1,1],"r6":[1,1],"r7":[1,1],"r8":[1,1],"r9":[1,1]}`
 	bad := map[string]string{
-		"duplicate label":                 `{"label":"x","label":"y","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"duplicate priority":              `{"label":"x","priority":0,"priority":1,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"duplicate cpu inside need":       `{"label":"x","priority":0,"need":{"cpu":[1,2],"cpu":[3,4]},"created_ns":5}`,
-		"duplicate by escaped spelling":   `{"label":"x","priority":0,"need":{"cpu":[1,2],"c\u0070u":[3,4]},"created_ns":5}`,
-		"duplicate in an unknown subtree": `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"extra":{"a":{"b":1,"b":2}}}`,
-		"duplicate in an unknown array":   `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"extra":[{"b":1,"b":2}]}`,
-		"priority 1001":                   `{"label":"x","priority":1001,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"priority -1001":                  `{"label":"x","priority":-1001,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"priority 1.0":                    `{"label":"x","priority":1.0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"priority 1e3":                    `{"label":"x","priority":1e3,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"priority string":                 `{"label":"x","priority":"1","need":{"cpu":[1,2]},"created_ns":5}`,
-		"priority null":                   `{"label":"x","priority":null,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"need min above max":              `{"label":"x","priority":0,"need":{"cpu":[5,4]},"created_ns":5}`,
-		"need min zero":                   `{"label":"x","priority":0,"need":{"cpu":[0,4]},"created_ns":5}`,
-		"need max 257":                    `{"label":"x","priority":0,"need":{"cpu":[1,257]},"created_ns":5}`,
-		"need one element":                `{"label":"x","priority":0,"need":{"cpu":[1]},"created_ns":5}`,
-		"need three elements":             `{"label":"x","priority":0,"need":{"cpu":[1,2,3]},"created_ns":5}`,
-		"need string element":             `{"label":"x","priority":0,"need":{"cpu":["1",2]},"created_ns":5}`,
-		"need float element":              `{"label":"x","priority":0,"need":{"cpu":[1,2.0]},"created_ns":5}`,
-		"need not an array":               `{"label":"x","priority":0,"need":{"cpu":2},"created_ns":5}`,
+		"duplicate label":                 `{"label":"x","label":"y","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"duplicate priority":              `{"label":"x","priority":0,"priority":1,"need":{"mem":[1,2]},"created_ns":5}`,
+		"duplicate mem inside need":       `{"label":"x","priority":0,"need":{"mem":[1,2],"mem":[3,4]},"created_ns":5}`,
+		"duplicate by escaped spelling":   `{"label":"x","priority":0,"need":{"mem":[1,2],"m\u0065m":[3,4]},"created_ns":5}`,
+		"duplicate in an unknown subtree": `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5,"extra":{"a":{"b":1,"b":2}}}`,
+		"duplicate in an unknown array":   `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5,"extra":[{"b":1,"b":2}]}`,
+		"priority 1001":                   `{"label":"x","priority":1001,"need":{"mem":[1,2]},"created_ns":5}`,
+		"priority -1001":                  `{"label":"x","priority":-1001,"need":{"mem":[1,2]},"created_ns":5}`,
+		"priority 1.0":                    `{"label":"x","priority":1.0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"priority 1e3":                    `{"label":"x","priority":1e3,"need":{"mem":[1,2]},"created_ns":5}`,
+		"priority string":                 `{"label":"x","priority":"1","need":{"mem":[1,2]},"created_ns":5}`,
+		"priority null":                   `{"label":"x","priority":null,"need":{"mem":[1,2]},"created_ns":5}`,
+		"need min above max":              `{"label":"x","priority":0,"need":{"mem":[5,4]},"created_ns":5}`,
+		"need min zero":                   `{"label":"x","priority":0,"need":{"mem":[0,4]},"created_ns":5}`,
+		"need max 257":                    `{"label":"x","priority":0,"need":{"mem":[1,257]},"created_ns":5}`,
+		"need one element":                `{"label":"x","priority":0,"need":{"mem":[1]},"created_ns":5}`,
+		"need three elements":             `{"label":"x","priority":0,"need":{"mem":[1,2,3]},"created_ns":5}`,
+		"need string element":             `{"label":"x","priority":0,"need":{"mem":["1",2]},"created_ns":5}`,
+		"need float element":              `{"label":"x","priority":0,"need":{"mem":[1,2.0]},"created_ns":5}`,
+		"need not an array":               `{"label":"x","priority":0,"need":{"mem":2},"created_ns":5}`,
 		"nine resources":                  `{"label":"x","priority":0,"need":` + nine + `,"created_ns":5}`,
 		"empty need":                      `{"label":"x","priority":0,"need":{},"created_ns":5}`,
 		"need is an array":                `{"label":"x","priority":0,"need":[],"created_ns":5}`,
-		"bad resource name":               `{"label":"x","priority":0,"need":{"Cpu":[1,2]},"created_ns":5}`,
-		"created_ns negative":             `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":-1}`,
+		"bad resource name":               `{"label":"x","priority":0,"need":{"Mem":[1,2]},"created_ns":5}`,
+		"created_ns negative":             `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":-1}`,
 		"minimums sum to 513":             `{"label":"x","priority":0,"need":{"a":[256,256],"b":[256,256],"c":[1,1]},"created_ns":5}`,
-		"lone high surrogate":             `{"label":"\ud800","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"lone low surrogate":              `{"label":"\udc00","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"low before high surrogate":       `{"label":"\ude00\ud83d","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"high surrogate then other":       `{"label":"\ud83d\u0041","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"high surrogate then text":        `{"label":"\ud83dx","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"surrogate in an unknown key":     `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"\ud800":1}`,
-		"surrogate in an unknown value":   `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"e":[{"k":"\udfff"}]}`,
-		"surrogate after an escaped pair": `{"label":"\ud83d\ude00\ud83d","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"missing label":                   `{"priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"missing priority":                `{"label":"x","need":{"cpu":[1,2]},"created_ns":5}`,
+		"lone high surrogate":             `{"label":"\ud800","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"lone low surrogate":              `{"label":"\udc00","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"low before high surrogate":       `{"label":"\ude00\ud83d","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"high surrogate then other":       `{"label":"\ud83d\u0041","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"high surrogate then text":        `{"label":"\ud83dx","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"surrogate in an unknown key":     `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5,"\ud800":1}`,
+		"surrogate in an unknown value":   `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5,"e":[{"k":"\udfff"}]}`,
+		"surrogate after an escaped pair": `{"label":"\ud83d\ude00\ud83d","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"missing label":                   `{"priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"missing priority":                `{"label":"x","need":{"mem":[1,2]},"created_ns":5}`,
 		"missing need":                    `{"label":"x","priority":0,"created_ns":5}`,
-		"missing created_ns":              `{"label":"x","priority":0,"need":{"cpu":[1,2]}}`,
-		"label null":                      `{"label":null,"priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"label number":                    `{"label":1,"priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"label 129 bytes":                 `{"label":"` + long(129) + `","priority":0,"need":{"cpu":[1,2]},"created_ns":5}`,
-		"label invalid UTF-8":             "{\"label\":\"\xff\",\"priority\":0,\"need\":{\"cpu\":[1,2]},\"created_ns\":5}",
-		"created_ns float":                `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5.0}`,
-		"created_ns exponent":             `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5e0}`,
-		"created_ns beyond int64":         `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":9223372036854775808}`,
+		"missing created_ns":              `{"label":"x","priority":0,"need":{"mem":[1,2]}}`,
+		"label null":                      `{"label":null,"priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"label number":                    `{"label":1,"priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"label 129 bytes":                 `{"label":"` + long(129) + `","priority":0,"need":{"mem":[1,2]},"created_ns":5}`,
+		"label invalid UTF-8":             "{\"label\":\"\xff\",\"priority\":0,\"need\":{\"mem\":[1,2]},\"created_ns\":5}",
+		"created_ns float":                `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5.0}`,
+		"created_ns exponent":             `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5e0}`,
+		"created_ns beyond int64":         `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":9223372036854775808}`,
 		"not an object":                   `[]`,
 		"null":                            `null`,
 		"empty body":                      ``,
@@ -301,7 +301,7 @@ func TestDecodeStrict(t *testing.T) {
 		"trailing garbage":                okTicket + ` x`,
 		"two objects":                     okTicket + okTicket,
 		"truncated":                       okTicket[:len(okTicket)-1],
-		"trailing comma":                  `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,}`,
+		"trailing comma":                  `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5,}`,
 		"byte order mark":                 "\ufeff" + okTicket,
 		"body of 8193 bytes":              okTicket[:len(okTicket)-1] + `,"pad":"` + long(8193-len(okTicket)-9) + `"}`,
 	}
@@ -315,13 +315,13 @@ func TestDecodeStrict(t *testing.T) {
 	}
 
 	// Hold: duplicate resource inside grant, and the grant rules.
-	const okHold = `{"label":"x","grant":{"cpu":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
+	const okHold = `{"label":"x","grant":{"mem":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
 	if _, err := DecodeHold([]byte(okHold)); err != nil {
 		t.Fatalf("baseline hold rejected: %v", err)
 	}
 	holdWith := func(key, val string) string {
 		m := map[string]string{
-			"label": `"x"`, "grant": `{"cpu":[0,1]}`, "start_ns": `5`, "unbudgeted": `false`,
+			"label": `"x"`, "grant": `{"mem":[0,1]}`, "start_ns": `5`, "unbudgeted": `false`,
 			"unbudgeted_resources": `[]`, "clamped": `{}`, "adopted": `false`,
 		}
 		m[key] = val
@@ -334,28 +334,28 @@ func TestDecodeStrict(t *testing.T) {
 		return "{" + strings.Join(parts, ",") + "}"
 	}
 	badHold := map[string]string{
-		"duplicate resource in grant":   holdWith("grant", `{"cpu":[0],"cpu":[1]}`),
-		"duplicate resource in clamped": holdWith("clamped", `{"cpu":4,"cpu":5}`),
+		"duplicate resource in grant":   holdWith("grant", `{"mem":[0],"mem":[1]}`),
+		"duplicate resource in clamped": holdWith("clamped", `{"mem":4,"mem":5}`),
 		"duplicate top-level key":       strings.Replace(okHold, `"adopted":false`, `"adopted":false,"adopted":true`, 1),
-		"grant unsorted":                holdWith("grant", `{"cpu":[1,0]}`),
-		"grant repeated index":          holdWith("grant", `{"cpu":[1,1]}`),
-		"grant empty array":             holdWith("grant", `{"cpu":[]}`),
-		"grant empty beside a token":    holdWith("grant", `{"cpu":[0],"gpu":[]}`),
-		"clamped zero":                  holdWith("clamped", `{"cpu":0}`),
-		"clamped 257":                   holdWith("clamped", `{"cpu":257}`),
-		"clamped negative":              holdWith("clamped", `{"cpu":-1}`),
+		"grant unsorted":                holdWith("grant", `{"mem":[1,0]}`),
+		"grant repeated index":          holdWith("grant", `{"mem":[1,1]}`),
+		"grant empty array":             holdWith("grant", `{"mem":[]}`),
+		"grant empty beside a token":    holdWith("grant", `{"mem":[0],"gpu":[]}`),
+		"clamped zero":                  holdWith("clamped", `{"mem":0}`),
+		"clamped 257":                   holdWith("clamped", `{"mem":257}`),
+		"clamped negative":              holdWith("clamped", `{"mem":-1}`),
 		"clamped bad name":              holdWith("clamped", `{"Bad":4}`),
 		"label lone high surrogate":     holdWith("label", `"\ud800"`),
 		"label lone low surrogate":      holdWith("label", `"\udc00"`),
 		"surrogate in a grant key":      holdWith("grant", `{"\ud800":[0]}`),
-		"grant index 4096":              holdWith("grant", `{"cpu":[4096]}`),
-		"grant index -1":                holdWith("grant", `{"cpu":[-1]}`),
-		"grant index float":             holdWith("grant", `{"cpu":[1.0]}`),
-		"grant 257 in one resource":     holdWith("grant", `{"cpu":[`+seqList(0, 257)+`]}`),
-		"grant 513 in total":            holdWith("grant", `{"cpu":[`+seqList(0, 256)+`],"gpu":[`+seqList(0, 256)+`],"io":[0]}`),
+		"grant index 4096":              holdWith("grant", `{"mem":[4096]}`),
+		"grant index -1":                holdWith("grant", `{"mem":[-1]}`),
+		"grant index float":             holdWith("grant", `{"mem":[1.0]}`),
+		"grant 257 in one resource":     holdWith("grant", `{"mem":[`+seqList(0, 257)+`]}`),
+		"grant 513 in total":            holdWith("grant", `{"mem":[`+seqList(0, 256)+`],"gpu":[`+seqList(0, 256)+`],"io":[0]}`),
 		"grant not an object":           holdWith("grant", `[]`),
-		"grant value not an array":      holdWith("grant", `{"cpu":3}`),
-		"grant bad name":                holdWith("grant", `{"CPU":[1]}`),
+		"grant value not an array":      holdWith("grant", `{"mem":3}`),
+		"grant bad name":                holdWith("grant", `{"MEM":[1]}`),
 		"start_ns negative":             holdWith("start_ns", `-1`),
 		"start_ns float":                holdWith("start_ns", `5.5`),
 		"start_ns beyond int64":         holdWith("start_ns", `9223372036854775808`),
@@ -364,8 +364,8 @@ func TestDecodeStrict(t *testing.T) {
 		"unbudgeted_resources object":   holdWith("unbudgeted_resources", `{}`),
 		"unbudgeted_resources number":   holdWith("unbudgeted_resources", `[1]`),
 		"unbudgeted_resources name":     holdWith("unbudgeted_resources", `["Bad Name"]`),
-		"clamped string":                holdWith("clamped", `{"cpu":"4"}`),
-		"clamped float":                 holdWith("clamped", `{"cpu":4.0}`),
+		"clamped string":                holdWith("clamped", `{"mem":"4"}`),
+		"clamped float":                 holdWith("clamped", `{"mem":4.0}`),
 		"adopted string":                holdWith("adopted", `"true"`),
 		"missing label":                 holdWith("label", ``),
 		"missing grant":                 holdWith("grant", ``),
@@ -403,14 +403,14 @@ func TestDecodeStrict(t *testing.T) {
 	}
 
 	// Unknown keys are ignored at any depth, whitespace around the object is allowed.
-	good := ` {"label":"x","priority":-1000,"need":{"cpu":[1,2],"gpu":[3,256]},"created_ns":5,` +
+	good := ` {"label":"x","priority":-1000,"need":{"mem":[1,2],"gpu":[3,256]},"created_ns":5,` +
 		`"future":{"a":[1,{"b":null}],"c":1.5},"also":"x"}` + "\n\t "
 	tk, err := DecodeTicket([]byte(good))
 	if err != nil {
 		t.Fatalf("ticket with unknown keys rejected: %v", err)
 	}
 	want := Ticket{Label: "x", Priority: -1000, CreatedNS: 5,
-		Need: map[string]spec.Range{"cpu": {Min: 1, Max: 2}, "gpu": {Min: 3, Max: 256}}}
+		Need: map[string]spec.Range{"mem": {Min: 1, Max: 2}, "gpu": {Min: 3, Max: 256}}}
 	if !reflect.DeepEqual(tk, want) {
 		t.Errorf("decoded ticket = %+v, want %+v", tk, want)
 	}
@@ -418,16 +418,16 @@ func TestDecodeStrict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold with an unknown key rejected: %v", err)
 	}
-	wantHold := Hold{Label: "x", Grant: map[string][]int{"cpu": {0, 1}}, StartNS: 5,
+	wantHold := Hold{Label: "x", Grant: map[string][]int{"mem": {0, 1}}, StartNS: 5,
 		UnbudgetedResources: []string{}, Clamped: map[string]int{}}
 	if !reflect.DeepEqual(h, wantHold) {
 		t.Errorf("decoded hold = %+v, want %+v", h, wantHold)
 	}
 	// An escaped backslash before "ud800" is the text, not an escape; pairs in either case are fine.
 	for body, want := range map[string]string{
-		`{"label":"\\ud800","priority":0,"need":{"cpu":[1,2]},"created_ns":0}`:             `\ud800`,
-		`{"label":"\uD83D\uDE00","priority":0,"need":{"cpu":[1,2]},"created_ns":0}`:        "\U0001F600",
-		`{"label":"\ud83d\ude00\\ud800","priority":0,"need":{"cpu":[1,2]},"created_ns":0}`: "\U0001F600\\ud800",
+		`{"label":"\\ud800","priority":0,"need":{"mem":[1,2]},"created_ns":0}`:             `\ud800`,
+		`{"label":"\uD83D\uDE00","priority":0,"need":{"mem":[1,2]},"created_ns":0}`:        "\U0001F600",
+		`{"label":"\ud83d\ude00\\ud800","priority":0,"need":{"mem":[1,2]},"created_ns":0}`: "\U0001F600\\ud800",
 	} {
 		got, err := DecodeTicket([]byte(body))
 		if err != nil || got.Label != want {
@@ -435,7 +435,7 @@ func TestDecodeStrict(t *testing.T) {
 		}
 	}
 	// Ticket at the limits: the body is exactly 8192 bytes.
-	pad := `{"label":"x","priority":0,"need":{"cpu":[1,2]},"created_ns":5,"pad":"`
+	pad := `{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":5,"pad":"`
 	body := pad + strings.Repeat("a", 8192-len(pad)-2) + `"}`
 	if len(body) != 8192 {
 		t.Fatalf("limit body is %d bytes", len(body))
@@ -455,11 +455,11 @@ func seqList(from, n int) string {
 
 func TestEncodeShapeAndRefusals(t *testing.T) {
 	// Every key is written, nil collections become empty ones, keys are in a fixed order.
-	b, err := Encode(Ticket{Label: "gate:unit", Priority: 0, Need: map[string]spec.Range{"cpu": {Min: 4, Max: 12}}, CreatedNS: 1791720000000000000})
+	b, err := Encode(Ticket{Label: "gate:unit", Priority: 0, Need: map[string]spec.Range{"mem": {Min: 4, Max: 12}}, CreatedNS: 1791720000000000000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"label":"gate:unit","priority":0,"need":{"cpu":[4,12]},"created_ns":1791720000000000000}`; string(b) != want {
+	if want := `{"label":"gate:unit","priority":0,"need":{"mem":[4,12]},"created_ns":1791720000000000000}`; string(b) != want {
 		t.Errorf("ticket body = %s, want %s", b, want)
 	}
 	b, err = Encode(&Hold{Label: "", StartNS: 7})
@@ -477,7 +477,7 @@ func TestEncodeShapeAndRefusals(t *testing.T) {
 		t.Errorf("cancel body = %s, want %s", b, want)
 	}
 	// A label with HTML characters and a line separator stays decodable.
-	tk := Ticket{Label: "<a&b>\u2028", Need: map[string]spec.Range{"cpu": {Min: 1, Max: 1}}}
+	tk := Ticket{Label: "<a&b>\u2028", Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}}
 	b, err = Encode(tk)
 	if err != nil {
 		t.Fatal(err)
@@ -486,29 +486,29 @@ func TestEncodeShapeAndRefusals(t *testing.T) {
 		t.Errorf("label round trip = %+v, %v", back, err)
 	}
 
-	cpu := map[string]spec.Range{"cpu": {Min: 1, Max: 1}}
+	mem := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
 	refused := map[string]any{
 		"unsupported type":    42,
 		"nil ticket pointer":  (*Ticket)(nil),
 		"nil hold pointer":    (*Hold)(nil),
 		"nil cancel pointer":  (*Cancel)(nil),
 		"ticket without need": Ticket{},
-		"ticket priority":     Ticket{Priority: 1001, Need: cpu},
-		"ticket range":        Ticket{Need: map[string]spec.Range{"cpu": {Min: 3, Max: 2}}},
-		"ticket label length": Ticket{Label: strings.Repeat("a", 129), Need: cpu},
-		"ticket label UTF-8":  Ticket{Label: "\xff", Need: cpu},
+		"ticket priority":     Ticket{Priority: 1001, Need: mem},
+		"ticket range":        Ticket{Need: map[string]spec.Range{"mem": {Min: 3, Max: 2}}},
+		"ticket label length": Ticket{Label: strings.Repeat("a", 129), Need: mem},
+		"ticket label UTF-8":  Ticket{Label: "\xff", Need: mem},
 		"hold label UTF-8":    Hold{Label: "\xff"},
-		"hold unsorted":       Hold{Grant: map[string][]int{"cpu": {2, 1}}},
-		"hold repeated":       Hold{Grant: map[string][]int{"cpu": {1, 1}}},
-		"hold index":          Hold{Grant: map[string][]int{"cpu": {4096}}},
-		"hold too many":       Hold{Grant: map[string][]int{"cpu": make257()}},
+		"hold unsorted":       Hold{Grant: map[string][]int{"mem": {2, 1}}},
+		"hold repeated":       Hold{Grant: map[string][]int{"mem": {1, 1}}},
+		"hold index":          Hold{Grant: map[string][]int{"mem": {4096}}},
+		"hold too many":       Hold{Grant: map[string][]int{"mem": make257()}},
 		"hold start":          Hold{StartNS: math.MaxInt64 + 1},
 		"hold name":           Hold{Clamped: map[string]int{"BAD": 3}},
-		"hold clamped zero":   Hold{Clamped: map[string]int{"cpu": 0}},
-		"hold clamped 257":    Hold{Clamped: map[string]int{"cpu": 257}},
-		"hold nil tokens":     Hold{Grant: map[string][]int{"cpu": nil}},
-		"hold empty tokens":   Hold{Grant: map[string][]int{"cpu": {}}},
-		"ticket created":      Ticket{Need: cpu, CreatedNS: -1},
+		"hold clamped zero":   Hold{Clamped: map[string]int{"mem": 0}},
+		"hold clamped 257":    Hold{Clamped: map[string]int{"mem": 257}},
+		"hold nil tokens":     Hold{Grant: map[string][]int{"mem": nil}},
+		"hold empty tokens":   Hold{Grant: map[string][]int{"mem": {}}},
+		"ticket created":      Ticket{Need: mem, CreatedNS: -1},
 		"ticket minimums":     Ticket{Need: map[string]spec.Range{"a": {Min: 256, Max: 256}, "b": {Min: 256, Max: 256}, "c": {Min: 1, Max: 1}}},
 		"cancel requested":    Cancel{RequestedNS: -1},
 		"cancel pid":          Cancel{RequesterPID: -1},
@@ -592,8 +592,8 @@ func TestLargestGrantFitsBody(t *testing.T) {
 }
 
 func TestEncodeCanonicalAndStable(t *testing.T) {
-	h := Hold{Label: "x", Grant: map[string][]int{"gpu": {0}, "cpu": {1, 2}}, StartNS: 3,
-		UnbudgetedResources: []string{"zz", "aa"}, Clamped: map[string]int{"cpu": 16}}
+	h := Hold{Label: "x", Grant: map[string][]int{"gpu": {0}, "mem": {1, 2}}, StartNS: 3,
+		UnbudgetedResources: []string{"zz", "aa"}, Clamped: map[string]int{"mem": 16}}
 	a, err := Encode(h)
 	if err != nil {
 		t.Fatal(err)
@@ -604,7 +604,7 @@ func TestEncodeCanonicalAndStable(t *testing.T) {
 			t.Fatalf("Encode is not deterministic: %s vs %s", a, b)
 		}
 	}
-	if want := `{"label":"x","grant":{"cpu":[1,2],"gpu":[0]},"start_ns":3,"unbudgeted":false,"unbudgeted_resources":["zz","aa"],"clamped":{"cpu":16},"adopted":false}`; string(a) != want {
+	if want := `{"label":"x","grant":{"gpu":[0],"mem":[1,2]},"start_ns":3,"unbudgeted":false,"unbudgeted_resources":["zz","aa"],"clamped":{"mem":16},"adopted":false}`; string(a) != want {
 		t.Errorf("hold body = %s\nwant        %s", a, want)
 	}
 }
@@ -831,7 +831,7 @@ func TestNameDisplay(t *testing.T) {
 // reads as false and leaves the body well-formed. Mutation: dropping omitempty from the tree key
 // reddens the exact-encoding tests, whose bodies carry no tree.
 func TestHoldTreeKey(t *testing.T) {
-	const okHold = `{"label":"x","grant":{"cpu":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
+	const okHold = `{"label":"x","grant":{"mem":[0,1]},"start_ns":5,"unbudgeted":false,"unbudgeted_resources":[],"clamped":{},"adopted":false}`
 	for body, want := range map[string]bool{
 		okHold:                                   false,
 		okHold[:len(okHold)-1] + `,"tree":true}`: true,
