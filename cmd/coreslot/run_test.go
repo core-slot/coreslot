@@ -1020,7 +1020,7 @@ func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 
 // ---------------------------------------------------------------- the waiting line
 
-type fakeStepper struct{ calls, holderCalls int }
+type fakeStepper struct{ calls int }
 
 // due is a non-head waiter's: its next election is a second away.
 func (s *fakeStepper) due() time.Duration { return time.Second }
@@ -1028,12 +1028,6 @@ func (s *fakeStepper) due() time.Duration { return time.Second }
 func (s *fakeStepper) step(context.Context) (engine.StepResult, error) {
 	s.calls++
 	return engine.Waiting{Position: 2}, nil
-}
-
-func (s *fakeStepper) holders() ([]engine.HolderInfo, error) {
-	s.holderCalls++
-	return []engine.HolderInfo{{Label: "gate", PID: 4711, NeedMiB: 1536,
-		StartNS: time.Now().Add(-192 * time.Second).UnixNano()}}, nil
 }
 
 // fakeClock advances only when the loop sleeps; it ends the context once limit has passed.
@@ -1069,7 +1063,12 @@ func TestWaitingLineEvery30s(t *testing.T) {
 	clk := &fakeClock{limit: 95 * time.Second, cancel: cancel}
 	s := &fakeStepper{}
 	var out bytes.Buffer
-	r := &run{o: runOptions{need: 1024}, why: func() string { return "needs 1 GiB, 512 MiB free" }}
+	snapshots := 0
+	r := &run{o: runOptions{need: 1024}, why: func() (string, []engine.HolderInfo) {
+		snapshots++
+		return "needs 1 GiB, 512 MiB free", []engine.HolderInfo{{Label: "gate", PID: 4711, NeedMiB: 1536,
+			StartNS: time.Now().Add(-192 * time.Second).UnixNano()}}
+	}}
 	_, err := waitLoop(ctx, s, clk, &out, r.waitingLine)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitLoop = %v, want the context's end", err)
@@ -1085,8 +1084,8 @@ func TestWaitingLineEvery30s(t *testing.T) {
 			t.Errorf("line %d = %q", i, lines[i])
 		}
 	}
-	if s.holderCalls != 4 {
-		t.Errorf("holders listed %d times in 95 s, want 4: only for the waiting lines", s.holderCalls)
+	if snapshots != 4 {
+		t.Errorf("%d snapshots in 95 s, want 4: one for each waiting line", snapshots)
 	}
 	if s.calls != 96 {
 		t.Errorf("%d steps in 95 s, want 96: one at the start and one each time the next is due (1 s)", s.calls)

@@ -59,16 +59,16 @@ type run struct {
 	startNS   int64    // wall clock at the run's start
 	start     time.Time
 	waited    time.Duration
-	env       []string           // the command's environment before its grant: the inherited context dropped
-	pipeNoted bool               // the waiting line said once whether stdin is a pipe
-	normal    map[string]float64 // every label's normal share, from the run log
-	stops     int                // memory stops so far
-	stopped   bool               // the last command was killed by a stop round
-	peakKiB   int64              // the last command's sampled peak
-	why       func() string      // why the request in the queue is not admitted yet
-	advised   bool               // the waiting line said once what to do about a tool's time limit
-	lastStop  string             // what the watchdog saw when it stopped the last command
-	reasons   []string           // lastStop of every stop so far
+	env       []string                             // the command's environment before its grant: the inherited context dropped
+	pipeNoted bool                                 // the waiting line said once whether stdin is a pipe
+	normal    map[string]float64                   // every label's normal share, from the run log
+	stops     int                                  // memory stops so far
+	stopped   bool                                 // the last command was killed by a stop round
+	peakKiB   int64                                // the last command's sampled peak
+	why       func() (string, []engine.HolderInfo) // why the request is not admitted yet, and the live holds
+	advised   bool                                 // the waiting line said once what to do about a tool's time limit
+	lastStop  string                               // what the watchdog saw when it stopped the last command
+	reasons   []string                             // lastStop of every stop so far
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -175,12 +175,14 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 		ctx, c = context.WithTimeout(ctx, r.o.timeout)
 		defer c()
 	}
-	r.why = func() string {
-		if rep, err := e.Snapshot(); err == nil {
-			return waitReason(rep, req)
+	r.why = func() (string, []engine.HolderInfo) {
+		rep, err := e.Snapshot()
+		if err != nil { // informative: a failure leaves it out
+			return "", nil
 		}
-		return ""
+		return waitReason(rep, req), rep.Holds
 	}
+
 	watch := watchSignals(cancel)
 
 	enqCtx := ctx

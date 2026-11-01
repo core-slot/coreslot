@@ -310,9 +310,8 @@ func TestRefreshCadenceWhenDue(t *testing.T) {
 	}
 }
 
-// Holds are listed and probed only when asked for (Ticket.Holders, the CLI's waiting line) or by
-// an admission attempt, which reads the reservations, not on the elections that follow a change
-// of gen.
+// Holds are listed and probed only by an admission attempt, which reads the reservations, or a
+// Snapshot, not on the elections that follow a change of gen.
 func TestHoldersOnlyOnRequest(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -320,7 +319,7 @@ func TestHoldersOnlyOnRequest(t *testing.T) {
 	if !isAdmitted(step(t, enqueue(t, e, need("mem=1")))) { // a live hold
 		t.Fatal("not admitted on a free budget")
 	}
-	var ahead []*Ticket // a full front window: w never attempts to pass (PROTOCOL.md section 10.3)
+	var ahead []*Ticket
 	for range FrontWindow {
 		ahead = append(ahead, enqueue(t, e, need("mem=8")))
 	}
@@ -344,10 +343,6 @@ func TestHoldersOnlyOnRequest(t *testing.T) {
 	}
 	if work.holdProbes != 0 {
 		t.Fatalf("%d hold probes over 5 elections after gen changes, want 0", work.holdProbes)
-	}
-	hs, err := w.Holders()
-	if err != nil || len(hs) != 1 || work.holdProbes != 1 {
-		t.Fatalf("Holders: %v, %v after %d probes; want the one live hold, one probe", hs, err, work.holdProbes)
 	}
 }
 

@@ -62,7 +62,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if err != nil {
 		return nil, err
 	}
-	holds, err := liveHolds(t.e.st, spec.ColdStartMiB(m.MemMiB))
+	holds, _, _, err := holdListing(t.e.st, spec.ColdStartMiB(m.MemMiB))
 	if err != nil {
 		return nil, err
 	}

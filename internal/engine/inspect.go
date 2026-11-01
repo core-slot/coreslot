@@ -4,6 +4,7 @@ package engine
 
 import (
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
@@ -83,55 +84,18 @@ func (e *Engine) Snapshot() (Report, error) {
 			MtimeNS: en.MtimeNS, Dead: dead})
 	}
 
-	holds, ignored, err := e.st.List(store.HoldsDir)
+	live, dead, ignored, err := holdListing(e.st, spec.ColdStartMiB(machine.MemMiB))
 	if err != nil {
 		return Report{}, err
 	}
-	r.Ignored[store.HoldsDir] = ignored
-	for _, en := range holds {
-		body, err := e.readBody(store.HoldsDir, en.Name)
-		if gone(err) {
-			continue
-		}
-		if stray(err) {
-			r.Ignored[store.HoldsDir]++
-			continue
-		}
-		if err != nil {
-			return Report{}, err
-		}
-		info := holderInfo(en, body)
-		if info == nil {
-			r.Ignored[store.HoldsDir]++
-			continue
-		}
-		dead, err := e.st.Probe(store.HoldsDir, en.Name)
-		if gone(err) {
-			continue
-		}
-		if stray(err) {
-			r.Ignored[store.HoldsDir]++
-			continue
-		}
-		if err != nil {
-			return Report{}, err
-		}
-		if dead {
-			r.DeadHolds = append(r.DeadHolds, en.Name)
-		} else {
-			r.Holds = append(r.Holds, *info)
-		}
+	r.Ignored[store.HoldsDir], r.DeadHolds = ignored, dead
+	for _, h := range live {
+		r.Holds = append(r.Holds, h.info())
+		r.Mem.ReservedMiB += h.body.NeedMiB
 	}
 	if memErr == nil && machine.HeadroomOK {
-		held := make([]state.MemHold, 0, len(r.Holds))
-		for _, h := range r.Holds {
-			r.Mem.ReservedMiB += h.NeedMiB
-			if h.NeedMiB > 0 {
-				held = append(held, state.MemHold{NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB})
-			}
-		}
-		room := state.Room(machine.HeadroomMiB, cfg.ReserveMiB, held)
-		r.Mem.Known, r.Mem.FreeMiB = true, max(0, room)
+		r.Mem.Known = true
+		r.Mem.FreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live)))
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
 	// descriptor. An unreadable process table reports nothing: unknown is not exited.
@@ -145,11 +109,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	now := e.clock.Realtime()
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
 		Fresh: fresh(at, now)}
-	jobs := make([]watch.Job, len(r.Holds))
-	for i, h := range r.Holds {
-		jobs[i] = watch.Job{Hold: h.Name, ArrivalNS: h.ArrivalNS, Victim: h.Victim, ChildExited: h.ChildExited}
-	}
-	if next := watch.StopList(jobs, 1); len(next) > 0 {
+	if next := watch.StopList(runningJobs(live, now, nil), 1); len(next) > 0 {
 		r.Watch.NextVictim = next[0]
 	}
 

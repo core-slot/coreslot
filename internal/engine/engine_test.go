@@ -196,7 +196,7 @@ func reservedUnits(t *testing.T, e *Engine) int {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	holds, err := liveHolds(e.st, 0)
+	holds, _, _, err := holdListing(e.st, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1002,9 +1002,10 @@ func TestOwnTicketRemovedKeepsWaiting(t *testing.T) {
 	}
 }
 
-// A hold whose body's start_ns differs from its name's is malformed and ignored (PROTOCOL.md
-// section 7.4): it is not reported as a holder.
-func TestHoldStartMismatchIsIgnored(t *testing.T) {
+// A hold whose body's start_ns differs from its name's is malformed (PROTOCOL.md section 7.4): its
+// label is not trusted, and like any malformed live hold it reserves the cold start, 426 MiB of
+// 1707 (section 7.2). Mutation: decoding without the name check shows the label "bad".
+func TestHoldStartMismatchIsMalformed(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
@@ -1028,20 +1029,21 @@ func TestHoldStartMismatchIsIgnored(t *testing.T) {
 	startHelper(t, "lock", dir, good+"\n"+bad) // both live
 	tk := enqueue(t, e, need("mem=1"))
 	clk.advance(time.Second)
-	// The ticket is head and admitted; a second ticket behind it reports the holders.
 	step(t, tk)
-	behind := enqueue(t, e, need("mem=8"))
-	step(t, behind)
-	holders, err := behind.Holders()
+	rep, err := e.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	labels := map[string]bool{}
-	for _, h := range holders {
-		labels[h.Label] = true
+	var sawGood bool
+	var mismatched HolderInfo
+	for _, h := range rep.Holds {
+		sawGood = sawGood || h.Label == "good"
+		if strings.HasSuffix(h.Name, "-bad") {
+			mismatched = h
+		}
 	}
-	if !labels["good"] || labels["bad"] || len(holders) != 2 {
-		t.Errorf("holders %+v, want the well-formed hold and the admitted one, not the mismatched one", holders)
+	if !sawGood || mismatched.Label != "" || mismatched.NeedMiB != 426 || len(rep.Holds) != 3 {
+		t.Errorf("holds %+v, want good, the admitted one and the mismatched one at the cold start", rep.Holds)
 	}
 }
 

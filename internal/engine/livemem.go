@@ -22,39 +22,51 @@ type liveHold struct {
 	body wire.Hold
 }
 
-// liveHolds lists holds/ and returns the live holds, a lock probe each, as Ticket.Holders does;
-// stray holds are left out. A live hold whose body does not parse (its run rewrites it in place,
-// so a read can be torn) reserves coldStartMiB: unknown is not zero. It fails when holds/ or a
-// body cannot be read. It takes no lock of its own: admit runs under stepMu, which
-// Ticket.Holders takes.
-func liveHolds(st *store.Store, coldStartMiB int64) ([]liveHold, error) {
-	entries, _, err := st.List(store.HoldsDir)
+// holdListing lists holds/ for admission, the watch tick and Snapshot alike: the live holds, a
+// lock probe each, the dead ones awaiting reconciliation, and how many entries were stray or did
+// not match the grammar. A live hold whose body does not parse (its run rewrites it in place, so
+// a read can be torn) reserves coldStartMiB, with the pid and start its name carries: unknown is
+// not zero (PROTOCOL.md section 7.2). It fails when holds/ or a body cannot be read.
+func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []string, ignored int, err error) {
+	entries, ignored, err := st.List(store.HoldsDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, 0, err
 	}
-	var live []liveHold
 	for _, en := range entries {
 		body, err := st.ReadSmall(filepath.Join(store.HoldsDir, en.Name), wire.MaxBodyBytes)
-		if gone(err) || stray(err) {
+		if gone(err) {
 			continue
 		}
-		if err != nil {
-			return nil, err
+		if err == nil {
+			var isDead bool
+			if isDead, err = probe(st, store.HoldsDir, en.Name); err == nil && isDead {
+				dead = append(dead, en.Name)
+				continue
+			}
 		}
-		h, ok := decodeHold(en, body)
-		dead, err := probe(st, store.HoldsDir, en.Name)
-		if gone(err) || stray(err) || (err == nil && dead) {
+		switch {
+		case gone(err):
 			continue
+		case stray(err):
+			ignored++
+			continue
+		case err != nil:
+			return nil, nil, 0, err
 		}
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			h = wire.Hold{NeedMiB: coldStartMiB}
+		h, err := wire.DecodeHold(body)
+		if err != nil || uint64(h.StartNS) != en.ID.OrderKey || h.PID != en.ID.PID {
+			h = wire.Hold{PID: en.ID.PID, StartNS: int64(en.ID.OrderKey), NeedMiB: coldStartMiB}
 		}
 		live = append(live, liveHold{name: en.Name, body: h})
 	}
-	return live, nil
+	return live, dead, ignored, nil
+}
+
+// info is the hold as a waiter or a snapshot shows it.
+func (h liveHold) info() HolderInfo {
+	b := h.body
+	return HolderInfo{Name: h.name, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
+		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Victim: b.Victim, ChildExited: b.ChildExited}
 }
 
 // reservations are the room's input: each live hold that reserves memory, with the footprint its
@@ -99,7 +111,7 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine, normal map[string]
 		if err != nil {
 			return watch.Sample{}, err
 		}
-		holds, err := liveHolds(e.st, spec.ColdStartMiB(m.MemMiB))
+		holds, _, _, err := holdListing(e.st, spec.ColdStartMiB(m.MemMiB))
 		if err != nil {
 			return watch.Sample{}, err
 		}

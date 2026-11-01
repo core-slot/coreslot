@@ -414,8 +414,10 @@ is its target's id, not its writer's `seq`; section 11 says what an existing one
   a table, so `1.5`, `1e999` or a 30-digit number under an unknown key is accepted. (The duplicate,
   surrogate and size rules still apply inside unknown keys.)
 - A malformed body makes its entry ignored and counted, never trusted. An ignored ticket takes no
-  place in the queue. A live hold whose body is malformed is not ignored by admission: it reserves
-  the cold start need (section 12.1), since unknown is not zero.
+  place in the queue. A live hold whose body is malformed is not ignored: admission, the watchdog
+  and `status` alike count it as reserving the cold start need (section 12.1), since unknown is not
+  zero, under the pid and start its name carries and with no label. It is no running hold (section
+  23.3).
 
 ### 7.3 Ticket
 

@@ -34,12 +34,11 @@ func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, err
 	return nil, errNotAtOnce
 }
 
-// stepper is the part of a ticket the wait loop drives: a Step, how long until the next one
-// has work due, and the live holds for the waiting line.
+// stepper is the part of a ticket the wait loop drives: a Step, and how long until the next one
+// has work due.
 type stepper interface {
 	step(ctx context.Context) (engine.StepResult, error)
 	due() time.Duration
-	holders() ([]engine.HolderInfo, error)
 }
 
 // ticketStepper steps a real ticket.
@@ -48,8 +47,6 @@ type ticketStepper struct{ t *engine.Ticket }
 func (s ticketStepper) step(ctx context.Context) (engine.StepResult, error) { return s.t.Step(ctx) }
 
 func (s ticketStepper) due() time.Duration { return s.t.Due() }
-
-func (s ticketStepper) holders() ([]engine.HolderInfo, error) { return s.t.Holders() }
 
 // waitOneP runs wait with the Go runtime limited to one P (runtime.GOMAXPROCS(1)) and restores
 // the previous setting afterwards. A waiting process sleeps almost all the time, and with one P
@@ -85,9 +82,8 @@ func (c realClock) Sleep(ctx context.Context, d time.Duration) error {
 
 // waitLoop steps the ticket whenever it next has work due (once per second while it is not the
 // head, on the admission backoff while it is) until it is admitted, ctx ends or the budget
-// fails, and writes a waiting line to w when the wait starts and every 30 s after, with the live
-// holds listed then.
-func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, []engine.HolderInfo, time.Duration) string) (*engine.Grant, error) {
+// fails, and writes a waiting line to w when the wait starts and every 30 s after.
+func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, time.Duration) string) (*engine.Grant, error) {
 	start := clk.Now()
 	next := start
 	for {
@@ -103,11 +99,7 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 			return v.Grant, nil
 		case engine.Waiting:
 			if now := clk.Now(); now >= next {
-				holders, err := s.holders()
-				if err != nil { // informative: a failure leaves them out
-					holders = nil
-				}
-				fmt.Fprintln(w, line(v, holders, now-start))
+				fmt.Fprintln(w, line(v, now-start))
 				next = now + waitLineEvery
 			}
 		}
@@ -119,11 +111,12 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 
 // waitingLine is the line a waiting run prints every 30 s, for example `coreslot: waiting for
 // mem 3 GiB: position 2 (1m00s); holders: gate pid 4711 mem 1 GiB (3m12s)`, where 1m00s is how
-// long the run has waited.
-func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited time.Duration) string {
+// long the run has waited. Why it waits and the holds come from one snapshot.
+func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 	why, advice := "", ""
+	var holders []engine.HolderInfo
 	if r.why != nil {
-		if why = r.why(); why != "" {
+		if why, holders = r.why(); why != "" {
 			why = "; " + why
 		}
 	}

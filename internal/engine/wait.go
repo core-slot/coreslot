@@ -23,8 +23,8 @@ type StepResult interface{ stepResult() }
 // Waiting reports a ticket still waiting. Position is 1 when the last election made it the
 // head, otherwise 1 plus the number of tickets ahead of it that the election did not pass over:
 // the election stops at the first live, non-STALLED ticket, so the tickets beyond it are
-// counted unexamined and Position is an upper bound. A Step lists no holds: Ticket.Holders lists the live holds when a caller
-// needs them (the CLI's waiting line, every 30 s).
+// counted unexamined and Position is an upper bound. A Step lists no holds: Snapshot does, when a
+// caller needs them (the CLI's waiting line, every 30 s).
 type Waiting struct {
 	Position int
 }
@@ -489,59 +489,4 @@ func (t *Ticket) ticketBody(name string) (ok bool, err error) {
 	}
 	t.wellFormed[name] = ok
 	return ok, nil
-}
-
-// Holders lists holds/ and returns the live holds (a lock probe each); malformed holds are
-// left out (PROTOCOL.md section 7.4). It is informative and not part of waiting: the CLI calls
-// it for its waiting line every 30 s. Hold bodies change while their runs measure, so each is
-// read afresh.
-func (t *Ticket) Holders() ([]HolderInfo, error) {
-	t.stepMu.Lock()
-	defer t.stepMu.Unlock()
-	holds, _, err := t.e.st.List(store.HoldsDir)
-	if err != nil {
-		return nil, err
-	}
-	var live []HolderInfo
-	for _, en := range holds {
-		body, err := t.e.readBody(store.HoldsDir, en.Name)
-		if gone(err) || stray(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		info := holderInfo(en, body)
-		if info == nil {
-			continue
-		}
-		dead, err := probe(t.e.st, store.HoldsDir, en.Name)
-		if gone(err) || stray(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if !dead {
-			live = append(live, *info)
-		}
-	}
-	return live, nil
-}
-
-// decodeHold decodes a hold body; ok is false when it is malformed, including a pid or start_ns
-// that is not the name's (PROTOCOL.md 7.4).
-func decodeHold(en store.Entry, body []byte) (wire.Hold, bool) {
-	h, err := wire.DecodeHold(body)
-	return h, err == nil && uint64(h.StartNS) == en.ID.OrderKey && h.PID == en.ID.PID
-}
-
-// holderInfo decodes a hold body as decodeHold does; nil when it is malformed.
-func holderInfo(en store.Entry, body []byte) *HolderInfo {
-	h, ok := decodeHold(en, body)
-	if !ok {
-		return nil
-	}
-	return &HolderInfo{Name: en.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS, ArrivalNS: h.ArrivalNS,
-		NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, Victim: h.Victim, ChildExited: h.ChildExited}
 }
