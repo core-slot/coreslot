@@ -1,1 +1,1 @@
-{"label":"x","grant":{},"start_ns":5,"unbudgeted":true,"unbudgeted_resources":["mem","gpu"],"clamped":{},"adopted":false}
+{"label":"x","grant":{},"start_ns":5,"unbudgeted":true,"unbudgeted_resources":["mem","gpu"],"clamped":{}}
