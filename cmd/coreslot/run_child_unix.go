@@ -90,7 +90,7 @@ func (r *run) runChild(c child) int {
 		stop()
 		<-watched
 		if c.grant != nil {
-			_ = c.grant.UpdateHold(func(h *wire.Hold) { h.ChildExited = true })
+			r.updateHold(c.grant, func(h *wire.Hold) { h.ChildExited = true })
 		}
 		childDone(terminal)
 		released = c.release()

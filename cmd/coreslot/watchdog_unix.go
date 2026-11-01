@@ -46,10 +46,12 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant) 
 		}
 		var d memsample.TreeTimes
 		d, prev = treeDeltas(prev, pids)
-		_ = g.UpdateHold(func(h *wire.Hold) {
+		if !r.updateHold(g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.SampledNS, h.Victim, h.Stops = store.NowNS(), sup.group && !r.o.noRestart, r.stops
-		})
+		}) {
+			continue
+		}
 		det, c, err := g.Tick(ctx, r.normal)
 		if err != nil || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
@@ -68,8 +70,17 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant) 
 	}
 }
 
-// treeDeltas is the time the processes pids spent since prev, their times then, and their times
-// now. A process new to the tree, or whose pid was reused, counts its whole time.
+// updateHold rewrites g's hold with fn, outside the section, only while the state directory's
+// FORMAT is one this client implements (PROTOCOL.md section 14); it reports whether it wrote.
+func (r *run) updateHold(g *engine.Grant, fn func(*wire.Hold)) bool {
+	if _, err := formatStillUnderstood(r.loc.dir); err != nil {
+		return false
+	}
+	return g.UpdateHold(fn) == nil
+}
+
+// treeDeltas returns the time the processes pids spent since prev, their times then, and their
+// times now. A process new to the tree, or whose pid was reused, counts its whole time.
 func treeDeltas(prev map[int]memsample.TreeTimes, pids []int) (memsample.TreeTimes, map[int]memsample.TreeTimes) {
 	var d memsample.TreeTimes
 	next := make(map[int]memsample.TreeTimes, len(pids))
