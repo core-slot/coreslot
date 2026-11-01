@@ -15,9 +15,6 @@ func Point(name string) {}
 // RealtimeOffset is added to the wall clock; always 0 without the coreslot_testhooks tag.
 func RealtimeOffset() time.Duration { return 0 }
 
-// Formats lists the formats the client implements; always [2] without the coreslot_testhooks tag.
-func Formats() []int { return []int{2} }
-
 // Getent names a getent to use instead of the system's; always "" without the coreslot_testhooks
 // tag, so that no environment of a release build can choose the program the home directory comes
 // from.

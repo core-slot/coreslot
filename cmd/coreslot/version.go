@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"runtime/debug"
-	"strconv"
 	"strings"
 
 	"github.com/core-slot/coreslot/internal/store"
@@ -13,8 +12,8 @@ const versionUsage = `usage: coreslot version
 
 Prints the version and the protocol formats this coreslot implements.`
 
-// versionCommand prints the CLI's version and the protocol formats it implements, for example
-// `coreslot 0.1.0 (protocol formats: 1)`.
+// versionCommand prints the CLI's version and the protocol format it implements, for example
+// `coreslot 0.4.0 (protocol formats: 2)`.
 func versionCommand(args []string, io IO) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Fprintln(io.Stdout, versionUsage)
@@ -24,12 +23,7 @@ func versionCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: version takes no arguments\n%s\n", versionUsage)
 		return exitUsage
 	}
-	formats := store.Formats()
-	text := make([]string, len(formats))
-	for i, f := range formats {
-		text[i] = strconv.Itoa(f)
-	}
-	fmt.Fprintf(io.Stdout, "coreslot %s (protocol formats: %s)\n", cliVersion(), strings.Join(text, ", "))
+	fmt.Fprintf(io.Stdout, "coreslot %s (protocol formats: %d)\n", cliVersion(), store.Format)
 	return 0
 }
 

@@ -18,23 +18,6 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// formatsOfThisBuild is the formats the CLI of this test build implements: with the test hooks
-// the environment decides, and the default is format 1.
-func formatsOfThisBuild() string {
-	if v := os.Getenv("CORESLOT_TESTHOOK_FORMATS"); v != "" {
-		return strings.ReplaceAll(v, ",", ", ")
-	}
-	return "1"
-}
-
-func TestVersionListsEveryImplementedFormat(t *testing.T) {
-	env := append(baseEnv(stateDir(t, "")), "CORESLOT_TESTHOOK_FORMATS=1,2")
-	r := cli(t, env, "version")
-	if r.code != 0 || r.stdout != "coreslot "+cliVersion()+" (protocol formats: 1, 2)\n" {
-		t.Errorf("version: exit %d, stdout %q", r.code, r.stdout)
-	}
-}
-
 // A real client paused inside the section: status names its pid. FORMAT exists already, so the
 // first point is the ticket's publication, after the entry wrote admit.lock's body.
 func TestStatusNamesSectionHolderOfPausedRun(t *testing.T) {

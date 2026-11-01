@@ -12,7 +12,6 @@
 //   - <CORESLOT_TESTHOOK_DIR>/realtime-offset: when this file exists, its content (a Go
 //     duration) replaces CORESLOT_TESTHOOK_REALTIME_OFFSET, re-read whenever the file changes,
 //     so that a test steps the wall clock of every running process at once.
-//   - CORESLOT_TESTHOOK_FORMATS: comma-separated formats the client implements.
 //   - CORESLOT_TESTHOOK_GETENT: the absolute path of a getent that replaces the system's in the
 //     home directory's NSS fallback.
 //   - CORESLOT_TESTHOOK_PASSWD_MISS: when set, the home directory's password-database lookup
@@ -155,23 +154,6 @@ func (c *fileCache[T]) load(path string, parse func(string) (T, error)) (v T, ok
 	}
 	c.path, c.mtime, c.size, c.v = path, fi.ModTime(), fi.Size(), v
 	return v, true
-}
-
-// Formats returns CORESLOT_TESTHOOK_FORMATS, or [2] when it is unset.
-func Formats() []int {
-	v := os.Getenv("CORESLOT_TESTHOOK_FORMATS")
-	if v == "" {
-		return []int{2}
-	}
-	var formats []int
-	for _, f := range strings.Split(v, ",") {
-		n, err := strconv.Atoi(f)
-		if err != nil {
-			panic(fmt.Sprintf("testhooks: CORESLOT_TESTHOOK_FORMATS: %v", err))
-		}
-		formats = append(formats, n)
-	}
-	return formats
 }
 
 // Getent returns CORESLOT_TESTHOOK_GETENT, or "" (the system's getent) when it is unset.

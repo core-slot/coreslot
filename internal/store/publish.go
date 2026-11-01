@@ -331,7 +331,7 @@ func (sec *Section) format(implements func(int) bool) (n int, understood bool, e
 		if err := sec.writeFormat(); err != nil {
 			return 0, false, err
 		}
-		n = written()
+		n = Format
 	case err != nil:
 		return 0, false, err
 	default:
@@ -351,7 +351,7 @@ func (sec *Section) format(implements func(int) bool) (n int, understood bool, e
 
 // writeFormat writes FORMAT naming the format written.
 func (sec *Section) writeFormat() error {
-	return sec.replaceFile(FormatFile, []byte(formatPrefix+strconv.Itoa(written())+"\n"))
+	return sec.replaceFile(FormatFile, []byte(formatPrefix+strconv.Itoa(Format)+"\n"))
 }
 
 // Prepare is what every entry that changes state does before its change (PROTOCOL.md sections 8

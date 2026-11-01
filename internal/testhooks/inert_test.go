@@ -5,7 +5,6 @@ package testhooks
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 	"time"
 )
@@ -16,7 +15,6 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_DIR", dir)
 	t.Setenv("CORESLOT_TESTHOOK_PAUSE", "admit.before-enter,x")
 	t.Setenv("CORESLOT_TESTHOOK_REALTIME_OFFSET", "-5m")
-	t.Setenv("CORESLOT_TESTHOOK_FORMATS", "1,2")
 	t.Setenv("CORESLOT_TESTHOOK_GETENT", "/tmp/fake-getent")
 	t.Setenv("CORESLOT_TESTHOOK_PASSWD_MISS", "1")
 	t.Setenv("CORESLOT_TESTHOOK_HEADROOM_MIB", "4096")
@@ -45,9 +43,6 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	}
 	if got := RealtimeOffset(); got != 0 {
 		t.Errorf("RealtimeOffset() = %v, want 0", got)
-	}
-	if got := Formats(); !slices.Equal(got, []int{2}) {
-		t.Errorf("Formats() = %v, want [2]", got)
 	}
 	if got := Getent(); got != "" {
 		t.Errorf("Getent() = %q, want \"\"", got)

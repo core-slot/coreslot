@@ -973,7 +973,7 @@ func TestVersionListsFormats(t *testing.T) {
 	if r.code != 0 || m == nil {
 		t.Fatalf("version: exit %d, stdout %q", r.code, r.stdout)
 	}
-	if want := formatsOfThisBuild(); m[1] != want {
+	if want := "2"; m[1] != want {
 		t.Errorf("formats %q, want %q", m[1], want)
 	}
 	if r := cli(t, baseEnv(stateDir(t, "")), "--version"); r.code != 0 || !versionLine.MatchString(r.stdout) {
@@ -1042,7 +1042,7 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 // A directory of format 1, with its res/ files and a dead hold, is not used: a run runs
 // unbudgeted at once with one notice that says what to do, --strict refuses, and doctor --reset
 // recreates the directory as format 2, its res/ gone. Mutations: keep format 1 in
-// store.Formats (the run queues on it and prints nothing); skip the res/ removal in Reset.
+// store.Understood (the run queues on it and prints nothing); skip the res/ removal in Reset.
 func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, d := range []string{"res/mem", "holds"} {
