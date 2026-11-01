@@ -155,7 +155,7 @@ func TestOversizeRunsAlone(t *testing.T) {
 }
 
 // I4: a waiter behind a blocked head whose need is the whole budget takes nothing, through Step
-// or Poll: passing the head (PROTOCOL.md section 10.3) never takes what the head is short of.
+// or Poll, and never tries admission: only the head does (PROTOCOL.md section 10.3).
 func TestOnlyHeadTakesTheBudget(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()

@@ -857,10 +857,9 @@ func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
 	step(t, ahead)                // refreshes, so tk sees it live and stays behind it
 	enters, tryEnters := countEntries(t)
 	step(t, tk)
-	// Two single attempts: the resume bump's, and tk's attempt to pass the live ticket ahead of it
-	// from the front window (PROTOCOL.md section 10.3), which finds the section busy too.
-	if *enters != 0 || *tryEnters != 2 {
-		t.Errorf("the Step after the gap entered %d times blocking, %d times single-attempt; want 0 and 2",
+	// One single attempt, the resume bump's: tk is behind a live ticket and makes no admission.
+	if *enters != 0 || *tryEnters != 1 {
+		t.Errorf("the Step after the gap entered %d times blocking, %d times single-attempt; want 0 and 1",
 			*enters, *tryEnters)
 	}
 	fi, err := os.Stat(filepath.Join(dir, store.QueueDir, tk.Name()))

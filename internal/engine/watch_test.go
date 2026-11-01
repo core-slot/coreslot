@@ -112,6 +112,27 @@ func TestRestartTakesTheSampleItself(t *testing.T) {
 	}
 }
 
+// A restarted ticket at the head keeps its place while it waits for calm: a later request that
+// fits is not admitted ahead of it. Mutation: a waiter behind the head trying admission passes it.
+func TestRestartedHeadIsNotPassed(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	hold(t, e, need("mem=1"))
+	req := need("mem=1")
+	req.Restart = true
+	restarted := enqueue(t, e, req)
+	later := enqueue(t, e, need("mem=1"))
+	for round := range 6 {
+		clk.advance(time.Second)
+		if isAdmitted(step(t, restarted)) {
+			t.Fatalf("round %d: the restart started without calm", round)
+		}
+		if isAdmitted(step(t, later)) {
+			t.Fatalf("round %d: a later request was admitted ahead of the restarted head", round)
+		}
+	}
+}
+
 // A restarted job waits for calm_s of green and for room of its need plus max(256 MiB, need/10),
 // where a new job of the same need starts. The room beside the 1-unit hold is 896 MiB.
 func TestRestartWaitsForCalmAndMargin(t *testing.T) {

@@ -112,10 +112,8 @@ Every conforming client MUST preserve these invariants:
   bodies, and is not a cap. The exceptions are the idle rule (a head starts when no hold is live)
   and an unreadable headroom (nothing gates the head), both of section 12.1.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
-  tickets were published before the election (section 10.3), with one bounded exception: a waiter
-  in the front window MAY be admitted ahead of live tickets under the rule of section 10.3.
-  Otherwise the head blocks every waiter behind it, and a waiter is passed over only while it is
-  STALLED, dead or canceled.
+  tickets were published before the election (section 10.3): the head blocks every waiter behind
+  it, and a waiter is passed over only while it is STALLED, dead or canceled.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
   no process is stopped inside the admission section, the head is admitted within 3 s; up to 4
@@ -647,28 +645,12 @@ A waiter:
   waiter's timers on the front of the queue running; the election's rule is unchanged. A dead
   ticket that is not yet removed still takes a slot of the window until reconciliation removes it
   (section 10.4);
-- when its own ticket is in the front window and the examination ended at a live ticket, MAY
-  enter the section once per election to be admitted ahead of it, under the rule below;
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
   rescan when `gen` changed) before each attempt.
 
-**Passing.** A waiter whose own ticket is among the first 4 tickets of the queue that are not gone,
-counted as the front window counts them, MAY be admitted while live tickets are ahead of it, when
-its need fits `room − Σ need_ahead`: the room of section 12.1 less the `need_mib` of every counted
-ticket ahead. Every ticket ahead counts except one the election passes over as STALLED, dead or
-canceled; a ticket the waiter has never observed counts as live. A waiter whose headroom is unknown
-does not pass. An entry ahead whose name matches the ticket grammar but whose body cannot be read
-or is malformed, or that is a stray (section 4.2), makes the waiter not pass. This fails closed,
-unlike the election, where such an entry takes no place in the queue (section 7.2): the waiter goes
-on waiting and is elected as before. The idle rule of section 12.1 does not apply to a passer. The
-decision is made inside the section (section 12.1 step 5); a waiter MAY make the same check
-outside the section first, to enter only when it would pass, but that check decides nothing.
-
-The rule moves a small request past a head that waits for a large one only while the room still
-covers the small one after the whole of every need ahead: it takes nothing from the tickets
-ahead, so memory released later reaches them as before, and I5 holds. A client that does not
-implement the rule waits for its election and conforms.
+Only the head tries admission: a waiter behind a live ticket never enters the section to be
+admitted, so a head held back by the level gate (section 12.4), a restart included, keeps its place.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting. It
@@ -682,8 +664,7 @@ cancellation, withdrawal), `ENOENT` counts as success.
 A waiting CLI prints a line when it begins to wait and then every 30 s: why it waits, its position
 and the live holds with their needs and ages (informative). The position is one plus the tickets
 ahead that the examination has not passed over, an upper bound: tickets beyond the one that ended
-the examination are counted without being examined. A waiter that passes under the rule above is
-admitted before its position reaches 1.
+the examination are counted without being examined.
 
 ### 10.4 Reconciliation
 
@@ -776,15 +757,7 @@ Inside the section the head:
    well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
    this observer (its mtime from the listing counts as an observation), the head leaves the section
    and waits. A ticket the head has never observed, such as one published after its election,
-   counts as live.
-
-   A waiter that entered the section to pass under section 10.3's rule, and a head whose
-   re-election finds a live ticket ahead (one published since its election), take these steps as
-   the head does, except that at the re-election, instead of leaving when a live ticket is ahead, it
-   checks on the fresh listing that its own ticket is in the front window, reads the need of every
-   ticket ahead that counts, and leaves and waits if its ticket is not in the window, if the
-   headroom is unknown, if any entry ahead makes it not pass (section 10.3), or if its need does
-   not fit the room less those needs;
+   counts as live;
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket, bumps `gen`,

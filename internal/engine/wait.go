@@ -89,9 +89,8 @@ type Ticket struct {
 	obs        state.Observer
 	gen        store.Gen
 	haveGen    bool
-	ahead      []aheadEntry     // ascending: the nearest ticket ahead is the last
-	badAhead   bool             // the last rescan found a malformed ticket ahead
-	ticketNeed map[string]int64 // ticket name -> body's need in MiB, 0 when malformed
+	ahead      []aheadEntry    // ascending: the nearest ticket ahead is the last
+	wellFormed map[string]bool // ticket name -> whether its body is well-formed
 
 	nextElection time.Duration
 	backoff      time.Duration
@@ -100,7 +99,7 @@ type Ticket struct {
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
-	return &Ticket{e: e, req: req, ticketNeed: map[string]int64{}, last: Waiting{Position: 1}}
+	return &Ticket{e: e, req: req, wellFormed: map[string]bool{}, last: Waiting{Position: 1}}
 }
 
 // ID is the ticket's id, what a cancel request names.
@@ -120,8 +119,7 @@ func (t *Ticket) Name() string {
 // this ticket, and, once per second, read gen (rescanning queue/ when it changed) and hold the
 // election, which examines the tickets ahead from the nearest up to the first live, non-STALLED
 // one; the head tries admission with backoff from 0.25 s up to 0.5 s, repeating the election
-// before each attempt, and a waiter in the front window makes a single attempt per election to
-// pass the live tickets ahead (PROTOCOL.md section 10.3). It returns Waiting or Admitted, or
+// before each attempt (PROTOCOL.md section 10.3). It returns Waiting or Admitted, or
 // ErrCanceled once a cancel request was found or the ticket was withdrawn. Section entries wait
 // at most RefreshEvery/4, so a caller that calls Step in a loop keeps refreshing at least every
 // RefreshEvery (see RefreshEvery). A caller that calls Step again after Due has no more work per
@@ -235,32 +233,23 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	if !head {
 		t.backoff = 0
 		t.nextElection = now + ElectEvery
-		// A waiter in the front window with no malformed ticket ahead may pass the live tickets
-		// ahead (PROTOCOL.md section 10.3): a single attempt per election, decided in the section.
-		if len(t.ahead) >= FrontWindow || t.badAhead {
-			return t.last, nil
-		}
+		return t.last, nil
 	}
 	// Refresh again before an entry that may wait, so the entry cannot stretch the gap.
-	if head && !single {
+	if !single {
 		if now := t.e.clock.Monotonic(); now-t.lastRefreshMono >= RefreshEvery/4 {
 			if err := t.refresh(now); err != nil {
 				return t.settledOr(err)
 			}
 		}
 	}
-	if head {
-		t.attempts++
-	}
-	g, err := t.admit(ctx, single || !head)
+	t.attempts++
+	g, err := t.admit(ctx, single)
 	if err != nil {
 		return t.settledOr(err)
 	}
 	if g != nil {
 		return Admitted{g}, nil
-	}
-	if !head {
-		return t.last, nil
 	}
 	if t.backoff == 0 {
 		t.backoff = HeadFirstBackoff
@@ -432,10 +421,9 @@ func (t *Ticket) watchFront(stop int, now time.Duration) error {
 
 // rescan re-lists the names in queue/ (the listing alone: no entry's metadata is read, so its
 // cost is the directory read). Tickets ahead of this one whose bodies are well-formed are kept
-// for the election; malformed ones take no place in the queue (PROTOCOL.md section 7.2), but
-// one ahead keeps this waiter from passing (badAhead). A stray entry is found out when the
-// election examines it. Bodies never change once published, so each is read once, when its
-// name is first seen.
+// for the election; malformed ones take no place in the queue (PROTOCOL.md section 7.2). A stray
+// entry is found out when the election examines it. Bodies never change once published, so each
+// is read once, when its name is first seen.
 func (t *Ticket) rescan() error {
 	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
@@ -443,25 +431,23 @@ func (t *Ticket) rescan() error {
 	}
 	present := make(map[string]bool, len(entries))
 	var ahead []aheadEntry
-	bad := false
 	for _, en := range entries {
 		present[en.Name] = true
 		k := state.Key(en.ID)
 		if !k.Less(t.key) {
 			continue
 		}
-		need, malformed, err := t.ticketBody(en.Name)
+		ok, err := t.ticketBody(en.Name)
 		if err != nil {
 			return err
 		}
-		bad = bad || malformed
-		if need != 0 {
+		if ok {
 			ahead = append(ahead, aheadEntry{name: en.Name, key: k})
 		}
 	}
-	for name := range t.ticketNeed {
+	for name := range t.wellFormed {
 		if !present[name] {
-			delete(t.ticketNeed, name)
+			delete(t.wellFormed, name)
 		}
 	}
 	for _, a := range t.ahead {
@@ -478,33 +464,31 @@ func (t *Ticket) rescan() error {
 		}
 		return 0
 	})
-	t.ahead, t.badAhead = ahead, bad
+	t.ahead = ahead
 	return nil
 }
 
-// ticketBody returns the need, in MiB, of the body of the ticket name in queue/, reading it only
+// ticketBody reports whether the body of the ticket name in queue/ is well-formed, reading it only
 // when the name is first seen: ticket bodies never change once published, so the answer is kept
-// in ticketNeed. need is 0 when the body is malformed (malformed is then true) or the ticket was
-// gone before its body was read (that answer is not kept). A stray entry under the name counts as
-// malformed and is never trusted (PROTOCOL.md section 4.2).
-func (t *Ticket) ticketBody(name string) (need int64, malformed bool, err error) {
-	if need, known := t.ticketNeed[name]; known {
-		return need, need == 0, nil
+// in wellFormed. A ticket gone before its body was read is not (that answer is not kept). A stray
+// entry under the name counts as malformed and is never trusted (PROTOCOL.md section 4.2).
+func (t *Ticket) ticketBody(name string) (ok bool, err error) {
+	if ok, known := t.wellFormed[name]; known {
+		return ok, nil
 	}
 	body, err := t.e.readBody(store.QueueDir, name)
 	if gone(err) {
-		return 0, false, nil
+		return false, nil
 	}
 	if err != nil && !stray(err) {
-		return 0, false, err
+		return false, err
 	}
 	if err == nil {
-		if tk, derr := wire.DecodeTicket(body); derr == nil {
-			need = tk.NeedMiB // at least 1 once decoded
-		}
+		_, derr := wire.DecodeTicket(body)
+		ok = derr == nil
 	}
-	t.ticketNeed[name] = need
-	return need, need == 0, nil
+	t.wellFormed[name] = ok
+	return ok, nil
 }
 
 // Holders lists holds/ and returns the live holds (a lock probe each); malformed holds are

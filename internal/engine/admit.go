@@ -24,11 +24,10 @@ const staleNS = int64(6 * time.Second)
 // fresh reports whether a reading taken at atNS, by the wall clock, is still one at nowNS.
 func fresh(atNS, nowNS int64) bool { return atNS > 0 && atNS <= nowNS && nowNS-atNS <= staleNS }
 
-// admit is the admission attempt of the head, or of a waiter in the front window that may pass
-// the live tickets ahead (PROTOCOL.md section 12.1 steps 1 to 7, with the re-election of step 5,
-// which decides which of the two it is). It returns the grant when admitted, nil with no error
-// when the ticket must keep waiting (the section was busy, or the live holds leave too little),
-// and ErrCanceled when a cancel request was published before this section.
+// admit is the admission attempt of the head (PROTOCOL.md section 12.1 steps 1 to 7). It returns
+// the grant when admitted, nil with no error when the ticket must keep waiting (the section was
+// busy, a ticket ahead was published since the election, or the live holds leave too little), and
+// ErrCanceled when a cancel request was published before this section.
 func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	point("admit.before-enter")
 	sec, entered, err := t.e.enter(ctx, single)
@@ -58,7 +57,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 
 	// 2-4. The room: the headroom less the reserve and what the live holds still have to grow
 	// into. With no hold live the head starts whatever the numbers say; a headroom that cannot be
-	// read gates nothing, and nobody then passes the tickets ahead.
+	// read gates nothing.
 	cfg, m, err := t.e.reading()
 	if err != nil {
 		return nil, err
@@ -72,23 +71,9 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		return nil, nil
 	}
-	// 5. The re-election: a ticket published ahead of this one since its election wins, unless
-	// this one may pass it: from the front window, with every body ahead well-formed, leaving
-	// every need ahead free (section 10.3).
-	ahead, front, malformed, err := t.reelect()
-	if err != nil {
+	// 5. The re-election: a ticket published ahead of this one since its election wins.
+	if ahead, err := t.reelect(); err != nil || ahead {
 		return nil, err
-	}
-	if len(ahead) > 0 {
-		if front >= FrontWindow || malformed || !m.HeadroomOK {
-			return nil, nil
-		}
-		for _, a := range ahead {
-			room -= a
-		}
-		if need > room {
-			return nil, nil
-		}
 	}
 	if len(holds) > 0 {
 		if wait, err := t.watchWait(sec, cfg, m, need, room); wait || err != nil {
@@ -151,35 +136,28 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
-// lists the names in queue/ again and returns, in ahead, the need of every live ticket ahead of
-// this one: well-formed and neither gone, dead nor STALLED for this observer, reading the mtime
-// (lstat) of only well-formed tickets. A ticket this observer has never watched, such as one
-// published after the election, counts as live; the next election then rescans whatever gen
-// says, so a ticket published without a gen bump is watched from then on and cannot keep the
-// head out for longer than a stall. front counts the well-formed tickets ahead that are not
-// gone, and malformed reports one ahead whose body is malformed or that a stray entry replaced.
-// It stops once a live ticket is found with front at FrontWindow: the ticket can then neither be
-// the head nor pass.
-func (t *Ticket) reelect() (ahead []int64, front int, malformed bool, err error) {
+// lists the names in queue/ again and reports whether a live ticket is ahead of this one:
+// well-formed and neither gone, dead nor STALLED for this observer, reading the mtime (lstat) of
+// only well-formed tickets. A ticket this observer has never watched, such as one published after
+// the election, counts as live; the next election then rescans whatever gen says, so a ticket
+// published without a gen bump is watched from then on and cannot keep the head out for longer
+// than a stall.
+func (t *Ticket) reelect() (ahead bool, err error) {
 	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
-		return nil, 0, false, err
+		return false, err
 	}
 	now := t.e.clock.Monotonic()
 	for _, en := range entries {
-		if len(ahead) > 0 && front >= FrontWindow {
-			break
-		}
 		k := state.Key(en.ID)
 		if !k.Less(t.key) {
 			continue
 		}
-		need, bad, err := t.ticketBody(en.Name)
+		ok, err := t.ticketBody(en.Name)
 		if err != nil {
-			return nil, 0, false, err
+			return false, err
 		}
-		malformed = malformed || bad
-		if need == 0 {
+		if !ok {
 			continue
 		}
 		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.Name))
@@ -187,22 +165,14 @@ func (t *Ticket) reelect() (ahead []int64, front int, malformed bool, err error)
 			continue
 		}
 		if err != nil {
-			return nil, 0, false, err
+			return false, err
 		}
 		dead, err := probe(t.e.st, store.QueueDir, en.Name)
-		if stray(err) {
-			malformed = true
-			continue
-		}
-		if gone(err) {
+		if gone(err) || stray(err) || err == nil && dead {
 			continue
 		}
 		if err != nil {
-			return nil, 0, false, err
-		}
-		front++ // a dead ticket not yet removed takes a place in the front window
-		if dead {
-			continue
+			return false, err
 		}
 		if _, seen := t.obs.Seen(k); !seen {
 			t.haveGen = false // rescan at the next election, so that it is watched from then on
@@ -212,9 +182,9 @@ func (t *Ticket) reelect() (ahead []int64, front int, malformed bool, err error)
 				continue
 			}
 		}
-		ahead = append(ahead, need)
+		return true, nil
 	}
-	return ahead, front, malformed, nil
+	return false, nil
 }
 
 // Grant is what an admission holds: the hold's lock-carrying descriptor, which carries the
