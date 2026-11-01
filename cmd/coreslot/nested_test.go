@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -174,6 +175,31 @@ func TestNestedClampsAboveHeld(t *testing.T) {
 	}
 	if want := "coreslot: mem: requested 1 GiB, the parent run holds 512 MiB; running with 512 MiB"; !strings.Contains(r.stderr, want) {
 		t.Errorf("stderr %q, want the notice %q", r.stderr, want)
+	}
+}
+
+// A nested run inside a live parent hold, passing through or --independent, keeps its command in
+// the parent command's process group, so a stop round's kill of that group leaves nothing of it.
+// Mutation: giving the nested command a group of its own leaves its sleep running.
+func TestNestedCommandDiesWithTheParentGroup(t *testing.T) {
+	for _, flags := range []string{"", "--independent --mem 128M"} {
+		t.Run("flags "+flags, func(t *testing.T) {
+			dir := budgetDir(t, 1024)
+			d := t.TempDir()
+			outer(t, dir, "256M", `"$BIN" run --label inner `+flags+` -- sh -c 'echo $$ > "$D/pid"; exec sleep 600' >/dev/null 2>&1 &
+				while [ ! -s "$D/pid" ]; do sleep 0.05; done; kill -KILL 0`, "D="+d)
+			b, err := os.ReadFile(filepath.Join(d, "pid"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+			t.Cleanup(func() { _ = unix.Kill(pid, unix.SIGKILL) })
+			for deadline := time.Now().Add(5 * time.Second); unix.Kill(pid, 0) == nil; time.Sleep(50 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatalf("the nested command (pid %d) outlived the kill of its parent's group", pid)
+				}
+			}
+		})
 	}
 }
 

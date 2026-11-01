@@ -105,8 +105,8 @@ with a margin. After the third stop it gives up with the refusal code and prints
 after 3 memory stops`.
 
 Never stopped: the oldest running command, a command whose label has `no_restart = true` in
-`needs.toml`, a command that shares coreslot's process group (a run in a terminal, or `--same-group`)
-and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
+`needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,
+or a run nested inside another run's reservation) and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
 and not restarted. The thresholds are `[watch]` keys with interim defaults; see
 [`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
@@ -171,7 +171,8 @@ inherits the descriptor that holds its reservation
 
 **Nested runs are pass-through.** A `coreslot run` started inside another run's reservation does not
 queue: it runs inside its parent's, with `min(need, parent's)`, and its memory counts in the
-parent's footprint. `--independent` queues it as an unrelated request.
+parent's footprint. `--independent` queues it as an unrelated request. Either way its command stays
+in its parent command's process group, so stopping the parent stops it too.
 
 **Stop a run by killing its process group.** Without a terminal, `run` starts its command in a
 process group of its own and relays signals to it, which a SIGKILL of coreslot's group cannot do:

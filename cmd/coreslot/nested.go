@@ -33,14 +33,16 @@ func environ() map[string]string {
 // unless --independent, an inherited CORESLOT_UNBUDGETED runs unbudgeted under its parent, and a
 // CORESLOT_HOLD of a live ancestor's hold runs inside that parent's reservation
 // (engine.DecideNested); anything else is an ordinary request that drops the inherited context
-// first.
+// first. A run inside a live parent hold, --independent too, keeps its command in the parent
+// command's process group, so that a stop round's kill of that group reaches it; it is no victim.
 func (r *run) decide() int {
 	env := environ()
-	if !r.o.independent {
-		if reason := env[engine.EnvUnbudgeted]; reason != "" {
-			return r.passThroughUnbudgeted(reason)
-		}
-		if inside, _ := engine.DecideNested(os.Environ(), isAncestor); inside {
+	if reason := env[engine.EnvUnbudgeted]; reason != "" && !r.o.independent {
+		return r.passThroughUnbudgeted(reason)
+	}
+	if inside, _ := engine.DecideNested(os.Environ(), isAncestor); inside {
+		r.o.sameGroup = true
+		if !r.o.independent {
 			return r.passThrough(env)
 		}
 	}

@@ -1008,6 +1008,10 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 hold of its own, so it neither ticks nor is listed by a stop round; the memory it uses is part of
 its parent's footprint.
 
+A run whose `CORESLOT_HOLD` names such a hold, a pass-through or an `--independent` run, keeps its command in the
+process group it inherited, as `--same-group` does, so that a stop round's kill of its parent's
+command reaches it; such a run is never a victim itself (section 23.5).
+
 Nested runs are **not** budgeted against each other: two siblings started together under a 3 GiB
 reservation both run with 3 GiB. A parent that wants concurrent children partitions its reservation
 itself.
