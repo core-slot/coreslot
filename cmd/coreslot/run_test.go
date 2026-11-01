@@ -1238,7 +1238,7 @@ func bigRunLog(t *testing.T, format string) (*store.Store, string) {
 // Only a FORMAT the rotation section does not understand, or a malformed one, stops the append
 // (PROTOCOL.md section 14): the line is not written into a directory of an unknown format.
 func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
-	for _, format := range []string{"coreslot-protocol 2\n", "coreslot-protocol x\n"} {
+	for _, format := range []string{"coreslot-protocol 3\n", "coreslot-protocol x\n"} {
 		st, dir := bigRunLog(t, format)
 		var notices []string
 		notice := func(f string, args ...any) { notices = append(notices, fmt.Sprintf(f, args...)) }
@@ -1266,7 +1266,7 @@ func TestRunLogSkippedWhenRotationFindsUnknownFormat(t *testing.T) {
 // admitted.
 func TestRunLogSkippedWhenFormatChangesDuringRun(t *testing.T) {
 	for name, c := range map[string]struct{ format, notice string }{
-		"unknown":   {"coreslot-protocol 2\n", "FORMAT is missing or names a format this client does not implement"},
+		"unknown":   {"coreslot-protocol 3\n", "FORMAT is missing or names a format this client does not implement"},
 		"malformed": {"coreslot-protocol x\n", "malformed FORMAT"},
 	} {
 		format := c.format
@@ -1318,7 +1318,7 @@ func TestRunLogSkippedWhenFormatMissingOrUnreadable(t *testing.T) {
 }
 
 // A command that removes FORMAT does not cost its run the line: the run's release section,
-// which comes before the append, writes the missing FORMAT again (format 1), and the re-read then
+// which comes before the append, writes the missing FORMAT again (format 2), and the re-read then
 // understands it.
 func TestRunLogAfterTheCommandRemovesFormat(t *testing.T) {
 	dir := stateDir(t, "")
@@ -1327,8 +1327,8 @@ func TestRunLogAfterTheCommandRemovesFormat(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 1\n" {
-		t.Errorf("FORMAT after the run: %q, %v; want format 1 written again", b, err)
+	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 2\n" {
+		t.Errorf("FORMAT after the run: %q, %v; want format 2 written again", b, err)
 	}
 	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["label"] != "removed" {
 		t.Errorf("run log %v: want the run's line", lines)
@@ -1340,7 +1340,7 @@ func TestRunLogAfterTheCommandRemovesFormat(t *testing.T) {
 
 // Any other rotation failure costs the rotation, never the line: one notice, then the append.
 func TestRunLogAppendedWhenRotationFails(t *testing.T) {
-	st, dir := bigRunLog(t, "coreslot-protocol 1\n")
+	st, dir := bigRunLog(t, "coreslot-protocol 2\n")
 	target := filepath.Join(t.TempDir(), "elsewhere")
 	if err := os.WriteFile(target, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -1368,7 +1368,7 @@ func TestRunLogAppendedWhenRotationFails(t *testing.T) {
 // A section entered only to rotate the run log reconciles first when reconciliation is due
 // (PROTOCOL.md section 10.4): a dead ticket is removed and gen records the reconciliation.
 func TestRunLogRotationReconcilesWhenDue(t *testing.T) {
-	st, dir := bigRunLog(t, "coreslot-protocol 1\n")
+	st, dir := bigRunLog(t, "coreslot-protocol 2\n")
 	if err := os.Mkdir(filepath.Join(dir, "queue"), 0o700); err != nil {
 		t.Fatal(err)
 	}

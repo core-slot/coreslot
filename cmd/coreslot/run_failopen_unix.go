@@ -17,6 +17,17 @@ import (
 // degraded record and the run log when the directory is usable and its format understood, and
 // CORESLOT_UNBUDGETED. e is nil when the directory could not be opened.
 func (r *run) failOpen(e *engine.Engine, err error) int {
+	var format *store.FormatError
+	if errors.As(err, &format) && format.Err == nil {
+		// A foreign format: the one notice says what to do, and nothing can be written there.
+		if r.o.strict {
+			code, _ := classify(strictRefusal(err, r.o.refusalCode))
+			r.notice("%s; refusing (--strict)", format.Error())
+			return code
+		}
+		r.notice("%s; running unbudgeted with mem=%s", format.Error(), spec.FormatMiB(r.o.need))
+		return r.runChild(r.unbudgetedChild(format.Error(), nil))
+	}
 	reason, ok := stateReason(err)
 	if !ok {
 		reason = err.Error()

@@ -275,7 +275,7 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if rep.Mem.SizeMiB != mem {
 		t.Errorf("mem %+v, want a size of %d MiB", rep.Mem, mem)
 	}
-	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != 1 {
+	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != 2 {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)
 	}
 	for _, name := range []string{store.ConfigFile, store.DegradedFile} {

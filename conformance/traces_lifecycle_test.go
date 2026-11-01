@@ -594,12 +594,12 @@ func layout(t *testing.T, e Env) map[string]string {
 	return files
 }
 
-// FORMAT 2, a format this client does not implement, is written while one run holds and two
+// FORMAT 1, a format this client does not implement, is written while one run holds and two
 // wait. The waiters find it as they next enter the section and fail open: their commands run
 // unbudgeted, holding no hold. A run that arrives afterwards does the same without queueing.
 // The reservations never exceed the size, and nobody writes anything: no ticket, hold, gen bump,
-// admit.lock body, degraded record or run-log line. The format-1 holder's release, whose section
-// finds FORMAT 2, leaves its hold in place rather than removing it under a format it does not
+// admit.lock body, degraded record or run-log line. The format-2 holder's release, whose section
+// finds FORMAT 1, leaves its hold in place rather than removing it under a format it does not
 // implement, and the holder writes no run-log line either: it re-reads FORMAT just before the
 // append (PROTOCOL.md section 20). The run log never comes to exist.
 //
@@ -617,14 +617,14 @@ func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 	sampler := sampleReserved(e)
 	defer sampler.stop()
 
-	// FORMAT 2 is written while the test sits in the section, so no section is in flight.
+	// FORMAT 1 is written while the test sits in the section, so no section is in flight.
 	marker := filepath.Join(e.MarkDir, "section")
 	s := e.StartChild("section", e.Dir, marker)
 	e.Eventually(startWait, "the helper enters the section", func() bool {
 		_, err := os.Stat(marker)
 		return err == nil
 	})
-	writeFormat(e, "2")
+	writeFormat(e, "1")
 	before := layout(t, e)
 	gen := e.Status().Gen
 	if err := os.WriteFile(marker+".release", nil, 0o600); err != nil {
@@ -643,7 +643,7 @@ func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 		}
 	}
 	if _, ok := e.Ticket("N"); ok {
-		t.Error("N published a ticket under FORMAT 2")
+		t.Error("N published a ticket under FORMAT 1")
 	}
 	if got := stableReserved(e); got != 2 {
 		t.Errorf("%d units reserved, want 2 (H's)", got)
@@ -656,14 +656,14 @@ func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 	}
 	sampler.check(t, 5)
 	for _, p := range []*Proc{w1, w2, n} {
-		if !strings.Contains(p.Stderr(), "format 2") {
-			t.Errorf("%s did not name format 2: %q", p.name, p.Stderr())
+		if !strings.Contains(p.Stderr(), "state format 1 is not supported; run coreslot doctor --reset") {
+			t.Errorf("%s did not print the format notice: %q", p.name, p.Stderr())
 		}
 	}
 
 	after := layout(t, e)
 	if !mapsEqual(before, after) {
-		t.Errorf("the state directory changed under FORMAT 2:\nbefore %q\nafter  %q", sortedKeys(before), sortedKeys(after))
+		t.Errorf("the state directory changed under FORMAT 1:\nbefore %q\nafter  %q", sortedKeys(before), sortedKeys(after))
 		for k, v := range after {
 			if before[k] != v {
 				t.Errorf("%s: %q -> %q", k, before[k], v)
@@ -674,10 +674,10 @@ func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 		t.Errorf("H's hold %s was not in the layout", hh.Name)
 	}
 	if got := e.Status().Gen; got != gen {
-		t.Errorf("gen went from %d to %d under FORMAT 2", gen, got)
+		t.Errorf("gen went from %d to %d under FORMAT 1", gen, got)
 	}
 	if _, err := os.Stat(filepath.Join(e.Dir, store.LogDir, store.RunLog)); err == nil {
-		t.Errorf("a run-log line was written under FORMAT 2: %v", runLog(t, e))
+		t.Errorf("a run-log line was written under FORMAT 1: %v", runLog(t, e))
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		t.Error(err)
 	}

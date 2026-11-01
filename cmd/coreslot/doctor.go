@@ -26,9 +26,9 @@ const (
 
 // doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
 // permissions, format, the configuration and the degraded record, and
-// reports every finding. --clear removes the degraded record. --reset empties the state, but only
-// when nothing is live and FORMAT names no format this client does not implement (PROTOCOL.md
-// section 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
+// reports every finding. --clear removes the degraded record. --reset recreates the state as this
+// client's format, whatever format it had, but only when nothing is live (PROTOCOL.md section
+// 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
 // a refused --clear or --reset is 75 (PROTOCOL.md section 19).
 func doctorCommand(args []string, io IO) int {
 	fs, doClear, doReset := doctorFlags()
@@ -90,7 +90,7 @@ func doctorAct(doReset bool, loc location, io IO) int {
 		case err != nil:
 			return doctorFailed(what, err, io)
 		}
-		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock and config.toml\n", removed)
+		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock and config.toml; wrote FORMAT\n", removed)
 		return 0
 	}
 	why, err := formatRefusal(e.Store())
@@ -139,7 +139,7 @@ func formatRefusal(st *store.Store) (why string, err error) {
 	case err != nil:
 		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live", nil
 	case present && !store.Understood(n):
-		return fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", n), nil
+		return (&store.FormatError{N: n}).Error(), nil
 	}
 	return "", nil
 }
@@ -195,9 +195,9 @@ func doctorReport(loc location, io IO) int {
 	case rep.FormatError != "":
 		problem("format: FORMAT is malformed (%s); `coreslot doctor --reset` repairs it when nothing is live", text(rep.FormatError))
 	case !rep.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
-		line("format: %d, which this client does not implement; runs refuse", rep.Format)
+		line("format: %d, which this client does not implement; runs fail open until `coreslot doctor --reset`", rep.Format)
 	case !rep.FormatPresent:
-		line("format: FORMAT not written yet (the first client writes 1)")
+		line("format: FORMAT not written yet (the first client writes 2)")
 	default:
 		line("format: %d", rep.Format)
 	}

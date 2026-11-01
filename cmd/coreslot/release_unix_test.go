@@ -19,7 +19,7 @@ import (
 // with the command's own status. A fail-open run's unbudgeted hold follows the same rule.
 func TestRunReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 	const recreate = `rm -rf "$S" && mkdir "$S"`
-	const withFormat = recreate + ` && printf 'coreslot-protocol 1\n' > "$S/FORMAT"`
+	const withFormat = recreate + ` && printf 'coreslot-protocol 2\n' > "$S/FORMAT"`
 	for _, c := range []struct{ name, cfg, script string }{
 		{"admitted", "", recreate},
 		{"admitted, new FORMAT", "", withFormat},

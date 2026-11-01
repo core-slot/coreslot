@@ -161,10 +161,11 @@ func TestResetThenUse(t *testing.T) {
 	if err != nil || removed == 0 {
 		t.Fatalf("Reset = %d, %v", removed, err)
 	}
-	for _, f := range []string{store.FormatFile, store.GenFile} {
-		if exists(filepath.Join(dir, f)) {
-			t.Errorf("%s survived", f)
-		}
+	if exists(filepath.Join(dir, store.GenFile)) {
+		t.Error("gen survived")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 2\n" {
+		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 2", b)
 	}
 	tk := enqueue(t, e, need("mem=1"))
 	if !isAdmitted(step(t, tk)) {
@@ -172,30 +173,26 @@ func TestResetThenUse(t *testing.T) {
 	}
 }
 
-// A reset under a well-formed FORMAT this client does not implement refuses and names it.
-func TestResetRefusesForeignFormat(t *testing.T) {
+// A reset under a well-formed FORMAT this client does not implement recreates the directory as
+// format 2, an entry of that format's queue included.
+func TestResetRecreatesAForeignFormat(t *testing.T) {
 	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
 	e := newEngine(t, dir, nil)
 	hold(t, e, need("mem=1")).Close()
-	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, store.QueueDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, store.QueueDir, "v2-ticket"), []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, store.QueueDir, "v3-ticket"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	setOtherLengthHolder(t, dir)
-	before := treeContent(t, dir)
-	_, err := e.Reset(context.Background())
-	var le *LiveError
-	if !errors.As(err, &le) || !errors.Is(err, ErrRefused) ||
-		!strings.Contains(err.Error(), "format 2 is not implemented by this client; use a coreslot that implements it") {
-		t.Fatalf("Reset = %v; want a refusal naming format 2", err)
+	if _, err := e.Reset(context.Background()); err != nil {
+		t.Fatalf("Reset = %v; want the directory recreated", err)
 	}
-	if after := treeContent(t, dir); after != before {
-		t.Errorf("the refused reset changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 2\n" || exists(filepath.Join(dir, store.QueueDir, "v3-ticket")) {
+		t.Errorf("after the reset FORMAT %q, v3-ticket present %v; want format 2 and an empty queue", b, exists(filepath.Join(dir, store.QueueDir, "v3-ticket")))
 	}
 }
 

@@ -23,14 +23,15 @@ func (e *LiveError) Error() string {
 
 func (e *LiveError) Unwrap() error { return ErrRefused }
 
-// Reset removes the contents of the state directory except the format-stable files and the
-// configuration (`coreslot doctor --reset`): inside the admission section it checks that there are
-// no holds, no tickets and no other section holder, and only then removes the entries of queue/,
-// holds/, cancel/ and log/, gen, FORMAT and degraded, keeping admit.lock and config.toml. It returns the number of entries removed.
+// Reset recreates the state directory as the format this client writes (`coreslot doctor
+// --reset`), whatever format it had: inside the admission section it checks that there are no
+// holds, no tickets and no other section holder, and only then removes the entries of queue/,
+// holds/, cancel/ and log/, gen, degraded and an earlier format's res/, and writes FORMAT, keeping
+// admit.lock and config.toml. It returns the number of entries removed.
 //
 // When something is alive it removes nothing and returns a *LiveError naming it. A section that
 // ctx does not let it enter is one more live thing: another client is inside it. The state is
-// not format-checked, so a malformed FORMAT is repaired by a reset like any other.
+// not format-checked, so a malformed or foreign FORMAT is replaced by a reset like any other.
 func (e *Engine) Reset(ctx context.Context) (removed int, err error) {
 	sec, err := enterSection(e.st, ctx)
 	if err != nil {
@@ -61,9 +62,6 @@ func (e *Engine) sectionHolderReason() string {
 
 func (e *Engine) liveReasons(l store.LiveState) []string {
 	var out []string
-	if l.ForeignFormat != nil {
-		out = append(out, fmt.Sprintf("format %d is not implemented by this client; use a coreslot that implements it", *l.ForeignFormat))
-	}
 	add := func(kind, dir string, names []string) {
 		if len(names) == 0 {
 			return

@@ -19,8 +19,6 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_FORMATS", "1,2")
 	t.Setenv("CORESLOT_TESTHOOK_GETENT", "/tmp/fake-getent")
 	t.Setenv("CORESLOT_TESTHOOK_PASSWD_MISS", "1")
-	t.Setenv("CORESLOT_TESTHOOK_PROBE_SHELL", "/nonexistent")
-	t.Setenv("CORESLOT_TESTHOOK_PROBE_TIMEOUT", "1m")
 	t.Setenv("CORESLOT_TESTHOOK_HEADROOM_MIB", "4096")
 	if err := os.WriteFile(filepath.Join(dir, "realtime-offset"), []byte("1h"), 0o600); err != nil {
 		t.Fatal(err)
@@ -46,8 +44,8 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	if got := RealtimeOffset(); got != 0 {
 		t.Errorf("RealtimeOffset() = %v, want 0", got)
 	}
-	if got := Formats(); !slices.Equal(got, []int{1}) {
-		t.Errorf("Formats() = %v, want [1]", got)
+	if got := Formats(); !slices.Equal(got, []int{2}) {
+		t.Errorf("Formats() = %v, want [2]", got)
 	}
 	if got := Getent(); got != "" {
 		t.Errorf("Getent() = %q, want \"\"", got)

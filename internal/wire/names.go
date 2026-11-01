@@ -1,4 +1,4 @@
-// Package wire is the on-disk wire format of PROTOCOL.md format 1: the fixed-width names of
+// Package wire is the on-disk wire format of PROTOCOL.md format 2: the fixed-width names of
 // tickets, holds and cancel requests, the strict JSON bodies they carry, and the escaping of
 // user text. It does no I/O.
 package wire

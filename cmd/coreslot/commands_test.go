@@ -824,10 +824,13 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, "reset: removed ") {
 		t.Fatalf("doctor --reset: exit %d (stderr %q):\n%s", r.code, r.stderr, r.stdout)
 	}
-	for _, f := range []string{"FORMAT", "gen", "degraded"} {
+	for _, f := range []string{"gen", "degraded"} {
 		if _, err := os.Lstat(filepath.Join(dir, f)); !os.IsNotExist(err) {
 			t.Errorf("%s survived: %v", f, err)
 		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != "coreslot-protocol 2\n" {
+		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 2", b)
 	}
 	for _, d := range []string{"queue", "holds", "cancel", "log"} {
 		if got := entries(t, dir, d); len(got) != 0 {
@@ -867,11 +870,11 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	if r.code != 1 {
 		t.Fatalf("doctor --reset left %s behind and exited %d, want 1: a state problem is never 70", stuck, r.code)
 	}
-	// The run log, gen and FORMAT were removed although the stuck entry could not be.
-	if !strings.Contains(r.stderr, "removed 3 entries; 1 could not be removed: ") {
-		t.Errorf("stderr %q: want how many entries were removed (3) and how many could not be (1)", r.stderr)
+	// The run log and gen were removed although the stuck entry could not be.
+	if !strings.Contains(r.stderr, "removed 2 entries; 1 could not be removed: ") {
+		t.Errorf("stderr %q: want how many entries were removed (2) and how many could not be (1)", r.stderr)
 	}
-	for _, f := range []string{"FORMAT", "gen", filepath.Join("log", "runs.jsonl")} {
+	for _, f := range []string{"gen", filepath.Join("log", "runs.jsonl")} {
 		if _, err := os.Lstat(filepath.Join(dir, f)); !os.IsNotExist(err) {
 			t.Errorf("%s survived: %v", f, err)
 		}
@@ -1031,6 +1034,48 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 	}
 }
 
+// A directory of format 1, with its res/ files and a dead hold, is not used: a run runs
+// unbudgeted at once with one notice that says what to do, --strict refuses, and doctor --reset
+// recreates the directory as format 2, its res/ gone. Mutations: keep format 1 in
+// store.Formats (the run queues on it and prints nothing); skip the res/ removal in Reset.
+func TestForeignFormatFailsOpenAndResets(t *testing.T) {
+	dir := stateDir(t, "")
+	for _, d := range []string{"res/mem", "holds"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{
+		"FORMAT":    "coreslot-protocol 1\n",
+		"res/mem/0": "",
+		"holds/01791720600000000000-0000004711-000001-old": `{"label":"old","grant":{"mem":[0]},"start_ns":1791720600000000000}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const notice = "state format 1 is not supported; run coreslot doctor --reset"
+	r := cli(t, baseEnv(dir), "run", "--", "true")
+	if r.code != 0 || strings.Count(r.stderr, "\n") != 1 || !strings.Contains(r.stderr, notice) {
+		t.Errorf("run: exit %d, stderr %q; want 0 and one notice containing %q", r.code, r.stderr, notice)
+	}
+	if r := cli(t, baseEnv(dir), "run", "--strict", "--", "true"); r.code != 75 || !strings.Contains(r.stderr, notice) {
+		t.Errorf("run --strict: exit %d, stderr %q; want 75 and the notice", r.code, r.stderr)
+	}
+	if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
+		t.Fatalf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 2\n" {
+		t.Errorf("FORMAT after the reset: %q, %v; want coreslot-protocol 2", b, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "res")); !os.IsNotExist(err) {
+		t.Errorf("res/ survived the reset: %v", err)
+	}
+	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 || r.stderr != "" {
+		t.Errorf("a run after the reset: exit %d, stderr %q; want 0 and silence", r.code, r.stderr)
+	}
+}
+
 // A directory whose FORMAT is well-formed but newer is not this client's to reset or clear;
 // a malformed one cannot be cleared (a reset repairs it).
 func TestDoctorFormatRefusals(t *testing.T) {
@@ -1054,22 +1099,11 @@ func TestDoctorFormatRefusals(t *testing.T) {
 		}
 		return dir
 	}
-	t.Run("reset under format 2", func(t *testing.T) {
-		dir := setup(t, "coreslot-protocol 2\n")
-		before := tree(t, dir)
-		r := cli(t, baseEnv(dir), "doctor", "--reset")
-		if r.code != 75 || !strings.Contains(r.stderr, "format 2 is not implemented by this client; use a coreslot that implements it") {
-			t.Errorf("doctor --reset: exit %d, want 75 naming format 2 (stderr %q)", r.code, r.stderr)
-		}
-		if after := tree(t, dir); after != before {
-			t.Errorf("the refused reset changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
-		}
-	})
-	t.Run("clear under format 2", func(t *testing.T) {
-		dir := setup(t, "coreslot-protocol 2\n")
+	t.Run("clear under format 3", func(t *testing.T) {
+		dir := setup(t, "coreslot-protocol 3\n")
 		before := tree(t, dir)
 		r := cli(t, baseEnv(dir), "doctor", "--clear")
-		if r.code != 75 || !strings.Contains(r.stderr, "format 2 is not implemented") {
+		if r.code != 75 || !strings.Contains(r.stderr, "state format 3 is not supported; run coreslot doctor --reset") {
 			t.Errorf("doctor --clear: exit %d, want 75 (stderr %q)", r.code, r.stderr)
 		}
 		if after := tree(t, dir); after != before {
@@ -1085,8 +1119,8 @@ func TestDoctorFormatRefusals(t *testing.T) {
 		if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
 			t.Errorf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)
 		}
-		if _, err := os.Lstat(filepath.Join(dir, "FORMAT")); !os.IsNotExist(err) {
-			t.Errorf("FORMAT survived the reset: %v", err)
+		if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != "coreslot-protocol 2\n" {
+			t.Errorf("FORMAT after the reset %q, want coreslot-protocol 2", b)
 		}
 	})
 }
@@ -1310,7 +1344,7 @@ func TestStatusAndDoctorReportFormatZero(t *testing.T) {
 		t.Errorf("status: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
 	}
 	if r := cli(t, baseEnv(dir), "doctor"); r.code != 0 ||
-		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement; runs refuse\n") {
+		!strings.Contains(r.stdout, "\nformat: 0, which this client does not implement; runs fail open until `coreslot doctor --reset`\n") {
 		t.Errorf("doctor: exit %d, want 0 naming format 0 unimplemented (stderr %q):\n%s", r.code, r.stderr, r.stdout)
 	}
 	doc := statusDoc(t, dir, 0)
@@ -1321,7 +1355,7 @@ func TestStatusAndDoctorReportFormatZero(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "FORMAT")); err != nil {
 		t.Fatal(err)
 	}
-	if r := cli(t, baseEnv(dir), "status"); !strings.Contains(r.stdout, "\nformat: not written yet (the first client writes 1)\n") {
+	if r := cli(t, baseEnv(dir), "status"); !strings.Contains(r.stdout, "\nformat: not written yet (the first client writes 2)\n") {
 		t.Errorf("status without FORMAT: exit %d:\n%s", r.code, r.stdout)
 	}
 	if doc := statusDoc(t, dir, 0); doc["format_present"] != false || doc["format_understood"] != true {
@@ -1355,13 +1389,13 @@ func TestDoctorNamesSectionHolder(t *testing.T) {
 // The engine's refusal reaches the user once prefixed: `coreslot: cancel refused: ...`.
 func TestCancelRefusalHasOnePrefix(t *testing.T) {
 	dir := stateDir(t, "")
-	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r := cli(t, baseEnv(dir), "cancel", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String())
-	want := "coreslot: cancel refused: the state directory has format 2, which this client does not implement\n"
+	want := "coreslot: cancel refused: state format 3 is not supported; run coreslot doctor --reset\n"
 	if r.code != 75 || r.stderr != want {
-		t.Errorf("cancel under format 2: exit %d, stderr %q; want 75 and %q", r.code, r.stderr, want)
+		t.Errorf("cancel under format 3: exit %d, stderr %q; want 75 and %q", r.code, r.stderr, want)
 	}
 }
 

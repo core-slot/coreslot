@@ -70,8 +70,8 @@ func TestRealtimeOffsetAndFormatsEnabled(t *testing.T) {
 	if got := RealtimeOffset(); got != 0 {
 		t.Errorf("unset RealtimeOffset() = %v, want 0", got)
 	}
-	if got := Formats(); !slices.Equal(got, []int{1}) {
-		t.Errorf("unset Formats() = %v, want [1]", got)
+	if got := Formats(); !slices.Equal(got, []int{2}) {
+		t.Errorf("unset Formats() = %v, want [2]", got)
 	}
 	if got := Getent(); got != "" {
 		t.Errorf("unset Getent() = %q, want \"\"", got)

@@ -1,16 +1,16 @@
-# coreslot protocol, format 1
+# coreslot protocol, format 2
 
-This document is the normative definition of the coreslot on-disk protocol, format 1: the state
+This document is the normative definition of the coreslot on-disk protocol, format 2: the state
 directory, its files and their bodies, the admission critical section, and the descriptor and
 environment contract between a run and the command it starts. A client written from this document
 alone, in any language, shares one budget with every other conforming client on the machine.
 
-Format 1's names, bodies and layout are never redefined once released: a release that needs
+Format 2's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
 no admission reads, as the needs file, its lock and its temporary files are (section 5.4). Until
 `v1.0.0` a minor release may
-introduce such a number, and may change what format 1 means elsewhere, such as the configuration's
+introduce such a number, and may change what format 2 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
@@ -39,7 +39,7 @@ requirement on a client.
 
 ## 2. Contract inventory
 
-Every shared file, field, environment variable and transition of format 1, and where it is defined.
+Every shared file, field, environment variable and transition of format 2, and where it is defined.
 
 | Item | Kind | Defined in |
 |---|---|---|
@@ -225,12 +225,12 @@ The directory is not a cache: liveness is decided by locks. Deleting or resettin
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds, tickets or other section
 holder exist; only then does it remove the entries of `queue/`, `holds/` and `cancel/`, `gen`,
-`FORMAT`, `degraded` and `log/`. It keeps `admit.lock`, `config.toml`, `needs.toml` and
+`degraded`, `log/` and an earlier format's `res/`, and writes `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml`, `needs.toml` and
 `needs.toml.lock`: the format-stable file (section 15.1), whose inode live clients may hold open,
 and the configuration. The run history the needs file is learned from goes with `log/`. A reset
-never deletes, renames or replaces `admit.lock`. It refuses when `FORMAT` is well-formed and names a format the client does not implement (a
-newer client's waiters are invisible to it and its entries are not format-1 grammar); a missing,
-malformed or implemented `FORMAT` does not stop it. It does not reconcile first (section 10.4):
+never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or
+another format, it recreates the directory as format 2; a live hold or ticket of any format stops
+it. It does not reconcile first (section 10.4):
 it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation would remove, and more.
 Temporary files directly in `$S` (section 11) are not entries it removes; the next
 reconciliation removes them once they are older than 30 s.
@@ -609,10 +609,10 @@ inode and the file never shrinks (I1). It keeps `label`, `pid` and `start_ns`.
 ### 7.6 FORMAT
 
 `$S/FORMAT` holds the line `coreslot-protocol <n>` where `<n>` is 1 to 9 ASCII decimal digits, read
-as a decimal number; leading zeros are allowed (`01` is format 1) and writers write none. Writers
+as a decimal number; leading zeros are allowed (`02` is format 2) and writers write none. Writers
 write the line followed by one LF. Readers MUST accept the line with or without the final LF. Any
 other content (a sign, more than 9 digits, a CR or other whitespace, a second line) is a malformed
-`FORMAT`: a state error. A well-formed `<n>` other than 1, including 0, is a format this document
+`FORMAT`: a state error. A well-formed `<n>` other than 2, including 0, is a format this document
 does not define (section 15.2). Section 15 defines what a client does with it.
 
 ### 7.7 admit.lock
@@ -685,7 +685,7 @@ run-log append happen outside it.
   `SIGTSTP` to its command's process group and then stops itself, once it holds no momentary
   lock, and forwards `SIGCONT` to that group when it is continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 1` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 2` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
@@ -1042,34 +1042,33 @@ also exits 3 while a state error makes runs fail open (section 19).
 ### 15.1 What every format keeps
 
 `FORMAT` holds `coreslot-protocol <n>`; `n` versions the metadata (names, bodies, and every part of
-the layout other than `admit.lock` and `res/`). Format 1 fixes, for every future format:
+the layout other than `admit.lock`). Every format keeps `admit.lock`, an exclusive `flock` held
+only briefly by whoever changes admission state.
 
-- `admit.lock` is an exclusive `flock` held only briefly by whoever changes admission state;
-- `res/<name>/<i>` are the token files, held by `flock(LOCK_EX)` and released by closing;
-- free capacity is counted by probing token locks at every existing index (section 6).
-
-A client that finds no `FORMAT` writes `coreslot-protocol 1` inside the section. Writing a newer
+A client that finds no `FORMAT` writes `coreslot-protocol 2` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
 ### 15.2 A format this client does not implement
 
-A client that finds a format it does not implement leaves the state directory as it found it and
-takes no part in the budget: it publishes nothing and writes nothing (no ticket, hold, log,
-degraded record, `gen` bump or `admit.lock` body), and its run fails open (section 14), with the
-refusal as the reason. The decision is made at every section entry from the `FORMAT` read there
-(section 8).
+A state directory whose format is not 2 is not used. A client that finds another format leaves
+the state directory as it found it and takes no part in the budget: it publishes nothing and
+writes nothing (no ticket, hold, log, degraded record, `gen` bump or `admit.lock` body), and its
+run fails open (section 14) with the one notice `state format <n> is not supported; run coreslot
+doctor --reset`; under `--strict` it refuses with that notice. The decision is made at every
+section entry from the `FORMAT` read there (section 8).
 
 A waiting client reads `FORMAT` at every section entry; one that finds the format changed under
 it closes its ticket's descriptor, so the ticket is dead at once, and fails open. It does not
-remove the file: that would be a write into a format it does not implement, so the file is left to
-a client of that format.
+remove the file: that would be a write into a format it does not implement.
 
-Every other operation that would write follows the same rule. Under a format it does not implement,
-a client publishes no cancel request or unbudgeted hold, records and clears no `degraded`, and does
-not remove its own hold after a run. A fail-open run still runs its command but writes nothing.
+Every other operation that would write follows the same rule, except a reset (section 4.4): under
+another format a client publishes no cancel request or unbudgeted hold, records and clears no
+`degraded`, and does not remove its own hold after a run. A fail-open run still runs its command
+but writes nothing. `coreslot doctor --reset` recreates the directory as format 2 when nothing of
+either format is live.
 
-> **Implementation note.** The Go CLI refuses cancellation, `doctor --clear` and `doctor --reset`
-> under a format it does not implement.
+> **Implementation note.** The Go CLI refuses cancellation and `doctor --clear` under another
+> format, with the same notice.
 
 ## 16. Windows
 
@@ -1153,7 +1152,7 @@ placeholders keep its request's width.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a locked token, a client inside the admission section) or `FORMAT` names a format it does not implement |
+| 75 | refusal (section 14); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1235,7 +1234,7 @@ generation). One generation is kept.
 All examples use one Linux machine: `/sys/devices/system/cpu/online` is `0-13` (`cpus = 14`),
 `MemTotal` is 16 GiB (`memory = 16384`), the configuration declares `cpu = "-4"` (size 10) and
 `pg-local = 2` and leaves `mem` at `"60%"` (9 830 MiB, size 76), and `$S` is
-`/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 1` unless stated. Listings show
+`/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 2` unless stated. Listings show
 the entries under `$S` that matter; `[L]` marks a file whose lock is held by a live process.
 `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is independent of the others;
 except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old when the example starts, so

@@ -206,7 +206,7 @@ func TestDegradedRecordCountsAndClears(t *testing.T) {
 	}
 
 	// Under a format this client does not implement, nothing is written.
-	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	snap := snapshot(t, dir)

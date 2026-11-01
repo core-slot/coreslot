@@ -66,7 +66,8 @@ func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 }
 
 // A reset of a state with nothing alive removes the entries of queue/, holds/, cancel/ and
-// log/, degraded, gen and FORMAT, and keeps admit.lock (with the same inode) and config.toml.
+// log/, degraded and gen, writes FORMAT 2, and keeps admit.lock (with the same inode) and
+// config.toml.
 func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
@@ -83,15 +84,18 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	if err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %d, %v; want nothing alive and no error", live, removed, err)
 	}
-	if removed != 9 {
-		t.Errorf("removed %d entries, want 9 (ticket, stray and temporary file; hold; cancel request; log; degraded, gen, FORMAT)", removed)
+	if removed != 8 {
+		t.Errorf("removed %d entries, want 8 (ticket, stray and temporary file; hold; cancel request; log; degraded, gen)", removed)
 	}
 	for _, d := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
 		if got := names(t, filepath.Join(dir, d)); len(got) != 0 {
 			t.Errorf("%s/ still holds %v", d, got)
 		}
 	}
-	for _, f := range []string{DegradedFile, GenFile, FormatFile} {
+	if b, err := os.ReadFile(filepath.Join(dir, FormatFile)); err != nil || string(b) != "coreslot-protocol 2\n" {
+		t.Errorf("FORMAT after the reset: %q, %v; want coreslot-protocol 2", b, err)
+	}
+	for _, f := range []string{DegradedFile, GenFile} {
 		if exists(filepath.Join(dir, f)) {
 			t.Errorf("%s survived the reset", f)
 		}
@@ -165,8 +169,8 @@ func TestResetRepairsMalformedFormat(t *testing.T) {
 	if live, _, err := sec.Reset(); err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %v", live, err)
 	}
-	if exists(filepath.Join(dir, FormatFile)) {
-		t.Error("the malformed FORMAT was not removed")
+	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 2\n" {
+		t.Errorf("the malformed FORMAT was not replaced: %q", b)
 	}
 }
 
@@ -186,8 +190,8 @@ func TestResetReportsWhatItCannotRemove(t *testing.T) {
 	if err == nil {
 		t.Fatal("Reset left a non-empty directory behind without an error")
 	}
-	if removed != 9 {
-		t.Errorf("removed %d entries alongside the error, want 9 (everything but the stuck entry)", removed)
+	if removed != 8 {
+		t.Errorf("removed %d entries alongside the error, want 8 (everything but the stuck entry)", removed)
 	}
 	var incomplete *ResetIncompleteError
 	if !errors.As(err, &incomplete) || incomplete.Left != 1 {
@@ -265,34 +269,34 @@ func setOtherLengthHolder(t *testing.T, dir string) {
 	}
 }
 
-// A well-formed FORMAT this client does not implement is a newer client's directory: its
-// entries may not be format-1 grammar and its waiters are invisible here, so the reset removes
-// nothing. FORMAT 0 is well-formed too.
-func TestResetRefusesForeignFormat(t *testing.T) {
-	for _, body := range []string{"coreslot-protocol 2\n", "coreslot-protocol 0", "coreslot-protocol 007\n"} {
+// A reset recreates a directory of any other format as format 2: FORMAT 1 with its res/
+// directory, a newer format with an entry no grammar of this client describes, and format 0 all
+// end as an empty layout under FORMAT 2, admit.lock kept. Mutation: skip the res/ removal and
+// the format-1 case keeps res/.
+func TestResetRecreatesAForeignFormat(t *testing.T) {
+	for _, body := range []string{"coreslot-protocol 1\n", "coreslot-protocol 3\n", "coreslot-protocol 0", "coreslot-protocol 007\n"} {
 		t.Run(body, func(t *testing.T) {
 			dir := newDir(t)
 			_, sec := resetFixture(t, dir)
 			if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			// An entry no format-1 grammar describes, as a newer format may keep.
-			if err := os.WriteFile(filepath.Join(dir, QueueDir, "v2-ticket.json"), []byte("{}"), 0o600); err != nil {
+			if err := os.MkdirAll(filepath.Join(dir, "res", "mem"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			setOtherLengthHolder(t, dir)
-			before := snapshotTree(t, dir)
-			live, removed, err := sec.Reset()
-			if err != nil || removed != 0 || live.ForeignFormat == nil || live.Empty() {
-				t.Fatalf("Reset = %+v, %d, %v; want a refusal naming the foreign format", live, removed, err)
+			for _, p := range []string{filepath.Join("res", "mem", "0"), filepath.Join(QueueDir, "v3-ticket.json")} {
+				if err := os.WriteFile(filepath.Join(dir, p), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if after := snapshotTree(t, dir); after != before {
-				t.Errorf("the refused reset changed the tree:\nbefore %s\nafter  %s", before, after)
+			if live, _, err := sec.Reset(); err != nil || !live.Empty() {
+				t.Fatalf("Reset = %+v, %v; want the directory recreated", live, err)
 			}
-			// The same directory is reset when this client implements that format.
-			foreign := *live.ForeignFormat
-			if live, _, err := sec.reset(func(n int) bool { return n == 1 || n == foreign }); err != nil || !live.Empty() {
-				t.Errorf("Reset with the format implemented = %+v, %v", live, err)
+			if b, err := os.ReadFile(filepath.Join(dir, FormatFile)); err != nil || string(b) != "coreslot-protocol 2\n" {
+				t.Errorf("FORMAT %q, %v; want coreslot-protocol 2", b, err)
+			}
+			if exists(filepath.Join(dir, "res")) || len(names(t, filepath.Join(dir, QueueDir))) != 0 {
+				t.Errorf("res/ or queue/ entries survived: %v", names(t, dir))
 			}
 		})
 	}

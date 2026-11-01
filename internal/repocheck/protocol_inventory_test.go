@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// contractInventory is every shared file, field, environment variable and transition of format 1,
+// contractInventory is every shared file, field, environment variable and transition of format 2,
 // the items PROTOCOL.md's contract inventory (its section 2) must list, including the three the
 // state-directory override adds (section 4.1): `config.toml`, `needs.toml` and
 // `CORESLOT_STATE_DIR`. The list is kept here, apart from the document, so that an item added to,

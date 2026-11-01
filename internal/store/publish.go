@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -310,7 +311,7 @@ func (sec *Section) BumpGen() error {
 const formatPrefix = "coreslot-protocol "
 
 // Format reads FORMAT, which every entry does before changing anything (PROTOCOL.md section
-// 8). When FORMAT is absent it writes `coreslot-protocol 1`. It reports the format n and
+// 8). When FORMAT is absent it writes `coreslot-protocol 2`. It reports the format n and
 // whether this client implements it (Understood). A malformed FORMAT is a *StateError. When the
 // format is understood it also rewrites admit.lock's informational body to name this holder; when
 // it is not, it writes nothing at all.
@@ -327,10 +328,10 @@ func (sec *Section) format(implements func(int) bool) (n int, understood bool, e
 	body, err := sec.s.ReadSmall(FormatFile, 64)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if err := sec.replaceFile(FormatFile, []byte(formatPrefix+"1\n")); err != nil {
+		if err := sec.writeFormat(); err != nil {
 			return 0, false, err
 		}
-		n = 1
+		n = written()
 	case err != nil:
 		return 0, false, err
 	default:
@@ -346,6 +347,11 @@ func (sec *Section) format(implements func(int) bool) (n int, understood bool, e
 		return n, true, err
 	}
 	return n, true, nil
+}
+
+// writeFormat writes FORMAT naming the format written.
+func (sec *Section) writeFormat() error {
+	return sec.replaceFile(FormatFile, []byte(formatPrefix+strconv.Itoa(written())+"\n"))
 }
 
 // Prepare is what every entry that changes state does before its change (PROTOCOL.md sections 8
@@ -367,7 +373,8 @@ func (sec *Section) Prepare(nowNS int64) (n int, understood bool, err error) {
 // FormatError refuses a write into a state directory whose FORMAT is not understood (PROTOCOL.md
 // sections 14 and 15.2). When Err is set FORMAT could not be read, written when missing, or
 // parsed, and the message is Err's; otherwise FORMAT names format N, which this client does not
-// implement, and Suffix ends the message, for a caller that says what it did not do.
+// implement, the message is the notice that says so, and Suffix ends it, for a caller that says
+// what it did not do.
 type FormatError struct {
 	N      int
 	Suffix string
@@ -378,7 +385,7 @@ func (e *FormatError) Error() string {
 	if e.Err != nil {
 		return e.Err.Error()
 	}
-	return fmt.Sprintf("the state directory has format %d, which this client does not implement%s", e.N, e.Suffix)
+	return fmt.Sprintf("state format %d is not supported; run coreslot doctor --reset%s", e.N, e.Suffix)
 }
 
 func (e *FormatError) Unwrap() error { return e.Err }

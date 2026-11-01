@@ -28,7 +28,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 1
+		r.FormatUnderstood = true // the first entry writes format 2
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}

@@ -119,11 +119,11 @@ func fileOffset(path string) (time.Duration, bool) {
 	return d, true
 }
 
-// Formats returns CORESLOT_TESTHOOK_FORMATS, or [1] when it is unset.
+// Formats returns CORESLOT_TESTHOOK_FORMATS, or [2] when it is unset.
 func Formats() []int {
 	v := os.Getenv("CORESLOT_TESTHOOK_FORMATS")
 	if v == "" {
-		return []int{1}
+		return []int{2}
 	}
 	var formats []int
 	for _, f := range strings.Split(v, ",") {

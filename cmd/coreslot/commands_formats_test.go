@@ -2,5 +2,5 @@
 
 package main
 
-// formatsOfThisBuild is the formats the CLI of this test build implements: format 1 only.
-func formatsOfThisBuild() string { return "1" }
+// formatsOfThisBuild is the formats the CLI of this test build implements: format 2 only.
+func formatsOfThisBuild() string { return "2" }

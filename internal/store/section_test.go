@@ -510,33 +510,33 @@ func snapshot(t *testing.T, dir string) string {
 func TestFormatUnknownIsReported(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol 2"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol 3"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshot(t, dir)
 	sec := enter(t, s)
 	n, understood, err := sec.Format()
-	if err != nil || n != 2 || understood {
-		t.Fatalf("Format over coreslot-protocol 2 = %d, %v, %v; want 2, false, nil", n, understood, err)
+	if err != nil || n != 3 || understood {
+		t.Fatalf("Format over coreslot-protocol 3 = %d, %v, %v; want 3, false, nil", n, understood, err)
 	}
 	if after := snapshot(t, dir); after != before {
 		t.Errorf("Format of an unknown format changed the directory:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
-	// The same client implementing format 2 understands it.
-	if n, understood, err := sec.format(func(n int) bool { return n == 1 || n == 2 }); err != nil || n != 2 || !understood {
-		t.Errorf("Format with 2 implemented = %d, %v, %v", n, understood, err)
+	// The same client implementing format 3 understands it.
+	if n, understood, err := sec.format(func(n int) bool { return n == 2 || n == 3 }); err != nil || n != 3 || !understood {
+		t.Errorf("Format with 3 implemented = %d, %v, %v", n, understood, err)
 	}
 }
 
-func TestFormatWritesOneWhenAbsentAndRejectsMalformed(t *testing.T) {
+func TestFormatWritesTwoWhenAbsentAndRejectsMalformed(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
 	n, understood, err := sec.Format()
-	if err != nil || n != 1 || !understood {
-		t.Fatalf("Format with no FORMAT = %d, %v, %v; want 1, true, nil", n, understood, err)
+	if err != nil || n != 2 || !understood {
+		t.Fatalf("Format with no FORMAT = %d, %v, %v; want 2, true, nil", n, understood, err)
 	}
-	if body, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(body) != "coreslot-protocol 1\n" {
+	if body, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(body) != "coreslot-protocol 2\n" {
 		t.Errorf("FORMAT = %q", body)
 	}
 	// An understood format names the holder in admit.lock's body.
