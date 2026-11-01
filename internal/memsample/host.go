@@ -2,9 +2,12 @@ package memsample
 
 import (
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/core-slot/coreslot/internal/testhooks"
 )
 
 // HostReading is one reading of the machine's paging counters, swap room and clocks. The
@@ -17,6 +20,33 @@ type HostReading struct {
 	SwapUsedMiB, SwapFreeMiB, VMVolumeFreeMiB int64
 	// WallNS counts the time the machine slept and AwakeNS does not; both are in ns since boot.
 	WallNS, AwakeNS int64
+}
+
+// ReadHost reads the machine's paging counters, swap room and clocks. In a test build the
+// readings hook replaces the fields it names (by their Go names; HasPSI is 0 or 1).
+func ReadHost() (HostReading, error) {
+	r, err := readHost()
+	if nums, set := testhooks.Readings(); set && err == nil {
+		r = overlay(r, nums)
+	}
+	return r, err
+}
+
+func overlay(r HostReading, nums map[string]int64) HostReading {
+	v := reflect.ValueOf(&r).Elem()
+	for name, n := range nums {
+		switch f := v.FieldByName(name); f.Kind() {
+		case reflect.Uint64:
+			f.SetUint(uint64(n))
+		case reflect.Int64:
+			f.SetInt(n)
+		case reflect.Bool:
+			f.SetBool(n != 0)
+		default:
+			panic("memsample: the readings hook names no reading " + name)
+		}
+	}
+	return r
 }
 
 // TreeTimes is the user, system and page-wait time a set of processes has spent, in ns. Page

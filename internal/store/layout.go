@@ -26,6 +26,7 @@ const (
 	HoldsDir     = "holds"
 	CancelDir    = "cancel"
 	DegradedFile = "degraded"
+	WatchFile    = "watch.json"
 	LogDir       = "log"
 	RunLog       = "runs.jsonl"
 	RunLogOld    = "runs.1.jsonl"
@@ -106,7 +107,7 @@ func openDir(dir string, create bool) (*Store, error) {
 		}
 		f.Close()
 	}
-	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, ConfigFile,
+	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, ConfigFile,
 		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld)} {
 		if err := CheckEntry(s.path(name), false); err != nil {
 			return nil, err

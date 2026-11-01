@@ -12,9 +12,9 @@ import (
 // vmVolume holds the swap files; swap grows into its free space.
 const vmVolume = "/System/Volumes/VM"
 
-// ReadHost reads the paging counters of host_statistics64, vm.swapusage, the free space of the
+// readHost reads the paging counters of host_statistics64, vm.swapusage, the free space of the
 // VM volume and the two clocks.
-func ReadHost() (HostReading, error) {
+func readHost() (HostReading, error) {
 	var r HostReading
 	var err error
 	if r.Decomp, r.SwapIns, err = vmCounters(); err != nil {

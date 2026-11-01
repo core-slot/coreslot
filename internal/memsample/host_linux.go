@@ -18,9 +18,9 @@ var hasPSI = sync.OnceValue(func() bool {
 	return err == nil && ok
 })
 
-// ReadHost reads pswpin of /proc/vmstat, the swap of /proc/meminfo, the PSI memory stall where
+// readHost reads pswpin of /proc/vmstat, the swap of /proc/meminfo, the PSI memory stall where
 // the kernel reports it, and the two clocks.
-func ReadHost() (HostReading, error) {
+func readHost() (HostReading, error) {
 	var r HostReading
 	data, err := os.ReadFile("/proc/vmstat")
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/watch"
 )
 
 // DefaultReserveMiB is the memory admission keeps free beyond every job's need. interim: the
@@ -20,8 +21,9 @@ const DefaultReserveMiB = 1024
 
 // Config is a parsed configuration file.
 type Config struct {
-	ReserveMiB     int64 // [memory] reserve
-	WindowsWarning bool  // [platform] windows_warning, default true
+	ReserveMiB     int64        // [memory] reserve
+	WindowsWarning bool         // [platform] windows_warning, default true
+	Watch          watch.Config // [watch]
 }
 
 // Error reports a configuration that cannot be read or is invalid: a state error. Err is the
@@ -61,9 +63,9 @@ func ReadMachine() (Machine, error) {
 	return m, nil
 }
 
-// parseReserve parses reserve: a size spec.ParseBytes reads ("768M", "1.5G"), or an integer of
-// GiB. 0 is allowed.
-func parseReserve(v any) (int64, error) {
+// parseSize parses the size of key: a size spec.ParseBytes reads ("768M", "1.5G"), or an
+// integer of GiB. 0 is allowed.
+func parseSize(key string, v any) (int64, error) {
 	var s string
 	switch x := v.(type) {
 	case string:
@@ -71,17 +73,17 @@ func parseReserve(v any) (int64, error) {
 	case int64:
 		s = strconv.FormatInt(x, 10)
 	default:
-		return 0, fmt.Errorf(`reserve %v (%T): want an integer of GiB or a size such as "768M"`, v, v)
+		return 0, fmt.Errorf(`%s %v (%T): want an integer of GiB or a size such as "768M"`, key, v, v)
 	}
 	mib, err := spec.ParseBytes(s)
 	if err != nil {
-		return 0, fmt.Errorf("reserve: %v", err)
+		return 0, fmt.Errorf("%s: %v", key, err)
 	}
 	return mib, nil
 }
 
 func defaults() Config {
-	return Config{ReserveMiB: DefaultReserveMiB, WindowsWarning: true}
+	return Config{ReserveMiB: DefaultReserveMiB, WindowsWarning: true, Watch: watch.Defaults()}
 }
 
 // notRegularError is the reason of a configuration path that resolves to something but a regular
@@ -134,12 +136,61 @@ func parse(data string) (Config, string) {
 			return Config{}, "[memory] is not a table"
 		}
 		if r, ok := tbl["reserve"]; ok {
-			mib, err := parseReserve(r)
+			mib, err := parseSize("reserve", r)
 			if err != nil {
 				return Config{}, "[memory] " + err.Error()
 			}
 			c.ReserveMiB = mib
 		}
 	}
+	if v, ok := raw["watch"]; ok {
+		tbl, ok := v.(map[string]any)
+		if !ok {
+			return Config{}, "[watch] is not a table"
+		}
+		if msg := parseWatch(tbl, &c.Watch); msg != "" {
+			return Config{}, "[watch] " + msg
+		}
+	}
 	return c, ""
+}
+
+// parseWatch reads the keys of [watch] into w: mode, sample_log, floor (a size, as reserve) and
+// the thresholds, numbers not below 0.
+func parseWatch(tbl map[string]any, w *watch.Config) string {
+	if v, ok := tbl["mode"]; ok {
+		if v != "enforce" && v != "observe" {
+			return fmt.Sprintf(`mode %v: want "enforce" or "observe"`, v)
+		}
+		w.Observe = v == "observe"
+	}
+	if v, ok := tbl["sample_log"]; ok {
+		if w.SampleLog, ok = v.(bool); !ok {
+			return "sample_log: want a boolean"
+		}
+	}
+	if v, ok := tbl["floor"]; ok {
+		mib, err := parseSize("floor", v)
+		if err != nil {
+			return err.Error()
+		}
+		w.FloorMiB = mib
+	}
+	for key, p := range map[string]*float64{"yellow_points": &w.YellowPoints, "red_points": &w.RedPoints,
+		"red_samples": &w.RedSamples, "gate_pages_s": &w.GatePagesPerS, "calm_s": &w.CalmS,
+		"post_kill_s": &w.PostKillS, "spacing_s": &w.SpacingS} {
+		switch n := tbl[key].(type) {
+		case nil:
+		case int64:
+			*p = float64(n)
+		case float64:
+			*p = n
+		default:
+			return key + ": want a number"
+		}
+		if !(*p >= 0) {
+			return key + ": want a number not below 0"
+		}
+	}
+	return ""
 }

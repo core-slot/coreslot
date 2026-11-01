@@ -8,12 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
+
+// staleNS is the age past which a stored machine sample is no reading: three periods.
+const staleNS = int64(6 * time.Second)
 
 // admit is the admission attempt of the head, or of a waiter in the front window that may pass
 // the live tickets ahead (PROTOCOL.md section 12.1 steps 1 to 7, with the re-election of step 5,
@@ -81,6 +86,11 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 			return nil, nil
 		}
 	}
+	if len(holds) > 0 {
+		if wait, err := t.watchWait(sec, cfg.Watch, need, room, m.HeadroomOK); wait || err != nil {
+			return nil, err
+		}
+	}
 
 	// 7. Publish the hold, close and unlink the ticket, bump gen. A Withdraw that came first
 	// wins; once the hold is published the ticket is admitted and Withdraw has no effect.
@@ -100,6 +110,32 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	_ = sec.BumpGen()
 	t.status, t.grant = statusAdmitted, g
 	return g, nil
+}
+
+// watchWait reports whether the shared watch state keeps the ticket out while holds are live. The
+// detector's times are on the sample's clock, which the sample's age carries to now.
+func (t *Ticket) watchWait(sec *store.Section, c watch.Config, need, room int64, headroomOK bool) (bool, error) {
+	d, s, at, err := sec.Watch()
+	now := t.e.clock.Realtime()
+	fresh := at > 0 && at <= now && now-at <= staleNS
+	mono, spacing := s.Host.WallNS+now-at, int64(c.SpacingS*1e9)
+	switch {
+	case err != nil:
+		return false, err
+	case t.req.Restart && (!fresh || d.Level != watch.Green || mono-d.CalmSinceNS < int64(c.CalmS*1e9) ||
+		headroomOK && room < need+max(256, need/10)):
+		return true, nil
+	case !fresh:
+		return false, nil
+	case d.Level >= watch.Yellow:
+		return true, nil
+	case d.LastAdmitNS >= d.YellowClearedNS && mono-d.LastAdmitNS < spacing: // spaced after a clear
+		return true, nil
+	case mono-d.YellowClearedNS < spacing:
+		d.LastAdmitNS = mono
+		_ = sec.SetWatch(d, s, at) // a start it could not record only spaces the next less
+	}
+	return false, nil
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it

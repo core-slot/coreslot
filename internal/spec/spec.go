@@ -25,6 +25,7 @@ type Request struct {
 	Label   string
 	NeedMiB int64
 	Tree    bool // the process tree at the requester's pid carries the grant's work; only the CLI sets it
+	Restart bool // a stopped command coming back: it waits for calm and a margin over its need
 }
 
 // UsageError reports input that can never be valid: the CLI's exit 64.

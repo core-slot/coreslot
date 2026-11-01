@@ -103,7 +103,7 @@ func (sec *Section) Reset() (live LiveState, removed int, err error) {
 			remove(s.path(dir, name))
 		}
 	}
-	for _, name := range []string{DegradedFile, GenFile} {
+	for _, name := range []string{DegradedFile, GenFile, WatchFile} {
 		remove(s.path(name))
 	}
 	if _, err := os.Lstat(s.path(earlierRes)); err == nil {

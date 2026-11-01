@@ -7,8 +7,8 @@ import (
 	"runtime"
 )
 
-// ReadHost is implemented on macOS and Linux only; elsewhere it is an error.
-func ReadHost() (HostReading, error) {
+// readHost is implemented on macOS and Linux only; elsewhere it is an error.
+func readHost() (HostReading, error) {
 	return HostReading{}, fmt.Errorf("the machine's readings are not implemented on %s", runtime.GOOS)
 }
 

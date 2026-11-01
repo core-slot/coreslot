@@ -235,3 +235,13 @@ func TestNoSubprocessImports(t *testing.T) {
 		}
 	}
 }
+
+// The readings hook names HostReading's fields: it replaces those it names and keeps the others.
+func TestReadingsReplaceNamedFields(t *testing.T) {
+	r := overlay(HostReading{SwapIns: 7, SwapUsedMiB: 9}, map[string]int64{"Decomp": 5,
+		"HasPSI": 1, "SwapFreeMiB": 100, "WallNS": 3e9, "AwakeNS": 2e9})
+	want := HostReading{Decomp: 5, SwapIns: 7, HasPSI: true, SwapUsedMiB: 9, SwapFreeMiB: 100, WallNS: 3e9, AwakeNS: 2e9}
+	if r != want {
+		t.Errorf("overlay = %+v, want %+v", r, want)
+	}
+}

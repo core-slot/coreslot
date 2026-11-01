@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/core-slot/coreslot/internal/watch"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -173,5 +175,39 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	}
 	if c, err := w.Current(); err != nil || c.ReserveMiB != DefaultReserveMiB {
 		t.Errorf("Current() after removal = %v, %v; want defaults", c.ReserveMiB, err)
+	}
+}
+
+// [watch] sets the mode, the sample log and every threshold; floor is a size as reserve is, and a
+// key it does not know is ignored. Without the table the detector's defaults hold.
+func TestWatchConfigKeys(t *testing.T) {
+	if c, err := Load(writeConfig(t, "")); err != nil || c.Watch != watch.Defaults() {
+		t.Errorf("no [watch]: %+v, %v; want the defaults", c.Watch, err)
+	}
+	c, err := Load(writeConfig(t, `
+[watch]
+mode = "observe"
+sample_log = true
+yellow_points = 12
+red_points = 35.5
+red_samples = 8
+gate_pages_s = 500
+floor = "3G"
+calm_s = 60
+post_kill_s = 20
+spacing_s = 5
+future = "ignored"
+`))
+	want := watch.Config{YellowPoints: 12, RedPoints: 35.5, RedSamples: 8, GatePagesPerS: 500,
+		FloorMiB: 3072, CalmS: 60, PostKillS: 20, SpacingS: 5, Observe: true, SampleLog: true}
+	if err != nil || c.Watch != want {
+		t.Errorf("[watch]: %+v, %v; want %+v", c.Watch, err, want)
+	}
+	for _, body := range []string{"watch = 1", "[watch]\nmode = \"kill\"", "[watch]\nsample_log = 1",
+		"[watch]\nred_points = \"high\"", "[watch]\ncalm_s = -1", "[watch]\nfloor = \"lots\""} {
+		var ce *Error
+		if _, err := Load(writeConfig(t, body+"\n")); !errors.As(err, &ce) {
+			t.Errorf("Load(%q) = %v, want a *config.Error", body, err)
+		}
 	}
 }
