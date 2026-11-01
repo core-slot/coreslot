@@ -1,5 +1,5 @@
 // Package memsample reads the machine's memory: its total, the kernel's headroom, and the private
-// memory a process tree holds. Tree's measure is Source: on macOS each process's physical
+// memory a process tree holds. Tree's measure: on macOS each process's physical
 // footprint, on Linux each process's anonymous resident memory and swap, plus the tree's largest
 // shared memory once.
 package memsample

@@ -352,10 +352,10 @@ func TestRunLogUsageKeys(t *testing.T) {
 func TestRunRecordMemKeys(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	kib, after, free := int64(368640), 2.5, 1.0
+	kib := int64(368640)
 	r := RunRecord{TimeNS: 1791720000000000000, Label: "mem"}
 	measured := r
-	measured.MemPeakKiB, measured.MemPeakSource, measured.PeakAfterS, measured.WaitedFreeS = &kib, "footprint", &after, &free
+	measured.MemPeakKiB = &kib
 	for _, rec := range []RunRecord{r, measured} {
 		if err := s.AppendRun(rec); err != nil {
 			t.Fatal(err)
@@ -365,15 +365,11 @@ func TestRunRecordMemKeys(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
 	}
-	for _, key := range []string{"mem_peak_kib", "mem_peak_source", "peak_after_s", "waited_free_s"} {
-		if strings.Contains(lines[0], `"`+key+`"`) {
-			t.Errorf("a line without memory has %s: %s", key, lines[0])
-		}
+	if strings.Contains(lines[0], `"mem_peak_kib"`) {
+		t.Errorf("a line without memory has mem_peak_kib: %s", lines[0])
 	}
-	for _, want := range []string{`"mem_peak_kib":368640`, `"mem_peak_source":"footprint"`, `"peak_after_s":2.5`, `"waited_free_s":1`} {
-		if !strings.Contains(lines[1], want) {
-			t.Errorf("line = %s; want it to contain %s", lines[1], want)
-		}
+	if want := `"mem_peak_kib":368640`; !strings.Contains(lines[1], want) {
+		t.Errorf("line = %s; want it to contain %s", lines[1], want)
 	}
 }
 
@@ -457,7 +453,7 @@ func TestReadRunsSkipsMalformed(t *testing.T) {
 	if r.Label != "old:tests" || r.WaitedS != 0.5 || r.RanS != 10 {
 		t.Errorf("old run %+v", r)
 	}
-	if r.MemPeakKiB != nil || r.MemPeakSource != "" || r.PeakAfterS != nil || r.WaitedFreeS != nil {
+	if r.MemPeakKiB != nil {
 		t.Errorf("old run has memory fields it never recorded: %+v", r)
 	}
 }
@@ -467,11 +463,10 @@ func TestReadRunsSkipsMalformed(t *testing.T) {
 func TestRunRecordKeys(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	user, sys, peak, after, free := 3.5, 0.25, int64(2831156), 22.0, 4.0
+	user, sys, peak := 3.5, 0.25, int64(2831156)
 	want := RunRecord{
 		TimeNS: 1791720000000000000, Label: "fastapi:tests", WaitedS: 1.5, RanS: 12.25, Exit: 1,
-		FailOpen: "timeout", Nested: true, MemPeakKiB: &peak, MemPeakSource: "footprint", PeakAfterS: &after,
-		WaitedFreeS: &free, UserS: &user, SysS: &sys, Stops: 2,
+		FailOpen: "timeout", Nested: true, MemPeakKiB: &peak, UserS: &user, SysS: &sys, Stops: 2,
 	}
 	plain := RunRecord{TimeNS: want.TimeNS, Label: "plain"}
 	for _, r := range []RunRecord{want, plain} {
@@ -490,8 +485,8 @@ func TestRunRecordKeys(t *testing.T) {
 		}
 		return slices.Sorted(maps.Keys(m))
 	}
-	full := []string{"exit", "fail_open", "label", "mem_peak_kib", "mem_peak_source", "nested", "peak_after_s",
-		"ran_s", "stops", "sys_s", "time_ns", "user_s", "waited_free_s", "waited_s"}
+	full := []string{"exit", "fail_open", "label", "mem_peak_kib", "nested", "ran_s", "stops", "sys_s",
+		"time_ns", "user_s", "waited_s"}
 	if got := keys(lines[0]); !slices.Equal(got, full) {
 		t.Errorf("a full record's keys %v, want %v", got, full)
 	}

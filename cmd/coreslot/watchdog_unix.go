@@ -28,7 +28,6 @@ var listTree = memsample.Tree
 // hold and takes its part in the shared watch tick; when a stop round lists its hold, it kills
 // the command's group and returns stopped, or in observe mode says what it would stop.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant) (stopped bool, p peak) {
-	start := time.Now()
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
 	prev := map[int]memsample.TreeTimes{}
@@ -41,7 +40,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant) 
 		}
 		kib, pids, ok := listTree(sup.pid)
 		if ok && (!p.ok || kib > p.kib) {
-			p = peak{kib: kib, afterS: time.Since(start).Seconds(), ok: true}
+			p = peak{kib: kib, ok: true}
 		}
 		if g == nil || n%listingsPerTick != 0 {
 			continue

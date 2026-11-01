@@ -117,15 +117,6 @@ func (r *run) runChild(c child) int {
 		maxRSS = recordUsage(&rec, sup.usage())
 	}
 	setMemPeak(&rec, maxRSS, p)
-	if r.freeWait != nil {
-		free := r.freeWait.total().Seconds()
-		rec.WaitedFreeS = &free
-	}
-	if !c.nested && c.failOpen == "" && !r.stopped && rec.MemPeakKiB != nil {
-		if h := memHint(r.o.label, c.grantMiB, *rec.MemPeakKiB, rec.RanS); h != "" {
-			r.notice("%s", h)
-		}
-	}
 	if c.log != nil || c.nested {
 		var err error
 		if c.nested {

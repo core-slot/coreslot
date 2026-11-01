@@ -1033,9 +1033,6 @@ informative string; a writer that cannot fit it writes no line. The object carri
 | `user_s` | number | optional; user seconds of the command (below) |
 | `sys_s` | number | optional; system seconds of the command (below) |
 | `mem_peak_kib` | integer | optional; memory peak of the command's process tree, in KiB (below) |
-| `mem_peak_source` | string | optional; what `mem_peak_kib` measured: `footprint`, `anon` or `max_rss` (below) |
-| `peak_after_s` | number | optional; seconds from the command's start to the reading of `mem_peak_kib` |
-| `waited_free_s` | number | optional; seconds of `waited_s` during which the memory the request needs was free (below) |
 | `stops` | integer | optional; on the line of a stopped attempt, how often the run has been stopped for memory, this stop included; absent on every other line |
 | `exit` | integer | the run's exit status |
 | `fail_open` | string | the fail-open reason, or empty |
@@ -1053,18 +1050,13 @@ is in KiB on Linux and the BSDs but in bytes on macOS; a writer MUST convert it 
 bytes), and MUST NOT use it on a platform whose unit it does not know. As in a body (section 7.2), a reader
 MUST ignore a key it does not know: lines only gain optional keys within a format.
 
-The memory keys `mem_peak_kib`, `mem_peak_source`, `peak_after_s` and `waited_free_s` are OPTIONAL
-too, under the same rule: a writer omits what it does not know, and a reader treats an absent key as
+The memory key `mem_peak_kib` is OPTIONAL too, under the same rule: a writer omits what it does not know, and a reader treats an absent key as
 unknown. A writer that samples reads the private memory of the command and every descendant every
-1 s while the command runs, and sums it: on macOS each process's physical footprint (source
-`footprint`); on Linux each process's `RssAnon` plus `VmSwap` from `/proc/<pid>/status`, with the
-largest `RssShmem` among them added once, since shared memory is held once (source `anon`). A
-process that exits between the listing and its reading is skipped. `mem_peak_kib` is the largest
-sum and `peak_after_s` when it was read. When no reading succeeded, or the rusage's `ru_maxrss` is
-larger, `mem_peak_kib` is `ru_maxrss`, `mem_peak_source` is `max_rss` and `peak_after_s` is absent.
-`waited_free_s` is written by a run that waited: the part of its wait during which the memory the
-kernel can hand out without paging anything anonymous out (the headroom of section 5.1) was at
-least its need, read at most once per second. It informs; no admission reads it.
+1 s while the command runs, and sums it: on macOS each process's physical footprint; on Linux
+each process's `RssAnon` plus `VmSwap` from `/proc/<pid>/status`, with the largest `RssShmem`
+among them added once, since shared memory is held once. A process that exits between the listing
+and its reading is skipped. `mem_peak_kib` is the largest sum, or the rusage's `ru_maxrss` when no
+reading succeeded or that is larger.
 
 The line of a stopped attempt carries the attempt's own peak and `stops`; the line of the attempt that
 ends the run carries neither mark and counts like any other. A **counted** run is one that is
@@ -1077,8 +1069,8 @@ inside the section: re-checks the size, then renames it to `runs.1.jsonl` (repla
 generation). One generation is kept.
 
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open`. It samples
-> memory on macOS and Linux and writes `mem_peak_source` `max_rss` elsewhere when it knows the
-> rusage's peak. `coreslot stats` reads both generations of the log and skips lines that do not
+> memory on macOS and Linux and writes the rusage's peak elsewhere when it knows it. `coreslot
+> stats` reads both generations of the log and skips lines that do not
 > parse. A label's need is the 90th percentile of the `mem_peak_kib` of its last 20 counted runs.
 
 ## 21. Worked examples
@@ -1341,7 +1333,7 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
 
    ```json
    {"time_ns": 1791720780000000000, "label": "lint", "waited_s": 1.0, "ran_s": 99.0,
-    "mem_peak_kib": 2355200, "mem_peak_source": "anon", "peak_after_s": 97.0, "stops": 1,
+    "mem_peak_kib": 2355200, "stops": 1,
     "exit": 137, "fail_open": ""}
    ```
 

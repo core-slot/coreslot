@@ -83,50 +83,11 @@ func (c realClock) Sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// freeMeter measures how long a run waited while the kernel's headroom was at least the memory
-// it needs. It reads the headroom at most once a second, so that a waiter on the head's backoff
-// stays cheap, and counts an interval as free when the reading at its start was. It informs the
-// run log only; no decision reads it.
-type freeMeter struct {
-	needMiB  int64
-	headroom func() (mib int64, ok bool)
-	read     bool          // a reading was taken
-	last     time.Duration // when
-	free     bool          // and whether it was at least needMiB
-	sum      time.Duration
-}
-
-// observe accounts for the time up to now and reads the headroom again, once a second has passed
-// since the last reading. A nil meter does nothing.
-func (m *freeMeter) observe(now time.Duration) {
-	if m == nil || m.read && now-m.last < time.Second {
-		return
-	}
-	if m.read && m.free {
-		m.sum += now - m.last
-	}
-	mib, ok := m.headroom()
-	m.read, m.last, m.free = true, now, ok && mib >= m.needMiB
-}
-
-// admit accounts for the time from the last reading to admission, however short, without
-// reading again. A nil meter does nothing.
-func (m *freeMeter) admit(now time.Duration) {
-	if m != nil && m.read && m.free {
-		m.sum += now - m.last
-	}
-}
-
-// total is the time counted as free.
-func (m *freeMeter) total() time.Duration { return m.sum }
-
 // waitLoop steps the ticket whenever it next has work due (once per second while it is not the
 // head, on the admission backoff while it is) until it is admitted, ctx ends or the budget
 // fails, and writes a waiting line to w when the wait starts and every 30 s after, with the live
 // holds listed then.
-// After every waiting step it lets m observe the headroom, and at admission it lets m count the
-// tail since the last reading.
-func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, []engine.HolderInfo, time.Duration) string, m *freeMeter) (*engine.Grant, error) {
+func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, []engine.HolderInfo, time.Duration) string) (*engine.Grant, error) {
 	start := clk.Now()
 	next := start
 	for {
@@ -139,10 +100,8 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 		}
 		switch v := res.(type) {
 		case engine.Admitted:
-			m.admit(clk.Now())
 			return v.Grant, nil
 		case engine.Waiting:
-			m.observe(clk.Now())
 			if now := clk.Now(); now >= next {
 				holders, err := s.holders()
 				if err != nil { // informative: a failure leaves them out

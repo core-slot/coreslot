@@ -36,18 +36,12 @@ type RunRecord struct {
 	// measured zero.
 	UserS *float64 `json:"user_s,omitempty"`
 	SysS  *float64 `json:"sys_s,omitempty"`
-	// MemPeakKiB is the command tree's memory peak in KiB and MemPeakSource its measure: the
-	// sampler's (memsample.Source) or "max_rss"; PeakAfterS is when the sampler read it, in
-	// seconds after the start. WaitedFreeS is how long the run waited while the memory it needs
-	// was free. Each is nil or empty when unknown, and is then not encoded.
-	MemPeakKiB    *int64   `json:"mem_peak_kib,omitempty"`
-	MemPeakSource string   `json:"mem_peak_source,omitempty"`
-	PeakAfterS    *float64 `json:"peak_after_s,omitempty"`
-	WaitedFreeS   *float64 `json:"waited_free_s,omitempty"`
-	Stops         int      `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
-	Exit          int      `json:"exit"`
-	FailOpen      string   `json:"fail_open"`
-	Nested        bool     `json:"nested,omitempty"` // a pass-through run (PROTOCOL.md section 18)
+	// MemPeakKiB is the command tree's memory peak in KiB, nil when unknown and then not encoded.
+	MemPeakKiB *int64 `json:"mem_peak_kib,omitempty"`
+	Stops      int    `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
+	Exit       int    `json:"exit"`
+	FailOpen   string `json:"fail_open"`
+	Nested     bool   `json:"nested,omitempty"` // a pass-through run (PROTOCOL.md section 18)
 }
 
 // ReadRuns reads the run log, the rotated generation (log/runs.1.jsonl) first and then

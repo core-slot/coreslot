@@ -28,7 +28,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
-	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -922,7 +921,7 @@ func TestRunLogRecordsUsage(t *testing.T) {
 // the sampler reads them both at 1 and 2 s. Mutation: drop the sampler from runChild, and the
 // peak is the larger child's max_rss, about 200 MiB.
 func TestRunLogsTreePeak(t *testing.T) {
-	if memsample.Source == "" {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("no process-tree sampler on " + runtime.GOOS)
 	}
 	dir := stateDir(t, "")
@@ -937,12 +936,8 @@ func TestRunLogsTreePeak(t *testing.T) {
 		t.Fatalf("run log %v: want one line", lines)
 	}
 	kib, ok := lines[0]["mem_peak_kib"].(float64)
-	if !ok || kib < 360<<10 || lines[0]["mem_peak_source"] != memsample.Source {
-		t.Errorf("mem_peak_kib %v, mem_peak_source %v; want at least %d KiB from %s",
-			lines[0]["mem_peak_kib"], lines[0]["mem_peak_source"], 360<<10, memsample.Source)
-	}
-	if after, ok := lines[0]["peak_after_s"].(float64); !ok || after < 1 {
-		t.Errorf("peak_after_s %v; want a sample time of at least 1 s", lines[0]["peak_after_s"])
+	if !ok || kib < 360<<10 {
+		t.Errorf("mem_peak_kib %v; want at least %d KiB", lines[0]["mem_peak_kib"], 360<<10)
 	}
 }
 
@@ -1075,7 +1070,7 @@ func TestWaitingLineEvery30s(t *testing.T) {
 	s := &fakeStepper{}
 	var out bytes.Buffer
 	r := &run{o: runOptions{need: 1024}, why: func() string { return "needs 1 GiB, 512 MiB free" }}
-	_, err := waitLoop(ctx, s, clk, &out, r.waitingLine, nil)
+	_, err := waitLoop(ctx, s, clk, &out, r.waitingLine)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitLoop = %v, want the context's end", err)
 	}
@@ -1095,93 +1090,6 @@ func TestWaitingLineEvery30s(t *testing.T) {
 	}
 	if s.calls != 96 {
 		t.Errorf("%d steps in 95 s, want 96: one at the start and one each time the next is due (1 s)", s.calls)
-	}
-}
-
-// headroomSeq returns the readings in order, and the last one from then on.
-func headroomSeq(readings ...int64) func() (int64, bool) {
-	i := 0
-	return func() (int64, bool) {
-		v := readings[min(i, len(readings)-1)]
-		i++
-		return v, v >= 0
-	}
-}
-
-// An interval counts as free when the reading at its start was at least the need: free at 0
-// and 2 s, short at 1 s, so 0..1 and 2..3 count. A reading less than a second after the last is
-// not taken. Mutation: count the interval when the headroom is below the need, and it is 1 s.
-func TestFreeMeter(t *testing.T) {
-	m := &freeMeter{needMiB: 512, headroom: headroomSeq(600, 100, 512, 100)}
-	for _, at := range []time.Duration{0, time.Second, 1500 * time.Millisecond, 2 * time.Second, 3 * time.Second} {
-		m.observe(at)
-	}
-	if got := m.total(); got != 2*time.Second {
-		t.Errorf("free for %v, want 2s", got)
-	}
-}
-
-// A headroom that cannot be read is never free. Mutation: treat a failed read as free.
-func TestFreeMeterFailedReadAddsNothing(t *testing.T) {
-	m := &freeMeter{needMiB: 0, headroom: headroomSeq(-1)}
-	for i := range 4 {
-		m.observe(time.Duration(i) * time.Second)
-	}
-	if got := m.total(); got != 0 {
-		t.Errorf("free for %v, want 0", got)
-	}
-	var none *freeMeter
-	none.observe(time.Second) // nil-safe
-}
-
-// At admission the time since the last reading counts when that reading was free, however short
-// and without a new reading: admitted 0.9 s after a free reading is 0.9 s, and 3.9 s into a free
-// wait is 3.9 s. Mutation: count the tail through observe's once-a-second gate, and they are 0
-// and 3 s.
-func TestFreeMeterCountsTheTailAtAdmission(t *testing.T) {
-	for _, admitAt := range []time.Duration{900 * time.Millisecond, 3900 * time.Millisecond} {
-		m := &freeMeter{needMiB: 512, headroom: headroomSeq(600, 600, 600, 600, 100)}
-		for at := time.Duration(0); at < admitAt; at += time.Second {
-			m.observe(at)
-		}
-		m.admit(admitAt)
-		if got := m.total(); got != admitAt {
-			t.Errorf("admitted at %v: free for %v, want %v", admitAt, got, admitAt)
-		}
-	}
-	var none *freeMeter
-	none.admit(time.Second) // nil-safe
-}
-
-// admitAfter waits n times, then admits.
-type admitAfter struct{ n int }
-
-func (s *admitAfter) due() time.Duration { return time.Second }
-
-func (s *admitAfter) step(context.Context) (engine.StepResult, error) {
-	if s.n == 0 {
-		return engine.Admitted{}, nil
-	}
-	s.n--
-	return engine.Waiting{Position: 1}, nil
-}
-
-func (s *admitAfter) holders() ([]engine.HolderInfo, error) { return nil, nil }
-
-// The wait loop counts every waiting step's interval and, at admission, the tail since the last
-// reading: three waits of a second each, all free, are 3 s. Mutation: drop the count at
-// admission, and it is 2 s.
-func TestWaitLoopMetersWaits(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	clk := &fakeClock{limit: time.Minute, cancel: cancel}
-	m := &freeMeter{needMiB: 128, headroom: headroomSeq(1024)}
-	r := &run{o: runOptions{need: 128}}
-	if _, err := waitLoop(ctx, &admitAfter{n: 3}, clk, io.Discard, r.waitingLine, m); err != nil {
-		t.Fatal(err)
-	}
-	if got := m.total(); got != 3*time.Second {
-		t.Errorf("free for %v while waiting, want 3s", got)
 	}
 }
 

@@ -9,9 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Source names Tree's measure: the physical footprint, as footprint(1) reports it.
-const Source = "footprint"
-
 // Tree returns the summed physical footprint of root and its descendants, in KiB, and their pids.
 func Tree(root int) (kib int64, pids []int, ok bool) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")

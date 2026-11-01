@@ -27,16 +27,15 @@ func statsDir(t *testing.T) string {
 	return dir
 }
 
-// The text names each label's runs, its peak and the suggestion; a fail-open run's line changes
-// none of it.
-// Mutation: suggest from Window[0] instead of the window's largest peak.
+// The text names each label's runs, its window and the need learned from it; a fail-open run's
+// line changes none of it. Mutation: learn from Window[0] instead of the window's p90.
 func TestStatsText(t *testing.T) {
 	r := cli(t, baseEnv(statsDir(t)), "stats")
 	if r.code != 0 {
 		t.Fatalf("stats exited %d: %s", r.code, r.stderr)
 	}
-	for _, want := range []string{"fastapi:tests  5 runs", "peak 2.7 GiB (footprint) at 22s",
-		`suggest  mem = "2765M"`, "current  none"} {
+	for _, want := range []string{"fastapi:tests  5 runs", "window  5 runs ",
+		`need  2.7 GiB (mem = "2765M")`, "current  none"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("stats output lacks %q:\n%s", want, r.stdout)
 		}
@@ -53,10 +52,8 @@ func TestStatsJSON(t *testing.T) {
 		Schema       int `json:"schema"`
 		SkippedLines int `json:"skipped_lines"`
 		Labels       []struct {
-			Label      string `json:"label"`
-			Suggestion struct {
-				Mem *string `json:"mem"`
-			} `json:"suggestion"`
+			Label string  `json:"label"`
+			Need  *string `json:"need"`
 		} `json:"labels"`
 	}
 	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil {
@@ -65,7 +62,7 @@ func TestStatsJSON(t *testing.T) {
 	if doc.Schema != 1 || doc.SkippedLines != 1 || len(doc.Labels) != 2 {
 		t.Fatalf("schema %d, skipped %d, %d labels; want 1, 1, 2:\n%s", doc.Schema, doc.SkippedLines, len(doc.Labels), r.stdout)
 	}
-	if l := doc.Labels[0]; l.Label != "fastapi:tests" || l.Suggestion.Mem == nil || *l.Suggestion.Mem != "2765M" {
+	if l := doc.Labels[0]; l.Label != "fastapi:tests" || l.Need == nil || *l.Need != "2765M" {
 		t.Errorf("labels[0] = %+v:\n%s", l, r.stdout)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -47,27 +46,23 @@ func TestPeakSamplerKeepsMax(t *testing.T) {
 	if !p.ok || p.kib != 300 {
 		t.Fatalf("peak %+v; want 300 KiB", p)
 	}
-	if p.afterS < 1.5 || p.afterS > 3 {
-		t.Errorf("peak after %v s, want about 2 s: the second listing", p.afterS)
-	}
 }
 
 func TestSetMemPeakFloorWins(t *testing.T) {
 	rss := int64(500)
 	var rec store.RunRecord
-	setMemPeak(&rec, &rss, peak{kib: 100, afterS: 1.5, ok: true})
-	if rec.MemPeakKiB == nil || *rec.MemPeakKiB != 500 || rec.MemPeakSource != "max_rss" || rec.PeakAfterS != nil {
-		t.Errorf("mem peak %v, %q, %v; want 500, max_rss, no time", rec.MemPeakKiB, rec.MemPeakSource, rec.PeakAfterS)
+	setMemPeak(&rec, &rss, peak{kib: 100, ok: true})
+	if rec.MemPeakKiB == nil || *rec.MemPeakKiB != 500 {
+		t.Errorf("mem peak %v, want 500", rec.MemPeakKiB)
 	}
 }
 
 func TestSetMemPeakSampledWins(t *testing.T) {
 	rss := int64(500)
 	var rec store.RunRecord
-	setMemPeak(&rec, &rss, peak{kib: 900, afterS: 2.5, ok: true})
-	if rec.MemPeakKiB == nil || *rec.MemPeakKiB != 900 || rec.MemPeakSource != memsample.Source ||
-		rec.PeakAfterS == nil || *rec.PeakAfterS != 2.5 {
-		t.Errorf("mem peak %v, %q, %v; want 900, %q, 2.5", rec.MemPeakKiB, rec.MemPeakSource, rec.PeakAfterS, memsample.Source)
+	setMemPeak(&rec, &rss, peak{kib: 900, ok: true})
+	if rec.MemPeakKiB == nil || *rec.MemPeakKiB != 900 {
+		t.Errorf("mem peak %v, want 900", rec.MemPeakKiB)
 	}
 }
 
@@ -75,7 +70,7 @@ func TestSetMemPeakSampledWins(t *testing.T) {
 func TestSetMemPeakUnknown(t *testing.T) {
 	var rec store.RunRecord
 	setMemPeak(&rec, nil, peak{})
-	if rec.MemPeakKiB != nil || rec.MemPeakSource != "" || rec.PeakAfterS != nil {
-		t.Errorf("mem peak %v, %q, %v; want none", rec.MemPeakKiB, rec.MemPeakSource, rec.PeakAfterS)
+	if rec.MemPeakKiB != nil {
+		t.Errorf("mem peak %v, want none", rec.MemPeakKiB)
 	}
 }

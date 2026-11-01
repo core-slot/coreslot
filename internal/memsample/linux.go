@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// Source names Tree's measure: anonymous resident memory and swap.
-const Source = "anon"
-
 // Tree returns, in KiB, RssAnon + VmSwap summed over root and its descendants, plus the largest
 // RssShmem among them once: shared memory is mapped by several of them but held once. It also
 // returns their pids.

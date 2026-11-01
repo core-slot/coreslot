@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
-	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
@@ -62,7 +61,6 @@ type run struct {
 	waited    time.Duration
 	env       []string           // the command's environment before its grant: the inherited context dropped
 	pipeNoted bool               // the waiting line said once whether stdin is a pipe
-	freeWait  *freeMeter         // how long it waited while its need was free
 	normal    map[string]float64 // every label's normal share, from the run log
 	stops     int                // memory stops so far
 	stopped   bool               // the last command was killed by a stop round
@@ -177,7 +175,6 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 		ctx, c = context.WithTimeout(ctx, r.o.timeout)
 		defer c()
 	}
-	r.freeWait = &freeMeter{needMiB: req.NeedMiB, headroom: memsample.Headroom}
 	r.why = func() string {
 		if rep, err := e.Snapshot(); err == nil {
 			return waitReason(rep, req)
@@ -198,7 +195,7 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 			g, err = r.tryOnce(ctx, t)
 		} else {
 			g, err = waitOneP(func() (*engine.Grant, error) {
-				return waitLoop(ctx, ticketStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine, r.freeWait)
+				return waitLoop(ctx, ticketStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
 			})
 		}
 		if err != nil {

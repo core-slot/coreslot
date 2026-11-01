@@ -117,9 +117,9 @@ func statsCommand(args []string, io IO) int {
 	line := func(key, value string) { fmt.Fprintf(&b, "  %s  %s\n", key, value) }
 	for _, s := range l.stats {
 		fmt.Fprintf(&b, "%s  %d %s\n", text(s.Label), s.Runs, plural(int64(s.Runs), "run", "runs"))
-		line("evidence", text(s.Suggest.Reason))
-		line("waited", fmt.Sprintf("%.0fs, %.0fs of it while the memory was free", s.WaitedS, s.WaitedFreeS))
-		line("suggest", suggestionText(s.Suggest))
+		line("window", s.Span())
+		line("need", needText(s.NeedMiB))
+		line("waited", fmt.Sprintf("%.0fs", s.WaitedS))
 		line("current", currentText(l.needs, s.Label))
 	}
 	if l.skipped > 0 {
@@ -129,11 +129,12 @@ func statsCommand(args []string, io IO) int {
 	return 0
 }
 
-func suggestionText(sg runstats.Suggestion) string {
-	if sg.MemMiB == 0 {
+// needText is the need learned from a window, as the needs file would pin it.
+func needText(mib int64) string {
+	if mib == 0 {
 		return "nothing measured"
 	}
-	return fmt.Sprintf("mem = %q", spec.NeedText(sg.MemMiB))
+	return fmt.Sprintf("%s (mem = %q)", spec.FormatMiB(mib), spec.NeedText(mib))
 }
 
 func currentText(f needs.File, label string) string {
@@ -164,25 +165,17 @@ type jsonStats struct {
 }
 
 // jsonLabelStats is one label. The window's sums and peaks are over its last runs (window_runs);
-// mem_peak_kib and peak_after_s are null when no run recorded them.
+// mem_peak_kib and need are null when no run recorded a peak.
 type jsonLabelStats struct {
-	Label         string         `json:"label"`
-	Runs          int            `json:"runs"`
-	WindowRuns    int            `json:"window_runs"`
-	FirstNS       int64          `json:"first_ns"`
-	LastNS        int64          `json:"last_ns"`
-	MemPeakKiB    *int64         `json:"mem_peak_kib"`
-	MemPeakSource string         `json:"mem_peak_source"`
-	PeakAfterS    *float64       `json:"peak_after_s"`
-	WaitedS       float64        `json:"waited_s"`
-	WaitedFreeS   float64        `json:"waited_free_s"`
-	Suggestion    jsonSuggestion `json:"suggestion"`
-	Current       *jsonCurrent   `json:"current"` // null when the needs file has no entry
-}
-
-type jsonSuggestion struct {
-	Mem      *string `json:"mem"`
-	Evidence string  `json:"evidence"`
+	Label      string       `json:"label"`
+	Runs       int          `json:"runs"`
+	WindowRuns int          `json:"window_runs"`
+	FirstNS    int64        `json:"first_ns"`
+	LastNS     int64        `json:"last_ns"`
+	MemPeakKiB *int64       `json:"mem_peak_kib"`
+	Need       *string      `json:"need"` // the need learned from the window
+	WaitedS    float64      `json:"waited_s"`
+	Current    *jsonCurrent `json:"current"` // null when the needs file has no entry
 }
 
 type jsonCurrent struct {
@@ -195,14 +188,12 @@ func writeStatsJSON(io IO, l learned) error {
 	doc := jsonStats{Schema: statsSchema, SkippedLines: l.skipped, Labels: []jsonLabelStats{}}
 	for _, s := range l.stats {
 		j := jsonLabelStats{Label: s.Label, Runs: s.Runs, WindowRuns: len(s.Window),
-			FirstNS: s.Window[0].TimeNS, LastNS: s.Window[len(s.Window)-1].TimeNS,
-			MemPeakSource: s.MemPeakSource, PeakAfterS: s.PeakAfterS, WaitedS: s.WaitedS,
-			WaitedFreeS: s.WaitedFreeS, Suggestion: jsonSuggestion{Evidence: s.Suggest.Reason}}
+			FirstNS: s.Window[0].TimeNS, LastNS: s.Window[len(s.Window)-1].TimeNS, WaitedS: s.WaitedS}
 		if s.MemPeakKiB > 0 {
 			j.MemPeakKiB = &s.MemPeakKiB
 		}
-		if s.Suggest.MemMiB > 0 {
-			j.Suggestion.Mem = new(spec.NeedText(s.Suggest.MemMiB))
+		if s.NeedMiB > 0 {
+			j.Need = new(spec.NeedText(s.NeedMiB))
 		}
 		e, ok, err := l.needs.Lookup(s.Label)
 		switch {

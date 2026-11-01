@@ -17,9 +17,6 @@ func ReadTreeTimes(pids []int) (TreeTimes, error) {
 	return TreeTimes{}, fmt.Errorf("process times are not implemented on %s", runtime.GOOS)
 }
 
-// Source is empty: Tree measures nothing here.
-const Source = ""
-
 // Tree is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Tree(root int) (kib int64, pids []int, ok bool) { return 0, nil, false }
 
