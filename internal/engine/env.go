@@ -10,7 +10,6 @@ import (
 // the way every other client does.
 const (
 	EnvGrantedMem = "CORESLOT_GRANTED_MEM"
-	EnvHeldFD     = "CORESLOT_HELD_FD"
 	EnvHold       = "CORESLOT_HOLD"
 	EnvUnbudgeted = "CORESLOT_UNBUDGETED"
 	envGranted    = "CORESLOT_GRANTED_" // the prefix every grant variable has
@@ -18,13 +17,13 @@ const (
 
 // ChildEnv is the CORESLOT_* environment a client gives the command it starts (PROTOCOL.md
 // section 17), the one builder of it in this module: CORESLOT_GRANTED_MEM=grantMiB;
-// CORESLOT_HELD_FD=3 and CORESLOT_HOLD=hold when the command inherits the hold named hold; and
+// CORESLOT_HOLD=hold when the command inherits the hold named hold, at descriptor 3; and
 // CORESLOT_UNBUDGETED=unbudgeted when unbudgeted is not empty. The order and the spelling are
 // what commands and tests see, so TestChildEnv pins them byte for byte.
 func ChildEnv(grantMiB int64, hold, unbudgeted string) []string {
 	env := []string{EnvGrantedMem + "=" + strconv.FormatInt(grantMiB, 10)}
 	if hold != "" {
-		env = append(env, EnvHeldFD+"=3", EnvHold+"="+hold)
+		env = append(env, EnvHold+"="+hold)
 	}
 	if unbudgeted != "" {
 		env = append(env, EnvUnbudgeted+"="+unbudgeted)
@@ -33,8 +32,8 @@ func ChildEnv(grantMiB int64, hold, unbudgeted string) []string {
 }
 
 // IsContext reports whether an environment variable is grant context (PROTOCOL.md section 17):
-// CORESLOT_GRANTED_*, CORESLOT_HELD_FD, CORESLOT_HOLD or CORESLOT_UNBUDGETED.
+// CORESLOT_GRANTED_*, CORESLOT_HOLD or CORESLOT_UNBUDGETED.
 // CORESLOT_STATE_DIR is not.
 func IsContext(key string) bool {
-	return strings.HasPrefix(key, envGranted) || key == EnvHeldFD || key == EnvHold || key == EnvUnbudgeted
+	return strings.HasPrefix(key, envGranted) || key == EnvHold || key == EnvUnbudgeted
 }

@@ -33,7 +33,7 @@ func TestPeakSamplerKeepsMax(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan peak)
 	go func() {
-		_, p := (&run{}).watchChild(ctx, &supervisor{pid: 42}, nil)
+		_, p := (&run{}).watchChild(ctx, &supervisor{pid: 42}, nil, nil)
 		done <- p
 	}()
 	waitFor(t, 10*time.Second, "four samples", func() bool {

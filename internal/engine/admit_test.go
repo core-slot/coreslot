@@ -110,7 +110,7 @@ func TestNoPerGrantCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
+	e := New(st, filepath.Join(dir, store.ConfigFile),
 		func() (config.Machine, error) {
 			return config.Machine{MemMiB: 32768, HeadroomMiB: 20000, HeadroomOK: true}, nil
 		},
@@ -298,14 +298,11 @@ func TestUnknownFormatRefuses(t *testing.T) {
 	})
 }
 
-// E1, E2, E7: a fail-open hold is published only into an understood format, never with the
-// reason "format", and removed like any hold.
+// E1, E2, E7: a fail-open hold is published only into an understood format and removed like any
+// hold.
 func TestFailOpenHold(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	if _, err := e.FailOpen(need("mem=2"), "format"); err == nil {
-		t.Error(`FailOpen with the reason "format": want an error`)
-	}
 	g, err := e.FailOpen(need("mem=2"), "configuration invalid")
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +311,7 @@ func TestFailOpenHold(t *testing.T) {
 		t.Errorf("hold %+v, want need_mib 0: it reserves nothing", h)
 	}
 	env := strings.Join(g.Env(), " ")
-	if env != "CORESLOT_GRANTED_MEM=256 CORESLOT_HELD_FD=3 CORESLOT_HOLD="+g.HoldName()+" CORESLOT_UNBUDGETED=configuration invalid" {
+	if env != "CORESLOT_GRANTED_MEM=256 CORESLOT_HOLD="+g.HoldName()+" CORESLOT_UNBUDGETED=configuration invalid" {
 		t.Errorf("env %q", env)
 	}
 	if rec, _ := e.st.Degraded(); rec == nil || rec.Reason != "configuration invalid" {

@@ -27,7 +27,7 @@ var listTree = memsample.Tree
 // second listing, when the run holds g, it writes the tree's footprint and time deltas into the
 // hold and takes its part in the shared watch tick; when a stop round lists its hold, it kills
 // the command's group and returns stopped, or in observe mode says what it would stop.
-func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant) (stopped bool, p peak) {
+func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
 	prev := map[int]memsample.TreeTimes{}
@@ -47,7 +47,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant) 
 		}
 		var d memsample.TreeTimes
 		d, prev = treeDeltas(prev, pids)
-		if !r.updateHold(g, func(h *wire.Hold) {
+		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.SampledNS, h.Victim, h.Stops = store.NowNS(), sup.group && !r.o.noRestart, r.stops
 		}) {
@@ -89,8 +89,8 @@ func (r *run) stopDetail(l watch.Level, kib int64, d memsample.TreeTimes) string
 
 // updateHold rewrites g's hold with fn, outside the section, only while the state directory's
 // FORMAT is one this client implements (PROTOCOL.md section 14); it reports whether it wrote.
-func (r *run) updateHold(g *engine.Grant, fn func(*wire.Hold)) bool {
-	if _, err := formatStillUnderstood(r.loc.dir); err != nil {
+func (r *run) updateHold(st *store.Store, g *engine.Grant, fn func(*wire.Hold)) bool {
+	if err := formatStillUnderstood(st); err != nil {
 		return false
 	}
 	return g.UpdateHold(fn) == nil

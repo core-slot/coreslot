@@ -117,7 +117,7 @@ func newEngine(t *testing.T, dir string, clk *fakeClock) *Engine {
 	if clk != nil {
 		c = clk.clock()
 	}
-	return New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
+	return New(st, filepath.Join(dir, store.ConfigFile),
 		testMachine, c)
 }
 
@@ -237,7 +237,7 @@ func TestHelperProcess(t *testing.T) {
 	if err != nil {
 		fail(err)
 	}
-	e := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
+	e := New(st, filepath.Join(dir, store.ConfigFile),
 		testMachine, SystemClock())
 	var keep []any
 	detail := ""

@@ -26,10 +26,10 @@ type Stats struct {
 	WaitedS    float64           // summed over the window
 }
 
-// counted reports whether r says what its label needs: labelled, not a pass-through, not run
-// without the budget, not stopped.
+// counted reports whether r says what its label needs: labelled, not run without the budget, not
+// stopped.
 func counted(r store.RunRecord) bool {
-	return r.Label != "" && !r.Nested && r.FailOpen == "" && r.Stops == 0
+	return r.Label != "" && r.FailOpen == "" && r.Stops == 0
 }
 
 // Window is the last n counted runs of label by time, oldest first.

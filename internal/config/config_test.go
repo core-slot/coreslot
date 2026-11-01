@@ -123,15 +123,14 @@ func TestMemoryTable(t *testing.T) {
 // The configuration is read at every call (PROTOCOL.md section 5.3): a replacement that keeps
 // the size and the mtime, by rewriting in place or by renaming another file over it, is seen at
 // once.
-func TestWatcherReadsEveryCall(t *testing.T) {
+func TestLoadReadsEveryCall(t *testing.T) {
 	path := writeConfig(t, "[memory]\nreserve = \"1280M\"\n")
 	old := time.Now().Add(-time.Hour).Truncate(time.Second)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	w := &Watcher{Path: path}
-	if c, err := w.Current(); err != nil || c.ReserveMiB != 1280 {
-		t.Fatalf("first Current() = %v, %v", c.ReserveMiB, err)
+	if c, err := Load(path); err != nil || c.ReserveMiB != 1280 {
+		t.Fatalf("first Load = %v, %v", c.ReserveMiB, err)
 	}
 
 	// Renamed over, same size, same mtime (cp -p to a temporary name, then mv).
@@ -145,7 +144,7 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Rename(tmp, path); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || c.ReserveMiB != 1536 {
+	if c, err := Load(path); err != nil || c.ReserveMiB != 1536 {
 		t.Errorf("Current() after a rename keeping size and mtime: reserve = %d, %v; want 1536", c.ReserveMiB, err)
 	}
 
@@ -156,7 +155,7 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || c.ReserveMiB != 1408 {
+	if c, err := Load(path); err != nil || c.ReserveMiB != 1408 {
 		t.Errorf("Current() after an in-place rewrite keeping size and mtime: reserve = %d, %v; want 1408", c.ReserveMiB, err)
 	}
 
@@ -165,7 +164,7 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ce *Error
-	if _, err := w.Current(); !errors.As(err, &ce) {
+	if _, err := Load(path); !errors.As(err, &ce) {
 		t.Errorf("Current() of an invalid file: %v, want a *config.Error", err)
 	}
 
@@ -173,7 +172,7 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || c.ReserveMiB != DefaultReserveMiB {
+	if c, err := Load(path); err != nil || c.ReserveMiB != DefaultReserveMiB {
 		t.Errorf("Current() after removal = %v, %v; want defaults", c.ReserveMiB, err)
 	}
 }

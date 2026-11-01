@@ -73,7 +73,7 @@ func waiterMain(args []string) int {
 		fmt.Fprintf(os.Stderr, "waiter %d: open: %v\n", pid, err)
 		return exitError
 	}
-	e := engine.New(st, &config.Watcher{Path: cfgPath}, benchMachine, engine.Clock{})
+	e := engine.New(st, cfgPath, benchMachine, engine.Clock{})
 	w, err := e.EnqueueContext(context.Background(), spec.Request{Label: *label,
 		NeedMiB: needMiB})
 	if err != nil {

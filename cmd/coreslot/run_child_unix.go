@@ -38,7 +38,6 @@ type child struct {
 	files    []*os.File // ExtraFiles: fd 3, nil without a hold
 	grantMiB int64
 	failOpen string
-	nested   bool
 	release  func() error  // closes the run's copies of the grant once the command exited
 	log      *store.Store  // the run log to append to; nil writes none
 	grant    *engine.Grant // the admitted grant the watchdog ticks for; nil outside the budget
@@ -87,13 +86,13 @@ func (r *run) runChild(c child) int {
 		watched := make(chan struct{})
 		go func() {
 			defer close(watched)
-			stopped, p = r.watchChild(ctx, sup, c.grant)
+			stopped, p = r.watchChild(ctx, sup, c.grant, c.log)
 		}()
 		status = superviseChild(cmd, sup, terminal)
 		stop()
 		<-watched
 		if c.grant != nil {
-			r.updateHold(c.grant, func(h *wire.Hold) { h.ChildExited = true })
+			r.updateHold(c.log, c.grant, func(h *wire.Hold) { h.ChildExited = true })
 		}
 		childDone(terminal)
 		released = c.release()
@@ -107,7 +106,7 @@ func (r *run) runChild(c child) int {
 	}
 	rec := store.RunRecord{
 		TimeNS: r.startNS, Label: r.o.label, WaitedS: r.waited.Seconds(),
-		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen, Nested: c.nested,
+		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen,
 	}
 	if r.stopped {
 		rec.Stops = r.stops + 1
@@ -117,14 +116,8 @@ func (r *run) runChild(c child) int {
 		maxRSS = recordUsage(&rec, sup.usage())
 	}
 	setMemPeak(&rec, maxRSS, p)
-	if c.log != nil || c.nested {
-		var err error
-		if c.nested {
-			err = appendNestedLog(rec) // reads FORMAT outside the section only now, after the command
-		} else {
-			err = appendRunLog(c.log, rec, r.notice)
-		}
-		if err != nil {
+	if c.log != nil {
+		if err := appendRunLog(c.log, rec, r.notice); err != nil {
 			r.notice("the run log was not written: %s", text(err.Error()))
 		}
 	}
@@ -179,18 +172,15 @@ var errFormatChanged = errors.New("the state directory's FORMAT is missing or na
 // appended, since it may have changed while the command ran (PROTOCOL.md section 20). It returns
 // errFormatChanged when FORMAT does not exist or names a format this client does not implement,
 // and the error of a FORMAT that cannot be read (not a regular file, unreadable) or is malformed.
-// missing is true only when FORMAT does not exist (ENOENT), which a pass-through does not report.
-func formatStillUnderstood(dir string) (missing bool, err error) {
-	n, present, err := store.ReadFormatAt(dir)
+func formatStillUnderstood(st *store.Store) error {
+	n, present, err := st.ReadFormat()
 	switch {
 	case err != nil:
-		return false, err
-	case !present:
-		return true, errFormatChanged
-	case !store.Understood(n):
-		return false, errFormatChanged
+		return err
+	case !present || !store.Understood(n):
+		return errFormatChanged
 	}
-	return false, nil
+	return nil
 }
 
 // appendRunLog appends rec to the run log outside the section (PROTOCOL.md section 20). When the
@@ -205,7 +195,7 @@ func formatStillUnderstood(dir string) (missing bool, err error) {
 // after that, when the release could not enter the section within 2 s, or when the run published
 // no hold to release. Any other rotation failure costs the rotation, not the line: notice reports it
 // and the line is appended. A section the rotation cannot enter (held for 2 s, or admit.lock
-// unusable) only skips the rotation. A pass-through never rotates (appendNestedLog).
+// unusable) only skips the rotation.
 func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format string, args ...any)) error {
 	if st.RunLogNeedsRotation() {
 		err := st.RotateLog()
@@ -222,7 +212,7 @@ func appendRunLog(st *store.Store, rec store.RunRecord, notice func(format strin
 			notice("the run log was not rotated: %s", text(err.Error()))
 		}
 	}
-	if _, err := formatStillUnderstood(st.Dir()); err != nil {
+	if err := formatStillUnderstood(st); err != nil {
 		return err
 	}
 	return st.AppendRun(rec)

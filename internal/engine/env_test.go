@@ -18,9 +18,9 @@ func TestChildEnv(t *testing.T) {
 		want             string
 	}{
 		{name: "admitted", grantMiB: 3072, hold: hold,
-			want: "CORESLOT_GRANTED_MEM=3072 CORESLOT_HELD_FD=3 CORESLOT_HOLD=" + hold},
+			want: "CORESLOT_GRANTED_MEM=3072 CORESLOT_HOLD=" + hold},
 		{name: "fail-open with its hold", grantMiB: 256, hold: hold, unbudgeted: "state dir gone",
-			want: "CORESLOT_GRANTED_MEM=256 CORESLOT_HELD_FD=3 CORESLOT_HOLD=" + hold + " CORESLOT_UNBUDGETED=state dir gone"},
+			want: "CORESLOT_GRANTED_MEM=256 CORESLOT_HOLD=" + hold + " CORESLOT_UNBUDGETED=state dir gone"},
 		{name: "fail-open without a hold", grantMiB: 256, unbudgeted: "timeout",
 			want: "CORESLOT_GRANTED_MEM=256 CORESLOT_UNBUDGETED=timeout"},
 		{name: "granted only", grantMiB: 40960, want: "CORESLOT_GRANTED_MEM=40960"},

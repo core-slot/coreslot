@@ -30,9 +30,8 @@ func Alive(procs map[int]Proc, pid int, startNS int64) bool {
 	return ok && p.StartNS <= startNS+startSlack
 }
 
-// descendants returns root and every process below it in parents (pid to parent pid), sorted,
-// leaving out the subtree of every pid in stop other than root.
-func descendants(root int, parents map[int]int, stop map[int]bool) []int {
+// descendants returns root and every process below it in parents (pid to parent pid), sorted.
+func descendants(root int, parents map[int]int) []int {
 	children := make(map[int][]int)
 	for pid, ppid := range parents {
 		if pid != ppid {
@@ -43,7 +42,7 @@ func descendants(root int, parents map[int]int, stop map[int]bool) []int {
 	out := []int{root}
 	for i := 0; i < len(out); i++ {
 		for _, c := range children[out[i]] {
-			if !seen[c] && !stop[c] {
+			if !seen[c] {
 				seen[c] = true
 				out = append(out, c)
 			}
@@ -59,7 +58,7 @@ func descendants(root int, parents map[int]int, stop map[int]bool) []int {
 func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, ok bool)) (int64, []int, bool) {
 	var sum int64
 	var pids []int
-	for _, pid := range descendants(root, parents, nil) {
+	for _, pid := range descendants(root, parents) {
 		if kib, ok := read(pid); ok {
 			sum += kib
 			pids = append(pids, pid)

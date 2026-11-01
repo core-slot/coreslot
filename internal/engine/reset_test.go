@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -212,7 +211,7 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			e := New(st, &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)},
+			e := New(st, filepath.Join(dir, store.ConfigFile),
 				testMachine, SystemClock())
 			rep, err := e.Snapshot()
 			if err != nil {

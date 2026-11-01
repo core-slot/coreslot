@@ -11,11 +11,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
-	"github.com/core-slot/coreslot/internal/store"
 )
 
 // environ is the environment as a map; a later duplicate wins, as for exec.
@@ -77,8 +75,8 @@ var shielded struct {
 // shieldedFD is a descriptor that was made close-on-exec, with its descriptor flags before.
 type shieldedFD struct{ fd, flags int }
 
-// shieldInherited makes the descriptor CORESLOT_HELD_FD names close-on-exec when it is 3 or above
-// and lacks the flag. main calls it before any command runs, so before this process can start any
+// shieldInherited makes the inherited hold's descriptor, 3 whenever CORESLOT_HOLD is set,
+// close-on-exec when it lacks the flag. main calls it before any command runs, so before this process can start any
 // child, such as the home directory's NSS fallback (getent), which every opener of the default
 // state directory may start. A child that inherited the hold's descriptor would keep its lock for
 // as long as it runs, after every holder of the hold has exited (getent for up to its 5 s bound).
@@ -136,16 +134,16 @@ func setCloseOnExec(fds []int) []shieldedFD {
 	return changed
 }
 
-// contextFDs is the descriptor CORESLOT_HELD_FD names, when it parses.
+// contextFDs is the inherited hold's descriptor: 3 when CORESLOT_HOLD is set (PROTOCOL.md section 17).
 func contextFDs(env map[string]string) []int {
-	if fd, ok := engine.ParseFD(env[engine.EnvHeldFD]); ok {
-		return []int{fd}
+	if env[engine.EnvHold] != "" {
+		return []int{3}
 	}
 	return nil
 }
 
 // dropInherited is what a run that does not run inside its parent does with an inherited context
-// (PROTOCOL.md section 17): it closes exactly the descriptor CORESLOT_HELD_FD names, so that its
+// (PROTOCOL.md section 17): it closes exactly the inherited hold's descriptor, so that its
 // command cannot keep a parent's hold alive, and returns the environment without the context
 // variables. Every other inherited descriptor is left alone. Only a regular file at descriptor 3
 // or above is closed: a context that names anything else (a standard stream, a pipe, the
@@ -193,34 +191,12 @@ func (r *run) passThrough(env map[string]string) int {
 		}
 		grant = parent
 	}
-	return r.runChild(child{env: withGrant(grant), grantMiB: grant, nested: true,
-		release: func() error { return nil }})
+	return r.runChild(child{env: withGrant(grant), grantMiB: grant, release: func() error { return nil }})
 }
 
 // passThroughUnbudgeted runs under a parent that runs unbudgeted (PROTOCOL.md section 18 rule
 // 1): with its need, passing CORESLOT_UNBUDGETED on, writing no degraded record.
 func (r *run) passThroughUnbudgeted(reason string) int {
 	r.notice("the parent run is unbudgeted (%s); running unbudgeted with mem=%s", text(reason), spec.FormatMiB(r.o.need))
-	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, nested: true,
-		release: func() error { return nil }})
-}
-
-// appendNestedLog appends a pass-through's run-log line (PROTOCOL.md section 20): only when
-// FORMAT, read outside the section just before the append, names a format this client
-// implements, and without opening the state directory as a Store, so nothing but log/ and its
-// file is ever created. With no FORMAT (it does not exist: no state directory yet) it writes no
-// line and that is not an error; any other FORMAT it does not understand (another format, a
-// malformed one, one that cannot be read) is reported.
-func appendNestedLog(rec store.RunRecord) error {
-	dir, _, err := config.StateDir()
-	if err != nil {
-		return nil
-	}
-	if missing, err := formatStillUnderstood(dir); err != nil {
-		if missing {
-			return nil
-		}
-		return err
-	}
-	return store.AppendRunAt(dir, rec)
+	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, release: func() error { return nil }})
 }

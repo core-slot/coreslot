@@ -122,7 +122,6 @@ type Detector struct {
 	Known           Level    `json:"known"`  // the last level that was not unknown
 	Yellow          bool     `json:"yellow"` // latched until clearSamples in a row below yellow
 	Below           int      `json:"below"`
-	Episode         int64    `json:"episode"` // counts the entries into red or floor
 	YellowClearedNS int64    `json:"yellow_cleared_ns"`
 	CalmSinceNS     int64    `json:"calm_since_ns"` // 0 while the level is not green
 	LastRoundNS     int64    `json:"last_round_ns"`
@@ -177,9 +176,6 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 		d.Level = Yellow
 	default:
 		d.Level = Green
-	}
-	if d.Level >= Red && was < Red {
-		d.Episode++
 	}
 	d.Known = d.Level
 	if d.Level != Green {

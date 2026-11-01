@@ -82,8 +82,8 @@ func checkDescriptors(t *testing.T, e Env, r ChildReport, holdName string) {
 	if got := r.FDs[3]; got != stat(t, filepath.Join(e.Dir, store.HoldsDir, holdName)) {
 		t.Errorf("fd 3 is %v, not the hold %s", got, holdName)
 	}
-	if r.Env["CORESLOT_HELD_FD"] != "3" || r.Env["CORESLOT_HOLD"] != holdName {
-		t.Errorf("CORESLOT_HELD_FD = %q, CORESLOT_HOLD = %q; want 3 and %s", r.Env["CORESLOT_HELD_FD"], r.Env["CORESLOT_HOLD"], holdName)
+	if r.Env["CORESLOT_HOLD"] != holdName {
+		t.Errorf("CORESLOT_HOLD = %q, want %s", r.Env["CORESLOT_HOLD"], holdName)
 	}
 	for _, n := range sortedFDs(r.FDs) {
 		if n > 3 {
@@ -848,7 +848,7 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 	r := e.WaitStarted("F")
 	h := e.WaitHold("F", startWait)
 	if r.Env["CORESLOT_GRANTED_MEM"] != "256" || r.Env["CORESLOT_UNBUDGETED"] == "" ||
-		r.Env["CORESLOT_UNBUDGETED"] == "format" || r.Env["CORESLOT_HELD_FD"] != "3" {
+		r.Env["CORESLOT_UNBUDGETED"] == "format" || r.Env["CORESLOT_HOLD"] == "" {
 		t.Errorf("command environment %v", r.Env)
 	}
 	if h.NeedMiB != 0 {

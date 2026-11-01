@@ -629,7 +629,7 @@ func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 	n := e.Run("N", "--mem", "128M")
 	for name, want := range map[string]string{"W1": "256", "W2": "128", "N": "128"} {
 		r := e.WaitStarted(name)
-		if r.Env["CORESLOT_UNBUDGETED"] == "" || r.Env["CORESLOT_GRANTED_MEM"] != want || r.Env["CORESLOT_HELD_FD"] != "" {
+		if r.Env["CORESLOT_UNBUDGETED"] == "" || r.Env["CORESLOT_GRANTED_MEM"] != want || r.Env["CORESLOT_HOLD"] != "" {
 			t.Errorf("%s's command environment %v", name, r.Env)
 		}
 		if _, ok := r.FDs[3]; ok {

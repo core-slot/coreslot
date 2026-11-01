@@ -75,15 +75,13 @@ func TestSpanNamesTheWindow(t *testing.T) {
 	}
 }
 
-// Unlabelled, pass-through and fail-open runs say nothing about what a label needs.
+// Unlabelled and fail-open runs say nothing about what a label needs.
 // Mutation: count fail-open runs.
 func TestUncountedSkipped(t *testing.T) {
 	unlabelled := run("", 1)
-	nested := run("x", 2)
-	nested.Nested = true
 	timeout := run("z", 4)
 	timeout.FailOpen = "timeout"
-	if stats := Summarize([]store.RunRecord{unlabelled, nested, timeout}); len(stats) != 0 {
+	if stats := Summarize([]store.RunRecord{unlabelled, timeout}); len(stats) != 0 {
 		t.Errorf("Stats %+v, want none", stats)
 	}
 }

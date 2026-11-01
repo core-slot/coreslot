@@ -7,15 +7,9 @@ import (
 	"strings"
 
 	"github.com/core-slot/coreslot/internal/config"
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
-
-// ParseFD parses one descriptor number of the descriptor contract (PROTOCOL.md section 17): one
-// to nine decimal digits and nothing else, no sign and no space (spec.ParseDigits). It serves
-// CORESLOT_HELD_FD.
-func ParseFD(s string) (int, bool) { return spec.ParseDigits(s) }
 
 // DecideNested decides, from the environment env a run inherited (a later duplicate wins, as for
 // exec), whether it runs inside its parent's reservation (PROTOCOL.md section 18): inside when

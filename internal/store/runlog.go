@@ -41,7 +41,6 @@ type RunRecord struct {
 	Stops      int    `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
 	Exit       int    `json:"exit"`
 	FailOpen   string `json:"fail_open"`
-	Nested     bool   `json:"nested,omitempty"` // a pass-through run (PROTOCOL.md section 18)
 }
 
 // ReadRuns reads the run log, the rotated generation (log/runs.1.jsonl) first and then

@@ -499,7 +499,7 @@ func (e Env) Engine() *engine.Engine {
 			e.shared.err = err
 			return
 		}
-		cfg := &config.Watcher{Path: filepath.Join(e.Dir, store.ConfigFile)}
+		cfg := filepath.Join(e.Dir, store.ConfigFile)
 		e.shared.engine = engine.New(st, cfg, config.ReadMachine, engine.Clock{})
 	})
 	if e.shared.err != nil {

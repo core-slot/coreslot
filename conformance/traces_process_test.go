@@ -227,9 +227,10 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 	if rep.Gen != gen+1 { // the parent's removal of its own hold
 		t.Errorf("gen went from %d to %d: the nested run entered a section", gen, rep.Gen)
 	}
-	inner := logLine(t, e, "inner")
-	if inner["nested"] != true || inner["fail_open"] != "" {
-		t.Errorf("the nested run-log line %v", inner)
+	for _, l := range runLog(t, e) {
+		if l["label"] == "inner" {
+			t.Errorf("the pass-through wrote a run-log line: %v", l)
+		}
 	}
 	if l := logLine(t, e, "parent"); l["fail_open"] == "" {
 		t.Errorf("the parent's run-log line %v", l)

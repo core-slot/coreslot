@@ -40,8 +40,8 @@ func usagef(format string, args ...any) error {
 }
 
 // ParseDigits parses one to nine ASCII decimal digits and nothing else: no sign, no space,
-// leading zeros allowed. It is the number of the FORMAT line (PROTOCOL.md section 7.6) and of the
-// descriptor in CORESLOT_HELD_FD (section 17); nine digits always fit an int.
+// leading zeros allowed. It is the number of the FORMAT line (PROTOCOL.md section 7.6); nine digits
+// always fit an int.
 func ParseDigits(s string) (int, bool) {
 	if s == "" || len(s) > 9 || strings.Trim(s, "0123456789") != "" {
 		return 0, false

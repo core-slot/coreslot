@@ -42,7 +42,7 @@ func openEngine(loc location, readOnly bool) (*engine.Engine, error) {
 	if err != nil {
 		return nil, asState(err)
 	}
-	return engine.New(st, &config.Watcher{Path: loc.cfgPath}, readMachine, engine.Clock{}), nil
+	return engine.New(st, loc.cfgPath, readMachine, engine.Clock{}), nil
 }
 
 // asState gives openEngine's failure the CLI's own form, "state error: <reason>" with one

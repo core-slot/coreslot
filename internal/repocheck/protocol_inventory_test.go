@@ -32,7 +32,6 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"cancel body", "Cancel request", "requester_pid"},
 	{"run-log memory keys", "Run log", "mem_peak_kib"},
 	{"CORESLOT_GRANTED_MEM", "Descriptor and environment contract", "CORESLOT_GRANTED_MEM"},
-	{"CORESLOT_HELD_FD", "Descriptor and environment contract", "CORESLOT_HELD_FD"},
 	{"CORESLOT_HOLD", "Descriptor and environment contract", "CORESLOT_HOLD"},
 	{"CORESLOT_UNBUDGETED", "Errors, fail-open and degraded mode", "CORESLOT_UNBUDGETED"},
 	{"CORESLOT_STATE_DIR", "Location", "CORESLOT_STATE_DIR"},

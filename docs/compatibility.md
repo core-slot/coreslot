@@ -86,7 +86,7 @@ change in any release; parse `status --json` instead.
 | `stats` | `--label LABEL`, `--json` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
 | configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `sample_log` and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`; `needs.toml` beside it: `[needs."<label>"]` with `mem` and `no_restart` |
-| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HELD_FD`, `CORESLOT_HOLD`, `CORESLOT_UNBUDGETED` (given to the command, read by nested runs) |
+| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED` (given to the command, read by nested runs) |
 | descriptors | the hold at fd 3 |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
 

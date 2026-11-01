@@ -250,7 +250,7 @@ func openEngine(dir string) (*engine.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg := &config.Watcher{Path: filepath.Join(dir, store.ConfigFile)}
+	cfg := filepath.Join(dir, store.ConfigFile)
 	return engine.New(st, cfg, config.ReadMachine, engine.Clock{}), nil
 }
 

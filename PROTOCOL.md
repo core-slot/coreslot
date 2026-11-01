@@ -62,7 +62,6 @@ Every shared file, field, environment variable and transition of format 2, and w
 | cancel body | body | [7.5](#75-cancel-request) |
 | run-log memory keys | field | [20](#20-run-log) |
 | `CORESLOT_GRANTED_MEM` | environment | [17](#17-descriptor-and-environment-contract) |
-| `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_STATE_DIR` | environment | [4.1](#41-location) |
@@ -543,7 +542,7 @@ client that does not run the detector needs only these keys:
 | `detector.observed` | boolean | the last stop round was written in observe mode (section 23.6) |
 
 The other keys under `sample` and `detector` are the detector's own state (the readings, the
-window, the rates, the excess, the leaky bucket, the yellow latch, the episode count). A detector
+window, the rates, the excess, the leaky bucket, the yellow latch). A detector
 that finds them missing starts afresh; a client that does not run the detector ignores them.
 Times named `…_ns` under `detector` are on the host clock of the sample, not on the wall clock: a
 reader brings one to the present by adding the sample's age, `host_now = sample.host.WallNS + (now
@@ -937,8 +936,7 @@ places them above. It sets this environment:
 | Variable | Value |
 |---|---|
 | `CORESLOT_GRANTED_MEM` | the memory the run reserves, in MiB: its need, also for a run outside the budget |
-| `CORESLOT_HELD_FD` | `3`, when the run passes a hold descriptor |
-| `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor |
+| `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor, which is always fd 3 |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 
 Every descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section
@@ -947,11 +945,10 @@ hold of the new attempt: `CORESLOT_HOLD` names that hold.
 
 A run that is not a pass-through (section 18 rules 1 and 2) builds this contract from its own hold
 only. An ordinary or `--independent` request, a fail-open run removes every inherited
-`CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_HOLD` and `CORESLOT_UNBUDGETED` from the
-command's environment before setting their own, and closes (does not pass on) exactly the
-inherited descriptor `CORESLOT_HELD_FD` names, so that a grandchild does not keep a hold that is
-not its parent's alive. A named descriptor that is a standard stream (0, 1 or 2) or not a regular
-file cannot be a hold's (its number was reused after a launcher closed the original), and a client
+`CORESLOT_GRANTED_*`, `CORESLOT_HOLD` and `CORESLOT_UNBUDGETED` from the command's environment
+before setting their own, and closes (does not pass on) exactly the inherited descriptor 3 when
+`CORESLOT_HOLD` is set, so that a grandchild does not keep a hold that is not its parent's alive.
+A descriptor 3 that is not a regular file cannot be a hold's (its number was reused after a launcher closed the original), and a client
 SHOULD leave it open. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
 user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not hold context and
 is passed on.
@@ -983,7 +980,7 @@ empty variable is absent), in this order:
 3. Otherwise, or with `--independent`, it is an ordinary request.
 
 A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and writes nothing under
-`$S` but its run-log line (section 20): no ticket, hold, `gen` bump or degraded record. It has no
+`$S`: no ticket, hold, `gen` bump, degraded record or run-log line. It has no
 hold of its own, so it neither ticks nor is listed by a stop round; the memory it uses is part of
 its parent's footprint.
 
@@ -1021,9 +1018,7 @@ during the run (section 14); a run whose release found a mismatch writes no line
 run that was stopped for memory appends one for each stopped attempt and one for the attempt that
 ends the run (section 24). `FORMAT` may change while the command runs, so the writer reads it
 again, outside the section, immediately before the write, and writes no line when it is absent, malformed or names a format the writer does not
-implement. A pass-through (section 18), valid or unbudgeted, appends too: that read is its only one
-(it never writes a missing `FORMAT`, and then writes no line), it marks its line `"nested": true`,
-and it never rotates the log. A line that would exceed 4 KiB MAY be fitted by shortening an
+implement. A pass-through (section 18) appends no line. A line that would exceed 4 KiB MAY be fitted by shortening an
 informative string; a writer that cannot fit it writes no line. The object carries:
 
 | Key | Type | Content |
@@ -1038,7 +1033,6 @@ informative string; a writer that cannot fit it writes no line. The object carri
 | `stops` | integer | optional; on the line of a stopped attempt, how often the run has been stopped for memory, this stop included; absent on every other line |
 | `exit` | integer | the run's exit status |
 | `fail_open` | string | the fail-open reason, or empty |
-| `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
 
 The usage keys `user_s` and `sys_s` are OPTIONAL. A writer MUST omit a key
 whose value it does not know rather than write a zero: a run whose command could not be started
@@ -1189,7 +1183,7 @@ holds/01791720600000000000-0000007300-000004-gate_big [L]
 ```
 
 The CLI starts the command with fd 3 = the hold and `CORESLOT_GRANTED_MEM=3072`,
-`CORESLOT_HELD_FD=3`, `CORESLOT_HOLD=01791720600000000000-0000007300-000004-gate_big`. Had no hold
+`CORESLOT_HOLD=01791720600000000000-0000007300-000004-gate_big`. Had no hold
 been live, the idle rule would have started the request whatever the headroom said; had the room
 been 3 000 MiB, the head would have left the section and tried again at its next election.
 
@@ -1288,9 +1282,8 @@ with `min(4096, 3072) = 3072` MiB, saying so because its need was given as `--me
 `make test` with the same descriptor, and passes `CORESLOT_HOLD` on unchanged with
 `CORESLOT_GRANTED_MEM=3072`.
 
-A pass-through does not enter the section or lock anything. After `make` exits it reads `FORMAT`
-(`coreslot-protocol 2`, understood) and appends one run-log line marked `"nested": true`
-(section 20); apart from that line, `$S` is unchanged before and after.
+A pass-through does not enter the section, lock anything or append a run-log line: `$S` is
+unchanged before and after.
 
 ### 21.8 Tick and level
 
@@ -1452,7 +1445,7 @@ below that applies.
   as they were. An optional reading the platform lacks (the memory stall, page wait) is not unknown.
 - **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
   stays below `yellow_points` for 15 samples in a row.
-- **Red:** a leaky bucket, per episode: +1 for a sample with `E ≥ red_points` and the gate open,
+- **Red:** a leaky bucket: +1 for a sample with `E ≥ red_points` and the gate open,
   −0.5 for any other comparable sample, never below 0, never above `red_samples` and never reset.
   Red while it is at `red_samples`, so the first sample after the danger leaves red.
 - **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
@@ -1463,8 +1456,7 @@ below that applies.
 
 `calm_since_ns` is the host clock of the sample that made the level green, kept while it stays
 green, and 0 while it is not. `yellow_cleared_ns` is that of the sample at which the level fell from
-yellow, red or floor to green, unknown samples between the two left out. An **episode** counts the
-entries into red or floor.
+yellow, red or floor to green, unknown samples between the two left out.
 
 ### 23.5 Stop rounds
 

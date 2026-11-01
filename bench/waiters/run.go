@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
@@ -189,7 +188,7 @@ func runOnce(p params, run int) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	b.client = engine.New(st, &config.Watcher{Path: filepath.Join(b.state, store.ConfigFile)}, benchMachine, engine.Clock{})
+	b.client = engine.New(st, filepath.Join(b.state, store.ConfigFile), benchMachine, engine.Clock{})
 	// The whole budget, taken while the machine is idle, before any waiter queues.
 	t, err := b.client.EnqueueContext(context.Background(), spec.Request{Label: "bench-harness", NeedMiB: int64(p.Size) * needMiB})
 	if err != nil {

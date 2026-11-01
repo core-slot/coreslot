@@ -822,9 +822,6 @@ func TestRunAppendsOneLogLine(t *testing.T) {
 	if line["label"] != "gate:unit" || line["exit"] != float64(0) {
 		t.Errorf("run log line %v", line)
 	}
-	if _, nested := line["nested"]; nested {
-		t.Errorf("an ordinary run's line is marked nested: %v", line)
-	}
 }
 
 // What the burn helper makes resident and how much user and system time it uses.
@@ -907,12 +904,10 @@ func TestRunLogRecordsUsage(t *testing.T) {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
 		lines := runLog(t, dir)
-		if len(lines) != 2 || lines[0]["label"] != "inner" || lines[0]["nested"] != true ||
-			lines[1]["label"] != "outer" {
-			t.Fatalf("run log %v: want the nested line, then the outer one", lines)
+		if len(lines) != 1 || lines[0]["label"] != "outer" {
+			t.Fatalf("run log %v: want the outer run's line alone", lines)
 		}
-		checkUsage(t, "the pass-through", lines[0])
-		checkUsage(t, "the run around the pass-through", lines[1])
+		checkUsage(t, "the run around the pass-through", lines[0])
 	})
 }
 

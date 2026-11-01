@@ -26,7 +26,7 @@ func TestMeminfo(t *testing.T) {
 // Mutation: stop the walk at the root's children (no grandchildren), and 6 is missing.
 func TestDescendants(t *testing.T) {
 	parents := map[int]int{2: 1, 3: 2, 4: 2, 5: 1, 6: 3}
-	if got := fmt.Sprint(descendants(2, parents, nil)); got != "[2 3 4 6]" {
+	if got := fmt.Sprint(descendants(2, parents)); got != "[2 3 4 6]" {
 		t.Errorf("descendants(2) = %s, want [2 3 4 6]", got)
 	}
 }

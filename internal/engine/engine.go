@@ -83,17 +83,17 @@ var (
 // Engine runs requests against one opened state directory. It is safe for concurrent use.
 type Engine struct {
 	st      *store.Store
-	cfg     *config.Watcher
+	cfgPath string
 	machine func() (config.Machine, error)
 	clock   Clock
 	seq     func() int
 }
 
-// New returns an engine over st. cfg yields the configuration (under the state-directory
-// override its Path is <statedir>/config.toml, which is then checked against the filesystem
-// policy before every load); machine yields the physical memory. A nil field of clock is
+// New returns an engine over st. cfgPath is the configuration file, read at every admission
+// attempt (under the state-directory override it is <statedir>/config.toml, which is then checked
+// against the filesystem policy before every load); machine yields the physical memory. A nil field of clock is
 // replaced by SystemClock's.
-func New(st *store.Store, cfg *config.Watcher, machine func() (config.Machine, error), clock Clock) *Engine {
+func New(st *store.Store, cfgPath string, machine func() (config.Machine, error), clock Clock) *Engine {
 	sys := SystemClock()
 	if clock.Realtime == nil {
 		clock.Realtime = sys.Realtime
@@ -101,7 +101,7 @@ func New(st *store.Store, cfg *config.Watcher, machine func() (config.Machine, e
 	if clock.Monotonic == nil {
 		clock.Monotonic = sys.Monotonic
 	}
-	return &Engine{st: st, cfg: cfg, machine: machine, clock: clock, seq: store.NextSeq}
+	return &Engine{st: st, cfgPath: cfgPath, machine: machine, clock: clock, seq: store.NextSeq}
 }
 
 // Store is the engine's state directory.
@@ -110,14 +110,14 @@ func (e *Engine) Store() *store.Store { return e.st }
 // Config reads the configuration as every admission does, afresh. An entry that fails the
 // layout's policy or an invalid configuration is a *store.StateError.
 func (e *Engine) Config() (config.Config, error) {
-	if filepath.Dir(e.cfg.Path) == e.st.Dir() {
+	if filepath.Dir(e.cfgPath) == e.st.Dir() {
 		// The override moved the configuration into the state directory: it is an entry of the
 		// layout and must pass its policy (PROTOCOL.md section 5.3).
-		if err := store.CheckEntry(e.cfg.Path, false); err != nil {
+		if err := store.CheckEntry(e.cfgPath, false); err != nil {
 			return config.Config{}, err
 		}
 	}
-	c, err := e.cfg.Current()
+	c, err := config.Load(e.cfgPath)
 	if err != nil {
 		return config.Config{}, &store.StateError{Reason: err.Error(), Err: err}
 	}

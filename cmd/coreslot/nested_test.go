@@ -50,17 +50,6 @@ func inode(t *testing.T, path string) string {
 	return fmt.Sprintf("%d:%d", uint64(st.Dev), uint64(st.Ino))
 }
 
-func nestedLines(t *testing.T, dir string) []map[string]any {
-	t.Helper()
-	var out []map[string]any
-	for _, l := range runLog(t, dir) {
-		if l["nested"] == true {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
 func TestNestedPassThrough(t *testing.T) {
 	dir := budgetDir(t, 1024)
 	d := t.TempDir()
@@ -79,15 +68,14 @@ func TestNestedPassThrough(t *testing.T) {
 		t.Errorf("the nested run touched the queue or gen: %q", r.stdout)
 	}
 	env := envOf(r.stdout)
-	if env["CORESLOT_GRANTED_MEM"] != "1024" || env["CORESLOT_HELD_FD"] != "3" || env["CORESLOT_HOLD"] == "" {
+	if env["CORESLOT_GRANTED_MEM"] != "1024" || env["CORESLOT_HOLD"] == "" {
 		t.Errorf("the nested command's environment: %v", env)
 	}
 	if got, want := fdsOf(r.stdout)[3], inode(t, filepath.Join(d, "held")); got != want {
 		t.Errorf("fd 3 is %q, want the parent's hold (%s)", got, want)
 	}
-	lines := nestedLines(t, dir)
-	if len(lines) != 1 || lines[0]["label"] != "inner" {
-		t.Errorf("nested run-log lines %v: want one for inner", lines)
+	if lines := runLog(t, dir); len(lines) != 1 || lines[0]["label"] == "inner" {
+		t.Errorf("run-log lines %v: want the outer run's alone", lines)
 	}
 	budgetFree(t, dir)
 }
@@ -129,9 +117,6 @@ func TestNestedRunsInsideParent(t *testing.T) {
 		r = cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+dead), "run", "--no-wait", "--", "sh", "-c", `echo "$CORESLOT_HOLD"`)
 		if got := strings.TrimSpace(r.stdout); r.code != 0 || got == dead || got == "" {
 			t.Errorf("exit %d, the command's CORESLOT_HOLD %q: want a hold of its own, not the dead %s", r.code, got, dead)
-		}
-		if lines := nestedLines(t, dir); len(lines) != 0 {
-			t.Errorf("nested run-log lines %v: an ordinary request is not nested", lines)
 		}
 	})
 }
@@ -227,7 +212,7 @@ func TestIndependentDropsInheritedContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := envOf(r.stdout)
-	if env["CORESLOT_GRANTED_MEM"] != "128" || env["CORESLOT_HELD_FD"] != "3" || env["CORESLOT_HOLD"] == "" ||
+	if env["CORESLOT_GRANTED_MEM"] != "128" || env["CORESLOT_HOLD"] == "" ||
 		env["CORESLOT_HOLD"] == strings.TrimSpace(string(parentHold)) {
 		t.Errorf("the command's environment %v: want only its own grant", env)
 	}
@@ -303,56 +288,9 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, "degraded")); err == nil {
 			t.Error("the pass-through wrote a degraded record")
 		}
-		lines := nestedLines(t, dir)
-		if len(lines) != 1 || lines[0]["label"] != "nested-unbudgeted" {
-			t.Errorf("nested run-log lines %v", lines)
+		if lines := runLog(t, dir); len(lines) != 1 {
+			t.Errorf("run-log lines %v: want the setup run's alone", lines)
 		}
 	})
 
-	// A pass-through re-reads FORMAT immediately before its line too (PROTOCOL.md section 20):
-	// under a FORMAT it does not understand it writes none, and says so. Only a FORMAT that does
-	// not exist is silent.
-	for name, replace := range map[string]func(t *testing.T, path string){
-		"format 3": func(t *testing.T, path string) {
-			if err := os.WriteFile(path, []byte("coreslot-protocol 3\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"FORMAT a directory": func(t *testing.T, path string) {
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Mkdir(path, 0o700); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"FORMAT a symlink": func(t *testing.T, path string) {
-			target := filepath.Join(t.TempDir(), "FORMAT")
-			if err := os.Rename(path, target); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(target, path); err != nil {
-				t.Fatal(err)
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			dir := stateDir(t, "")
-			if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
-				t.Fatalf("setup run: %d %q", r.code, r.stderr)
-			}
-			replace(t, filepath.Join(dir, "FORMAT"))
-			env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason")
-			r := cli(t, env, "run", "--mem", "384M", "--label", "nested-format", "--", "true")
-			if r.code != 0 {
-				t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-			}
-			if lines := nestedLines(t, dir); len(lines) != 0 {
-				t.Errorf("a pass-through wrote a run-log line: %v", lines)
-			}
-			if !strings.Contains(r.stderr, "the run log was not written") {
-				t.Errorf("stderr %q: want a notice that the run log was not written", r.stderr)
-			}
-		})
-	}
 }

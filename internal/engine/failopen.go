@@ -4,7 +4,7 @@ package engine
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/core-slot/coreslot/internal/spec"
 )
@@ -30,8 +30,8 @@ func (e *Engine) UnbudgetedHold(req spec.Request, reason string) (*Grant, error)
 }
 
 func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) (*Grant, error) {
-	if reason == "" || reason == "format" {
-		return nil, fmt.Errorf("engine: unbudgeted reason %q: want non-empty text other than \"format\"", reason)
+	if reason == "" {
+		return nil, errors.New("engine: an unbudgeted run needs a reason")
 	}
 	if err := req.Validate(); err != nil {
 		return nil, err

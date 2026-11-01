@@ -59,17 +59,3 @@ func TestDecideNested(t *testing.T) {
 		})
 	}
 }
-
-// One descriptor number: digits only, one to nine of them.
-func TestParseFD(t *testing.T) {
-	for s, want := range map[string]int{"3": 3, "0": 0, "007": 7, "999999999": 999999999} {
-		if fd, ok := ParseFD(s); !ok || fd != want {
-			t.Errorf("ParseFD(%q) = %d, %v; want %d", s, fd, ok, want)
-		}
-	}
-	for _, s := range []string{"", "+3", "-3", " 3", "3 ", "0x3", "3.0", "1000000000"} {
-		if fd, ok := ParseFD(s); ok {
-			t.Errorf("ParseFD(%q) = %d, want a refusal", s, fd)
-		}
-	}
-}

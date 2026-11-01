@@ -2,9 +2,7 @@ package repocheck
 
 import (
 	"bytes"
-	"compress/gzip"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -116,8 +114,7 @@ func TestPatternFile(t *testing.T) {
 
 // Contract: no file of this repository records a path of the machine it was written or built on.
 // The guarantee covers a closed set of forms, and only those, in every file of the tree: in text
-// as written, in a gzip stream (a pprof profile) after decompression, and in any other binary
-// file as its raw bytes, which shows only strings stored uncompressed.
+// as written, and in a binary file as its raw bytes, which shows only strings stored uncompressed.
 //
 //   - a home directory, /Users/<name> or /home/<name>, unless <name> is one of placeholderUsers;
 //   - a Windows home directory, <drive>:\Users\<name>\;
@@ -125,7 +122,7 @@ func TestPatternFile(t *testing.T) {
 //     followed by a slash;
 //   - a numbered work directory name, task<N> or task-<N>, and a path flattened into a name,
 //     -Users-<name>-;
-//   - in a gzip stream or a binary file only, /tmp/ and a source tree under /opt, /usr or /nix (a
+//   - in a binary file only, /tmp/ and a source tree under /opt, /usr or /nix (a
 //     path with a /src/ in it) too: a profile built with -trimpath names its binary by its base
 //     name and its sources by import path (runtime/proc.go,
 //     golang.org/x/sys@v0.49.0/unix/syscall_bsd.go), so a /tmp/ there is a build directory and an
@@ -147,7 +144,7 @@ var localPathForms = []struct {
 var (
 	// homeDir is a home directory and its user name.
 	homeDir = regexp.MustCompile(`/(User[s]|hom[e])/([A-Za-z0-9_][A-Za-z0-9_.-]*)`)
-	// binaryOnly are the forms only a gzip stream or a binary file is checked for.
+	// binaryOnly are the forms only a binary file is checked for.
 	binaryOnly = []struct {
 		why string
 		re  *regexp.Regexp
@@ -161,7 +158,7 @@ var (
 )
 
 // localPathFindings returns the distinct local paths in s, or nil. binary selects the forms that
-// apply to a gzip stream or a binary file.
+// apply to a binary file.
 func localPathFindings(s string, binary bool) []string {
 	var out []string
 	add := func(why string) {
@@ -189,30 +186,8 @@ func localPathFindings(s string, binary bool) []string {
 	return out
 }
 
-// maxInflated bounds a gzip stream's decompressed size, so a corrupt file cannot exhaust memory.
-const maxInflated = 64 << 20
-
-// isGzip reports whether b starts with the gzip magic number.
-func isGzip(b []byte) bool { return len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b }
-
-// binaryLocalPaths returns the local paths in b, a gzip stream or another binary file, as
-// "offset: finding" entries. A gzip stream is decompressed first, every member of it, and a
-// stream that does not decompress is an error, since its content would go unscanned.
-func binaryLocalPaths(b []byte) ([]string, error) {
-	data := b
-	if isGzip(b) {
-		zr, err := gzip.NewReader(bytes.NewReader(b))
-		if err != nil {
-			return nil, err
-		}
-		data, err = io.ReadAll(io.LimitReader(zr, maxInflated+1))
-		if err != nil {
-			return nil, err
-		}
-		if len(data) > maxInflated {
-			return nil, fmt.Errorf("decompresses to more than %d bytes", maxInflated)
-		}
-	}
+// binaryLocalPaths returns the local paths in data, a binary file, as "offset: finding" entries.
+func binaryLocalPaths(data []byte) []string {
 	// Scan each run of printable bytes, as strings(1) shows them: a protobuf string is stored
 	// whole, between its length and the next field's tag.
 	var out []string
@@ -231,21 +206,7 @@ func binaryLocalPaths(b []byte) ([]string, error) {
 			start = -1
 		}
 	}
-	return out, nil
-}
-
-// gzipped compresses s, for the tests.
-func gzipped(t *testing.T, s string) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write([]byte(s)); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
+	return out
 }
 
 // The matcher itself: every closed form is caught, and the placeholders and import paths that
@@ -304,29 +265,13 @@ func TestLocalPathMatcher(t *testing.T) {
 		t.Errorf("two forms on one line give %d findings, want 2: %v", len(f), f)
 	}
 
-	// A gzip stream is scanned after decompression; its compressed bytes hide the path. Deflate
-	// stores a short input as it is, so the fixture repeats enough to be compressed for real.
-	pad := strings.Repeat("\x32\x0bruntime/x.go", 64)
-	leak := pad + "\x32" + unbar("\x24/Use|rs/somebody/Dev/x.go") + pad
-	z := gzipped(t, leak)
-	if bytes.Contains(z, []byte("somebody")) {
-		t.Fatal("the gzip fixture keeps its plaintext, so it cannot show decompression")
+	// A binary file is scanned run by run of printable bytes.
+	pad := strings.Repeat("\x32\x0bruntime/x.go", 4)
+	if f := binaryLocalPaths([]byte(pad + "\x32" + unbar("\x24/Use|rs/somebody/Dev/x.go") + pad)); len(f) != 1 {
+		t.Errorf("a binary with a home path gives %v; want one finding", f)
 	}
-	if f, err := binaryLocalPaths(z); err != nil || len(f) != 1 {
-		t.Errorf("a gzipped profile string gives %v, %v; want one finding", f, err)
-	}
-	if f, err := binaryLocalPaths(gzipped(t, pad)); err != nil || len(f) != 0 {
-		t.Errorf("a clean gzipped profile gives %v, %v; want nothing", f, err)
-	}
-	if f, err := binaryLocalPaths([]byte(leak)); err != nil || len(f) != 1 {
-		t.Errorf("an uncompressed binary gives %v, %v; want one finding", f, err)
-	}
-	if _, err := binaryLocalPaths(z[:len(z)/2]); err == nil {
-		t.Error("a truncated gzip stream is not an error")
-	}
-	two := append(gzipped(t, "clean"), gzipped(t, leak)...)
-	if f, err := binaryLocalPaths(two); err != nil || len(f) != 1 {
-		t.Errorf("a second gzip member gives %v, %v; want one finding", f, err)
+	if f := binaryLocalPaths([]byte(pad)); len(f) != 0 {
+		t.Errorf("a clean binary gives %v; want nothing", f)
 	}
 }
 
@@ -424,8 +369,7 @@ func checkListing(t *testing.T, listed []string) {
 }
 
 // TestRepositoryHygiene scans every file of the repository, this one included: a text file for
-// Markdown names that resolve nowhere and for local paths, a gzip stream (a pprof profile) and any
-// other binary file for local paths.
+// Markdown names that resolve nowhere and for local paths, and a binary file for local paths.
 func TestRepositoryHygiene(t *testing.T) {
 	listed, git := listFiles(t)
 	if git {
@@ -436,8 +380,8 @@ func TestRepositoryHygiene(t *testing.T) {
 		files[f] = true
 		bases[path.Base(f)] = true
 	}
-	text, gz, binary := 0, 0, 0
-	var missing, unreadable []string
+	text, binary := 0, 0
+	var missing []string
 	for _, f := range listed {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -448,21 +392,11 @@ func TestRepositoryHygiene(t *testing.T) {
 			}
 			t.Fatal(err)
 		}
-		if isGzip(b) || binaryText(b) {
-			found, err := binaryLocalPaths(b)
-			if err != nil {
-				unreadable = append(unreadable, f)
-				t.Errorf("%s: %v: its content is not scanned", f, err)
-				continue
-			}
-			for _, why := range found {
+		if binaryText(b) {
+			for _, why := range binaryLocalPaths(b) {
 				t.Errorf("%s: %s: write the path the way a -trimpath build records it", f, why)
 			}
-			if isGzip(b) {
-				gz++
-			} else {
-				binary++
-			}
+			binary++
 			continue
 		}
 		for i, line := range strings.Split(string(b), "\n") {
@@ -478,12 +412,11 @@ func TestRepositoryHygiene(t *testing.T) {
 	for _, f := range missing {
 		t.Errorf("%s is listed but missing from the working tree, so it is not scanned", f)
 	}
-	if want := len(listed) - len(missing) - len(unreadable); text+gz+binary != want {
-		t.Fatalf("scanned %d files (%d text, %d gzip, %d other binary), want %d (%d listed, %d missing, %d unreadable)",
-			text+gz+binary, text, gz, binary, want, len(listed), len(missing), len(unreadable))
+	if want := len(listed) - len(missing); text+binary != want {
+		t.Fatalf("scanned %d files (%d text, %d binary), want %d (%d listed, %d missing)",
+			text+binary, text, binary, want, len(listed), len(missing))
 	}
-	t.Logf("scanned %d text files, %d gzip streams and %d other binary files (%d listed, git listing %v)",
-		text, gz, binary, len(listed), git)
+	t.Logf("scanned %d text files and %d binary files (%d listed, git listing %v)", text, binary, len(listed), git)
 	if text < minTextFiles {
 		t.Fatalf("checked %d text files, fewer than %d: the listing lost the tree", text, minTextFiles)
 	}
