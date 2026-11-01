@@ -538,6 +538,7 @@ client that does not run the detector needs only these keys:
 | `detector.last_admit_ns` | integer | the host clock of the last admission recorded for spacing (section 12.4); `0` before |
 | `detector.last_round_ns` | integer | the host clock of the last stop round (section 23.5); `0` before |
 | `detector.stop` | array of strings | the hold names the last stop round listed |
+| `detector.observed` | boolean | the last stop round was written in observe mode (section 23.6) |
 
 The other keys under `sample` and `detector` are the detector's own state (the readings, the
 window, the rates, the excess, the leaky bucket, the yellow latch, the episode count). A detector
@@ -1509,7 +1510,8 @@ one at a time.
    group id cannot have been reused. The kill and the reap are serialized under one lock in the
    run's supervisor. That is the one control: no other signal, no pid list.
 3. No new round starts until every listed hold reports `child_exited` or is gone and `post_kill_s`
-   has passed.
+   has passed, except that under `mode = "enforce"` a round written in observe mode
+   (`detector.observed`), whose holds never exit, holds nothing back.
 
 The oldest running hold, a hold whose label has `no_restart` and a run that shares coreslot's
 process group are never victims. A run that finds its command ended by a `SIGKILL` it did not send does not

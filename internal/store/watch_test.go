@@ -97,6 +97,27 @@ func TestOneStopRoundPerEpisode(t *testing.T) {
 	}
 }
 
+// A round written in observe mode, whose listed children never exit, does not hold back the next
+// round once the mode is enforce. Mutation: one rule for both modes writes no second round.
+func TestObserveRoundDoesNotBlockEnforce(t *testing.T) {
+	sec := enter(t, open(t, newDir(t)))
+	m := &machine{jobs: []watch.Job{stalled("1", 1), stalled("2", 2), stalled("3", 3)}}
+	c := watch.Defaults()
+	c.Observe = true
+	now := NowNS()
+	var d watch.Detector
+	for d.LastRoundNS == 0 && m.calls < 20 {
+		now += 2e9
+		d, _, _ = sec.Tick(now, m.read, c)
+	}
+	round := d.LastRoundNS
+	c.Observe = false
+	now += 2e9
+	if d, _, err := sec.Tick(now, m.read, c); err != nil || round == 0 || d.LastRoundNS == round {
+		t.Errorf("rounds at %d then %d (%v): want an enforced round at the first tick after the switch", round, d.LastRoundNS, err)
+	}
+}
+
 // With sample_log on, each machine sample is one line of log/watch.jsonl carrying every key of
 // the calibration's schema, and the sample that wrote a stop round names it; with it off nothing
 // is written. Mutation: logging at every Tick writes two lines for the first period.

@@ -67,7 +67,7 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 	var round []string
 	if d.Advance(prev, cur, c) >= watch.Red && roundOver(d, cur, c) { // red or floor: a stop round
 		round = watch.StopList(cur.Jobs, max(-cur.RoomMiB, 0))
-		d.Stop, d.LastRoundNS = round, cur.Host.WallNS
+		d.Stop, d.LastRoundNS, d.Observed = round, cur.Host.WallNS, c.Observe
 	}
 	if c.SampleLog {
 		_ = sec.s.appendSample(cur, d, round) // a calibration aid: a failed write costs a line
@@ -79,8 +79,12 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 }
 
 // roundOver reports whether a new stop round may start: post_kill_s has passed since the last
-// one, and every hold it listed is gone or reports its child exited.
+// one, and every hold it listed is gone or reports its child exited. A round observe mode wrote,
+// whose holds never exit, holds back no round under enforce.
 func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
+	if d.Observed && !c.Observe {
+		return true
+	}
 	if since := cur.Host.WallNS - d.LastRoundNS; since >= 0 && since < int64(c.PostKillS*1e9) {
 		return false
 	}
