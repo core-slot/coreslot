@@ -8,7 +8,7 @@ import (
 
 func TestValidateBounds(t *testing.T) {
 	base := func() Request {
-		return Request{Label: "gate:unit", Priority: 0, NeedMiB: 3072}
+		return Request{Label: "gate:unit", NeedMiB: 3072}
 	}
 	if err := base().Validate(); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
@@ -18,10 +18,6 @@ func TestValidateBounds(t *testing.T) {
 		mod   func(*Request)
 		valid bool
 	}{
-		{"priority 1000", func(r *Request) { r.Priority = 1000 }, true},
-		{"priority 1001", func(r *Request) { r.Priority = 1001 }, false},
-		{"priority -1000", func(r *Request) { r.Priority = -1000 }, true},
-		{"priority -1001", func(r *Request) { r.Priority = -1001 }, false},
 		{"128-byte label", func(r *Request) { r.Label = strings.Repeat("é", 64) }, true},
 		{"129-byte label", func(r *Request) { r.Label = strings.Repeat("é", 64) + "x" }, false},
 		{"invalid UTF-8 label", func(r *Request) { r.Label = "gate\xff" }, false},

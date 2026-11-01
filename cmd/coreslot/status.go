@@ -278,8 +278,8 @@ func (v statusView) human() string {
 		if t.position > 0 {
 			pos = fmt.Sprint(t.position)
 		}
-		line := fmt.Sprintf("  %s. %s  pid %d  priority %d  need mem %s  waiting %s", pos, labelText(t.info.Label),
-			t.info.PID, t.info.Priority, spec.FormatMiB(t.info.NeedMiB), duration(t.waited))
+		line := fmt.Sprintf("  %s. %s  pid %d  need mem %s  waiting %s", pos, labelText(t.info.Label),
+			t.info.PID, spec.FormatMiB(t.info.NeedMiB), duration(t.waited))
 		switch t.state {
 		case "stalled":
 			line += "  STALLED"
@@ -397,7 +397,6 @@ type jsonTicket struct {
 	ID        string  `json:"id"`
 	Label     string  `json:"label"`
 	PID       int     `json:"pid"`
-	Priority  int     `json:"priority"`
 	NeedMiB   int64   `json:"need_mib"`
 	CreatedNS int64   `json:"created_ns"`
 	WaitedS   float64 `json:"waited_s"`
@@ -439,7 +438,7 @@ func (v statusView) document() jsonStatus {
 	}
 	for _, t := range v.tickets {
 		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
-			Priority: t.info.Priority, NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
+			NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
 			Position: t.position, State: t.state}
 		if v.observed > 0 {
 			stalled := t.state == "stalled"

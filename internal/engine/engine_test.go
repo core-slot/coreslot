@@ -394,7 +394,8 @@ func holdPath(t *testing.T, dir string, units int) string {
 
 // ---------------------------------------------------------------- ordering, cancel, reconcile
 
-func TestFIFOAtEqualPriority(t *testing.T) {
+// The queue orders by arrival alone (PROTOCOL.md section 9).
+func TestFIFOByArrival(t *testing.T) {
 	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
@@ -432,54 +433,6 @@ func TestFIFOAtEqualPriority(t *testing.T) {
 	}
 	if got := strings.Join(order, ","); got != "a,b,c" {
 		t.Fatalf("admission order %q, want a,b,c", got)
-	}
-}
-
-func TestPriorityAgingViaKey(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"128M\"\n")
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	blocker := enqueue(t, e, needLabel("mem=1", "blocker"))
-	r := step(t, blocker)
-	if !isAdmitted(r) {
-		t.Fatal("blocker not admitted")
-	}
-	holder := r.(Admitted).Grant
-
-	a := enqueue(t, e, needLabel("mem=1", "a")) // priority 0 at r0
-	clk.advance(30 * time.Second)
-	reqB := needLabel("mem=1", "b")
-	reqB.Priority = 1 // arrives 30 s later with one point: key r0-30 s, ahead of a
-	b := enqueue(t, e, reqB)
-	clk.advance(31 * time.Second)
-	reqC := needLabel("mem=1", "c")
-	reqC.Priority = 1 // arrives 61 s after a with one point: key r0+1 s, behind a
-	c := enqueue(t, e, reqC)
-	if !(b.key.Less(a.key) && a.key.Less(c.key)) {
-		t.Fatalf("keys: a %v b %v c %v, want b < a < c", a.key, b.key, c.key)
-	}
-	holder.Close()
-
-	var order []string
-	waiting := map[string]*Ticket{"a": a, "b": b, "c": c}
-	var last *Grant
-	for round := 0; round < 12 && len(order) < 3; round++ {
-		clk.advance(time.Second)
-		for _, name := range []string{"c", "a", "b"} {
-			if tk, ok := waiting[name]; ok {
-				if r := step(t, tk); isAdmitted(r) {
-					order = append(order, name)
-					last = r.(Admitted).Grant
-					delete(waiting, name)
-				}
-			}
-		}
-		if round%2 == 1 && last != nil {
-			last.Close()
-		}
-	}
-	if got := strings.Join(order, ","); got != "b,a,c" {
-		t.Fatalf("admission order %q, want b,a,c", got)
 	}
 }
 

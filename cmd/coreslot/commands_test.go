@@ -232,7 +232,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("tickets = %v", tickets)
 	}
 	tk := tickets[0].(map[string]any)
-	const ticketKeys = "created_ns id label need_mib pid position priority stalled state waited_s"
+	const ticketKeys = "created_ns id label need_mib pid position stalled state waited_s"
 	if got := keysOf(tk); got != ticketKeys {
 		t.Errorf("ticket keys\n got %s\nwant %s", got, ticketKeys)
 	}
@@ -318,14 +318,14 @@ func TestStatusObserveReportsStalled(t *testing.T) {
 }
 
 // status shows each waiting ticket's need on the ticket's line as the waiting line writes it,
-// between its priority and how long it has waited, and the budget's line.
+// between its pid and how long it has waited, and the budget's line.
 func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"2048M\"\n")
 	c := openLib(t, dir)
 	hold(t, c, "gate", 16)
 	queue(t, c, "wide", 12)
 	r := cli(t, baseEnv(dir), "status")
-	want := fmt.Sprintf("\n  1. wide  pid %d  priority 0  need mem 1.5 GiB  waiting ", os.Getpid())
+	want := fmt.Sprintf("\n  1. wide  pid %d  need mem 1.5 GiB  waiting ", os.Getpid())
 	if r.code != 0 || !strings.Contains(r.stdout, want) {
 		t.Errorf("status: exit %d, want a ticket line with %q:\n%s", r.code, want, r.stdout)
 	}

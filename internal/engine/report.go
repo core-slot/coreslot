@@ -22,7 +22,6 @@ type TicketInfo struct {
 	Name      string // the ticket's file name
 	ID        string // its first three fields: what a cancel request names
 	Label     string // unescaped: escape it before printing
-	Priority  int
 	PID       int
 	NeedMiB   int64
 	CreatedNS int64

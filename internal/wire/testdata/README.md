@@ -3,7 +3,7 @@
 Test vectors for the names and bodies of `PROTOCOL.md` section 7. The Go reference implementation
 reads these files; it does not generate them at test time. This
 README is enough to consume them without reading any Go code. The rules the fixtures exercise are
-those of `PROTOCOL.md` sections 1, 7.1 to 7.5 and 9; where this file and `PROTOCOL.md` differ,
+those of `PROTOCOL.md` sections 1 and 7.1 to 7.5; where this file and `PROTOCOL.md` differ,
 `PROTOCOL.md` wins and the difference is a bug in the fixtures.
 
 ## Layout
@@ -11,7 +11,6 @@ those of `PROTOCOL.md` sections 1, 7.1 to 7.5 and 9; where this file and `PROTOC
 ```
 names.json            names: ticket/hold names and cancel names, accepted and refused
 display.json          label -> display suffix examples (informational, see below)
-order_keys.json       arrival time and priority -> order key
 bodies/ticket/        ticket bodies
 bodies/hold/          hold bodies
 bodies/cancel/        cancel request bodies
@@ -93,13 +92,6 @@ at most 18446744073709551615, 2^64 - 1: a 20-digit value above it, such as
 `18446744073709551616` or `99999999999999999999`, makes the name invalid. A parser returns the
 three numbers; the display is checked against its character set and otherwise ignored. A name
 that does not match is not an entry of the directory.
-
-## order_keys.json
-
-A list of `{ "arrival_ns", "priority", "order_key" }`. `order_key` is
-`arrival_ns - priority * 60000000000` as a 20-digit zero-padded string, and **0 when that value is
-below zero** (`PROTOCOL.md` section 9): for example `arrival_ns` 0 with priority 1000 gives
-`00000000000000000000`. The vectors assume a priority already validated to `[-1000, 1000]`.
 
 ## display.json (informational)
 

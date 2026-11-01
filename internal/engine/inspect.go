@@ -77,7 +77,7 @@ func (e *Engine) Snapshot() (Report, error) {
 			return Report{}, err
 		}
 		r.Tickets = append(r.Tickets, TicketInfo{Name: en.Name, ID: en.ID.String(), Label: tk.Label,
-			Priority: tk.Priority, PID: en.ID.PID, NeedMiB: tk.NeedMiB, CreatedNS: tk.CreatedNS,
+			PID: en.ID.PID, NeedMiB: tk.NeedMiB, CreatedNS: tk.CreatedNS,
 			MtimeNS: en.MtimeNS, Dead: dead})
 	}
 

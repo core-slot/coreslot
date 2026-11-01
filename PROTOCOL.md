@@ -565,7 +565,6 @@ Body:
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
-| `priority` | integer | `-1000..1000` |
 | `need_mib` | integer | `1..1073741824` (1 PiB); the memory the run needs, in MiB |
 | `created_ns` | integer | `≥ 0`; the wall clock read for `arrival_ns` (section 9) |
 
@@ -693,14 +692,11 @@ run-log append happen outside it.
 
 ## 9. Order
 
-Priority is an integer in `[-1000, 1000]`, default 0; higher runs first. Waiting ages a ticket by
-one priority point per minute, which gives the same order as a static key:
+The queue orders by arrival alone:
 
 ```
-order-key = arrival_ns − priority × 60 000 000 000      (ascending; ties by pid, then seq)
+order-key = max(0, arrival_ns)      (ascending; ties by pid, then seq)
 ```
-
-An order key computed below zero is 0.
 
 `arrival_ns` is the wall clock read inside the enqueue section. A ticket is **ahead** of another
 when its (order-key, pid, seq) is smaller. A wall-clock step misorders the tickets enqueued across

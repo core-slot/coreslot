@@ -5,8 +5,6 @@ package wire
 
 import (
 	"fmt"
-	"math"
-	"math/big"
 	"strconv"
 )
 
@@ -130,18 +128,6 @@ func digits(s string) (uint64, bool) {
 	return v, err == nil
 }
 
-// OrderKey is `arrival_ns - priority * 60_000_000_000` (PROTOCOL.md section 9): ascending order
-// runs first, and a minute of waiting is worth one priority point. The result saturates: below
-// zero it is 0 (the key is unsigned) and above the largest uint64 it is that maximum. The caller
-// validates priority; no input makes the arithmetic wrap.
-func OrderKey(arrivalNS int64, priority int) uint64 {
-	k := new(big.Int).Mul(big.NewInt(int64(priority)), big.NewInt(60_000_000_000))
-	k.Sub(big.NewInt(arrivalNS), k)
-	switch {
-	case k.Sign() < 0:
-		return 0
-	case !k.IsUint64():
-		return math.MaxUint64
-	}
-	return k.Uint64()
-}
+// OrderKey is the order key of a ticket that arrived at arrivalNS (PROTOCOL.md section 9): the
+// arrival itself, ascending order running first; an arrival before the epoch is 0.
+func OrderKey(arrivalNS int64) uint64 { return uint64(max(arrivalNS, 0)) }

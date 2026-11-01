@@ -23,7 +23,6 @@ func malformed(format string, args ...any) error {
 // Ticket is the body of a queue entry (PROTOCOL.md section 7.3).
 type Ticket struct {
 	Label     string
-	Priority  int
 	NeedMiB   int64
 	CreatedNS int64
 }
@@ -55,7 +54,6 @@ type Cancel struct {
 
 type ticketJSON struct {
 	Label     string `json:"label"`
-	Priority  int    `json:"priority"`
 	NeedMiB   int64  `json:"need_mib"`
 	CreatedNS int64  `json:"created_ns"`
 }
@@ -139,7 +137,7 @@ func validate(v any) error {
 // ---------------------------------------------------------------- rules
 
 func (t Ticket) validate() error {
-	if err := (spec.Request{Label: t.Label, Priority: t.Priority, NeedMiB: t.NeedMiB}).Validate(); err != nil {
+	if err := (spec.Request{Label: t.Label, NeedMiB: t.NeedMiB}).Validate(); err != nil {
 		return malformed("%v", err)
 	}
 	if t.CreatedNS < 0 {
@@ -178,9 +176,6 @@ func DecodeTicket(body []byte) (Ticket, error) {
 	}
 	var t Ticket
 	if t.Label, err = o.str("label"); err != nil {
-		return Ticket{}, err
-	}
-	if t.Priority, err = o.smallInt("priority"); err != nil {
 		return Ticket{}, err
 	}
 	if t.NeedMiB, err = o.int64("need_mib"); err != nil {

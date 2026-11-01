@@ -1,5 +1,5 @@
 // Package spec holds the validated request type shared by the engine and the CLI: a memory need
-// in MiB, a priority and a label, with the bounds of PROTOCOL.md.
+// in MiB and a label, with the bounds of PROTOCOL.md.
 package spec
 
 import (
@@ -11,8 +11,6 @@ import (
 
 // Bounds of format 2 (PROTOCOL.md section 7).
 const (
-	MinPriority   = -1000
-	MaxPriority   = 1000
 	MaxLabelBytes = 128
 	// MaxNeedMiB bounds every MiB amount of a body (1 PiB), so that summing a full directory of
 	// them never overflows.
@@ -24,10 +22,9 @@ const (
 
 // Request is what a client asks for: NeedMiB of memory.
 type Request struct {
-	Label    string
-	Priority int
-	NeedMiB  int64
-	Tree     bool // the process tree at the requester's pid carries the grant's work; only the CLI sets it
+	Label   string
+	NeedMiB int64
+	Tree    bool // the process tree at the requester's pid carries the grant's work; only the CLI sets it
 }
 
 // UsageError reports input that can never be valid: the CLI's exit 64.
@@ -57,9 +54,6 @@ func ParseDigits(s string) (int, bool) {
 func (r Request) Validate() error {
 	if r.NeedMiB < 1 || r.NeedMiB > MaxNeedMiB {
 		return usagef("a need of %d MiB: want 1 to %d", r.NeedMiB, MaxNeedMiB)
-	}
-	if r.Priority < MinPriority || r.Priority > MaxPriority {
-		return usagef("priority %d is outside [%d, %d]", r.Priority, MinPriority, MaxPriority)
 	}
 	return ValidateLabel(r.Label)
 }

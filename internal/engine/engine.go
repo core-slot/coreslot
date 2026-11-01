@@ -225,12 +225,11 @@ func (t *Ticket) publish(sec *store.Section) error {
 		return err
 	}
 	arrival := e.clock.Realtime()
-	body, err := wire.Encode(wire.Ticket{Label: t.req.Label, Priority: t.req.Priority,
-		NeedMiB: t.req.NeedMiB, CreatedNS: arrival})
+	body, err := wire.Encode(wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival})
 	if err != nil {
 		return err
 	}
-	id := wire.ID{OrderKey: wire.OrderKey(arrival, t.req.Priority), PID: os.Getpid()}
+	id := wire.ID{OrderKey: wire.OrderKey(arrival), PID: os.Getpid()}
 	f, name, seq, err := sec.PublishNamed(store.QueueDir, body, e.seq(), e.seq, func(seq int) string {
 		return wire.TicketName(wire.ID{OrderKey: id.OrderKey, PID: id.PID, Seq: seq}, t.req.Label)
 	})

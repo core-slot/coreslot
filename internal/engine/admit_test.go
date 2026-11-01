@@ -446,9 +446,8 @@ func TestReelectionInsideTheSection(t *testing.T) {
 	defaultPoint := point
 	point = func(name string) {
 		if name == "admit.before-enter" && p == nil {
-			req := needLabel("mem=1", "p")
-			req.Priority = 10 // ahead of h
-			p = enqueue(t, newEngine(t, dir, clk), req)
+			early := &fakeClock{mono: clk.clock().Monotonic(), real: clk.clock().Realtime() - int64(time.Minute)}
+			p = enqueue(t, newEngine(t, dir, early), needLabel("mem=1", "p")) // an earlier arrival: ahead of h
 		}
 	}
 	t.Cleanup(func() { point = defaultPoint })
