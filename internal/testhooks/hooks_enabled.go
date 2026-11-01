@@ -1,8 +1,8 @@
 //go:build coreslot_testhooks
 
 // Package testhooks provides pause points, a wall-clock offset, a format list, a getent substitute,
-// a password database that finds no record and a memory headroom for the deterministic trace
-// tests and the fallback tests.
+// a password database that finds no record, a memory headroom and machine readings for the
+// deterministic trace tests and the fallback tests.
 // This file is the enabled build (tag coreslot_testhooks); the
 // variables it reads are ignored by every other build.
 //
@@ -21,10 +21,13 @@
 //   - CORESLOT_TESTHOOK_HEADROOM_MIB: a decimal integer of MiB that replaces the kernel's memory
 //     headroom in the live mem size, which then measures no holder's tree, so that a test's
 //     live admission never depends on the machine's memory.
+//   - <CORESLOT_TESTHOOK_DIR>/readings: when this file exists, its named numbers replace the
+//     machine readings of those names, re-read whenever the file changes.
 package testhooks
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -71,7 +74,7 @@ func Point(name string) {
 // directory.
 func RealtimeOffset() time.Duration {
 	if dir := os.Getenv("CORESLOT_TESTHOOK_DIR"); dir != "" {
-		if d, ok := fileOffset(filepath.Join(dir, OffsetFile)); ok {
+		if d, ok := offsetCache.load(filepath.Join(dir, OffsetFile), time.ParseDuration); ok {
 			return d
 		}
 	}
@@ -86,37 +89,73 @@ func RealtimeOffset() time.Duration {
 	return d
 }
 
-// offsetCache holds the last parsed offset file, keyed by path, mtime and size.
-var offsetCache struct {
+// ReadingsFile is the name, under CORESLOT_TESTHOOK_DIR, of the steppable machine readings.
+const ReadingsFile = "readings"
+
+// Readings returns the numbers of <CORESLOT_TESTHOOK_DIR>/readings, one "name value" line each,
+// re-read whenever the file changes as the offset file is; set is false when it does not exist.
+// The names are the caller's: it replaces the readings named and keeps the others.
+func Readings() (nums map[string]int64, set bool) {
+	dir := os.Getenv("CORESLOT_TESTHOOK_DIR")
+	if dir == "" {
+		return nil, false
+	}
+	nums, set = readingsCache.load(filepath.Join(dir, ReadingsFile), parseReadings)
+	return maps.Clone(nums), set
+}
+
+// parseReadings parses the lines of a readings file.
+func parseReadings(text string) (map[string]int64, error) {
+	nums := map[string]int64{}
+	for line := range strings.Lines(text) {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			return nil, fmt.Errorf("want \"name value\", got %q", line)
+		}
+		n, err := strconv.ParseInt(f[1], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		nums[f[0]] = n
+	}
+	return nums, nil
+}
+
+var (
+	offsetCache   fileCache[time.Duration]
+	readingsCache fileCache[map[string]int64]
+)
+
+// fileCache holds the last parse of a hook file, keyed by path, mtime and size.
+type fileCache[T any] struct {
 	sync.Mutex
 	path  string
 	mtime time.Time
 	size  int64
-	d     time.Duration
+	v     T
 }
 
-// fileOffset reads the offset file at path; ok is false when it does not exist.
-func fileOffset(path string) (time.Duration, bool) {
+// load returns the parse of the file at path, parsed again only when its mtime or size changed;
+// ok is false when it does not exist. A file that does not parse panics.
+func (c *fileCache[T]) load(path string, parse func(string) (T, error)) (v T, ok bool) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return 0, false
+		return v, false
 	}
-	c := &offsetCache
 	c.Lock()
 	defer c.Unlock()
 	if c.path == path && c.mtime.Equal(fi.ModTime()) && c.size == fi.Size() {
-		return c.d, true
+		return c.v, true
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return 0, false // removed between the stat and the read
+		return v, false // removed between the stat and the read
 	}
-	d, err := time.ParseDuration(strings.TrimSpace(string(data)))
-	if err != nil {
+	if v, err = parse(strings.TrimSpace(string(data))); err != nil {
 		panic(fmt.Sprintf("testhooks: %s: %v", path, err))
 	}
-	c.path, c.mtime, c.size, c.d = path, fi.ModTime(), fi.Size(), d
-	return d, true
+	c.path, c.mtime, c.size, c.v = path, fi.ModTime(), fi.Size(), v
+	return v, true
 }
 
 // Formats returns CORESLOT_TESTHOOK_FORMATS, or [2] when it is unset.

@@ -2,6 +2,21 @@
 
 package memsample
 
+import (
+	"fmt"
+	"runtime"
+)
+
+// ReadHost is implemented on macOS and Linux only; elsewhere it is an error.
+func ReadHost() (HostReading, error) {
+	return HostReading{}, fmt.Errorf("the machine's readings are not implemented on %s", runtime.GOOS)
+}
+
+// ReadTreeTimes is implemented on macOS and Linux only; elsewhere it is an error.
+func ReadTreeTimes(pids []int) (TreeTimes, error) {
+	return TreeTimes{}, fmt.Errorf("process times are not implemented on %s", runtime.GOOS)
+}
+
 // Source is empty: Tree measures nothing here.
 const Source = ""
 

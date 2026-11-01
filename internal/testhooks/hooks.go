@@ -1,8 +1,8 @@
 //go:build !coreslot_testhooks
 
 // Package testhooks provides pause points, a wall-clock offset, a format list, a getent substitute,
-// a password database that finds no record and a memory headroom for the deterministic trace
-// tests and the fallback tests.
+// a password database that finds no record, a memory headroom and machine readings for the
+// deterministic trace tests and the fallback tests.
 // They act only in binaries built with the coreslot_testhooks tag; in every other build they are
 // inert and ignore the environment.
 package testhooks
@@ -30,3 +30,7 @@ func PasswdMiss() bool { return false }
 // Headroom replaces the kernel's memory headroom, in MiB; always 0, false without the
 // coreslot_testhooks tag.
 func Headroom() (mib int64, set bool) { return 0, false }
+
+// Readings replaces machine readings by name; always nil, false without the coreslot_testhooks
+// tag.
+func Readings() (nums map[string]int64, set bool) { return nil, false }

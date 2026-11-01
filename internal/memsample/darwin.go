@@ -45,21 +45,30 @@ func resident(pid int) (private, shared int64, ok bool) {
 	return private, 0, ok
 }
 
-// footprint reads ri_phys_footprint of pid's rusage_info_v4 (proc_pid_rusage), in KiB.
+// footprint reads ri_phys_footprint of pid's rusage_info_v4, in KiB.
 func footprint(pid int) (int64, bool) {
-	const (
-		pidRusage   = 9  // PROC_INFO_CALL_PIDRUSAGE
-		rusageV4    = 4  // RUSAGE_INFO_V4
-		footprintAt = 72 // offset of ri_phys_footprint in rusage_info_v4
-	)
-	var buf [512]byte
+	ri, ok := rusage(pid, rusageV4)
+	return int64(ri[footprintAt] >> 10), ok
+}
+
+// The rusage_info flavors read, and the places of their fields in 64-bit words, after the 16-byte
+// ri_uuid; V4's fields are V6's first ones.
+const (
+	rusageV4    = 4  // RUSAGE_INFO_V4
+	rusageV6    = 6  // RUSAGE_INFO_V6
+	userAt      = 2  // ri_user_time, in mach ticks
+	sysAt       = 3  // ri_system_time, in mach ticks
+	footprintAt = 9  // ri_phys_footprint, in bytes
+	pageWaitAt  = 50 // ri_page_wait_time_mach, V6 only
+)
+
+// rusage reads pid's rusage_info of flavor (proc_pid_rusage); ok is false when pid is gone.
+func rusage(pid, flavor int) (ri [64]uint64, ok bool) {
+	const pidRusage = 9 // PROC_INFO_CALL_PIDRUSAGE
 	//lint:ignore SA1019 x/sys/unix wraps no proc_pid_rusage; a libSystem call needs cgo or an assembly trampoline
-	_, _, errno := unix.Syscall6(unix.SYS_PROC_INFO, pidRusage, uintptr(pid), rusageV4, 0,
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	if errno != 0 {
-		return 0, false
-	}
-	return int64(binary.LittleEndian.Uint64(buf[footprintAt:]) >> 10), true
+	_, _, errno := unix.Syscall6(unix.SYS_PROC_INFO, pidRusage, uintptr(pid), uintptr(flavor), 0,
+		uintptr(unsafe.Pointer(&ri[0])), unsafe.Sizeof(ri))
+	return ri, errno == 0
 }
 
 // Headroom returns the memory the kernel can hand out without paging anything anonymous out, in

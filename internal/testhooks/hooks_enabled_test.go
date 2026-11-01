@@ -151,3 +151,42 @@ func TestRealtimeOffsetFileSteps(t *testing.T) {
 		RealtimeOffset()
 	}()
 }
+
+// The readings file under CORESLOT_TESTHOOK_DIR gives its numbers while it exists and is re-read
+// whenever it changes, so a test can step the machine readings of every running process at once.
+// Mutation: parse the file once, and the step to 200 is not seen.
+func TestReadingsFileSteps(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CORESLOT_TESTHOOK_DIR", dir)
+	path := filepath.Join(dir, ReadingsFile)
+	write := func(v string, mtime time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, set := Readings(); got != nil || set {
+		t.Fatalf("without the file Readings() = %v, %v; want nil, false", got, set)
+	}
+	base := time.Now()
+	write("decomp 100\nwall_ns -5\n", base)
+	if got, set := Readings(); !set || len(got) != 2 || got["decomp"] != 100 || got["wall_ns"] != -5 {
+		t.Errorf("Readings() = %v, %v; want map[decomp:100 wall_ns:-5], true", got, set)
+	}
+	write("decomp 200\nwall_ns -5\n", base.Add(time.Second))
+	if got, _ := Readings(); got["decomp"] != 200 {
+		t.Errorf("after the step Readings() = %v; want decomp 200", got)
+	}
+	write("decomp x\n", base.Add(2*time.Second))
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("a malformed readings file did not panic")
+			}
+		}()
+		Readings()
+	}()
+}

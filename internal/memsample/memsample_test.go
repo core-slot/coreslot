@@ -2,7 +2,11 @@ package memsample
 
 import (
 	"fmt"
+	"go/parser"
+	"go/token"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,6 +160,78 @@ func TestCgroupLimit(t *testing.T) {
 	} {
 		if mib, ok := cgroupLimit(c.self, c.read); mib != c.mib || ok != c.wantOK {
 			t.Errorf("%s: cgroupLimit = %d, %v; want %d, %v", c.name, mib, ok, c.mib, c.wantOK)
+		}
+	}
+}
+
+// A laptop that slept for ten minutes between two samples advanced its sleep-inclusive clock by
+// 600 s and its awake clock by 2 s: a gap. Mutation: drop the divergence check, and a 3 s sleep
+// inside one period passes.
+func TestClockPairDetectsSleep(t *testing.T) {
+	const s = int64(time.Second)
+	prev := HostReading{WallNS: 1000 * s, AwakeNS: 900 * s}
+	for _, c := range []struct {
+		name        string
+		wall, awake int64
+		want        bool
+	}{
+		{"slept 598 s", 600 * s, 2 * s, true},
+		{"slept 3 s", 5 * s, 2 * s, true},
+		{"one period awake", 2 * s, 2 * s, false},
+		{"sampler stalled 7 s", 7 * s, 7 * s, true},
+		{"a reading from before a reboot", -990 * s, -990 * s, true},
+	} {
+		cur := HostReading{WallNS: prev.WallNS + c.wall, AwakeNS: prev.AwakeNS + c.awake}
+		if got := Gap(prev, cur); got != c.want {
+			t.Errorf("%s: Gap = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Mutation: take the total of the "full" line, and the stall reads 678.
+func TestPSITotalParse(t *testing.T) {
+	const text = "some avg10=0.00 avg60=0.12 avg300=0.05 total=12345\n" +
+		"full avg10=0.00 avg60=0.00 avg300=0.00 total=678\n"
+	if us, ok := psiTotal(text); !ok || us != 12345 {
+		t.Errorf("psiTotal = %d, %v; want 12345, true", us, ok)
+	}
+	for _, bad := range []string{"", "full avg10=0.00 total=678\n", "some avg10=0.00 total=x\n"} {
+		if us, ok := psiTotal(bad); ok {
+			t.Errorf("psiTotal(%q) = %d, true; want not found", bad, us)
+		}
+	}
+}
+
+// Mutation: match the key as a prefix, and pswpin_zero's 9 is read.
+func TestVmstatParse(t *testing.T) {
+	const text = "nr_free_pages 1000\npswpin_zero 9\npswpin 42\npswpout 7\n"
+	if n, ok := vmstat(text, "pswpin"); !ok || n != 42 {
+		t.Errorf("vmstat(pswpin) = %d, %v; want 42, true", n, ok)
+	}
+	if n, ok := vmstat(text, "pgmajfault"); ok {
+		t.Errorf("vmstat(pgmajfault) = %d, true; want not found", n)
+	}
+}
+
+// The watchdog reads the machine inside its tick, where a subprocess would cost more than the
+// tick. Mutation: import os/exec in any file of the package.
+func TestNoSubprocessImports(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("Glob = %v, %v", files, err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imp := range f.Imports {
+			if imp.Path.Value == `"os/exec"` {
+				t.Errorf("%s imports os/exec", name)
+			}
 		}
 	}
 }

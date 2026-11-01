@@ -20,8 +20,10 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_GETENT", "/tmp/fake-getent")
 	t.Setenv("CORESLOT_TESTHOOK_PASSWD_MISS", "1")
 	t.Setenv("CORESLOT_TESTHOOK_HEADROOM_MIB", "4096")
-	if err := os.WriteFile(filepath.Join(dir, "realtime-offset"), []byte("1h"), 0o600); err != nil {
-		t.Fatal(err)
+	for name, v := range map[string]string{"realtime-offset": "1h", "readings": "decomp 1\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	done := make(chan struct{})
@@ -38,7 +40,7 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "realtime-offset" {
+	if len(entries) != 2 {
 		t.Errorf("Point created files without the tag: %v", entries)
 	}
 	if got := RealtimeOffset(); got != 0 {
@@ -55,5 +57,8 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	}
 	if mib, set := Headroom(); mib != 0 || set {
 		t.Errorf("Headroom() = %d, %v, want 0, false", mib, set)
+	}
+	if got, set := Readings(); got != nil || set {
+		t.Errorf("Readings() = %v, %v, want nil, false", got, set)
 	}
 }

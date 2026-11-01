@@ -19,7 +19,24 @@ import (
 // incompressible bytes, prints "ready" and holds them for a minute.
 const helperEnv = "MEMSAMPLE_HELPER_MIB"
 
+// spinEnv makes the test binary a helper that spins until it has spent 1 s in user code, prints
+// "ready" and sleeps for a minute.
+const spinEnv = "MEMSAMPLE_HELPER_SPIN"
+
 func TestMain(m *testing.M) {
+	if os.Getenv(spinEnv) != "" {
+		for n := 0; ; n++ {
+			var ru syscall.Rusage
+			if n%1_000_000 == 0 {
+				if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil || ru.Utime.Sec >= 1 {
+					break
+				}
+			}
+		}
+		fmt.Println("ready")
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	if v := os.Getenv(helperEnv); v != "" {
 		mib, err := strconv.Atoi(v)
 		if err != nil {
@@ -82,6 +99,35 @@ func TestTreeCountsChildren(t *testing.T) {
 	kib, ok := Tree(cmd.Process.Pid)
 	if mib := kib / 1024; !ok || mib < 540 || mib > 760 {
 		t.Errorf("Tree = %d MiB, %v; want 540..760 MiB, true", mib, ok)
+	}
+}
+
+// A child that spent 1 s in user code reads as about 1e9 ns of user time. Mutation: leave out
+// the mach tick conversion on Apple Silicon, and it reads as 24 ms.
+func TestTreeTimesTicks(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), spinEnv+"=1")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
+		t.Fatalf("helper said %q, %v; want ready", line, err)
+	}
+	tt, err := ReadTreeTimes([]int{cmd.Process.Pid})
+	if err != nil || tt.UserNS < 0.8e9 || tt.UserNS > 1.2e9 {
+		t.Errorf("ReadTreeTimes = %+v, %v; want UserNS within 20 %% of 1e9", tt, err)
 	}
 }
 
