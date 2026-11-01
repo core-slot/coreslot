@@ -155,16 +155,17 @@ func TestNoWaitRefusesAtRestart(t *testing.T) {
 	}
 }
 
-// --timeout covers the waits of a restart: B, stopped while the level stays out of calm, refuses
-// on its timeout instead of waiting for a next attempt. Mutation: a fresh timeout per attempt
-// keeps B waiting past it.
-func TestTimeoutCoversRestarts(t *testing.T) {
+// --timeout counts waiting: B's restart, which waits for calm past it, refuses with the stop's
+// reason and never runs outside the budget, even with --on-timeout run. Mutation: one deadline
+// for the whole run, or --on-timeout run at a restart, starts B's command again.
+func TestRestartTimeoutRefuses(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(capacityConfig(64 << 10)) // calm_s 30: no restart within the timeout
-	b := stopB(t, e, "--timeout", "30s")
+	b := stopB(t, e, "--timeout", "5s", "--on-timeout", "run")
 	b.ExitCode(75)
-	if out := b.Stderr(); !strings.Contains(out, "(--timeout)") {
-		t.Errorf("stderr:\n%s\nwant the timeout's refusal", out)
+	if out := b.Stderr(); !strings.Contains(out, "was stopped for memory (swap room under the floor, at ") ||
+		!strings.Contains(out, ") and not restarted within 5s (--timeout)\n") {
+		t.Errorf("stderr:\n%s\nwant the stop and the timeout's refusal", out)
 	}
 	if _, restarted := e.Started("B"); restarted {
 		t.Error("B's command started again")

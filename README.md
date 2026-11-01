@@ -163,10 +163,10 @@ coreslot doctor            # state directory, filesystem, permissions, format, r
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
 ```
 
-`--no-wait` refuses at once instead of queueing, `--timeout D` bounds the waiting (restarts
-included; it never stops a running command), and `--on-timeout run` runs the command without the
-budget when the timeout passes. The command receives `CORESLOT_GRANTED_MEM` (its need, in MiB) and
-inherits the descriptor that holds its reservation
+`--no-wait` refuses at once instead of queueing, `--timeout D` bounds each wait (it never stops a
+running command), and `--on-timeout run` runs the command without the budget when the timeout
+passes; a restart that waits past it refuses. The command receives `CORESLOT_GRANTED_MEM` (its
+need, in MiB) and inherits the descriptor that holds its reservation
 ([`PROTOCOL.md` section 17](PROTOCOL.md#17-descriptor-and-environment-contract)).
 
 **Nested runs are pass-through.** A `coreslot run` started inside another run's reservation does not

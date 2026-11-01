@@ -1122,10 +1122,11 @@ The examples use the `coreslot` CLI, which is not part of the protocol: `coreslo
 [--label L] [--timeout D] [--on-timeout run|fail] [--no-wait] [--strict] [--independent]
 [--same-group] [--refusal-code N] -- COMMAND...`. Without `--mem` the need is the label's entry in
 the needs file (section 5.4), else what the label's last counted runs needed (section 20), else the
-cold start (section 5.1). `--timeout` defaults to 0, no limit, and bounds the waiting: one deadline
-from the run's start, shared by every wait, those after a stop included, which never stops a
-running command; a negative one is a usage error. `--on-timeout` defaults to `fail`, so a `--timeout` that
-expires refuses; strict mode is `--strict`; `--refusal-code` defaults to 75. The other
+cold start (section 5.1). `--timeout` defaults to 0, no limit, and bounds each wait, the wait after
+a stop included; it never stops a running command; a negative one is a usage error. `--on-timeout`
+defaults to `fail`, so a `--timeout` that expires refuses; with `run` an ordinary request runs
+outside the budget, while a restart (section 24) refuses whatever `--on-timeout` says. Strict mode
+is `--strict`; `--refusal-code` defaults to 75. The other
 commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
 `coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]`,
 `coreslot stats [--label LABEL] [--json]` and `coreslot version`.

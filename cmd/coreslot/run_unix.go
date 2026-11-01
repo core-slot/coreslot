@@ -115,7 +115,7 @@ func (r *run) refuse(format string, args ...any) int {
 }
 
 // ordinary is a run that queues (PROTOCOL.md section 18 rule 3). A command a stop round killed
-// queues again with its first arrival, until its third stop; --timeout covers every wait.
+// queues again with its first arrival, until its third stop; --timeout bounds each wait.
 func (r *run) ordinary() int {
 	e, err := openEngine(r.loc, false)
 	if err != nil {
@@ -127,11 +127,6 @@ func (r *run) ordinary() int {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if r.o.timeout > 0 {
-		var c context.CancelFunc
-		ctx, c = context.WithTimeout(ctx, r.o.timeout)
-		defer c()
-	}
 	for {
 		g, code, ok := r.wait(ctx, cancel, e, req)
 		if !ok {
@@ -177,6 +172,11 @@ func restartNeed(peakKiB, needMiB int64) int64 { return max((peakKiB+1023)/1024,
 // wait queues req and waits for its grant. ok is false when the run ends without one, with code
 // its exit status.
 func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Engine, req spec.Request) (g *engine.Grant, code int, ok bool) {
+	if r.o.timeout > 0 {
+		var c context.CancelFunc
+		ctx, c = context.WithTimeout(ctx, r.o.timeout)
+		defer c()
+	}
 	r.freeWait = &freeMeter{needMiB: req.NeedMiB, headroom: memsample.Headroom}
 	r.why = func() string {
 		if rep, err := e.Snapshot(); err == nil {
@@ -217,19 +217,22 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 		return nil, code, false
 	}
 	if err != nil {
-		return nil, r.notAdmitted(e, err), false
+		return nil, r.notAdmitted(e, err, req.Restart), false
 	}
 	return g, 0, true
 }
 
-// notAdmitted handles a wait that ended without a grant.
-func (r *run) notAdmitted(e *engine.Engine, err error) int {
+// notAdmitted handles a wait that ended without a grant. A restart never runs outside the budget.
+func (r *run) notAdmitted(e *engine.Engine, err error, restart bool) int {
 	switch {
 	case errors.Is(err, engine.ErrCanceled):
 		return r.refuse("the request was cancelled")
 	case r.o.noWait && (errors.Is(err, errNotAtOnce) || errors.Is(err, context.DeadlineExceeded)):
 		r.notice("not admitted at once (--no-wait)%s", r.holdersText(e))
 		return r.o.refusalCode
+	case errors.Is(err, context.DeadlineExceeded) && restart:
+		return r.refuse("%s was stopped for memory (%s) and not restarted within %v (--timeout)",
+			commandText(r.o.argv), r.lastStop, r.o.timeout)
 	case errors.Is(err, context.DeadlineExceeded):
 		if r.o.onTimeout == "run" {
 			return r.timeoutRun(e)
