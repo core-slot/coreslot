@@ -117,6 +117,24 @@ func TestRedLeakyBucketSurvivesFlicker(t *testing.T) {
 	}
 }
 
+// The bucket saturates at red_samples: after 15 hot samples the first calm one leaves red, so a
+// calm machine gets no second round. Mutation: an uncapped bucket stays red for 10 calm samples.
+func TestRedEndsOnTheFirstCalmSample(t *testing.T) {
+	c := Defaults()
+	f := newFeed(c)
+	for range 15 {
+		f.step(c, true, job(0.60, 0.04))
+	}
+	if f.d.Level != Red {
+		t.Fatalf("after 15 hot samples: %v, want red", f.d.Level)
+	}
+	for i := range 20 {
+		if l := f.step(c, false, job(0.04, 0.04)); l >= Red {
+			t.Fatalf("calm sample %d: %v", i+1, l)
+		}
+	}
+}
+
 // One sample at 38 points, then calm: the bucket holds 1 and drains; never red.
 func TestSpikeDoesNotRed(t *testing.T) {
 	c := Defaults()

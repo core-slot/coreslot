@@ -1468,8 +1468,8 @@ below that applies.
 - **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
   stays below `yellow_points` for 15 samples in a row.
 - **Red:** a leaky bucket, per episode: +1 for a sample with `E ≥ red_points` and the gate open,
-  −0.5 for any other comparable sample, never below 0 and never reset. Red when it reaches
-  `red_samples`.
+  −0.5 for any other comparable sample, never below 0, never above `red_samples` and never reset.
+  Red while it is at `red_samples`, so the first sample after the danger leaves red.
 - **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
   `SwapFree` on Linux) is under `floor`, and swap used grew by at least 256 MiB over the last 20 s.
   It is an edge: a calm machine with little room never reaches it.

@@ -146,7 +146,7 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 		return Unknown
 	}
 	if d.Gate && d.Excess >= c.RedPoints {
-		d.Bucket++
+		d.Bucket = min(d.Bucket+1, c.RedSamples) // saturated, so red ends with the danger
 	} else {
 		d.Bucket = max(0, d.Bucket-0.5)
 	}
