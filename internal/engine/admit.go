@@ -125,11 +125,13 @@ func (t *Ticket) watchWait(sec *store.Section, c watch.Config, need, room int64,
 	case t.req.Restart && (!fresh || d.Level != watch.Green || mono-d.CalmSinceNS < int64(c.CalmS*1e9) ||
 		headroomOK && room < need+max(256, need/10)):
 		return true, nil
-	case !fresh:
+	case !fresh || d.Level == watch.Unknown:
 		return false, nil
 	case d.Level >= watch.Yellow:
 		return true, nil
-	case mono-d.YellowClearedNS >= int64(c.CalmS*1e9): // no clear within calm_s: no spacing
+	// Spacing needs the clear and the last start on this sample's clock: a reboot keeps watch.json.
+	case s.Host.WallNS == 0 || d.YellowClearedNS > mono || d.LastAdmitNS > mono ||
+		mono-d.YellowClearedNS >= int64(c.CalmS*1e9): // no clear within calm_s: no spacing
 	case d.LastAdmitNS >= d.YellowClearedNS && mono-d.LastAdmitNS < spacing:
 		return true, nil
 	default:

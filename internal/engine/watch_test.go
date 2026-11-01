@@ -75,6 +75,27 @@ func TestSpacingAfterClear(t *testing.T) {
 	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
 }
 
+// Detector times from another clock epoch (a reboot keeps watch.json; a failed reading stores a
+// zero sample) never space admissions. Mutation: dropping the epoch check keeps both jobs out.
+func TestSpacingOnlyWithinTheSampleEpoch(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	hold(t, e, need("mem=1"))
+	setWatch(t, e, clk, watch.Detector{YellowClearedNS: 5e14, LastAdmitNS: 5e14 + 1e9}, 0)
+	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+
+	sec, err := e.st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sec.SetWatch(watch.Detector{Level: watch.Unknown, LastAdmitNS: sampleWallNS}, watch.Sample{}, clk.clock().Realtime())
+	sec.Leave()
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+}
+
 // A restarted job waits for calm_s of green and for room of its need plus max(256 MiB, need/10),
 // where a new job of the same need starts. The room beside the 1-unit hold is 896 MiB.
 func TestRestartWaitsForCalmAndMargin(t *testing.T) {
