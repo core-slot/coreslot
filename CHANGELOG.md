@@ -39,8 +39,8 @@ reserve are interim defaults until calibration.
   a label from every stop round); `[memory] reserve` in the configuration.
 - `CORESLOT_HOLD`: a `coreslot run` inside a command's reservation runs inside it without queueing,
   unless `--independent`.
-- On Linux a run raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill takes a
-  restartable coreslot command before anything else of yours.
+- On Linux a run raises its own `oom_score_adj` to 500, unless its label has `no_restart = true`,
+  so the kernel's out-of-memory kill takes a coreslot command before the desktop.
 - `calibration/`: the harness that sets the watchdog's defaults from runs on real machines.
 - A Claude Code plugin, `integrations/claude-code`: a `PreToolUse` hook that refuses a bare heavy
   test or build command once and offers the same command back as `coreslot run -- <command>`. The

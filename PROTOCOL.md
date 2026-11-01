@@ -984,7 +984,8 @@ is passed on.
 
 On Linux a run SHOULD raise its own `oom_score_adj` to 500, never lowering a higher one, before it
 starts the command, which inherits it, so that the kernel's or systemd-oomd's out-of-memory kill
-takes a restartable job rather than the desktop.
+takes a coreslot job rather than the desktop. A run whose label has `no_restart` (section 5.4)
+leaves its score alone.
 
 ## 18. Nested runs: pass-through
 

@@ -113,7 +113,7 @@ and not restarted. The thresholds are `[watch]` keys with interim defaults; see
 the kill and says what it would have stopped.
 
 On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
-takes a restartable coreslot command before your desktop.
+takes a coreslot command before your desktop; a label with `no_restart = true` keeps its score.
 
 ## Install
 

@@ -66,7 +66,9 @@ func (r *run) runChild(c child) int {
 	// --same-group takes the terminal-mode branch: the command stays in coreslot's group.
 	terminal := r.o.sameGroup || terminalMode(r.io.Stdin)
 	prepareChild(cmd, terminal)
-	raiseOOMScore()
+	if !r.o.noRestart { // a command that must not be restarted is not put first in line
+		raiseOOMScore()
+	}
 	started := time.Now()
 	status := 0
 	var released error
