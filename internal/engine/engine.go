@@ -125,7 +125,7 @@ func (e *Engine) Config() (config.Config, error) {
 }
 
 // reading reads the configuration and the machine's memory afresh, as every admission does
-// (PROTOCOL.md section 5.2). An invalid configuration or an unknown memory is a *store.StateError.
+// (PROTOCOL.md sections 5.1 and 5.3). An invalid configuration or an unknown memory is a *store.StateError.
 func (e *Engine) reading() (config.Config, config.Machine, error) {
 	c, err := e.Config()
 	if err != nil {

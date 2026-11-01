@@ -1,7 +1,7 @@
 package config
 
-// Watcher returns the configuration at Path, read afresh at every call: sizes are recomputed at
-// every admission attempt (PROTOCOL.md section 5.2), and no file attribute (mtime, size, inode,
+// Watcher returns the configuration at Path, read afresh at every call: the file is read at
+// every admission attempt (PROTOCOL.md section 5.3), and no file attribute (mtime, size, inode,
 // ctime) reliably tells a replaced configuration from the one read before, since a copy that
 // keeps times (cp -p, rsync -t) or a rename can leave all of them unchanged. The file is small.
 // The zero value with Path set is ready to use; it is safe for concurrent use.

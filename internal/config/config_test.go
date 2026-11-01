@@ -120,7 +120,7 @@ func TestMemoryTable(t *testing.T) {
 	}
 }
 
-// The configuration is read at every call (PROTOCOL.md section 5.2): a replacement that keeps
+// The configuration is read at every call (PROTOCOL.md section 5.3): a replacement that keeps
 // the size and the mtime, by rewriting in place or by renaming another file over it, is seen at
 // once.
 func TestWatcherReadsEveryCall(t *testing.T) {

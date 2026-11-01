@@ -227,12 +227,12 @@ count); they are never removed except by reconciliation's rules (section 10.4).
 The directory is not a cache: liveness is decided by locks. Deleting or resetting `$S` while any
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
-process still locks; only then does it remove the entries of `queue/`, `holds/` and `cancel/`,
-`gen`, `watch.json`, `degraded`, `log/` and a `res/` directory of an earlier format, and writes
+process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/` and
+`log/`, `gen`, `watch.json`, `degraded` and a `res/` directory of an earlier format, and writes
 `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the format-stable
 file (section 15.1), whose inode live clients may hold open, and the configuration. The run
-history that needs are learned from goes with `log/`. A reset never deletes, renames or
-replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
+history that needs are learned from goes with the entries of `log/`. A reset never deletes, renames
+or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
 the directory as format 2; a live hold or ticket of any format stops it. It does not reconcile
 first (section 10.4): it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
@@ -426,7 +426,7 @@ Body:
 |---|---|---|
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
 | `need_mib` | integer | `1..1073741824` (1 PiB); the memory the run needs, in MiB |
-| `created_ns` | integer | `≥ 0`; the wall clock when the ticket was published |
+| `created_ns` | integer | `≥ 0`; the run's arrival: the wall clock when the ticket was published, a restarted run's first arrival (section 24) |
 
 ### 7.4 Hold
 
@@ -442,11 +442,10 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB: the need asked; `0` for a run outside the budget (section 14), which reserves nothing |
 | `stops` | integer | `≥ 0`; how often the run was stopped for memory before this attempt |
 | `footprint_mib` | integer | `0..1073741824`; the run's footprint as it last measured it; `0` when not measured |
-| `d_user_ns`, `d_sys_ns`, `d_pagewait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_pagewait_ns` is `0` where the kernel reports no page wait (section 23.1) |
+| `d_user_ns`, `d_sys_ns`, `d_page_wait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_page_wait_ns` is `0` where the kernel reports no page wait (section 23.1) |
 | `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
 | `victim` | boolean | `true` when a stop round may list the hold: its label has no `no_restart` (section 5.4) and its command does not share coreslot's process group |
 | `child_exited` | boolean | `true` once the run's command has exited |
-| `tree` | boolean | `true` when the process whose pid the name carries, with its descendants, carries the reservation's work. The CLI's run writes it (its command is its child) |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -454,9 +453,11 @@ as large as 2^64 − 1 (section 7.1) while `start_ns` is a signed 64-bit integer
 carries a start-ns above 2^63 − 1 never has a well-formed body and is ignored and counted. No
 writer produces one, because the wall clock is a signed 64-bit value.
 
-Only the holder writes its body, at publication and then in place at every tick (section 23.1):
-one write at offset 0 of the whole body, padded with spaces to the length it replaces, so that the
-file and its lock keep their inode and the file never shrinks (I1). It keeps `label`, `pid` and
+A hold is published with `stops`, `footprint_mib`, the three deltas and `sampled_ns` at 0 and
+`victim` and `child_exited` false; the run's first tick (section 23.1) writes the true values. Only
+the holder writes its body, at publication and then in place at every tick: one write at offset 0
+of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
+their inode and the file never shrinks (I1). It keeps `label`, `pid` and
 `start_ns` as they were. A reader MAY still see a body that does not parse; it then treats the
 live hold as section 7.2 says.
 
@@ -598,9 +599,10 @@ misorders the tickets enqueued across it by at most the size of the step and aff
 
 ### 10.1 Enqueue
 
-Inside the section the client reads `arrival_ns`, computes the order key, publishes its ticket
-(section 11) keeping the ticket's lock-carrying descriptor open, bumps `gen`, and leaves. From then
-on, until admission, cancellation or withdrawal, it MUST keep that descriptor open and refreshed.
+Inside the section the client reads `arrival_ns` (a restarted run takes its first, section 24),
+computes the order key, publishes its ticket (section 11) keeping the ticket's lock-carrying
+descriptor open, bumps `gen`, and leaves. From then on, until admission, cancellation or
+withdrawal, it MUST keep that descriptor open and refreshed.
 
 ### 10.2 Refresh and STALLED
 
@@ -674,12 +676,10 @@ checking `queue/` first (section 13.1), and only until a reconciliation removes 
 ticket name is gone (section 10.4, step 2). When it later removes its ticket (admission,
 cancellation, withdrawal), `ENOENT` counts as success.
 
-A waiting CLI prints a line when it begins to wait and then every 30 s, for example
-`coreslot: waiting for mem 3 GiB: position 2 (1m30s); holders: gate:unit pid 4711 mem 2 GiB
-(3m12s), ci:o-r pid 5120 mem 1 GiB (1m05s)`: the request, its position, how long it has waited and
-the live holds with their needs and ages (informative). The position is one plus the tickets ahead
-that the examination has not passed over, an upper bound: tickets beyond the one that ended the
-examination are counted without being examined. A waiter that passes under the rule above is
+A waiting CLI prints a line when it begins to wait and then every 30 s: why it waits, its position
+and the live holds with their needs and ages (informative). The position is one plus the tickets
+ahead that the examination has not passed over, an upper bound: tickets beyond the one that ended
+the examination are counted without being examined. A waiter that passes under the rule above is
 admitted before its position reaches 1.
 
 ### 10.4 Reconciliation
@@ -787,19 +787,13 @@ Inside the section the head:
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket, bumps `gen`,
    and leaves the section.
 
-> **Implementation note.** For a live hold that says `"tree": true` and whose pid no other live
-> hold names, the Go client may measure the tree's footprint itself at admission and use it in
-> place of the body's `footprint_mib`: the tree is the process with that pid and its descendants,
-> less the subtree of every other live hold's pid. A process listing that fails leaves the body's
-> value.
-
 ### 12.2 Oversized request
 
 A need above `memory` less `reserve` fits no room, since the room never exceeds the headroom less
 the reserve. Such a request starts only under the idle rule, when no hold is live, and runs alone:
 its remaining growth, the need less its footprint, keeps the room of every later request negative.
-The hold's `need_mib` is the need asked, and so is `CORESLOT_GRANTED_MEM`. A CLI run says so once, before it queues
-(`coreslot: needs 40.0 GiB of 32.0 GiB; runs only alone`).
+The hold's `need_mib` is the need asked, and so is `CORESLOT_GRANTED_MEM`. A CLI run says so once,
+before it queues.
 
 ### 12.3 After the command exits
 
@@ -838,10 +832,9 @@ defines it:
 - not fresh: the gate holds nothing back, except from a restarted run (below);
 - fresh and `detector.level` is yellow, red or floor: nothing new starts. Unknown does not hold a
   request back;
-- otherwise (green, or unknown): after a level that was yellow, red or floor has cleared, at most
-  one request starts per `spacing_s`. For `spacing_s` after `yellow_cleared_ns`, an admission is recorded in
-  `detector.last_admit_ns`, and no further request starts until `spacing_s` has passed since the
-  recorded one.
+- otherwise (green, or unknown): for `calm_s` after `yellow_cleared_ns`, at most one request starts
+  per `spacing_s`: an admission is recorded in `detector.last_admit_ns`, and no further request
+  starts until `spacing_s` has passed since the recorded one.
 
 A **restarted** run (section 24) that finds a hold live additionally needs a fresh sample, the
 level green, the level calm for `calm_s` (`host_now − calm_since_ns ≥ calm_s`), and, when the
@@ -928,8 +921,8 @@ A client that finds no `FORMAT` writes `coreslot-protocol 2` inside the section.
 A state directory whose format is not 2 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
 writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json` or `admit.lock`
-body), and its run fails open (section 14) with the one notice `state format <n> is not supported;
-run coreslot doctor --reset`; under `--strict` it refuses with that notice. The decision is made at
+body), and its run fails open (section 14) with one notice that names the format and `coreslot doctor
+--reset`; under `--strict` it refuses with that notice. The decision is made at
 every section entry from the `FORMAT` read there (section 8).
 
 A waiting client reads `FORMAT` at every section entry; one that finds the format changed under
@@ -984,9 +977,9 @@ is passed on.
 > **Implementation note.** The Go CLI closes the named descriptor only when it is a regular file at
 > fd 3 or above.
 
-On Linux a run SHOULD set its own `oom_score_adj` to 500 before it starts the command, which
-inherits it, so that the kernel's or systemd-oomd's out-of-memory kill takes a restartable job
-rather than the desktop.
+On Linux a run SHOULD raise its own `oom_score_adj` to 500, never lowering a higher one, before it
+starts the command, which inherits it, so that the kernel's or systemd-oomd's out-of-memory kill
+takes a restartable job rather than the desktop.
 
 ## 18. Nested runs: pass-through
 
@@ -998,11 +991,12 @@ empty variable is absent), in this order:
 2. `CORESLOT_HOLD` names a hold (and the run is not `--independent`) whose pid is an ancestor of
    the run and whose fresh probe in `$S/holds/` fails (some process holds it): it is a
    **pass-through**, inside its parent's reservation. It does not queue, enter the section or lock
-   anything. It runs with its need, or with the parent's `CORESLOT_GRANTED_MEM` when that is less,
-   with a notice when its need was given as `--mem`; it passes the parent's descriptor on unchanged
-   and sets `CORESLOT_GRANTED_MEM` to the narrowed value. A hold that is malformed, dead, gone or
+   anything. It runs with its need, or with the parent's `CORESLOT_GRANTED_MEM` when that is less
+   (the CLI says so when the need was given as `--mem`); it passes the parent's descriptor on
+   unchanged and sets `CORESLOT_GRANTED_MEM` to the narrowed value. A hold that is malformed, dead, gone or
    not an ancestor's, or a `$S` that cannot be resolved, makes the run an ordinary request: a
-   parent that holds the budget is always an ancestor whose hold is live.
+   parent that holds the budget is always an ancestor whose hold is live. (When the process table
+   cannot be read, the Go CLI takes the hold's pid for an ancestor's.)
 3. Otherwise, or with `--independent`, it is an ordinary request.
 
 A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and writes nothing under
@@ -1037,9 +1031,9 @@ for it, and only a give-up (section 24.2) prints one.
 Each run SHOULD append one JSON line of at most 4 KiB to `$S/log/runs.jsonl` with a single
 `O_APPEND` write (outside the section), into a directory whose `FORMAT` it has read and understood
 during the run (section 14); a run whose release found a mismatch writes no line (section 12.3). A
-run that was stopped for memory appends one for each attempt (section 24). `FORMAT` may change
-while the command runs, so the writer reads it again, outside the section, immediately before the
-write, and writes no line when it is absent, malformed or names a format the writer does not
+run that was stopped for memory appends one for each stopped attempt and one for the attempt that
+ends the run (section 24). `FORMAT` may change while the command runs, so the writer reads it
+again, outside the section, immediately before the write, and writes no line when it is absent, malformed or names a format the writer does not
 implement. A pass-through (section 18), valid or unbudgeted, appends too: that read is its only one
 (it never writes a missing `FORMAT`, and then writes no line), it marks its line `"nested": true`,
 and it never rotates the log. A line that would exceed 4 KiB MAY be fitted by shortening an
@@ -1057,7 +1051,7 @@ informative string; a writer that cannot fit it writes no line. The object carri
 | `mem_peak_source` | string | optional; what `mem_peak_kib` measured: `footprint`, `anon` or `max_rss` (below) |
 | `peak_after_s` | number | optional; seconds from the command's start to the reading of `mem_peak_kib` |
 | `waited_free_s` | number | optional; seconds of `waited_s` during which the memory the request needs was free (below) |
-| `stops` | integer | optional; how often the run had been stopped for memory when the line was written, this attempt's stop included; written only above 0 |
+| `stops` | integer | optional; on the line of a stopped attempt, how often the run has been stopped for memory, this stop included; absent on every other line |
 | `exit` | integer | the run's exit status |
 | `fail_open` | string | the fail-open reason, or empty |
 | `nested` | boolean | optional; `true` for a pass-through run (section 18), absent or `false` otherwise |
@@ -1087,10 +1081,10 @@ larger, `mem_peak_kib` is `ru_maxrss`, `mem_peak_source` is `max_rss` and `peak_
 kernel can hand out without paging anything anonymous out (the headroom of section 5.1) was at
 least its need, read at most once per second. It informs; no admission reads it.
 
-The line of a stopped attempt carries the attempt's own peak, and `stops` above 0 marks every line
-of a run that was stopped, the stopped attempts' and the last one's. A **counted** run is one that
-is labelled, not a pass-through, not run outside the budget (`fail_open` empty) and has no `stops`:
-only counted runs say what a label needs (section 5.4) or what its stall baseline is.
+The line of a stopped attempt carries the attempt's own peak and `stops`; the line of the attempt that
+ends the run carries neither mark and counts like any other. A **counted** run is one that is
+labelled, not a pass-through, not run outside the budget (`fail_open` empty) and has no `stops`: only
+counted runs say what a label needs (section 5.4) or what its stall baseline is.
 
 The log MUST NOT contain argv or the environment; labels are recorded, so they must not carry
 secrets. A client that finds `runs.jsonl` at or above 10 MiB before appending rotates it
@@ -1119,9 +1113,10 @@ The examples use the `coreslot` CLI, which is not part of the protocol: `coreslo
 [--label L] [--timeout D] [--on-timeout run|fail] [--no-wait] [--strict] [--independent]
 [--same-group] [--refusal-code N] -- COMMAND...`. Without `--mem` the need is the label's entry in
 the needs file (section 5.4), else what the label's last counted runs needed (section 20), else the
-cold start (section 5.1). `--timeout` defaults to 0, no limit, covers the whole run (restarts
-included), and a negative one is a usage error; `--on-timeout` defaults to `fail`, so a `--timeout`
-that expires refuses; strict mode is `--strict`; `--refusal-code` defaults to 75. The other
+cold start (section 5.1). `--timeout` defaults to 0, no limit, and bounds the waiting: one deadline
+from the run's start, shared by every wait, those after a stop included, which never stops a
+running command; a negative one is a usage error. `--on-timeout` defaults to `fail`, so a `--timeout` that
+expires refuses; strict mode is `--strict`; `--refusal-code` defaults to 75. The other
 commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
 `coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]`,
 `coreslot stats [--label LABEL] [--json]` and `coreslot version`.
@@ -1209,8 +1204,8 @@ holds/01791720600000000000-0000007300-000004-gate_big [L]
 ```json
 {"label": "gate:big", "pid": 7300, "start_ns": 1791720600000000000,
  "arrival_ns": 1791720540000000000, "need_mib": 3072, "stops": 0, "footprint_mib": 0,
- "d_user_ns": 0, "d_sys_ns": 0, "d_pagewait_ns": 0, "sampled_ns": 0, "victim": true,
- "child_exited": false, "tree": true}
+ "d_user_ns": 0, "d_sys_ns": 0, "d_page_wait_ns": 0, "sampled_ns": 0, "victim": false,
+ "child_exited": false}
 ```
 
 The CLI starts the command with fd 3 = the hold and `CORESLOT_GRANTED_MEM=3072`,
@@ -1327,8 +1322,8 @@ The run of section 21.3 ticks at 12:10:02 (`1791720602000000000`). The kernel re
    ```json
    {"label": "gate:big", "pid": 7300, "start_ns": 1791720600000000000,
     "arrival_ns": 1791720540000000000, "need_mib": 3072, "stops": 0, "footprint_mib": 1984,
-    "d_user_ns": 1600000000, "d_sys_ns": 300000000, "d_pagewait_ns": 0,
-    "sampled_ns": 1791720602000000000, "victim": true, "child_exited": false, "tree": true}
+    "d_user_ns": 1600000000, "d_sys_ns": 300000000, "d_page_wait_ns": 0,
+    "sampled_ns": 1791720602000000000, "victim": true, "child_exited": false}
    ```
 2. It enters the section. The stored sample of `watch.json` is 3.2 s old, more than one period, so
    it takes the machine sample: the paging counters rose by 40 pages per second (below
@@ -1367,7 +1362,8 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
    Its new ticket is `queue/01791720780000000000-0000007400-000010-lint`, the order key being its
    first arrival, with `need_mib` 2 300 (the larger of its peak and its learned need). It starts
    again when it is admitted, the level has been green for 30 s and the room is at least `2 300 +
-   max(256, 230) = 2 556` MiB. The new hold has `"stops": 1` and `"arrival_ns": 1791720780000000000`.
+   max(256, 230) = 2 556` MiB. The new hold has `"arrival_ns": 1791720780000000000` and, from its first tick,
+   `"stops": 1`.
    After a third stop the run prints `coreslot: gave up after 3 memory stops (run
    01791720781000000000-0000007400-000009-lint)` and exits 75.
 
@@ -1408,10 +1404,11 @@ start until it exits, in both modes of section 23.6. Each tick:
    spent waiting for pages (`ri_page_wait_time_mach` of `proc_pid_rusage`; `/proc/<pid>/stat`
    `utime` and `stime` on Linux). It rewrites its own hold's body in place (section 7.4):
    `footprint_mib` (the tree's footprint, as section 20 measures it), `d_user_ns`, `d_sys_ns` and
-   `d_pagewait_ns` (the tree's times since the run's previous tick), `sampled_ns`, `victim` and
-   `child_exited`.
-2. **Samples.** It enters the section briefly (section 8) and reads `watch.json`. If the stored
-   sample is at least one period (2 s) old, or lies in the future, it takes a new machine sample
+   `d_page_wait_ns` (the tree's times since the run's previous tick), `sampled_ns`, `victim` and
+   `stops`. It sets `child_exited` once, when the command has exited.
+2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short
+   bound leaves its part of that period to the others) and reads `watch.json`. If the stored sample
+   is at least one period (2 s) old, or lies in the future, it takes a new machine sample
    (section 23.2), advances the detector (section 23.4) and, when a stop round is due, writes the
    stop list (section 23.5); otherwise it only reads. One sample is taken per period machine-wide,
    one bucket step per sample, and no writer races another: the section serializes them.
@@ -1423,8 +1420,8 @@ A stored sample more than 3 periods (6 s) old is no reading: admission ignores t
 ### 23.2 The machine sample
 
 A **machine sample** is the host readings, the live holds' latest measurements and the room (section
-12.1), taken together. The host readings, which a sample takes in well under a millisecond with no
-subprocess:
+12.1; 0 when the headroom is unknown), taken together. The host readings, which a sample takes in
+well under a millisecond with no subprocess:
 
 | Reading | macOS | Linux |
 |---|---|---|
@@ -1443,14 +1440,14 @@ that the next comparison starts afresh.
 
 ### 23.3 The stall measure
 
-For each live hold with a measurement, `S = (d_sys + d_pagewait) / (d_user + d_sys + d_pagewait)`
+For each live hold with a measurement, `S = (d_sys + d_page_wait) / (d_user + d_sys + d_page_wait)`
 over its latest tick period. Its normal share `S0` is the median of `sys_s / (user_s + sys_s)` over
 the last 20 counted runs of its label (section 20) that report both times, and 0.25 when there are
 none: the highest normal measured, so that a command nothing is known of needs more evidence. The
 machine's **excess** `E`, in percentage points, is
 
 ```
-E = 100 × Σ wᵢ · max(0, Sᵢ − S0ᵢ) / Σ wᵢ      wᵢ = d_userᵢ + d_sysᵢ + d_pagewaitᵢ
+E = 100 × Σ wᵢ · max(0, Sᵢ − S0ᵢ) / Σ wᵢ      wᵢ = d_userᵢ + d_sysᵢ + d_page_waitᵢ
 ```
 
 over the holds with `wᵢ > 0`, and 0 when there are none. The **paging gate** is open when the
@@ -1491,9 +1488,10 @@ one at a time.
 1. The ticker that advanced the detector writes the stop list into `detector.stop`, and the round's
    time into `detector.last_round_ns`. The list holds the **victims** from the newest arrival to the
    oldest: live holds whose `victim` is true and whose `child_exited` is false, never the oldest live
-   hold by arrival (ties by hold name). It takes victims until their footprints sum to at least the
-   deficit `max(−room, 0)` MiB of the sample it just took, and at least one. With only the oldest
-   hold or holds that are not victims left, the list is empty.
+   hold by arrival (of equal arrivals the greatest hold name counts as the oldest). It takes victims
+   until their footprints sum to at least the deficit `max(−room, 0)` MiB of the sample it just
+   took, and at least one. With only the oldest hold or holds that are not victims left, the list is
+   empty.
 2. A run kills only its own command, only when its own hold's name is in the list. It sends
    `SIGKILL` to the command's process group, and only while it has not reaped the command, so the
    group id cannot have been reused. The kill and the reap are serialized under one lock in the
@@ -1522,16 +1520,15 @@ The `coreslot run` of a stopped command keeps running. It reaps the command, clo
 (section 12.3), appends one run-log line for the stopped attempt with `stops` (section 20) and
 enqueues again (section 10.1) with its **first arrival**: the order key of the new ticket and the
 `arrival_ns` of its next hold are those of its first attempt, so it keeps its place. Its need is
-the larger of the peak footprint the stopped attempt reached and the need it had learned. It waits
-as any request does and, in addition, under the restart conditions of section 12.4; on admission it
+the larger of the peak footprint the stopped attempt reached and the need the run had at its start.
+It waits as any request does and, in addition, under the restart conditions of section 12.4; on admission it
 starts the same command again, under a new hold whose `stops` is the number of stops so far.
 
 ### 24.2 Giving up
 
-After the third stop the run does not restart. It prints, first, the marker line `coreslot: gave up
-after 3 memory stops (run <hold>)`, where `<hold>` is the name of the hold of the last attempt,
-then the reasons of the three stops and the advice to run the command alone or to narrow it, and
-exits with the refusal code (section 19).
+After the third stop the run does not restart. It prints the marker line `coreslot: gave up after 3
+memory stops (run <hold>)`, where `<hold>` is the name of the hold of the last attempt, as the first
+line of its give-up, and exits with the refusal code (section 19).
 
 ### 24.3 A kill from outside
 
