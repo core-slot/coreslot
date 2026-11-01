@@ -96,6 +96,22 @@ func TestSpacingOnlyWithinTheSampleEpoch(t *testing.T) {
 	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
 }
 
+// A restart beside holds whose runs do not tick takes the machine sample itself, so its calm is
+// measured. Mutation: a restart that only reads watch.json finds no sample and waits for ever.
+func TestRestartTakesTheSampleItself(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	hold(t, e, need("mem=1"))
+	req := need("mem=1")
+	req.Restart = true
+	if isAdmitted(step(t, enqueue(t, e, req))) {
+		t.Fatal("a restart started without calm")
+	}
+	if _, _, at, err := e.st.ReadWatch(); err != nil || at != clk.clock().Realtime() {
+		t.Errorf("watch.json sampled at %d (%v), want now, %d", at, err, clk.clock().Realtime())
+	}
+}
+
 // A restarted job waits for calm_s of green and for room of its need plus max(256 MiB, need/10),
 // where a new job of the same need starts. The room beside the 1-unit hold is 896 MiB.
 func TestRestartWaitsForCalmAndMargin(t *testing.T) {

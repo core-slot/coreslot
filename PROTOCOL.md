@@ -124,8 +124,8 @@ Every conforming client MUST preserve these invariants:
   within 11 s of becoming the nearest ticket that waiter has not passed over.
 - **I6 one budget:** every client of format 2 reads the same holds and the same
   `watch.json` under the same admission lock.
-- **I7 own children only:** a stop round never lists the oldest live hold, a hold whose `victim` is
-  false or one whose command has exited, and a run signals only the process group of its own
+- **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
+  of them nor one whose `victim` is false, and a run signals only the process group of its own
   command, only while it has not reaped it (section 23.5).
 
 ## 4. State directory and filesystem policy
@@ -832,14 +832,18 @@ defines it:
 - not fresh: the gate holds nothing back, except from a restarted run (below);
 - fresh and `detector.level` is yellow, red or floor: nothing new starts. Unknown does not hold a
   request back;
-- otherwise (green, or unknown): for `calm_s` after `yellow_cleared_ns`, at most one request starts
-  per `spacing_s`: an admission is recorded in `detector.last_admit_ns`, and no further request
-  starts until `spacing_s` has passed since the recorded one.
+- unknown: the gate holds nothing back;
+- otherwise (green): for `calm_s` after `yellow_cleared_ns`, at most one request starts per
+  `spacing_s`: an admission is recorded in `detector.last_admit_ns`, and no further request starts
+  until `spacing_s` has passed since the recorded one. Spacing applies only while the stored
+  sample's `wall_ns` is not 0 and neither `yellow_cleared_ns` nor `last_admit_ns` is later than
+  `host_now`: a host clock that restarted (a reboot keeps `watch.json`) spaces nothing.
 
-A **restarted** run (section 24) that finds a hold live additionally needs a fresh sample, the
-level green, the level calm for `calm_s` (`host_now − calm_since_ns ≥ calm_s`), and, when the
-headroom is known, a room of at least its need plus `max(256 MiB, need / 10)`. With no hold live,
-the idle rule starts it like any other.
+A **restarted** run (section 24) that finds a hold live first takes its part in the tick (section
+23.1), as a running command's run does, so that calm is measured when no run ticks. It then needs a
+fresh sample, the level green, the level calm for `calm_s` (`host_now − calm_since_ns ≥ calm_s`),
+and, when the headroom is known, a room of at least its need plus `max(256 MiB, need / 10)`. With
+no hold live, the idle rule starts it like any other.
 
 ## 13. Cancellation and withdrawal
 
@@ -1344,7 +1348,7 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
 2 196 MiB.
 
 1. The ticker that took the sample builds the stop list from the victims, newest arrival first,
-   never the oldest live hold: `watcher` is not a victim; `lint` is next and its footprint, 2 300
+   never the oldest running hold: `watcher` is not a victim; `lint` is next and its footprint, 2 300
    MiB, covers the deficit. It writes `detector.stop` =
    `["01791720781000000000-0000007400-000009-lint"]` and `detector.last_round_ns` into
    `watch.json`.
@@ -1419,7 +1423,8 @@ A stored sample more than 3 periods (6 s) old is no reading: admission ignores t
 
 ### 23.2 The machine sample
 
-A **machine sample** is the host readings, the live holds' latest measurements and the room (section
+A **machine sample** is the host readings, the running holds' latest measurements (section 23.3)
+and the room (section
 12.1; 0 when the headroom is unknown), taken together. The host readings, which a sample takes in
 well under a millisecond with no subprocess:
 
@@ -1440,7 +1445,10 @@ that the next comparison starts afresh.
 
 ### 23.3 The stall measure
 
-For each live hold with a measurement, `S = (d_sys + d_page_wait) / (d_user + d_sys + d_page_wait)`
+A **running** hold is a live hold whose body is well-formed, whose `child_exited` is false and whose
+`sampled_ns` is at most 6 s old on the wall clock: its run still ticks. Any other live hold reserves
+memory (section 12) but is no job of the watchdog. For each running hold,
+`S = (d_sys + d_page_wait) / (d_user + d_sys + d_page_wait)`
 over its latest tick period. Its normal share `S0` is the median of `sys_s / (user_s + sys_s)` over
 the last 20 counted runs of its label (section 20) that report both times, and 0.25 when there are
 none: the highest normal measured, so that a command nothing is known of needs more evidence. The
@@ -1487,8 +1495,8 @@ one at a time.
 
 1. The ticker that advanced the detector writes the stop list into `detector.stop`, and the round's
    time into `detector.last_round_ns`. The list holds the **victims** from the newest arrival to the
-   oldest: live holds whose `victim` is true and whose `child_exited` is false, never the oldest live
-   hold by arrival (of equal arrivals the greatest hold name counts as the oldest). It takes victims
+   oldest: running holds whose `victim` is true, never the oldest running hold by arrival (of equal
+   arrivals the greatest hold name counts as the oldest). It takes victims
    until their footprints sum to at least the deficit `max(−room, 0)` MiB of the sample it just
    took, and at least one. With only the oldest hold or holds that are not victims left, the list is
    empty.
@@ -1499,8 +1507,8 @@ one at a time.
 3. No new round starts until every listed hold reports `child_exited` or is gone and `post_kill_s`
    has passed.
 
-The oldest live hold, a hold whose label has `no_restart` and a run that shares coreslot's process
-group are never victims. A run that finds its command ended by a `SIGKILL` it did not send does not
+The oldest running hold, a hold whose label has `no_restart` and a run that shares coreslot's
+process group are never victims. A run that finds its command ended by a `SIGKILL` it did not send does not
 restart it (section 24.3).
 
 ### 23.6 Observe mode and the sample log

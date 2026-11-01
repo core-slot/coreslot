@@ -7,6 +7,7 @@ import (
 	"context"
 	"path/filepath"
 
+	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
@@ -87,7 +88,13 @@ func (g *Grant) Tick(ctx context.Context, normal map[string]float64) (watch.Dete
 	if err != nil {
 		return watch.Detector{}, watch.Config{}, err
 	}
-	d, _, err := sec.Tick(e.clock.Realtime(), func() (watch.Sample, error) {
+	d, _, err := sec.Tick(e.clock.Realtime(), e.sampler(cfg, m, normal), cfg.Watch)
+	return d, cfg.Watch, err
+}
+
+// sampler reads one machine sample: the host, the running jobs and the room.
+func (e *Engine) sampler(cfg config.Config, m config.Machine, normal map[string]float64) func() (watch.Sample, error) {
+	return func() (watch.Sample, error) {
 		host, err := memsample.ReadHost()
 		if err != nil {
 			return watch.Sample{}, err
@@ -96,21 +103,30 @@ func (g *Grant) Tick(ctx context.Context, normal map[string]float64) (watch.Dete
 		if err != nil {
 			return watch.Sample{}, err
 		}
-		s := watch.Sample{Host: host}
+		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime(), normal)}
 		if m.HeadroomOK {
 			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
 		}
-		for _, h := range holds {
-			b := h.body
-			share, ok := normal[b.Label]
-			if !ok {
-				share = watch.DefaultNormalShare
-			}
-			s.Jobs = append(s.Jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
-				NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
-				DPageWaitNS: b.DPageWaitNS, NormalShare: share, Victim: b.Victim, ChildExited: b.ChildExited})
-		}
 		return s, nil
-	}, cfg.Watch)
-	return d, cfg.Watch, err
+	}
+}
+
+// runningJobs are the watch jobs of holds at nowNS, with their labels' normal shares: the holds
+// whose command is alive and whose run ticked within staleNS. Any other hold has no time to report.
+func runningJobs(holds []liveHold, nowNS int64, normal map[string]float64) []watch.Job {
+	var jobs []watch.Job
+	for _, h := range holds {
+		b := h.body
+		if b.ChildExited || !fresh(b.SampledNS, nowNS) {
+			continue
+		}
+		share, ok := normal[b.Label]
+		if !ok {
+			share = watch.DefaultNormalShare
+		}
+		jobs = append(jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
+			NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
+			DPageWaitNS: b.DPageWaitNS, NormalShare: share, Victim: b.Victim, ChildExited: b.ChildExited})
+	}
+	return jobs
 }

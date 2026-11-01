@@ -144,7 +144,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	d, _, at, _ := e.st.ReadWatch() // no readable watch.json is no sample
 	now := e.clock.Realtime()
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
-		Fresh: at > 0 && at <= now && now-at <= staleNS}
+		Fresh: fresh(at, now)}
 	jobs := make([]watch.Job, len(r.Holds))
 	for i, h := range r.Holds {
 		jobs[i] = watch.Job{Hold: h.Name, ArrivalNS: h.ArrivalNS, Victim: h.Victim, ChildExited: h.ChildExited}

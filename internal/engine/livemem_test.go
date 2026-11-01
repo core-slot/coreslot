@@ -5,12 +5,14 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -82,6 +84,26 @@ func TestRoomCountsFootprint(t *testing.T) {
 // A live hold whose body does not parse (its run rewrites it in place, so a read can be torn)
 // counts at the cold start of the machine, 426 MiB of 1707, not at zero: 2048 MiB of headroom less
 // the 1024 reserve and 426 leaves 598. Mutation: counting it at zero admits 600.
+// Only a hold whose run still ticks is a job: one whose command exited while a descendant keeps
+// the lock, one whose run stopped ticking and a torn body count neither in E nor as the oldest.
+// Mutation: listing every live hold gives E 28 from the frozen hold and exempts it as the oldest.
+func TestOnlyTickingHoldsAreJobs(t *testing.T) {
+	now := int64(1e18)
+	frozen := wire.Hold{Label: "f", ArrivalNS: 1, DUserNS: 8e8, DSysNS: 12e8, Victim: true, ChildExited: true, SampledNS: now - 1e9}
+	stale := wire.Hold{Label: "f", ArrivalNS: 2, DUserNS: 8e8, DSysNS: 12e8, Victim: true, SampledNS: now - 7e9}
+	oldest := wire.Hold{Label: "c", ArrivalNS: 3, DUserNS: 2e9, Victim: true, SampledNS: now - 1e9}
+	newest := wire.Hold{Label: "c", ArrivalNS: 4, DUserNS: 2e9, Victim: true, SampledNS: now - 1e9}
+	holds := []liveHold{{"frozen", frozen}, {"stale", stale}, {"oldest", oldest}, {"newest", newest},
+		{"torn", wire.Hold{NeedMiB: 426}}}
+	jobs := runningJobs(holds, now, map[string]float64{"f": 0.04, "c": 0.04})
+	if e := watch.Excess(jobs, 2e9); e != 0 {
+		t.Errorf("E %v from holds that do not tick, want 0", e)
+	}
+	if got := watch.StopList(jobs, 1); !slices.Equal(got, []string{"newest"}) {
+		t.Errorf("stop list %v, want [newest]", got)
+	}
+}
+
 func TestTornLiveHoldCountsAtColdStart(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
