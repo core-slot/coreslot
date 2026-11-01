@@ -1494,7 +1494,8 @@ below that applies.
 
 `calm_since_ns` is the host clock of the sample that made the level green, kept while it stays
 green, and 0 while it is not. `yellow_cleared_ns` is that of the sample at which the level fell from
-yellow, red or floor to green. An **episode** counts the entries into red or floor.
+yellow, red or floor to green, unknown samples between the two left out. An **episode** counts the
+entries into red or floor.
 
 ### 23.5 Stop rounds
 

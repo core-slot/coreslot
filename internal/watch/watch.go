@@ -119,6 +119,7 @@ type Detector struct {
 	Gate            bool     `json:"gate"`
 	Bucket          float64  `json:"bucket"`
 	Level           Level    `json:"level"`
+	Known           Level    `json:"known"`  // the last level that was not unknown
 	Yellow          bool     `json:"yellow"` // latched until clearSamples in a row below yellow
 	Below           int      `json:"below"`
 	Episode         int64    `json:"episode"` // counts the entries into red or floor
@@ -133,7 +134,7 @@ type Detector struct {
 // Advance moves the detector from sample prev to cur and returns the level. A pair it cannot
 // compare (memsample.Gap, a counter that went back) is Unknown and keeps the bucket and latch.
 func (d *Detector) Advance(prev, cur Sample, c Config) Level {
-	was, now := d.Level, cur.Host.WallNS
+	was, now := d.Known, cur.Host.WallNS
 	r, ok := rates(prev.Host, cur.Host)
 	d.Rates, d.Excess, d.Gate = r, 0, false
 	if ok {
@@ -180,6 +181,7 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	if d.Level >= Red && was < Red {
 		d.Episode++
 	}
+	d.Known = d.Level
 	if d.Level != Green {
 		d.CalmSinceNS = 0
 	} else if d.CalmSinceNS == 0 {

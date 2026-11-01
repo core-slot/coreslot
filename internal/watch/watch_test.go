@@ -210,6 +210,30 @@ func TestGapIsUnknown(t *testing.T) {
 	}
 }
 
+// A clear that comes through a gap is still a clear: yellow, a 10 s period (unknown), then the
+// calm sample that ends the latch turns green and records yellow_cleared_ns. Mutation: comparing
+// with the level just before, which is unknown, records nothing.
+func TestClearThroughUnknownIsRecorded(t *testing.T) {
+	c := Defaults()
+	f := newFeed(c)
+	for range 3 {
+		f.step(c, true, job(0.60, 0.04))
+	}
+	for range 15 { // the first still has two hot samples among the last three
+		f.step(c, false, job(0.04, 0.04))
+	}
+	gap := f.prev
+	gap.Host.WallNS += 10e9
+	gap.Host.AwakeNS += 10e9
+	if l := f.d.Advance(f.prev, gap, c); l != Unknown {
+		t.Fatalf("a 10 s period: %v, want unknown", l)
+	}
+	f.prev = gap
+	if l := f.step(c, false, job(0.04, 0.04)); l != Green || f.d.YellowClearedNS != f.prev.Host.WallNS {
+		t.Errorf("after the gap: %v, yellow_cleared_ns %d; want green at %d", l, f.d.YellowClearedNS, f.prev.Host.WallNS)
+	}
+}
+
 // A platform without PSI or page wait still has levels: they are optional readings.
 func TestMissingOptionalReadingIsNotUnknown(t *testing.T) {
 	c := Defaults()
