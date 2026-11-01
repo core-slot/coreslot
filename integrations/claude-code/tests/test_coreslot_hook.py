@@ -41,8 +41,7 @@ def payload(command: str, session: str = "s1", agent: str = "", tool: str = "Bas
 
 
 def offered(command: str) -> str | None:
-    found = hook.offer(command, SHAPES)
-    return None if found is None else found[0]
+    return hook.offer(command, SHAPES)
 
 
 class Splitting(unittest.TestCase):
@@ -74,11 +73,9 @@ class Splitting(unittest.TestCase):
 
     def test_gives_up_on_braces_and_double_brackets_even_quoted(self) -> None:
         """Mutation: drop the `{`, `}` and `[[` check -> each of these gets an offer that changes
-        what the command does: a wrap inside a string, a `[[` split in two, a `{n}` coreslot
-        substitutes."""
+        what the command does: a wrap inside a string, a `[[` split in two."""
         for command in ['echo "${x:-"a;go test ./...;b"}"', "[[ -n x && xcodebuild ]]",
-                        "go test ./... -args '{n}'", "go test ./... \\{n\\}",
-                        'make -j4 "{n:mem}"', "cargo test -- '{n:gpu}'"]:
+                        "go test ./... -args '${x}'", "go test ./... \\{x\\}"]:
             with self.subTest(command=command):
                 self.assertIsNone(offered(command))
 
@@ -86,7 +83,7 @@ class Splitting(unittest.TestCase):
         """Offsets count UTF-8 bytes, so a multi-byte character before the segment keeps its place."""
         self.assertEqual(
             offered("echo 'é—ж' && X=1 go test ./..."),
-            "echo 'é—ж' && X=1 coreslot run --label go-test -- go test ./...",
+            "echo 'é—ж' && X=1 coreslot run -- go test ./...",
         )
 
 
@@ -95,21 +92,21 @@ class Offering(unittest.TestCase):
         """Mutation: insert at the segment's start -> `coreslot run ... -- GOFLAGS=-race go`."""
         self.assertEqual(
             offered("GOFLAGS=-race CGO_ENABLED=1 go test ./..."),
-            "GOFLAGS=-race CGO_ENABLED=1 coreslot run --label go-test -- go test ./...",
+            "GOFLAGS=-race CGO_ENABLED=1 coreslot run -- go test ./...",
         )
 
     def test_every_matching_segment_is_offered_and_every_other_byte_kept(self) -> None:
         """Mutation: stop after the first insert -> the cargo segment is left bare."""
         self.assertEqual(
             offered("cd 'my repo' &&  go test -race ./... ;cargo test  2>&1 | tail -5"),
-            "cd 'my repo' &&  coreslot run --label go-test -- go test -race ./... ;"
-            "coreslot run --label cargo -- cargo test  2>&1 | tail -5",
+            "cd 'my repo' &&  coreslot run -- go test -race ./... ;"
+            "coreslot run -- cargo test  2>&1 | tail -5",
         )
 
     def test_requires_one_of_its_words_or_a_word_starting_with_one(self) -> None:
         """Mutation: drop the `requires` check -> `go test ./internal/x` and serial pytest match."""
-        self.assertEqual(offered("make -j8 all"), "coreslot run --label make -- make -j8 all")
-        self.assertEqual(offered("uv run pytest -n4"), "coreslot run --label pytest -- uv run pytest -n4")
+        self.assertEqual(offered("make -j8 all"), "coreslot run -- make -j8 all")
+        self.assertEqual(offered("uv run pytest -n4"), "coreslot run -- uv run pytest -n4")
         for command in ["go test ./internal/x", "pytest tests/unit", "make fmt"]:
             with self.subTest(command=command):
                 self.assertIsNone(offered(command))
@@ -118,11 +115,11 @@ class Offering(unittest.TestCase):
         """Mutation: compare program words with == only -> `./.venv/bin/pytest -n 4` passes."""
         self.assertEqual(
             offered("./.venv/bin/pytest -n 4"),
-            "coreslot run --label pytest -- ./.venv/bin/pytest -n 4",
+            "coreslot run -- ./.venv/bin/pytest -n 4",
         )
 
     def test_a_wrapped_or_unknown_command_is_not_offered(self) -> None:
-        for command in ["coreslot run --label go-test -- go test ./...", "ls -la",
+        for command in ["coreslot run -- go test ./...", "ls -la",
                         "ssh host go test ./...", "A=1", "echo $(go test ./...)"]:
             with self.subTest(command=command):
                 self.assertIsNone(offered(command))
@@ -135,18 +132,11 @@ class ShapeFile(unittest.TestCase):
         path.write_text(json.dumps(document), encoding="utf-8")
         return path
 
-    def test_a_label_a_shell_would_read_is_refused(self) -> None:
-        """Mutation: drop the LABEL check -> a label of `x;rm` loads and lands in the offer."""
-        for label in ["x;rm", "a b", "$(x)", "", "-x", "a@4"]:
-            with self.subTest(label=label):
-                path = self.write({"shapes": [{"label": label, "programs": [["go"]]}]})
-                with self.assertRaises(ValueError):
-                    hook.load_shapes(path)
-
     def test_unknown_keys_and_empty_programs_are_refused(self) -> None:
-        for document in [{"shape": []}, {"shapes": [{"label": "a", "programs": []}]},
-                         {"shapes": [{"label": "a", "programs": [[]]}]},
-                         {"shapes": [{"label": "a", "programs": [["go"]], "need": "mem=2"}]}]:
+        for document in [{"shape": []}, {"shapes": [{"programs": []}]},
+                         {"shapes": [{"programs": [[]]}]},
+                         {"shapes": [{"programs": [["go"]], "label": "go-test"}]},
+                         {"shapes": [{"programs": [["go"]], "need": "mem=2"}]}]:
             with self.subTest(document=document):
                 with self.assertRaises(ValueError):
                     hook.load_shapes(self.write(document))
@@ -164,8 +154,16 @@ class Responding(unittest.TestCase):
         decision = self.respond(payload("go test ./..."))["hookSpecificOutput"]
         self.assertEqual(decision["hookEventName"], "PreToolUse")
         self.assertEqual(decision["permissionDecision"], "deny")
-        self.assertIn("\ncoreslot run --label go-test -- go test ./...\n",
+        self.assertIn("\ncoreslot run -- go test ./...\n",
                       decision["permissionDecisionReason"])
+
+    def test_the_refusal_speaks_of_memory_and_a_time_limit(self) -> None:
+        """Mutation: drop the memory wording or the time-limit advice from the refusal -> red."""
+        reason = self.respond(payload("go test ./..."))["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("memory", reason)
+        self.assertIn("if your tool has a time limit, run it in the background or raise the limit", reason)
+        for gone in ["--label", "{n", "cores", "budget"]:
+            self.assertNotIn(gone, reason.replace("coreslot", ""))
 
     def test_an_identical_retry_passes_for_that_session_and_agent_only(self) -> None:
         """Mutation: make refused_before always return False -> the retry is refused again."""
@@ -189,10 +187,10 @@ class Responding(unittest.TestCase):
     def test_the_user_shape_file_replaces_the_defaults(self) -> None:
         user = self.home / hook.USER_SHAPES
         user.parent.mkdir(parents=True)
-        user.write_text(json.dumps({"shapes": [{"label": "unit", "programs": [["./ci.sh"]]}]}))
+        user.write_text(json.dumps({"shapes": [{"programs": [["./ci.sh"]]}]}))
         self.assertIsNone(self.respond(payload("go test ./...")))
         reason = self.respond(payload("./ci.sh"))["hookSpecificOutput"]["permissionDecisionReason"]
-        self.assertIn("\ncoreslot run --label unit -- ./ci.sh\n", reason)
+        self.assertIn("\ncoreslot run -- ./ci.sh\n", reason)
 
     def test_its_own_failure_is_a_pass(self) -> None:
         """Mutation: re-raise in respond's handler -> a broken shape file blocks every command."""
@@ -216,7 +214,7 @@ class Process(unittest.TestCase):
                         mock.patch("sys.stdin", io.StringIO(payload("go test ./...", session=str(found)))), \
                         contextlib.redirect_stdout(out):
                     self.assertEqual(hook.main(), 0)
-                self.assertEqual("coreslot run --label go-test -- go test ./..." in out.getvalue(), refused)
+                self.assertEqual("coreslot run -- go test ./..." in out.getvalue(), refused)
 
     def test_the_script_exits_0_and_prints_only_a_refusal(self) -> None:
         bin_dir = Path(tempfile.mkdtemp())

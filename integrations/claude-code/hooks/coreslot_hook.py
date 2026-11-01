@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Refuse a heavy Bash command once, and offer it back under the machine's core budget.
+"""Refuse a heavy Bash command once, and offer it back under coreslot's memory guard.
 
 A Claude Code `PreToolUse` hook on `Bash`. When a command runs one of the heavy shapes of the
 shape file (`go test ./...`, `cargo test`, `pytest -n`, `make -j`, ...) and `coreslot` is on
-`PATH`, it denies the call with the same command offered back: `coreslot run --label <label> -- `
-inserted at the program word of every recognised segment, every other byte unchanged. The model
-then runs the offered command, which waits for its share of the budget instead of oversubscribing
-the machine; it goes through the user's permission rules like any other command.
+`PATH`, it denies the call with the same command offered back: `coreslot run -- ` inserted at
+the program word of every recognised segment, every other byte unchanged. The model then runs
+the offered command, which starts when the machine has the memory for it instead of piling onto
+a machine that is already short; it goes through the user's permission rules like any other
+command. coreslot names the command by itself, so the offer carries no label.
 
 It is a nudge, not containment: a rephrased command escapes it. So it passes, silently, whenever
 it is not sure:
@@ -16,7 +17,7 @@ it is not sure:
   even quoted, `[[`, unbalanced quotes, line continuations, `#` comments), or no segment
   matches a shape (a command that already starts with `coreslot` matches none);
 - the same command was refused before for the same session and agent: from then on it passes
-  every time that session and agent send it, outside the budget, for as long as the record is
+  every time that session and agent send it, outside coreslot, for as long as the record is
   kept (below), so a user who asks for a bare run gets one;
 - anything of its own goes wrong.
 
@@ -48,8 +49,6 @@ USER_SHAPES = Path(".config", "coreslot", "claude-code-shapes.json")
 STATE = Path(".local", "state", "coreslot-claude-code")
 KEEP_SECONDS = 7 * 24 * 3600
 
-# A label is written into a command line unquoted, so it is held to characters no shell reads.
-LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 _ASSIGNMENT = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*=")
 _BLANK = b" \t"
 
@@ -68,7 +67,6 @@ class Word(NamedTuple):
 
 
 class Shape(NamedTuple):
-    label: str
     programs: tuple[tuple[str, ...], ...]
     requires: tuple[str, ...]
 
@@ -83,20 +81,17 @@ def load_shapes(path: Path) -> tuple[Shape, ...]:
         raise ValueError("a shape file is an object with one key, shapes")
     shapes = []
     for entry in document.get("shapes", []):
-        if not isinstance(entry, dict) or set(entry) - {"label", "programs", "requires"}:
-            raise ValueError("a shape has label, programs and optionally requires")
-        label, programs = entry.get("label"), entry.get("programs")
-        requires = entry.get("requires", [])
-        if not isinstance(label, str) or not LABEL.fullmatch(label):
-            raise ValueError(f"label {label!r} must match {LABEL.pattern}")
+        if not isinstance(entry, dict) or set(entry) - {"programs", "requires"}:
+            raise ValueError("a shape has programs and optionally requires")
+        programs, requires = entry.get("programs"), entry.get("requires", [])
         if not isinstance(programs, list) or not programs:
-            raise ValueError(f"shape {label} needs programs")
+            raise ValueError("a shape needs programs")
         for program in programs + [requires]:
             if not isinstance(program, list) or not all(isinstance(w, str) and w for w in program):
-                raise ValueError(f"shape {label}: programs and requires are lists of words")
+                raise ValueError("programs and requires are lists of words")
         if any(not program for program in programs):
-            raise ValueError(f"shape {label}: a program has at least one word")
-        shapes.append(Shape(label, tuple(tuple(p) for p in programs), tuple(requires)))
+            raise ValueError("a program has at least one word")
+        shapes.append(Shape(tuple(tuple(p) for p in programs), tuple(requires)))
     return tuple(shapes)
 
 
@@ -131,10 +126,9 @@ def split_segments(command: bytes) -> list[Segment] | None:
     gives None.
 
     A `{` or `}` anywhere, even quoted, gives None: `${...}` nests quotes this splitter does not
-    model, and an argument that is exactly `{n}` changes meaning under `coreslot run`. So does
-    `[[` anywhere, whose `&&` and `||` do not separate commands.
+    model. So does `[[` anywhere, whose `&&` and `||` do not separate commands.
     """
-    if any(token in command for token in (b"{", b"}", b"[[")):
+    if any(mark in command for mark in (b"{", b"}", b"[[")):
         return None
     raw: list[tuple[int, int, bytes | None, bytes | None]] = []
     start, before = 0, None
@@ -256,8 +250,8 @@ def _same_word(word: str, expected: str) -> bool:
     return word == expected or ("/" in expected and word == "./" + expected)
 
 
-def classify(values: list[str], shapes: tuple[Shape, ...]) -> str | None:
-    """The label of the first shape matching `values`, the words from the program word on.
+def matches(values: list[str], shapes: tuple[Shape, ...]) -> bool:
+    """Whether a shape matches `values`, the words from the program word on.
 
     A shape matches when the words begin with one of its programs and, when it lists
     `requires`, one of the remaining words equals or starts with one of them (`-j` takes
@@ -273,33 +267,31 @@ def classify(values: list[str], shapes: tuple[Shape, ...]) -> str | None:
                 word.startswith(required) for word in rest for required in shape.requires
             ):
                 continue
-            return shape.label
-    return None
+            return True
+    return False
 
 
-def offer(command: str, shapes: tuple[Shape, ...]) -> tuple[str, list[str]] | None:
-    """The command with `coreslot run --label <label> -- ` inserted at the program word of every
-    segment a shape matches, and the labels in order; None when no segment matches or the
-    command cannot be split."""
+def offer(command: str, shapes: tuple[Shape, ...]) -> str | None:
+    """The command with `coreslot run -- ` inserted at the program word of every segment a shape
+    matches; None when no segment matches or the command cannot be split."""
     raw = command.encode("utf-8")
     segments = split_segments(raw)
     if segments is None:
         return None
-    inserts: list[tuple[int, str]] = []
+    inserts: list[int] = []
     for segment in segments:
         found = words(raw, segment)
         index = program_index(raw, found)
         if index is None:
             continue
-        label = classify([word.value for word in found[index:]], shapes)
-        if label is not None:
-            inserts.append((found[index].start, label))
+        if matches([word.value for word in found[index:]], shapes):
+            inserts.append(found[index].start)
     if not inserts:
         return None
     offered = raw
-    for offset, label in reversed(inserts):
-        offered = offered[:offset] + f"coreslot run --label {label} -- ".encode() + offered[offset:]
-    return offered.decode("utf-8"), [label for _, label in inserts]
+    for offset in reversed(inserts):
+        offered = offered[:offset] + b"coreslot run -- " + offered[offset:]
+    return offered.decode("utf-8")
 
 
 # --- remembering refusals ---------------------------------------------------------------------------
@@ -352,18 +344,19 @@ def respond(stdin: str, home: Path, has_coreslot: bool) -> str:
             return ""
         user_shapes = home / USER_SHAPES
         shapes = load_shapes(user_shapes if user_shapes.exists() else DEFAULT_SHAPES)
-        found = offer(command, shapes)
-        if found is None or refused_before(home / STATE, session, agent, command):
+        offered = offer(command, shapes)
+        if offered is None or refused_before(home / STATE, session, agent, command):
             return ""
     except Exception:  # noqa: BLE001 -- a nudge never blocks a command on its own failure
         return ""
-    offered, _ = found
     reason = (
-        "coreslot: this machine shares its cores through a budget, and this command is one of "
-        "its heavy ones. Run it with the `coreslot run --label ... --` prefix inserted, which "
-        "waits for a share of the cores instead of oversubscribing the machine:\n"
+        "coreslot: several agents share this machine's memory, and this command is one of the "
+        "heavy ones. Run it with the `coreslot run --` prefix inserted, which starts it when "
+        "enough memory is free and, if memory runs short, stops the newest jobs and restarts "
+        "them by itself:\n"
         f"{offered}\n"
-        "Sent again unchanged, the command runs outside the budget."
+        "It may wait for free memory first: if your tool has a time limit, run it in the "
+        "background or raise the limit. Sent again unchanged, the command runs outside coreslot."
     )
     return json.dumps(
         {

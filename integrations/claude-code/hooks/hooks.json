@@ -1,5 +1,5 @@
 {
-  "description": "Offers heavy test and build commands back under coreslot's machine-wide core budget",
+  "description": "Offers heavy test and build commands back under coreslot's memory guard",
   "hooks": {
     "PreToolUse": [
       {

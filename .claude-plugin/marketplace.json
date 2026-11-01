@@ -1,6 +1,6 @@
 {
   "name": "coreslot",
-  "description": "coreslot: one machine-wide core budget for test suites, builds and coding agents",
+  "description": "coreslot: a memory guard for the test suites, builds and coding agents that share one machine",
   "owner": {
     "name": "core-slot",
     "url": "https://github.com/core-slot"
@@ -9,7 +9,7 @@
     {
       "name": "coreslot",
       "source": "./integrations/claude-code",
-      "description": "Routes heavy test and build commands through coreslot run, so parallel agent sessions share one machine-wide core budget.",
+      "description": "Routes heavy test and build commands through coreslot run, so parallel agent sessions start them when the machine has the memory for it.",
       "category": "development"
     }
   ]

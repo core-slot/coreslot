@@ -1,10 +1,10 @@
 {
   "name": "coreslot",
   "version": "0.1.0",
-  "description": "Routes heavy test and build commands (go test ./..., cargo test, pytest -n, make -j, ...) through coreslot run, so parallel agent sessions share one machine-wide core budget instead of oversubscribing the machine.",
+  "description": "Routes heavy test and build commands (go test ./..., cargo test, pytest -n, make -j, ...) through coreslot run, so parallel agent sessions start them when the machine has the memory for it instead of piling onto a machine that is short of it.",
   "author": {"name": "core-slot", "url": "https://github.com/core-slot"},
   "homepage": "https://github.com/core-slot/coreslot/tree/main/integrations/claude-code",
   "repository": "https://github.com/core-slot/coreslot",
   "license": "MIT",
-  "keywords": ["concurrency", "cpu", "tests", "builds", "parallel-agents"]
+  "keywords": ["memory", "tests", "builds", "parallel-agents"]
 }
