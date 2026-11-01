@@ -1066,28 +1066,32 @@ func (c *fakeClock) Sleep(ctx context.Context, d time.Duration) error {
 	return ctx.Err()
 }
 
+// The waiting line comes at the start of a wait and every 30 s after, with why the run waits; the
+// first alone says what to do about a tool's time limit.
 func TestWaitingLineEvery30s(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	clk := &fakeClock{limit: 95 * time.Second, cancel: cancel}
 	s := &fakeStepper{}
 	var out bytes.Buffer
-	r := &run{o: runOptions{need: 1024}}
+	r := &run{o: runOptions{need: 1024}, why: func() string { return "needs 1 GiB, 512 MiB free" }}
 	_, err := waitLoop(ctx, s, clk, &out, r.waitingLine, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitLoop = %v, want the context's end", err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("%d waiting lines in 95 s, want 3 (at 30, 60 and 90 s):\n%s", len(lines), out.String())
+	if len(lines) != 4 {
+		t.Fatalf("%d waiting lines in 95 s, want 4 (at 0, 30, 60 and 90 s):\n%s", len(lines), out.String())
 	}
-	for i, want := range []string{"(30s)", "(1m00s)", "(1m30s)"} {
-		if !strings.HasPrefix(lines[i], "coreslot: waiting for mem 1 GiB: position 2 "+want+"; holders: gate pid 4711 mem 1.5 GiB (3m1") {
+	const advice = "; if your tool has a time limit, run this in the background or raise the limit"
+	for i, want := range []string{"(0s)", "(30s)", "(1m00s)", "(1m30s)"} {
+		prefix := "coreslot: waiting for mem 1 GiB: position 2 " + want + "; needs 1 GiB, 512 MiB free; holders: gate pid 4711 mem 1.5 GiB (3m1"
+		if !strings.HasPrefix(lines[i], prefix) || strings.HasSuffix(lines[i], advice) != (i == 0) {
 			t.Errorf("line %d = %q", i, lines[i])
 		}
 	}
-	if s.holderCalls != 3 {
-		t.Errorf("holders listed %d times in 95 s, want 3: only for the waiting lines", s.holderCalls)
+	if s.holderCalls != 4 {
+		t.Errorf("holders listed %d times in 95 s, want 4: only for the waiting lines", s.holderCalls)
 	}
 	if s.calls != 96 {
 		t.Errorf("%d steps in 95 s, want 96: one at the start and one each time the next is due (1 s)", s.calls)

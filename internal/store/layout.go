@@ -30,6 +30,7 @@ const (
 	LogDir       = "log"
 	RunLog       = "runs.jsonl"
 	RunLogOld    = "runs.1.jsonl"
+	WatchLog     = "watch.jsonl"
 	ConfigFile   = "config.toml"
 )
 

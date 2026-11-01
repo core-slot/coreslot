@@ -8,11 +8,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
@@ -144,6 +146,38 @@ func formatRefusal(st *store.Store) (why string, err error) {
 	return "", nil
 }
 
+// doctorReadings reports whether each reading the watchdog stands on can be read, and the age of
+// the newest machine sample. A reading the platform may lack (page wait, PSI) is not a problem.
+func doctorReadings(w engine.WatchInfo, line, problem func(format string, args ...any)) {
+	check := func(name string, err error) {
+		if err != nil {
+			problem("reading %s: %s", name, text(err.Error()))
+		} else {
+			line("reading %s: readable", name)
+		}
+	}
+	host, err := memsample.ReadHost()
+	check("of paging counters, swap and clocks", err)
+	var headroomErr error
+	if _, ok := memsample.Headroom(); !ok {
+		headroomErr = errors.New("cannot be read")
+	}
+	check("of free memory", headroomErr)
+	times, err := memsample.ReadTreeTimes([]int{os.Getpid()})
+	check("of process times", err)
+	if err == nil && !times.HasPageWait {
+		line("reading of page wait: not reported by this system (optional)")
+	}
+	if runtime.GOOS == "linux" && !host.HasPSI {
+		line("reading of memory pressure (PSI): not reported by this kernel (optional)")
+	}
+	if w.SampledNS == 0 {
+		line("newest machine sample: none yet (no job has run)")
+	} else {
+		line("newest machine sample: %s old, level %s", duration(time.Duration(max(store.NowNS()-w.SampledNS, 0))), w.Level)
+	}
+}
+
 // doctorReport prints the findings at loc and returns doctor's exit status.
 func doctorReport(loc location, io IO) int {
 	problems := 0
@@ -233,6 +267,7 @@ func doctorReport(loc location, io IO) int {
 		} else {
 			line("degraded: no")
 		}
+		doctorReadings(rep.Watch, line, problem)
 		if rep.Section.Held {
 			line("admission section: %s", sectionHolder(rep.Section, store.NowNS()))
 		}

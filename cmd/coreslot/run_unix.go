@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,6 +67,10 @@ type run struct {
 	stops     int                // memory stops so far
 	stopped   bool               // the last command was killed by a stop round
 	peakKiB   int64              // the last command's sampled peak
+	why       func() string      // why the request in the queue is not admitted yet
+	advised   bool               // the waiting line said once what to do about a tool's time limit
+	lastStop  string             // what the watchdog saw when it stopped the last command
+	reasons   []string           // lastStop of every stop so far
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -135,15 +140,34 @@ func (r *run) ordinary() int {
 		if code = r.admitted(e, g); !r.stopped {
 			return code
 		}
-		if r.stops++; r.stops == maxStops {
+		r.stops++
+		r.reasons = append(r.reasons, r.lastStop)
+		cmd := commandText(r.o.argv)
+		switch {
+		case r.o.noWait: // a restart waits for calm, which --no-wait does not
+			return r.refuse("%s was stopped for memory (%s) and not restarted because of --no-wait", cmd, r.lastStop)
+		case r.stops == maxStops:
 			r.notice("gave up after %d memory stops (run %s)", maxStops, g.HoldName())
+			for i, why := range r.reasons {
+				r.notice("stop %d: %s", i+1, why)
+			}
+			r.notice("run %s alone, or narrow it", cmd)
 			return r.o.refusalCode
 		}
-		r.notice("memory stop %d of %d: the command was killed to free memory; coreslot restarts it by itself; do not run it again",
-			r.stops, maxStops)
+		r.notice("memory stop %d of %d: %s was stopped (%s); coreslot restarts it by itself; do not run it again",
+			r.stops, maxStops, cmd, r.lastStop)
 		req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
 		r.start, r.startNS = time.Now(), time.Now().UnixNano()
 	}
+}
+
+// commandText is the command for a message: at most 200 characters, escaped for a terminal.
+func commandText(argv []string) string {
+	s := []rune(text(strings.Join(argv, " ")))
+	if len(s) > 200 {
+		s = append(s[:200], '.', '.', '.')
+	}
+	return "`" + string(s) + "`"
 }
 
 // restartNeed is the need of a stopped command coming back: the larger of its peak before the
@@ -154,6 +178,12 @@ func restartNeed(peakKiB, needMiB int64) int64 { return max((peakKiB+1023)/1024,
 // its exit status.
 func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Engine, req spec.Request) (g *engine.Grant, code int, ok bool) {
 	r.freeWait = &freeMeter{needMiB: req.NeedMiB, headroom: memsample.Headroom}
+	r.why = func() string {
+		if rep, err := e.Snapshot(); err == nil {
+			return waitReason(rep, req)
+		}
+		return ""
+	}
 	watch := watchSignals(cancel)
 
 	enqCtx := ctx

@@ -87,6 +87,14 @@ const (
 	Floor
 )
 
+// String is the level's name; a value read from a damaged state is "unknown".
+func (l Level) String() string {
+	if names := [...]string{"green", "unknown", "yellow", "red", "floor"}; l >= 0 && int(l) < len(names) {
+		return names[l]
+	}
+	return "unknown"
+}
+
 // Rates are the paging counters' rates per second over the last period.
 type Rates struct {
 	DecompS    float64 `json:"decomp_s"`

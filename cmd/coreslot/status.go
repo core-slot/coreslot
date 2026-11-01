@@ -18,6 +18,7 @@ import (
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -257,14 +258,24 @@ func (v statusView) human() string {
 			spec.FormatMiB(r.Mem.FreeMiB))
 	}
 
+	p("%s", v.watchLine())
 	if len(r.Holds) == 0 {
 		p("holds: none")
 	} else {
 		p("holds:")
 	}
 	for _, h := range r.Holds {
-		line := fmt.Sprintf("  %s  pid %d  %s  held %s", labelText(h.Label), h.PID, holdNeed(h),
-			duration(time.Duration(max(v.nowNS-h.StartNS, 0))))
+		line := fmt.Sprintf("  %s  pid %d  %s  held %s  footprint %s", labelText(h.Label), h.PID, holdNeed(h),
+			duration(time.Duration(max(v.nowNS-h.StartNS, 0))), spec.FormatMiB(h.FootprintMiB))
+		if h.ArrivalNS > 0 {
+			line += "  arrived " + duration(time.Duration(max(v.nowNS-h.ArrivalNS, 0))) + " ago"
+		}
+		if h.Stops > 0 {
+			line += fmt.Sprintf("  stops %d", h.Stops)
+		}
+		if h.Name == r.Watch.NextVictim {
+			line += "  next victim"
+		}
 		if h.OwnerExited {
 			line += "  owner exited, held by a descendant"
 		}
@@ -310,6 +321,34 @@ func (v statusView) human() string {
 	return b.String()
 }
 
+// protection says whether the watchdog is protecting now and, if not, why.
+func (v statusView) protection() (on bool, reason string) {
+	w := v.rep.Watch
+	switch {
+	case len(v.rep.Holds) == 0:
+		return false, "no coreslot job is running"
+	case w.Observe:
+		return false, "observe mode logs what it would stop and stops nothing"
+	case !w.Fresh:
+		return false, "no run has sampled the machine in the last 6 s"
+	case w.Level == watch.Unknown:
+		return false, "the last sample is a gap (the machine slept, or a reading is missing)"
+	}
+	return true, ""
+}
+
+// watchLine is the memory level and E, and whether the watchdog is protecting.
+func (v statusView) watchLine() string {
+	state := "protecting"
+	if on, why := v.protection(); !on {
+		state = "not protecting: " + why
+	}
+	if w := v.rep.Watch; w.Fresh {
+		return fmt.Sprintf("watch: %s, E %.1f points; %s", w.Level, w.Excess, state)
+	}
+	return "watch: no fresh sample; " + state
+}
+
 // plural is one when n is 1, else many.
 func plural(n int64, one, many string) string {
 	if n == 1 {
@@ -346,6 +385,7 @@ type jsonStatus struct {
 	Degraded         *jsonDegraded  `json:"degraded"`
 	Section          jsonSection    `json:"section"`
 	Mem              *jsonMem       `json:"mem"`
+	Watch            jsonWatch      `json:"watch"`
 	Holds            []jsonHold     `json:"holds"`
 	Tickets          []jsonTicket   `json:"tickets"`
 	DeadHolds        []string       `json:"dead_holds"`
@@ -377,6 +417,16 @@ type jsonHolder struct {
 }
 
 // jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
+// jsonWatch is the watchdog: the level and E of the newest sample (no level without a fresh one),
+// whether it protects and, if not, why, and the hold of the next victim.
+type jsonWatch struct {
+	Level        string  `json:"level"`
+	ExcessPoints float64 `json:"excess_points"`
+	Protecting   bool    `json:"protecting"`
+	Reason       string  `json:"reason"`
+	NextVictim   string  `json:"next_victim"`
+}
+
 type jsonMem struct {
 	SizeMiB     int64 `json:"size_mib"`
 	ReservedMiB int64 `json:"reserved_mib"`
@@ -419,6 +469,11 @@ func (v statusView) document() jsonStatus {
 	}
 	if r.Mem.Known {
 		d.Mem = &jsonMem{SizeMiB: r.Mem.SizeMiB, ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB}
+	}
+	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim}
+	d.Watch.Protecting, d.Watch.Reason = v.protection()
+	if r.Watch.Fresh {
+		d.Watch.Level = r.Watch.Level.String()
 	}
 	if r.Section.Held {
 		h := &jsonHolder{PID: r.Section.PID, EnteredNS: r.Section.EnteredNS, HeldForS: sectionHeldFor(r.Section, v.nowNS).Seconds()}

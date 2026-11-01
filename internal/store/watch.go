@@ -28,9 +28,12 @@ type watchState struct {
 
 // Watch reads the shared watch state: the detector, the machine sample it last advanced on and
 // when, by NowNS, that sample was taken. A missing or malformed watch.json is the zero state.
-func (sec *Section) Watch() (watch.Detector, watch.Sample, int64, error) {
+func (sec *Section) Watch() (watch.Detector, watch.Sample, int64, error) { return sec.s.ReadWatch() }
+
+// ReadWatch is Section.Watch outside the section: watch.json is replaced whole, never rewritten.
+func (s *Store) ReadWatch() (watch.Detector, watch.Sample, int64, error) {
 	var w watchState
-	body, err := sec.s.ReadSmall(WatchFile, maxWatchBytes)
+	body, err := s.ReadSmall(WatchFile, maxWatchBytes)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
@@ -61,8 +64,13 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 	if rerr != nil {
 		cur = watch.Sample{} // no reading: Unknown, and the next sample starts afresh
 	}
+	var round []string
 	if d.Advance(prev, cur, c) >= watch.Red && roundOver(d, cur, c) { // red or floor: a stop round
-		d.Stop, d.LastRoundNS = watch.StopList(cur.Jobs, max(-cur.RoomMiB, 0)), cur.Host.WallNS
+		round = watch.StopList(cur.Jobs, max(-cur.RoomMiB, 0))
+		d.Stop, d.LastRoundNS = round, cur.Host.WallNS
+	}
+	if c.SampleLog {
+		_ = sec.s.appendSample(cur, d, round) // a calibration aid: a failed write costs a line
 	}
 	if err := sec.SetWatch(d, cur, now); err != nil {
 		return d, d.Stop, err
@@ -79,4 +87,35 @@ func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
 	return !slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool {
 		return !j.ChildExited && slices.Contains(d.Stop, j.Hold)
 	})
+}
+
+// appendSample appends cur and the detector d that advanced on it to log/watch.jsonl, as the
+// calibration reads it; stop is the round written at this sample.
+func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) error {
+	h, jobs := cur.Host, []map[string]any{}
+	var psi any // null where the platform has no PSI
+	if d.Rates.HasPSI {
+		psi = d.Rates.PSISomeUSS
+	}
+	for _, j := range cur.Jobs {
+		var share any // null when the job reported no time
+		if v, ok := watch.Share(j); ok {
+			share = v
+		}
+		jobs = append(jobs, map[string]any{"hold": j.Hold, "label": j.Label, "arrival_ns": j.ArrivalNS,
+			"need_mib": j.NeedMiB, "footprint_mib": j.FootprintMiB, "share": share, "normal_share": j.NormalShare,
+			"d_user_ns": j.DUserNS, "d_sys_ns": j.DSysNS, "d_page_wait_ns": j.DPageWaitNS})
+	}
+	l := map[string]any{"t_ns": h.WallNS, "awake_ns": h.AwakeNS, "level": d.Level.String(), "excess": d.Excess,
+		"bucket": d.Bucket, "gate": d.Gate, "decomp_s": d.Rates.DecompS, "swapins_s": d.Rates.SwapInsS,
+		"psi_some_us_s": psi, "swap_used_mib": h.SwapUsedMiB, "swap_free_mib": h.SwapFreeMiB,
+		"vm_free_mib": h.VMVolumeFreeMiB, "room_mib": cur.RoomMiB, "jobs": jobs}
+	if len(stop) > 0 {
+		l["stop"] = stop
+	}
+	line, err := json.Marshal(l)
+	if err != nil {
+		return err
+	}
+	return s.appendLine(WatchLog, append(line, '\n'))
 }

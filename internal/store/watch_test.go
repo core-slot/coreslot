@@ -3,7 +3,11 @@
 package store
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,5 +94,83 @@ func TestOneStopRoundPerEpisode(t *testing.T) {
 	}
 	if waited := time.Duration(d.LastRoundNS - round); waited < 15*time.Second || !slices.Equal(stop, []string{"2"}) {
 		t.Errorf("next round after %v: %v; want [2] after post_kill_s", waited, stop)
+	}
+}
+
+// With sample_log on, each machine sample is one line of log/watch.jsonl carrying every key of
+// the calibration's schema, and the sample that wrote a stop round names it; with it off nothing
+// is written. Mutation: logging at every Tick writes two lines for the first period.
+func TestSampleLog(t *testing.T) {
+	top := []string{"t_ns", "awake_ns", "level", "excess", "bucket", "gate", "decomp_s", "swapins_s",
+		"psi_some_us_s", "swap_used_mib", "swap_free_mib", "vm_free_mib", "room_mib", "jobs"}
+	perJob := []string{"hold", "label", "arrival_ns", "need_mib", "footprint_mib", "share", "normal_share",
+		"d_user_ns", "d_sys_ns", "d_page_wait_ns"}
+	run := func(c watch.Config) (lines []map[string]any, dir string) {
+		dir = newDir(t)
+		sec := enter(t, open(t, dir))
+		m := &machine{jobs: []watch.Job{stalled("1", 1), stalled("2", 2), {Hold: "idle", ArrivalNS: 3}}}
+		now := NowNS()
+		for _, at := range []int64{now, now + 5e8, now + 21e8} { // the first two share a period
+			if _, _, err := sec.Tick(at, m.read, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for m.calls < 20 {
+			now += 21e8
+			if _, _, err := sec.Tick(now, m.read, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		body, err := os.ReadFile(filepath.Join(dir, LogDir, WatchLog))
+		if err != nil {
+			return nil, dir
+		}
+		for _, l := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+			var v map[string]any
+			if err := json.Unmarshal([]byte(l), &v); err != nil {
+				t.Fatalf("line %q: %v", l, err)
+			}
+			lines = append(lines, v)
+		}
+		return lines, dir
+	}
+
+	c := watch.Defaults()
+	if lines, _ := run(c); lines != nil {
+		t.Fatalf("sample_log off wrote %d lines", len(lines))
+	}
+	c.SampleLog = true
+	lines, _ := run(c)
+	if len(lines) != 20 {
+		t.Fatalf("%d lines for 20 samples, want 20", len(lines))
+	}
+	stops := 0
+	for i, l := range lines {
+		for _, k := range top {
+			if _, ok := l[k]; !ok {
+				t.Fatalf("line %d lacks %q: %v", i, k, l)
+			}
+		}
+		jobs := l["jobs"].([]any)
+		if len(jobs) != 3 {
+			t.Fatalf("line %d has %d jobs, want 3", i, len(jobs))
+		}
+		for _, k := range perJob {
+			if _, ok := jobs[0].(map[string]any)[k]; !ok {
+				t.Fatalf("line %d: a job lacks %q: %v", i, k, jobs[0])
+			}
+		}
+		if jobs[2].(map[string]any)["share"] != nil || l["psi_some_us_s"] != nil {
+			t.Errorf("line %d: a job with no time or a platform without PSI has a number: %v", i, l)
+		}
+		if s, ok := l["stop"]; ok {
+			stops++
+			if l["level"] != "red" || !slices.Equal(s.([]any), []any{"2"}) {
+				t.Errorf("line %d: stop %v at level %v, want [2] at red", i, s, l["level"])
+			}
+		}
+	}
+	if stops != 1 {
+		t.Errorf("%d lines name a stop round, want 1", stops)
 	}
 }

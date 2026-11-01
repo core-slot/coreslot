@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/core-slot/coreslot/internal/watch"
+
 // HolderInfo describes one live hold as a waiter or a snapshot sees it.
 type HolderInfo struct {
 	Name         string // the hold's file name
@@ -10,10 +12,22 @@ type HolderInfo struct {
 	NeedMiB      int64  // what the hold reserves; 0 for a run outside the budget
 	FootprintMiB int64  // what its run last measured
 	Stops        int
+	Victim       bool // a stop round may list it
+	ChildExited  bool // its command has exited
 	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
 	// still held, so a descendant that inherited the hold's descriptor holds the reservation. Only
 	// Snapshot sets it, and only when the process table can be read.
 	OwnerExited bool
+}
+
+// WatchInfo is the shared watch state in a snapshot.
+type WatchInfo struct {
+	Level      watch.Level
+	Excess     float64 // E, in points, at the newest sample
+	SampledNS  int64   // when, by the wall clock, the newest sample was taken; 0 when none was
+	Fresh      bool    // the newest sample is young enough for admission to read
+	Observe    bool    // [watch] mode is observe: nothing is stopped
+	NextVictim string  // the hold the next stop round lists first; "" when none
 }
 
 // TicketInfo describes one queue entry in a snapshot.
@@ -78,5 +92,6 @@ type Report struct {
 	Cancels          []string       // pending cancel requests (ticket ids)
 	Ignored          map[string]int // per directory: entries that do not match the grammar or whose body is malformed
 	Section          SectionInfo
+	Watch            WatchInfo
 	Degraded         *DegradedInfo // nil when degraded mode is not recorded
 }

@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -57,17 +59,33 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant) 
 			continue
 		}
 		round = det.LastRoundNS
-		if !c.Observe && sup.KillGroup() {
+		why := r.stopDetail(det.Level, kib, d)
+		if c.Observe {
+			r.notice("would stop %s (%s)", text(r.o.label), why)
+		} else if sup.KillGroup() {
+			r.lastStop = why
 			return true, p
 		}
-		if c.Observe {
-			reason := "memory red"
-			if det.Level == watch.Floor {
-				reason = "swap room under the floor"
-			}
-			r.notice("would stop %s (%s)", text(r.o.label), reason)
-		}
 	}
+}
+
+// stopDetail is what the watchdog saw when a stop round listed this run: the memory level, the
+// command's footprint and the part of its last period that went to memory stalls, against its
+// normal.
+func (r *run) stopDetail(l watch.Level, kib int64, d memsample.TreeTimes) string {
+	reason := "memory " + l.String()
+	if l == watch.Floor {
+		reason = "swap room under the floor"
+	}
+	detail := fmt.Sprintf("%s, at %s", reason, spec.FormatMiB(kib>>10))
+	if share, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
+		normal, known := r.normal[r.o.label]
+		if !known {
+			normal = watch.DefaultNormalShare
+		}
+		detail += fmt.Sprintf(", %.0f%% of its time went to memory stalls against its normal %.0f%%", 100*share, 100*normal)
+	}
+	return detail
 }
 
 // updateHold rewrites g's hold with fn, outside the section, only while the state directory's

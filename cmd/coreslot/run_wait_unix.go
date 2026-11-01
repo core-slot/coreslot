@@ -14,6 +14,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -121,12 +122,13 @@ func (m *freeMeter) total() time.Duration { return m.sum }
 
 // waitLoop steps the ticket whenever it next has work due (once per second while it is not the
 // head, on the admission backoff while it is) until it is admitted, ctx ends or the budget
-// fails, and writes a waiting line to w every 30 s of waiting, with the live holds listed then.
+// fails, and writes a waiting line to w when the wait starts and every 30 s after, with the live
+// holds listed then.
 // After every waiting step it lets m observe the headroom, and at admission it lets m count the
 // tail since the last reading.
 func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line func(engine.Waiting, []engine.HolderInfo, time.Duration) string, m *freeMeter) (*engine.Grant, error) {
 	start := clk.Now()
-	next := start + waitLineEvery
+	next := start
 	for {
 		res, err := s.step(ctx)
 		if err != nil {
@@ -160,8 +162,31 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 // mem 3 GiB: position 2 (1m00s); holders: gate pid 4711 mem 1 GiB (3m12s)`, where 1m00s is how
 // long the run has waited.
 func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited time.Duration) string {
-	return fmt.Sprintf("coreslot: waiting for %s: position %d (%s)%s%s", r.o.needText(), w.Position,
-		duration(waited), holderList(holders, time.Now().UnixNano()), r.pipeNote())
+	why, advice := "", ""
+	if r.why != nil {
+		if why = r.why(); why != "" {
+			why = "; " + why
+		}
+	}
+	if !r.advised {
+		r.advised, advice = true, "; if your tool has a time limit, run this in the background or raise the limit"
+	}
+	return fmt.Sprintf("coreslot: waiting for %s: position %d (%s)%s%s%s%s", r.o.needText(), w.Position,
+		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
+}
+
+// waitReason says why a waiting request is not admitted: the room it lacks, else the memory level
+// that holds admissions, else that a restarted command waits for calm.
+func waitReason(rep engine.Report, req spec.Request) string {
+	switch w := rep.Watch; {
+	case rep.Mem.Known && len(rep.Holds) > 0 && req.NeedMiB > rep.Mem.FreeMiB:
+		return fmt.Sprintf("needs %s, %s free", spec.FormatMiB(req.NeedMiB), spec.FormatMiB(rep.Mem.FreeMiB))
+	case w.Fresh && w.Level >= watch.Yellow:
+		return "memory is " + w.Level.String()
+	case req.Restart:
+		return "a stopped command restarts when memory has been calm for a while"
+	}
+	return ""
 }
 
 // pipeNote is what the first waiting line adds when the run's stdin is a pipe: the command

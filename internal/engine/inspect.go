@@ -6,6 +6,7 @@ import (
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -138,6 +139,18 @@ func (e *Engine) Snapshot() (Report, error) {
 		for i, h := range r.Holds {
 			r.Holds[i].OwnerExited = !memsample.Alive(procs, h.PID, h.StartNS)
 		}
+	}
+
+	d, _, at, _ := e.st.ReadWatch() // no readable watch.json is no sample
+	now := e.clock.Realtime()
+	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
+		Fresh: at > 0 && at <= now && now-at <= staleNS}
+	jobs := make([]watch.Job, len(r.Holds))
+	for i, h := range r.Holds {
+		jobs[i] = watch.Job{Hold: h.Name, ArrivalNS: h.ArrivalNS, Victim: h.Victim, ChildExited: h.ChildExited}
+	}
+	if next := watch.StopList(jobs, 1); len(next) > 0 {
+		r.Watch.NextVictim = next[0]
 	}
 
 	cancels, ignored, err := e.st.List(store.CancelDir)

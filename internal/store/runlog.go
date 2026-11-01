@@ -123,17 +123,22 @@ func (s *Store) AppendRun(r RunRecord) error {
 	if err != nil {
 		return err
 	}
+	return s.appendLine(RunLog, line)
+}
+
+// appendLine appends line to log/name with one write, recreating log/ when a reset removed it.
+func (s *Store) appendLine(name string, line []byte) error {
 	if err := ensureDir(s.path(LogDir)); err != nil {
 		return err
 	}
-	f, err := OpenFile(s.path(LogDir, RunLog), os.O_WRONLY|os.O_APPEND|os.O_CREATE)
+	f, err := OpenFile(s.path(LogDir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	n, err := writeOnce(f, line)
 	if err == nil && n != len(line) {
-		err = fmt.Errorf("store: short run-log write: %d of %d bytes", n, len(line))
+		err = fmt.Errorf("store: short log write: %d of %d bytes", n, len(line))
 	}
 	return err
 }
