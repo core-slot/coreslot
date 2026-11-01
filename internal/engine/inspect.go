@@ -131,7 +131,7 @@ func (e *Engine) Snapshot() (Report, error) {
 			}
 		}
 		room := state.Room(machine.HeadroomMiB, cfg.ReserveMiB, held)
-		r.Mem.Known, r.Mem.SizeMiB, r.Mem.FreeMiB = true, r.Mem.ReservedMiB+room, max(0, room)
+		r.Mem.Known, r.Mem.FreeMiB = true, max(0, room)
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
 	// descriptor. An unreadable process table reports nothing: unknown is not exited.

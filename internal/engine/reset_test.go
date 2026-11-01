@@ -221,8 +221,8 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 			if rep.StateDirExists != (name == "empty") || rep.Section.Held || len(rep.Holds)+len(rep.Tickets) != 0 {
 				t.Errorf("report %+v", rep)
 			}
-			if rep.Mem.SizeMiB != 1024 {
-				t.Errorf("mem %+v, want the default budget", rep.Mem)
+			if rep.Mem.FreeMiB != 1024 {
+				t.Errorf("mem %+v, want the whole room free", rep.Mem)
 			}
 			if after := treeContent(t, root); after != before {
 				t.Errorf("Snapshot created entries:\nbefore:\n%s\nafter:\n%s", before, after)

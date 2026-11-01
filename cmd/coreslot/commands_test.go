@@ -212,11 +212,11 @@ func TestStatusJSONSchema(t *testing.T) {
 	}
 
 	mem := doc["mem"].(map[string]any)
-	if got := keysOf(mem); got != "free_mib reserved_mib size_mib" {
+	if got := keysOf(mem); got != "free_mib reserved_mib" {
 		t.Errorf("mem keys %s", got)
 	}
-	if mem["size_mib"] != float64(512) || mem["reserved_mib"] != float64(384) || mem["free_mib"] != float64(128) {
-		t.Errorf("mem = %v, want size 512, reserved 384, free 128", mem)
+	if mem["reserved_mib"] != float64(384) || mem["free_mib"] != float64(128) {
+		t.Errorf("mem = %v, want reserved 384, free 128", mem)
 	}
 
 	holds := doc["holds"].([]any)
@@ -334,14 +334,14 @@ func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, want) {
 		t.Errorf("status: exit %d, want a ticket line with %q:\n%s", r.code, want, r.stdout)
 	}
-	if line := "\nmem: size 2 GiB  reserved 2 GiB  free 0 MiB\n"; !strings.Contains(r.stdout, line) {
+	if line := "\nmem: reserved 2 GiB  free 0 MiB\n"; !strings.Contains(r.stdout, line) {
 		t.Errorf("status lacks the budget line %q:\n%s", strings.TrimSpace(line), r.stdout)
 	}
 }
 
-// memReport is a snapshot with a 9.5 GiB mem budget, 3 GiB of it reserved by one hold.
+// memReport is a snapshot with 3 GiB reserved by one hold and 6.5 GiB of room.
 func memReport() engine.Report {
-	return engine.Report{Mem: engine.MemInfo{Known: true, SizeMiB: 9728, ReservedMiB: 3072, FreeMiB: 6656},
+	return engine.Report{Mem: engine.MemInfo{Known: true, ReservedMiB: 3072, FreeMiB: 6656},
 		Holds: []engine.HolderInfo{{Name: "h", Label: "gate", PID: 7, NeedMiB: 3072}}}
 }
 
@@ -350,7 +350,7 @@ func TestStatusHumanMem(t *testing.T) {
 	rep := memReport()
 	rep.Holds = append(rep.Holds, engine.HolderInfo{Name: "u", Label: "open", PID: 8})
 	h := buildStatus(rep, 0, nil, 0).human()
-	for _, line := range []string{"\nmem: size 9.5 GiB  reserved 3 GiB  free 6.5 GiB\n",
+	for _, line := range []string{"\nmem: reserved 3 GiB  free 6.5 GiB\n",
 		"  gate  pid 7  mem 3 GiB  held ", "  open  pid 8  unbudgeted  held "} {
 		if !strings.Contains(h, line) {
 			t.Errorf("status lacks the line %q:\n%s", strings.TrimSpace(line), h)
@@ -374,7 +374,7 @@ func TestStatusJSONMemMiB(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	wantMem := map[string]int64{"size_mib": 9728, "reserved_mib": 3072, "free_mib": 6656}
+	wantMem := map[string]int64{"reserved_mib": 3072, "free_mib": 6656}
 	if doc.Schema != 1 || !maps.Equal(doc.Mem, wantMem) || len(doc.Holds) != 1 || doc.Holds[0].NeedMiB != 3072 {
 		t.Errorf("schema %d, mem %v, holds %+v; want schema 1, mem %v and one hold of 3072", doc.Schema, doc.Mem, doc.Holds, wantMem)
 	}
@@ -739,7 +739,7 @@ func TestDoctorReports(t *testing.T) {
 	for _, want := range []string{
 		"filesystem: host-local",
 		"permissions: every entry of the layout is the user's",
-		"mem: size 512 MiB, reserved 0 MiB, free 512 MiB",
+		"mem: reserved 0 MiB, free 512 MiB",
 		"degraded: no",
 		"no problems found",
 	} {
@@ -1031,7 +1031,7 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 					t.Errorf("state_dir_exists = %v, want false", doc["state_dir_exists"])
 				}
 				mem := doc["mem"].(map[string]any)
-				if mem["reserved_mib"] != float64(0) || mem["free_mib"] != mem["size_mib"] {
+				if mem["reserved_mib"] != float64(0) {
 					t.Errorf("an empty budget is expected, got %v", mem)
 				}
 			}

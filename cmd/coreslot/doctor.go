@@ -252,7 +252,7 @@ func doctorReport(loc location, io IO) int {
 		}
 		line("configuration: %s (%s)", text(cfgPath), state)
 		if m := rep.Mem; m.Known {
-			line("mem: size %s, reserved %s, free %s", spec.FormatMiB(m.SizeMiB), spec.FormatMiB(m.ReservedMiB), spec.FormatMiB(m.FreeMiB))
+			line("mem: reserved %s, free %s", spec.FormatMiB(m.ReservedMiB), spec.FormatMiB(m.FreeMiB))
 		}
 	}
 

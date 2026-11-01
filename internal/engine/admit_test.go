@@ -397,8 +397,8 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	if len(r.Tickets) != 1 || r.Tickets[0].Name != waiter.Name() || r.Tickets[0].Dead {
 		t.Errorf("tickets %+v", r.Tickets)
 	}
-	if m := r.Mem; m.SizeMiB != 1024 || m.ReservedMiB != 3*unit || m.FreeMiB != 5*unit {
-		t.Errorf("mem %+v, want size 1024, reserved 384, free 640", m)
+	if m := r.Mem; m.ReservedMiB != 3*unit || m.FreeMiB != 5*unit {
+		t.Errorf("mem %+v, want reserved 384, free 640", m)
 	}
 	if r.Format != 2 || !r.FormatUnderstood {
 		t.Errorf("format %d understood %v", r.Format, r.FormatUnderstood)

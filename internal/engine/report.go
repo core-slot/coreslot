@@ -48,9 +48,8 @@ type TicketInfo struct {
 // or the configuration is invalid, and the sizes are then 0.
 type MemInfo struct {
 	Known       bool
-	SizeMiB     int64 // what the live holds reserve and the room they leave add up to
 	ReservedMiB int64 // what the live holds reserve
-	FreeMiB     int64 // the room a new job may take: max(0, SizeMiB - ReservedMiB)
+	FreeMiB     int64 // the room a new job may take, never below 0
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.

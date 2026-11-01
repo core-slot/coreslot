@@ -254,8 +254,7 @@ func (v statusView) human() string {
 	case !r.Mem.Known:
 		p("mem: not known, the machine's free memory cannot be read")
 	default:
-		p("mem: size %s  reserved %s  free %s", spec.FormatMiB(r.Mem.SizeMiB), spec.FormatMiB(r.Mem.ReservedMiB),
-			spec.FormatMiB(r.Mem.FreeMiB))
+		p("mem: reserved %s  free %s", spec.FormatMiB(r.Mem.ReservedMiB), spec.FormatMiB(r.Mem.FreeMiB))
 	}
 
 	p("%s", v.watchLine())
@@ -428,7 +427,6 @@ type jsonWatch struct {
 }
 
 type jsonMem struct {
-	SizeMiB     int64 `json:"size_mib"`
 	ReservedMiB int64 `json:"reserved_mib"`
 	FreeMiB     int64 `json:"free_mib"`
 }
@@ -468,7 +466,7 @@ func (v statusView) document() jsonStatus {
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
 	}
 	if r.Mem.Known {
-		d.Mem = &jsonMem{SizeMiB: r.Mem.SizeMiB, ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB}
+		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB}
 	}
 	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim}
 	d.Watch.Protecting, d.Watch.Reason = v.protection()

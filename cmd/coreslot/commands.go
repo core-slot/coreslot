@@ -24,10 +24,7 @@ func text(s string) string { return wire.EscapeHuman(s) }
 const statusUsage = `usage: coreslot status [--json] [--observe DURATION]
 
 --observe watches the queue for DURATION to find STALLED tickets; a ticket is
-STALLED after 10s without a refresh, so use 10s or more.
-
-mem may show 0 free while runs are still admitted above its size from free
-memory.`
+STALLED after 10s without a refresh, so use 10s or more.`
 
 const cancelUsage = `usage: coreslot cancel <ticket-id>
        coreslot cancel --label LABEL`

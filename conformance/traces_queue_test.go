@@ -271,8 +271,8 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 		t.Errorf("environment %v, want a grant of the cold start, %s MiB", r.Env, want)
 	}
 	rep := e.Status()
-	if want := int64(confHeadroomMiB - config.DefaultReserveMiB); rep.Mem.SizeMiB != want {
-		t.Errorf("mem %+v, want a size of %d MiB", rep.Mem, want)
+	if want := int64(confHeadroomMiB - config.DefaultReserveMiB); rep.Mem.FreeMiB != want {
+		t.Errorf("mem %+v, want %d MiB free", rep.Mem, want)
 	}
 	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != 2 {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)
