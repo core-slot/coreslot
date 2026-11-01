@@ -34,9 +34,9 @@ func gitCommonDir(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// repoName is the name of the repository dir belongs to: the base name of the parent of the git
-// common directory, which every worktree of a repository shares. It is "" outside a repository and
-// when git fails.
+// repoName is the name of the repository dir belongs to, from the git common directory, which every
+// worktree of a repository shares: the base of its parent when it is named .git, else its own base
+// less a .git suffix. It is "" outside a repository and when git fails.
 func repoName(dir string, git func(dir string) (string, error)) string {
 	common, err := git(dir)
 	if err != nil || common == "" {
@@ -45,7 +45,11 @@ func repoName(dir string, git func(dir string) (string, error)) string {
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(dir, common)
 	}
-	return filepath.Base(filepath.Dir(filepath.Clean(common)))
+	common = filepath.Clean(common)
+	if filepath.Base(common) == ".git" {
+		return filepath.Base(filepath.Dir(common))
+	}
+	return strings.TrimSuffix(filepath.Base(common), ".git") // a submodule's or a bare repository's
 }
 
 // autoLabel is the label of a run that names none: the command's shape, then "@" and the name of

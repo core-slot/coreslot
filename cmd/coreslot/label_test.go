@@ -43,6 +43,17 @@ func TestRepoNameWorktreesShare(t *testing.T) {
 	}
 }
 
+// A common directory not named .git (a submodule's, under the superproject's .git/modules, or a
+// bare repository's) names the repository by its own base, without a .git suffix. Mutation:
+// always taking the parent names them "modules" and "x".
+func TestRepoNameSubmoduleAndBare(t *testing.T) {
+	for common, want := range map[string]string{"/x/super/.git/modules/lib": "lib", "/x/proj.git": "proj"} {
+		if got := repoName("/y", func(string) (string, error) { return common, nil }); got != want {
+			t.Errorf("repoName with the common directory %s = %q, want %s", common, got, want)
+		}
+	}
+}
+
 // Outside a repository, or when git fails, there is no repository name, and the label is the
 // shape alone.
 func TestNoRepoShapeOnly(t *testing.T) {
