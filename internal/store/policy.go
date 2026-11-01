@@ -15,7 +15,7 @@ import (
 
 // StateError is a state error (PROTOCOL.md section 14): an unusable state directory, a refused
 // filesystem, an entry of an unexpected type, owner or mode, a full directory, a malformed
-// FORMAT, or an inode mismatch at a held token. The caller decides whether to fail open. Err is
+// FORMAT, or an inode mismatch at a run's own hold. The caller decides whether to fail open. Err is
 // the error that caused it, when one did.
 type StateError struct {
 	Reason string

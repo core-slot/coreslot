@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,31 +26,31 @@ func lookupOf(t *testing.T, text string) (needsLookup, *[]string) {
 	}), &notices
 }
 
-func wantNeed(t *testing.T, args []string, lookup needsLookup, want map[string]spec.Range) {
+func wantNeed(t *testing.T, args []string, lookup needsLookup, want int64) {
 	t.Helper()
 	o, err := parseRun(args, IO{}, lookup)
 	if err != nil {
 		t.Fatalf("parseRun(%q): %v", args, err)
 	}
-	if !maps.Equal(o.need, want) {
-		t.Errorf("parseRun(%q) need = %v, want %v", args, o.need, want)
+	if o.need != want {
+		t.Errorf("parseRun(%q) need = %d MiB, want %d", args, o.need, want)
 	}
 }
 
 // The entry's mem is the request when --mem is not given, and --mem wins over it. Mutation: let
-// the entry override --mem → 16 tokens, red; ignore the entry → one token, red.
+// the entry override --mem → 2048, red; ignore the entry → the default, red.
 func TestNeedsEntryMem(t *testing.T) {
 	lookup, _ := lookupOf(t, "[needs.\"a\"]\nmem = \"2G\"\n")
-	wantNeed(t, []string{"--label", "a", "--", "true"}, lookup, map[string]spec.Range{"mem": {Min: 16, Max: 16}})
-	wantNeed(t, []string{"--label", "a", "--mem", "512M", "--", "true"}, lookup, map[string]spec.Range{"mem": {Min: 4, Max: 4}})
-	wantNeed(t, []string{"--label", "other", "--", "true"}, lookup, map[string]spec.Range{"mem": {Min: 1, Max: 1}})
+	wantNeed(t, []string{"--label", "a", "--", "true"}, lookup, 2048)
+	wantNeed(t, []string{"--label", "a", "--mem", "512M", "--", "true"}, lookup, 512)
+	wantNeed(t, []string{"--label", "other", "--", "true"}, lookup, spec.DefaultNeedMiB)
 }
 
 // An unlabelled run never reads the needs file. Mutation: drop the label check → red.
 func TestNeedsUnlabelled(t *testing.T) {
 	calls := 0
 	lookup := func(string) (needs.Entry, bool) { calls++; return needs.Entry{}, false }
-	wantNeed(t, []string{"--", "true"}, lookup, map[string]spec.Range{"mem": {Min: 1, Max: 1}})
+	wantNeed(t, []string{"--", "true"}, lookup, spec.DefaultNeedMiB)
 	if calls != 0 {
 		t.Errorf("lookup called %d times for an unlabelled run", calls)
 	}

@@ -31,7 +31,7 @@ func notIgnored(sigs ...os.Signal) []os.Signal {
 // runtime cannot give a stop signal back its default disposition once it has been caught, so
 // the run catches them for its whole life and stops itself with SIGSTOP, except while it holds a
 // lock it took only momentarily (momentaryLockTaken): the admission section, or the probe lock of
-// a token, ticket or hold. There the stop is deferred until it has let go. While a
+// a ticket or hold. There the stop is deferred until it has let go. While a
 // command runs in non-terminal mode, a SIGTSTP is first forwarded to the command's own group:
 // coreslot then stops as well, so that a shell sees its whole job stopped, and the SIGCONT that
 // continues coreslot is forwarded to the command's group.
@@ -45,7 +45,7 @@ var stops struct {
 
 // installLockHooks makes the store tell this process when it may hold a lock it takes only
 // momentarily, so that a stop is deferred exactly then (PROTOCOL.md section 8): every try to take
-// admit.lock and every moment it is held, and every probe of a token, ticket or hold, whichever
+// admit.lock and every moment it is held, and every probe of a ticket or hold, whichever
 // command and call site makes it, but never the waits between tries to enter the section, during
 // which Ctrl-Z stops the process at once. The locks a run owns for a lifetime (its ticket while
 // it waits, its grant while its command runs) do not defer a stop: a stopped run keeps only what
@@ -90,10 +90,10 @@ func onStop(sig syscall.Signal) {
 // momentaryLockTaken is the store's lock hook that runs just before each try to take a momentary
 // lock: from now until the matching momentaryLockLeft, a stop signal must not stop the process,
 // since a process stopped inside the section blocks every other client, and one stopped holding a
-// probe lock makes every other client count that token as locked (I5). SIGTSTP, SIGTTIN and
-// SIGTTOU arriving meanwhile are held back. Holds nest (a probe inside the section) and may
-// overlap across goroutines, so they are counted. It runs once per probed token, so it does no
-// more than take a mutex.
+// probe lock makes every other client count that ticket or hold as live (I5). SIGTSTP, SIGTTIN
+// and SIGTTOU arriving meanwhile are held back. Holds nest (a probe inside the section) and may
+// overlap across goroutines, so they are counted. It runs once per probe, so it does no more than
+// take a mutex.
 func momentaryLockTaken() {
 	installStops()
 	stops.mu.Lock()

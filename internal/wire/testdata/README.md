@@ -38,8 +38,7 @@ The file name states the expected verdict:
 `ok-<slug>.expect.json` is the decoded value, written as the canonical body of that kind: every key
 of the table present, collections empty rather than absent, unknown keys of the source body
 dropped, key order and whitespace not significant. Compare it with the value your decoder produced
-**as parsed JSON** (object equality), not as text. Resource names in `grant`, `clamped`, `need`
-are keys; token indices stay in the order the body gave them (they are ascending).
+**as parsed JSON** (object equality), not as text.
 
 Verdict reminders, all from `PROTOCOL.md`:
 
@@ -60,12 +59,11 @@ Verdict reminders, all from `PROTOCOL.md`:
 - A duplicate key at any depth is malformed, including inside objects and arrays of unknown keys.
   Keys are compared after JSON unescaping.
 - Unknown keys, at any depth, are ignored (their values may be any JSON).
-- Resource names (the keys of `need`, `grant` and `clamped`, and the elements of
-  `unbudgeted_resources`) must match `[a-z][a-z0-9-]{0,31}`.
-- Ticket: `created_ns` is at least 0; the minimums of `need` sum to at most 512
-  (`bad-created-ns-negative`, `bad-need-minimums-sum-513`, `ok-eight-resources-minimums-sum-512`).
-- Hold: `grant` never maps a resource to an empty array (`bad-grant-empty-array*`); each value of
-  `clamped` is an integer in 1..256 (`bad-clamped-*`, `ok-clamped-bounds`).
+- Ticket: `need_mib` is an integer in 1..1073741824 and `created_ns` is at least 0
+  (`bad-need-mib-*`, `ok-need-mib-maximum`, `bad-created-ns-negative`).
+- Hold: `need_mib` and `footprint_mib` are integers in 0..1073741824, every other integer is at
+  least 0, and every key, `tree` included, is required (`bad-missing-*`, `ok-unbudgeted-run`,
+  `ok-need-and-footprint-maximum`).
 - Cancel: `requested_ns` and `requester_pid` are at least 0 (`bad-requested-ns-negative`,
   `bad-requester-pid-negative`, `ok-zeros`).
 - `hold` fixtures do not check that `start_ns` equals the start time in the hold's name; that

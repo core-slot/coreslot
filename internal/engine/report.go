@@ -1,20 +1,18 @@
 package engine
 
-import "github.com/core-slot/coreslot/internal/spec"
-
 // HolderInfo describes one live hold as a waiter or a snapshot sees it.
 type HolderInfo struct {
-	Name                string         // the hold's file name
-	Label               string         // the holder's label, unescaped: escape it before printing
-	PID                 int            // the owner's pid, from the name
-	StartNS             int64          // wall clock at admission, from the name
-	Grant               map[string]int // resource -> number of tokens held
-	Unbudgeted          bool           // a fail-open hold
-	UnbudgetedResources []string
-	Clamped             map[string]int // resource -> requested min, for clamped resources
-	Tree                bool           // the process tree at PID carries the grant's work; status does not show it
+	Name         string // the hold's file name
+	Label        string // the holder's label, unescaped: escape it before printing
+	PID          int    // the owner's pid
+	StartNS      int64  // wall clock at admission
+	ArrivalNS    int64  // wall clock at the run's first arrival in the queue
+	NeedMiB      int64  // what the hold reserves; 0 for a run outside the budget
+	FootprintMiB int64  // what its run last measured
+	Stops        int
+	Tree         bool // the process tree at PID carries the grant's work; status does not show it
 	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
-	// still held, so a descendant that inherited the grant's descriptors holds the tokens. Only
+	// still held, so a descendant that inherited the hold's descriptor holds the reservation. Only
 	// Snapshot sets it, and only when the process table can be read.
 	OwnerExited bool
 }
@@ -26,7 +24,7 @@ type TicketInfo struct {
 	Label     string // unescaped: escape it before printing
 	Priority  int
 	PID       int
-	Need      map[string]spec.Range
+	NeedMiB   int64
 	CreatedNS int64
 	MtimeNS   int64 // the last refresh, as a value; never compare it with a clock
 	// Dead: the ticket's lock probe succeeded, so nobody holds its descriptor: its owner exited,
@@ -34,11 +32,11 @@ type TicketInfo struct {
 	Dead bool
 }
 
-// ResourceInfo is one declared resource in a snapshot.
-type ResourceInfo struct {
-	Size      int // the current size
-	Locked    int // tokens locked at every existing index
-	Available int // max(0, Size - Locked); status prints it as free
+// MemInfo is the memory budget in a snapshot, in MiB.
+type MemInfo struct {
+	SizeMiB     int64 // the configured size
+	ReservedMiB int64 // what the live holds reserve
+	FreeMiB     int64 // max(0, SizeMiB - ReservedMiB)
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.
@@ -71,15 +69,14 @@ type Report struct {
 	FormatErr        error  // the error FormatError is the text of
 	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)
 	ReconciledNS     int64
-	Resources        map[string]ResourceInfo // declared resources
-	ConfigError      string                  // set when sizes could not be computed
-	ConfigErr        error                   // the error ConfigError is the reason of
-	UndeclaredLocked map[string]int          // res/<name> directories the configuration does not declare, with locked tokens
-	Tickets          []TicketInfo            // in queue order
-	Holds            []HolderInfo            // live holds, in name order
-	DeadHolds        []string                // names of holds whose probe succeeded, awaiting reconciliation
-	Cancels          []string                // pending cancel requests (ticket ids)
-	Ignored          map[string]int          // per directory: entries that do not match the grammar or whose body is malformed
+	Mem              MemInfo        // zero when the size could not be computed
+	ConfigError      string         // set when the size could not be computed
+	ConfigErr        error          // the error ConfigError is the reason of
+	Tickets          []TicketInfo   // in queue order
+	Holds            []HolderInfo   // live holds, in name order
+	DeadHolds        []string       // names of holds whose probe succeeded, awaiting reconciliation
+	Cancels          []string       // pending cancel requests (ticket ids)
+	Ignored          map[string]int // per directory: entries that do not match the grammar or whose body is malformed
 	Section          SectionInfo
 	Degraded         *DegradedInfo // nil when degraded mode is not recorded
 }

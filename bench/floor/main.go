@@ -144,7 +144,7 @@ func parent(args []string) int {
 
 // prepare builds what the children use. Syscall modes: a gen file, an own ticket file per
 // child (created by the child), and a ticket "ahead" whose lock this process holds, so a probe
-// finds it live. Waiter mode: a state directory with mem = 128M, the token held by this process
+// finds it live. Waiter mode: a state directory with mem = 128M, all of it held by this process
 // and a ticket ahead of every child kept fresh by this process's Polls.
 func prepare(mode, dir string) (stop func(), err error) {
 	if mode != "waiter" && mode != "cli" {
@@ -167,8 +167,8 @@ func prepare(mode, dir string) (stop func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	need := map[string]spec.Range{"mem": {Min: 1, Max: 1}}
-	holder, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-holder", Need: need})
+	const need = 128 // MiB: the whole budget
+	holder, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-holder", NeedMiB: need})
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func prepare(mode, dir string) (stop func(), err error) {
 	if !ok {
 		return nil, fmt.Errorf("floor-holder was not admitted at once")
 	}
-	head, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-head", Need: need})
+	head, err := e.EnqueueContext(context.Background(), spec.Request{Label: "floor-head", NeedMiB: need})
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +209,7 @@ func child(args []string) int {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1
 		}
-		w, err := e.EnqueueContext(context.Background(), spec.Request{Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}})
+		w, err := e.EnqueueContext(context.Background(), spec.Request{NeedMiB: 128})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "floor child:", err)
 			return 1

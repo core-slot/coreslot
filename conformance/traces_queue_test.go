@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -43,8 +42,9 @@ const exitRefusal = 75
 
 // ---------------------------------------------------------------- helpers
 
+// memConfig is a configuration of n units of 128 MiB.
 func memConfig(n int) string {
-	return fmt.Sprintf("[resources]\nmem = \"%dM\"\n", n*spec.MemTokenMiB)
+	return fmt.Sprintf("[resources]\nmem = \"%dM\"\n", n*128)
 }
 
 func admittedAt(h engine.HolderInfo) time.Time { return time.Unix(0, h.StartNS) }
@@ -53,7 +53,7 @@ func admittedAt(h engine.HolderInfo) time.Time { return time.Unix(0, h.StartNS) 
 func noHold(t *testing.T, e Env, label, why string) {
 	t.Helper()
 	if h, ok := e.Hold(label); ok {
-		t.Fatalf("%s holds %v (admitted at %v): %s", label, h.Grant, admittedAt(h), why)
+		t.Fatalf("%s holds %d MiB (admitted at %v): %s", label, h.NeedMiB, admittedAt(h), why)
 	}
 }
 
@@ -76,36 +76,18 @@ func stat(t *testing.T, path string) [2]uint64 {
 }
 
 // checkDescriptors checks the descriptor contract (PROTOCOL.md section 17) of a run's
-// command: fd 3 is the hold's file, the tokens follow from fd 4 in ascending index, and the
-// environment names them.
-func checkDescriptors(t *testing.T, e Env, r ChildReport, holdName string, grant map[string][]int) {
+// command: fd 3 is the hold's file, nothing is open beyond it, and the environment names it.
+func checkDescriptors(t *testing.T, e Env, r ChildReport, holdName string) {
 	t.Helper()
 	if got := r.FDs[3]; got != stat(t, filepath.Join(e.Dir, store.HoldsDir, holdName)) {
 		t.Errorf("fd 3 is %v, not the hold %s", got, holdName)
 	}
-	fd := 4
-	for _, name := range sortedKeys(grant) {
-		for _, i := range grant[name] {
-			if got, want := r.FDs[fd], stat(t, filepath.Join(e.Dir, store.ResDir, name, strconv.Itoa(i))); got != want {
-				t.Errorf("fd %d is %v, not token %s/%d %v", fd, got, name, i, want)
-			}
-			fd++
-		}
-	}
-	if r.Env["CORESLOT_HELD_FD"] != "3" {
-		t.Errorf("CORESLOT_HELD_FD = %q, want 3", r.Env["CORESLOT_HELD_FD"])
-	}
-	// A single descriptor may be written 4 or 4-4 (PROTOCOL.md section 17).
-	want := []string{fmt.Sprintf("4-%d", fd-1)}
-	if fd == 5 {
-		want = append(want, "4")
-	}
-	if got := r.Env["CORESLOT_TOKEN_FDS"]; fd > 4 && !slices.Contains(want, got) {
-		t.Errorf("CORESLOT_TOKEN_FDS = %q, want %v", got, want)
+	if r.Env["CORESLOT_HELD_FD"] != "3" || r.Env["CORESLOT_HOLD"] != holdName {
+		t.Errorf("CORESLOT_HELD_FD = %q, CORESLOT_HOLD = %q; want 3 and %s", r.Env["CORESLOT_HELD_FD"], r.Env["CORESLOT_HOLD"], holdName)
 	}
 	for _, n := range sortedFDs(r.FDs) {
-		if n >= fd {
-			t.Errorf("fd %d is open beyond the grant (which ends at fd %d)", n, fd-1)
+		if n > 3 {
+			t.Errorf("fd %d is open beyond the hold's fd 3", n)
 		}
 	}
 }
@@ -173,7 +155,7 @@ func TestStateDirWithSpace(t *testing.T) {
 	g := e.Run("go", "--mem", "256M")
 	r := e.WaitStarted("go")
 	h := e.WaitHold("go", startWait)
-	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
+	checkDescriptors(t, e, r, h.Name)
 	if r.Env["CORESLOT_GRANTED_MEM"] != "256" || r.Env["CORESLOT_STATE_DIR"] != e.Dir {
 		t.Errorf("environment %v", r.Env)
 	}
@@ -193,8 +175,8 @@ func TestStateDirWithSpace(t *testing.T) {
 	var doc struct {
 		StateDir string `json:"state_dir"`
 		Holds    []struct {
-			Label string         `json:"label"`
-			Grant map[string]int `json:"grant"`
+			Label   string `json:"label"`
+			NeedMiB int64  `json:"need_mib"`
 		} `json:"holds"`
 		Tickets []struct {
 			ID    string `json:"id"`
@@ -204,7 +186,7 @@ func TestStateDirWithSpace(t *testing.T) {
 	if err := json.Unmarshal([]byte(sj.Stdout()), &doc); err != nil {
 		t.Fatalf("status --json: %v\n%s", err, sj.Stdout())
 	}
-	if doc.StateDir != e.Dir || len(doc.Holds) != 1 || doc.Holds[0].Label != "go" || doc.Holds[0].Grant["mem"] != 2 ||
+	if doc.StateDir != e.Dir || len(doc.Holds) != 1 || doc.Holds[0].Label != "go" || doc.Holds[0].NeedMiB != 256 ||
 		len(doc.Tickets) != 1 || doc.Tickets[0].ID != tkW.ID {
 		t.Errorf("status --json: %+v", doc)
 	}
@@ -288,10 +270,10 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mem := spec.MemTokensFloor(m.MemMiB * 60 / 100)
+	mem := m.MemMiB * 60 / 100
 	rep := e.Status()
-	if len(rep.Resources) != 1 || rep.Resources["mem"].Size != mem {
-		t.Errorf("resources %v, want mem of size %d", rep.Resources, mem)
+	if rep.Mem.SizeMiB != mem {
+		t.Errorf("mem %+v, want a size of %d MiB", rep.Mem, mem)
 	}
 	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != 1 {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)
@@ -351,7 +333,7 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 
-	// A needs both tokens and waits at the head; B and C need one, which is free, but there is
+	// A needs both units and waits at the head; B and C need one, which is free, but there is
 	// no backfill: they wait behind the live head.
 	a, autoA := startStoppableHead(e, "A", "--mem", "256M")
 	e.WaitTicket("A")
@@ -379,7 +361,7 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	noHold(t, e, "C", "C was admitted past B")
 
 	// C has watched A (the head, in its front window) since before A stopped; observeWait more
-	// makes sure it has judged A STALLED. No token is free (X and B hold both), so nothing can be
+	// makes sure it has judged A STALLED. No unit is free (X and B hold both), so nothing can be
 	// admitted meanwhile.
 	time.Sleep(observeWait)
 	a.Cont()
@@ -387,8 +369,8 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	waitRefreshed(e, "A", mtime)
 	time.Sleep(observeWait)
 
-	// One token frees up: C would fit, A (needing two) does not, and C, which judged A STALLED,
-	// must now see it live again (STALLED to WAITING) and wait behind it. Then the second token:
+	// One unit frees up: C would fit, A (needing two) does not, and C, which judged A STALLED,
+	// must now see it live again (STALLED to WAITING) and wait behind it. Then the second unit:
 	// A is next.
 	e.ReleaseChild("B")
 	b.ExitCode(0)
@@ -430,7 +412,7 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 	stoppedAt, mtimeA := stopOutsideSection(e, a, autoA)
 
 	// C arrives after both stopped: its first sighting of them is already stale. E arrives too,
-	// and finds no token left once C and D are admitted.
+	// and finds no unit left once C and D are admitted.
 	c := e.Run("C", "--mem", "128M")
 	tkC := e.WaitTicket("C")
 	f := e.Run("E", "--mem", "128M")
@@ -452,7 +434,7 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 
 	// E watches A and B (both in its front window) from its arrival, just after C's; C was
 	// admitted 10 s after it arrived, so observeWait more makes sure E has judged both STALLED.
-	// No token is free (X, D and C hold all three), so nothing can be admitted meanwhile.
+	// No unit is free (X, D and C hold all three), so nothing can be admitted meanwhile.
 	time.Sleep(observeWait)
 	a.Cont()
 	defer a.AutoRelease("admit.before-enter")()
@@ -461,7 +443,7 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 	waitRefreshed(e, "B", tkB.MtimeNS)
 	time.Sleep(observeWait)
 
-	// One token frees up: E would fit, A and B (needing three) do not, and E, which judged them
+	// One unit frees up: E would fit, A and B (needing three) do not, and E, which judged them
 	// STALLED, must now see them live again (STALLED to WAITING) and wait behind them.
 	e.ReleaseChild("D")
 	d.ExitCode(0)
@@ -503,7 +485,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 		h := e.Pausing("admit.before-enter", "section.entered").Run("H", "--mem", "128M")
 		autoSec := h.AutoRelease("section.entered")
 		e.WaitTicket("H")
-		h.WaitReached("admit.before-enter") // H won an election with the token free
+		h.WaitReached("admit.before-enter") // H won an election with the unit free
 		autoSec()
 
 		// P, ahead of H, is published and elected too, and is held before its own admitting
@@ -515,7 +497,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 			t.Fatalf("queue %v: P is not ahead of H", rep.Tickets)
 		}
 
-		// H enters the section it was elected for, with the token free: it must not take it.
+		// H enters the section it was elected for, with the unit free: it must not take it.
 		h.Release("admit.before-enter")
 		h.WaitReached("section.entered")
 		defer h.AutoRelease("admit.before-enter")()
@@ -548,14 +530,14 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	h.WaitReached("admit.before-enter") // H won an election: it is the head
 	autoSec()
 
-	// Before H's next section, P, which needs both tokens, is published ahead of H in the order.
+	// Before H's next section, P, which needs both units, is published ahead of H in the order.
 	p := e.Offset(-time.Hour).Run("P", "--mem", "256M")
 	e.WaitTicket("P")
 	if rep := e.Status(); len(rep.Tickets) != 2 || rep.Tickets[0].Label != "P" {
 		t.Fatalf("queue %v: P is not ahead of H", rep.Tickets)
 	}
 
-	// H goes on into the section it was elected for; X and Y hold both tokens, so it is not
+	// H goes on into the section it was elected for; X and Y hold both units, so it is not
 	// admitted and leaves.
 	h.Release("admit.before-enter")
 	h.WaitReached("section.entered")
@@ -564,7 +546,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	defer h.AutoRelease("section.entered")()
 	e.Eventually(startWait, "H leaves its section", func() bool { return !e.Status().Section.Held })
 
-	// One token frees up. P cannot be admitted (it needs both) and H, behind the live P, must
+	// One unit frees up. P cannot be admitted (it needs both) and H, behind the live P, must
 	// not be: it repeats the election before each attempt.
 	e.ReleaseChild("X")
 	x.ExitCode(0)
@@ -575,7 +557,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	e.WaitHold("P", startWait)
 	noHold(t, e, "H", "H was admitted beside P")
 
-	// H is the head again. P2, ahead of H and needing both tokens, arrives while H is paused
+	// H is the head again. P2, ahead of H and needing both units, arrives while H is paused
 	// inside the section that admits it: H's admission stands, and P2 is admitted after H.
 	autoPub()
 	e.ReleaseChild("P")
@@ -665,8 +647,8 @@ func restored(t *testing.T, e Env, tickets, holds, cancels []string, locked int)
 			t.Errorf("%d ignored entries in %s", n, dir)
 		}
 	}
-	if got := rep.Resources["mem"].Locked; got != locked {
-		t.Errorf("%d mem tokens locked, want %d", got, locked)
+	if got := rep.Mem.ReservedMiB / 128; got != int64(locked) {
+		t.Errorf("%d units reserved, want %d", got, locked)
 	}
 }
 
@@ -718,7 +700,7 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 
 func publishHold(t *testing.T, e Env, point string, killed bool) {
 	w := e.Pausing(point).Run("W", "--mem", "128M")
-	w.CatchPublication(point, store.HoldsDir) // inside the admitting section, tokens taken
+	w.CatchPublication(point, store.HoldsDir) // inside the admitting section, the reservation decided
 	if rep := e.Status(); len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 {
 		t.Fatalf("a hold is visible before W's publication completed: holds %v, dead %v", rep.Holds, rep.DeadHolds)
 	}
@@ -745,7 +727,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 		t.Errorf("the reconciliation removed %d entries with nothing dead", n)
 	}
 	h, ok := e.Hold("W")
-	if !ok || h.Grant["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
+	if !ok || h.NeedMiB != 128 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
 		t.Fatalf("after the reconciliation W's hold is %+v (present %v), its command saw %v", h, ok, r.Env)
 	}
 	restored(t, e, nil, []string{"W"}, nil, 1)
@@ -811,20 +793,20 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 
 // ---------------------------------------------------------------- admission edges
 
-// A minimum above the resource's size is clamped: the run waits for the whole resource, runs
-// alone with it, says so once, and records the requested minimum.
+// A need above the budget is clamped: the run waits for the whole budget, runs alone with it,
+// says so once, and its hold reserves the need asked.
 func TestOversizeIsClamped(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(8))
 	o := e.Run("O", "--mem", "2048M")
 	r := e.WaitStarted("O")
 	h := e.WaitHold("O", startWait)
-	if r.Env["CORESLOT_GRANTED_MEM"] != "1024" || h.Grant["mem"] != 8 || h.Clamped["mem"] != 16 {
-		t.Errorf("command environment %v; hold grant %v, clamped %v", r.Env, h.Grant, h.Clamped)
+	if r.Env["CORESLOT_GRANTED_MEM"] != "1024" || h.NeedMiB != 2048 {
+		t.Errorf("command environment %v; hold need %d MiB", r.Env, h.NeedMiB)
 	}
-	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if got := e.Status().Resources["mem"].Locked; got != 8 {
-		t.Errorf("%d mem tokens locked, want 8", got)
+	checkDescriptors(t, e, r, h.Name)
+	if got := e.Status().Mem.ReservedMiB; got != 2048 {
+		t.Errorf("%d MiB reserved, want 2048", got)
 	}
 	y := e.Run("Y", "--mem", "128M")
 	e.WaitTicket("Y")
@@ -858,11 +840,11 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 	r := e.WaitStarted("F")
 	h := e.WaitHold("F", startWait)
 	if r.Env["CORESLOT_GRANTED_MEM"] != "256" || r.Env["CORESLOT_UNBUDGETED"] == "" ||
-		r.Env["CORESLOT_UNBUDGETED"] == "format" || r.Env["CORESLOT_TOKEN_FDS"] != "" || r.Env["CORESLOT_HELD_FD"] != "3" {
+		r.Env["CORESLOT_UNBUDGETED"] == "format" || r.Env["CORESLOT_HELD_FD"] != "3" {
 		t.Errorf("command environment %v", r.Env)
 	}
-	if !h.Unbudgeted || len(h.Grant) != 0 {
-		t.Errorf("hold %+v, want an unbudgeted hold with an empty grant", h)
+	if h.NeedMiB != 0 {
+		t.Errorf("hold %+v, want an unbudgeted hold that reserves nothing", h)
 	}
 	rep := e.Status()
 	if rep.Degraded == nil || !strings.Contains(rep.Degraded.Reason, "full") {

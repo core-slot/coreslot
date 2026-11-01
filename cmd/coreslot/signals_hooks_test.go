@@ -152,18 +152,19 @@ func TestStopDeferredWhileHoldingTheSection(t *testing.T) {
 	}
 }
 
-// A status that holds a token's probe lock defers SIGTSTP until it has closed the probe, and then
-// stops: a client stopped holding a probe lock makes every other client count the token as
-// locked, so a head whose minimum needs it is never admitted although nobody is stopped inside
-// the admission section (I5). The status pauses in its probe of mem's first token, holding its
-// lock, and is sent SIGTSTP there; once it goes on, it must stop with that token free, and a
-// request for the whole of mem must be admitted at once while it stays stopped.
-// Mutation: ProbeLocked no longer calls the lock hooks (the status stops holding the token).
+// A status that holds a hold's probe lock defers SIGTSTP until it has closed the probe, and then
+// stops: a client stopped holding a probe lock makes every other client count the hold as live,
+// so a head whose need its reservation keeps out is never admitted although nobody is stopped
+// inside the admission section (I5). The status pauses in its probe of a dead hold of the whole
+// of mem, holding its lock, and is sent SIGTSTP there; once it goes on, it must stop with that
+// hold dead again, and a request for the whole of mem must be admitted at once while it stays
+// stopped. Mutation: ProbeLocked no longer calls the lock hooks (the status stops holding it).
 func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
 	if r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
+	deadHold(t, dir, 2)
 	whole := func() result {
 		return cli(t, baseEnv(dir), "run", "--no-wait", "--mem", "256M", "--", "true")
 	}
@@ -175,9 +176,9 @@ func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
 	}
 	watchdog(t, cmd.Process.Pid)
 	probing := pausePoint(hooks, cmd.Process.Pid, "probe.locked")
-	waitFor(t, 30*time.Second, "the status's pause inside a token probe", reached(probing))
+	waitFor(t, 30*time.Second, "the status's pause inside a hold's probe", reached(probing))
 	if r := whole(); r.code == 0 {
-		t.Fatal("the paused status does not hold a token's probe lock")
+		t.Fatal("the paused status does not hold the dead hold's probe lock")
 	}
 	if err := unix.Kill(cmd.Process.Pid, unix.SIGTSTP); err != nil {
 		t.Fatal(err)
@@ -185,7 +186,7 @@ func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if st := procState(t, cmd.Process.Pid); st == "T" {
 		r := whole()
-		t.Fatalf("the status stopped holding a token's probe lock; a request for the whole of mem then exits %d: %q",
+		t.Fatalf("the status stopped holding a hold's probe lock; a request for the whole of mem then exits %d: %q",
 			r.code, r.stderr)
 	}
 	resume(t, probing)

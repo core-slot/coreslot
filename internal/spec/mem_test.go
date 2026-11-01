@@ -16,21 +16,6 @@ func TestParseBytes(t *testing.T) {
 	}
 }
 
-// A mem need of n MiB asks for n/128 tokens rounded up, capped at MaxPerResource, and a size
-// floors to whole tokens. Mutation: round down in MemTokensCeil, and 700 and 1 redden.
-func TestMemTokens(t *testing.T) {
-	for mib, want := range map[int64]int{3072: 24, 700: 6, 1: 1, 40960: 256, 2560: 20} {
-		if got := MemTokensCeil(mib); got != want {
-			t.Errorf("MemTokensCeil(%d) = %d, want %d", mib, got, want)
-		}
-	}
-	for mib, want := range map[int64]int{3072: 24, 700: 5, 127: 0, -5: 0} {
-		if got := MemTokensFloor(mib); got != want {
-			t.Errorf("MemTokensFloor(%d) = %d, want %d", mib, got, want)
-		}
-	}
-}
-
 func TestFormatMiB(t *testing.T) {
 	for in, want := range map[int64]string{9728: "9.5 GiB", 8192: "8 GiB", 1100: "1.1 GiB",
 		768: "768 MiB", 128: "128 MiB"} {

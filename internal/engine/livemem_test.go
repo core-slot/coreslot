@@ -6,8 +6,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Every engine test reads no headroom unless it sets one, so that no mem admission, wait or
@@ -17,7 +15,7 @@ func init() {
 	liveMem.use = func(map[int]int64, map[int]bool) map[int]int64 { return nil }
 }
 
-// setLiveMem replaces the live size's readings for one test: the headroom in MiB, and the use in
+// setLiveMem replaces the live capacity's readings for one test: the headroom in MiB, and the use in
 // KiB that every root asked about reports (none when useKiB is negative). It returns the number
 // of headroom reads.
 func setLiveMem(t *testing.T, headroomMiB, useKiB int64) *int {
@@ -42,25 +40,25 @@ func setLiveMem(t *testing.T, headroomMiB, useKiB int64) *int {
 	return reads
 }
 
-const staticCfg = "[resources]\nmem = \"1G\"\n"       // 8 mem tokens
-const liveCfg = staticCfg + "[memory]\nlive = true\n" // the live size is off unless turned on
+const staticCfg = "[resources]\nmem = \"1G\"\n"       // 1024 MiB
+const liveCfg = staticCfg + "[memory]\nlive = true\n" // the live capacity is off unless turned on
 
-// A fixed mem need above what the static size leaves free is admitted from the headroom: 4096
-// MiB less A's unmeasured 1 GiB is 24 tokens on top of A's 8. Mutation: attemptSizes returning
-// sizes unchanged, and B waits.
+// A need above what the static size leaves free is admitted from the headroom: 4096 MiB less A's
+// unmeasured 1 GiB is 3 GiB on top of A's 1 GiB. Mutation: capacityFor returning the size
+// unchanged, and B waits.
 func TestLiveAdmitsAboveStatic(t *testing.T) {
 	dir := newStateDir(t, liveCfg)
 	e := newEngine(t, dir, newFakeClock())
 	setLiveMem(t, 4096, -1)
 	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
 	g := admitted(t, step(t, enqueue(t, e, need("mem=2G"))))
-	if g.Grant()["mem"] != 16 || !g.LiveMem() || len(g.Clamped()) != 0 {
-		t.Errorf("grant %v, LiveMem %v, clamped %v; want mem 16 from a live size, not clamped",
-			g.Grant(), g.LiveMem(), g.Clamped())
+	if g.GrantMiB() != 2048 || !g.LiveMem() || g.ClampedMiB() != 0 {
+		t.Errorf("grant %d, LiveMem %v, clamped %d; want 2048 from a live capacity, not clamped",
+			g.GrantMiB(), g.LiveMem(), g.ClampedMiB())
 	}
 }
 
-// A need the static size covers never reads the headroom. Mutation: computing the live size
+// A need the static size covers never reads the headroom. Mutation: computing the live capacity
 // unconditionally, and the read count is 2.
 func TestLiveNotReadWhenStaticSuffices(t *testing.T) {
 	dir := newStateDir(t, liveCfg)
@@ -73,7 +71,7 @@ func TestLiveNotReadWhenStaticSuffices(t *testing.T) {
 	}
 }
 
-// [memory] live = false keeps the static size. Mutation: attemptSizes ignoring LiveMem.
+// [memory] live = false keeps the static size. Mutation: capacityFor ignoring LiveMem.
 func TestLiveOffByConfig(t *testing.T) {
 	dir := newStateDir(t, staticCfg+"[memory]\nlive = false\n")
 	e := newEngine(t, dir, newFakeClock())
@@ -84,20 +82,20 @@ func TestLiveOffByConfig(t *testing.T) {
 	}
 }
 
-// A waiter whose fixed mem need only the live size would admit does not pass a live ticket ahead
-// that is short of mem on the configured size: H waits for 4 of the 2 tokens A leaves, and P's 3
-// would come from the headroom, taking what H waits for. Withdrawn, H no longer holds P back.
-// Mutation: drop the live test from the passer's checks in admit, and P is admitted past H.
+// A waiter whose need only the live capacity would admit does not pass a live ticket ahead that
+// is short on the configured size: H waits for more than the headroom, and P's 384 MiB would come
+// from the headroom, taking what H waits for. Withdrawn, H no longer holds P back. Mutation: drop
+// the live test from the passer's checks in admit, and P is admitted past H.
 func TestLivePasserDoesNotPass(t *testing.T) {
 	dir := newStateDir(t, liveCfg)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	setLiveMem(t, 4096, -1)
 	admitted(t, step(t, enqueue(t, e, need("mem=768M"))))
-	h := enqueue(t, e, spec.Request{Need: map[string]spec.Range{"mem": {Min: 4, Max: 8}}})
+	h := enqueue(t, e, need("mem=5000M"))
 	p := enqueue(t, e, need("mem=384M"))
 	if r := step(t, h); isAdmitted(r) {
-		t.Fatal("H admitted with 2 mem tokens free")
+		t.Fatal("H admitted beside A")
 	}
 	if r := step(t, p); isAdmitted(r) {
 		t.Fatal("P admitted past H from the live size")
@@ -107,19 +105,7 @@ func TestLivePasserDoesNotPass(t *testing.T) {
 	}
 	clk.advance(time.Second)
 	if g := admitted(t, step(t, p)); !g.LiveMem() {
-		t.Errorf("P, alone, granted %v without the live size", g.Grant())
-	}
-}
-
-// A mem range is sized statically. Mutation: attemptSizes not requiring Min == Max.
-func TestLiveRangeRequestIsStatic(t *testing.T) {
-	dir := newStateDir(t, liveCfg)
-	e := newEngine(t, dir, newFakeClock())
-	setLiveMem(t, 4096, -1)
-	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
-	req := spec.Request{Need: map[string]spec.Range{"mem": {Min: 16, Max: 32}}}
-	if r := step(t, enqueue(t, e, req)); isAdmitted(r) {
-		t.Fatal("mem 16..32 admitted from a live size")
+		t.Errorf("P, alone, granted %d MiB without the live capacity", g.GrantMiB())
 	}
 }
 
@@ -136,9 +122,9 @@ func TestLiveReadFailsIsStatic(t *testing.T) {
 	}
 }
 
-// A hold without tree counts its whole reservation: 2560 MiB less A's 1 GiB is 12 tokens, too
-// few for B's 16. With A's tree measured at 1 GiB nothing of it is unrealised, 20 tokens are
-// free and B is admitted. Mutation: liveMemHolds taking every hold as claiming its tree reddens
+// A hold without tree counts its whole reservation: 2560 MiB less A's 1 GiB leaves 1536 MiB, too
+// little for B's 2 GiB. With A's tree measured at 1 GiB nothing of it is still to grow, 2560 MiB
+// are free and B is admitted. Mutation: measure taking every hold as claiming its tree reddens
 // the first half; never asking use reddens the second.
 func TestLiveUnmeasuredHoldCountsWhole(t *testing.T) {
 	for _, c := range []struct {
@@ -160,23 +146,23 @@ func TestLiveUnmeasuredHoldCountsWhole(t *testing.T) {
 	}
 }
 
-// A fixed need above the live size is clamped to it: 3072 MiB free is 24 tokens, not the static
-// 8. Mutation: Effective not run again over the raised sizes, and the clamp is to 8.
+// A need above the live capacity is clamped to it: 3072 MiB free, not the static 1024. Mutation:
+// clamping to the configured size, and the grant is 1024.
 func TestLiveClampAgainstLiveSize(t *testing.T) {
 	dir := newStateDir(t, liveCfg)
 	e := newEngine(t, dir, newFakeClock())
 	setLiveMem(t, 3072, -1)
 	g := admitted(t, step(t, enqueue(t, e, need("mem=4G"))))
-	if g.Grant()["mem"] != 24 || !reflect.DeepEqual(g.Clamped(), map[string]int{"mem": 32}) || !g.LiveMem() {
-		t.Errorf("grant %v, clamped %v, LiveMem %v; want mem 24, clamped mem 32, true",
-			g.Grant(), g.Clamped(), g.LiveMem())
+	if g.GrantMiB() != 3072 || g.ClampedMiB() != 4096 || !g.LiveMem() {
+		t.Errorf("grant %d, clamped %d, LiveMem %v; want 3072, clamped 4096, true",
+			g.GrantMiB(), g.ClampedMiB(), g.LiveMem())
 	}
 }
 
 // B's process runs inside A's tree and B's whole reservation counts, so A's tree is read without
-// B's subtree; C, a tree hold with no mem tokens, stops the walk unread; D and E name one pid and
-// both count whole. Mutation: stop only at the measured roots, and 12 is no stop; roots without
-// the h.tokens > 0 check, and 14 is a root; claims[h.pid] == 1 as >= 1, and 16 is a root.
+// B's subtree; C, a tree hold that reserves nothing, stops the walk unread; D and E name one pid
+// and both count whole. Mutation: stop only at the measured roots, and 12 is no stop; roots
+// without the h.needMiB > 0 check, and 14 is a root; claims[h.pid] == 1 as >= 1, and 16 is a root.
 func TestMeasureStopsAtEveryLiveHold(t *testing.T) {
 	setLiveMem(t, 0, -1)
 	var roots map[int]int64
@@ -185,8 +171,8 @@ func TestMeasureStopsAtEveryLiveHold(t *testing.T) {
 		roots, stop = r, s
 		return nil
 	}
-	measure([]memHold{{pid: 10, tree: true, tokens: 32}, {pid: 12, tokens: 8}, {pid: 14, tree: true},
-		{pid: 16, tree: true, tokens: 8}, {pid: 16, tree: true, tokens: 8}})
+	measure([]memHold{{pid: 10, tree: true, needMiB: 4096}, {pid: 12, needMiB: 1024}, {pid: 14, tree: true},
+		{pid: 16, tree: true, needMiB: 1024}, {pid: 16, tree: true, needMiB: 1024}})
 	if !reflect.DeepEqual(roots, map[int]int64{10: 0}) || !reflect.DeepEqual(stop, map[int]bool{10: true, 12: true, 14: true, 16: true}) {
 		t.Errorf("use asked roots %v, stop %v; want roots map[10:0], stop map[10 12 14 16]", roots, stop)
 	}

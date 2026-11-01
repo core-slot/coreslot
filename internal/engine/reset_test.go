@@ -61,8 +61,8 @@ func setOtherLengthHolder(t *testing.T, dir string) {
 	}
 }
 
-// A reset with a live ticket, a live hold, a locked token or another client inside the section
-// refuses with a *LiveError that names it, and changes nothing.
+// A reset with a live ticket, a live hold or another client inside the section refuses with a
+// *LiveError that names it, and changes nothing.
 func TestResetRefusesLiveState(t *testing.T) {
 	cases := []struct {
 		name string
@@ -73,7 +73,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 		{"hold", func(t *testing.T, e *Engine, dir string) {
 			hold(t, e, needLabel("mem=2", "gate"))
 		}, "1 live hold (pid"},
-		{"token", func(t *testing.T, e *Engine, dir string) { startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 2)) }, "locked tokens (mem 3)"},
+		{"another client's hold", func(t *testing.T, e *Engine, dir string) { startHelper(t, "lock", dir, holdPath(t, dir, 3)) }, "1 live hold (pid 4"},
 		{"section", func(t *testing.T, e *Engine, dir string) { startHelper(t, "section", dir, "") }, "another client is inside the admission section"},
 	}
 	for _, c := range cases {
@@ -200,7 +200,7 @@ func TestResetRefusesForeignFormat(t *testing.T) {
 }
 
 // Snapshot over a store opened read-only creates nothing, on a missing and on an empty
-// directory, and reports locked tokens of resources the configuration does not declare.
+// directory.
 func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(root, "missing")
@@ -224,28 +224,12 @@ func TestSnapshotReadOnlyCreatesNothing(t *testing.T) {
 			if rep.StateDirExists != (name == "empty") || rep.Section.Held || len(rep.Holds)+len(rep.Tickets) != 0 {
 				t.Errorf("report %+v", rep)
 			}
-			if rep.Resources["mem"].Size != testTokens {
-				t.Errorf("resources %v, want the default mem budget", rep.Resources)
+			if rep.Mem.SizeMiB != 1024 {
+				t.Errorf("mem %+v, want the default budget", rep.Mem)
 			}
 			if after := treeContent(t, root); after != before {
 				t.Errorf("Snapshot created entries:\nbefore:\n%s\nafter:\n%s", before, after)
 			}
 		})
-	}
-}
-
-func TestSnapshotReportsUndeclaredLockedTokens(t *testing.T) {
-	dir := newStateDir(t, "[resources]\nmem = \"512M\"\n")
-	e := newEngine(t, dir, nil)
-	startHelper(t, "lock", dir, tokenPaths(dir, "old-gpu", 0, 1))
-	rep, err := e.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.UndeclaredLocked["old-gpu"] != 2 || len(rep.UndeclaredLocked) != 1 {
-		t.Errorf("UndeclaredLocked = %v, want old-gpu 2 only", rep.UndeclaredLocked)
-	}
-	if _, ok := rep.Resources["old-gpu"]; ok {
-		t.Errorf("an undeclared resource is listed as declared: %v", rep.Resources)
 	}
 }

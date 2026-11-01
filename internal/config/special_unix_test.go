@@ -86,7 +86,7 @@ func TestLoadDanglingSymlinkIsAMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a dangling symlink must read as a missing file: %v", err)
 	}
-	if got := c.Sizes(m16)["mem"]; got != 76 {
+	if got := c.MemMiB(m16); got != 9830 {
 		t.Errorf("a dangling symlink did not give the defaults: mem %d", got)
 	}
 }
@@ -102,7 +102,7 @@ func TestLoadReadsThroughASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := loadWithin(t, path)
-	if err != nil || c.Sizes(m16)["mem"] != 3 {
-		t.Errorf("Load through a symlink = mem %d, %v; want 3", c.Sizes(m16)["mem"], err)
+	if err != nil || c.MemMiB(m16) != 384 {
+		t.Errorf("Load through a symlink = mem %d, %v; want 384", c.MemMiB(m16), err)
 	}
 }

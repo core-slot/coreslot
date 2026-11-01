@@ -17,8 +17,7 @@ import (
 
 // resetFixture fills a state directory with one of everything a reset removes (dead tickets
 // and holds, a cancel request, a stray, a temporary file, the run log, degraded, gen, FORMAT)
-// and everything it keeps (admit.lock, token files, config.toml). It returns the section the
-// caller is in.
+// and everything it keeps (admit.lock, config.toml). It returns the section the caller is in.
 func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	t.Helper()
 	s := open(t, dir)
@@ -63,20 +62,11 @@ func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte("[resources]\nmem = \"512M\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, ResDir, "mem"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 2; i++ {
-		if err := os.WriteFile(tokenPath(dir, "mem", i), nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	return s, sec
 }
 
 // A reset of a state with nothing alive removes the entries of queue/, holds/, cancel/ and
-// log/, degraded, gen and FORMAT, and keeps admit.lock, res/ (with the same inodes) and
-// config.toml.
+// log/, degraded, gen and FORMAT, and keeps admit.lock (with the same inode) and config.toml.
 func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
@@ -87,7 +77,7 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 		}
 		return fi.Sys().(*syscall.Stat_t).Ino
 	}
-	lockBefore, tokenBefore := inode(filepath.Join(dir, AdmitLock)), inode(tokenPath(dir, "mem", 0))
+	lockBefore := inode(filepath.Join(dir, AdmitLock))
 
 	live, removed, err := sec.Reset()
 	if err != nil || !live.Empty() {
@@ -106,7 +96,7 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 			t.Errorf("%s survived the reset", f)
 		}
 	}
-	for _, f := range []string{AdmitLock, ConfigFile, filepath.Join(ResDir, "mem", "0"), filepath.Join(ResDir, "mem", "1")} {
+	for _, f := range []string{AdmitLock, ConfigFile} {
 		if !exists(filepath.Join(dir, f)) {
 			t.Errorf("%s was removed", f)
 		}
@@ -114,13 +104,9 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	if got := inode(filepath.Join(dir, AdmitLock)); got != lockBefore {
 		t.Errorf("admit.lock inode %d -> %d", lockBefore, got)
 	}
-	if got := inode(tokenPath(dir, "mem", 0)); got != tokenBefore {
-		t.Errorf("token inode %d -> %d", tokenBefore, got)
-	}
 }
 
-// Anything alive stops the reset before it removes anything: a held ticket, a held hold, a
-// locked token (of a resource the configuration does not even declare).
+// Anything alive stops the reset before it removes anything: a held ticket, a held hold.
 func TestResetRefusesWhatIsAlive(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -134,7 +120,7 @@ func TestResetRefusesWhatIsAlive(t *testing.T) {
 			}
 			t.Cleanup(func() { f.Close() })
 		}, func(t *testing.T, live LiveState) {
-			if len(live.Tickets) != 1 || live.Tickets[0] != ticketName(10) || len(live.Holds) != 0 || len(live.Tokens) != 0 {
+			if len(live.Tickets) != 1 || live.Tickets[0] != ticketName(10) || len(live.Holds) != 0 {
 				t.Errorf("live = %+v, want only ticket %s", live, ticketName(10))
 			}
 		}},
@@ -145,18 +131,8 @@ func TestResetRefusesWhatIsAlive(t *testing.T) {
 			}
 			t.Cleanup(func() { f.Close() })
 		}, func(t *testing.T, live LiveState) {
-			if len(live.Holds) != 1 || len(live.Tickets) != 0 || len(live.Tokens) != 0 {
+			if len(live.Holds) != 1 || len(live.Tickets) != 0 {
 				t.Errorf("live = %+v, want one hold", live)
-			}
-		}},
-		{"token", func(t *testing.T, dir string, sec *Section) {
-			if err := os.MkdirAll(filepath.Join(dir, ResDir, "old-gpu"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			startHelper(t, "lock", dir, tokenPath(dir, "old-gpu", 3), nil)
-		}, func(t *testing.T, live LiveState) {
-			if live.Tokens["old-gpu"] != 1 || len(live.Holds) != 0 || len(live.Tickets) != 0 {
-				t.Errorf("live = %+v, want one locked old-gpu token", live)
 			}
 		}},
 	}
@@ -361,7 +337,7 @@ func TestResetMarksItselfHolder(t *testing.T) {
 	}
 }
 
-// OpenReadOnly creates nothing: not the state directory, not res/, not admit.lock.
+// OpenReadOnly creates nothing: not the state directory, not admit.lock.
 func TestOpenReadOnlyCreatesNothing(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(root, "missing", "state dir")
@@ -387,9 +363,6 @@ func TestOpenReadOnlyCreatesNothing(t *testing.T) {
 	if held, err := s.SectionHeld(); held || err != nil {
 		t.Errorf("SectionHeld of an empty directory = %v, %v", held, err)
 	}
-	if res, err := s.Resources(); err != nil || len(res) != 0 {
-		t.Errorf("Resources = %v, %v", res, err)
-	}
 	if after := snapshotTree(t, empty); after != before {
 		t.Errorf("a read-only open and probe changed the directory:\nbefore %s\nafter  %s", before, after)
 	}
@@ -398,11 +371,11 @@ func TestOpenReadOnlyCreatesNothing(t *testing.T) {
 	if err := os.Mkdir(bad, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(empty, filepath.Join(bad, ResDir)); err != nil {
+	if err := os.Symlink(empty, filepath.Join(bad, QueueDir)); err != nil {
 		t.Fatal(err)
 	}
 	_, err = OpenReadOnly(bad)
-	wantStateError(t, err, "a symlinked res/")
+	wantStateError(t, err, "a symlinked queue/")
 }
 
 // SectionHeld sees another description's hold without taking it.

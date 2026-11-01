@@ -83,15 +83,15 @@ type Ticket struct {
 
 	lastRefreshMono time.Duration
 	lastRefreshReal int64
-	needBump        bool // a refresh gap above StallAfter: bump gen in the section
+	arrivalNS       int64 // the wall clock its ticket was published at
+	needBump        bool  // a refresh gap above StallAfter: bump gen in the section
 
 	obs        state.Observer
 	gen        store.Gen
 	haveGen    bool
-	ahead      []aheadEntry                     // ascending: the nearest ticket ahead is the last
-	badAhead   bool                             // the last rescan found a malformed ticket ahead
-	ticketNeed map[string]map[string]spec.Range // ticket name -> body's need, nil when malformed
-	holdBodies map[string]*HolderInfo           // hold name -> parsed body, nil when malformed
+	ahead      []aheadEntry     // ascending: the nearest ticket ahead is the last
+	badAhead   bool             // the last rescan found a malformed ticket ahead
+	ticketNeed map[string]int64 // ticket name -> body's need in MiB, 0 when malformed
 
 	nextElection time.Duration
 	backoff      time.Duration
@@ -100,8 +100,7 @@ type Ticket struct {
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
-	return &Ticket{e: e, req: req, ticketNeed: map[string]map[string]spec.Range{}, holdBodies: map[string]*HolderInfo{},
-		last: Waiting{Position: 1}}
+	return &Ticket{e: e, req: req, ticketNeed: map[string]int64{}, last: Waiting{Position: 1}}
 }
 
 // ID is the ticket's id, what a cancel request names.
@@ -456,7 +455,7 @@ func (t *Ticket) rescan() error {
 			return err
 		}
 		bad = bad || malformed
-		if need != nil {
+		if need != 0 {
 			ahead = append(ahead, aheadEntry{name: en.Name, key: k})
 		}
 	}
@@ -483,34 +482,35 @@ func (t *Ticket) rescan() error {
 	return nil
 }
 
-// ticketBody returns the need of the body of the ticket name in queue/, reading it only when the
-// name is first seen: bodies never change once published, so the answer is kept in ticketNeed.
-// need is nil when the body is malformed (malformed is then true) or the ticket was gone before
-// its body was read (that answer is not kept). A stray entry under the name counts as malformed
-// and is never trusted (PROTOCOL.md section 4.2).
-func (t *Ticket) ticketBody(name string) (need map[string]spec.Range, malformed bool, err error) {
+// ticketBody returns the need, in MiB, of the body of the ticket name in queue/, reading it only
+// when the name is first seen: ticket bodies never change once published, so the answer is kept
+// in ticketNeed. need is 0 when the body is malformed (malformed is then true) or the ticket was
+// gone before its body was read (that answer is not kept). A stray entry under the name counts as
+// malformed and is never trusted (PROTOCOL.md section 4.2).
+func (t *Ticket) ticketBody(name string) (need int64, malformed bool, err error) {
 	if need, known := t.ticketNeed[name]; known {
-		return need, need == nil, nil
+		return need, need == 0, nil
 	}
 	body, err := t.e.readBody(store.QueueDir, name)
 	if gone(err) {
-		return nil, false, nil
+		return 0, false, nil
 	}
 	if err != nil && !stray(err) {
-		return nil, false, err
+		return 0, false, err
 	}
 	if err == nil {
 		if tk, derr := wire.DecodeTicket(body); derr == nil {
-			need = tk.Need // never nil once decoded
+			need = tk.NeedMiB // at least 1 once decoded
 		}
 	}
 	t.ticketNeed[name] = need
-	return need, need == nil, nil
+	return need, need == 0, nil
 }
 
 // Holders lists holds/ and returns the live holds (a lock probe each); malformed holds are
 // left out (PROTOCOL.md section 7.4). It is informative and not part of waiting: the CLI calls
-// it for its waiting line every 30 s. Hold bodies are read once per name.
+// it for its waiting line every 30 s. Hold bodies change while their runs measure, so each is
+// read afresh.
 func (t *Ticket) Holders() ([]HolderInfo, error) {
 	t.stepMu.Lock()
 	defer t.stepMu.Unlock()
@@ -518,24 +518,16 @@ func (t *Ticket) Holders() ([]HolderInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	present := make(map[string]bool, len(holds))
 	var live []HolderInfo
 	for _, en := range holds {
-		present[en.Name] = true
-		info, known := t.holdBodies[en.Name]
-		if !known {
-			body, err := t.e.readBody(store.HoldsDir, en.Name)
-			if gone(err) {
-				continue
-			}
-			if err != nil && !stray(err) {
-				return nil, err
-			}
-			if err == nil {
-				info = holderInfo(en, body)
-			}
-			t.holdBodies[en.Name] = info
+		body, err := t.e.readBody(store.HoldsDir, en.Name)
+		if gone(err) || stray(err) {
+			continue
 		}
+		if err != nil {
+			return nil, err
+		}
+		info := holderInfo(en, body)
 		if info == nil {
 			continue
 		}
@@ -550,27 +542,16 @@ func (t *Ticket) Holders() ([]HolderInfo, error) {
 			live = append(live, *info)
 		}
 	}
-	for name := range t.holdBodies {
-		if !present[name] {
-			delete(t.holdBodies, name)
-		}
-	}
 	return live, nil
 }
 
-// holderInfo decodes a hold body; nil when it is malformed, including a start_ns that is not
-// the name's start-ns.
+// holderInfo decodes a hold body; nil when it is malformed, including a pid or start_ns that is
+// not the name's (PROTOCOL.md 7.4).
 func holderInfo(en store.Entry, body []byte) *HolderInfo {
 	h, err := wire.DecodeHold(body)
-	if err != nil || h.StartNS != en.ID.OrderKey {
-		// A start_ns that differs from the name's makes the body malformed (PROTOCOL.md 7.4).
+	if err != nil || uint64(h.StartNS) != en.ID.OrderKey || h.PID != en.ID.PID {
 		return nil
 	}
-	grant := make(map[string]int, len(h.Grant))
-	for name, idx := range h.Grant {
-		grant[name] = len(idx)
-	}
-	return &HolderInfo{Name: en.Name, Label: h.Label, PID: en.ID.PID, StartNS: int64(en.ID.OrderKey),
-		Grant: grant, Unbudgeted: h.Unbudgeted, UnbudgetedResources: h.UnbudgetedResources,
-		Clamped: h.Clamped, Tree: h.Tree}
+	return &HolderInfo{Name: en.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS, ArrivalNS: h.ArrivalNS,
+		NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, Tree: h.Tree}
 }

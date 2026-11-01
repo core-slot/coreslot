@@ -66,30 +66,30 @@ func TestReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 	}
 }
 
-// One token file replaced under the holder: Close reports it and leaves the hold in place, dead,
-// for reconciliation; it never removes a hold by a path whose identity it no longer trusts.
-func TestReleaseAfterATokenWasReplaced(t *testing.T) {
+// The hold's file replaced under the holder: Close reports it and leaves the file at the hold's
+// name, dead, for reconciliation; it never removes a hold by a path whose identity it no longer
+// trusts.
+func TestReleaseAfterTheHoldWasReplaced(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
 	g := admitted(t, step(t, enqueue(t, e, need("mem=2"))))
 	hold := filepath.Join(dir, store.HoldsDir, g.HoldName())
-	tok := filepath.Join(dir, store.ResDir, "mem", "1")
-	if err := os.WriteFile(tok+".new", nil, 0o600); err != nil {
+	if err := os.WriteFile(hold+".new", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(tok+".new", tok); err != nil {
+	if err := os.Rename(hold+".new", hold); err != nil {
 		t.Fatal(err)
 	}
 	var se *store.StateError
 	var mismatch *IdentityError
 	if err := g.Close(); !errors.As(err, &se) || !errors.As(err, &mismatch) {
-		t.Fatalf("Close after a token was replaced: %v, want a state error that is an *IdentityError", err)
+		t.Fatalf("Close after the hold was replaced: %v, want a state error that is an *IdentityError", err)
 	}
 	if !exists(hold) {
-		t.Error("the hold was removed after the identity check failed")
+		t.Error("the hold's file was removed after the identity check failed")
 	}
 	if dead, err := e.st.Probe(store.HoldsDir, g.HoldName()); err != nil || !dead {
-		t.Errorf("the hold after Close: dead %v, %v; want dead (its descriptor closed)", dead, err)
+		t.Errorf("the hold after Close: dead %v, %v; want dead", dead, err)
 	}
 }
 

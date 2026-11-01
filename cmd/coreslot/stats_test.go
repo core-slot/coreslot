@@ -36,7 +36,7 @@ func TestStatsText(t *testing.T) {
 		t.Fatalf("stats exited %d: %s", r.code, r.stderr)
 	}
 	for _, want := range []string{"fastapi:tests  5 runs", "peak 2.7 GiB (footprint) at 22s",
-		`suggest  mem = "2816M"`, "current  none"} {
+		`suggest  mem = "2765M"`, "current  none"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("stats output lacks %q:\n%s", want, r.stdout)
 		}
@@ -65,7 +65,7 @@ func TestStatsJSON(t *testing.T) {
 	if doc.Schema != 1 || doc.SkippedLines != 1 || len(doc.Labels) != 2 {
 		t.Fatalf("schema %d, skipped %d, %d labels; want 1, 1, 2:\n%s", doc.Schema, doc.SkippedLines, len(doc.Labels), r.stdout)
 	}
-	if l := doc.Labels[0]; l.Label != "fastapi:tests" || l.Suggestion.Mem == nil || *l.Suggestion.Mem != "2816M" {
+	if l := doc.Labels[0]; l.Label != "fastapi:tests" || l.Suggestion.Mem == nil || *l.Suggestion.Mem != "2765M" {
 		t.Errorf("labels[0] = %+v:\n%s", l, r.stdout)
 	}
 }

@@ -1,1 +1,1 @@
-{"label":"\uD83D\uDE00","priority":0,"need":{"mem":[1,2]},"created_ns":5}
+{"label":"\uD83D\uDE00","priority":0,"need_mib":128,"created_ns":5}

@@ -2,7 +2,6 @@ package config
 
 import (
 	"errors"
-	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,8 +25,8 @@ func TestLoadMissingFileIsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load of a missing file: %v", err)
 	}
-	if got := c.Sizes(m16); !maps.Equal(got, map[string]int{"mem": 76}) {
-		t.Errorf("Sizes = %v, want map[mem:76]", got)
+	if got := c.MemMiB(m16); got != 9830 {
+		t.Errorf("MemMiB = %d, want 9830", got)
 	}
 	if !c.WindowsWarning {
 		t.Error("WindowsWarning defaults to false, want true")
@@ -42,8 +41,8 @@ func TestConfigMinimal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load(%q): %v", body, err)
 		}
-		if got := c.Sizes(m16); !maps.Equal(got, map[string]int{"mem": 76}) || !c.WindowsWarning {
-			t.Errorf("Load(%q): sizes %v, windows warning %v; want mem 76 and the warning on", body, got, c.WindowsWarning)
+		if got := c.MemMiB(m16); got != 9830 || !c.WindowsWarning {
+			t.Errorf("Load(%q): mem %d MiB, windows warning %v; want 9830 and the warning on", body, got, c.WindowsWarning)
 		}
 	}
 }
@@ -62,47 +61,42 @@ anything = "is ignored"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Sizes(m16); !maps.Equal(got, map[string]int{"mem": 8}) {
-		t.Errorf("Sizes = %v", got)
+	if got := c.MemMiB(m16); got != 1024 {
+		t.Errorf("MemMiB = %d, want 1024", got)
 	}
 	if c.WindowsWarning {
 		t.Error("windows_warning = false not honoured")
 	}
 }
 
-// With no file, mem is 60% of memory in 128 MiB tokens, rounded down. Mutation: a default of
-// "50%", and this test reddens.
+// With no file, mem is 60% of memory in MiB, rounded down. Mutation: a default of "50%", and
+// this test reddens.
 func TestDefaultSizes(t *testing.T) {
 	c, msg := parse("")
 	if msg != "" {
 		t.Fatal(msg)
 	}
-	if got := c.Sizes(m16); !maps.Equal(got, map[string]int{"mem": 76}) {
-		t.Errorf("Sizes = %v, want map[mem:76]", got)
+	if got := c.MemMiB(m16); got != 9830 {
+		t.Errorf("MemMiB = %d, want 9830", got)
 	}
 }
 
 func TestMemSizes(t *testing.T) {
-	for body, want := range map[string]int{`"60%"`: 76, "9": 72, `"9.5G"`: 76, `"768M"`: 6,
-		`"1M"`: 1, `"100%"`: 128} {
+	for body, want := range map[string]int64{`"60%"`: 9830, "9": 9216, `"9.5G"`: 9728, `"768M"`: 768,
+		`"1M"`: 1, `"100%"`: 16384, `"1000G"`: 1024000} {
 		c, msg := parse("[resources]\nmem = " + body + "\n")
 		if msg != "" {
 			t.Errorf("mem = %s: %s", body, msg)
 			continue
 		}
-		if got := c.Sizes(m16)["mem"]; got != want {
-			t.Errorf("mem = %s: %d tokens, want %d", body, got, want)
+		if got := c.MemMiB(m16); got != want {
+			t.Errorf("mem = %s: %d MiB, want %d", body, got, want)
 		}
 	}
 	for _, body := range []string{`"101%"`, `"-2"`, "true", "4.5", `"9GB"`, "0", `"0M"`} {
 		if _, msg := parse("[resources]\nmem = " + body + "\n"); msg == "" {
 			t.Errorf("mem = %s accepted", body)
 		}
-	}
-	// A size above the protocol's maximum is the maximum.
-	c, _ := parse("[resources]\nmem = \"1000G\"\n")
-	if got := c.Sizes(m16)["mem"]; got != 4096 {
-		t.Errorf("mem = 1000G: %d tokens, want 4096", got)
 	}
 }
 
@@ -176,8 +170,8 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := &Watcher{Path: path}
-	if c, err := w.Current(); err != nil || c.Sizes(m16)["mem"] != 10 {
-		t.Fatalf("first Current() = %v, %v", c.Sizes(m16), err)
+	if c, err := w.Current(); err != nil || c.MemMiB(m16) != 1280 {
+		t.Fatalf("first Current() = %v, %v", c.MemMiB(m16), err)
 	}
 
 	// Renamed over, same size, same mtime (cp -p to a temporary name, then mv).
@@ -191,8 +185,8 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Rename(tmp, path); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || c.Sizes(m16)["mem"] != 12 {
-		t.Errorf("Current() after a rename keeping size and mtime: mem = %d, %v; want 12", c.Sizes(m16)["mem"], err)
+	if c, err := w.Current(); err != nil || c.MemMiB(m16) != 1536 {
+		t.Errorf("Current() after a rename keeping size and mtime: mem = %d, %v; want 1536", c.MemMiB(m16), err)
 	}
 
 	// Rewritten in place, same size, same mtime.
@@ -202,8 +196,8 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || c.Sizes(m16)["mem"] != 11 {
-		t.Errorf("Current() after an in-place rewrite keeping size and mtime: mem = %d, %v; want 11", c.Sizes(m16)["mem"], err)
+	if c, err := w.Current(); err != nil || c.MemMiB(m16) != 1408 {
+		t.Errorf("Current() after an in-place rewrite keeping size and mtime: mem = %d, %v; want 1408", c.MemMiB(m16), err)
 	}
 
 	// An invalid file is reported as a *config.Error.
@@ -219,7 +213,7 @@ func TestWatcherReadsEveryCall(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := w.Current(); err != nil || !maps.Equal(c.Sizes(m16), map[string]int{"mem": 76}) {
-		t.Errorf("Current() after removal = %v, %v; want defaults", c.Sizes(m16), err)
+	if c, err := w.Current(); err != nil || c.MemMiB(m16) != 9830 {
+		t.Errorf("Current() after removal = %v, %v; want defaults", c.MemMiB(m16), err)
 	}
 }

@@ -5,42 +5,11 @@ package store
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/wire"
 )
-
-// CountLockedProbe counts every locked token at every index, ignoring non-token names, without
-// entering the section: it works while another process holds the section.
-func TestCountLockedProbeOutsideSection(t *testing.T) {
-	dir := newDir(t)
-	s := open(t, dir)
-	var paths []string
-	for i := 0; i < 6; i++ {
-		paths = append(paths, tokenPath(dir, "mem", i))
-	}
-	paths = append(paths, filepath.Join(dir, ResDir, "mem", "007"), filepath.Join(dir, ResDir, "mem", "4096"))
-	if err := os.MkdirAll(filepath.Join(dir, ResDir, "mem"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range paths {
-		if err := os.WriteFile(p, nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Lock tokens 2, 3 and 5 and both non-token names.
-	startHelper(t, "lock", dir, strings.Join([]string{paths[2], paths[3], paths[5], paths[6], paths[7]}, "\n"), nil)
-	startHelper(t, "section", dir, "", nil)
-	n, err := s.CountLockedProbe("mem")
-	if err != nil || n != 3 {
-		t.Fatalf("CountLockedProbe = %d, %v; want 3 (007 and 4096 are not tokens)", n, err)
-	}
-	if n, err := s.CountLockedProbe("gpu"); err != nil || n != 0 {
-		t.Errorf("a resource without res/<name>/: %d, %v; want 0", n, err)
-	}
-}
 
 func TestReadFormatOutsideSection(t *testing.T) {
 	dir := newDir(t)

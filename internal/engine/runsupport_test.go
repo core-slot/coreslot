@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -90,21 +89,20 @@ func TestUnbudgetedHoldRecordsNoDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := readHold(t, e, g)
-	if !h.Unbudgeted || len(h.Grant) != 0 || !reflect.DeepEqual(h.UnbudgetedResources, []string{"mem"}) {
-		t.Errorf("hold %+v, want unbudgeted, empty grant, unbudgeted_resources [mem]", h)
+	if h := readHold(t, e, g); h.NeedMiB != 0 {
+		t.Errorf("hold %+v, want need_mib 0: it reserves nothing", h)
 	}
 	if readGen(t, e) != before+1 {
 		t.Errorf("gen %d -> %d, want one bump", before, readGen(t, e))
 	}
-	if env := strings.Join(g.Env(), " "); env != "CORESLOT_GRANTED_MEM=256 CORESLOT_HELD_FD=3 CORESLOT_UNBUDGETED=timeout" {
+	if env := strings.Join(g.Env(), " "); env != "CORESLOT_GRANTED_MEM=256 CORESLOT_HELD_FD=3 CORESLOT_HOLD="+g.HoldName()+" CORESLOT_UNBUDGETED=timeout" {
 		t.Errorf("env %q", env)
 	}
 	if rec, err := e.st.Degraded(); rec != nil || err != nil {
 		t.Errorf("degraded %+v, %v; want no record", rec, err)
 	}
 	snap, err := e.Snapshot()
-	if err != nil || len(snap.Holds) != 1 || !snap.Holds[0].Unbudgeted {
+	if err != nil || len(snap.Holds) != 1 || snap.Holds[0].NeedMiB != 0 {
 		t.Errorf("snapshot holds %+v, %v; want the unbudgeted hold", snap.Holds, err)
 	}
 	g.Close()

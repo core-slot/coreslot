@@ -48,7 +48,7 @@ func runCommand(args []string, io IO) int {
 	argv := o.argv
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = io.Stdin, io.Stdout, io.Stderr
-	cmd.Env = append(os.Environ(), engine.ChildEnv(o.minGrant(), false, 0, "")...)
+	cmd.Env = append(os.Environ(), engine.ChildEnv(o.need, "", "")...)
 	// The console delivers Ctrl-C to the command too; the run only waits for it.
 	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	if err := cmd.Start(); err != nil {

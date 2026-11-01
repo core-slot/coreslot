@@ -3,16 +3,12 @@ package wire
 import (
 	"errors"
 	"fmt"
-	"math"
 
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // MaxBodyBytes is the largest body: 8 KiB (PROTOCOL.md section 7.2).
 const MaxBodyBytes = 8192
-
-// MaxTokenIndex is the highest token index a grant can name: sizes are at most 4096.
-const MaxTokenIndex = spec.MaxSize - 1
 
 // ErrMalformed is wrapped by every error a decoder returns for a body it refuses: not one UTF-8
 // JSON object of at most 8 KiB, a key missing, of the wrong type or outside its rule, or a
@@ -28,20 +24,25 @@ func malformed(format string, args ...any) error {
 type Ticket struct {
 	Label     string
 	Priority  int
-	Need      map[string]spec.Range
+	NeedMiB   int64
 	CreatedNS int64
 }
 
-// Hold is the body of a holds entry (section 7.4). StartNS must equal the start time in the
-// hold's name; the decoder cannot check that, the caller that has the name does.
+// Hold is the body of a holds entry (section 7.4): the reservation of a run and what its run last
+// measured. PID and StartNS must equal the pid and start time in the hold's name; the decoder
+// cannot check that, the caller that has the name does. A NeedMiB of 0 reserves nothing: a run
+// outside the budget.
 type Hold struct {
-	Label               string
-	Grant               map[string][]int
-	StartNS             uint64
-	Unbudgeted          bool
-	UnbudgetedResources []string
-	Clamped             map[string]int
-	Tree                bool // the process tree at the hold's pid carries the grant's work
+	Label                        string
+	PID                          int
+	StartNS, ArrivalNS           int64
+	NeedMiB                      int64
+	Stops                        int
+	FootprintMiB                 int64
+	DUserNS, DSysNS, DPageWaitNS int64
+	SampledNS                    int64
+	Victim, ChildExited          bool
+	Tree                         bool // the process tree at the hold's pid carries the grant's work
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -53,20 +54,27 @@ type Cancel struct {
 // ---------------------------------------------------------------- encoding
 
 type ticketJSON struct {
-	Label     string            `json:"label"`
-	Priority  int               `json:"priority"`
-	Need      map[string][2]int `json:"need"`
-	CreatedNS int64             `json:"created_ns"`
+	Label     string `json:"label"`
+	Priority  int    `json:"priority"`
+	NeedMiB   int64  `json:"need_mib"`
+	CreatedNS int64  `json:"created_ns"`
 }
 
 type holdJSON struct {
-	Label               string           `json:"label"`
-	Grant               map[string][]int `json:"grant"`
-	StartNS             uint64           `json:"start_ns"`
-	Unbudgeted          bool             `json:"unbudgeted"`
-	UnbudgetedResources []string         `json:"unbudgeted_resources"`
-	Clamped             map[string]int   `json:"clamped"`
-	Tree                bool             `json:"tree,omitempty"`
+	Label        string `json:"label"`
+	PID          int    `json:"pid"`
+	StartNS      int64  `json:"start_ns"`
+	ArrivalNS    int64  `json:"arrival_ns"`
+	NeedMiB      int64  `json:"need_mib"`
+	Stops        int    `json:"stops"`
+	FootprintMiB int64  `json:"footprint_mib"`
+	DUserNS      int64  `json:"d_user_ns"`
+	DSysNS       int64  `json:"d_sys_ns"`
+	DPageWaitNS  int64  `json:"d_pagewait_ns"`
+	SampledNS    int64  `json:"sampled_ns"`
+	Victim       bool   `json:"victim"`
+	ChildExited  bool   `json:"child_exited"`
+	Tree         bool   `json:"tree"`
 }
 
 type cancelJSON struct {
@@ -75,22 +83,22 @@ type cancelJSON struct {
 }
 
 // Encode returns the body of a Ticket, Hold or Cancel (or a pointer to one): compact JSON with
-// every key of its table, nil collections written empty, keys in the table's order and map keys
-// sorted. It refuses, with ErrMalformed, a value no reader would accept.
+// every key of its table, in the table's order. It refuses, with ErrMalformed, a value no reader
+// would accept.
 func Encode(v any) ([]byte, error) {
 	var out any
 	switch t := v.(type) {
 	case Ticket:
-		out = t.wire()
+		out = ticketJSON(t)
 	case *Ticket:
 		if t != nil {
-			out = t.wire()
+			out = ticketJSON(*t)
 		}
 	case Hold:
-		out = t.wire()
+		out = holdJSON(t)
 	case *Hold:
 		if t != nil {
-			out = t.wire()
+			out = holdJSON(*t)
 		}
 	case Cancel:
 		out = cancelJSON(t)
@@ -128,32 +136,10 @@ func validate(v any) error {
 	return nil
 }
 
-func (t Ticket) wire() ticketJSON {
-	need := make(map[string][2]int, len(t.Need))
-	for name, r := range t.Need {
-		need[name] = [2]int{r.Min, r.Max}
-	}
-	return ticketJSON{Label: t.Label, Priority: t.Priority, Need: need, CreatedNS: t.CreatedNS}
-}
-
-func (h Hold) wire() holdJSON {
-	j := holdJSON(h)
-	if j.Grant == nil {
-		j.Grant = map[string][]int{}
-	}
-	if j.UnbudgetedResources == nil {
-		j.UnbudgetedResources = []string{}
-	}
-	if j.Clamped == nil {
-		j.Clamped = map[string]int{}
-	}
-	return j
-}
-
 // ---------------------------------------------------------------- rules
 
 func (t Ticket) validate() error {
-	if err := (spec.Request{Label: t.Label, Priority: t.Priority, Need: t.Need}).Validate(); err != nil {
+	if err := (spec.Request{Label: t.Label, Priority: t.Priority, NeedMiB: t.NeedMiB}).Validate(); err != nil {
 		return malformed("%v", err)
 	}
 	if t.CreatedNS < 0 {
@@ -173,42 +159,11 @@ func (h Hold) validate() error {
 	if err := spec.ValidateLabel(h.Label); err != nil {
 		return malformed("%v", err)
 	}
-	if h.StartNS > math.MaxInt64 {
-		return malformed("start_ns %d is outside the signed 64-bit range", h.StartNS)
+	if h.PID < 0 || h.Stops < 0 || min(h.StartNS, h.ArrivalNS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS) < 0 {
+		return malformed("pid, stops and every time are at least 0")
 	}
-	total := 0
-	for name, idx := range h.Grant {
-		if err := spec.ValidateName(name); err != nil {
-			return malformed("grant: %v", err)
-		}
-		if len(idx) > spec.MaxPerResource {
-			return malformed("grant: %d tokens of %s, at most %d", len(idx), name, spec.MaxPerResource)
-		}
-		if len(idx) == 0 {
-			return malformed("grant: %s maps to an empty array; leave the resource out", name)
-		}
-		total += len(idx)
-		for i, x := range idx {
-			if x < 0 || x > MaxTokenIndex || i > 0 && x <= idx[i-1] {
-				return malformed("grant: indices of %s must be ascending, distinct, in [0, %d]", name, MaxTokenIndex)
-			}
-		}
-	}
-	if total > spec.MaxPerGrant {
-		return malformed("grant: %d tokens, at most %d", total, spec.MaxPerGrant)
-	}
-	for _, name := range h.UnbudgetedResources {
-		if err := spec.ValidateName(name); err != nil {
-			return malformed("unbudgeted_resources: %v", err)
-		}
-	}
-	for name, req := range h.Clamped {
-		if err := spec.ValidateName(name); err != nil {
-			return malformed("clamped: %v", err)
-		}
-		if req < 1 || req > spec.MaxPerResource {
-			return malformed("clamped: %s is %d, want an integer in [1, %d]", name, req, spec.MaxPerResource)
-		}
+	if h.NeedMiB < 0 || h.NeedMiB > spec.MaxNeedMiB || h.FootprintMiB < 0 || h.FootprintMiB > spec.MaxNeedMiB {
+		return malformed("need_mib and footprint_mib are in [0, %d]", spec.MaxNeedMiB)
 	}
 	return nil
 }
@@ -228,25 +183,11 @@ func DecodeTicket(body []byte) (Ticket, error) {
 	if t.Priority, err = o.smallInt("priority"); err != nil {
 		return Ticket{}, err
 	}
+	if t.NeedMiB, err = o.int64("need_mib"); err != nil {
+		return Ticket{}, err
+	}
 	if t.CreatedNS, err = o.int64("created_ns"); err != nil {
 		return Ticket{}, err
-	}
-	need, err := o.object("need")
-	if err != nil {
-		return Ticket{}, err
-	}
-	t.Need = make(map[string]spec.Range, len(need))
-	for name, v := range need {
-		pair, ok := v.([]any)
-		if !ok || len(pair) != 2 {
-			return Ticket{}, malformed("need.%s is not an array of two integers", name)
-		}
-		lo, err1 := toInt(pair[0])
-		hi, err2 := toInt(pair[1])
-		if err1 != nil || err2 != nil || int64(int(lo)) != lo || int64(int(hi)) != hi {
-			return Ticket{}, malformed("need.%s is not an array of two integers", name)
-		}
-		t.Need[name] = spec.Range{Min: int(lo), Max: int(hi)}
 	}
 	if err := t.validate(); err != nil {
 		return Ticket{}, err
@@ -264,62 +205,31 @@ func DecodeHold(body []byte) (Hold, error) {
 	if h.Label, err = o.str("label"); err != nil {
 		return Hold{}, err
 	}
-	start, err := o.int64("start_ns")
-	if err != nil {
-		return Hold{}, err
-	}
-	if start < 0 {
-		return Hold{}, malformed("start_ns is negative")
-	}
-	h.StartNS = uint64(start)
-	if h.Unbudgeted, err = o.boolean("unbudgeted"); err != nil {
-		return Hold{}, err
-	}
-	// tree is optional: absent or not a boolean, it reads as false.
-	h.Tree, _ = o["tree"].(bool)
-	grant, err := o.object("grant")
-	if err != nil {
-		return Hold{}, err
-	}
-	h.Grant = make(map[string][]int, len(grant))
-	for name, v := range grant {
-		list, ok := v.([]any)
-		if !ok {
-			return Hold{}, malformed("grant.%s is not an array", name)
+	for _, f := range []struct {
+		key string
+		dst *int
+	}{{"pid", &h.PID}, {"stops", &h.Stops}} {
+		if *f.dst, err = o.smallInt(f.key); err != nil {
+			return Hold{}, err
 		}
-		idx := make([]int, len(list))
-		for i, e := range list {
-			n, err := toInt(e)
-			if err != nil || int64(int(n)) != n {
-				return Hold{}, malformed("grant.%s holds a non-integer", name)
-			}
-			idx[i] = int(n)
+	}
+	for _, f := range []struct {
+		key string
+		dst *int64
+	}{{"start_ns", &h.StartNS}, {"arrival_ns", &h.ArrivalNS}, {"need_mib", &h.NeedMiB},
+		{"footprint_mib", &h.FootprintMiB}, {"d_user_ns", &h.DUserNS}, {"d_sys_ns", &h.DSysNS},
+		{"d_pagewait_ns", &h.DPageWaitNS}, {"sampled_ns", &h.SampledNS}} {
+		if *f.dst, err = o.int64(f.key); err != nil {
+			return Hold{}, err
 		}
-		h.Grant[name] = idx
 	}
-	list, err := o.array("unbudgeted_resources")
-	if err != nil {
-		return Hold{}, err
-	}
-	h.UnbudgetedResources = make([]string, len(list))
-	for i, e := range list {
-		s, ok := e.(string)
-		if !ok {
-			return Hold{}, malformed("unbudgeted_resources holds a non-string")
+	for _, f := range []struct {
+		key string
+		dst *bool
+	}{{"victim", &h.Victim}, {"child_exited", &h.ChildExited}, {"tree", &h.Tree}} {
+		if *f.dst, err = o.boolean(f.key); err != nil {
+			return Hold{}, err
 		}
-		h.UnbudgetedResources[i] = s
-	}
-	clamped, err := o.object("clamped")
-	if err != nil {
-		return Hold{}, err
-	}
-	h.Clamped = make(map[string]int, len(clamped))
-	for name, v := range clamped {
-		n, err := toInt(v)
-		if err != nil || int64(int(n)) != n {
-			return Hold{}, malformed("clamped.%s is not an integer", name)
-		}
-		h.Clamped[name] = int(n)
 	}
 	if err := h.validate(); err != nil {
 		return Hold{}, err

@@ -8,8 +8,8 @@ import (
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
-// --mem is a size in MiB under spec.ParseBytes's rules, more than 0; the request asks for it in
-// whole tokens. Mutation: accept 0, and the usage case reddens.
+// --mem is a size in MiB under spec.ParseBytes's rules, more than 0, which the request asks for.
+// Mutation: accept 0, and the usage case reddens.
 func TestMemFlag(t *testing.T) {
 	for _, c := range []struct {
 		arg  string
@@ -40,7 +40,7 @@ func TestMemFlag(t *testing.T) {
 	}
 }
 
-// A run without --mem asks for one memory token, and a brace in an argument is the command's own.
+// A run without --mem asks for the default 128 MiB, and a brace in an argument is the command's own.
 // Mutation: substitute {n} in parseRun's argv, and the case reddens.
 func TestBracesReachTheChild(t *testing.T) {
 	o, err := parseRun([]string{"--", "echo", "{n}", "-j{n}", "{n:mem}"}, IO{}, nil)

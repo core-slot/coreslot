@@ -4,11 +4,9 @@ package main
 
 import (
 	"errors"
-	"maps"
 	"os"
 	"os/exec"
 	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -23,40 +21,32 @@ const memSampleEvery = time.Second
 
 // admitted runs the command on an admitted grant.
 func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
-	for _, name := range slices.Sorted(maps.Keys(g.Clamped())) {
-		n := amount(name, g.Grant()[name])
-		if name == "mem" && g.LiveMem() {
+	if asked := g.ClampedMiB(); asked > 0 {
+		n := spec.FormatMiB(g.GrantMiB())
+		if g.LiveMem() {
 			r.notice("mem: requested %s, more than the budget and free memory allow; running alone with %s",
-				amount(name, g.Clamped()[name]), n)
-			continue
+				spec.FormatMiB(asked), n)
+		} else {
+			r.notice("mem: requested %s, budget is %s; running alone with %s", spec.FormatMiB(asked), n, n)
 		}
-		r.notice("%s: requested %s, budget is %s; running alone with %s", name, amount(name, g.Clamped()[name]), n, n)
 	}
 	c := child{
-		env:     append(slices.Clone(r.env), g.Env()...),
-		files:   g.Files(),
-		grant:   g.Grant(),
-		clamped: slices.Sorted(maps.Keys(g.Clamped())),
-		release: g.Close,
-		log:     e.Store(), // FORMAT was understood in the admitting section
+		env:      append(slices.Clone(r.env), g.Env()...),
+		files:    g.Files(),
+		grantMiB: g.GrantMiB(),
+		clamped:  g.ClampedMiB() > 0,
+		release:  g.Close,
+		log:      e.Store(), // FORMAT was understood in the admitting section
 	}
 	return r.runChild(c)
-}
-
-func grantText(grant map[string]int, names []string) string {
-	parts := make([]string, 0, len(names))
-	for _, name := range names {
-		parts = append(parts, name+"="+amount(name, grant[name]))
-	}
-	return strings.Join(parts, ", ")
 }
 
 // child is what a run starts its command with.
 type child struct {
 	env      []string
-	files    []*os.File // ExtraFiles: fd 3 (nil without a hold), then the tokens
-	grant    map[string]int
-	clamped  []string
+	files    []*os.File // ExtraFiles: fd 3, nil without a hold
+	grantMiB int64
+	clamped  bool
 	failOpen string
 	nested   bool
 	release  func() error // closes the run's copies of the grant once the command exited
@@ -76,11 +66,6 @@ func (r *run) runChild(c child) int {
 	if slices.ContainsFunc(c.files, func(f *os.File) bool { return f != nil }) {
 		cmd.ExtraFiles = c.files
 	}
-	inherited := 0
-	if cmd.ExtraFiles != nil {
-		inherited = 3 + len(cmd.ExtraFiles)
-	}
-	_, _ = raiseChildNofile(r.nofile.originalNofile(), inherited)
 	if sig := pendingSignal(); sig != 0 {
 		// Interrupted between the admission and the start: the command never runs.
 		_ = c.release()
@@ -123,8 +108,7 @@ func (r *run) runChild(c child) int {
 		rec.WaitedFreeS = &free
 	}
 	if !c.nested && c.failOpen == "" && rec.MemPeakKiB != nil {
-		grantMiB := int64(c.grant["mem"]) * spec.MemTokenMiB
-		if h := memHint(r.o.label, grantMiB, slices.Contains(c.clamped, "mem"), *rec.MemPeakKiB, rec.RanS); h != "" {
+		if h := memHint(r.o.label, c.grantMiB, c.clamped, *rec.MemPeakKiB, rec.RanS); h != "" {
 			r.notice("%s", h)
 		}
 	}

@@ -8,9 +8,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// fileCap is the most a soft RLIMIT_NOFILE can be set to below the hard limit; 0, none here.
-func fileCap() uint64 { return 0 }
-
 // fdDir is the directory that lists this process's open descriptors by number.
 const fdDir = "/proc/self/fd"
 

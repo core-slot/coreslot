@@ -46,9 +46,8 @@ Every shared file, field, environment variable and transition of format 1, and w
 | `FORMAT` | file | [7.6](#76-format), [15](#15-formats-and-an-unimplemented-format) |
 | `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) |
 | `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
-| `res/` | directory of token files | [6](#6-tokens-and-descriptor-ownership) |
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
-| `holds/` | directory of holds | [7.4](#74-hold), [12](#12-admission) |
+| `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
@@ -61,7 +60,7 @@ Every shared file, field, environment variable and transition of format 1, and w
 | run-log memory keys | field | [20](#20-run-log) |
 | `CORESLOT_GRANTED_*` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HELD_FD` | environment | [17](#17-descriptor-and-environment-contract) |
-| `CORESLOT_TOKEN_FDS` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
+| `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_STATE_DIR` | environment | [4.1](#41-location) |
 | enqueue | transition | [10.1](#101-enqueue), example [21.1](#211-enqueue) |
@@ -94,14 +93,13 @@ reconciliation (section 10.4) removes its file.
 
 Every conforming client MUST preserve these invariants:
 
-- **I1 identity:** no two live holds list the same (resource, index), and every token a live hold
-  lists is locked through an open file description whose inode equals
-  `stat($S/res/<name>/<i>).st_ino`. A holder checks this when it takes tokens (section 12.1 step 6)
-  and again at release (section 12.3); a holder that finds `st_nlink == 0` or a different inode at
-  its token's path has a state error (section 14) and reports degraded mode to its user.
-- **I2 truthful grant:** a live hold's body lists exactly the tokens it locks. Tokens may be locked
-  without a published hold only momentarily by a probe (section 6, inside or outside the
-  section), or between a holder's last close and the next reconciliation.
+- **I1 identity:** a live hold is locked through an open file description whose inode equals
+  `stat($S/holds/<hold>).st_ino`, and keeps that inode while it lives: its body is rewritten in
+  place, never replaced (section 7.4). A holder checks this when it rewrites its body and at
+  release (section 12.3); a holder that finds `st_nlink == 0` or a different inode at its hold's
+  path has a state error (section 14) and reports degraded mode to its user.
+- **I2 truthful grant:** a live hold's body says what it reserves (`need_mib`, section 7.4), and
+  nothing is reserved without a live hold.
 - **I3 bounded admission:** an admission never brings the number of locked tokens of a
   resource — at **any** index that exists, including indices at or above the current size — above
   that resource's current size. A later shrink may leave locked tokens above the new size; no
@@ -198,7 +196,6 @@ take part through a client on the host.
 FORMAT           metadata format (section 7.6)
 admit.lock       the admission lock (section 7.7); never deleted, semantics fixed for every format
 gen              {"gen": n, "reconciled_ns": t} (section 7.8)
-res/<name>/<i>   token files (section 6); never deleted, semantics fixed for every format
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
@@ -224,15 +221,14 @@ Publishing into a directory that already holds 65 536 entries is a state error. 
 match the grammar of their directory (section 7.1) are ignored and counted (`status` reports the
 count); they are never removed except by reconciliation's rules (section 10.4).
 
-The directory is not a cache: token files are permanent and liveness is decided by locks. Deleting
-or resetting `$S` while any client is live creates a second set of token inodes and is not
-supported. The CLI's `doctor --reset` runs inside the admission section and checks that no holds,
-tickets, other section holder or locked tokens exist; only then does it remove the entries of
-`queue/`, `holds/` and `cancel/`, `gen`, `FORMAT`, `degraded` and `log/`. It keeps `admit.lock`,
-`res/`, `config.toml`, `needs.toml` and `needs.toml.lock`: the format-stable files (section 15.1),
-whose inodes live clients may hold open, and the configuration. The run history the needs file is
-learned from goes with `log/`. A reset never deletes, renames or replaces `admit.lock` or a token
-file. It refuses when `FORMAT` is well-formed and names a format the client does not implement (a
+The directory is not a cache: liveness is decided by locks. Deleting or resetting `$S` while any
+client is live loses the reservations of its holds and is not supported. The CLI's `doctor
+--reset` runs inside the admission section and checks that no holds, tickets or other section
+holder exist; only then does it remove the entries of `queue/`, `holds/` and `cancel/`, `gen`,
+`FORMAT`, `degraded` and `log/`. It keeps `admit.lock`, `config.toml`, `needs.toml` and
+`needs.toml.lock`: the format-stable file (section 15.1), whose inode live clients may hold open,
+and the configuration. The run history the needs file is learned from goes with `log/`. A reset
+never deletes, renames or replaces `admit.lock`. It refuses when `FORMAT` is well-formed and names a format the client does not implement (a
 newer client's waiters are invisible to it and its entries are not format-1 grammar); a missing,
 malformed or implemented `FORMAT` does not stop it. It does not reconcile first (section 10.4):
 it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation would remove, and more.
@@ -488,43 +484,21 @@ A file that cannot be parsed is left as it is.
 > `cpu_per_worker`. Its suggested `mem` rests on the window's largest peak; when that run's cpu
 > grant is above the `cpu` max it suggests, the evidence names the grant.
 
-## 6. Tokens and descriptor ownership
+## 6. Holds and descriptor ownership
 
-Token files are `$S/res/<name>/<i>`, where `<name>` is a resource name and `<i>` an index in
-`[0, 4095]` written in decimal without leading zeros (`0`, `1`, ..., `13`). A token file is created
-on first use (`open` with `O_CREAT|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, no `O_EXCL`) and never
-deleted; its content is empty and never read. A holder holds a token by keeping `flock(LOCK_EX)` on
-an open file description of it.
-
-An entry of `res/` whose name is not a resource name, and an entry of `res/<name>/` whose name is
-not an index written as above (`007`, `5000`, `x`), is not a token file: it is never probed,
-counted, checked (section 4.2) or removed. "An index that exists" below means a token file at such
-a name.
+A run's reservation is its hold (section 7.4): the memory a live hold's `need_mib` names is
+reserved for as long as some open file description holds the hold's `flock(LOCK_EX)`. There is no
+other lock that reserves memory.
 
 Ownership is by open file description, and release is by **closing**: a client MUST NOT release a
-token, ticket or hold with `LOCK_UN`, because `LOCK_UN` releases the lock for every descriptor
-sharing that description, including a child's. A run passes its grant's descriptors to the command
-it starts (section 17) and keeps its own copies until the command exits, so the tokens stay held
-while the run or any process that inherited the copies is alive. Processes that are not descendants
-(a container started through a daemon) do not extend a grant.
+ticket or hold with `LOCK_UN`, because `LOCK_UN` releases the lock for every descriptor sharing
+that description, including a child's. A run passes its hold's descriptor to the command it starts
+(section 17) and keeps its own copy until the command exits, so the hold stays live while the run
+or any process that inherited the copy is alive. Processes that are not descendants (a container
+started through a daemon) do not extend a hold.
 
-A grant holds at most 256 tokens of one resource and at most 512 in total, so a run never needs more
-than 513 inherited descriptors. A request whose minimums sum above 512 is invalid (a usage error,
-section 14); admission (section 12.1) never takes more than 512 tokens in total. A run SHOULD raise the soft `RLIMIT_NOFILE` it passes to the command
-to at least the inherited count plus 256 when the hard limit allows.
-
-> **Implementation note.** The Go runtime raises its own soft limit at start-up, so the Go CLI
-> learns the soft limit it inherited from a `/bin/sh -c 'ulimit -S -n'` it starts before it sets
-> any limit, which the runtime gives that original limit. The limit it sets is its own as well,
-> and it still opens descriptors under it to start the command and to write the run log, so it
-> adds 256 to the highest of that original limit, its own highest open descriptor plus one, and
-> the count of descriptors it places from fd 0; a pass-through's inherited grant is among its open
-> descriptors.
-
-The **locked count** of a resource is the number of its existing token files, at every index that
-exists, whose probe fails with `EWOULDBLOCK`. Probing a token is permitted inside and outside the
-section; a probe's momentary lock can only make another client see a token as locked, never as
-free.
+Probing a ticket or hold is permitted inside and outside the section; a probe's momentary lock can
+only make another client see a dead entry as live, never a live one as dead.
 
 ## 7. Names and bodies
 
@@ -573,9 +547,8 @@ is its target's id, not its writer's `seq`; section 11 says what an existing one
   bytes is not conforming.
 - Nesting depth alone never makes a body malformed: a reader MUST accept any depth that fits in
   8 KiB (about 4 096 levels).
-- In particular, a body is malformed when a key inside `need`, `grant` or `clamped` does not match
-  the resource-name grammar (section 5.1), when `grant` maps a resource to an empty array, or when
-  a string anywhere in it contains an unpaired UTF-16 surrogate escape (a `\uD800`-`\uDBFF` escape
+- In particular, a body is malformed when a string anywhere in it contains an unpaired UTF-16
+  surrogate escape (a `\uD800`-`\uDBFF` escape
   not followed by a `\uDC00`-`\uDFFF` escape, or a `\uDC00`-`\uDFFF` escape not preceded by one).
 - Unknown keys are ignored at any depth: bodies only gain optional keys within a format. The value
   of an unknown key may be any JSON value; the integer rule of section 1 applies only to the keys of
@@ -593,7 +566,7 @@ Body:
 |---|---|---|
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
 | `priority` | integer | `-1000..1000` |
-| `need` | object | resource name → `[min, max]`, an array of exactly two integers, `1 ≤ min ≤ max ≤ 256`; 1 to 8 entries; the minimums sum to at most 512; names need not be declared (section 14); a `mem` count is in 128 MiB tokens |
+| `need_mib` | integer | `1..1073741824` (1 PiB); the memory the run needs, in MiB |
 | `created_ns` | integer | `≥ 0`; the wall clock read for `arrival_ns` (section 9) |
 
 ### 7.4 Hold
@@ -604,24 +577,26 @@ its grant, and passes that descriptor to its command as fd 3 (section 17). Body:
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | as in the ticket |
-| `grant` | object | resource name → array of the token indices held, ascending, distinct, each in `[0, 4095]`; never an empty array (a resource of which no token is held is left out); at most 256 per resource and 512 in total; `{}` when no token is held; each `mem` token is 128 MiB |
-| `start_ns` | integer | `≥ 0`; equal to the name's start-ns, and a body whose `start_ns` differs is malformed |
-| `unbudgeted` | boolean | `true` for a run outside the budget: a fail-open run, a run whose wait timed out and that runs anyway, or a light run (section 14) |
-| `unbudgeted_resources` | array of resource names | resources the request named that are not declared, or that a run outside the budget could not budget (section 14); writers list distinct names in ascending order, readers check neither |
-| `clamped` | object | resource name → the requested `min`, an integer in `[1, 256]`, for each resource clamped (section 12.2); readers do not check that the resource appears in `grant` |
-| `tree` | boolean | optional: `true` when the process whose pid the name carries, with its descendants, carries the grant's work, so that its tree's resident memory measures the hold (section 5.2); absent means `false`. The CLI's run writes it (its command is its child) |
-| `preemptible` | string | optional: why the run is preemptible, as the run log's `preemptible` (section 20); absent or not a string reads as empty, which never makes a body malformed. `status` shows it on the hold |
+| `pid` | integer | `≥ 0`; equal to the name's pid |
+| `start_ns` | integer | `≥ 0`; equal to the name's start-ns |
+| `arrival_ns` | integer | `≥ 0`; when the run first arrived in the queue |
+| `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB: the need asked, also when it was clamped (section 12.2); `0` for a run outside the budget (section 14), which reserves nothing |
+| `stops` | integer | `≥ 0`; how often the run was stopped for memory |
+| `footprint_mib` | integer | `0..1073741824`; the run's footprint as it last measured it; `0` when not measured |
+| `d_user_ns`, `d_sys_ns`, `d_pagewait_ns` | integer | `≥ 0`; the run's latest measured time deltas |
+| `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
+| `victim`, `child_exited` | boolean | the run's latest view of its command |
+| `tree` | boolean | `true` when the process whose pid the name carries, with its descendants, carries the grant's work, so that its tree's resident memory measures the hold (section 5.2). The CLI's run writes it (its command is its child) |
 
-`tree` is an exception to section 7.2's "a writer MUST write every key of its table": a writer MAY
-leave it out, and a reader reads it as `false` when it is absent or is anything but `true`, which
-never makes a body malformed. Like `tree`, `preemptible` is an exception to that rule: a writer MAY
-leave it out, and a reader reads it as empty when it is absent or not a string.
+A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
+name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
+as large as 2^64 − 1 (section 7.1) while `start_ns` is a signed 64-bit integer: a hold whose name
+carries a start-ns above 2^63 − 1 never has a well-formed body and is ignored and counted. No
+writer produces one, because the wall clock is a signed 64-bit value.
 
-Comparing `start_ns` with the name needs the name, so it is done by the reader of `holds/`, not by
-a body decoder. A start-ns in a name may be as large as 2^64 − 1 (section 7.1) while `start_ns` is
-a signed 64-bit integer: a hold whose name carries a start-ns above 2^63 − 1 never has a
-well-formed body and is ignored and counted. No writer produces one, because the wall clock is a
-signed 64-bit value.
+Only the holder writes its body, at publication and then in place: one write at offset 0 of the
+whole body, padded with spaces to the length it replaces, so that the file and its lock keep their
+inode and the file never shrinks (I1). It keeps `label`, `pid` and `start_ns`.
 
 ### 7.5 Cancel request
 
@@ -1108,53 +1083,33 @@ exit 70 on Windows (there is no budget to inspect, cancel or repair), and their 
 
 ## 17. Descriptor and environment contract
 
-A run that starts a command with a grant gives it:
-
-| Descriptor | Content |
-|---|---|
-| fd 3 | the hold's lock-carrying descriptor, when the run has a hold; otherwise fd 3 is closed in the child and the tokens still start at fd 4 (a Go launcher passes a nil `ExtraFiles[0]`) |
-| fd 4 onward | the token descriptors, in ascending resource name and then ascending index |
-
-Descriptors 3 through 3 + n of the command, n being the number of token descriptors, are the
-run's: an inherited descriptor at one of those numbers is not passed on, so a launcher that
-needs its own descriptors in the command places them above.
-
-and this environment:
+A run that starts a command with a grant gives it fd 3, the hold's lock-carrying descriptor, when
+the run has a hold; otherwise fd 3 is closed in the child (a Go launcher passes a nil
+`ExtraFiles[0]`). An inherited descriptor at 3 is not passed on, so a launcher that needs its own
+descriptors in the command places them above. It sets this environment:
 
 | Variable | Value |
 |---|---|
-| `CORESLOT_GRANTED_<RES>` | for each resource the request names, in environment form (section 5.1): the number of tokens granted, or, for a resource run unbudgeted, its requested `min`; `CORESLOT_GRANTED_MEM` is that count in MiB (tokens × 128) |
+| `CORESLOT_GRANTED_MEM` | the memory granted, in MiB: the need, or the capacity that clamped it, or, for a run outside the budget, its need |
 | `CORESLOT_HELD_FD` | `3`, when the run passes a hold descriptor |
-| `CORESLOT_TOKEN_FDS` | the token descriptors' numbers, when it passes any |
+| `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 
-```
-token-fds = item *( "," item )
-item      = fd [ "-" fd ]       ; "a-b" is every fd from a to b inclusive, a <= b
-fd        = 1*DIGIT
-```
-
-Writers usually write a single range (`4-13`); a single descriptor may be written `4` or `4-4`, and
-both conform. Readers MUST accept the whole grammar. A list that
-names one descriptor twice, directly or through overlapping ranges, is invalid: a pass-through
-treats it as a context that does not validate (section 18). Every
-descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section 4.2).
-A launcher that starts nested runs passes these
-descriptors through (Python: `subprocess.run(..., pass_fds=...)`; Go: `exec.Cmd.ExtraFiles`).
+Every descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section
+4.2).
 
 A run that is not a pass-through (section 18 rules 1 and 2) builds this contract from its own grant
-only. An ordinary or `--independent` request, a fail-open run removes every
-inherited `CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_TOKEN_FDS` and `CORESLOT_UNBUDGETED`
-from the command's environment before setting their own, and close (do not pass on) exactly the
-inherited descriptors those inherited variables name: the `CORESLOT_HELD_FD` descriptor and every
-descriptor `CORESLOT_TOKEN_FDS` lists. Otherwise a grandchild would pass through to a grant that is
-not its parent's. A named descriptor that is a standard stream (0, 1 or 2) or not a regular file
-cannot be a grant's (its number was reused after a launcher closed the original), and a client
+only. An ordinary or `--independent` request, a fail-open run removes every inherited
+`CORESLOT_GRANTED_*`, `CORESLOT_HELD_FD`, `CORESLOT_HOLD` and `CORESLOT_UNBUDGETED` from the
+command's environment before setting their own, and closes (does not pass on) exactly the
+inherited descriptor `CORESLOT_HELD_FD` names, so that a grandchild does not keep a hold that is
+not its parent's alive. A named descriptor that is a standard stream (0, 1 or 2) or not a regular
+file cannot be a hold's (its number was reused after a launcher closed the original), and a client
 SHOULD leave it open. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
 user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not grant context and
 is passed on.
 
-> **Implementation note.** The Go CLI closes only the named descriptors that are regular files at
+> **Implementation note.** The Go CLI closes the named descriptor only when it is a regular file at
 > fd 3 or above.
 
 **Placeholders** (CLI): an argument that is exactly `{n}` (or `{n:RES}`) is replaced by the grant of
@@ -1175,29 +1130,21 @@ empty variable is absent), in this order:
 1. `CORESLOT_UNBUDGETED` is set (and the run is not `--independent`): it runs unbudgeted with its
    `min` of each resource, prints a notice, passes the variable on, and writes no degraded record
    of its own.
-2. `CORESLOT_TOKEN_FDS` is set (and the run is not `--independent`): it is a **pass-through**. The
-   context is valid when no descriptor is listed twice, every descriptor listed is open, its
-   `(st_dev, st_ino)` equals that of some `$S/res/<name>/<i>`, and a fresh probe of that path fails.
-   Two listed descriptors with the same `(st_dev, st_ino)` (a launcher duplicated one) hold one
-   token, not two: such a context does not validate.
-   A valid pass-through does not queue, enter the section or lock anything. Per resource it names,
-   it runs with `min(max, held)`, where `held` is the number of valid token descriptors of that
-   resource, counted from the descriptors and not from the environment; a resource it names that the
-   parent does not hold is listed as unbudgeted with a notice; a `min` above what the parent holds
-   is clamped with a notice. It passes the parent's descriptors on unchanged and sets
-   `CORESLOT_GRANTED_<RES>` to the narrowed value for each resource it names. A context that does
-   not validate (a launcher closed the descriptors, or the parent is gone) is a refusal with a
-   diagnostic naming the likely cause; the run never queues behind a parent that may hold the whole
-   budget. A list naming more than 512 descriptors does not validate (a grant holds at most 512
-   tokens; a reader checks the count before expanding a range), and neither does a context the run
-   cannot check because `$S`, `res/` or a token file cannot be read.
+2. `CORESLOT_HOLD` names a hold (and the run is not `--independent`) whose pid is an ancestor of
+   the run and whose fresh probe in `$S/holds/` fails (some process holds it): it is a
+   **pass-through**, inside its parent's reservation. It does not queue, enter the section or lock
+   anything. It runs with its need, or with the parent's `CORESLOT_GRANTED_MEM` when that is less,
+   with a notice when its need was given as `--mem`; it passes the parent's descriptor on unchanged
+   and sets `CORESLOT_GRANTED_MEM` to the narrowed value. A hold that is malformed, dead, gone or
+   not an ancestor's, or a `$S` that cannot be resolved, makes the run an ordinary request: a
+   parent that holds the budget is always an ancestor whose hold is live.
 3. Otherwise, or with `--independent`, it is an ordinary request.
 
 A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and writes nothing under
 `$S` but its run-log line (section 20): no ticket, hold, `gen` bump or degraded record.
 
-Nested runs are **not** budgeted against each other: two siblings started together under an 8-token
-grant both run with 8. A parent that wants concurrent children partitions its grant itself.
+Nested runs are **not** budgeted against each other: two siblings started together under a 1 GiB
+grant both run with 1 GiB. A parent that wants concurrent children partitions its grant itself.
 
 A preemptible parent (section 5.4) that names `cpu` holds one cpu token, so a pass-through under
 it runs with one cpu token, and its cpu placeholder is what one token gives (1, or the workers one

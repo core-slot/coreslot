@@ -45,8 +45,8 @@ func TicketName(id ID, label string) string {
 }
 
 // HoldName is the file name of a hold: its start time in nanoseconds in place of the order key.
-func HoldName(startNS uint64, pid, seq int, label string) string {
-	return withDisplay(ID{OrderKey: startNS, PID: pid, Seq: seq}, label)
+func HoldName(startNS int64, pid, seq int, label string) string {
+	return withDisplay(ID{OrderKey: uint64(startNS), PID: pid, Seq: seq}, label)
 }
 
 func withDisplay(id ID, label string) string {

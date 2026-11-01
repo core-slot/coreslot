@@ -5,7 +5,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -22,6 +21,7 @@ import (
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 type kind int
@@ -123,7 +123,7 @@ type bench struct {
 	run    int
 	state  string
 	client *engine.Engine
-	grants []*engine.Grant
+	hold   *engine.Grant // the harness's own grant: the whole budget between bursts
 	rng    *rand.Rand
 
 	inR, inW, outR, outW, errFile *os.File
@@ -164,7 +164,7 @@ func runOnce(p params, run int) (result, error) {
 	if err := os.MkdirAll(b.state, 0o700); err != nil {
 		return result{}, err
 	}
-	cfg := fmt.Sprintf("[resources]\nmem = \"%dM\"\n", p.Size*spec.MemTokenMiB)
+	cfg := fmt.Sprintf("[resources]\nmem = \"%dM\"\n", p.Size*needMiB)
 	if err := os.WriteFile(filepath.Join(b.state, "config.toml"), []byte(cfg), 0o600); err != nil {
 		return result{}, err
 	}
@@ -190,14 +190,18 @@ func runOnce(p params, run int) (result, error) {
 		return result{}, err
 	}
 	b.client = engine.New(st, &config.Watcher{Path: filepath.Join(b.state, store.ConfigFile)}, config.ReadMachine, engine.Clock{})
-	if err := b.holdAll(10 * time.Second); err != nil {
+	// The whole budget, taken while the machine is idle, before any waiter queues.
+	t, err := b.client.EnqueueContext(context.Background(), spec.Request{Label: "bench-harness", NeedMiB: int64(p.Size) * needMiB})
+	if err != nil {
 		return result{}, err
 	}
-	defer func() {
-		for _, g := range b.grants {
-			g.Close()
-		}
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	b.hold, err = t.Wait(ctx)
+	cancel()
+	if err != nil {
+		return result{}, fmt.Errorf("could not take the budget: %w", err)
+	}
+	defer b.hold.Close()
 
 	if b.inR, b.inW, err = os.Pipe(); err != nil {
 		return result{}, err
@@ -558,8 +562,8 @@ func (b *bench) candidates() []*proc {
 	return out
 }
 
-// burst is one burst: cancel requests and withdrawals, refill arrivals, released tokens for the
-// admission window, then the first waiter in queue order that is a stall candidate (not
+// burst is one burst: cancel requests and withdrawals, refill arrivals, Release waiters' needs
+// freed from the harness's hold for the admission window, then the first waiter in queue order that is a stall candidate (not
 // stopped, leaving or profiled), plus Stall-1 random candidates, stopped for stall-for.
 func (b *bench) burst() error {
 	rep, err := b.client.Snapshot()
@@ -599,69 +603,19 @@ func (b *bench) burst() error {
 			return err
 		}
 	}
-	for i := 0; i < b.p.Release && len(b.grants) > 0; i++ {
-		g := b.grants[len(b.grants)-1]
-		b.grants = b.grants[:len(b.grants)-1]
-		if err := g.Close(); err != nil {
-			return err
-		}
+	if err := b.reserve(max(0, b.p.Size-b.p.Release)); err != nil {
+		return err
 	}
 	now := time.Now()
-	b.at(now.Add(b.p.AdmitWindow), b.retake)
+	b.at(now.Add(b.p.AdmitWindow), func() error { return b.reserve(b.p.Size) })
 	b.at(now.Add(b.p.AdmitWindow+time.Second), b.stallSome)
 	return nil
 }
 
-// retake takes the budget back, retrying every second until it holds all of it.
-func (b *bench) retake() error {
-	if err := b.holdAll(time.Second); err != nil {
-		return err
-	}
-	if len(b.grants) < b.p.Size {
-		b.at(time.Now().Add(time.Second), b.retake)
-	}
-	return nil
-}
-
-// holdAll requests one token at a time, at the top priority so that it is the head of the queue
-// whatever the waiters are, until the harness holds the whole budget or within passes.
-func (b *bench) holdAll(within time.Duration) error {
-	deadline := time.Now().Add(within)
-	for len(b.grants) < b.p.Size && time.Now().Before(deadline) {
-		// Request only a token that is free: a request that has to wait publishes a ticket and
-		// withdraws it, two gen bumps that make every waiter rescan, so it is not retried blindly.
-		free, err := b.client.Free("mem")
-		if err != nil {
-			return err
-		}
-		if free == 0 {
-			if b.inWin {
-				break // retake tries again in a second
-			}
-			time.Sleep(20 * time.Millisecond)
-			continue
-		}
-		t, err := b.client.EnqueueContext(context.Background(), spec.Request{Label: "bench-harness",
-			Priority: spec.MaxPriority, Need: map[string]spec.Range{"mem": {Min: 1, Max: 1}}})
-		if err != nil {
-			return err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		g, err := t.Wait(ctx)
-		cancel()
-		switch {
-		case err == nil:
-			b.grants = append(b.grants, g)
-		case errors.Is(err, context.DeadlineExceeded): // a waiter took the free token first
-			time.Sleep(20 * time.Millisecond)
-		default:
-			return err
-		}
-	}
-	if len(b.grants) == 0 && b.p.Size > 0 && !b.inWin {
-		return fmt.Errorf("could not take the budget")
-	}
-	return nil
+// reserve rewrites the harness's hold to reserve n waiters' needs: the waiters' admissions see
+// the rest of the budget free, and none is admitted once it reserves the whole budget again.
+func (b *bench) reserve(n int) error {
+	return b.hold.UpdateHold(func(h *wire.Hold) { h.NeedMiB = int64(n) * needMiB })
 }
 
 // stallSome stops the first waiter in queue order that is a stall candidate (not stopped, leaving

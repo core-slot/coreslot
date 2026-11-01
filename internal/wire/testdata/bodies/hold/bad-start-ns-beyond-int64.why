@@ -1,1 +1,1 @@
-outside the signed 64-bit range
+start_ns does not fit a signed 64-bit integer

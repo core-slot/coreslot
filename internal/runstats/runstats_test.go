@@ -48,8 +48,8 @@ func TestWindowIsLastFive(t *testing.T) {
 	}
 }
 
-// mem is the window's largest peak, a failed run's included, rounded up to a whole token.
-// Mutation: leave failed runs out of the peak, or round to the nearest token.
+// mem is the window's largest peak, a failed run's included, rounded up to a whole MiB.
+// Mutation: leave failed runs out of the peak, or round down (2764).
 func TestMemIsMaxRoundedUp(t *testing.T) {
 	r1, r2, r3 := run("x", 1), run("x", 2), run("x", 3)
 	r1.MemPeakKiB, r2.MemPeakKiB, r3.MemPeakKiB = gib(2.1), gib(2.7), gib(3.0)
@@ -59,8 +59,8 @@ func TestMemIsMaxRoundedUp(t *testing.T) {
 		t.Errorf("mem %d MiB, peak %d KiB; want 3072 and %d", s.Suggest.MemMiB, s.MemPeakKiB, *gib(3.0))
 	}
 	s = only(t, Summarize([]store.RunRecord{r2}))
-	if s.Suggest.MemMiB != 2816 {
-		t.Errorf("mem %d MiB, want 2816", s.Suggest.MemMiB)
+	if s.Suggest.MemMiB != 2765 {
+		t.Errorf("mem %d MiB, want 2765", s.Suggest.MemMiB)
 	}
 	s = only(t, Summarize([]store.RunRecord{run("x", 1)}))
 	if s.Suggest.MemMiB != 0 || s.MemPeakKiB != 0 {

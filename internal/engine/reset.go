@@ -5,8 +5,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 
 	"github.com/core-slot/coreslot/internal/store"
@@ -27,9 +25,8 @@ func (e *LiveError) Unwrap() error { return ErrRefused }
 
 // Reset removes the contents of the state directory except the format-stable files and the
 // configuration (`coreslot doctor --reset`): inside the admission section it checks that there are
-// no holds, no tickets, no other section holder and no locked tokens, and only then removes the
-// entries of queue/, holds/, cancel/ and log/, gen, FORMAT and degraded, keeping admit.lock, res/
-// and config.toml. It returns the number of entries removed.
+// no holds, no tickets and no other section holder, and only then removes the entries of queue/,
+// holds/, cancel/ and log/, gen, FORMAT and degraded, keeping admit.lock and config.toml. It returns the number of entries removed.
 //
 // When something is alive it removes nothing and returns a *LiveError naming it. A section that
 // ctx does not let it enter is one more live thing: another client is inside it. The state is
@@ -79,13 +76,6 @@ func (e *Engine) liveReasons(l store.LiveState) []string {
 	}
 	add("hold", store.HoldsDir, l.Holds)
 	add("ticket", store.QueueDir, l.Tickets)
-	if len(l.Tokens) > 0 {
-		var parts []string
-		for _, r := range slices.Sorted(maps.Keys(l.Tokens)) {
-			parts = append(parts, fmt.Sprintf("%s %d", r, l.Tokens[r]))
-		}
-		out = append(out, "locked tokens ("+strings.Join(parts, ", ")+")")
-	}
 	return out
 }
 

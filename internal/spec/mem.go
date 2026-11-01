@@ -7,9 +7,6 @@ import (
 	"strings"
 )
 
-// MemTokenMiB is the size of one token of the mem resource.
-const MemTokenMiB = 128
-
 var bytesRE = regexp.MustCompile(`^[0-9]{1,6}(\.[0-9]{1,3})?[GM]?$`)
 
 // ParseBytes parses a memory size: a number of at most six digits and three decimals, then G
@@ -32,17 +29,6 @@ func ParseBytes(s string) (int64, error) {
 	f, _ := strconv.ParseInt(frac, 10, 64)
 	milli := (w*1000 + f) * unit
 	return (milli + 999) / 1000, nil
-}
-
-// MemTokensCeil is the number of mem tokens a need of mib MiB asks for: rounded up, at most
-// MaxPerResource.
-func MemTokensCeil(mib int64) int {
-	return int(min((mib+MemTokenMiB-1)/MemTokenMiB, MaxPerResource))
-}
-
-// MemTokensFloor is the number of whole mem tokens in mib MiB, never below 0.
-func MemTokensFloor(mib int64) int {
-	return int(max(mib/MemTokenMiB, 0))
 }
 
 // FormatMiB shows a size for a person: MiB below 1 GiB, GiB with one decimal above it.

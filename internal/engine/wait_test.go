@@ -55,7 +55,7 @@ func TestElectionStopsAtFirstLiveTicket(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7)) // nobody is admitted
+	startHelper(t, "lock", dir, holdPath(t, dir, 8)) // nobody is admitted
 	const k = 20
 	var tks []*Ticket
 	for i := 0; i < k; i++ {
@@ -85,7 +85,7 @@ func TestConsecutiveStoppedTickets(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	// Each needs every token, so s cannot pass them while they are live (PROTOCOL.md section 10.3).
+	// Each needs the whole budget, so s cannot pass them while they are live (PROTOCOL.md section 10.3).
 	startHelper(t, "enqueue", dir, "mem=8") // the head, stopped
 	startHelper(t, "enqueue", dir, "mem=8") // the next, stopped
 	s := enqueue(t, e, need("mem=1"))
@@ -112,7 +112,7 @@ func TestStoppedHeadPassedByEverySuccessor(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "mem=8") // the head, stopped; needs every token, so none passes it
+	startHelper(t, "enqueue", dir, "mem=8") // the head, stopped; needs the whole budget, so none passes it
 	ws := []*Ticket{enqueue(t, e, need("mem=1")), enqueue(t, e, need("mem=1")), enqueue(t, e, need("mem=1"))}
 	admitted := map[int]int{} // waiter -> second
 	for sec := 0; sec <= 11 && len(admitted) < len(ws); sec++ {
@@ -252,7 +252,7 @@ func TestHeadRetriesOnBackoff(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, tokenPaths(dir, "mem", 0, 7)) // the head cannot be admitted
+	startHelper(t, "lock", dir, holdPath(t, dir, 8)) // the head cannot be admitted
 	tk := enqueue(t, e, need("mem=1"))
 	at := drive(t, clk, tk, 2*time.Second, func() {})
 	if len(at) < 2 || at[1] != HeadFirstBackoff {
@@ -310,8 +310,9 @@ func TestRefreshCadenceWhenDue(t *testing.T) {
 	}
 }
 
-// Holds are listed and probed only when asked for (Ticket.Holders, the CLI's waiting line), not
-// on the elections that follow a change of gen.
+// Holds are listed and probed only when asked for (Ticket.Holders, the CLI's waiting line) or by
+// an admission attempt, which reads the reservations, not on the elections that follow a change
+// of gen.
 func TestHoldersOnlyOnRequest(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -319,7 +320,10 @@ func TestHoldersOnlyOnRequest(t *testing.T) {
 	if !isAdmitted(step(t, enqueue(t, e, need("mem=1")))) { // a live hold
 		t.Fatal("not admitted on a free budget")
 	}
-	ahead := enqueue(t, e, need("mem=8")) // w cannot pass it (PROTOCOL.md section 10.3)
+	var ahead []*Ticket // a full front window: w never attempts to pass (PROTOCOL.md section 10.3)
+	for range FrontWindow {
+		ahead = append(ahead, enqueue(t, e, need("mem=8")))
+	}
 	w := enqueue(t, e, need("mem=1"))
 	work := countWaitWork(t)
 	for i := 0; i < 5; i++ {
@@ -330,8 +334,10 @@ func TestHoldersOnlyOnRequest(t *testing.T) {
 		if readGen(t, e) == before {
 			t.Fatal("gen did not change")
 		}
-		if err := ahead.refresh(clk.clock().Monotonic()); err != nil {
-			t.Fatal(err)
+		for _, a := range ahead {
+			if err := a.refresh(clk.clock().Monotonic()); err != nil {
+				t.Fatal(err)
+			}
 		}
 		step(t, w)
 		clk.advance(time.Second)

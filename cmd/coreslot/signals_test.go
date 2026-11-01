@@ -277,13 +277,11 @@ func gone(t *testing.T, pid int) func() bool {
 	return func() bool { return procState(t, pid) == "" }
 }
 
-// tokensFree checks that no token of mem 0..n-1 is locked.
-func tokensFree(t *testing.T, dir string, n int) {
+// budgetFree checks that no hold is live: the runs released what they reserved.
+func budgetFree(t *testing.T, dir string) {
 	t.Helper()
-	for i := 0; i < n; i++ {
-		if locked(t, dir, "mem", i) {
-			t.Errorf("token mem/%d is still locked", i)
-		}
+	if n := liveHolds(t, dir); n != 0 {
+		t.Errorf("%d holds are still live", n)
 	}
 }
 
@@ -310,7 +308,7 @@ func TestTermAndHupToWrapperTerminalMode(t *testing.T) {
 				t.Errorf("coreslot exited %d, want %d; terminal:\n%s", got, 128+int(sig), p.output())
 			}
 			waitFor(t, 10*time.Second, "the command's exit", gone(t, child))
-			tokensFree(t, dir, 2)
+			budgetFree(t, dir)
 		})
 	}
 }
@@ -336,7 +334,7 @@ func TestCtrlCTerminalReachesChildOnce(t *testing.T) {
 		t.Errorf("the command received %s SIGINTs, want exactly one", b)
 	}
 	waitFor(t, 10*time.Second, "the command's exit", gone(t, child))
-	tokensFree(t, dir, 2)
+	budgetFree(t, dir)
 }
 
 func TestCtrlZAndFg(t *testing.T) {
@@ -375,7 +373,7 @@ func TestCtrlZAndFg(t *testing.T) {
 	waitFor(t, 30*time.Second, "coreslot's exit", gone(t, cs))
 	sh.write(t, "echo rc=$?\n")
 	sh.waitOutput(t, "rc=0", 10*time.Second)
-	tokensFree(t, dir, 2)
+	budgetFree(t, dir)
 }
 
 // ---------------------------------------------------------------- non-terminal mode
@@ -438,7 +436,7 @@ func TestPipelineCtrlZAndFg(t *testing.T) {
 	if exit != float64(0) {
 		t.Errorf("coreslot's status was %v, want 0", exit)
 	}
-	tokensFree(t, dir, 2)
+	budgetFree(t, dir)
 }
 
 func TestPipelineCtrlCTerminatesChildGroup(t *testing.T) {
@@ -471,7 +469,7 @@ func TestPipelineCtrlCTerminatesChildGroup(t *testing.T) {
 	if exit != float64(130) {
 		t.Errorf("coreslot's status was %v, want 130", exit)
 	}
-	tokensFree(t, dir, 2)
+	budgetFree(t, dir)
 }
 
 func TestTermAndHupNonTerminal(t *testing.T) {
@@ -517,7 +515,7 @@ func signalNonTerminal(t *testing.T, sig syscall.Signal) {
 		t.Errorf("coreslot exited %d, want %d (stderr %q)", got, 128+int(sig), errb.String())
 	}
 	waitFor(t, 10*time.Second, "the command's exit", gone(t, child))
-	tokensFree(t, dir, 2)
+	budgetFree(t, dir)
 }
 
 // ---------------------------------------------------------------- the section
@@ -605,7 +603,7 @@ func sameGroupTree(t *testing.T, dir string, sameGroup bool, attrs *syscall.SysP
 }
 
 // A caller that stops a run by SIGKILLing its process group, from a session without a terminal,
-// reaches the whole command tree with --same-group and frees the grant's tokens: the command
+// reaches the whole command tree with --same-group and frees the grant's hold: the command
 // stays in coreslot's group, which SIGKILL reaches although coreslot cannot relay it.
 func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
@@ -618,10 +616,10 @@ func TestSameGroupKillpgReachesCommandTree(t *testing.T) {
 	}
 	waitFor(t, 10*time.Second, "the command's shell to die", gone(t, sh))
 	waitFor(t, 10*time.Second, "the grandchild to die", gone(t, gc))
-	// coreslot holds the tokens too, and its threads may still be exiting after its single-threaded
+	// coreslot keeps the hold too, and its threads may still be exiting after its single-threaded
 	// command tree is gone: its descriptors are closed once it is reaped.
 	_ = cmd.Wait()
-	tokensFree(t, dir, 2)
+	budgetFree(t, dir)
 }
 
 // A caller that SIGKILLs coreslot's group without --same-group leaves the command running in its
@@ -647,7 +645,7 @@ func TestOwnerExitedHoldHeldByDescendant(t *testing.T) {
 		t.Errorf("status --json holds %v, want one with owner_exited true", holds)
 	}
 	r := cli(t, baseEnv(dir), "doctor")
-	want := fmt.Sprintf("\nnote: a hold whose owner exited is held by a descendant ((no label), pid %d); its tokens free when that process exits\n", cmd.Process.Pid)
+	want := fmt.Sprintf("\nnote: a hold whose owner exited is held by a descendant ((no label), pid %d); its reservation frees when that process exits\n", cmd.Process.Pid)
 	if r.code != 0 || !strings.Contains(r.stdout, want) || !strings.Contains(r.stdout, "no problems found") {
 		t.Errorf("doctor exited %d, want 0 with %q and no problems:\n%s", r.code, strings.TrimSpace(want), r.stdout)
 	}

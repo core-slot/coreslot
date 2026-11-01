@@ -3,104 +3,60 @@
 package engine
 
 import (
-	"slices"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// stateDirOf reads CORESLOT_STATE_DIR from the context it is given, not from this process's
-// environment, and holds it to the rule of PROTOCOL.md section 4.1. Mutation: reading the process
-// environment for an unset variable reddens "unset".
-func TestStateDirOf(t *testing.T) {
-	t.Setenv(config.StateDirEnv, "/process/environment") // not the context's: it must not count
-	def, _, err := config.StateDirFrom(func(string) string { return "" })
-	if err != nil {
+// A run is inside its parent's reservation only when CORESLOT_HOLD names a hold that is live in
+// the state directory the context names (never this process's environment) and whose pid is an
+// ancestor. Mutations: skipping the probe reddens "dead"; skipping isAncestor reddens "not an
+// ancestor"; reading the process environment's CORESLOT_STATE_DIR reddens "live ancestor".
+func TestDecideNested(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, newFakeClock())
+	live := hold(t, e, need("mem=1")).HoldName()
+	deadName := wire.HoldName(7, 4321, 1, "dead") // a hold nobody locks, left by a killed run
+	if err := os.WriteFile(filepath.Join(dir, store.HoldsDir, deadName), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv(config.StateDirEnv, t.TempDir()) // not the context's: it must not count
+	livePID := func(name string) int { id, _ := wire.ParseName(name); return id.PID }(live)
+	ctx := func(hold string) []string {
+		return []string{config.StateDirEnv + "=" + dir, EnvHold + "=" + hold}
+	}
 	for _, tc := range []struct {
-		name string
-		env  map[string]string
-		dir  string
-		err  string
+		name     string
+		env      []string
+		ancestor bool
+		inside   bool
 	}{
-		{name: "unset", env: map[string]string{}, dir: def},
-		{name: "empty", env: map[string]string{config.StateDirEnv: ""}, dir: def},
-		{name: "absolute", env: map[string]string{config.StateDirEnv: "/srv//state/"}, dir: "/srv/state"},
-		{name: "relative", env: map[string]string{config.StateDirEnv: "state"},
-			err: `CORESLOT_STATE_DIR="state" is not an absolute path`},
+		{name: "live ancestor", env: ctx(live), ancestor: true, inside: true},
+		{name: "a later duplicate wins", env: append(ctx("x"), EnvHold+"="+live), ancestor: true, inside: true},
+		{name: "not an ancestor", env: ctx(live), ancestor: false},
+		{name: "dead", env: ctx(deadName), ancestor: true},
+		{name: "gone", env: ctx(wire.HoldName(5, livePID, 9, "gone")), ancestor: true},
+		{name: "not a hold name", env: ctx("../holds"), ancestor: true},
+		{name: "unset", env: []string{config.StateDirEnv + "=" + dir}, ancestor: true},
+		{name: "relative state directory", env: []string{config.StateDirEnv + "=state", EnvHold + "=" + live}, ancestor: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir, err := stateDirOf(tc.env)
-			if tc.err != "" {
-				if err == nil || err.Error() != tc.err {
-					t.Fatalf("stateDirOf(%v) = %q, %v; want the error %q", tc.env, dir, err, tc.err)
-				}
-				return
+			asked := 0
+			inside, _ := DecideNested(tc.env, func(pid int) bool {
+				asked = pid
+				return tc.ancestor
+			})
+			if inside != tc.inside {
+				t.Fatalf("DecideNested(%v) inside %v, want %v", tc.env, inside, tc.inside)
 			}
-			if err != nil || dir != tc.dir {
-				t.Fatalf("stateDirOf(%v) = %q, %v; want %q", tc.env, dir, err, tc.dir)
-			}
-		})
-	}
-}
-
-// The order of PROTOCOL.md section 18: independent first, then CORESLOT_UNBUDGETED (rule 1), then
-// CORESLOT_TOKEN_FDS (rule 2), an empty variable counting as unset. Mutation: checking
-// CORESLOT_TOKEN_FDS before CORESLOT_UNBUDGETED reddens "both set"; ignoring independent reddens
-// "independent".
-func TestDecideNested(t *testing.T) {
-	bad := "999999999" // never an open descriptor: the context does not validate
-	for _, tc := range []struct {
-		name        string
-		env         map[string]string
-		independent bool
-		kind        NestedKind
-		err         bool
-	}{
-		{name: "nothing", env: map[string]string{}, kind: NotNested},
-		{name: "empty variables", env: map[string]string{EnvUnbudgeted: "", EnvTokenFDs: ""}, kind: NotNested},
-		{name: "unbudgeted", env: map[string]string{EnvUnbudgeted: "why"}, kind: NestedUnbudgeted},
-		{name: "both set", env: map[string]string{EnvUnbudgeted: "format", EnvTokenFDs: bad}, kind: NestedUnbudgeted},
-		{name: "invalid grant", env: map[string]string{EnvTokenFDs: bad}, err: true},
-		{name: "independent", env: map[string]string{EnvUnbudgeted: "why", EnvTokenFDs: bad}, independent: true, kind: NotNested},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			n, err := DecideNested(tc.env, tc.independent, "")
-			if (err != nil) != tc.err || (err == nil && n.Kind != tc.kind) {
-				t.Fatalf("DecideNested(%v, %v) = %+v, %v; want kind %d, error %v", tc.env, tc.independent, n, err, tc.kind, tc.err)
-			}
-			if n.Kind == NestedUnbudgeted && n.Reason != tc.env[EnvUnbudgeted] {
-				t.Errorf("reason %q, want %q", n.Reason, tc.env[EnvUnbudgeted])
+			if tc.inside && asked != livePID {
+				t.Errorf("isAncestor asked about pid %d, want the hold's %d", asked, livePID)
 			}
 		})
-	}
-}
-
-// The bound of CORESLOT_TOKEN_FDS (PROTOCOL.md sections 6 and 17): at most 512 descriptors, in
-// one range or several, and a list naming more is refused before any range is expanded.
-func TestTokenFDsBoundIs512(t *testing.T) {
-	for _, s := range []string{"4-515", "4-259,300-555"} {
-		if fds, err := ParseTokenFDs(s); err != nil || len(fds) != 512 {
-			t.Errorf("ParseTokenFDs(%q) = %d fds, %v; want 512", s, len(fds), err)
-		}
-	}
-	for _, s := range []string{"4-516", "4-259,300-556", "0-99999999999999", "0-999999999"} {
-		if fds, err := ParseTokenFDs(s); err == nil {
-			t.Errorf("ParseTokenFDs(%q) = %d fds, want a refusal", s, len(fds))
-		}
-	}
-}
-
-// A list naming one descriptor twice, directly or through overlapping ranges, does not parse.
-func TestTokenFDsNamingADescriptorTwice(t *testing.T) {
-	for _, s := range []string{"4,4", "4-6,5", "4-6,6-8", "4-4,4"} {
-		if fds, err := ParseTokenFDs(s); err == nil {
-			t.Errorf("ParseTokenFDs(%q) = %v, want a refusal", s, fds)
-		}
-	}
-	if fds, err := ParseTokenFDs("4-6,8,7"); err != nil || !slices.Equal(fds, []int{4, 5, 6, 8, 7}) {
-		t.Errorf("ParseTokenFDs(4-6,8,7) = %v, %v; want 4 5 6 8 7 in the order listed", fds, err)
 	}
 }
 

@@ -7,15 +7,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -24,13 +22,10 @@ const (
 	exitProblems = 1
 	// resetWait is how long --reset waits to enter the admission section before it refuses.
 	resetWait = time.Second
-	// wantDescriptors is what a grant of the largest size needs open at once: up to 512
-	// tokens, the hold, the ticket, the lock and the standard streams, with margin.
-	wantDescriptors = 600
 )
 
 // doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
-// permissions, format, the configuration, the descriptor limits and the degraded record, and
+// permissions, format, the configuration and the degraded record, and
 // reports every finding. --clear removes the degraded record. --reset empties the state, but only
 // when nothing is live and FORMAT names no format this client does not implement (PROTOCOL.md
 // section 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
@@ -95,7 +90,7 @@ func doctorAct(doReset bool, loc location, io IO) int {
 		case err != nil:
 			return doctorFailed(what, err, io)
 		}
-		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock, res/ and config.toml\n", removed)
+		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock and config.toml\n", removed)
 		return 0
 	}
 	why, err := formatRefusal(e.Store())
@@ -222,25 +217,8 @@ func doctorReport(loc location, io IO) int {
 			state = "absent, the defaults apply"
 		}
 		line("configuration: %s (%s)", text(cfgPath), state)
-		for _, name := range slices.Sorted(maps.Keys(rep.Resources)) {
-			ri := rep.Resources[name]
-			line("resource %s: size %s, locked %s, free %s", name, amount(name, ri.Size), amount(name, ri.Locked), amount(name, ri.Available))
-		}
-	}
-
-	var lim syscall.Rlimit
-	if gerr := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); gerr != nil {
-		problem("descriptor limits: %v", gerr)
-	} else {
-		// The soft limit doctor was started with, the one a run started here would add 256 to;
-		// getrlimit reports the limit the Go runtime raised it to (rlimit_unix.go).
-		soft, hard := startNofileProbe().originalNofile(), uint64(lim.Max)
-		line("descriptor limit: soft %s, hard %s; a grant of 512 tokens needs about %d", limitText(soft), limitText(hard), wantDescriptors)
-		if hard < wantDescriptors {
-			problem("the hard descriptor limit %s is below %d: a large grant cannot be held", limitText(hard), wantDescriptors)
-		} else if soft < wantDescriptors {
-			line("note: the soft limit is below %d; coreslot run gives its command %d more, within the hard limit", wantDescriptors, extraNofile)
-		}
+		m := rep.Mem
+		line("mem: size %s, reserved %s, free %s", spec.FormatMiB(m.SizeMiB), spec.FormatMiB(m.ReservedMiB), spec.FormatMiB(m.FreeMiB))
 	}
 
 	if err == nil {
@@ -262,7 +240,7 @@ func doctorReport(loc location, io IO) int {
 		}
 		for _, h := range rep.Holds {
 			if h.OwnerExited { // a designed state, not a problem: the command keeps its inherited grant
-				line("note: a hold whose owner exited is held by a descendant (%s, pid %d); its tokens free when that process exits",
+				line("note: a hold whose owner exited is held by a descendant (%s, pid %d); its reservation frees when that process exits",
 					labelText(h.Label), h.PID)
 			}
 		}
@@ -280,12 +258,4 @@ func doctorReport(loc location, io IO) int {
 	}
 	line("no problems found")
 	return 0
-}
-
-// limitText prints a descriptor limit, "unlimited" for the infinite one.
-func limitText(n uint64) string {
-	if n >= 1<<62 {
-		return "unlimited"
-	}
-	return fmt.Sprint(n)
 }

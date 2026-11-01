@@ -71,8 +71,7 @@ func summarize(label string, n int, window []store.RunRecord) Stats {
 			s.MemPeakKiB, s.MemPeakSource, s.PeakAfterS = *r.MemPeakKiB, r.MemPeakSource, r.PeakAfterS
 		}
 	}
-	const tokenKiB = spec.MemTokenMiB * 1024
-	s.Suggest.MemMiB = (s.MemPeakKiB + tokenKiB - 1) / tokenKiB * spec.MemTokenMiB
+	s.Suggest.MemMiB = (s.MemPeakKiB + 1023) / 1024
 	s.Suggest.Reason = s.reason()
 	return s
 }

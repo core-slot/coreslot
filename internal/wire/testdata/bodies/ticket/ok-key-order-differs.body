@@ -1,1 +1,1 @@
-{"created_ns":5,"need":{"mem":[1,2]},"priority":0,"label":"x"}
+{"created_ns":5,"need_mib":128,"priority":0,"label":"x"}

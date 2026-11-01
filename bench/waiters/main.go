@@ -67,9 +67,9 @@ func benchMain(args []string) int {
 	fs.DurationVar(&p.Duration, "duration", gateDuration, "measured window per run")
 	fs.IntVar(&p.Runs, "runs", gateRuns, "runs")
 	fs.DurationVar(&p.BurstEvery, "burst-every", 10*time.Second, "interval between bursts")
-	fs.IntVar(&p.Size, "size", 8, "mem budget size in tokens; the harness holds all of it between bursts")
-	fs.IntVar(&p.Release, "release", 4, "tokens the harness releases at each burst (admissions)")
-	fs.DurationVar(&p.AdmitWindow, "admit-window", 3*time.Second, "how long released tokens stay free")
+	fs.IntVar(&p.Size, "size", 8, "mem budget in waiters' needs; the harness holds all of it between bursts")
+	fs.IntVar(&p.Release, "release", 4, "waiters' needs the harness frees at each burst (admissions)")
+	fs.DurationVar(&p.AdmitWindow, "admit-window", 3*time.Second, "how long the freed needs stay free")
 	fs.IntVar(&p.Cancel, "cancel", 5, "cancel requests (`coreslot cancel <id>`) per burst")
 	fs.IntVar(&p.Withdraw, "withdraw", 5, "withdrawals (SIGTERM, the waiter's Wait context ends) per burst")
 	fs.IntVar(&p.Stall, "stall", 3, "waiters stopped (SIGSTOP) per burst: "+
@@ -107,7 +107,7 @@ func benchMain(args []string) int {
 	fmt.Printf("host: %s; %d logical CPUs; %s; %s %s/%s; waiter GOMAXPROCS default\n",
 		h.Model, h.CPUs, h.OS, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 	fmt.Printf("setup: %d waiters (mem=1 each), budget mem=%d held by the harness, window %s per run, "+
-		"a burst every %s: refill arrivals, %d tokens released for %s, %d cancel requests, %d withdrawals, "+
+		"a burst every %s: refill arrivals, %d needs freed for %s, %d cancel requests, %d withdrawals, "+
 		"%d stopped for %s (the first stall candidate in queue order, plus random candidates)\n",
 		p.N, p.Size, p.Duration, p.BurstEvery, p.Release, p.AdmitWindow, p.Cancel, p.Withdraw, p.Stall, p.StallFor)
 	fmt.Println("cpu accounting: per-waiter wait4 rusage (user+sys) minus each pre-window waiter's own " +

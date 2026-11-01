@@ -7,14 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -166,7 +165,7 @@ func (r *run) waitingLine(w engine.Waiting, holders []engine.HolderInfo, waited 
 }
 
 // pipeNote is what the first waiting line adds when the run's stdin is a pipe: the command
-// writing it may be a stage of the same pipeline that holds the tokens this run waits for, and
+// writing it may be a stage of the same pipeline that holds the memory this run waits for, and
 // blocks on the full pipe until this run reads it, so the two wait on each other until a
 // timeout. coreslot cannot see the other end of a pipe, so it says so once rather than deciding.
 func (r *run) pipeNote() string {
@@ -177,7 +176,7 @@ func (r *run) pipeNote() string {
 	if fi, err := r.io.Stdin.Stat(); err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
 		return ""
 	}
-	return "; stdin is a pipe: if the command writing it holds tokens, it may be waiting for this run " +
+	return "; stdin is a pipe: if the command writing it holds a grant, it may be waiting for this run " +
 		"to read; run the whole pipeline under one coreslot run"
 }
 
@@ -208,21 +207,19 @@ func holderList(holders []engine.HolderInfo, nowNS int64) string {
 		if label == "" {
 			label = "(no label)"
 		}
-		var grant []string
-		for _, name := range slices.Sorted(maps.Keys(h.Grant)) {
-			if name == "mem" {
-				grant = append(grant, "mem "+amount(name, h.Grant[name]))
-			} else {
-				grant = append(grant, name+amount(name, h.Grant[name]))
-			}
-		}
-		if h.Unbudgeted {
-			grant = append(grant, "unbudgeted")
-		}
-		parts = append(parts, fmt.Sprintf("%s pid %d %s (%s)", label, h.PID, strings.Join(grant, " "),
+		parts = append(parts, fmt.Sprintf("%s pid %d %s (%s)", label, h.PID, holdNeed(h),
 			duration(time.Duration(nowNS-h.StartNS))))
 	}
 	return "; holders: " + strings.Join(parts, ", ")
+}
+
+// holdNeed is what a hold reserves for a person: `mem 3 GiB`, or `unbudgeted` for a run outside
+// the budget, which reserves nothing.
+func holdNeed(h engine.HolderInfo) string {
+	if h.NeedMiB == 0 {
+		return "unbudgeted"
+	}
+	return "mem " + spec.FormatMiB(h.NeedMiB)
 }
 
 // duration is a coarse duration: 12s, 3m12s, 1h02m03s.

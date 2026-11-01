@@ -10,11 +10,11 @@ import (
 
 // TestTraceLiveMemStaticSizeWaits: a CLI run is admitted above the static mem size from free
 // memory, and a run that sizes mem statically (live sizing was switched off by then) waits for
-// it. Static mem is 1 GiB (8 tokens) and the headroom is pinned at 4096 MiB, so the first run's
-// 2 GiB (16 tokens) gets a live size of 32 and runs unclamped; the second run's 128 MiB then finds
-// 16 locked above its size of 8 and stays queued until the first exits.
+// it. Static mem is 1 GiB and the headroom is pinned at 4096 MiB, so the first run's 2 GiB gets
+// a live capacity of 4 GiB and runs unclamped; the second run's 128 MiB then finds 2 GiB reserved
+// above its size of 1 GiB and stays queued until the first exits.
 //
-// Mutation: attemptSizes returning the static sizes clamps the run to 8 tokens, so it prints 1024
+// Mutation: capacityFor returning the static size clamps the run to 1 GiB, so it prints 1024
 // instead of 2048.
 func TestTraceLiveMemStaticSizeWaits(t *testing.T) {
 	e := State(t)
@@ -28,7 +28,7 @@ func TestTraceLiveMemStaticSizeWaits(t *testing.T) {
 	waiter := e.Run("static", "--mem", "128M")
 	e.WaitTicket("static")
 	for !run.Exited() {
-		noHold(t, e, "static", "the first run holds 16 mem tokens above the static size of 8")
+		noHold(t, e, "static", "the first run reserves 2 GiB above the static size of 1 GiB")
 		time.Sleep(100 * time.Millisecond)
 	}
 	run.ExitCode(0)

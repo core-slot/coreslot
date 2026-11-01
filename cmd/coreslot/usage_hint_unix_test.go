@@ -8,12 +8,11 @@ import (
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/engine"
-	"github.com/core-slot/coreslot/internal/spec"
 )
 
-// The memory hint names a peak that outgrew the mem grant by more than one token, or a big peak
+// The memory hint names a peak that outgrew the mem grant by more than memHintSlack, or a big peak
 // with no mem need, and the stats command for the label. Mutation: comparing the peak
-// with the grant without the one-token slack turns the 2.1 GiB row red.
+// with the grant without the slack turns the 2.1 GiB row red.
 func TestMemHint(t *testing.T) {
 	const gib = 1024 * 1024 // KiB
 	for _, c := range []struct {
@@ -40,12 +39,10 @@ func TestMemHint(t *testing.T) {
 	}
 }
 
-// The waiting line shows a mem need in bytes, and a holder's mem grant too. Mutation: amount
-// printing tokens for mem turns it red.
+// The waiting line shows a mem need in bytes, and a holder's need too.
 func TestWaitingLineMem(t *testing.T) {
-	need := map[string]spec.Range{"mem": {Min: 24, Max: 24}}
-	holders := []engine.HolderInfo{{Label: "gate", PID: 4711, Grant: map[string]int{"mem": 8}}}
-	r := &run{o: runOptions{need: need}}
+	holders := []engine.HolderInfo{{Label: "gate", PID: 4711, NeedMiB: 1024}}
+	r := &run{o: runOptions{need: 3072}}
 	line := r.waitingLine(engine.Waiting{Position: 1}, holders, 0)
 	for _, want := range []string{"waiting for mem 3 GiB: ", "gate pid 4711 mem 1 GiB ("} {
 		if !strings.Contains(line, want) {
@@ -68,17 +65,16 @@ func TestPipeNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	need := map[string]spec.Range{"mem": {Min: 8, Max: 8}}
 	w := engine.Waiting{Position: 2}
 
-	r := &run{o: runOptions{need: need}, io: IO{Stdin: rd}}
+	r := &run{o: runOptions{need: 1024}, io: IO{Stdin: rd}}
 	if first := r.waitingLine(w, nil, 0); !strings.Contains(first, "; stdin is a pipe: ") {
 		t.Errorf("first line with a pipe on stdin: %q", first)
 	}
 	if second := r.waitingLine(w, nil, 0); strings.Contains(second, "pipe") {
 		t.Errorf("second line repeats the note: %q", second)
 	}
-	r = &run{o: runOptions{need: need}, io: IO{Stdin: file}}
+	r = &run{o: runOptions{need: 1024}, io: IO{Stdin: file}}
 	if line := r.waitingLine(w, nil, 0); strings.Contains(line, "pipe") {
 		t.Errorf("a file on stdin got the pipe note: %q", line)
 	}

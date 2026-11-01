@@ -3,18 +3,16 @@
 package engine
 
 import (
-	"maps"
 	"path/filepath"
 
 	"github.com/core-slot/coreslot/internal/memsample"
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/testhooks"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// liveMem is the seam for the live size's readings; tests replace it. Under the test hook's
+// liveMem is the seam for the live capacity's readings; tests replace it. Under the test hook's
 // headroom it measures no tree.
 var liveMem = struct {
 	headroom func() (mib int64, ok bool)
@@ -38,51 +36,49 @@ var liveMem = struct {
 	},
 }
 
-// attemptSizes returns the sizes for this attempt: sizes unchanged unless the request's mem is
-// fixed, live (the LiveMem of the configuration sizes came from) is on, mem is declared and
-// sizes["mem"]-locked["mem"] is below its min; then mem's size is state.LiveMemSize over the live
-// holds, read inside the section the caller is in. A failed headroom read or listing of holds/
-// leaves sizes unchanged; a failed process listing or use read counts the holds it touches
-// whole. It never returns an error.
-func (e *Engine) attemptSizes(need map[string]spec.Range, sizes, locked map[string]int, live bool) (out map[string]int, raised bool) {
-	r, requested := need["mem"]
-	static, declared := sizes["mem"]
-	if !live || !requested || !declared || r.Min != r.Max || static-locked["mem"] >= r.Min {
-		return sizes, false
+// capacityFor is mem's capacity, in MiB, for an attempt of need beside the live holds, which
+// reserve reserved: the configured sizeMiB, unless live sizing is on and need does not fit in
+// what the holds leave of it; then the reservations plus the room the holds leave of the
+// headroom (state.Room), when that is more (raised). A failed headroom read keeps sizeMiB.
+func capacityFor(sizeMiB int64, live bool, holds []memHold, reserved, need int64) (capacity int64, raised bool) {
+	if !live || reserved+need <= sizeMiB {
+		return sizeMiB, false
 	}
 	headroom, ok := liveMem.headroom()
 	if !ok {
-		return sizes, false
+		return sizeMiB, false
 	}
-	holds, ok := liveMemHolds(e.st)
-	if !ok {
-		return sizes, false
+	if c := reserved + state.Room(headroom, measure(holds)); c > sizeMiB {
+		return c, true
 	}
-	size, raised := state.LiveMemSize(static, locked["mem"], headroom, measure(holds))
-	if !raised {
-		return sizes, false
-	}
-	out = maps.Clone(sizes)
-	out["mem"] = size
-	return out, true
+	return sizeMiB, false
 }
 
-// memHold is one live hold as the live size reads it.
+// memHold is one live hold as admission reads it.
 type memHold struct {
-	pid     int
-	startNS int64
-	tree    bool
-	tokens  int // mem tokens it lists
+	pid       int
+	startNS   int64
+	tree      bool
+	needMiB   int64
+	footprint int64 // MiB, as its run last wrote it
 }
 
-// liveMemHolds lists holds/ and returns the live holds, a lock probe each, as Ticket.Holders
-// does; malformed and stray holds are left out, so their tokens count as unlisted. ok is false
-// when holds/ or a body could not be read. It takes no lock of its own: admit runs under stepMu,
-// which Ticket.Holders takes.
-func liveMemHolds(st *store.Store) ([]memHold, bool) {
+// reservedMiB is what holds reserve: the sum of their needs.
+func reservedMiB(holds []memHold) int64 {
+	var n int64
+	for _, h := range holds {
+		n += h.needMiB
+	}
+	return n
+}
+
+// liveHolds lists holds/ and returns the live holds, a lock probe each, as Ticket.Holders does;
+// malformed and stray holds are left out. It fails when holds/ or a body cannot be read. It takes
+// no lock of its own: admit runs under stepMu, which Ticket.Holders takes.
+func liveHolds(st *store.Store) ([]memHold, error) {
 	entries, _, err := st.List(store.HoldsDir)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	var live []memHold
 	for _, en := range entries {
@@ -91,7 +87,7 @@ func liveMemHolds(st *store.Store) ([]memHold, bool) {
 			continue
 		}
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
 		info := holderInfo(en, body)
 		if info == nil {
@@ -102,15 +98,17 @@ func liveMemHolds(st *store.Store) ([]memHold, bool) {
 			continue
 		}
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
-		live = append(live, memHold{pid: info.PID, startNS: info.StartNS, tree: info.Tree, tokens: info.Grant["mem"]})
+		live = append(live, memHold{pid: info.PID, startNS: info.StartNS, tree: info.Tree,
+			needMiB: info.NeedMiB, footprint: info.FootprintMiB})
 	}
-	return live, true
+	return live, nil
 }
 
-// measure turns holds into the live size's input: a hold listing mem tokens is measured, less
-// every other live hold's subtree, when it alone claims its pid's tree; else it counts whole.
+// measure turns holds into the room's input: a hold that reserves memory is measured, less every
+// other live hold's subtree, when it alone claims its pid's tree; otherwise its footprint is the
+// one its body carries.
 func measure(holds []memHold) []state.MemHold {
 	claims := make(map[int]int)
 	stop := make(map[int]bool, len(holds))
@@ -122,7 +120,7 @@ func measure(holds []memHold) []state.MemHold {
 	}
 	roots := make(map[int]int64)
 	for _, h := range holds {
-		if h.tree && claims[h.pid] == 1 && h.tokens > 0 {
+		if h.tree && claims[h.pid] == 1 && h.needMiB > 0 {
 			roots[h.pid] = h.startNS
 		}
 	}
@@ -132,14 +130,14 @@ func measure(holds []memHold) []state.MemHold {
 	}
 	out := make([]state.MemHold, 0, len(holds))
 	for _, h := range holds {
-		if h.tokens == 0 {
+		if h.needMiB == 0 {
 			continue
 		}
-		used := int64(-1)
+		fp := h.footprint
 		if kib, ok := use[h.pid]; ok && h.tree && claims[h.pid] == 1 {
-			used = kib
+			fp = kib / 1024
 		}
-		out = append(out, state.MemHold{Tokens: h.tokens, UsedKiB: used})
+		out = append(out, state.MemHold{NeedMiB: h.needMiB, FootprintMiB: fp})
 	}
 	return out
 }

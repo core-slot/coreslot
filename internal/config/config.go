@@ -38,8 +38,8 @@ func (e *Error) Unwrap() error { return e.Err }
 type sizeKind int
 
 const (
-	sizeMemPercent sizeKind = iota // N% of physical memory, in whole mem tokens
-	sizeMemMiB                     // n MiB, in whole mem tokens
+	sizeMemPercent sizeKind = iota // N% of physical memory
+	sizeMemMiB                     // n MiB
 )
 
 // SizeExpr is a configured size; Resolve turns it into a size for a machine.
@@ -64,13 +64,13 @@ func ReadMachine() (Machine, error) {
 	return Machine{MemMiB: mib}, nil
 }
 
-// Resolve returns the size in mem tokens on machine m, rounded down, within [1, spec.MaxSize].
-func (s SizeExpr) Resolve(m Machine) int {
-	v := spec.MemTokensFloor(int64(s.n))
+// Resolve returns the size in MiB on machine m, rounded down, at least 1.
+func (s SizeExpr) Resolve(m Machine) int64 {
+	v := int64(s.n)
 	if s.kind == sizeMemPercent {
-		v = spec.MemTokensFloor(m.MemMiB * int64(s.n) / 100)
+		v = m.MemMiB * v / 100
 	}
-	return min(max(v, 1), spec.MaxSize)
+	return max(v, 1)
 }
 
 // ParseMemSize parses the size of the mem resource: an integer is GiB; a string is "N%" of
@@ -181,7 +181,5 @@ func parse(data string) (Config, string) {
 	return c, ""
 }
 
-// Sizes resolves the budget on machine m: the mem resource, in tokens.
-func (c Config) Sizes(m Machine) map[string]int {
-	return map[string]int{"mem": c.Mem.Resolve(m)}
-}
+// MemMiB resolves the budget on machine m, in MiB.
+func (c Config) MemMiB(m Machine) int64 { return c.Mem.Resolve(m) }

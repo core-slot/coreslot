@@ -164,30 +164,6 @@ func (o object) smallInt(key string) (int, error) {
 	return int(n), nil
 }
 
-func (o object) object(key string) (map[string]any, error) {
-	v, err := o.get(key)
-	if err != nil {
-		return nil, err
-	}
-	m, ok := v.(map[string]any)
-	if !ok {
-		return nil, malformed("%q is not an object", key)
-	}
-	return m, nil
-}
-
-func (o object) array(key string) ([]any, error) {
-	v, err := o.get(key)
-	if err != nil {
-		return nil, err
-	}
-	a, ok := v.([]any)
-	if !ok {
-		return nil, malformed("%q is not an array", key)
-	}
-	return a, nil
-}
-
 // checkSurrogates refuses a `\uD800`-`\uDBFF` escape not immediately followed by a
 // `\uDC00`-`\uDFFF` escape, and a `\uDC00`-`\uDFFF` escape not preceded by one. body is valid JSON,
 // so a backslash is always the start of an escape of a string and the escaped character after

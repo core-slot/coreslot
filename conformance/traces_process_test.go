@@ -169,15 +169,15 @@ func ticks(e Env, name string) int64 {
 	return fi.Size()
 }
 
-// settled checks that nothing a run published is left: no hold, live or dead, no ticket, no
-// locked mem token.
+// settled checks that nothing a run published is left: no hold, live or dead, no ticket, nothing
+// reserved.
 func settled(t *testing.T, e Env) {
 	t.Helper()
 	e.SectionLeft()
 	rep := e.Status()
-	if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || rep.Resources["mem"].Locked != 0 {
-		t.Errorf("left behind: holds %v, dead holds %v, tickets %v, %d mem tokens locked",
-			rep.Holds, rep.DeadHolds, rep.Tickets, rep.Resources["mem"].Locked)
+	if len(rep.Holds) != 0 || len(rep.DeadHolds) != 0 || len(rep.Tickets) != 0 || rep.Mem.ReservedMiB != 0 {
+		t.Errorf("left behind: holds %v, dead holds %v, tickets %v, %d MiB reserved",
+			rep.Holds, rep.DeadHolds, rep.Tickets, rep.Mem.ReservedMiB)
 	}
 }
 
@@ -198,14 +198,14 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 	r := e.WaitStarted("inner")
 	e.SectionLeft()
 	rep := e.Status()
-	if len(rep.Holds) != 1 || rep.Holds[0].Label != "parent" || !rep.Holds[0].Unbudgeted || len(rep.Tickets) != 0 {
+	if len(rep.Holds) != 1 || rep.Holds[0].Label != "parent" || rep.Holds[0].NeedMiB != 0 || len(rep.Tickets) != 0 {
 		t.Errorf("holds %+v, tickets %v: want only the parent's unbudgeted hold", rep.Holds, rep.Tickets)
 	}
 	if rep.Degraded == nil || rep.Degraded.Count != 1 {
 		t.Errorf("degraded %+v, want one fail-open recorded", rep.Degraded)
 	}
 	reason := r.Env["CORESLOT_UNBUDGETED"]
-	if r.Env["CORESLOT_GRANTED_MEM"] != "384" || reason == "" || reason == "format" || r.Env["CORESLOT_TOKEN_FDS"] != "" {
+	if r.Env["CORESLOT_GRANTED_MEM"] != "384" || reason == "" || reason == "format" {
 		t.Errorf("the nested command's environment %v: want mem 384 and the parent's reason", r.Env)
 	}
 	if rep.Degraded != nil && rep.Degraded.Reason != reason {
@@ -236,109 +236,30 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 	}
 }
 
-// A run nested under a launcher that closed the grant's descriptors refuses at once, with a
-// diagnostic naming the cause, instead of queueing behind a parent that holds the whole
-// budget; so does one whose inherited token descriptors are open but no longer locked (the
-// parent is gone).
-//
-// Mutation: a context that does not validate falls back to an ordinary request (decide queues
-// instead of refusing): a ticket appears behind the parent.
-func TestDescriptorClosingLauncherRefuses(t *testing.T) {
-	t.Run("launcher closed a descriptor", func(t *testing.T) {
-		e := State(t)
-		e.WriteConfig(memConfig(4))
-		p := e.Start("run", "--label", "parent", "--mem", "512M", "--", "sh", "-c", `
-			: > "$2/start"
-			sh -c 'exec 4>&-; exec "$0" run --label inner -- "$1" hold "$2" inner' "$0" "$1" "$2"
-			echo $? > "$2/code.partial"; mv "$2/code.partial" "$2/code"
-			exec "$1" hold "$2" parent`, bins.coreslot, bins.child, e.MarkDir)
-		// The parent's own ticket stays in queue/ until its admitting section, which publishes
-		// the hold before it unlinks the ticket, has left; refused fails on any ticket it sees.
-		e.WaitHold("parent", startWait)
-		e.SectionLeft()
-		refused(t, e, filepath.Join(e.MarkDir, "start"))
-		if !strings.Contains(p.Stderr(), "descriptor 4 of CORESLOT_TOKEN_FDS") || !strings.Contains(p.Stderr(), "closed") ||
-			!strings.Contains(p.Stderr(), "--independent") {
-			t.Errorf("stderr %q: want a diagnostic naming the closed descriptor and --independent", p.Stderr())
-		}
-		e.WaitStarted("parent")
-		e.ReleaseChild("parent")
-		p.ExitCode(0)
-	})
-
-	t.Run("parent gone", func(t *testing.T) {
-		e := State(t)
-		e.WriteConfig(memConfig(4))
-		e.Start("run", "--mem", "512M", "--", "true").ExitCode(0) // the token files exist
-		p := e.StartCommand("sh", "-c", `
-			: > "$2/start"
-			exec 4<"$3/res/mem/0" 5<"$3/res/mem/1"
-			CORESLOT_TOKEN_FDS=4-5 CORESLOT_GRANTED_MEM=2 "$0" run --label inner -- "$1" hold "$2" inner
-			echo $? > "$2/code.partial"; mv "$2/code.partial" "$2/code"`, bins.coreslot, bins.child, e.MarkDir, e.Dir)
-		refused(t, e, filepath.Join(e.MarkDir, "start"))
-		p.ExitCode(0)
-		if !strings.Contains(p.Stderr(), "does not validate") {
-			t.Errorf("stderr %q: want the refusal's diagnostic", p.Stderr())
-		}
-	})
-}
-
-// refused waits for the nested run's exit code in $M/code, failing at once if a ticket is
-// published meanwhile, and checks that the run refused without running its command.
-func refused(t *testing.T, e Env, start string) {
-	t.Helper()
-	code := filepath.Join(e.MarkDir, "code")
-	e.Eventually(startWait, "the nested run ends", func() bool {
-		if tks := e.Status().Tickets; len(tks) != 0 {
-			t.Fatalf("the nested run queued instead of refusing: tickets %v", tks)
-		}
-		if _, ok := e.Started("inner"); ok {
-			t.Fatal("the nested run's command runs: it was admitted instead of refusing")
-		}
-		_, err := os.Stat(code)
-		return err == nil
-	})
-	data, err := os.ReadFile(code)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.TrimSpace(string(data)); got != strconv.Itoa(exitRefusal) {
-		t.Errorf("the nested run exited %s, want %d", got, exitRefusal)
-	}
-	if _, ok := e.Started("inner"); ok {
-		t.Error("the nested run's command ran")
-	}
-	st, err1 := os.Stat(start)
-	en, err2 := os.Stat(code)
-	if err1 == nil && err2 == nil {
-		t.Logf("the nested run refused %v after the launcher started it", en.ModTime().Sub(st.ModTime()))
-	}
-}
-
 // ---------------------------------------------------------------- grant truth
 
-// A 1-token request on a free 8-token resource takes one token and leaves 7 acquirable (I2):
-// a 7-token request is then admitted at once, and nothing more is.
+// A 1-unit request on a free 8-unit budget reserves one unit and leaves 7 (I2): a 7-unit
+// request is then admitted at once, and nothing more is.
 //
-// Mutation: the extra pass ignores the request's max (state.fill's room is free - take): the
-// 1-token request takes all 8.
+// Mutation: the hold reserves the capacity instead of the need (publishHold given capacity):
+// the 1-unit request reserves all 8.
 func TestOneOfEightLeavesSeven(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(8))
 	one := e.Run("one", "--mem", "128M")
 	r := e.WaitStarted("one")
 	h := e.WaitHold("one", startWait)
-	if h.Grant["mem"] != 1 || r.Env["CORESLOT_GRANTED_MEM"] != "128" || !slices.Equal(indices(e, "one"), []int{0}) {
-		t.Fatalf("hold %+v (indices %v), environment %v: want one token, index 0", h, indices(e, "one"), r.Env)
+	if h.NeedMiB != 128 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
+		t.Fatalf("hold %+v, environment %v: want one unit", h, r.Env)
 	}
-	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
-	if free := e.Status().Resources["mem"].Available; free != 7 {
-		t.Errorf("Available(mem) = %d; want 7", free)
+	checkDescriptors(t, e, r, h.Name)
+	if free := e.Status().Mem.FreeMiB; free != 7*128 {
+		t.Errorf("free %d MiB; want 7 units", free)
 	}
 	seven := e.Run("seven", "--no-wait", "--mem", "896M")
-	e.WaitStarted("seven") // no snapshot probes the tokens while seven takes them
-	if got := indices(e, "seven"); !slices.Equal(got, span(1, 7)) {
-		t.Errorf("seven holds %v, want 1-7", got)
+	e.WaitStarted("seven")
+	if got := stableReserved(e); got != 8 {
+		t.Errorf("%d units reserved, want 8", got)
 	}
 	e.Start("run", "--no-wait", "--", "true").ExitCode(exitRefusal)
 	for _, p := range []*Proc{one, seven} {
@@ -348,16 +269,16 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 	settled(t, e)
 }
 
-// A command that closes every descriptor of its grant while the run lives keeps the grant:
-// the run's own copies hold the tokens and the hold until the command exits.
+// A command that closes its grant's descriptor while the run lives keeps the grant: the run's
+// own copy holds the hold until the command exits.
 //
-// Mutation: the run closes its copies as soon as the command has started (runChild calls
-// release before superviseChild): the tokens are free while the command runs.
-func TestChildClosingCopiesKeepsTokens(t *testing.T) {
+// Mutation: the run closes its copy as soon as the command has started (runChild calls release
+// before superviseChild): the reservation is gone while the command runs.
+func TestChildClosingCopiesKeepsTheHold(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(2))
 	p := e.Start("run", "--label", "closer", "--mem", "256M", "--", "sh", "-c",
-		`exec 3<&- 4<&- 5<&-; exec "$0" hold "$1" closer`, bins.child, e.MarkDir)
+		`exec 3<&-; exec "$0" hold "$1" closer`, bins.child, e.MarkDir)
 	r := e.WaitStarted("closer")
 	if len(r.FDs) != 0 {
 		t.Fatalf("the command still has descriptors open: %v", r.FDs)
@@ -365,9 +286,9 @@ func TestChildClosingCopiesKeepsTokens(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	e.SectionLeft()
 	rep := e.Status()
-	if rep.Resources["mem"].Locked != 2 || len(rep.Holds) != 1 || len(rep.DeadHolds) != 0 {
-		t.Errorf("while the command runs: %d tokens locked, holds %v, dead %v; want 2 and the live hold",
-			rep.Resources["mem"].Locked, rep.Holds, rep.DeadHolds)
+	if rep.Mem.ReservedMiB != 256 || len(rep.Holds) != 1 || len(rep.DeadHolds) != 0 {
+		t.Errorf("while the command runs: %d MiB reserved, holds %v, dead %v; want 256 and the live hold",
+			rep.Mem.ReservedMiB, rep.Holds, rep.DeadHolds)
 	}
 	e.Start("run", "--no-wait", "--", "true").ExitCode(exitRefusal)
 	e.ReleaseChild("closer")
@@ -376,10 +297,10 @@ func TestChildClosingCopiesKeepsTokens(t *testing.T) {
 }
 
 // A command that cannot be started (not found, not executable) releases everything at once:
-// the run exits 127 or 126 and leaves no hold, live or dead, no ticket and no locked token.
+// the run exits 127 or 126 and leaves no hold, live or dead, no ticket and nothing reserved.
 //
 // Mutation: the run does not release its grant when the start fails (runChild skips
-// c.release on a start error): the tokens go with the process, but the hold is never removed.
+// c.release on a start error): the lock goes with the process, but the hold is never removed.
 func TestFailedSpawnFreesEverything(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(memConfig(4))
@@ -408,9 +329,9 @@ func TestFailedSpawnFreesEverything(t *testing.T) {
 
 // Close closes the process's copies without unlocking, so a command that inherited the grant
 // keeps it until it exits, and repeated Close calls return nil and change nothing, even after
-// another grant of the same tokens reuses the descriptor numbers.
+// another grant reuses the descriptor numbers.
 //
-// Mutations: Close releases with LOCK_UN (the command's tokens are freed by the first Close);
+// Mutations: Close releases with LOCK_UN (the command's hold is freed by the first Close);
 // a repeated Close closes again (no closed guard and os.ErrClosed reported): it returns an
 // error.
 func TestRepeatedClose(t *testing.T) {
@@ -419,7 +340,7 @@ func TestRepeatedClose(t *testing.T) {
 	c := e.Engine()
 	admit := func(label string) *engine.Grant {
 		t.Helper()
-		w, err := c.EnqueueContext(context.Background(), spec.Request{Label: label, Need: map[string]spec.Range{"mem": {Min: 2, Max: 2}}})
+		w, err := c.EnqueueContext(context.Background(), spec.Request{Label: label, NeedMiB: 256})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -436,29 +357,29 @@ func TestRepeatedClose(t *testing.T) {
 	p := e.startWith(g.Files(), g.Env(), bins.child, "hold", e.MarkDir, "lib-child")
 	r := e.WaitStarted("lib-child")
 	h, _ := e.Hold("lib")
-	checkDescriptors(t, e, r, h.Name, e.HoldBody(h.Name).Grant)
+	checkDescriptors(t, e, r, h.Name)
 	for i := range 2 {
 		if err := g.Close(); err != nil {
 			t.Errorf("Close %d: %v", i+1, err)
 		}
 	}
-	if got := memLocked(e); got != 2 {
-		t.Errorf("%d tokens locked after Close while the command holds them, want 2", got)
+	if got := memReserved(e); got != 2 {
+		t.Errorf("%d units reserved after Close while the command holds the hold, want 2", got)
 	}
 	e.ReleaseChild("lib-child")
 	p.ExitCode(0)
-	e.Eventually(startWait, "the tokens are free once the command exited", func() bool { return memLocked(e) == 0 })
+	e.Eventually(startWait, "the reservation is free once the command exited", func() bool { return memReserved(e) == 0 })
 	if err := g.Close(); err != nil {
 		t.Errorf("Close 3: %v", err)
 	}
 
-	// A second grant of the same tokens in this process; the first grant's Close leaves it alone.
+	// A second grant in this process; the first grant's Close leaves it alone.
 	g2 := admit("lib2")
 	if err := g.Close(); err != nil {
 		t.Errorf("Close 4: %v", err)
 	}
-	if _, ok := e.Hold("lib2"); !ok || memLocked(e) != 2 {
-		t.Errorf("the second grant lost its hold or tokens to the first grant's Close (%d locked)", memLocked(e))
+	if _, ok := e.Hold("lib2"); !ok || memReserved(e) != 2 {
+		t.Errorf("the second grant lost its hold to the first grant's Close (%d units reserved)", memReserved(e))
 	}
 	for i := range 2 {
 		if err := g2.Close(); err != nil {

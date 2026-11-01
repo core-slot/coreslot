@@ -135,7 +135,7 @@ func TestStrayTopLevelTemporaryStaysStateError(t *testing.T) {
 func TestStrayDirectoryStaysStateError(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	if err := os.Symlink(filepath.Join(dir, ResDir), filepath.Join(dir, QueueDir)); err != nil {
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, QueueDir)); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err := s.List(QueueDir)

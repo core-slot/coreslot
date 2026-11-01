@@ -33,8 +33,8 @@ type hookPair struct{ enter, leave func() }
 // SetLockHooks installs enter and leave, which bracket every moment at which this process may
 // hold a lock it takes only momentarily: admit.lock, from each try to take it to the close that
 // leaves the section (each try of Enter, the try of TryEnter, the probe of SectionHeld), and the
-// probe lock of every token, ticket and hold (ProbeLocked, Probe, CountLocked, CountLockedProbe,
-// and the probe-before-unlink of reconciliation and of RemoveOwnTicket and ProbeAndRemoveHold).
+// probe lock of every ticket and hold (ProbeLocked, Probe, and the probe-before-unlink of
+// reconciliation and of RemoveOwnTicket and ProbeAndRemoveHold).
 // enter runs just before each try, and leave runs exactly once for each enter, right after a
 // try that did not take the lock, or right after the descriptor that took it is closed. So the
 // time between them never includes Enter's sleeps between tries, only the tries themselves and
@@ -42,18 +42,17 @@ type hookPair struct{ enter, leave func() }
 // leave.
 //
 // The locks a process owns for a lifetime are not bracketed: its ticket while it waits, and its
-// hold and tokens while its grant lives. It takes them inside the section, so their tries are
+// hold while its grant lives. It takes them inside the section, so their tries are
 // bracketed by the section's own pair, but they outlive it, and a process stopped while it owns
 // them only keeps what it was granted, which is intended.
 //
 // It is how the CLI defers its job-control stops while it holds such a lock (PROTOCOL.md section
 // 8) without deferring them while it only waits to enter the section. A process stopped inside
 // the section blocks every admission; one stopped holding a probe lock makes every other client
-// count that token as locked, or that ticket or hold as live, for as long as it stays stopped,
-// so a head whose minimum needs the token is never admitted although nobody is stopped inside
-// the section. The pairs nest and may overlap: a probe runs inside the section, and one goroutine
+// count that ticket or hold as live for as long as it stays stopped, so a head whose need the
+// hold's reservation keeps out is never admitted although nobody is stopped inside the section. The pairs nest and may overlap: a probe runs inside the section, and one goroutine
 // may probe while another holds the section, so the hooks must count rather than toggle, and
-// must be safe for concurrent use. They must be cheap, since a snapshot probes every token, and
+// must be safe for concurrent use. They must be cheap, since a snapshot probes every hold, and
 // must not take a lock of the state directory themselves. A program installs them once, before
 // it first takes such a lock; the engine never does, and without them nothing runs.
 func SetLockHooks(enter, leave func()) {

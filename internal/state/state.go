@@ -1,15 +1,10 @@
-// Package state is the pure state machine of the protocol: election, observed freshness,
-// clamping, undeclared resources and capacity planning. It performs no I/O and reads no clock;
-// time is always a parameter.
+// Package state is the pure state machine of the protocol: election, observed freshness and the
+// room the live holds leave. It performs no I/O and reads no clock; time is always a parameter.
 package state
 
 import (
 	"cmp"
-	"maps"
-	"slices"
 	"time"
-
-	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Key orders tickets: ascending OrderKey, ties by PID, then Seq (PROTOCOL.md section 9).
@@ -40,83 +35,4 @@ type Ticket struct {
 // that is not passed over ends it.
 func PassedOver(t Ticket, obs *Observer, now time.Duration) bool {
 	return t.Dead || obs.Stalled(t.Key, now)
-}
-
-// Effective computes each requested declared resource's effective range (PROTOCOL.md section 12.2).
-// A resource missing from sizes is undeclared (section 12.1): it is excluded from eff and listed,
-// sorted, in undeclared. When min exceeds the size the range becomes size..size and clamped records
-// the requested min; otherwise max is lowered to the size.
-func Effective(need map[string]spec.Range, sizes map[string]int) (eff map[string]spec.Range, clamped map[string]int, undeclared []string) {
-	eff = make(map[string]spec.Range, len(need))
-	clamped = make(map[string]int)
-	for name, r := range need {
-		size, ok := sizes[name]
-		if !ok {
-			undeclared = append(undeclared, name)
-			continue
-		}
-		if r.Min > size {
-			clamped[name] = r.Min
-			r = spec.Range{Min: size, Max: size}
-		} else if r.Max > size {
-			r.Max = size
-		}
-		eff[name] = r
-	}
-	slices.Sort(undeclared)
-	return eff, clamped, undeclared
-}
-
-// Plan sizes an admission (PROTOCOL.md section 12.1 steps 4 to 6). locked counts the locked
-// tokens of each resource at every index, including at or above the size (I3), so
-// free = size - locked. It is not ok, with a nil take, when any free is below that resource's
-// min. Otherwise take holds every effective min (the minimum pass) and then, in ascending
-// resource name, further tokens up to min(max, free) per resource while the grant holds fewer
-// than spec.MaxPerGrant tokens in total (the extra pass), so the cap never starves a later
-// resource below its minimum.
-func Plan(eff map[string]spec.Range, sizes, locked map[string]int) (take map[string]int, ok bool) {
-	free := make(map[string]int, len(eff))
-	mins := make(map[string]int, len(eff))
-	for name, r := range eff {
-		free[name] = sizes[name] - locked[name]
-		if free[name] < r.Min {
-			return nil, false
-		}
-		mins[name] = r.Min
-	}
-	return fill(eff, free, mins), true
-}
-
-// PlanBehind sizes the admission of a waiter with live tickets ahead of it (the exception to I4
-// beside the front window, PROTOCOL.md section 10.3): Plan with every minimum of every ticket of
-// ahead, each the effective range of its need (Effective against the same sizes), added to the
-// locked count of each resource of eff, so that the plan, its extra pass included, leaves those
-// minimums free. A resource eff does not request imposes nothing. With ahead empty it is Plan.
-func PlanBehind(eff map[string]spec.Range, sizes, locked map[string]int, ahead []map[string]spec.Range) (take map[string]int, ok bool) {
-	reserved := make(map[string]int, len(eff))
-	for name := range eff {
-		reserved[name] = locked[name]
-		for _, a := range ahead {
-			reserved[name] += a[name].Min
-		}
-	}
-	return Plan(eff, sizes, reserved)
-}
-
-// fill starts from the minimum pass's mins and adds the extra pass: in ascending resource name,
-// up to min(max, free) per resource while the total stays at most spec.MaxPerGrant.
-func fill(eff map[string]spec.Range, free, mins map[string]int) map[string]int {
-	take := make(map[string]int, len(eff))
-	total := 0
-	for name, n := range mins {
-		take[name] = n
-		total += n
-	}
-	for _, name := range slices.Sorted(maps.Keys(eff)) {
-		room := min(eff[name].Max, free[name]) - take[name]
-		add := max(0, min(room, spec.MaxPerGrant-total))
-		take[name] += add
-		total += add
-	}
-	return take
 }

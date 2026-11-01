@@ -1,8 +1,8 @@
 //go:build !coreslot_testhooks
 
 // Package testhooks provides pause points, a wall-clock offset, a format list, a getent substitute,
-// a password database that finds no record and the CLI's descriptor-limit probe for the
-// deterministic trace tests and the fallback tests.
+// a password database that finds no record and a memory headroom for the deterministic trace
+// tests and the fallback tests.
 // They act only in binaries built with the coreslot_testhooks tag; in every other build they are
 // inert and ignore the environment.
 package testhooks
@@ -26,14 +26,6 @@ func Getent() string { return "" }
 // PasswdMiss reports whether the home directory's password-database lookup is to find no record,
 // so that its NSS fallback runs; always false without the coreslot_testhooks tag.
 func PasswdMiss() bool { return false }
-
-// ProbeShell is the shell the CLI runs to learn the descriptor limit it was started with; always
-// /bin/sh without the coreslot_testhooks tag.
-func ProbeShell() string { return "/bin/sh" }
-
-// ProbeTimeout is how long the CLI lets that probe run; always d, the CLI's own bound, without the
-// coreslot_testhooks tag.
-func ProbeTimeout(d time.Duration) time.Duration { return d }
 
 // Headroom replaces the kernel's memory headroom, in MiB; always 0, false without the
 // coreslot_testhooks tag.

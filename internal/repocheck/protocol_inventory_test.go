@@ -13,13 +13,12 @@ import (
 // `CORESLOT_STATE_DIR`. The list is kept here, apart from the document, so that an item added to,
 // dropped from or renamed in only one of the two fails the test. title is the heading of the section that defines the item, without its
 // number; a row must link to that heading, outside the worked examples. A word in the body is not
-// enough: `gen`, `hold` or `res/` appear in many sections that do not define them. mention is what
+// enough: `gen` or `hold` appear in many sections that do not define them. mention is what
 // the defining section's text must contain.
 var contractInventory = []struct{ item, title, mention string }{
 	{"FORMAT", "FORMAT", "coreslot-protocol"},
 	{"admit.lock", "admit.lock", "admit.lock"},
 	{"gen", "gen", "reconciled_ns"},
-	{"res/", "Tokens and descriptor ownership", "res/"},
 	{"queue/", "Ticket", "queue/"},
 	{"holds/", "Hold", "holds/"},
 	{"cancel/", "Cancel request", "cancel/"},
@@ -28,13 +27,13 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"config.toml", "Configuration file", "config.toml"},
 	{"needs.toml", "Needs file", "needs.toml.lock"},
 	{"mem", "Sizes", "128 MiB"},
-	{"ticket body", "Ticket", "created_ns"},
-	{"hold body", "Hold", "start_ns"},
+	{"ticket body", "Ticket", "need_mib"},
+	{"hold body", "Hold", "need_mib"},
 	{"cancel body", "Cancel request", "requester_pid"},
 	{"run-log memory keys", "Run log", "mem_peak_kib"},
 	{"CORESLOT_GRANTED_*", "Descriptor and environment contract", "CORESLOT_GRANTED_"},
 	{"CORESLOT_HELD_FD", "Descriptor and environment contract", "CORESLOT_HELD_FD"},
-	{"CORESLOT_TOKEN_FDS", "Descriptor and environment contract", "CORESLOT_TOKEN_FDS"},
+	{"CORESLOT_HOLD", "Descriptor and environment contract", "CORESLOT_HOLD"},
 	{"CORESLOT_UNBUDGETED", "Errors, fail-open and degraded mode", "CORESLOT_UNBUDGETED"},
 	{"CORESLOT_STATE_DIR", "Location", "CORESLOT_STATE_DIR"},
 	{"enqueue", "Enqueue", "order key"},

@@ -20,7 +20,7 @@ import (
 // hookRecorder checks the contract of SetLockHooks while a test runs: every lock this process
 // tries to take, of whatever file, is tried while the hooks have entered; leave runs once per
 // enter; and when the last leave runs, every description that took a lock is closed again,
-// except those the test declared owned (a ticket, a hold, granted tokens), which outlive the
+// except those the test declared owned (a ticket, a hold), which outlive the
 // section by design.
 type hookRecorder struct {
 	mu     sync.Mutex
@@ -189,13 +189,13 @@ func TestLockHooksBracketEverySectionHold(t *testing.T) {
 	}
 }
 
-// The lock hooks bracket every probe of a token, ticket or hold, each probe on its own, outside
-// the section as inside it, and every lock this package takes is tried inside them; the locks a
-// client owns (its ticket, its hold, its granted tokens) are taken inside the section's bracket
+// The lock hooks bracket every probe of a ticket or hold, each probe on its own, outside the
+// section as inside it, and every lock this package takes is tried inside them; the locks a
+// client owns (its ticket and its hold) are taken inside the section's bracket
 // and are the only ones that outlive it. A process stopped while it holds a probe lock makes
-// every other client count that token as locked or that ticket or hold as live, which the
-// section's bracket alone did not prevent.
-// Mutations: drop hookEnter from ProbeLocked or removeIfDead (a token, ticket or hold tried
+// every other client count that ticket or hold as live, which the section's bracket alone did
+// not prevent.
+// Mutations: drop hookEnter from ProbeLocked or removeIfDead (a ticket or hold tried
 // outside the hooks); run ProbeLocked's hookLeave before its close, or defer removeIfDead's after
 // the close's defer (the last leave while a probe lock is held); drop either hookLeave (the
 // hooks left deeper than 0).
@@ -203,60 +203,47 @@ func TestLockHooksBracketEveryProbe(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 
-	// Before recording: three token files of mem, one of them locked by a description of the
-	// test's own, as another client's grant would be.
+	// Before recording: a hold locked by a description of the test's own, as another client's
+	// grant would be.
 	sec, err := s.Enter(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts, got, err := sec.TakeTokens(map[string]int{"mem": 3}, map[string]int{"mem": 3})
-	if err != nil || got["mem"] != 3 {
-		t.Fatalf("TakeTokens = %v, %v", got, err)
+	f, oname, _, err := sec.PublishNamed(HoldsDir, []byte(`{}`), 9, NextSeq, ticketName)
+	if err != nil {
+		t.Fatal(err)
 	}
 	sec.Leave()
-	ts.Close()
-	other := lockOther(t, filepath.Join(dir, ResDir, "mem", "1"))
+	f.Close()
+	other := lockOther(t, filepath.Join(dir, HoldsDir, oname))
 
 	r := recordHooks(t)
 
 	// Outside the section: the reader's probes (status, doctor, a cancel by label, the --no-wait
 	// refusal, a Step) and the election's.
-	if n, err := s.CountLockedProbe("mem"); err != nil || n != 1 {
-		t.Fatalf("CountLockedProbe = %d, %v; want 1", n, err)
-	}
-	r.want(t, "CountLockedProbe of 3 tokens", 3, 1, 3)
 	if locked, err := ProbeLocked(other.Name()); err != nil || !locked {
-		t.Fatalf("ProbeLocked of a locked token = %v, %v", locked, err)
+		t.Fatalf("ProbeLocked of a locked hold = %v, %v", locked, err)
 	}
-	r.want(t, "ProbeLocked of a locked token", 1, 1, 1)
+	r.want(t, "ProbeLocked of a locked hold", 1, 1, 1)
 
-	// Inside the section: publication of an owned ticket and hold, the count and the take of
-	// admission, the removals that probe before they unlink, and reconciliation.
+	// Inside the section: publication of an owned ticket and hold, the removals that probe
+	// before they unlink, and reconciliation.
 	sec, err = s.Enter(context.Background())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if n, err := sec.CountLocked("mem"); err != nil || n != 1 {
-		t.Fatalf("CountLocked = %d, %v; want 1", n, err)
 	}
 	ticket, tname, _, err := sec.PublishNamed(QueueDir, []byte(`{}`), 1, NextSeq, ticketName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, hname, err := sec.PublishHold(wire.Hold{StartNS: 1791720600000000000, Label: "gate:unit"}, 4711, 1)
+	hold, hname, err := sec.PublishHold(wire.Hold{StartNS: 1791720600000000000, PID: 4711, Label: "gate:unit"}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant, got, err := sec.TakeTokens(map[string]int{"mem": 2}, map[string]int{"mem": 3})
-	if err != nil || got["mem"] != 2 {
-		t.Fatalf("TakeTokens = %v, %v", got, err)
-	}
 	r.own(ticket, hold)
-	r.own(grant.Files...)
 	sec.Leave()
-	// 1 section + 3 probes; tries: 1 + 3 + the ticket's and the hold's locks + 3 tries of tokens
-	// (one of them busy).
-	r.want(t, "a section that counts, publishes and takes", 4, 2, 1+3+2+3)
+	// 1 section; tries: 1 + the ticket's and the hold's locks.
+	r.want(t, "a section that publishes", 1, 1, 1+2)
 
 	if dead, err := s.Probe(QueueDir, tname); err != nil || dead {
 		t.Fatalf("Probe of a live ticket = %v, %v", dead, err)
@@ -283,7 +270,7 @@ func TestLockHooksBracketEveryProbe(t *testing.T) {
 	r.want(t, "RemoveOwnTicket and ProbeAndRemoveHold", 3, 2, 3)
 
 	// Reconciliation: one dead ticket and one dead hold, probed and unlinked under their probe
-	// locks.
+	// locks, and the other client's live hold, probed and kept.
 	sec, err = s.Enter(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -299,20 +286,18 @@ func TestLockHooksBracketEveryProbe(t *testing.T) {
 		t.Fatalf("ReconcileIfDue = %d, %v; want 2", removed, err)
 	}
 	sec.Leave()
-	r.want(t, "ReconcileIfDue of a dead ticket and hold", 3, 2, 1+2+2)
+	r.want(t, "ReconcileIfDue of a dead ticket and hold beside a live one", 4, 2, 1+2+3)
 
-	// A reset's liveness probes: the tokens it counts (one is the grant's, one another
-	// description's) refuse it.
+	// A reset's liveness probe: the other description's hold refuses it.
 	sec, err = s.Enter(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if live, _, err := sec.Reset(); err != nil || live.Empty() {
-		t.Fatalf("Reset = %+v, %v; want a refusal for the locked tokens", live, err)
+		t.Fatalf("Reset = %+v, %v; want a refusal for the live hold", live, err)
 	}
 	sec.Leave()
-	r.want(t, "Reset refused by locked tokens", 4, 2, 4)
-	grant.Close()
+	r.want(t, "Reset refused by a live hold", 2, 2, 2)
 
 	// Every caller of the probe-before-unlink is inside the section, whose bracket hides the
 	// order of the probe's own leave and close; called alone, its leave must still come last.

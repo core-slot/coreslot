@@ -1,48 +1,30 @@
 package engine
 
 import (
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
-
-	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // The environment of a run's command (PROTOCOL.md section 17). They live in a file without a
 // build constraint, as ChildEnv does, so that the Windows build of the CLI names its variables
 // the way every other client does.
 const (
-	EnvTokenFDs   = "CORESLOT_TOKEN_FDS"
+	EnvGrantedMem = "CORESLOT_GRANTED_MEM"
 	EnvHeldFD     = "CORESLOT_HELD_FD"
+	EnvHold       = "CORESLOT_HOLD"
 	EnvUnbudgeted = "CORESLOT_UNBUDGETED"
-	EnvGranted    = "CORESLOT_GRANTED_" // followed by a resource name in environment form
+	envGranted    = "CORESLOT_GRANTED_" // the prefix every grant variable has
 )
 
 // ChildEnv is the CORESLOT_* environment a client gives the command it starts (PROTOCOL.md
-// section 17), the one builder of it in this module: CORESLOT_GRANTED_<RES> for each resource of
-// granted, in ascending resource name, in tokens except mem's, which is in MiB; CORESLOT_HELD_FD=3 when held; CORESLOT_TOKEN_FDS when
-// tokens is above 0, naming that many descriptors from fd 4 (`4` for one, `4-<3+tokens>` for
-// more); and
+// section 17), the one builder of it in this module: CORESLOT_GRANTED_MEM=grantMiB;
+// CORESLOT_HELD_FD=3 and CORESLOT_HOLD=hold when the command inherits the hold named hold; and
 // CORESLOT_UNBUDGETED=unbudgeted when unbudgeted is not empty. The order and the spelling are
 // what commands and tests see, so TestChildEnv pins them byte for byte.
-func ChildEnv(granted map[string]int, held bool, tokens int, unbudgeted string) []string {
-	var env []string
-	for _, name := range slices.Sorted(maps.Keys(granted)) {
-		n := granted[name]
-		if name == "mem" {
-			n *= spec.MemTokenMiB
-		}
-		env = append(env, EnvGranted+spec.EnvName(name)+"="+strconv.Itoa(n))
-	}
-	if held {
-		env = append(env, EnvHeldFD+"=3")
-	}
-	switch {
-	case tokens == 1:
-		env = append(env, EnvTokenFDs+"=4")
-	case tokens > 1:
-		env = append(env, EnvTokenFDs+"=4-"+strconv.Itoa(3+tokens))
+func ChildEnv(grantMiB int64, hold, unbudgeted string) []string {
+	env := []string{EnvGrantedMem + "=" + strconv.FormatInt(grantMiB, 10)}
+	if hold != "" {
+		env = append(env, EnvHeldFD+"=3", EnvHold+"="+hold)
 	}
 	if unbudgeted != "" {
 		env = append(env, EnvUnbudgeted+"="+unbudgeted)
@@ -51,8 +33,8 @@ func ChildEnv(granted map[string]int, held bool, tokens int, unbudgeted string) 
 }
 
 // IsContext reports whether an environment variable is grant context (PROTOCOL.md section 17):
-// CORESLOT_GRANTED_*, CORESLOT_HELD_FD, CORESLOT_TOKEN_FDS or CORESLOT_UNBUDGETED.
+// CORESLOT_GRANTED_*, CORESLOT_HELD_FD, CORESLOT_HOLD or CORESLOT_UNBUDGETED.
 // CORESLOT_STATE_DIR is not.
 func IsContext(key string) bool {
-	return strings.HasPrefix(key, EnvGranted) || key == EnvHeldFD || key == EnvTokenFDs || key == EnvUnbudgeted
+	return strings.HasPrefix(key, envGranted) || key == EnvHeldFD || key == EnvHold || key == EnvUnbudgeted
 }

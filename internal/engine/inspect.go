@@ -3,42 +3,13 @@
 package engine
 
 import (
-	"fmt"
-	"maps"
-	"slices"
-
 	"github.com/core-slot/coreslot/internal/memsample"
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // listProcs reads the process table for Snapshot's owner check; tests replace it.
 var listProcs = memsample.Listing
-
-// Free returns resource's size minus its locked tokens now (PROTOCOL.md section 12.1 step 4),
-// never below 0. It counts by probing every existing token file outside the section
-// (store.CountLockedProbe), which the protocol permits, so it never waits for the section and
-// works under any format. A
-// resource the configuration does not declare is an error matching ErrRefused.
-func (e *Engine) Free(resource string) (int, error) {
-	if err := spec.ValidateName(resource); err != nil {
-		return 0, err
-	}
-	sizes, _, err := e.sizes()
-	if err != nil {
-		return 0, err
-	}
-	size, ok := sizes[resource]
-	if !ok {
-		return 0, fmt.Errorf("%w: resource %q is not declared in the configuration", ErrRefused, resource)
-	}
-	locked, err := e.st.CountLockedProbe(resource)
-	if err != nil {
-		return 0, err
-	}
-	return max(0, size-locked), nil
-}
 
 // Snapshot reads the state directory outside the section, so that it works while another
 // client holds (or is stopped inside) the section, and writes nothing: it creates no file, not
@@ -47,8 +18,7 @@ func (e *Engine) Free(resource string) (int, error) {
 // directory unreadable is returned; a malformed FORMAT, an invalid configuration and malformed
 // or stray entries are reported in the Report.
 func (e *Engine) Snapshot() (Report, error) {
-	r := Report{StateDir: e.st.Dir(), StateDirExists: e.st.Exists(), Resources: map[string]ResourceInfo{},
-		UndeclaredLocked: map[string]int{}, Ignored: map[string]int{}}
+	r := Report{StateDir: e.st.Dir(), StateDirExists: e.st.Exists(), Ignored: map[string]int{}}
 
 	n, present, err := e.st.ReadFormat()
 	// Format 0 is well-formed and names a format this document does not define (PROTOCOL.md
@@ -68,34 +38,9 @@ func (e *Engine) Snapshot() (Report, error) {
 	}
 	r.Gen, r.ReconciledNS = g.N, g.ReconciledNS
 
-	if sizes, _, err := e.sizes(); err != nil {
-		r.ConfigError, r.ConfigErr = reasonOf(err), err
-	} else {
-		for _, name := range slices.Sorted(maps.Keys(sizes)) {
-			locked, err := e.st.CountLockedProbe(name)
-			if err != nil {
-				return Report{}, err
-			}
-			r.Resources[name] = ResourceInfo{Size: sizes[name], Locked: locked, Available: max(0, sizes[name]-locked)}
-		}
-		// Tokens of a resource the configuration no longer declares are still locks (PROTOCOL.md
-		// section 6): report them.
-		dirs, err := e.st.Resources()
-		if err != nil {
-			return Report{}, err
-		}
-		for _, name := range dirs {
-			if _, declared := sizes[name]; declared {
-				continue
-			}
-			locked, err := e.st.CountLockedProbe(name)
-			if err != nil {
-				return Report{}, err
-			}
-			if locked > 0 {
-				r.UndeclaredLocked[name] = locked
-			}
-		}
+	sizeMiB, _, sizeErr := e.memSize()
+	if sizeErr != nil {
+		r.ConfigError, r.ConfigErr = reasonOf(sizeErr), sizeErr
 	}
 
 	tickets, ignored, err := e.st.List(store.QueueDir)
@@ -132,7 +77,7 @@ func (e *Engine) Snapshot() (Report, error) {
 			return Report{}, err
 		}
 		r.Tickets = append(r.Tickets, TicketInfo{Name: en.Name, ID: en.ID.String(), Label: tk.Label,
-			Priority: tk.Priority, PID: en.ID.PID, Need: maps.Clone(tk.Need), CreatedNS: tk.CreatedNS,
+			Priority: tk.Priority, PID: en.ID.PID, NeedMiB: tk.NeedMiB, CreatedNS: tk.CreatedNS,
 			MtimeNS: en.MtimeNS, Dead: dead})
 	}
 
@@ -175,8 +120,15 @@ func (e *Engine) Snapshot() (Report, error) {
 			r.Holds = append(r.Holds, *info)
 		}
 	}
-	// A live hold's lock outlives its owner only in a descendant that inherited the grant's
-	// descriptors. An unreadable process table reports nothing: unknown is not exited.
+	if sizeErr == nil {
+		r.Mem.SizeMiB = sizeMiB
+		for _, h := range r.Holds {
+			r.Mem.ReservedMiB += h.NeedMiB
+		}
+		r.Mem.FreeMiB = max(0, sizeMiB-r.Mem.ReservedMiB)
+	}
+	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
+	// descriptor. An unreadable process table reports nothing: unknown is not exited.
 	if procs, ok := listProcs(); ok {
 		for i, h := range r.Holds {
 			r.Holds[i].OwnerExited = !memsample.Alive(procs, h.PID, h.StartNS)

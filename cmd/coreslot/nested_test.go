@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,8 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/core-slot/coreslot/internal/engine"
-	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // outer runs script under `coreslot run --mem mem -- sh -c script`, with $BIN the coreslot
@@ -62,37 +60,17 @@ func nestedLines(t *testing.T, dir string) []map[string]any {
 	return out
 }
 
-func TestNestedGrant(t *testing.T) {
-	req := spec.Request{Need: map[string]spec.Range{
-		"mem":      {Min: 4, Max: 12},
-		"gpu":      {Min: 3, Max: 3},
-		"pg-local": {Min: 1, Max: 1},
-	}}
-	grant, clamped, unbudgeted := engine.NestedGrant(req, map[string]int{"mem": 8, "gpu": 2})
-	if want := map[string]int{"mem": 8, "gpu": 2, "pg-local": 1}; !maps.Equal(grant, want) {
-		t.Errorf("grant %v, want %v", grant, want)
-	}
-	if want := map[string]int{"gpu": 3}; !maps.Equal(clamped, want) {
-		t.Errorf("clamped %v, want %v", clamped, want)
-	}
-	if !slices.Equal(unbudgeted, []string{"pg-local"}) {
-		t.Errorf("unbudgeted %v, want [pg-local]", unbudgeted)
-	}
-	grant, _, _ = engine.NestedGrant(spec.Request{Need: map[string]spec.Range{"mem": {Min: 2, Max: 4}}}, map[string]int{"mem": 10})
-	if grant["mem"] != 4 {
-		t.Errorf("min(max, held) = %d, want 4", grant["mem"])
-	}
-}
-
 func TestNestedPassThrough(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
+	d := t.TempDir()
 	r := outer(t, dir, "1G", `
+		ln "$CORESLOT_STATE_DIR/holds/$CORESLOT_HOLD" "$D/held"
 		cat "$CORESLOT_STATE_DIR/gen" > "$D/gen-before"
 		ls "$CORESLOT_STATE_DIR/queue" > "$D/queue"
 		"$BIN" run --mem 1536M --label inner -- $FDS || exit 1
 		cat "$CORESLOT_STATE_DIR/gen" > "$D/gen-after"
 		cmp -s "$D/gen-before" "$D/gen-after" || echo gen-changed
-		ls "$CORESLOT_STATE_DIR/queue" | cmp -s - "$D/queue" || echo queue-changed`)
+		ls "$CORESLOT_STATE_DIR/queue" | cmp -s - "$D/queue" || echo queue-changed`, "D="+d)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -100,20 +78,61 @@ func TestNestedPassThrough(t *testing.T) {
 		t.Errorf("the nested run touched the queue or gen: %q", r.stdout)
 	}
 	env := envOf(r.stdout)
-	if env["CORESLOT_GRANTED_MEM"] != "1024" || env["CORESLOT_TOKEN_FDS"] != "4-11" || env["CORESLOT_HELD_FD"] != "3" {
+	if env["CORESLOT_GRANTED_MEM"] != "1024" || env["CORESLOT_HELD_FD"] != "3" || env["CORESLOT_HOLD"] == "" {
 		t.Errorf("the nested command's environment: %v", env)
 	}
-	fds := fdsOf(r.stdout)
-	for i := 0; i < 8; i++ {
-		if got, want := fds[4+i], inode(t, filepath.Join(dir, "res", "mem", strconv.Itoa(i))); got != want {
-			t.Errorf("fd %d is %q, want token mem/%d (%s)", 4+i, got, i, want)
-		}
+	if got, want := fdsOf(r.stdout)[3], inode(t, filepath.Join(d, "held")); got != want {
+		t.Errorf("fd 3 is %q, want the parent's hold (%s)", got, want)
 	}
 	lines := nestedLines(t, dir)
 	if len(lines) != 1 || lines[0]["label"] != "inner" {
 		t.Errorf("nested run-log lines %v: want one for inner", lines)
 	}
-	tokensFree(t, dir, 8)
+	budgetFree(t, dir)
+}
+
+// A run whose CORESLOT_HOLD names a live hold of an ancestor runs inside that reservation without
+// queueing, though the budget is full; a dead hold or another process's live one makes it an
+// ordinary request. Mutations: skipping the probe in DecideNested reddens "dead"; skipping
+// isAncestor reddens "not an ancestor".
+func TestNestedRunsInsideParent(t *testing.T) {
+	t.Run("live ancestor", func(t *testing.T) {
+		dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+		r := outer(t, dir, "256M", `env -u CORESLOT_TOKEN_FDS "$BIN" run --no-wait --mem 256M -- true; echo "code=$?"`)
+		if r.code != 0 || strings.TrimSpace(r.stdout) != "code=0" {
+			t.Errorf("exit %d stdout %q stderr %q: want the nested run inside its parent, not queued", r.code, r.stdout, r.stderr)
+		}
+	})
+	t.Run("not an ancestor", func(t *testing.T) {
+		dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
+		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+			t.Fatalf("setup run: %d %q", r.code, r.stderr)
+		}
+		holdOther(t, dir, 2) // live, the whole budget, of a pid that is no ancestor
+		other := entries(t, dir, "holds")[0]
+		r := cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+other), "run", "--no-wait", "--", "true")
+		if r.code != 75 || !strings.Contains(r.stderr, "not admitted at once") {
+			t.Errorf("exit %d stderr %q: want an ordinary request, refused by --no-wait", r.code, r.stderr)
+		}
+	})
+	t.Run("dead", func(t *testing.T) {
+		dir := stateDir(t, "")
+		r := outer(t, dir, "256M", `echo "$CORESLOT_HOLD" > "$D/hold"`, "D="+t.TempDir())
+		if r.code != 0 {
+			t.Fatalf("setup run: %d %q", r.code, r.stderr)
+		}
+		dead := wire.HoldName(1, os.Getpid(), 1, "dead") // the test process is an ancestor
+		if err := os.WriteFile(filepath.Join(dir, "holds", dead), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r = cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+dead), "run", "--no-wait", "--", "sh", "-c", `echo "$CORESLOT_HOLD"`)
+		if got := strings.TrimSpace(r.stdout); r.code != 0 || got == dead || got == "" {
+			t.Errorf("exit %d, the command's CORESLOT_HOLD %q: want a hold of its own, not the dead %s", r.code, got, dead)
+		}
+		if lines := nestedLines(t, dir); len(lines) != 0 {
+			t.Errorf("nested run-log lines %v: an ordinary request is not nested", lines)
+		}
+	})
 }
 
 func TestNestedSiblingsBothRun(t *testing.T) {
@@ -131,7 +150,7 @@ func TestNestedSiblingsBothRun(t *testing.T) {
 	}
 }
 
-// The pass-through's clamp notice reads mem in bytes. Mutation: printing its counts as tokens
+// The pass-through's clamp notice reads mem in bytes. Mutation: printing its amounts in MiB
 // turns it red.
 func TestNestedNoticeMem(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"8G\"\n")
@@ -158,40 +177,6 @@ func TestNestedClampsAboveHeld(t *testing.T) {
 	}
 }
 
-func TestNestedCountsFromDescriptorsNotEnv(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"1G\"\n")
-	r := outer(t, dir, "1G", `CORESLOT_GRANTED_MEM=99999 "$BIN" run --mem 8G -- sh -c 'echo $CORESLOT_GRANTED_MEM'`)
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	if got := strings.TrimSpace(r.stdout); got != "1024" {
-		t.Errorf("CORESLOT_GRANTED_MEM = %q, want 1024: held is counted from the descriptors", got)
-	}
-}
-
-func TestDescriptorClosingLauncherRefuses(t *testing.T) {
-	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
-	r := outer(t, dir, "512M", `
-		start=$(date +%s)
-		sh -c 'exec 4>&-; exec "$BIN" run -- true'
-		code=$?
-		echo "code=$code took=$(( $(date +%s) - start ))"`)
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	out := strings.TrimSpace(r.stdout)
-	if !strings.HasPrefix(out, "code=75 ") {
-		t.Fatalf("the nested run reported %q, want a refusal (stderr %q)", out, r.stderr)
-	}
-	if took, _ := strconv.Atoi(strings.TrimPrefix(out, "code=75 took=")); took > 2 {
-		t.Errorf("refused after %d s, want within 2 s (load: %s)", took, uptime())
-	}
-	if !strings.Contains(r.stderr, "descriptor 4 of CORESLOT_TOKEN_FDS") || !strings.Contains(r.stderr, "closed") ||
-		!strings.Contains(r.stderr, "--independent") {
-		t.Errorf("stderr %q: want a diagnostic naming the closed descriptor and --independent", r.stderr)
-	}
-}
-
 func TestIndependentQueues(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"256M\"\n")
 	r := outer(t, dir, "256M", `"$BIN" run --independent --timeout 1s -- true; echo "code=$?"`)
@@ -205,25 +190,27 @@ func TestIndependentQueues(t *testing.T) {
 
 func TestIndependentDropsInheritedContext(t *testing.T) {
 	dir := stateDir(t, "[resources]\nmem = \"512M\"\n")
-	r := outer(t, dir, "256M", `exec 7</dev/null; "$BIN" run --independent --mem 128M -- $FDS`)
+	d := t.TempDir()
+	r := outer(t, dir, "256M", `echo "$CORESLOT_HOLD" > "$D/hold"; ln "$CORESLOT_STATE_DIR/holds/$CORESLOT_HOLD" "$D/held"
+		exec 7</dev/null; "$BIN" run --independent --mem 128M -- $FDS`, "D="+d)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
+	parentHold, err := os.ReadFile(filepath.Join(d, "hold"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	env := envOf(r.stdout)
-	if env["CORESLOT_TOKEN_FDS"] != "4" || env["CORESLOT_GRANTED_MEM"] != "128" || env["CORESLOT_HELD_FD"] != "3" {
+	if env["CORESLOT_GRANTED_MEM"] != "128" || env["CORESLOT_HELD_FD"] != "3" || env["CORESLOT_HOLD"] == "" ||
+		env["CORESLOT_HOLD"] == strings.TrimSpace(string(parentHold)) {
 		t.Errorf("the command's environment %v: want only its own grant", env)
 	}
-	fds := fdsOf(r.stdout)
-	if fds[4] != inode(t, filepath.Join(dir, "res", "mem", "2")) {
-		t.Errorf("fd 4 is %q, want its own token mem/2", fds[4])
-	}
 	// The helper's own runtime may open descriptors of its own, so check identities, not numbers.
-	for i := 0; i < 2; i++ {
-		parent := inode(t, filepath.Join(dir, "res", "mem", strconv.Itoa(i)))
-		for fd, id := range fds {
-			if id == parent {
-				t.Errorf("fd %d is the parent's token mem/%d, which was passed on: %v", fd, i, fds)
-			}
+	fds := fdsOf(r.stdout)
+	parent := inode(t, filepath.Join(d, "held"))
+	for fd, id := range fds {
+		if id == parent {
+			t.Errorf("fd %d is the parent's hold, which was passed on: %v", fd, fds)
 		}
 	}
 	if fds[7] != inode(t, "/dev/null") {
@@ -300,8 +287,8 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 	// under a FORMAT it does not understand it writes none, and says so. Only a FORMAT that does
 	// not exist is silent.
 	for name, replace := range map[string]func(t *testing.T, path string){
-		"format 2": func(t *testing.T, path string) {
-			if err := os.WriteFile(path, []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+		"format 3": func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("coreslot-protocol 3\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		},
@@ -341,94 +328,5 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 				t.Errorf("stderr %q: want a notice that the run log was not written", r.stderr)
 			}
 		})
-	}
-}
-
-func TestValidateInherited(t *testing.T) {
-	dir := stateDir(t, "")
-	res := filepath.Join(dir, "res", "mem")
-	if err := os.MkdirAll(res, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// Tokens 0 and 1 are locked through descriptors this process holds; token 2 exists unlocked.
-	var tokens []*os.File
-	for i := 0; i < 3; i++ {
-		f, err := os.OpenFile(filepath.Join(res, strconv.Itoa(i)), os.O_RDONLY|os.O_CREATE, 0o600)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { f.Close() })
-		if i < 2 {
-			if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-				t.Fatal(err)
-			}
-		}
-		tokens = append(tokens, f)
-	}
-	// A validated descriptor is kept open for the life of the process by the *os.File
-	// ValidateInherited returns, which nobody may close: each call gets fresh duplicates, which
-	// the test never closes either.
-	dup := func(f *os.File, owned bool) int {
-		fd, err := unix.Dup(int(f.Fd()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !owned {
-			t.Cleanup(func() { unix.Close(fd) })
-		}
-		return fd
-	}
-	devnull, err := os.Open(os.DevNull)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { devnull.Close() })
-	closed := 1000
-	for _, err := unix.FcntlInt(uintptr(closed), unix.F_GETFD, 0); err == nil; _, err = unix.FcntlInt(uintptr(closed), unix.F_GETFD, 0) {
-		closed++
-	}
-	list := func(xs ...int) string {
-		var s []string
-		for _, x := range xs {
-			s = append(s, strconv.Itoa(x))
-		}
-		return strings.Join(s, ",")
-	}
-	check := func(tokenFDs string) (map[string][]*os.File, error) {
-		return engine.ValidateInherited(map[string]string{"CORESLOT_STATE_DIR": dir, "CORESLOT_TOKEN_FDS": tokenFDs})
-	}
-
-	t0, t1, t2 := dup(tokens[0], false), dup(tokens[1], false), dup(tokens[2], false)
-	for name, v := range map[string]string{
-		"listed twice":      list(t0, t0),
-		"overlapping range": fmt.Sprintf("%d,%d-%d", t1, min(t0, t1), max(t0, t1)),
-		"not open":          list(t0, closed),
-		"not a token":       list(int(devnull.Fd())),
-		"token not locked":  list(t2),
-		"malformed":         "4-",
-		"descending range":  "9-4",
-		"more than 512":     "3-515",
-		"sign":              "+4",
-	} {
-		if held, err := check(v); err == nil {
-			t.Errorf("%s (%q) validated: %v", name, v, held)
-		}
-	}
-	if _, err := check(list(t0, dup(tokens[0], false))); err == nil || !strings.Contains(err.Error(), "same token file") {
-		t.Errorf("two descriptors of one token file: err %v, want a diagnostic naming the same token file", err)
-	}
-	if _, err := engine.ValidateInherited(map[string]string{"CORESLOT_STATE_DIR": filepath.Join(dir, "missing"),
-		"CORESLOT_TOKEN_FDS": list(t0)}); err == nil {
-		t.Error("a context whose state directory cannot be read validated")
-	}
-
-	held, err := check(list(dup(tokens[0], true), dup(tokens[1], true)))
-	if err != nil || len(held["mem"]) != 2 {
-		t.Fatalf("two locked tokens: held %v, err %v", held, err)
-	}
-	one := dup(tokens[0], true)
-	held, err = check(fmt.Sprintf("%d-%d", one, one))
-	if err != nil || len(held["mem"]) != 1 {
-		t.Fatalf("a single descriptor written as a range: held %v, err %v", held, err)
 	}
 }

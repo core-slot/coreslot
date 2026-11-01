@@ -45,7 +45,6 @@ func TestOpenCreatesLayoutWithModes(t *testing.T) {
 	open(t, dir)
 	want := map[string]os.FileMode{
 		".":          os.ModeDir | 0o700,
-		"res":        os.ModeDir | 0o700,
 		"admit.lock": 0o600,
 	}
 	checkModes := func(want map[string]os.FileMode) {
@@ -63,8 +62,8 @@ func TestOpenCreatesLayoutWithModes(t *testing.T) {
 	}
 	checkModes(want)
 	// Before FORMAT is read, Open creates nothing else (PROTOCOL.md sections 14 and 15.2).
-	if got := names(t, dir); !slices.Equal(got, []string{"admit.lock", "res"}) {
-		t.Errorf("Open created %v, want only admit.lock and res", got)
+	if got := names(t, dir); !slices.Equal(got, []string{"admit.lock"}) {
+		t.Errorf("Open created %v, want only admit.lock", got)
 	}
 	// A second Open accepts the layout it created, and keeps admit.lock's inode.
 	before, _ := os.Stat(filepath.Join(dir, "admit.lock"))
@@ -93,12 +92,12 @@ func TestOpenCreatesLayoutWithModes(t *testing.T) {
 }
 
 func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
-	// A directory written by a format-2 client: the format-stable files and FORMAT only.
+	// A directory written by a client of format 3: the format-stable file and FORMAT only.
 	dir := newDir(t)
-	if err := os.MkdirAll(filepath.Join(dir, ResDir), 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{AdmitLock: "", FormatFile: "coreslot-protocol 2\n"} {
+	for name, body := range map[string]string{AdmitLock: "", FormatFile: "coreslot-protocol 3\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -106,15 +105,12 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	before := snapshot(t, dir)
 	s := open(t, dir)
 	sec := enter(t, s)
-	if n, understood, err := sec.Format(); n != 2 || understood || err != nil {
+	if n, understood, err := sec.Format(); n != 3 || understood || err != nil {
 		t.Fatalf("Format = %d, %v, %v", n, understood, err)
 	}
 	// What a client of a foreign format reads must work without the directories it may not create.
 	if e, ignored, err := s.List(QueueDir); len(e) != 0 || ignored != 0 || err != nil {
 		t.Errorf("List of an absent queue/ = %v, %d, %v", e, ignored, err)
-	}
-	if n, err := sec.CountLocked("mem"); n != 0 || err != nil {
-		t.Errorf("CountLocked with no res/mem = %d, %v", n, err)
 	}
 	if err := sec.rotateLogIfNeeded(); err != nil {
 		t.Errorf("rotateLogIfNeeded with no log/: %v", err)
@@ -248,26 +244,23 @@ func TestOpenRejectsForeignFile(t *testing.T) {
 	_, err = Open(dir3)
 	wantStateError(t, err, "Open with a regular file at cancel")
 
-	// A symlinked token file is refused by OpenFile (O_NOFOLLOW) and by Open.
+	// A symlinked file of the layout is refused by OpenFile (O_NOFOLLOW) and by Open.
 	dir4 := newDir(t)
 	open(t, dir4)
-	if err := os.Mkdir(filepath.Join(dir4, "res", "mem"), 0o700); err != nil {
+	link := filepath.Join(dir4, GenFile)
+	if err := os.Symlink(filepath.Join(dir4, "admit.lock"), link); err != nil {
 		t.Fatal(err)
 	}
-	tok := filepath.Join(dir4, "res", "mem", "0")
-	if err := os.Symlink(filepath.Join(dir4, "admit.lock"), tok); err != nil {
-		t.Fatal(err)
-	}
-	_, err = OpenFile(tok, os.O_RDONLY|os.O_CREATE)
-	wantStateError(t, err, "OpenFile of a symlinked token")
+	_, err = OpenFile(link, os.O_RDONLY|os.O_CREATE)
+	wantStateError(t, err, "OpenFile of a symlinked gen")
 	_, err = Open(dir4)
-	wantStateError(t, err, "Open with a symlinked token")
+	wantStateError(t, err, "Open with a symlinked gen")
 }
 
 func TestOpenFileIsCloseOnExecAndPrivate(t *testing.T) {
 	dir := newDir(t)
 	open(t, dir)
-	p := filepath.Join(dir, "res", "probe")
+	p := filepath.Join(dir, "probe")
 	f, err := OpenFile(p, os.O_RDWR|os.O_CREATE)
 	if err != nil {
 		t.Fatal(err)

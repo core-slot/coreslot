@@ -98,28 +98,6 @@ func TestRealtimeOffsetAndFormatsEnabled(t *testing.T) {
 	}
 }
 
-func TestProbeShellEnabled(t *testing.T) {
-	t.Setenv("CORESLOT_TESTHOOK_PROBE_SHELL", "")
-	if got := ProbeShell(); got != "/bin/sh" {
-		t.Errorf("unset ProbeShell() = %q, want /bin/sh", got)
-	}
-	t.Setenv("CORESLOT_TESTHOOK_PROBE_SHELL", "/nonexistent")
-	if got := ProbeShell(); got != "/nonexistent" {
-		t.Errorf("ProbeShell() = %q, want /nonexistent", got)
-	}
-}
-
-func TestProbeTimeoutEnabled(t *testing.T) {
-	t.Setenv("CORESLOT_TESTHOOK_PROBE_TIMEOUT", "")
-	if got := ProbeTimeout(time.Second); got != time.Second {
-		t.Errorf("unset ProbeTimeout(1s) = %v, want 1s", got)
-	}
-	t.Setenv("CORESLOT_TESTHOOK_PROBE_TIMEOUT", "1m")
-	if got := ProbeTimeout(time.Second); got != time.Minute {
-		t.Errorf("ProbeTimeout(1s) = %v, want 1m", got)
-	}
-}
-
 // The offset file under CORESLOT_TESTHOOK_DIR replaces the environment's offset while it exists
 // and is re-read whenever it changes, so a test can step a running process's wall clock.
 func TestRealtimeOffsetFileSteps(t *testing.T) {

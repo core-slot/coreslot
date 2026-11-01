@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -22,24 +21,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
 // The kill-storm: randomized CLI clients, some of them nested runs, queue for mem while the storm kills them with SIGKILL, stops and continues them, cancels them, and
-// shrinks and grows the sizes through the configuration. A sampler checks I1, I2, I3 and I7
-// throughout. Each client runs with its headroom pinned through the test hook, so that the
-// clients size mem from it when the static size falls short; I3 then bounds mem by the
-// headroom's tokens too. Every run prints its seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
+// shrinks and grows the size through the configuration. A sampler checks I1, I2, I3 and I7 on
+// the hold bodies throughout. Each client runs with its headroom pinned through the test hook,
+// so that the clients size mem from it when the static size falls short; I3 then bounds the
+// reservations by the headroom too. Needs are counted in units of 128 MiB. Every run prints its seed; CORESLOT_STORM_SEED=<seed> replays the same schedule (each client's kind, request, fate
 // and delays, and the size changes; the interleaving is the scheduler's). The schedule also
 // depends on -short. The first clients and the first two size changes are fixed, and one
 // client is canceled while it is seen queued, so that every run exercises each kind of
-// client, a kill of a holder, a stop, a cancellation, a shrink below the locked count and a
+// client, a kill of a holder, a stop, a cancellation, a shrink below what is reserved and a
 // growth; the test asserts that it did.
 //
-// Mutations: dropping unrealised from state.LiveMemSize admits all three memFlood clients beside
-// the first wave, 36 mem tokens locked against the headroom's 24 (I3 for mem); attemptSizes
-// returning the static sizes leaves no sample with mem locked above its static size.
+// Mutations: dropping the holds from state.Room admits all three memFlood clients beside the
+// first wave, 36 units reserved against the headroom's 24 (I3); capacityFor returning the static
+// size leaves no sample with more reserved than the static size.
 
 const (
 	stormFull, stormShort     = 60 * time.Second, 10 * time.Second
@@ -47,35 +45,35 @@ const (
 	stormSeedEnv              = "CORESLOT_STORM_SEED"
 	// windDown bounds the end of the storm: every client killed and reaped.
 	windDown = 60 * time.Second
-	// The static mem sizes the sizer sets range over stormMemMin..stormMemMax tokens, and every
-	// client's headroom is stormHeadroomMiB: a live size never exceeds its tokens, so neither does
-	// the locked count of mem.
+	// stormUnit is the MiB of one unit of need. The static sizes the sizer sets range over
+	// stormMemMin..stormMemMax units, and every client's headroom is stormHeadroomMiB: a live
+	// capacity never exceeds it, so neither do the reservations.
+	stormUnit                = 128
 	stormMemMin, stormMemMax = 8, 16
-	stormHeadroomMiB         = spec.MemTokenMiB * (stormMemMax + 8)
+	stormHeadroomMiB         = stormUnit * (stormMemMax + 8)
 )
 
-// A storm label names its request, so that the sampler can check I7 from the hold alone:
-// s<id>.<kind>[.m<min>_<max>], the mem tokens. It uses only characters a hold's display keeps, so
-// the display of a ticket's name is the label itself.
-var labelNeed = regexp.MustCompile(`\.m([0-9]+)_([0-9]+)`)
+// A storm label names its need, so that the sampler can check I7 from the hold alone:
+// s<id>.<kind>[.m<units>]. It uses only characters a hold's display keeps, so the display of a
+// ticket's name is the label itself.
+var labelNeed = regexp.MustCompile(`\.m([0-9]+)$`)
 
-func stormLabel(id int, kind string, need map[string]spec.Range) string {
+func stormLabel(id int, kind string, units int) string {
 	l := fmt.Sprintf("s%05d.%s", id, kind)
-	if rg, ok := need["mem"]; ok {
-		l += fmt.Sprintf(".m%d_%d", rg.Min, rg.Max)
+	if units > 0 {
+		l += fmt.Sprintf(".m%d", units)
 	}
 	return l
 }
 
-// stormRequest is the request a storm label names.
-func stormRequest(label string) (map[string]spec.Range, bool) {
+// stormRequest is the need, in MiB, a storm label names.
+func stormRequest(label string) (int64, bool) {
 	m := labelNeed.FindStringSubmatch(label)
 	if m == nil {
-		return nil, false
+		return 0, false
 	}
-	lo, _ := strconv.Atoi(m[1])
-	hi, _ := strconv.Atoi(m[2])
-	return map[string]spec.Range{"mem": {Min: lo, Max: hi}}, true
+	units, _ := strconv.Atoi(m[1])
+	return int64(units) * stormUnit, true
 }
 
 // ---------------------------------------------------------------- reports
@@ -101,7 +99,7 @@ type stormClient struct {
 	kind        string // cli, or cli-go for a nested run
 	inner       string // "" or go: the nested run
 	name        string // the label, and the marker name of its command
-	need        map[string]spec.Range
+	need        int    // units; 0 asks for the default
 	timeout     time.Duration
 	fate        string // release, kill (at a time), killheld (once it holds), killheld-after-shrink, stop or cancel
 	at          time.Duration
@@ -133,7 +131,7 @@ type storm struct {
 
 	mu      sync.Mutex
 	nextID  int
-	labels  map[string]map[string]spec.Range
+	labels  map[string]int64
 	results []stormResult
 	helpers []*Proc // cancel commands
 	live    map[*stormClient]bool
@@ -163,23 +161,21 @@ func (st *storm) victimID() int {
 // plan draws client id's schedule from its own stream of the seed, so that a client's plan does
 // not depend on the order in which the slots ask for theirs. Clients 1 to firstWave are fixed:
 // four CLI admissions, the third with a nested run, each holding mem until the first shrink:
-// 1 token each, but 6 for the first and the third, so the first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
+// 1 unit each, but 6 for the first and the third, so the first wave holds 14, above the static 8, and the second is sized live. Then each lets go, except
 // the one victimID picks, which is killed while it holds. The memFlood clients after them are
-// CLI runs of 8 mem tokens and nothing else, each holding for a second, which arrive while the
-// first wave holds and find nothing ahead of them: a live size admits one beside the first wave's 14 and
-// holds the others back at the headroom's 24 tokens, while a size that forgets the holds'
+// CLI runs of 8 units and nothing else, each holding for a second, which arrive while the
+// first wave holds and find nothing ahead of them: a live capacity admits one beside the first wave's 14 and
+// holds the others back at the headroom's 24 units, while a capacity that forgets the holds'
 // reservations admits all three. Client firstWave+memFlood+1 is stopped and continued.
-// A mem need is fixed (min = max), so that it may be sized live.
 func (st *storm) plan(id int) *stormClient {
 	r := rand.New(rand.NewPCG(st.seed, uint64(id)))
-	c := &stormClient{id: id, need: map[string]spec.Range{}}
+	c := &stormClient{id: id}
 	if r.IntN(6) == 0 {
 		c.inner = "go"
 	}
-	// A mem need is fixed (min = max), as the CLI takes one size, and a client without one asks
-	// for the default of one token.
+	// A client without a need asks for the default of one unit.
 	if n := 1 + r.IntN(8); r.IntN(8) != 0 {
-		c.need["mem"] = spec.Range{Min: n, Max: n}
+		c.need = n
 	}
 	if r.IntN(5) == 0 {
 		c.timeout = time.Second + time.Duration(r.IntN(5000))*time.Millisecond
@@ -208,9 +204,9 @@ func (st *storm) plan(id int) *stormClient {
 		if id == 3 {
 			c.inner = "go"
 		}
-		c.need = map[string]spec.Range{"mem": {Min: 1, Max: 1}}
+		c.need = 1
 		if id == 1 || id == 3 {
-			c.need["mem"] = spec.Range{Min: 6, Max: 6}
+			c.need = 6
 		}
 		c.timeout, c.fate, c.afterShrink = 0, "release", true
 		if id == st.victimID() {
@@ -219,7 +215,7 @@ func (st *storm) plan(id int) *stormClient {
 	}
 	if id > firstWave && id <= firstWave+memFlood {
 		c.inner = ""
-		c.need = map[string]spec.Range{"mem": {Min: 8, Max: 8}}
+		c.need = 8
 		c.timeout, c.fate, c.hold = 0, "release", time.Second
 	}
 	if id == firstWave+memFlood+1 {
@@ -233,10 +229,10 @@ func (st *storm) plan(id int) *stormClient {
 	return c
 }
 
-// memFlags writes need as the CLI's one --mem size.
-func memFlags(need map[string]spec.Range) []string {
-	if r, ok := need["mem"]; ok {
-		return []string{"--mem", fmt.Sprintf("%dM", r.Min*spec.MemTokenMiB)}
+// memFlags writes a need of units as the CLI's --mem size; none for the default.
+func memFlags(units int) []string {
+	if units > 0 {
+		return []string{"--mem", fmt.Sprintf("%dM", units*stormUnit)}
 	}
 	return nil
 }
@@ -317,7 +313,9 @@ func (st *storm) kill(c *stormClient) {
 // and killed with its process group, and reaped, before life returns.
 func (st *storm) life(ctx context.Context, c *stormClient) {
 	st.mu.Lock()
-	st.labels[c.name] = maps.Clone(c.need)
+	if c.need > 0 {
+		st.labels[c.name] = int64(c.need) * stormUnit
+	}
 	st.mu.Unlock()
 	c.proc = st.e.StartCommand(st.argv(c)...)
 	c.proc.name = c.name
@@ -536,25 +534,22 @@ func (st *storm) finish(c *stormClient) {
 	st.mu.Unlock()
 }
 
-// resize changes the sizes and counts the change: shrinks, growths, and shrinks that leave more
-// tokens locked than the new size.
-func (st *storm) resize(ctx context.Context, next map[string]int) bool {
-	old := st.s.Sizes()
-	locked, err := st.s.Resize(ctx, next)
+// resize changes the size to units and counts the change: shrinks, growths, and shrinks that
+// leave more reserved than the new size.
+func (st *storm) resize(ctx context.Context, units int) bool {
+	old, next := st.s.Size(), int64(units)*stormUnit
+	reserved, err := st.s.Resize(ctx, next)
 	if err != nil {
 		return false
 	}
-	for _, res := range slices.Sorted(maps.Keys(next)) {
-		n := next[res]
-		switch {
-		case n < old[res]:
-			st.count("shrink")
-			if locked[res] > n {
-				st.count("shrink below the locked count")
-			}
-		case n > old[res]:
-			st.count("growth")
+	switch {
+	case next < old:
+		st.count("shrink")
+		if reserved > next {
+			st.count("shrink below what is reserved")
 		}
+	case next > old:
+		st.count("growth")
 	}
 	return true
 }
@@ -589,25 +584,25 @@ func (st *storm) sizer(ctx context.Context) {
 			break
 		}
 	}
-	_, _ = st.s.Sample(ctx) // the first wave's 12 mem tokens above the static 8, before the shrink
-	if ctx.Err() != nil || !st.resize(ctx, map[string]int{"mem": stormMemMin / 2}) {
+	_, _ = st.s.Sample(ctx) // the first wave's 14 units above the static 8, before the shrink
+	if ctx.Err() != nil || !st.resize(ctx, stormMemMin/2) {
 		return
 	}
 	shrunk = true
 	close(st.shrunk)
 	r := rand.New(rand.NewPCG(st.seed, 0))
 	if !sleep(time.Second+time.Duration(r.IntN(1500))*time.Millisecond) ||
-		!st.resize(ctx, map[string]int{"mem": stormMemMin}) {
+		!st.resize(ctx, stormMemMin) {
 		return
 	}
 	for sleep(1500*time.Millisecond + time.Duration(r.IntN(2500))*time.Millisecond) {
-		if !st.resize(ctx, map[string]int{"mem": stormMemMin + r.IntN(stormMemMax-stormMemMin+1)}) {
+		if !st.resize(ctx, stormMemMin+r.IntN(stormMemMax-stormMemMin+1)) {
 			return
 		}
 	}
 }
 
-func (st *storm) request(label string) (map[string]spec.Range, bool) {
+func (st *storm) request(label string) (int64, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	need, ok := st.labels[label]
@@ -665,7 +660,7 @@ func TestKillStorm(t *testing.T) {
 	e := State(t)
 	st := &storm{t: t, e: e, seed: seed, short: testing.Short(),
 		shrunk: make(chan struct{}),
-		labels: map[string]map[string]spec.Range{}, live: map[*stormClient]bool{}, counts: map[string]int{}}
+		labels: map[string]int64{}, live: map[*stormClient]bool{}, counts: map[string]int{}}
 	banner := fmt.Sprintf("kill-storm seed %d (%s=%d replays the schedule; -short=%v), %d clients for %v; load: %s",
 		seed, stormSeedEnv, seed, testing.Short(), clients, dur, uptime())
 	t.Log(banner)
@@ -676,8 +671,7 @@ func TestKillStorm(t *testing.T) {
 		}
 	}()
 
-	sizes := map[string]int{"mem": stormMemMin}
-	st.s = NewSampler(t, e, sizes, map[string]int{"mem": stormHeadroomMiB / spec.MemTokenMiB})
+	st.s = NewSampler(t, e, stormMemMin*stormUnit, stormHeadroomMiB)
 	st.s.Request = st.request
 
 	sctx, stopSampler := context.WithCancel(context.Background())
@@ -694,8 +688,8 @@ func TestKillStorm(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Go(func() { st.sizer(ctx) })
 	// Every client after the first wave starts once the first wave holds (or after 5 s). Two
-	// floors need that: the first shrink must find the first wave's tokens locked to land
-	// below the locked count, and the victim must be admitted, which a later request that
+	// floors need that: the first shrink must find the first wave's reservations to land below
+	// what is reserved, and the victim must be admitted, which a later request that
 	// blocks the queue could otherwise delay past a -short run.
 	waveHolds := make(chan struct{})
 	go func() {
@@ -767,12 +761,12 @@ func TestKillStorm(t *testing.T) {
 
 	lctx, ldone := context.WithTimeout(context.Background(), startWait)
 	defer ldone()
-	locked, holds, err := st.s.Leftovers(lctx)
+	holds, err := st.s.Leftovers(lctx)
 	if err != nil {
 		t.Fatalf("final observation: %v", err)
 	}
-	if len(locked) > 0 || len(holds) > 0 {
-		t.Errorf("after every client is gone: locked tokens %v, live holds %v", locked, holds)
+	if len(holds) > 0 {
+		t.Errorf("after every client is gone: live holds %v", holds)
 	}
 	if rep := e.Status(); rep.Degraded != nil {
 		t.Errorf("degraded mode after the storm: %+v", *rep.Degraded)
@@ -811,8 +805,8 @@ func TestKillStorm(t *testing.T) {
 	fmt.Fprintln(os.Stderr, summary)
 
 	// The run exercised what it is for: floors on what happened, scaled for -short. The first
-	// shrink is deterministic (mem 4 to 2 while the first wave holds 4), so the floor on a
-	// shrink below the locked count checks that the schedule ran, not that chance produced one.
+	// shrink is deterministic (8 units to 4 while the first wave holds 14), so the floor on a
+	// shrink below what is reserved checks that the schedule ran, not that chance produced one.
 	admitted := 0
 	for k, n := range st.counts {
 		if strings.HasPrefix(k, "admitted ") && k != "admitted nested" {
@@ -827,7 +821,7 @@ func TestKillStorm(t *testing.T) {
 		t.Errorf("%d admissions, want at least %d", admitted, minAdmitted)
 	}
 	floors := []string{"admitted cli", "admitted nested", "SIGKILL of a holder",
-		"SIGSTOP", "cancel took effect", "shrink below the locked count", "growth"}
+		"SIGSTOP", "cancel took effect", "shrink below what is reserved", "growth"}
 	floorFailed := false
 	for _, what := range floors {
 		if st.counts[what] < 1 {
@@ -847,11 +841,11 @@ func TestKillStorm(t *testing.T) {
 			}
 		}
 	}
-	// The live path ran: some sample saw more mem locked than the static size and a shrink's
-	// bound allow, which only a live size admits. The first wave's two mem clients take 12 of a
-	// static 8 in every run.
-	if st.s.AboveStatic()["mem"] < 1 {
-		t.Errorf("no sample saw mem locked above its static size: the live size never admitted")
+	// The live path ran: some sample saw more reserved than the static size and a shrink's
+	// bound allow, which only a live capacity admits. The first wave's two 6-unit clients take
+	// 12 of a static 8 in every run.
+	if st.s.AboveStatic() < 1 {
+		t.Errorf("no sample saw more reserved than the static size: the live capacity never admitted")
 	}
 	if minSamples := int(3 * dur.Seconds()); samples < minSamples || missed > 3 {
 		t.Errorf("%d samples (%d missed), want at least %d and at most 3 missed", samples, missed, minSamples)

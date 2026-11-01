@@ -8,15 +8,13 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // LiveState is what a reset found alive and therefore refused to remove.
 type LiveState struct {
-	Holds   []string       // names of holds whose lock some description holds
-	Tickets []string       // names of tickets whose lock some description holds
-	Tokens  map[string]int // per resource, the locked tokens at every existing index
+	Holds   []string // names of holds whose lock some description holds
+	Tickets []string // names of tickets whose lock some description holds
 	// ForeignFormat is set when FORMAT is well-formed and names a format this client does not
 	// implement: the entries of that format are not this client's to interpret or remove, and
 	// its waiters are not visible here.
@@ -25,18 +23,16 @@ type LiveState struct {
 
 // Empty reports that nothing is alive: the state may be reset.
 func (l LiveState) Empty() bool {
-	return len(l.Holds) == 0 && len(l.Tickets) == 0 && len(l.Tokens) == 0 && l.ForeignFormat == nil
+	return len(l.Holds) == 0 && len(l.Tickets) == 0 && l.ForeignFormat == nil
 }
 
 // Reset empties the state directory of everything a reset (`coreslot doctor --reset`) removes,
 // inside the section the caller entered: every entry of queue/, holds/ and cancel/ and of log/,
-// then degraded, gen and FORMAT. It keeps admit.lock, res/ and config.toml (the format-stable files
-// whose inodes live clients may hold open, and the configuration) and the four directories
-// themselves.
+// then degraded, gen and FORMAT. It keeps admit.lock and config.toml (the format-stable file whose
+// inode live clients may hold open, and the configuration) and the four directories themselves.
 //
-// It first checks that nothing is alive: no hold or ticket whose lock is held and no locked
-// token of any resource under res/, whether or not the configuration declares it. When anything
-// is alive it removes nothing and returns it. An entry that is not a regular file of the user
+// It first checks that nothing is alive: no hold or ticket whose lock is held. When anything is
+// alive it removes nothing and returns it. An entry that is not a regular file of the user
 // (a stray) is no client's and is removed with the rest; one that cannot be removed (a
 // directory that is not empty) is an error, reported after the other removals have been tried.
 // A FORMAT that is well-formed but not Understood belongs to a newer client whose waiters this
@@ -61,25 +57,6 @@ func (sec *Section) reset(implements func(int) bool) (live LiveState, removed in
 	if n, present, ferr := s.ReadFormat(); ferr == nil && present && !implements(n) {
 		live.ForeignFormat = &n
 		return live, 0, nil
-	}
-	resources, err := readNamesIfExist(s.path(ResDir))
-	if err != nil {
-		return live, 0, err
-	}
-	for _, name := range resources {
-		if spec.ValidateName(name) != nil {
-			continue
-		}
-		n, err := s.countLocked(name)
-		if err != nil {
-			return live, 0, err
-		}
-		if n > 0 {
-			if live.Tokens == nil {
-				live.Tokens = map[string]int{}
-			}
-			live.Tokens[name] = n
-		}
 	}
 	listed := map[string][]string{}
 	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {

@@ -1,1 +1,1 @@
-{"label":"x","priority":0,"need":{"mem":[1,2]},"created_ns":9223372036854775807}
+{"label":"x","priority":0,"need_mib":128,"created_ns":9223372036854775807}

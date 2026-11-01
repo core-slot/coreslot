@@ -9,8 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"time"
 
@@ -148,18 +146,16 @@ type ticketView struct {
 	waited   time.Duration
 }
 
-// statusView is a snapshot with what status derives from it: ticket positions and states,
-// ages, and the locked tokens no hold lists.
+// statusView is a snapshot with what status derives from it: ticket positions, states and ages.
 type statusView struct {
 	rep      engine.Report
 	nowNS    int64
 	observed time.Duration
 	tickets  []ticketView
-	unlisted map[string]int // resource -> locked tokens that no live hold lists
 }
 
 func buildStatus(rep engine.Report, nowNS int64, w *stallWatcher, observed time.Duration) statusView {
-	v := statusView{rep: rep, nowNS: nowNS, observed: observed, unlisted: map[string]int{}}
+	v := statusView{rep: rep, nowNS: nowNS, observed: observed}
 	ahead := 0 // live, non-stalled tickets in front, the way a waiter counts its position
 	for _, t := range rep.Tickets {
 		tv := ticketView{info: t, state: "waiting", waited: time.Duration(max(nowNS-t.CreatedNS, 0))}
@@ -175,15 +171,6 @@ func buildStatus(rep engine.Report, nowNS int64, w *stallWatcher, observed time.
 			}
 		}
 		v.tickets = append(v.tickets, tv)
-	}
-	for name, r := range rep.Resources {
-		listed := 0
-		for _, h := range rep.Holds {
-			listed += h.Grant[name]
-		}
-		if n := r.Locked - listed; n > 0 {
-			v.unlisted[name] = n
-		}
 	}
 	return v
 }
@@ -261,17 +248,10 @@ func (v statusView) human() string {
 	}
 
 	if r.ConfigError != "" {
-		p("resources: not known, the configuration cannot be read (runs fail open until it is fixed)")
+		p("mem: not known, the configuration cannot be read (runs fail open until it is fixed)")
 	} else {
-		p("resources:")
-	}
-	for _, name := range slices.Sorted(maps.Keys(r.Resources)) {
-		ri := r.Resources[name]
-		line := fmt.Sprintf("  %s  size %s  locked %s  free %s", name, amount(name, ri.Size), amount(name, ri.Locked), amount(name, ri.Available))
-		if n := v.unlisted[name]; n > 0 {
-			line += fmt.Sprintf("  (%s locked, no hold lists %s)", amount(name, n), plural(int64(n), "it", "them"))
-		}
-		p("%s", line)
+		p("mem: size %s  reserved %s  free %s", spec.FormatMiB(r.Mem.SizeMiB), spec.FormatMiB(r.Mem.ReservedMiB),
+			spec.FormatMiB(r.Mem.FreeMiB))
 	}
 
 	if len(r.Holds) == 0 {
@@ -280,33 +260,12 @@ func (v statusView) human() string {
 		p("holds:")
 	}
 	for _, h := range r.Holds {
-		line := fmt.Sprintf("  %s  pid %d  %s  held %s", labelText(h.Label), h.PID, holdTokens(h.Grant),
+		line := fmt.Sprintf("  %s  pid %d  %s  held %s", labelText(h.Label), h.PID, holdNeed(h),
 			duration(time.Duration(max(v.nowNS-h.StartNS, 0))))
 		if h.OwnerExited {
 			line += "  owner exited, held by a descendant"
 		}
-		if len(h.Clamped) > 0 {
-			var parts []string
-			for _, name := range slices.Sorted(maps.Keys(h.Clamped)) {
-				parts = append(parts, fmt.Sprintf("%s (asked %s)", name, amount(name, h.Clamped[name])))
-			}
-			line += "  clamped " + strings.Join(parts, ", ")
-		}
-		switch {
-		case len(h.UnbudgetedResources) > 0:
-			line += "  unbudgeted " + strings.Join(h.UnbudgetedResources, ", ")
-		case h.Unbudgeted:
-			line += "  unbudgeted"
-		}
 		p("%s", line)
-	}
-
-	if len(r.UndeclaredLocked) > 0 {
-		p("undeclared resources with locked tokens (not in the configuration): %s", tokenList(r.UndeclaredLocked))
-	}
-
-	if len(v.unlisted) > 0 {
-		p("locked tokens no hold lists: %s (a hold in transition)", tokenList(v.unlisted))
 	}
 
 	if len(v.tickets) == 0 {
@@ -319,8 +278,8 @@ func (v statusView) human() string {
 		if t.position > 0 {
 			pos = fmt.Sprint(t.position)
 		}
-		line := fmt.Sprintf("  %s. %s  pid %d  priority %d  need %s  waiting %s", pos, labelText(t.info.Label),
-			t.info.PID, t.info.Priority, needText(t.info.Need), duration(t.waited))
+		line := fmt.Sprintf("  %s. %s  pid %d  priority %d  need mem %s  waiting %s", pos, labelText(t.info.Label),
+			t.info.PID, t.info.Priority, spec.FormatMiB(t.info.NeedMiB), duration(t.waited))
 		switch t.state {
 		case "stalled":
 			line += "  STALLED"
@@ -356,23 +315,6 @@ func plural(n int64, one, many string) string {
 	return many
 }
 
-// holdTokens is `gpu 1, mem 3 GiB`, or `no tokens` for an unbudgeted hold.
-func holdTokens(grant map[string]int) string {
-	if len(grant) == 0 {
-		return "no tokens"
-	}
-	return tokenList(grant)
-}
-
-// tokenList is an amount per resource in name order: `gpu 1, mem 3 GiB`.
-func tokenList(tokens map[string]int) string {
-	var parts []string
-	for _, name := range slices.Sorted(maps.Keys(tokens)) {
-		parts = append(parts, name+" "+amount(name, tokens[name]))
-	}
-	return strings.Join(parts, ", ")
-}
-
 // ignoredText lists the entries ignored per directory of the layout, `queue 1, holds 2`, leaving
 // out a directory with none; "" when nothing was ignored.
 func ignoredText(ignored map[string]int) string {
@@ -388,26 +330,25 @@ func ignoredText(ignored map[string]int) string {
 // ---------------------------------------------------------------- JSON output
 
 type jsonStatus struct {
-	Schema           int                     `json:"schema"`
-	StateDir         string                  `json:"state_dir"`
-	StateDirExists   bool                    `json:"state_dir_exists"`
-	Format           int                     `json:"format"`
-	FormatPresent    bool                    `json:"format_present"`
-	FormatUnderstood bool                    `json:"format_understood"`
-	FormatError      string                  `json:"format_error"`
-	Gen              int64                   `json:"gen"`
-	ReconciledNS     int64                   `json:"reconciled_ns"`
-	ConfigError      string                  `json:"config_error"`
-	Degraded         *jsonDegraded           `json:"degraded"`
-	Section          jsonSection             `json:"section"`
-	Resources        map[string]jsonResource `json:"resources"`
-	UndeclaredLocked map[string]int          `json:"undeclared_locked"`
-	Holds            []jsonHold              `json:"holds"`
-	Tickets          []jsonTicket            `json:"tickets"`
-	DeadHolds        []string                `json:"dead_holds"`
-	CancelRequests   []string                `json:"cancel_requests"`
-	Ignored          map[string]int          `json:"ignored"`
-	ObservedS        float64                 `json:"observed_s"`
+	Schema           int            `json:"schema"`
+	StateDir         string         `json:"state_dir"`
+	StateDirExists   bool           `json:"state_dir_exists"`
+	Format           int            `json:"format"`
+	FormatPresent    bool           `json:"format_present"`
+	FormatUnderstood bool           `json:"format_understood"`
+	FormatError      string         `json:"format_error"`
+	Gen              int64          `json:"gen"`
+	ReconciledNS     int64          `json:"reconciled_ns"`
+	ConfigError      string         `json:"config_error"`
+	Degraded         *jsonDegraded  `json:"degraded"`
+	Section          jsonSection    `json:"section"`
+	Mem              *jsonMem       `json:"mem"`
+	Holds            []jsonHold     `json:"holds"`
+	Tickets          []jsonTicket   `json:"tickets"`
+	DeadHolds        []string       `json:"dead_holds"`
+	CancelRequests   []string       `json:"cancel_requests"`
+	Ignored          map[string]int `json:"ignored"`
+	ObservedS        float64        `json:"observed_s"`
 }
 
 type jsonDegraded struct {
@@ -432,46 +373,37 @@ type jsonHolder struct {
 	Alive     *bool   `json:"alive"`
 }
 
-// jsonResource is one resource in tokens; mem alone adds its amounts in MiB.
-type jsonResource struct {
-	Size           int    `json:"size"`
-	Locked         int    `json:"locked"`
-	Free           int    `json:"free"`
-	UnlistedLocked int    `json:"unlisted_locked"`
-	SizeMiB        *int64 `json:"size_mib,omitempty"`
-	LockedMiB      *int64 `json:"locked_mib,omitempty"`
-	FreeMiB        *int64 `json:"free_mib,omitempty"`
+// jsonMem is the memory budget in MiB; null when the configuration cannot be read.
+type jsonMem struct {
+	SizeMiB     int64 `json:"size_mib"`
+	ReservedMiB int64 `json:"reserved_mib"`
+	FreeMiB     int64 `json:"free_mib"`
 }
 
 type jsonHold struct {
-	Name                string         `json:"name"`
-	Label               string         `json:"label"`
-	PID                 int            `json:"pid"`
-	StartNS             int64          `json:"start_ns"`
-	HeldForS            float64        `json:"held_for_s"`
-	Grant               map[string]int `json:"grant"`
-	Unbudgeted          bool           `json:"unbudgeted"`
-	UnbudgetedResources []string       `json:"unbudgeted_resources"`
-	Clamped             map[string]int `json:"clamped"`
-	OwnerExited         bool           `json:"owner_exited"` // the owner exited; a descendant holds the grant
-}
-
-type jsonRange struct {
-	Min int `json:"min"`
-	Max int `json:"max"`
+	Name         string  `json:"name"`
+	Label        string  `json:"label"`
+	PID          int     `json:"pid"`
+	StartNS      int64   `json:"start_ns"`
+	HeldForS     float64 `json:"held_for_s"`
+	ArrivalNS    int64   `json:"arrival_ns"`
+	NeedMiB      int64   `json:"need_mib"` // 0 for a run outside the budget
+	FootprintMiB int64   `json:"footprint_mib"`
+	Stops        int     `json:"stops"`
+	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
 }
 
 type jsonTicket struct {
-	ID        string               `json:"id"`
-	Label     string               `json:"label"`
-	PID       int                  `json:"pid"`
-	Priority  int                  `json:"priority"`
-	Need      map[string]jsonRange `json:"need"`
-	CreatedNS int64                `json:"created_ns"`
-	WaitedS   float64              `json:"waited_s"`
-	Position  int                  `json:"position"` // 1 is the head; 0 for a dead ticket
-	State     string               `json:"state"`    // waiting, stalled or dead
-	Stalled   *bool                `json:"stalled"`  // null unless --observe ran
+	ID        string  `json:"id"`
+	Label     string  `json:"label"`
+	PID       int     `json:"pid"`
+	Priority  int     `json:"priority"`
+	NeedMiB   int64   `json:"need_mib"`
+	CreatedNS int64   `json:"created_ns"`
+	WaitedS   float64 `json:"waited_s"`
+	Position  int     `json:"position"` // 1 is the head; 0 for a dead ticket
+	State     string  `json:"state"`    // waiting, stalled or dead
+	Stalled   *bool   `json:"stalled"`  // null unless --observe ran
 }
 
 func (v statusView) document() jsonStatus {
@@ -479,13 +411,12 @@ func (v statusView) document() jsonStatus {
 	d := jsonStatus{
 		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatPresent: r.FormatPresent,
 		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError,
-		Section:   jsonSection{Held: r.Section.Held},
-		Resources: map[string]jsonResource{}, UndeclaredLocked: maps.Clone(r.UndeclaredLocked), Holds: []jsonHold{}, Tickets: []jsonTicket{},
+		Section: jsonSection{Held: r.Section.Held}, Holds: []jsonHold{}, Tickets: []jsonTicket{},
 		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
 	}
-	if d.UndeclaredLocked == nil {
-		d.UndeclaredLocked = map[string]int{}
+	if r.ConfigError == "" {
+		d.Mem = &jsonMem{SizeMiB: r.Mem.SizeMiB, ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB}
 	}
 	if r.Section.Held {
 		h := &jsonHolder{PID: r.Section.PID, EnteredNS: r.Section.EnteredNS, HeldForS: sectionHeldFor(r.Section, v.nowNS).Seconds()}
@@ -498,31 +429,17 @@ func (v statusView) document() jsonStatus {
 	if x := r.Degraded; x != nil {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
 	}
-	for name, ri := range r.Resources {
-		jr := jsonResource{Size: ri.Size, Locked: ri.Locked, Free: ri.Available, UnlistedLocked: v.unlisted[name]}
-		if name == "mem" {
-			mib := func(tokens int) *int64 { n := int64(tokens) * spec.MemTokenMiB; return &n }
-			jr.SizeMiB, jr.LockedMiB, jr.FreeMiB = mib(ri.Size), mib(ri.Locked), mib(ri.Available)
-		}
-		d.Resources[name] = jr
-	}
 	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
 		d.Ignored[dir] = r.Ignored[dir]
 	}
 	for _, h := range r.Holds {
 		d.Holds = append(d.Holds, jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
-			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), Grant: nonNilMap(h.Grant),
-			Unbudgeted: h.Unbudgeted, UnbudgetedResources: nonNil(h.UnbudgetedResources),
-			Clamped:     nonNilMap(h.Clamped),
-			OwnerExited: h.OwnerExited})
+			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
+			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited})
 	}
 	for _, t := range v.tickets {
-		need := make(map[string]jsonRange, len(t.info.Need))
-		for name, mm := range t.info.Need {
-			need[name] = jsonRange{Min: mm.Min, Max: mm.Max}
-		}
 		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
-			Priority: t.info.Priority, Need: need, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
+			Priority: t.info.Priority, NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
 			Position: t.position, State: t.state}
 		if v.observed > 0 {
 			stalled := t.state == "stalled"
@@ -538,13 +455,6 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-func nonNilMap(m map[string]int) map[string]int {
-	if m == nil {
-		return map[string]int{}
-	}
-	return m
 }
 
 // writeJSON writes the document with labels exactly as stored: encoding/json escapes the C0

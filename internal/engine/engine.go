@@ -1,12 +1,11 @@
 //go:build unix
 
 // Package engine runs the protocol's transitions (PROTOCOL.md sections 10 to 15): enqueue,
-// observed-freshness waiting and election, cancellation and withdrawal, admission with clamping,
-// and inspection, and the pass-through of nested requests (section 18).
+// observed-freshness waiting and election, cancellation and withdrawal, admission on the holds'
+// reservations with clamping, and inspection, and the decision of a nested run (section 18).
 // It composes the pure state machine (internal/state) with the filesystem layer
 // (internal/store). It never prints, never installs signal handlers, never chooses exit codes and
-// never decides on its own to run unbudgeted: errors go to the caller, and a pass-through under a
-// parent that runs unbudgeted follows the parent.
+// never decides on its own to run unbudgeted: errors go to the caller.
 package engine
 
 import (
@@ -124,18 +123,19 @@ func (e *Engine) Config() (config.Config, error) {
 	return c, nil
 }
 
-// sizes recomputes the mem size from the configuration and the machine (PROTOCOL.md section 5.2),
-// and returns its LiveMem. An invalid configuration or an unknown memory is a *store.StateError.
-func (e *Engine) sizes() (map[string]int, bool, error) {
+// memSize recomputes the mem size, in MiB, from the configuration and the machine (PROTOCOL.md
+// section 5.2), and returns its LiveMem. An invalid configuration or an unknown memory is a
+// *store.StateError.
+func (e *Engine) memSize() (int64, bool, error) {
 	c, err := e.Config()
 	if err != nil {
-		return nil, false, err
+		return 0, false, err
 	}
 	m, err := e.machine()
 	if err != nil {
-		return nil, false, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
+		return 0, false, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
 	}
-	return c.Sizes(m), c.LiveMem, nil
+	return c.MemMiB(m), c.LiveMem, nil
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,
@@ -226,7 +226,7 @@ func (t *Ticket) publish(sec *store.Section) error {
 	}
 	arrival := e.clock.Realtime()
 	body, err := wire.Encode(wire.Ticket{Label: t.req.Label, Priority: t.req.Priority,
-		Need: t.req.Need, CreatedNS: arrival})
+		NeedMiB: t.req.NeedMiB, CreatedNS: arrival})
 	if err != nil {
 		return err
 	}
@@ -246,7 +246,7 @@ func (t *Ticket) publish(sec *store.Section) error {
 	t.f, t.id, t.name = f, id, name
 	t.mu.Unlock()
 	t.key = state.Key(id)
-	t.lastRefreshMono, t.lastRefreshReal = e.clock.Monotonic(), arrival
+	t.lastRefreshMono, t.lastRefreshReal, t.arrivalNS = e.clock.Monotonic(), arrival, arrival
 	return nil
 }
 

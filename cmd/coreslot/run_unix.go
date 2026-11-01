@@ -12,7 +12,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
-	"github.com/core-slot/coreslot/internal/spec"
 )
 
 // Timing of a waiting run (PROTOCOL.md section 22).
@@ -29,10 +28,9 @@ type run struct {
 	startNS   int64    // wall clock at the run's start
 	start     time.Time
 	waited    time.Duration
-	env       []string     // the command's environment before its grant: the inherited context dropped
-	nofile    *nofileProbe // learns the descriptor limit the run was started with (rlimit_unix.go)
-	pipeNoted bool         // the waiting line said once whether stdin is a pipe
-	freeWait  *freeMeter   // set when the request names mem: how long it waited while that was free
+	env       []string   // the command's environment before its grant: the inherited context dropped
+	pipeNoted bool       // the waiting line said once whether stdin is a pipe
+	freeWait  *freeMeter // how long it waited while its need was free
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -56,7 +54,6 @@ func runCommand(args []string, io IO) int {
 	defer signal.Stop(runSignals)
 	installStops()
 	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now()}
-	defer func() { r.nofile.stop() }()
 	return r.decide()
 }
 
@@ -77,9 +74,7 @@ func (r *run) ordinary() int {
 		return r.failOpen(nil, err)
 	}
 	req := r.o.request()
-	if mem, ok := req.Need["mem"]; ok {
-		r.freeWait = &freeMeter{needMiB: int64(mem.Min) * spec.MemTokenMiB, headroom: memsample.Headroom}
-	}
+	r.freeWait = &freeMeter{needMiB: req.NeedMiB, headroom: memsample.Headroom}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -8,11 +8,12 @@ import (
 	"slices"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
 // failOpen handles a state error (PROTOCOL.md section 14): under --strict a refusal, otherwise
-// the command runs at once with min of each resource, a diagnostic, an unbudgeted hold, the
+// the command runs at once with its need, a diagnostic, an unbudgeted hold, the
 // degraded record and the run log when the directory is usable and its format understood, and
 // CORESLOT_UNBUDGETED. e is nil when the directory could not be opened.
 func (r *run) failOpen(e *engine.Engine, err error) int {
@@ -25,8 +26,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 		r.notice("state error: %s; refusing (--strict)", text(reason))
 		return code
 	}
-	r.notice("state error: %s; running unbudgeted with %s (fail-open)", text(reason),
-		grantText(r.o.minGrant(), r.o.sortedNeed()))
+	r.notice("state error: %s; running unbudgeted with mem=%s (fail-open)", text(reason), spec.FormatMiB(r.o.need))
 	var g *engine.Grant
 	var ferr error
 	if e != nil {
@@ -42,15 +42,15 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	return r.runChild(c)
 }
 
-// unbudgetedChild is the child of a run outside the budget for reason, with min of each
-// resource: g's environment and descriptors when its unbudgeted hold g was published (g may be
-// nil), else the unbudgeted environment engine.ChildEnv builds. The caller decides whether it logs.
+// unbudgetedChild is the child of a run outside the budget for reason, with its need: g's
+// environment and descriptor when its unbudgeted hold g was published (g may be nil), else the
+// unbudgeted environment engine.ChildEnv builds. The caller decides whether it logs.
 func (r *run) unbudgetedChild(reason string, g *engine.Grant) child {
-	c := child{grant: r.o.minGrant(), failOpen: reason, release: func() error { return nil }}
+	c := child{grantMiB: r.o.need, failOpen: reason, release: func() error { return nil }}
 	if g != nil {
 		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
 	} else {
-		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.minGrant(), false, 0, reason)...)
+		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.need, "", reason)...)
 	}
 	return c
 }
@@ -80,12 +80,12 @@ func failOpenNotice(opened, held bool, err error) string {
 // CORESLOT_UNBUDGETED.
 const timeoutReason = "timeout"
 
-// timeoutRun is --on-timeout run: the ticket is withdrawn and the command runs with min of each
-// resource outside the budget. Its unbudgeted hold shows it in status and its run-log line gives
+// timeoutRun is --on-timeout run: the ticket is withdrawn and the command runs with its need
+// outside the budget. Its unbudgeted hold shows it in status and its run-log line gives
 // the reason, but a timeout is not a state error: nothing is recorded as degraded.
 func (r *run) timeoutRun(e *engine.Engine) int {
-	r.notice("not admitted within %v (--timeout); running without the budget with %s (--on-timeout run)",
-		r.o.timeout, grantText(r.o.minGrant(), r.o.sortedNeed()))
+	r.notice("not admitted within %v (--timeout); running without the budget with mem=%s (--on-timeout run)",
+		r.o.timeout, spec.FormatMiB(r.o.need))
 	g, herr := e.UnbudgetedHold(r.o.request(), timeoutReason)
 	c := r.unbudgetedChild(timeoutReason, g)
 	if timeoutLogs(g != nil && g.HoldName() != "", herr) {

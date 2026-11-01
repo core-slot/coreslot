@@ -9,14 +9,13 @@ import (
 	"testing"
 )
 
-// A pass-through starts no child that inherits its parent's grant but its command: the home
+// A pass-through starts no child that inherits its parent's hold but its command: the home
 // directory's NSS fallback (getent), which its context check starts when CORESLOT_STATE_DIR is
-// unset, must not get the hold's and the tokens' descriptors, or the grant's locks outlive every
-// holder for as long as getent runs (up to its 5 s bound and the wait after it). Nor must the
-// getent the pass-through starts for its run log once its command has exited. The password
-// database is made to miss, so that the fallback runs on every host, and the getent substitute
-// reports, from the environment it inherits, which of the descriptors CORESLOT_HELD_FD and
-// CORESLOT_TOKEN_FDS name are open in it. The ordinary parent's getent has no context to report.
+// unset, must not get the hold's descriptor, or its lock outlives every holder for as long as
+// getent runs (up to its 5 s bound and the wait after it). Nor must the getent the pass-through
+// starts for its run log once its command has exited. The password database is made to miss, so
+// that the fallback runs on every host, and the getent substitute reports, from the environment
+// it inherits, whether the descriptor CORESLOT_HELD_FD names is open in it. The ordinary parent's getent has no context to report.
 // Mutations: drop the shield main installs (the pass-through's context check starts getent with
 // the grant open); expose the grant to the command without shielding it again once the command
 // has started (the run log's getent gets it).
@@ -28,8 +27,8 @@ func TestPassThroughGetentInheritsNoGrant(t *testing.T) {
 	script := `#!/bin/sh
 [ "$1" = passwd ] || exit 2
 {
-	echo "context held=${CORESLOT_HELD_FD:-} tokens=${CORESLOT_TOKEN_FDS:-}"
-	for fd in ${CORESLOT_HELD_FD:-} $(echo "${CORESLOT_TOKEN_FDS:-}" | tr ',-' '  '); do
+	echo "context held=${CORESLOT_HELD_FD:-}"
+	for fd in ${CORESLOT_HELD_FD:-}; do
 		if [ -e /dev/fd/$fd ]; then echo "open $fd"; fi
 	done
 } >>"$GETENT_REPORT"
@@ -58,11 +57,11 @@ echo "me:x:$2:$2:me:$GETENT_HOME:/bin/sh"
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	nested := 0
 	for _, l := range lines {
-		if strings.HasPrefix(l, "context held=3 ") {
+		if l == "context held=3" {
 			nested++
 		}
 		if strings.HasPrefix(l, "open ") {
-			t.Errorf("a getent the pass-through started had the grant's descriptor %s open", strings.TrimPrefix(l, "open "))
+			t.Errorf("a getent the pass-through started had the hold's descriptor %s open", strings.TrimPrefix(l, "open "))
 		}
 	}
 	if nested < 2 {

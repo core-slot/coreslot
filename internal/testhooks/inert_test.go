@@ -55,12 +55,6 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	if PasswdMiss() {
 		t.Error("PasswdMiss() = true, want false")
 	}
-	if got := ProbeShell(); got != "/bin/sh" {
-		t.Errorf("ProbeShell() = %q, want /bin/sh", got)
-	}
-	if got := ProbeTimeout(time.Second); got != time.Second {
-		t.Errorf("ProbeTimeout(1s) = %v, want 1s", got)
-	}
 	if mib, set := Headroom(); mib != 0 || set {
 		t.Errorf("Headroom() = %d, %v, want 0, false", mib, set)
 	}

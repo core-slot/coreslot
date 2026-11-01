@@ -1,37 +1,32 @@
-// Package spec holds the validated request types shared by the engine and the CLI:
-// resource names, need ranges, priorities and labels, with the bounds of PROTOCOL.md.
+// Package spec holds the validated request type shared by the engine and the CLI: a memory need
+// in MiB, a priority and a label, with the bounds of PROTOCOL.md.
 package spec
 
 import (
 	"fmt"
-	"maps"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
-// Bounds of format 1 (PROTOCOL.md sections 5, 6 and 7).
+// Bounds of format 2 (PROTOCOL.md section 7).
 const (
-	MaxSize        = 4096 // largest configured size of a resource
-	MaxPerResource = 256  // largest request max, and most tokens of one resource in a grant
-	MaxPerGrant    = 512  // most tokens in one grant
-	MaxResources   = 8    // most resources in one request
-	MinPriority    = -1000
-	MaxPriority    = 1000
-	MaxLabelBytes  = 128
+	MinPriority   = -1000
+	MaxPriority   = 1000
+	MaxLabelBytes = 128
+	// MaxNeedMiB bounds every MiB amount of a body (1 PiB), so that summing a full directory of
+	// them never overflows.
+	MaxNeedMiB = 1 << 30
+	// DefaultNeedMiB is the need of a run that names none. interim: the learned or cold-start
+	// need replaces it.
+	DefaultNeedMiB = 128
 )
 
-// Range is a request for one resource: start once Min is free, take up to Max.
-type Range struct {
-	Min, Max int
-}
-
-// Request is what a client asks for. Need maps a resource name to its range.
+// Request is what a client asks for: NeedMiB of memory.
 type Request struct {
 	Label    string
 	Priority int
-	Need     map[string]Range
+	NeedMiB  int64
 	Tree     bool // the process tree at the requester's pid carries the grant's work; only the CLI sets it
 }
 
@@ -46,25 +41,9 @@ func usagef(format string, args ...any) error {
 	return &UsageError{Msg: fmt.Sprintf(format, args...)}
 }
 
-var nameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-
-// ValidateName checks a resource name against `[a-z][a-z0-9-]{0,31}`.
-func ValidateName(name string) error {
-	if !nameRE.MatchString(name) {
-		return usagef("invalid resource name %q: want [a-z][a-z0-9-]{0,31}", name)
-	}
-	return nil
-}
-
-// EnvName is a resource name's environment form: upper case, "-" mapped to "_".
-func EnvName(name string) string {
-	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-}
-
 // ParseDigits parses one to nine ASCII decimal digits and nothing else: no sign, no space,
-// leading zeros allowed. It is the number of the FORMAT line (PROTOCOL.md section 7.6), of a
-// descriptor in CORESLOT_HELD_FD and CORESLOT_TOKEN_FDS (section 17), and of the configuration's
-// sizes; nine digits always fit an int.
+// leading zeros allowed. It is the number of the FORMAT line (PROTOCOL.md section 7.6) and of the
+// descriptor in CORESLOT_HELD_FD (section 17); nine digits always fit an int.
 func ParseDigits(s string) (int, bool) {
 	if s == "" || len(s) > 9 || strings.Trim(s, "0123456789") != "" {
 		return 0, false
@@ -73,35 +52,11 @@ func ParseDigits(s string) (int, bool) {
 	return n, err == nil
 }
 
-func (r Range) validate(name string) error {
-	if r.Min < 1 || r.Min > r.Max || r.Max > MaxPerResource {
-		return usagef("invalid range %d..%d for %s: want 1 <= min <= max <= %d", r.Min, r.Max, name, MaxPerResource)
-	}
-	return nil
-}
-
-// Validate checks every bound of a request. Call it on a normalized request: an empty Need is a
-// *UsageError here, where Normalize makes it mem=1..1.
+// Validate checks every bound of a request. Call it on a normalized request: a need of 0 is a
+// *UsageError here, where Normalize makes it DefaultNeedMiB.
 func (r Request) Validate() error {
-	if len(r.Need) == 0 {
-		return usagef("a request names at least one resource")
-	}
-	if len(r.Need) > MaxResources {
-		return usagef("a request names at most %d resources, got %d", MaxResources, len(r.Need))
-	}
-	minSum := 0
-	for name, rg := range r.Need {
-		if err := ValidateName(name); err != nil {
-			return err
-		}
-		if err := rg.validate(name); err != nil {
-			return err
-		}
-		minSum += rg.Min
-	}
-	// A grant holds at most MaxPerGrant tokens, so minimums above it could never be admitted.
-	if minSum > MaxPerGrant {
-		return usagef("the minimums sum to %d, a grant holds at most %d tokens", minSum, MaxPerGrant)
+	if r.NeedMiB < 1 || r.NeedMiB > MaxNeedMiB {
+		return usagef("a need of %d MiB: want 1 to %d", r.NeedMiB, MaxNeedMiB)
 	}
 	if r.Priority < MinPriority || r.Priority > MaxPriority {
 		return usagef("priority %d is outside [%d, %d]", r.Priority, MinPriority, MaxPriority)
@@ -121,13 +76,10 @@ func ValidateLabel(label string) error {
 	return nil
 }
 
-// Normalize returns a copy of r whose Need defaults to mem=1..1 when empty. It never shares the
-// caller's map.
+// Normalize returns r with a need of 0 replaced by DefaultNeedMiB.
 func Normalize(r Request) Request {
-	if len(r.Need) == 0 {
-		r.Need = map[string]Range{"mem": {Min: 1, Max: 1}}
-	} else {
-		r.Need = maps.Clone(r.Need)
+	if r.NeedMiB == 0 {
+		r.NeedMiB = DefaultNeedMiB
 	}
 	return r
 }

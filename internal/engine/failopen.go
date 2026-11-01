@@ -5,20 +5,17 @@ package engine
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 
 	"github.com/core-slot/coreslot/internal/spec"
-	"github.com/core-slot/coreslot/internal/store"
 )
 
 // FailOpen publishes the hold of a run its caller has decided to run unbudgeted (PROTOCOL.md
-// section 14): "unbudgeted": true, an empty grant, every requested resource in
-// unbudgeted_resources, and the reason recorded in degraded, in one section entered within 2 s.
-// The engine never makes that decision itself. reason is informational, non-empty text.
+// section 14): a need of 0, which reserves nothing, and the reason recorded in degraded, in one
+// section entered within 2 s. The engine never makes that decision itself. reason is
+// informational, non-empty text.
 //
-// The returned grant is always usable: its Env carries CORESLOT_UNBUDGETED=reason and each
-// resource's min. When nothing could be written (the section stayed busy, a state error, or a
+// The returned grant is always usable: its Env carries CORESLOT_UNBUDGETED=reason and the
+// request's need. When nothing could be written (the section stayed busy, a state error, or a
 // FORMAT this client does not implement or that is malformed) it has no hold, and err says why;
 // the caller still runs and reports it. Close removes the hold as after any run (section 12.3).
 func (e *Engine) FailOpen(req spec.Request, reason string) (*Grant, error) {
@@ -40,8 +37,7 @@ func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) 
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	g := &Grant{e: e, tokens: &store.TokenSet{Indices: map[string][]int{}}, need: req.Need,
-		clamped: map[string]int{}, unbudgeted: slices.Sorted(maps.Keys(req.Need)), failOpen: reason}
+	g := &Grant{e: e, grantMiB: req.NeedMiB, failOpen: reason}
 	ctx, cancel := context.WithTimeout(context.Background(), releaseWait)
 	defer cancel()
 	sec, err := enterSection(e.st, ctx)
@@ -56,7 +52,7 @@ func (e *Engine) unbudgetedHold(req spec.Request, reason string, degraded bool) 
 	if !understood {
 		return g, refuseFormat(n, "; nothing written")
 	}
-	if err := g.publishHold(sec, req); err != nil {
+	if err := g.publishHold(sec, req, e.clock.Realtime(), 0); err != nil {
 		return g, err
 	}
 	_ = sec.BumpGen()

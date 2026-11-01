@@ -5,9 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/spec"
@@ -16,8 +13,8 @@ import (
 // runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the
 // CLI is not part of the protocol).
 type runOptions struct {
-	need        map[string]spec.Range // normalized: --mem, then the needs file, then one mem token
-	mem         int64                 // MiB from --mem, 0 when not given
+	need        int64 // MiB: --mem, then the needs file, then spec.DefaultNeedMiB
+	mem         int64 // MiB from --mem, 0 when not given
 	label       string
 	timeout     time.Duration
 	onTimeout   string // "fail" (the default) or "run"
@@ -104,16 +101,11 @@ func parseRun(args []string, streams IO, lookup needsLookup) (runOptions, error)
 			mib = e.MemMiB
 		}
 	}
-	need := map[string]spec.Range{}
-	if mib > 0 {
-		t := spec.MemTokensCeil(mib)
-		need["mem"] = spec.Range{Min: t, Max: t}
-	}
-	req := spec.Normalize(spec.Request{Label: o.label, Need: need})
+	req := spec.Normalize(spec.Request{Label: o.label, NeedMiB: mib})
 	if err := req.Validate(); err != nil {
 		return o, err
 	}
-	o.need = req.Need
+	o.need = req.NeedMiB
 	switch {
 	case o.onTimeout != "fail" && o.onTimeout != "run":
 		return o, usagef("--on-timeout %q: want run or fail", o.onTimeout)
@@ -131,35 +123,8 @@ func usagef(format string, args ...any) error {
 
 // request is the request of the run. Its hold says that the run's process tree carries the work.
 func (o runOptions) request() spec.Request {
-	return spec.Request{Label: o.label, Need: o.need, Tree: true}
+	return spec.Request{Label: o.label, NeedMiB: o.need, Tree: true}
 }
-
-// sortedNeed lists the requested resources in ascending name order.
-func (o runOptions) sortedNeed() []string { return slices.Sorted(maps.Keys(o.need)) }
 
 // needText is the request in the form of the waiting line: `mem 3 GiB`.
-func (o runOptions) needText() string { return needText(o.need) }
-
-// needText is a request as the waiting line and status show it: `gpu 1..1, mem 3 GiB`, with a
-// fixed mem need as one size.
-func needText(need map[string]spec.Range) string {
-	var parts []string
-	for _, name := range slices.Sorted(maps.Keys(need)) {
-		r := need[name]
-		if name == "mem" && r.Min == r.Max {
-			parts = append(parts, "mem "+amount(name, r.Min))
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s %s..%s", name, amount(name, r.Min), amount(name, r.Max)))
-	}
-	return strings.Join(parts, ", ")
-}
-
-// minGrant is each requested resource's min: the grant of a run without a budget.
-func (o runOptions) minGrant() map[string]int {
-	g := make(map[string]int, len(o.need))
-	for name, r := range o.need {
-		g[name] = r.Min
-	}
-	return g
-}
+func (o runOptions) needText() string { return "mem " + spec.FormatMiB(o.need) }

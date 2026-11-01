@@ -17,7 +17,7 @@ import (
 )
 
 // Contract: every Markdown file name the repository writes names a file of the repository. A
-// Markdown name is any token ending in ".md" or ".markdown", in any case, in prose, code, links or
+// Markdown name is any word ending in ".md" or ".markdown", in any case, in prose, code, links or
 // backticks; it resolves relative to the file it appears in, relative to the root, or, for a bare
 // name, to any file of that name. A URL's Markdown name is another site's and is out of scope, and
 // so is a name split across a line break: matching is per line. This file is scanned like every
