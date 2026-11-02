@@ -179,13 +179,20 @@ func TestNestedCommandDiesWithTheParentGroup(t *testing.T) {
 			}
 			pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 			t.Cleanup(func() { _ = unix.Kill(pid, unix.SIGKILL) })
-			for deadline := time.Now().Add(5 * time.Second); unix.Kill(pid, 0) == nil; time.Sleep(50 * time.Millisecond) {
+			for deadline := time.Now().Add(5 * time.Second); !exited(pid); time.Sleep(50 * time.Millisecond) {
 				if time.Now().After(deadline) {
 					t.Fatalf("the nested command (pid %d) outlived the kill of its parent's group", pid)
 				}
 			}
 		})
 	}
+}
+
+// exited reports whether pid has exited; a zombie that nobody reaps (a container's init may not)
+// has exited too.
+func exited(pid int) bool {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	return unix.Kill(pid, 0) != nil || err == nil && strings.Contains(string(b), ") Z ")
 }
 
 func TestIndependentQueues(t *testing.T) {
