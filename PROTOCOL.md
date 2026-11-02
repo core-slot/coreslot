@@ -1007,7 +1007,7 @@ itself.
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
-| 3 | `status`: runs fail open, because degraded mode is recorded or a state error (an unusable directory, a malformed `FORMAT`, an invalid configuration) stands; `doctor`: degraded mode is recorded and nothing else is wrong |
+| 3 | `status`: runs fail open, because degraded mode is recorded or a state error (an unusable directory, a malformed `FORMAT` or one naming a format this client does not implement, an invalid configuration) stands; `doctor`: degraded mode is recorded and nothing else is wrong |
 | 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusals of `--clear` and `--reset` are 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
@@ -1444,7 +1444,7 @@ over the holds that have a normal share and worked for at least a tenth of the p
 `wᵢ ≥ 0.1 × (the period)`, and 0 when there are none: an idle job's few milliseconds, mostly system
 time, say nothing about memory. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
-have no normal share. A command is protected after its first completed run. The **paging gate** is open when the
+have no normal share (`status --json`: `watch.learning`). A command is protected after its first completed run. The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
 other system time.

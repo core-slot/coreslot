@@ -70,7 +70,7 @@ func statusCommand(args []string, io IO) int {
 	} else {
 		fmt.Fprint(io.Stdout, v.human())
 	}
-	if rep.Degraded != nil || rep.FormatError != "" || rep.ConfigError != "" {
+	if rep.Degraded != nil || rep.FormatError != "" || !rep.FormatUnderstood || rep.ConfigError != "" {
 		return exitDegraded
 	}
 	return 0
@@ -421,13 +421,15 @@ type jsonHolder struct {
 
 // jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
 // jsonWatch is the watchdog: the level and E of the newest sample (no level without a fresh one),
-// whether it protects and, if not, why, and the hold of the next victim.
+// whether it protects and, if not, why, the hold of the next victim and the running jobs that have
+// no history.
 type jsonWatch struct {
 	Level        string  `json:"level"`
 	ExcessPoints float64 `json:"excess_points"`
 	Protecting   bool    `json:"protecting"`
 	Reason       string  `json:"reason"`
 	NextVictim   string  `json:"next_victim"`
+	Learning     int     `json:"learning"`
 }
 
 type jsonMem struct {
@@ -472,7 +474,7 @@ func (v statusView) document() jsonStatus {
 	if r.Mem.Known {
 		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB}
 	}
-	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim}
+	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim, Learning: r.Watch.Learning}
 	d.Watch.Protecting, d.Watch.Reason = v.protection()
 	if r.Watch.Fresh {
 		d.Watch.Level = r.Watch.Level.String()

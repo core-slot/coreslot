@@ -111,8 +111,8 @@ func TestStatusWatch(t *testing.T) {
 // status --json carries the watchdog's state too.
 func TestStatusJSONWatch(t *testing.T) {
 	w, _ := statusDoc(t, budgetDir(t, 8192), 0)["watch"].(map[string]any)
-	if len(w) != 5 || w["level"] != "" || w["protecting"] != false || w["reason"] != "no coreslot job is running" {
-		t.Errorf("status --json watch = %v, want the five keys, no level, not protecting for want of a job", w)
+	if len(w) != 6 || w["level"] != "" || w["protecting"] != false || w["reason"] != "no coreslot job is running" || w["learning"] != float64(0) {
+		t.Errorf("status --json watch = %v, want the six keys, no level, not protecting for want of a job, learning 0", w)
 	}
 }
 
