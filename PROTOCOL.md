@@ -122,7 +122,7 @@ Every conforming client MUST preserve these invariants:
 - **I6 one budget:** every client of format 2 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
-  of them nor one whose `victim` is false, and a run signals only the process group of its own
+  of them, one whose `victim` is false nor one whose label has no normal share, and a run signals only the process group of its own
   command, only while it has not reaped it (section 23.5).
 
 ## 4. State directory and filesystem policy
@@ -1422,16 +1422,21 @@ A **running** hold is a live hold whose body is well-formed, whose `child_exited
 memory (section 12) but is no job of the watchdog. For each running hold,
 `S = (d_sys + d_page_wait) / (d_user + d_sys + d_page_wait)`
 over its latest tick period. Its normal share `S0` is the median of `sys_s / (user_s + sys_s)` over
-the last 20 counted runs of its label (section 20) that report both times, and 0.25 when there are
-none: the highest normal measured, so that a command nothing is known of needs more evidence. The
-machine's **excess** `E`, in percentage points, is
+the last 20 counted runs of its label (section 20) that report both times. When there are none it
+has no normal share and is **learning**: ordinary commands spend anything from 3 % to 97 % of their
+time in the kernel, so no value stands for a command nothing is known of. A run reads the run log
+once, when it starts, so a command started before the first run of its label completes is learning
+until it ends. The machine's **excess** `E`, in percentage points, is
 
 ```
 E = 100 × Σ wᵢ · max(0, Sᵢ − S0ᵢ) / Σ wᵢ      wᵢ = d_userᵢ + d_sysᵢ + d_page_waitᵢ
 ```
 
-over the holds that worked for at least a tenth of the period, `wᵢ ≥ 0.1 × (the period)`, and 0
-when there are none: an idle job's few milliseconds, mostly system time, say nothing about memory. The **paging gate** is open when the
+over the holds that have a normal share and worked for at least a tenth of the period,
+`wᵢ ≥ 0.1 × (the period)`, and 0 when there are none: an idle job's few milliseconds, mostly system
+time, say nothing about memory. A learning hold is no part of `E`: it still reserves memory (section
+12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
+have no normal share. A command is protected after its first completed run. The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
 other system time.
@@ -1469,7 +1474,7 @@ one at a time.
 
 1. The ticker that advanced the detector writes the stop list into `detector.stop`, and the round's
    time into `detector.last_round_ns`. The list holds the **victims** from the newest arrival to the
-   oldest: running holds whose `victim` is true, never the oldest running hold by arrival (of equal
+   oldest: running holds whose `victim` is true and that have a normal share (section 23.3), never the oldest running hold by arrival (of equal
    arrivals the smallest hold name counts as the oldest, and the greatest as the newest). It takes
    victims until their footprints sum to at least the deficit `max(−room, 0)` MiB of the sample
    it just took, and at least one. With only the oldest hold or holds that are not victims left, the list is
@@ -1482,8 +1487,8 @@ one at a time.
    has passed, except that under `mode = "enforce"` a round written in observe mode
    (`detector.observed`), whose holds never exit, holds nothing back.
 
-The oldest running hold, a hold whose label has `no_restart` and a run that shares coreslot's
-process group are never victims. A run that finds its command ended by a `SIGKILL` it did not send does not
+The oldest running hold, a hold whose label has `no_restart`, a hold that is learning (it has no
+normal share) and a run that shares coreslot's process group are never victims. A run that finds its command ended by a `SIGKILL` it did not send does not
 restart it (section 24.3).
 
 ### 23.6 Observe mode and the sample log

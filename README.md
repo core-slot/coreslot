@@ -106,11 +106,17 @@ after 3 memory stops`.
 
 Never stopped: the oldest running command, a command whose label has `no_restart = true` in
 `needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,
-or a run nested inside another run's reservation) and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
+or a run nested inside another run's reservation), a command whose label has no completed run yet
+and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
 and not restarted. The thresholds are `[watch]` keys with interim defaults; see
 [`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
 the kill and says what it would have stopped.
+
+A command is protected after its first completed run. Until then coreslot does not know what is
+normal for it (commands spend anywhere from 3 % to 97 % of their time in the kernel), so the first run
+of a label is never stopped and does not count towards the level; it still holds its memory, and
+`status` says the watchdog is learning and how many running commands have no history.
 
 On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
 takes a coreslot command before your desktop; a label with `no_restart = true` keeps its score.
