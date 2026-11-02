@@ -101,7 +101,7 @@ func TestOnlyTickingHoldsAreJobs(t *testing.T) {
 	if e := watch.Excess(jobs, 2e9); e != 0 {
 		t.Errorf("E %v from holds that do not tick, want 0", e)
 	}
-	if got := watch.StopList(jobs, 1); !slices.Equal(got, []string{"newest"}) {
+	if got := watch.StopList(jobs, false, 1); !slices.Equal(got, []string{"newest"}) {
 		t.Errorf("stop list %v, want [newest]", got)
 	}
 }
@@ -172,5 +172,53 @@ func TestSamplersWithDifferentLogViewsAgree(t *testing.T) {
 	}
 	if a, b := excess(early), excess(late); a != b || a != 56 {
 		t.Errorf("E is %v when the earlier run samples and %v when the later does; want 56 from A3 alone", a, b)
+	}
+}
+
+// A stop round frees the physical shortage, the reserve less the headroom, not the reservations
+// not yet used: with 1.5 GiB of headroom over a 1 GiB reserve nothing is short, and of A (6 GiB
+// needed, 5 in use), B (3, 1), C (3, 0.8) and D (3, 0.5) the round lists D alone. Mutation: sizing
+// the round by the room, -7.2 GiB here, lists D, C and B.
+func TestStopRoundFreesTheShortageNotTheReservations(t *testing.T) {
+	clk := newFakeClock()
+	dir := newStateDir(t, "")
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := func() (config.Machine, error) {
+		return config.Machine{MemMiB: 65536, HeadroomMiB: 65536, HeadroomOK: true}, nil
+	}
+	e := New(st, filepath.Join(dir, store.ConfigFile), big, clk.clock())
+	for i, h := range []struct{ need, footprint int64 }{{6144, 5120}, {3072, 1024}, {3072, 819}, {3072, 512}} {
+		g := hold(t, e, need(h.need))
+		if err := g.UpdateHold(func(b *wire.Hold) {
+			b.ArrivalNS, b.FootprintMiB, b.Victim, b.Learned = int64(i+1), h.footprint, true, true
+			b.SampledNS = clk.clock().Realtime()
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Headroom 1536 leaves nothing short; at 256 the machine is 768 MiB short, which D (512) does
+	// not cover and D with C (819) does.
+	for _, c := range []struct {
+		headroom, short int64
+		want            []int64 // arrivals
+	}{{1536, 0, []int64{4}}, {256, 768, []int64{4, 3}}} {
+		s, err := e.sampler(config.Config{ReserveMiB: 1024}, config.Machine{MemMiB: 65536, HeadroomMiB: c.headroom, HeadroomOK: true})()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int64
+		for _, hold := range watch.StopList(s.Jobs, false, s.ShortMiB) {
+			for _, j := range s.Jobs {
+				if j.Hold == hold {
+					got = append(got, j.ArrivalNS)
+				}
+			}
+		}
+		if s.ShortMiB != c.short || !slices.Equal(got, c.want) {
+			t.Errorf("headroom %d: shortage %d MiB, stopped arrivals %v (room %d); want %d, %v", c.headroom, s.ShortMiB, got, s.RoomMiB, c.short, c.want)
+		}
 	}
 }

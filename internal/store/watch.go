@@ -59,8 +59,8 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 		cur = watch.Sample{} // no reading: Unknown, and the next sample starts afresh
 	}
 	var round []string
-	if d.Advance(prev, cur, c) >= watch.Red && roundOver(d, cur, c) { // red or floor: a stop round
-		round = watch.StopList(cur.Jobs, max(-cur.RoomMiB, 0))
+	if lvl := d.Advance(prev, cur, c); lvl >= watch.Red && roundOver(d, cur, c) { // red or floor: a stop round
+		round = watch.StopList(cur.Jobs, lvl == watch.Floor, cur.ShortMiB)
 		d.Stop, d.LastRoundNS, d.Observed = round, cur.Host.WallNS, c.Observe
 	}
 	if c.SampleLog { // a calibration aid: a failed rotation or write costs a line

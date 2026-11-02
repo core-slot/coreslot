@@ -56,7 +56,7 @@ func Defaults() Config {
 
 // Job is one live hold as its run last wrote it: its tree's footprint and the time deltas since
 // its run's previous tick, and its label's normal S, which Learned says the run log gave: a job
-// without it is neither counted in E nor stopped.
+// without it is neither counted in E nor stopped by a red round.
 type Job struct {
 	Hold         string  `json:"hold"`
 	Label        string  `json:"label"`
@@ -71,11 +71,13 @@ type Job struct {
 	Victim       bool    `json:"victim"`
 }
 
-// Sample is one machine sample: the host readings, the live jobs and the admission room in MiB.
+// Sample is one machine sample: the host readings, the live jobs, the admission room in MiB and
+// the shortage, how far the headroom is under the reserve (0 when it is not).
 type Sample struct {
-	Host    memsample.HostReading `json:"host"`
-	Jobs    []Job                 `json:"jobs"`
-	RoomMiB int64                 `json:"room_mib"`
+	Host     memsample.HostReading `json:"host"`
+	Jobs     []Job                 `json:"jobs"`
+	RoomMiB  int64                 `json:"room_mib"`
+	ShortMiB int64                 `json:"short_mib"`
 }
 
 // Level is the machine's memory level. Admission waits at Yellow and above; Unknown is no

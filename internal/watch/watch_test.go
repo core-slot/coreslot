@@ -308,17 +308,17 @@ func jobs() []Job {
 
 // Victims go newest first until their footprints cover the deficit; the oldest never goes.
 func TestStopListNewestFirstCumulative(t *testing.T) {
-	if got := StopList(jobs(), 1024); !slices.Equal(got, []string{"7", "6", "5"}) {
+	if got := StopList(jobs(), false, 1024); !slices.Equal(got, []string{"7", "6", "5"}) {
 		t.Errorf("stop list %v, want [7 6 5]", got)
 	}
-	if got := StopList(jobs(), 1<<20); !slices.Equal(got, []string{"7", "6", "5"}) {
+	if got := StopList(jobs(), false, 1<<20); !slices.Equal(got, []string{"7", "6", "5"}) {
 		t.Errorf("stop list for a deficit nobody covers %v, want [7 6 5]", got)
 	}
 }
 
 // A round stops at least one job, even with no deficit.
 func TestStopListAtLeastOne(t *testing.T) {
-	if got := StopList(jobs(), 0); !slices.Equal(got, []string{"7"}) {
+	if got := StopList(jobs(), false, 0); !slices.Equal(got, []string{"7"}) {
 		t.Errorf("stop list %v, want [7]", got)
 	}
 }
@@ -329,19 +329,42 @@ func TestStopListOnlyOldestLeft(t *testing.T) {
 	for i := range js[1:] {
 		js[i+1].Victim = false
 	}
-	if got := StopList(js, 1024); len(got) != 0 {
+	if got := StopList(js, false, 1024); len(got) != 0 {
 		t.Errorf("stop list %v, want none", got)
 	}
-	if got := StopList(jobs()[:1], 1024); len(got) != 0 {
+	if got := StopList(jobs()[:1], false, 1024); len(got) != 0 {
 		t.Errorf("stop list of the oldest alone %v, want none", got)
 	}
 }
 
-// A cold job is never listed, even as the newest; the learned victims behind it are.
+// A red round never lists a cold job, even as the newest; the learned victims behind it are.
 func TestStopListSkipsColdJobs(t *testing.T) {
 	js := jobs()
 	js[3].Learned = false
-	if got := StopList(js, 1<<20); !slices.Equal(got, []string{"6", "5"}) {
+	if got := StopList(js, false, 1<<20); !slices.Equal(got, []string{"6", "5"}) {
 		t.Errorf("stop list %v, want [6 5]", got)
+	}
+}
+
+// A is the oldest and learned, B learning and large, D learning and small, C learned, small and newest.
+// A red round lists C alone; a floor round lists the learned C, then the learning ones newest
+// first until the footprints cover the shortage, and never A. Mutation: ignoring the floor flag
+// lists C alone to the end.
+func TestStopListFloorTakesLearningJobs(t *testing.T) {
+	js := []Job{
+		{Hold: "A", ArrivalNS: 1, FootprintMiB: 2048, Victim: true, Learned: true},
+		{Hold: "B", ArrivalNS: 2, FootprintMiB: 8192, Victim: true},
+		{Hold: "C", ArrivalNS: 4, FootprintMiB: 300, Victim: true, Learned: true},
+		{Hold: "D", ArrivalNS: 3, FootprintMiB: 100, Victim: true},
+	}
+	for _, c := range []struct {
+		floor bool
+		short int64
+		want  []string
+	}{{false, 1 << 20, []string{"C"}}, {true, 200, []string{"C"}}, {true, 350, []string{"C", "D"}},
+		{true, 1 << 20, []string{"C", "D", "B"}}} {
+		if got := StopList(js, c.floor, c.short); !slices.Equal(got, c.want) {
+			t.Errorf("floor %v, shortage %d: stop list %v, want %v", c.floor, c.short, got, c.want)
+		}
 	}
 }

@@ -1318,12 +1318,11 @@ At 12:14:40 the detector's bucket reaches `red_samples` and the sample leaves th
 holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB), `gate:big`
 (arrival 12:09:00, 3 072 / 1 984), `lint` (pid 7400, arrival 12:13:00, 2 048 / 2 300) and `watcher`
 (pid 7500, arrival 12:14:00, 1 024 / 900), whose label has `no_restart = true`. The headroom reads
-2 600 MiB, so the room is `2600 − 1024 − (2560 + 1088 + 0 + 124) = −2196` MiB: a deficit of
-2 196 MiB.
+600 MiB against the 1 024 MiB reserve: the machine is `1024 − 600 = 424` MiB short.
 
 1. The ticker that took the sample builds the stop list from the victims, newest arrival first,
    never the oldest running hold: `watcher` is not a victim; `lint` is next and its footprint, 2 300
-   MiB, covers the deficit. It writes `detector.stop` =
+   MiB, covers the shortage. It writes `detector.stop` =
    `["01791720781000000000-0000007400-000009-lint"]` and `detector.last_round_ns` into
    `watch.json`.
 2. Pid 7400's next tick finds its own hold in the list. It sends SIGKILL to the process group of
@@ -1444,7 +1443,7 @@ over the holds that have a normal share and worked for at least a tenth of the p
 time, say nothing about memory. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
 have no normal share (`status --json`: `watch.learning`). A command is judged only once the first run of its label has
-completed; until then it is never stopped. The **paging gate** is open when the
+completed; until then only a floor round stops it (section 23.5). The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
 other system time. On Linux the stall rises in almost every period, so there the gate is nearly
@@ -1487,11 +1486,13 @@ one at a time.
 
 1. The ticker that advanced the detector writes the stop list into `detector.stop`, and the round's
    time into `detector.last_round_ns`. The list holds the **victims** from the newest arrival to the
-   oldest: running holds whose `victim` is true and that have a normal share (section 23.3), never the oldest running hold by arrival (of equal
-   arrivals the smallest hold name counts as the oldest, and the greatest as the newest). It takes
-   victims until their footprints sum to at least the deficit `max(−room, 0)` MiB of the sample
-   it just took, and at least one. With only the oldest hold or holds that are not victims left, the list is
-   empty.
+   oldest: running holds whose `victim` is true, never the oldest running hold by arrival (of equal
+   arrivals the smallest hold name counts as the oldest, and the greatest as the newest). A red
+   round takes the victims that have a normal share (section 23.3). A floor round takes every
+   such victim first and only then the learning ones, newest first within each. It takes victims
+   until their footprints sum to at least the **shortage**, `max(reserve − headroom, 0)` MiB of the
+   sample it just took (the room counts reservations not yet used, which free no memory), and at
+   least one. With only the oldest hold or holds that are not victims left, the list is empty.
 2. A run kills only its own command, only when its own hold's name is in the list. It sends
    `SIGKILL` to the command's process group, and only while it has not reaped the command, so the
    group id cannot have been reused. The kill and the reap are serialized under one lock in the
@@ -1500,9 +1501,14 @@ one at a time.
    has passed, except that under `mode = "enforce"` a round written in observe mode
    (`detector.observed`), whose holds never exit, holds nothing back.
 
-The oldest running hold, a hold whose label has `no_restart`, a hold that is learning (it has no
-normal share) and a run that shares coreslot's process group are never victims. A run that finds its command ended by a `SIGKILL` it did not send does not
+The oldest running hold, a hold whose label has `no_restart` and a run that shares coreslot's
+process group are never victims, and a hold that is learning (it has no normal share) is a victim of
+a floor round only. A run that finds its command ended by a `SIGKILL` it did not send does not
 restart it (section 24.3).
+
+A run stopped by a floor round tells its agent that the whole machine ran out of memory (swap
+nearly full) and to free memory outside coreslot before the command comes back, and restarts it by
+itself as for any stop (section 24.1). A red stop does not say so.
 
 ### 23.6 Observe mode and the sample log
 

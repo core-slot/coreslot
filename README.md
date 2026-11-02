@@ -97,8 +97,8 @@ kernel is actually paging:
 | Level | When | Effect |
 |---|---|---|
 | yellow | the commands lose noticeably more time to memory than their normal | nothing new starts; starts resume one at a time after it clears |
-| red | they lose a large share of it for tens of seconds | a stop round: the newest commands are killed until their footprints cover the shortfall |
-| floor | swap is nearly out of room and still growing | the same stop round, at once |
+| red | they lose a large share of it for tens of seconds | a stop round: the newest commands are killed until their footprints cover how far free memory is under the reserve |
+| floor | swap is nearly out of room and still growing | the same stop round, at once, and it may take a command that is still learning |
 
 A stopped command is killed with `SIGKILL` and put back in the queue at its **first arrival**, so it
 keeps its place; it starts again once memory has been calm for a while and there is room for it
@@ -107,8 +107,7 @@ after 3 memory stops`.
 
 Never stopped: the oldest running command, a command whose label has `no_restart = true` in
 `needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,
-or a run nested inside another run's reservation), a command whose label has no completed run yet
-and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
+or a run nested inside another run's reservation) and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
 and not restarted. The thresholds are `[watch]` keys; [the calibration
 notes](calibration/README.md#what-the-defaults-rest-on) say what recorded runs of two Macs show about
 each default, and which are not calibrated. See
@@ -117,9 +116,9 @@ each default, and which are not calibrated. See
 the kill and says what it would have stopped.
 
 A command is judged only once the first run of its label has completed. Until then coreslot does
-not know what is normal for it, so that first run is never stopped and does not count towards the
-level; it still holds its memory, and `status` says the watchdog is learning and how many running
-commands have no history.
+not know what is normal for it, so that first run does not count towards the level and no red round
+stops it; only a floor round does, after every command that has history. It still holds its memory,
+and `status` says the watchdog is learning and how many running commands have no history.
 
 On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
 takes a coreslot command before your desktop; a label with `no_restart = true` keeps its score.

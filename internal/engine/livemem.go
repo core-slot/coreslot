@@ -117,6 +117,7 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Samp
 		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime())}
 		if m.HeadroomOK {
 			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
+			s.ShortMiB = max(cfg.ReserveMiB-m.HeadroomMiB, 0)
 		}
 		return s, nil
 	}

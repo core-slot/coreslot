@@ -17,16 +17,20 @@ import (
 // machine is a read for Tick: every call is the next 2 s of a machine paging hard, with jobs
 // whose system share is far above their normal.
 type machine struct {
-	calls int
-	jobs  []watch.Job
+	calls    int
+	jobs     []watch.Job
+	swapStep int64 // swap used grows by it per call, with no room left in swap or on the volume
 }
 
 func (m *machine) read() (watch.Sample, error) {
 	m.calls++
 	ns := int64(1e12) + int64(m.calls)*2e9
-	s := watch.Sample{Jobs: slices.Clone(m.jobs), RoomMiB: -100}
+	s := watch.Sample{Jobs: slices.Clone(m.jobs), ShortMiB: 100}
 	s.Host.Decomp, s.Host.WallNS, s.Host.AwakeNS = uint64(m.calls)*1e6, ns, ns
 	s.Host.SwapFreeMiB, s.Host.VMVolumeFreeMiB = 8192, 100000
+	if m.swapStep > 0 {
+		s.Host.SwapUsedMiB, s.Host.SwapFreeMiB, s.Host.VMVolumeFreeMiB = int64(m.calls)*m.swapStep, 100, 100
+	}
 	return s, nil
 }
 
@@ -104,6 +108,25 @@ func TestOneStopRoundPerEpisode(t *testing.T) {
 	}
 	if waited := time.Duration(d.LastRoundNS - round); waited < 15*time.Second || !slices.Equal(stop, []string{"2"}) {
 		t.Errorf("next round after %v: %v; want [2] after post_kill_s", waited, stop)
+	}
+}
+
+// A floor round lists a learning job that a red round skips. Mutation: a round that never takes
+// the level's floor lists nothing here.
+func TestFloorRoundListsLearningJobs(t *testing.T) {
+	sec := enter(t, open(t, newDir(t)))
+	learning := stalled("2", 2)
+	learning.Learned = false
+	m := &machine{jobs: []watch.Job{stalled("1", 1), learning}, swapStep: 300}
+	now := NowNS()
+	var d watch.Detector
+	var stop []string
+	for d.Level != watch.Floor && m.calls < 20 {
+		now += 2e9
+		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
+	}
+	if d.Level != watch.Floor || !slices.Equal(stop, []string{"2"}) {
+		t.Errorf("level %v, stop %v; want floor, [2]", d.Level, stop)
 	}
 }
 
