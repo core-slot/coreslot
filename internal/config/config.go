@@ -15,8 +15,8 @@ import (
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
-// DefaultReserveMiB is the memory admission keeps free beyond every job's need. calibration/records:
-// 2 GiB more makes the Air's room negative in every control sample.
+// DefaultReserveMiB is the memory admission keeps free beyond every job's need. Not calibrated: a
+// round value (calibration/README.md has what the records show).
 const DefaultReserveMiB = 1024
 
 // Config is a parsed configuration file.

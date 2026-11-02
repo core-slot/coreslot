@@ -15,9 +15,8 @@ Its on-disk protocol is format 2.
 
 A state directory of another format is not used: runs start unbudgeted with a notice (`--strict`
 refuses) until `coreslot doctor --reset` recreates it as format 2. Every client of a machine runs
-the same release. The watchdog's thresholds and the memory reserve are calibrated on two Macs
-(`calibration/records`); the floor comes from prior art, and the waits `post_kill_s` and
-`spacing_s` are still interim.
+the same release. The watchdog's yellow and red points were chosen on recorded runs of two Macs;
+no other default is calibrated ([what the records show](calibration/README.md#what-the-defaults-rest-on)).
 
 ### Added
 
@@ -33,16 +32,17 @@ the same release. The watchdog's thresholds and the memory reserve are calibrate
   queue, after memory has been calm for a while; after the third stop it gives up with the refusal
   code and the line `coreslot: gave up after 3 memory stops`. The `[watch]` configuration table sets
   the mode (`enforce` or `observe`), the thresholds and the waits; `observe` logs what it would stop.
+  The first run of a label is not judged: it is never stopped and does not count towards the level.
 - Labels are automatic: without `--label`, a run is labelled with the command's shape and its
   repository, such as `go test@proj`, and the worktrees of one repository share the label. A
-  `needs.toml` key such as `["go test@proj"]` needs TOML quoting.
+  `needs.toml` table such as `[needs."go test@proj"]` needs TOML quoting.
 - `--mem SIZE` on `coreslot run`; `mem` and `no_restart` in a `needs.toml` entry (`no_restart` spares
   a label from every stop round); `[memory] reserve` in the configuration.
 - `CORESLOT_HOLD`: a `coreslot run` inside a command's reservation runs inside it without queueing,
   unless `--independent`.
 - On Linux a run raises its own `oom_score_adj` to 500, unless its label has `no_restart = true`,
   so the kernel's out-of-memory kill takes a coreslot command before the desktop.
-- `calibration/`: the harness that sets the watchdog's defaults from runs on real machines.
+- `calibration/`: the harness that scores the watchdog's thresholds on runs of real machines, its records, and a measurement of the watchdog's own cost.
 - A Claude Code plugin, `integrations/claude-code`: a `PreToolUse` hook that refuses a bare heavy
   test or build command once and offers the same command back as `coreslot run -- <command>`. The
   repository is its marketplace: `/plugin marketplace add core-slot/coreslot`, then

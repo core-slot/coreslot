@@ -261,7 +261,7 @@ A size, in the configuration's `reserve` and `floor`, the needs file's `mem` and
 then optionally `G` (GiB, also meant without a suffix) or `M` (MiB). Its value is the number in
 MiB, rounded up to a whole MiB (`"9.5G"` is 9 728 MiB, `"768M"` is 768 MiB, `"3"` is 3 072 MiB). In
 a TOML file a size may also be an integer, which counts GiB. A size of 0 is valid where the key
-allows it (`reserve`, `floor`) and invalid where it does not (a need). Any other value (a negative
+allows it (`reserve`) and invalid where it does not (`floor`, a need). Any other value (a negative
 number, `"1.5T"`, more than 6 digits or 3 decimals, a boolean, a float, a table) is invalid.
 
 A need is at most `1073741824` MiB (1 PiB; section 7.3). Memory has no granularity: a need is
@@ -1077,7 +1077,7 @@ generation). One generation is kept.
 ## 21. Worked examples
 
 All examples use one Linux machine: `MemTotal` is 16 GiB (`memory = 16384`), the configuration
-declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 10`, `red_points = 30`,
+declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 20`, `red_points = 40`,
 `red_samples = 10`, `gate_pages_s = 1000`, `floor = "2G"`, `calm_s = 30`, `post_kill_s = 15` and
 `spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 2`
 unless stated. Listings show the entries under `$S` that matter; `[L]` marks a file whose lock is
@@ -1342,8 +1342,8 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
    again when it is admitted, the level has been green for 30 s and the room is at least `2 300 +
    max(256, 230) = 2 556` MiB. The new hold has `"arrival_ns": 1791720780000000000` and, from its first tick,
    `"stops": 1`.
-   After a third stop the run prints `coreslot: gave up after 3 memory stops (run
-   01791720781000000000-0000007400-000009-lint)` and exits 75.
+   After a third stop the run prints `coreslot: gave up after 3 memory stops (run <hold>)`, naming
+   the hold of its third attempt, and exits 75.
 
 ## 22. Timing constants
 
@@ -1429,8 +1429,7 @@ memory (section 12) but is no job of the watchdog. For each running hold,
 `S = (d_sys + d_page_wait) / (d_user + d_sys + d_page_wait)`
 over its latest tick period. Its normal share `S0` is the median of `sys_s / (user_s + sys_s)` over
 the last 20 counted runs of its label (section 20) that report both times. When there are none it
-has no normal share and is **learning**: ordinary commands spend anything from 3 % to 97 % of their
-time in the kernel, so no value stands for a command nothing is known of. Each run decides its own
+has no normal share and is **learning**: no value stands for a command nothing is known of. Each run decides its own
 command's `S0` and whether it is learned once, from its own read of the run log when it starts, and
 writes both in its hold (`normal_share`, `learned`, section 7.4). A machine sample takes them from the
 holds and reads no run log, so every run that samples computes the same `E`, and a command started
@@ -1444,10 +1443,12 @@ over the holds that have a normal share and worked for at least a tenth of the p
 `wᵢ ≥ 0.1 × (the period)`, and 0 when there are none: an idle job's few milliseconds, mostly system
 time, say nothing about memory. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
-have no normal share (`status --json`: `watch.learning`). A command is protected after its first completed run. The **paging gate** is open when the
+have no normal share (`status --json`: `watch.learning`). A command is judged only once the first run of its label has
+completed; until then it is never stopped. The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
-other system time.
+other system time. On Linux the stall rises in almost every period, so there the gate is nearly
+always open and tells nothing.
 
 ### 23.4 Levels
 
@@ -1469,7 +1470,9 @@ below that applies.
 - **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
   `SwapFree` plus `MemAvailable` on Linux) is under `floor`, and swap used grew by at least 256 MiB
   over the last 20 s.
-  It is an edge: a calm machine with little room never reaches it.
+  It is an edge: a calm machine with little room never reaches it. Without swap, swap used never
+  grows: on a Linux host without swap the floor never fires and the kernel's own out-of-memory
+  killer acts instead (a coreslot run carries `oom_score_adj` 500, section 17, so it goes first).
 - **Green** otherwise.
 
 `calm_since_ns` is the host clock of the sample that made the level green, kept while it stays

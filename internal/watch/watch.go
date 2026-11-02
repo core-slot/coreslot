@@ -9,28 +9,27 @@ import (
 	"github.com/core-slot/coreslot/internal/memsample"
 )
 
-// The detector's thresholds. The waits post_kill_s and spacing_s are interim: no calibration
-// record sets them.
+// The detector's defaults and what each rests on; calibration/README.md has the numbers. The points
+// were chosen on calibration/records, the gate is a round value, the rest are not calibrated.
 const (
-	// calibration/records: no full-speed sample of the Pro reaches it with the gate open.
+	// Chosen on the records: 1 of 339 full-speed samples is held by it, none of 74 control samples.
 	DefaultYellowPoints = 20
-	// calibration/records: no full-speed or slowing sample reaches it; every cliff has samples over it.
+	// Chosen on the records: none of 947 full-speed or slowing samples reaches it.
 	DefaultRedPoints = 40
-	// calibration/records: red comes inside the cliff on every Air ramp and Pro long ramp.
+	// Not calibrated: red needs danger held for tens of seconds (about 20 s); the records allow 3 to 15.
 	DefaultRedSamples = 10
-	// calibration/records: every cliff sample has the gate open; at 3000 some do not.
+	// Chosen: the records give the same levels at 1000, 3000 and 10 000.
 	DefaultGatePagesPerS = 1000
-	// From prior art: no ramp in calibration/records reaches a full disk.
+	// Not calibrated: a round value; no record has a floor sample.
 	DefaultFloorMiB = 2048
-	// calibration/records: every ramp with a cliff is green 45 to 58 s after its stop and stays so.
+	// Not calibrated: ramps turn green 3 to 58 s after a stop by the detector's own clearing.
 	DefaultCalmS     = 30
 	DefaultPostKillS = 15
 	DefaultSpacingS  = 3
 )
 
 // minWorkShare is the part of a period a job's user, system and page-wait time must reach to count
-// toward E: an idle polling job is mostly system time and says nothing about memory. interim: the
-// calibration sets it.
+// toward E: an idle polling job is mostly system time and says nothing about memory. Not calibrated.
 const minWorkShare = 0.10
 
 const (

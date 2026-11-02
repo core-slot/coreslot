@@ -50,9 +50,10 @@ Other agents get the same rule as a line in their instructions
 ([the snippet](integrations/claude-code/README.md#other-coding-agents)).
 
 **Status:** `v0`. macOS on Apple silicon is the supported platform; Linux and Intel Macs are
-experimental, and Windows runs commands unbudgeted. The watchdog's defaults are calibrated on two
-Macs ([the records](calibration/records)), and the CLI may still change before `v1.0.0`: the
-[compatibility policy](docs/compatibility.md) says how.
+experimental, and Windows runs commands unbudgeted. The watchdog's yellow and red points were chosen
+on recorded runs of two Macs and its other defaults are not calibrated ([what the records
+show](calibration/README.md#what-the-defaults-rest-on)); the CLI may still change before `v1.0.0`:
+the [compatibility policy](docs/compatibility.md) says how.
 
 ## When you do not need coreslot
 
@@ -74,7 +75,7 @@ Macs ([the records](calibration/records)), and the CLI may still change before `
 
 **Admission.** A command's need is `--mem`, else the `mem` of its label in
 [`needs.toml`](#configuration), else the 90th percentile of the memory peaks of the label's last 20
-runs, else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
+counted runs ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)), else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
 (on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
 less the reserve, less what each running command still has to grow into (its need less what it uses
 now). A command starts when its need fits the room. A need larger than the machine's memory less the
@@ -108,20 +109,23 @@ Never stopped: the oldest running command, a command whose label has `no_restart
 `needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,
 or a run nested inside another run's reservation), a command whose label has no completed run yet
 and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
-and not restarted. The thresholds are `[watch]` keys whose defaults come from
-[recorded runs on two Macs](calibration/records): in them the CPU-contention control stays green, and
-no full-speed or slowing sample counts toward red. See
+and not restarted. The thresholds are `[watch]` keys; [the calibration
+notes](calibration/README.md#what-the-defaults-rest-on) say what recorded runs of two Macs show about
+each default, and which are not calibrated. See
 [`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
 the kill and says what it would have stopped.
 
-A command is protected after its first completed run. Until then coreslot does not know what is
-normal for it (commands spend anywhere from 3 % to 97 % of their time in the kernel), so the first run
-of a label is never stopped and does not count towards the level; it still holds its memory, and
-`status` says the watchdog is learning and how many running commands have no history.
+A command is judged only once the first run of its label has completed. Until then coreslot does
+not know what is normal for it, so that first run is never stopped and does not count towards the
+level; it still holds its memory, and `status` says the watchdog is learning and how many running
+commands have no history.
 
 On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
 takes a coreslot command before your desktop; a label with `no_restart = true` keeps its score.
+The floor needs swap to grow, so on a host without swap it never fires and the kernel's
+out-of-memory killer acts instead, and the paging gate opens on any rise of the memory stall, which
+is nearly every period. Linux is experimental and its defaults are not calibrated.
 
 ## Install
 
@@ -220,9 +224,8 @@ sample_log = false    # true: log every machine sample to log/watch.jsonl
 ```
 
 `[watch]` also takes the thresholds and waits
-([`PROTOCOL.md` section 5.3](PROTOCOL.md#53-configuration-file)); their defaults rest on the
-[calibration records](calibration/records), except `post_kill_s` and `spacing_s`, which they do not
-set.
+([`PROTOCOL.md` section 5.3](PROTOCOL.md#53-configuration-file)); [the calibration
+notes](calibration/README.md#what-the-defaults-rest-on) say which defaults the records support.
 
 `needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
 space or an `@` is not a bare TOML key, so quote it:
@@ -232,7 +235,7 @@ space or an `@` is not a bare TOML key, so quote it:
 mem = "3G"            # a pin: learning never replaces it
 
 [needs."gate:docker"]
-no_restart = true     # a stop round never kills this label's commands
+no_restart = true     # never stopped by a stop round, so never restarted
 ```
 
 The state lives in `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`
@@ -259,7 +262,7 @@ so a command whose work happens in a container or on another host looks small to
 
 - [Protocol](PROTOCOL.md), the normative definition of format 2
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
-- [Calibration](calibration/README.md), where the watchdog's defaults come from
+- [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)
 - [Contributing](CONTRIBUTING.md), [security](SECURITY.md), [code of conduct](CODE_OF_CONDUCT.md)
 - [Third-party licenses](THIRD_PARTY_LICENSES.md)
