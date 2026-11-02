@@ -109,8 +109,11 @@ coreslot before the command comes back.
 
 Never stopped: the oldest running command, a command whose label has `no_restart = true` in
 `needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,
-or a run nested inside another run's reservation) and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
-and not restarted. The thresholds are `[watch]` keys; [the calibration
+or a run nested inside another run's reservation), a run outside the budget and anything coreslot did
+not start. A stop kills the command's process group: a process that left it (`setsid`, a build
+daemon, a dev server) survives and may still hold memory or a port when the command comes back. A
+command that exits `SIGKILL` for another reason is reported and not restarted. A `--no-wait` run
+whose command is stopped refuses instead of restarting it. The thresholds are `[watch]` keys; [the calibration
 notes](calibration/README.md#what-the-defaults-rest-on) say what recorded runs of two Macs show about
 each default, and which are not calibrated. See
 [`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
@@ -119,15 +122,19 @@ the kill and says what it would have stopped.
 
 A command is judged only once a run of its label has completed and measured that. Until then coreslot does
 not know what is normal for it (the median share its earlier runs measured, the same way, while the
-kernel was not paging), so that first run does not count towards the level and no red round
-stops it; only a floor round does, after every command that has history. It still holds its memory,
-and `status` says the watchdog is learning and how many running commands have no history.
+kernel was not paging), so it does not count towards the level and no red round
+stops it; only a floor round does, after every command that has a normal share. A run shorter than
+one sampling period (2 s), or one during which the kernel paged all along, measures no share and
+leaves its label learning. A learning command still holds its memory, and `status` says the
+watchdog is learning and how many running commands have no normal share yet.
 
 On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
 takes a coreslot command before your desktop; a label with `no_restart = true` keeps its score.
 The floor needs swap to grow, so on a host without swap it never fires and the kernel's
 out-of-memory killer acts instead, and the paging gate opens on any rise of the memory stall, which
-is nearly every period. Linux is experimental and its defaults are not calibrated.
+is nearly every period. A label's normal share is measured only while the gate is closed, so on
+Linux most labels stay learning: red rounds stop almost nothing there, and only the floor acts,
+which needs swap. Linux is experimental and its defaults are not calibrated.
 
 ## Install
 

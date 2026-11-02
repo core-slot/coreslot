@@ -35,8 +35,10 @@ no other default is calibrated ([what the records show](calibration/README.md#wh
   queue, after memory has been calm for a while; after the third stop it gives up with the refusal
   code and the line `coreslot: gave up after 3 memory stops`. The `[watch]` configuration table sets
   the mode (`enforce` or `observe`), the thresholds and the waits; `observe` logs what it would stop.
-  The first run of a label is not judged: it does not count towards the level and no red round stops
-  it; only a floor round does, after every command that has history. A round frees the memory the
+  A label is not judged until one of its runs has measured its normal share, over the ticks where
+  the kernel was not paging (a run shorter than one tick, or paged throughout, measures none): until
+  then its commands do not count towards the level and no red round stops them; only a floor round
+  does, after every command whose label has one. A round frees the memory the
   machine is short, not what other commands have reserved and not yet used. A command a floor round
   stopped is told the whole machine ran out of memory and to free some outside coreslot.
 - Labels are automatic: without `--label`, a run is labelled with the command's shape and its

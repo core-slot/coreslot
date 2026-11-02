@@ -27,7 +27,8 @@ func stopSelf() {
 func maxRSSKiB(maxrss int64) (kib int64, known bool) { return maxrss, true }
 
 // oomScore is what a run raises its oom_score_adj to before it starts its command, which inherits
-// it: the kernel's or systemd-oomd's OOM kill then prefers a coreslot job to the desktop.
+// it: the kernel's OOM kill then prefers a coreslot job to the desktop. systemd-oomd does not read
+// it; it picks a cgroup by its memory pressure or swap use.
 const oomScore = 500
 
 // raiseOOMScore raises this process's oom_score_adj to oomScore, never lowering a higher one.

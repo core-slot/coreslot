@@ -886,7 +886,7 @@ remove its ticket in a section, bumping `gen` (section 7.8); otherwise reconcili
 | Class | Examples | Outcome |
 |---|---|---|
 | usage | a need of 0 or above 1 PiB, a size that is not one, a label above 128 bytes, a flag the command does not know, no command | exit 64; nothing runs |
-| refusal | a no-wait or fail-on-timeout request expiring, cancellation, strict mode turning any of the next row into a refusal, giving up after 3 stops (section 24) | the refusal code (section 19); nothing runs, or the run ends |
+| refusal | a no-wait or fail-on-timeout request expiring, a stopped `--no-wait` run, cancellation, strict mode turning any of the next row into a refusal, giving up after 3 stops (section 24) | the refusal code (section 19); nothing runs, or the run ends |
 | state error | unusable directory, refused filesystem, unexpected file types or owners, directory full, malformed `FORMAT`, invalid configuration, an inode mismatch at a held hold (I1) | fail-open unless strict |
 | internal | the command cannot be started | exit 70, or 126 / 127 |
 
@@ -991,8 +991,9 @@ is passed on.
 > fd 3 or above.
 
 On Linux a run SHOULD raise its own `oom_score_adj` to 500, never lowering a higher one, before it
-starts the command, which inherits it, so that the kernel's or systemd-oomd's out-of-memory kill
-takes a coreslot job rather than the desktop. A run whose label has `no_restart` (section 5.4)
+starts the command, which inherits it, so that the kernel's out-of-memory kill takes a coreslot
+job rather than the desktop (systemd-oomd does not read the score: it picks a cgroup by its memory
+pressure or swap use). A run whose label has `no_restart` (section 5.4)
 leaves its score alone.
 
 ## 18. Nested runs: pass-through
@@ -1057,7 +1058,7 @@ informative string; a writer that cannot fit it writes no line. The object carri
 
 | Key | Type | Content |
 |---|---|---|
-| `time_ns` | integer | wall clock at the run's start |
+| `time_ns` | integer | wall clock at the attempt's start: the run's, or for an attempt after a stop its re-enqueue |
 | `label` | string | the request's label |
 | `waited_s` | number | seconds spent waiting |
 | `ran_s` | number | seconds the command ran |
@@ -1482,8 +1483,9 @@ over the holds that have a normal share and worked for at least a tenth of the p
 `wᵢ ≥ 0.1 × (the period)`, and 0 when there are none: an idle job's few milliseconds, mostly system
 time, say nothing about memory. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
-have no normal share (`status --json`: `watch.learning`); at red, with no victim but the learning
-ones, it does not say that the watchdog is protecting but that only the floor can stop a command.
+have no normal share (`status --json`: `watch.learning`); at red, when a red round has no victim
+(every running hold is the oldest, learning or never a victim), it does not say that the watchdog is
+protecting but that a red round can stop no running command.
 A command is judged only once a run of its label has
 completed with a `tick_share` (a run shorter than one tick, or whose every gate was open or unread, leaves the label learning); until then only a floor round stops it (section 23.5). The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
@@ -1545,12 +1547,18 @@ one at a time.
 
 The oldest running hold, a hold whose label has `no_restart` and a run that shares coreslot's
 process group are never victims, and a hold that is learning (it has no normal share) is a victim of
-a floor round only. A run that finds its command ended by a `SIGKILL` it did not send does not
-restart it (section 24.3).
+a floor round only. A run outside the budget (section 14, `--on-timeout run`) ticks nothing, so it
+is no running hold: it is never a victim and never the oldest. A run that finds its command ended
+by a `SIGKILL` it did not send does not restart it (section 24.3). The kill reaches the command's
+process group only: a descendant that left it (`setsid`, a daemon) survives the stop and may still
+hold memory, ports or files when the command comes back, although its footprint counted as freed.
 
 A run stopped by a floor round tells its agent that the whole machine ran out of memory (swap
 nearly full) and to free memory outside coreslot before the command comes back, and restarts it by
-itself as for any stop (section 24.1). A red stop does not say so.
+itself as for any stop (section 24.1); a give-up or a refusal that follows a floor stop says it too.
+A red stop does not say so. What a run does about a round that lists it follows that round as it
+was written, its kind (`detector.round_floor`) and its mode (`detector.observed`), not the level or
+the mode at the run's own later tick.
 
 ### 23.6 Observe mode and the sample log
 
@@ -1572,6 +1580,8 @@ enqueues again (section 10.1) with its **first arrival**: the order key of the n
 the larger of the peak footprint the stopped attempt reached and the need the run had at its start.
 It waits as any request does and, in addition, under the restart conditions of section 12.4; on admission it
 starts the same command again, under a new hold whose `stops` is the number of stops so far.
+A run with `--no-wait` does not come back, since a restart waits for calm: it refuses with the
+refusal code, naming the stop.
 
 ### 24.2 Giving up
 
@@ -1582,5 +1592,6 @@ line of its give-up, and exits with the refusal code (section 19).
 ### 24.3 A kill from outside
 
 A command that ends by `SIGKILL` which the run did not send, the kernel's out-of-memory killer or
-another user's kill, is not restarted: the run reports that the command was ended by SIGKILL from
+another user's kill, is not restarted (a command that exits with status 137 itself was not killed
+and is not reported): the run reports that the command was ended by SIGKILL from
 outside coreslot and not restarted, and exits with the command's status.

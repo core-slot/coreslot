@@ -22,7 +22,9 @@ and in earlier notes (`1042c1d`, `6b8b599`, `6cc4823`) name no commit here: `104
 ("conformance: the stop traces teach their victims' labels; a label with no history is never
 listed"), and `6b8b599` and `6cc4823` are both `a646bab` ("calibration: run.sh ramp takes --slow-s
 and --slow-pct for the scored hog, so a ramp can hold the cliff long enough to score the red
-duration"). The Air's metas carry `6b8b599` in their version string. The Pro's metas read
+duration"). The Air's metas carry `6b8b599` in their version string. The cost record's `524e122` is `5ee0575`
+("delete watch.Job.ChildExited, HolderInfo.Victim and ChildExited, run.start and Section.Watch"),
+whose tree is the same. The Pro's metas read
 `coreslot 0.0.0-dev`: that binary was built without version information, so its meta does not
 name its commit.
 

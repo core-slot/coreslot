@@ -87,7 +87,7 @@ func TestNestedPassThrough(t *testing.T) {
 func TestNestedRunsInsideParent(t *testing.T) {
 	t.Run("live ancestor", func(t *testing.T) {
 		dir := budgetDir(t, 256)
-		r := outer(t, dir, "256M", `env -u CORESLOT_TOKEN_FDS "$BIN" run --no-wait --mem 256M -- true; echo "code=$?"`)
+		r := outer(t, dir, "256M", `"$BIN" run --no-wait --mem 256M -- true; echo "code=$?"`)
 		if r.code != 0 || strings.TrimSpace(r.stdout) != "code=0" {
 			t.Errorf("exit %d stdout %q stderr %q: want the nested run inside its parent, not queued", r.code, r.stdout, r.stderr)
 		}
