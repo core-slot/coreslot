@@ -2,7 +2,7 @@
 """Score candidate watchdog thresholds on recorded calibration runs.
 
 usage: analyse.py RECORD_DIR... [--yellow-points N] [--red-points N] [--red-samples N]
-                                [--gate-pages-s N] [--floor-mib N]
+                                [--gate-pages-s N]
 
 A record directory holds watch.jsonl (the watchdog's sample log), work.jsonl (the hog's or the
 contention control's own log) and, optionally, meta.json (machine, OS, threads). A directory with
@@ -16,7 +16,9 @@ sample's period and put into a band:
   cliff     under 30 % with paging, or decompressions at CLIFF_DECOMP_S or more per second
   control   a sample of the contention control, where nothing may fire
 Gaps (level unknown) are skipped. The tables then count, per band, the samples a candidate would
-fire on, and replay the yellow and red rules over each run.
+fire on, replaying the yellow and red rules over each run as the detector applies them; the replay
+at the chosen values is checked against the level the detector logged, and every sample where they
+differ is printed. calm_s is scored from the logged levels alone. The floor is not calibrated.
 """
 import argparse
 import json
@@ -31,13 +33,13 @@ BANDS = ("full", "slowing", "slow", "cliff", "control")
 PRE_CLIFF = ("full", "slowing", "slow", "control")
 MAX_PERIOD_NS = 6_000_000_000
 
-INTERIM = {"yellow_points": 10, "red_points": 30, "red_samples": 10, "gate_pages_s": 1000, "floor_mib": 2048}
+INTERIM = {"yellow_points": 10, "red_points": 30, "red_samples": 10, "gate_pages_s": 1000}
+CLEAR_SAMPLES = 15  # samples in a row below yellow_points that clear yellow
 CANDIDATES = {
     "yellow_points": (5, 10, 15, 20, 30),
     "red_points": (10, 15, 20, 30, 40, 50),
     "red_samples": (3, 5, 10, 15, 20),
     "gate_pages_s": (100, 300, 1000, 3000, 10000),
-    "floor_mib": (1024, 2048, 4096, 8192),
     "reserve_delta_mib": (-2048, -1024, 0, 1024, 2048),
     "calm_s": (15, 30, 60, 90),
 }
@@ -116,7 +118,6 @@ def join(rec):
             continue
         paging = (w.get("decomp_s") or 0) + (w.get("swapins_s") or 0)
         s = {"t_ns": t, "E": w["excess"], "paging": paging, "level": w["level"], "room_mib": w.get("room_mib", 0),
-             "swap_used_mib": w.get("swap_used_mib", 0), "headroom_mib": w.get("swap_free_mib", 0) + w.get("vm_free_mib", 0),
              "hot_mib": None, "speed": None}
         if rec.is_control:
             if not start < t <= stop + period:
@@ -155,59 +156,65 @@ def band_table(samples, gate_pages_s):
     return lines
 
 
-def yellow_samples(seq, points, gate_pages_s):
-    """The samples the yellow rule holds yellow on: E over the points with the gate open in 2 of the
-    last 3 samples, cleared after 15 samples below the points."""
-    hits, below, active, held = [], 0, False, []
+def replay(seq, c):
+    """The level of each sample at the values c, as the detector computes it from E and the gate
+    (the floor left out): yellow latches on 2 hot samples of the last 3 and clears after
+    CLEAR_SAMPLES in a row below yellow_points; red is the leaky bucket, saturated at red_samples.
+    A gap (level unknown) stays unknown, counts as a sample that is not hot and keeps the rest."""
+    out, hot, yellow, below, bucket = [], [], False, 0, 0.0
     for s in seq:
-        hit = s["E"] >= points and gate_open(s, gate_pages_s)
-        hits = (hits + [hit])[-3:]
-        if not active and sum(hits) >= 2:
-            active, below = True, 0
-        elif active:
-            below = below + 1 if s["E"] < points else 0
-            if below >= 15:
-                active, hits = False, []
-        if active:
-            held.append(s)
-    return held
+        if s.get("level") == "unknown":
+            hot = (hot + [False])[-3:]
+            out.append("unknown")
+            continue
+        gate = gate_open(s, c["gate_pages_s"])
+        hot = (hot + [gate and s["E"] >= c["yellow_points"]])[-3:]
+        if gate and s["E"] >= c["red_points"]:
+            bucket = min(bucket + 1, c["red_samples"])
+        else:
+            bucket = max(0.0, bucket - 0.5)
+        if sum(hot) >= 2:
+            yellow, below = True, 0
+        elif s["E"] >= c["yellow_points"]:
+            below = 0
+        elif yellow:
+            below += 1
+            yellow = below < CLEAR_SAMPLES
+        out.append("red" if bucket >= c["red_samples"] else "yellow" if yellow else "green")
+    return out
 
 
-def first_red(seq, points, samples_needed, gate_pages_s):
-    """The sample at which the leaky bucket reaches the red samples, or None."""
-    bucket = 0.0
-    for s in seq:
-        hit = s["E"] >= points and gate_open(s, gate_pages_s)
-        bucket = bucket + 1 if hit else max(0.0, bucket - 0.5)
-        if bucket >= samples_needed:
-            return s
-    return None
+def first_red(seq, c):
+    """The first sample the replay at c makes red, or None."""
+    return next((s for s, level in zip(seq, replay(seq, c)) if level == "red"), None)
 
 
-def floor_samples(seq, floor_mib):
-    """Samples where headroom is under the floor while swap used grew 256 MiB over the last 20 s."""
-    fired = []
-    for i, s in enumerate(seq):
-        window = [x for x in seq[: i + 1] if s["t_ns"] - x["t_ns"] <= 20_000_000_000]
-        if s["headroom_mib"] < floor_mib and s["swap_used_mib"] - window[0]["swap_used_mib"] >= 256:
-            fired.append(s)
-    return fired
+def mismatches(rec, c):
+    """The logged samples whose level the replay at c gives otherwise, as (t_s, replayed, logged);
+    a floor sample is skipped, since the replay leaves the floor out."""
+    seq = [{"t_ns": w["t_ns"], "E": w["excess"], "paging": (w.get("decomp_s") or 0) + (w.get("swapins_s") or 0),
+            "level": w.get("level")} for w in rec.watch]
+    t0 = seq[0]["t_ns"] if seq else 0
+    return [((s["t_ns"] - t0) / 1e9, got, s["level"]) for s, got in zip(seq, replay(seq, c))
+            if s["level"] != "floor" and got != s["level"]]
+
+
+def calm_after_stop(rec):
+    """From the levels the detector logged after the hog's stop: seconds until the level first turned
+    green, and seconds it then stayed green (to the next level that was not, or the record's end)."""
+    if rec.stop_ns is None:
+        return None
+    post = [w for w in rec.watch if w["t_ns"] > rec.stop_ns and w.get("level") != "unknown"]
+    i = next((i for i, w in enumerate(post) if w["level"] == "green"), None)
+    if i is None:
+        return None
+    end = next((w["t_ns"] for w in post[i:] if w["level"] != "green"), post[-1]["t_ns"])
+    return (post[i]["t_ns"] - rec.stop_ns) / 1e9, (end - post[i]["t_ns"]) / 1e9
 
 
 def room_negative(seq, delta):
     """The first sample where admission room would be negative with the reserve raised by delta MiB."""
     return next((s for s in seq if s["room_mib"] - delta < 0), None)
-
-
-def recovery_s(rec, calm_points=5, run=5):
-    """Seconds from the hog's stop to the start of the first run of `run` samples under calm_points."""
-    if rec.stop_ns is None:
-        return None
-    post = [w for w in rec.watch if w["t_ns"] > rec.stop_ns and w.get("level") != "unknown"]
-    for i in range(len(post) - run + 1):
-        if all(w["excess"] < calm_points for w in post[i: i + run]):
-            return (post[i]["t_ns"] - rec.stop_ns) / 1e9
-    return None
 
 
 def by_band(samples):
@@ -238,9 +245,13 @@ def report(records, chosen=None):
         out.append(f"== {r.label()}: {len(r.samples)} samples in the run, "
                    f"{'control' if r.is_control else f'reference {r.baseline:.0f} touches/s'}")
         out += band_table(r.samples, gate)
-        rec_s = recovery_s(r)
+        calm = calm_after_stop(r)
         if not r.is_control:
-            out.append(f"after the stop: calm in {'never' if rec_s is None else f'{rec_s:.0f} s'}")
+            out.append("after the stop: " + ("never green" if calm is None else
+                       f"green after {calm[0]:.0f} s, then green for {calm[1]:.0f} s"))
+        diff = mismatches(r, chosen)
+        out.append(f"replay against the logged level: {len(diff)} mismatches")
+        out += [f"  {t:7.0f} s: replay {got}, logged {logged}" for t, got, logged in diff[:20]]
         out.append("")
     pooled = [s for r in records for s in r.samples]
     out.append(f"== all {len(records)} runs")
@@ -252,8 +263,12 @@ def report(records, chosen=None):
         counts = by_band([s for r in records for s in fired(r)])
         return f"{value:8} " + " ".join(f"{counts[b]:8d}" for b in BANDS) + "  " + verdict(records, fired)
 
-    out += table(f"yellow_points: samples held yellow (gate_pages_s={gate})",
-                 [counts_row(v, lambda r, v=v: yellow_samples(r.samples, v, gate)) for v in CANDIDATES["yellow_points"]], head)
+    def held(r, v):
+        c = {**chosen, "yellow_points": v}
+        return [s for s, level in zip(r.samples, replay(r.samples, c)) if level != "green"]
+
+    out += table(f"yellow_points: samples held yellow or red (gate_pages_s={gate})",
+                 [counts_row(v, lambda r, v=v: held(r, v)) for v in CANDIDATES["yellow_points"]], head)
     out += table(f"red_points: samples with E at or over the value and the gate open (gate_pages_s={gate})",
                  [counts_row(v, lambda r, v=v: [s for s in r.samples if s["E"] >= v and gate_open(s, gate)])
                   for v in CANDIDATES["red_points"]], head)
@@ -261,7 +276,7 @@ def report(records, chosen=None):
     def red_row(v):
         marks = []
         for r in records:
-            s = first_red(r.samples, chosen["red_points"], v, gate)
+            s = first_red(r.samples, {**chosen, "red_samples": v})
             marks.append(f"{r.name}:{s['band'] if s else 'never'}")
         return f"{v:8} " + "  ".join(marks)
 
@@ -270,15 +285,14 @@ def report(records, chosen=None):
     out += table("gate_pages_s: share of each band's samples with the gate open",
                  [f"{v:8} " + " ".join(f"{sum(gate_open(s, v) for s in pooled if s['band'] == b) / max(1, sum(s['band'] == b for s in pooled)):8.0%}"
                                         for b in BANDS) for v in CANDIDATES["gate_pages_s"]], head.split("  verdict")[0])
-    out += table("floor_mib: samples where the floor trips",
-                 [counts_row(v, lambda r, v=v: floor_samples(r.samples, v)) for v in CANDIDATES["floor_mib"]], head)
     out += table("reserve raised by value (MiB): samples where room would be negative",
                  [counts_row(v, lambda r, v=v: [s for s in r.samples if s["room_mib"] - v < 0])
                   for v in CANDIDATES["reserve_delta_mib"]], head)
     ramps = [r for r in records if not r.is_control]
-    rec = [recovery_s(r) for r in ramps]
-    out += table("calm_s: ramps calm within the value after the hog stopped",
-                 [f"{v:8} {sum(x is not None and x <= v for x in rec)}/{len(ramps)}" for v in CANDIDATES["calm_s"]], "   value")
+    calm = [calm_after_stop(r) for r in ramps]
+    out += table("calm_s: ramps whose logged level, once green after the stop, stayed green for the value",
+                 [f"{v:8} {sum(x is not None and x[1] >= v for x in calm)}/{len(ramps)}" for v in CANDIDATES["calm_s"]],
+                 "   value")
     return "\n".join(out)
 
 

@@ -15,8 +15,12 @@ def fired_in(records, points, gate=1000):
     return analyse.by_band([s for r in records for s in r.samples if s["E"] >= points and analyse.gate_open(s, gate)])
 
 
-def sample(t, headroom, swap_used):
-    return {"t_ns": t * S, "E": 0.0, "paging": 0, "headroom_mib": headroom, "swap_used_mib": swap_used, "band": "full"}
+def sample(t):
+    return {"t_ns": t * S, "E": 0.0, "paging": 0, "band": "full"}
+
+
+def at(**kv):
+    return {**analyse.INTERIM, **kv}
 
 
 class AnalyseTest(unittest.TestCase):
@@ -55,33 +59,43 @@ class AnalyseTest(unittest.TestCase):
         self.assertEqual(analyse.band_of(0.8, 150_000), "cliff")  # heavy decompression needs no slowdown
         self.assertEqual([analyse.band_of(x, 0) for x in (0.95, 0.7)], ["full", "slowing"])
 
-    def test_red_bucket_leaks(self):
-        hit = dict(sample(0, 9999, 0), E=50.0, paging=5000)
+    def test_red_bucket_leaks_and_saturates(self):
+        hit = dict(sample(0), E=50.0, paging=5000)
         miss = dict(hit, E=0.0)
-        self.assertIsNone(analyse.first_red([hit, miss, miss, hit, miss, miss, hit], 30, 2, 1000))
-        self.assertIsNotNone(analyse.first_red([hit, miss, hit, miss, hit], 30, 2, 1000))
+        self.assertIsNone(analyse.first_red([hit, miss, miss, hit, miss, miss, hit], at(red_samples=2)))
+        self.assertIsNotNone(analyse.first_red([hit, miss, hit, miss, hit], at(red_samples=2)))
+        levels = analyse.replay([hit] * 15 + [miss], at())
+        self.assertEqual(levels[14:], ["red", "yellow"])  # a saturated bucket leaves red on the first calm sample
 
         seq = self.ramp.samples
-        self.assertEqual(analyse.first_red(seq, 30, 3, 1000)["band"], "cliff")
-        self.assertIsNone(analyse.first_red(seq, 30, 4, 1000))
-        self.assertEqual(analyse.first_red(seq, 20, 2, 1000)["band"], "slow")
-        self.assertIsNone(analyse.first_red(self.control.samples, 5, 2, 1000))
+        self.assertEqual(analyse.first_red(seq, at(red_samples=3))["band"], "cliff")
+        self.assertIsNone(analyse.first_red(seq, at(red_samples=4)))
+        self.assertEqual(analyse.first_red(seq, at(red_points=20, red_samples=2))["band"], "slow")
+        self.assertIsNone(analyse.first_red(self.control.samples, at(red_points=5, red_samples=2)))
 
     def test_yellow_needs_two_of_three_and_clears_after_fifteen(self):
-        seq = self.ramp.samples
-        self.assertEqual([s["band"] for s in analyse.yellow_samples(seq, 30, 1000)], ["cliff", "cliff"])
-        calm = [dict(sample(t, 9999, 0), E=0.0) for t in range(40)]
-        calm[3].update(E=50.0, paging=5000)
-        self.assertEqual(analyse.yellow_samples(calm, 10, 1000), [])  # one hit is not two of three
+        hot = dict(sample(0), E=50.0, paging=5000)
+        calm = dict(sample(0), E=0.0)
+        self.assertEqual(set(analyse.replay([calm] * 3 + [hot] + [calm] * 30, at())), {"green"})  # one is not two
+        levels = analyse.replay([hot, hot] + [calm] * 16, at())
+        self.assertEqual(levels.index("green", 2), 2 + 15)  # the first calm one still sees two hot ones
+        gap = dict(calm, level="unknown")
+        self.assertEqual(analyse.replay([hot, gap, hot], at())[1:], ["unknown", "yellow"])
 
-    def test_floor_is_an_edge(self):
-        low = [sample(t * 2, 1000, 100 + 40 * t) for t in range(12)]
-        self.assertEqual(len(analyse.floor_samples(low, 2048)), 5)  # 40 MiB per 2 s reaches 256 MiB at the 8th sample
-        still = [sample(t * 2, 1000, 100) for t in range(12)]
-        self.assertEqual(analyse.floor_samples(still, 2048), [])
+    def test_replay_is_checked_against_the_logged_level(self):
+        self.assertEqual(analyse.mismatches(self.ramp, analyse.INTERIM), [])
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("watch.jsonl", "work.jsonl"):
+                with open(os.path.join(DATA, "ramp", name)) as f:
+                    lines = f.read().splitlines()
+                if name == "watch.jsonl":
+                    lines[0] = lines[0].replace('"level":"green"', '"level":"yellow"')
+                with open(os.path.join(d, name), "w") as f:
+                    f.write("\n".join(lines) + "\n")
+            self.assertEqual(analyse.mismatches(analyse.Record(d), analyse.INTERIM), [(0.0, "green", "yellow")])
 
-    def test_recovery_and_a_torn_last_line(self):
-        self.assertEqual(analyse.recovery_s(self.ramp), 6.0)
+    def test_calm_comes_from_the_logged_level_and_a_torn_last_line(self):
+        self.assertIsNone(analyse.calm_after_stop(self.ramp))  # still yellow when the record ends
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "work.jsonl")
             with open(path, "w") as f:

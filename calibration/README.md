@@ -1,7 +1,7 @@
 # Calibration
 
 The watchdog stops the newest jobs when memory costs them real time. Its thresholds (yellow and red
-points, red samples, the paging gate, the floor, the calm window, the reserve) are set from runs of
+points, red samples, the paging gate, the calm window, the reserve) are set from runs of
 this harness, not from a model: it runs a memory hog under the branch's own `coreslot run` in observe
 mode, logs what the watchdog sees at every sample, and scores candidate thresholds against how fast
 the hog actually ran.
@@ -12,10 +12,10 @@ Needs macOS, Python 3 and Go. It reads nothing that needs privileges.
 
 | file | what it does |
 |---|---|
-| `hog.py` | Grows hot memory in steps (`--step-mib` every `--hold-s`), rewrites a byte in a random page of all it holds from `--threads` threads, and logs its touches per second every second. Stops itself when its speed stays under 30 % of its first step's for 5 s, when decompressions stay at 100 000/s for 5 s, when swap used grows 6 GiB from the start, or at `--max-gib`. |
+| `hog.py` | Grows hot memory in steps (`--step-mib` every `--hold-s`), rewrites a byte in a random page of all it holds from `--threads` threads, and logs its touches per second every second; it starts no process, so the measured tree is the hog alone. Stops itself when its speed stays under 30 % of its first step's for 5 s, or at `--max-gib`. |
 | `cpu_control.py` | The control: busy loops (default twice the number of cores) for `--seconds` and no memory pressure. The watchdog must stay calm here. |
-| `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, and writes the record. |
-| `analyse.py` | Joins the watchdog's `watch.jsonl` with the workload's `work.jsonl`, puts each sample into a speed band, and prints the per-band excess and a scoring table per candidate value. |
+| `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. |
+| `analyse.py` | Joins the watchdog's `watch.jsonl` with the workload's `work.jsonl`, puts each sample into a speed band, and prints the per-band excess, the samples where its replay of the levels at the chosen values differs from the level the watchdog logged, and a scoring table per candidate value. |
 | `testdata/` | A tiny record for the tests. |
 | `records/` | Where `run.sh` puts its records. |
 
@@ -62,8 +62,11 @@ The tables then show, per candidate value, how many samples of each band it woul
 the verdict column, in how many cliff bands it fires and in which pre-cliff or control bands it
 also fires. A value is justified by a property two candidates score differently on, for example:
 `red_points = 30` fires in every ramp's cliff band and in no pre-cliff band; 20 also fires in the
-`slow` band of one ramp. `red_samples` replays the leaky bucket and names the band in which each run
-first turns red; `calm_s` counts the ramps that were calm that soon after the hog stopped.
+`slow` band of one ramp. The yellow and red tables replay the detector's rules; each record's
+section lists every sample where that replay, at the chosen values, differs from the level the
+watchdog logged, so a replay that drifts from the code shows. `red_samples` names the band in which
+each run first turns red; `calm_s` counts the ramps whose logged level, once green after the hog
+stopped, stayed green for that long. The floor is not calibrated.
 
 Notes for reading numbers:
 

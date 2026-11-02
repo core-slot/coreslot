@@ -4,15 +4,14 @@
 The hog maps a step of anonymous memory every --hold-s seconds (each page half random, half zero,
 about 2:1 compressible) and from --threads threads keeps rewriting one byte in a random page of all
 it holds, so every page stays hot. Once a second it appends one JSON line to --log: the touches per
-second, the hot MiB, and its own reading of swap and decompressions.
+second and the hot MiB. It logs only its own touches and starts no process, so the measured tree is
+the hog alone; the system's readings come from the watchdog's sample log.
 
 It stops itself, writing a stop line with the reason, when
   slow          its speed stayed below --slow-pct of its first step's for --slow-s seconds,
-  cliff_decomp  decompressions stayed at or above --cliff-decomp-s per second for --slow-s seconds
-                (a cache-bound single thread slows without any paging, so speed alone is not the cliff),
-  swap          swap used grew by --stop-swap-gib from the start (a Mac may carry GiB already),
   max           it holds --max-gib,
   signal        it got SIGINT, SIGTERM or SIGHUP.
+run.sh stops it from outside when swap grows too far.
 Lines carry t_ns on the clock the watchdog's sample log uses (darwin CLOCK_MONOTONIC_RAW, Linux
 CLOCK_BOOTTIME), so the two logs join on it.
 """
@@ -23,10 +22,8 @@ import json
 import mmap
 import os
 import random
-import re
 import signal
 import statistics
-import subprocess
 import sys
 import threading
 import time
@@ -38,28 +35,6 @@ HALF = PAGE // 2
 
 def now_ns():
     return time.clock_gettime_ns(CLOCK)
-
-
-def swap_used_mib():
-    """Swap in use in MiB from vm.swapusage, or None where the platform has no such sysctl."""
-    try:
-        out = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True).stdout
-    except OSError:
-        return None
-    m = re.search(r"used = ([0-9.]+)([KMG])", out)
-    if not m:
-        return None
-    return float(m.group(1)) * {"K": 1 / 1024, "M": 1, "G": 1024}[m.group(2)]
-
-
-def decompressions():
-    """The machine's decompression counter from vm_stat, or None."""
-    try:
-        out = subprocess.run(["vm_stat"], capture_output=True, text=True).stdout
-    except OSError:
-        return None
-    m = re.search(r"Decompressions:\s+(\d+)", out)
-    return int(m.group(1)) if m else None
 
 
 class Memory:
@@ -111,8 +86,6 @@ def main(argv):
     p.add_argument("--max-gib", type=float, default=default_max, help="stop at this much (default 1.5 x RAM)")
     p.add_argument("--slow-pct", type=float, default=30.0)
     p.add_argument("--slow-s", type=int, default=5)
-    p.add_argument("--cliff-decomp-s", type=int, default=100_000)
-    p.add_argument("--stop-swap-gib", type=float, default=6.0)
     a = p.parse_args(argv)
     if a.threads < 1 or a.step_mib < 1 or a.hold_s <= 0:
         p.error("--threads, --step-mib and --hold-s must be positive")
@@ -130,9 +103,7 @@ def main(argv):
 
     memory, stop = Memory(), threading.Event()
     counts = [0] * a.threads
-    swap0, decomp_prev = swap_used_mib(), decompressions()
-    emit(event="start", threads=a.threads, step_mib=a.step_mib, hold_s=a.hold_s, page_bytes=PAGE,
-         swap_used_mib=swap0)
+    emit(event="start", threads=a.threads, step_mib=a.step_mib, hold_s=a.hold_s, page_bytes=PAGE)
     memory.grow(a.step_mib * 2**20)  # the touching threads need something to touch
     first_mib = memory.mib()
     emit(event="grow", hot_mib=first_mib)
@@ -140,7 +111,7 @@ def main(argv):
         threading.Thread(target=toucher, args=(i, memory, counts, stop), daemon=True).start()
 
     first_rates, baseline = [], None
-    slow = hot = 0
+    slow = 0
     next_grow = time.monotonic() + a.hold_s
     last_t, last_total, reason = time.monotonic(), 0, None
     while not reason:
@@ -153,27 +124,17 @@ def main(argv):
         dt = t - last_t
         rate = (total - last_total) / dt
         last_t, last_total = t, total
-        swap, decomp = swap_used_mib(), decompressions()
-        decomp_s = None
-        if decomp is not None and decomp_prev is not None:
-            decomp_s = round((decomp - decomp_prev) / dt)
-        decomp_prev = decomp
-        emit(event="rate", hot_mib=memory.mib(), touches_s=round(rate), decomp_s=decomp_s, swap_used_mib=swap)
+        emit(event="rate", hot_mib=memory.mib(), touches_s=round(rate))
 
         if memory.mib() == first_mib:  # the first step's median speed is the reference
             first_rates.append(rate)
             if len(first_rates) > 3:
                 baseline = statistics.median(first_rates)
         slow = slow + 1 if baseline and rate < baseline * a.slow_pct / 100 else 0
-        hot = hot + 1 if decomp_s is not None and decomp_s >= a.cliff_decomp_s else 0
         if stopping:
             reason = "signal"
         elif slow >= a.slow_s:
             reason = "slow"
-        elif hot >= a.slow_s:
-            reason = "cliff_decomp"
-        elif swap is not None and swap0 is not None and swap - swap0 > a.stop_swap_gib * 1024:
-            reason = "swap"
         elif memory.mib() >= a.max_gib * 1024:
             reason = "max"
     emit(event="stop", reason=reason, hot_mib=memory.mib())
