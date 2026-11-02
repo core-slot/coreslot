@@ -39,8 +39,9 @@ type Hold struct {
 	Stops                        int
 	FootprintMiB                 int64
 	DUserNS, DSysNS, DPageWaitNS int64
+	NormalShare                  float64
 	SampledNS                    int64
-	Victim, ChildExited          bool
+	Victim, Learned, ChildExited bool
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -58,19 +59,21 @@ type ticketJSON struct {
 }
 
 type holdJSON struct {
-	Label        string `json:"label"`
-	PID          int    `json:"pid"`
-	StartNS      int64  `json:"start_ns"`
-	ArrivalNS    int64  `json:"arrival_ns"`
-	NeedMiB      int64  `json:"need_mib"`
-	Stops        int    `json:"stops"`
-	FootprintMiB int64  `json:"footprint_mib"`
-	DUserNS      int64  `json:"d_user_ns"`
-	DSysNS       int64  `json:"d_sys_ns"`
-	DPageWaitNS  int64  `json:"d_page_wait_ns"`
-	SampledNS    int64  `json:"sampled_ns"`
-	Victim       bool   `json:"victim"`
-	ChildExited  bool   `json:"child_exited"`
+	Label        string  `json:"label"`
+	PID          int     `json:"pid"`
+	StartNS      int64   `json:"start_ns"`
+	ArrivalNS    int64   `json:"arrival_ns"`
+	NeedMiB      int64   `json:"need_mib"`
+	Stops        int     `json:"stops"`
+	FootprintMiB int64   `json:"footprint_mib"`
+	DUserNS      int64   `json:"d_user_ns"`
+	DSysNS       int64   `json:"d_sys_ns"`
+	DPageWaitNS  int64   `json:"d_page_wait_ns"`
+	NormalShare  float64 `json:"normal_share"`
+	SampledNS    int64   `json:"sampled_ns"`
+	Victim       bool    `json:"victim"`
+	Learned      bool    `json:"learned"`
+	ChildExited  bool    `json:"child_exited"`
 }
 
 type cancelJSON struct {
@@ -161,6 +164,9 @@ func (h Hold) validate() error {
 	if h.NeedMiB < 0 || h.NeedMiB > spec.MaxNeedMiB || h.FootprintMiB < 0 || h.FootprintMiB > spec.MaxNeedMiB {
 		return malformed("need_mib and footprint_mib are in [0, %d]", spec.MaxNeedMiB)
 	}
+	if !(h.NormalShare >= 0 && h.NormalShare <= 1) {
+		return malformed("normal_share is in [0, 1]")
+	}
 	return nil
 }
 
@@ -216,10 +222,13 @@ func DecodeHold(body []byte) (Hold, error) {
 			return Hold{}, err
 		}
 	}
+	if h.NormalShare, err = o.float("normal_share"); err != nil {
+		return Hold{}, err
+	}
 	for _, f := range []struct {
 		key string
 		dst *bool
-	}{{"victim", &h.Victim}, {"child_exited", &h.ChildExited}} {
+	}{{"learned", &h.Learned}, {"victim", &h.Victim}, {"child_exited", &h.ChildExited}} {
 		if *f.dst, err = o.boolean(f.key); err != nil {
 			return Hold{}, err
 		}

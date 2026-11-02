@@ -38,7 +38,7 @@ func TestWaitReason(t *testing.T) {
 // The stop detail names the level, the footprint and the stalls against the label's normal; the
 // command is cut at 200 characters.
 func TestStopMessageParts(t *testing.T) {
-	r := &run{o: runOptions{label: "x"}, normal: map[string]float64{"x": 0.04}}
+	r := &run{o: runOptions{label: "x"}, share: 0.04, learned: true}
 	times := memsample.TreeTimes{UserNS: 8e8, SysNS: 6e8, PageWaitNS: 6e8}
 	if got, want := r.stopDetail(watch.Red, 2458*1024, times),
 		"memory red, at 2.4 GiB, 60% of its time went to memory stalls against its normal 4%"; got != want {

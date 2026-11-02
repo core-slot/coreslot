@@ -61,8 +61,9 @@ Verdict reminders, all from `PROTOCOL.md`:
 - Ticket: `need_mib` is an integer in 1..1073741824 and `created_ns` is at least 0
   (`bad-need-mib-*`, `ok-need-mib-maximum`, `bad-created-ns-negative`).
 - Hold: `need_mib` and `footprint_mib` are integers in 0..1073741824, every other integer is at
-  least 0, and every key is required (`bad-missing-*`, `ok-unbudgeted-run`,
-  `ok-need-and-footprint-maximum`).
+  least 0, `normal_share` is a number from 0 to 1 (a fraction or an exponent is fine there, and a
+  string is not) and `learned` is a boolean, and every key is required (`bad-missing-*`,
+  `bad-normal-share-*`, `ok-unbudgeted-run`, `ok-need-and-footprint-maximum`).
 - Cancel: `requested_ns` and `requester_pid` are at least 0 (`bad-requested-ns-negative`,
   `bad-requester-pid-negative`, `ok-zeros`).
 - `hold` fixtures do not check that `start_ns` equals the start time in the hold's name; that

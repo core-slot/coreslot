@@ -28,27 +28,24 @@ const (
 const maxStops = 3
 
 // readLog reads the run log once for a run: the need it gives label, the p90 peak of its last
-// counted runs (ok false when unknown), and every label's normal share of system time.
-func readLog(loc location, label string) (needMiB int64, ok bool, normal map[string]float64) {
-	normal = map[string]float64{}
+// counted runs (ok false when unknown), and the label's normal share of system time (learned
+// false when none of those runs measured it).
+func readLog(loc location, label string) (needMiB int64, ok bool, share float64, learned bool) {
 	if loc.err != nil {
-		return 0, false, normal
+		return
 	}
 	st, err := store.OpenReadOnly(loc.dir)
 	if err != nil || !st.Exists() {
-		return 0, false, normal
+		return
 	}
 	runs, _, err := st.ReadRuns()
 	if err != nil {
-		return 0, false, normal
+		return
 	}
-	for _, s := range runstats.Summarize(runs) {
-		if share, ok := runstats.NormalShare(s.Window); ok {
-			normal[s.Label] = share
-		}
-	}
-	needMiB, ok = runstats.NeedMiB(runstats.Window(runs, label, runstats.WindowRuns))
-	return needMiB, ok, normal
+	window := runstats.Window(runs, label, runstats.WindowRuns)
+	needMiB, ok = runstats.NeedMiB(window)
+	share, learned = runstats.NormalShare(window)
+	return
 }
 
 // run is one `coreslot run`.
@@ -61,7 +58,8 @@ type run struct {
 	waited    time.Duration
 	env       []string                             // the command's environment before its grant: the inherited context dropped
 	pipeNoted bool                                 // the waiting line said once whether stdin is a pipe
-	normal    map[string]float64                   // every label's normal share, from the run log
+	share     float64                              // the label's normal share, from the run log read at the start
+	learned   bool                                 // the run log gave the label a normal share
 	stops     int                                  // memory stops so far
 	stopped   bool                                 // the last command was killed by a stop round
 	peakKiB   int64                                // the last command's sampled peak
@@ -93,12 +91,12 @@ func runCommand(args []string, io IO) int {
 		})
 	}
 	machine, _ := readMachine()
-	learned, known, normal := readLog(loc, o.label)
-	o.resolveNeed(lookup, func() (int64, bool) { return learned, known }, machine.MemMiB)
+	needMiB, known, share, learned := readLog(loc, o.label)
+	o.resolveNeed(lookup, func() (int64, bool) { return needMiB, known }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now(), normal: normal}
+	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), start: time.Now(), share: share, learned: learned}
 	return r.decide()
 }
 
@@ -119,7 +117,6 @@ func (r *run) ordinary() int {
 	if err != nil {
 		return r.failOpen(nil, err)
 	}
-	e.Normal = r.normal
 	req := r.o.request()
 	if total, over := e.Oversized(req.NeedMiB); over {
 		r.notice("needs %.1f GiB of %.1f GiB; runs only alone", float64(req.NeedMiB)/1024, float64(total)/1024)

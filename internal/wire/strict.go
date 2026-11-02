@@ -152,6 +152,15 @@ func (o object) int64(key string) (int64, error) {
 	return n, nil
 }
 
+func (o object) float(key string) (float64, error) {
+	n, _ := o[key].(json.Number) // a missing key or another type gives "", which does not parse
+	f, err := strconv.ParseFloat(string(n), 64)
+	if err != nil {
+		return 0, malformed("%q is not a number", key)
+	}
+	return f, nil
+}
+
 // smallInt is an integer that also fits the platform's int.
 func (o object) smallInt(key string) (int, error) {
 	n, err := o.int64(key)

@@ -1,1 +1,1 @@
-{"label":"x","pid":4711,"start_ns":5,"arrival_ns":4,"need_mib":2048,"stops":0,"footprint_mib":512,"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"sampled_ns":0,"victim":false,"child_exited":false}
+{"label":"x","pid":4711,"start_ns":5,"arrival_ns":4,"need_mib":2048,"stops":0,"footprint_mib":512,"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"normal_share":0,"sampled_ns":0,"victim":false,"learned":false,"child_exited":false}

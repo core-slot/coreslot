@@ -11,6 +11,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -89,13 +91,13 @@ func TestRoomCountsFootprint(t *testing.T) {
 // Mutation: listing every live hold gives E 28 from the frozen hold and exempts it as the oldest.
 func TestOnlyTickingHoldsAreJobs(t *testing.T) {
 	now := int64(1e18)
-	frozen := wire.Hold{Label: "f", ArrivalNS: 1, DUserNS: 8e8, DSysNS: 12e8, Victim: true, ChildExited: true, SampledNS: now - 1e9}
-	stale := wire.Hold{Label: "f", ArrivalNS: 2, DUserNS: 8e8, DSysNS: 12e8, Victim: true, SampledNS: now - 7e9}
-	oldest := wire.Hold{Label: "c", ArrivalNS: 3, DUserNS: 2e9, Victim: true, SampledNS: now - 1e9}
-	newest := wire.Hold{Label: "c", ArrivalNS: 4, DUserNS: 2e9, Victim: true, SampledNS: now - 1e9}
+	frozen := wire.Hold{Label: "f", ArrivalNS: 1, DUserNS: 8e8, DSysNS: 12e8, NormalShare: 0.04, Learned: true, Victim: true, ChildExited: true, SampledNS: now - 1e9}
+	stale := wire.Hold{Label: "f", ArrivalNS: 2, DUserNS: 8e8, DSysNS: 12e8, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 7e9}
+	oldest := wire.Hold{Label: "c", ArrivalNS: 3, DUserNS: 2e9, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 1e9}
+	newest := wire.Hold{Label: "c", ArrivalNS: 4, DUserNS: 2e9, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 1e9}
 	holds := []liveHold{{"frozen", frozen}, {"stale", stale}, {"oldest", oldest}, {"newest", newest},
 		{"torn", wire.Hold{NeedMiB: 426}}}
-	jobs := runningJobs(holds, now, map[string]float64{"f": 0.04, "c": 0.04})
+	jobs := runningJobs(holds, now)
 	if e := watch.Excess(jobs, 2e9); e != 0 {
 		t.Errorf("E %v from holds that do not tick, want 0", e)
 	}
@@ -104,13 +106,15 @@ func TestOnlyTickingHoldsAreJobs(t *testing.T) {
 	}
 }
 
-// A job is learned only when the run log gave its label a normal S, even a normal of 0.
-func TestRunningJobsAreLearnedByLabel(t *testing.T) {
+// A job is learned only when its own run wrote so, and then with the share it wrote; two holds of
+// one label can differ.
+func TestRunningJobsAreLearnedByTheirRun(t *testing.T) {
 	now := int64(1e18)
-	holds := []liveHold{{"a", wire.Hold{Label: "known", SampledNS: now}}, {"b", wire.Hold{Label: "new", SampledNS: now}}}
-	jobs := runningJobs(holds, now, map[string]float64{"known": 0})
-	if !jobs[0].Learned || jobs[1].Learned {
-		t.Errorf("learned = %v, %v; want true, false", jobs[0].Learned, jobs[1].Learned)
+	holds := []liveHold{{"a", wire.Hold{Label: "x", SampledNS: now, Learned: true, NormalShare: 0.25}},
+		{"b", wire.Hold{Label: "x", SampledNS: now}}}
+	jobs := runningJobs(holds, now)
+	if !jobs[0].Learned || jobs[0].NormalShare != 0.25 || jobs[1].Learned {
+		t.Errorf("jobs = %+v, %+v; want a learned with 0.25, b learning", jobs[0], jobs[1])
 	}
 }
 
@@ -141,4 +145,32 @@ func TestTornLiveHoldCountsAtColdStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	admitted(t, step(t, enqueue(t, e, need(598))))
+}
+
+// Two runs that read the run log at different moments sample one machine and agree on E: A1
+// started before label x's first run completed, A3 after it. Each wrote its own view in its hold,
+// so whoever samples, A1 is learning and A3 counts.
+func TestSamplersWithDifferentLogViewsAgree(t *testing.T) {
+	dir, clk := newStateDir(t, ""), newFakeClock()
+	setLiveMem(t, 8192)
+	early, late := newEngine(t, dir, clk), newEngine(t, dir, clk)
+	for _, share := range []float64{0, 0.04} { // A1 learning, A3 learned
+		g := hold(t, early, needLabel(100, "x"))
+		if err := g.UpdateHold(func(h *wire.Hold) {
+			h.DUserNS, h.DSysNS, h.SampledNS = 8e8, 12e8, clk.clock().Realtime()
+			h.NormalShare, h.Learned = share, share > 0
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	excess := func(e *Engine) float64 {
+		s, err := e.sampler(config.Config{}, config.Machine{MemMiB: 1707})()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return watch.Excess(s.Jobs, memsample.PeriodNS)
+	}
+	if a, b := excess(early), excess(late); a != b || a != 56 {
+		t.Errorf("E is %v when the earlier run samples and %v when the later does; want 56 from A3 alone", a, b)
+	}
 }

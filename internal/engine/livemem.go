@@ -114,7 +114,7 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Samp
 		if err != nil {
 			return watch.Sample{}, err
 		}
-		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime(), e.Normal)}
+		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime())}
 		if m.HeadroomOK {
 			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
 		}
@@ -122,20 +122,19 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Samp
 	}
 }
 
-// runningJobs are the watch jobs of holds at nowNS, with their labels' normal shares, Learned for a
-// label that normal has: the holds whose command is alive and whose run ticked within
-// memsample.StaleNS. Any other hold has no time to report.
-func runningJobs(holds []liveHold, nowNS int64, normal map[string]float64) []watch.Job {
+// runningJobs are the watch jobs of holds at nowNS, each with the normal share its own run wrote:
+// the holds whose command is alive and whose run ticked within memsample.StaleNS. Any other hold
+// has no time to report.
+func runningJobs(holds []liveHold, nowNS int64) []watch.Job {
 	var jobs []watch.Job
 	for _, h := range holds {
 		b := h.body
 		if b.ChildExited || !fresh(b.SampledNS, nowNS) {
 			continue
 		}
-		share, learned := normal[b.Label]
 		jobs = append(jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
 			NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
-			DPageWaitNS: b.DPageWaitNS, NormalShare: share, Learned: learned, Victim: b.Victim, ChildExited: b.ChildExited})
+			DPageWaitNS: b.DPageWaitNS, NormalShare: b.NormalShare, Learned: b.Learned, Victim: b.Victim, ChildExited: b.ChildExited})
 	}
 	return jobs
 }

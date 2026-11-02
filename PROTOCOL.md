@@ -445,8 +445,10 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `stops` | integer | `≥ 0`; how often the run was stopped for memory before this attempt |
 | `footprint_mib` | integer | `0..1073741824`; the run's footprint as it last measured it; `0` when not measured |
 | `d_user_ns`, `d_sys_ns`, `d_page_wait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_page_wait_ns` is `0` where the kernel reports no page wait (section 23.1) |
+| `normal_share` | number | `0..1`; the label's normal share `S0` (section 23.3) as the run read it from the run log when it started; `0` when `learned` is false |
 | `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
 | `victim` | boolean | `true` when a stop round may list the hold: its label has no `no_restart` (section 5.4) and its command does not share coreslot's process group |
+| `learned` | boolean | `true` when the run log gave the label a normal share when the run started; otherwise the hold is learning (section 23.3) |
 | `child_exited` | boolean | `true` once the run's command has exited |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
@@ -455,9 +457,10 @@ as large as 2^64 − 1 (section 7.1) while `start_ns` is a signed 64-bit integer
 carries a start-ns above 2^63 − 1 never has a well-formed body and is ignored and counted. No
 writer produces one, because the wall clock is a signed 64-bit value.
 
-A hold is published with `stops`, `footprint_mib`, the three deltas and `sampled_ns` at 0 and
-`victim` and `child_exited` false. Once its command has started the run writes `stops` and
-`victim`, which hold for the attempt, and each tick (section 23.1) writes the measured keys. Only
+A hold is published with `stops`, `footprint_mib`, the three deltas, `normal_share` and
+`sampled_ns` at 0 and `victim`, `learned` and `child_exited` false. Once its command has started
+the run writes `stops`, `victim`, `normal_share` and `learned`, which hold for the attempt, and
+each tick (section 23.1) writes the measured keys. Only
 the holder writes its body, at publication and then in place: one write at offset 0
 of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
 their inode and the file never shrinks (I1). It keeps `label`, `pid` and
@@ -1180,8 +1183,8 @@ holds/01791720600000000000-0000007300-000004-gate_big [L]
 ```json
 {"label": "gate:big", "pid": 7300, "start_ns": 1791720600000000000,
  "arrival_ns": 1791720540000000000, "need_mib": 3072, "stops": 0, "footprint_mib": 0,
- "d_user_ns": 0, "d_sys_ns": 0, "d_page_wait_ns": 0, "sampled_ns": 0, "victim": false,
- "child_exited": false}
+ "d_user_ns": 0, "d_sys_ns": 0, "d_page_wait_ns": 0, "normal_share": 0, "sampled_ns": 0,
+ "victim": false, "learned": false, "child_exited": false}
 ```
 
 The CLI starts the command with fd 3 = the hold and `CORESLOT_GRANTED_MEM=3072`,
@@ -1297,14 +1300,14 @@ The run of section 21.3 ticks at 12:10:02 (`1791720602000000000`). The kernel re
    ```json
    {"label": "gate:big", "pid": 7300, "start_ns": 1791720600000000000,
     "arrival_ns": 1791720540000000000, "need_mib": 3072, "stops": 0, "footprint_mib": 1984,
-    "d_user_ns": 1600000000, "d_sys_ns": 300000000, "d_page_wait_ns": 0,
-    "sampled_ns": 1791720602000000000, "victim": true, "child_exited": false}
+    "d_user_ns": 1600000000, "d_sys_ns": 300000000, "d_page_wait_ns": 0, "normal_share": 0,
+    "sampled_ns": 1791720602000000000, "victim": true, "learned": false, "child_exited": false}
    ```
 2. It enters the section. The stored sample of `watch.json` is 3.2 s old, more than one period, so
    it takes the machine sample: the paging counters rose by 40 pages per second (below
    `gate_pages_s`, so the gate is closed), and the two live holds report their deltas. For this hold
-   `S = 0.3 / 1.9 = 15.8 %`, below the 25 % a label without history is assumed to have, so its
-   excess is 0, and so is `E`. The detector stays green, and the bucket stays 0. The run replaces
+   `S = 0.3 / 1.9 = 15.8 %`; its label has no counted run, so the hold is learning, no part of
+   `E`, and `E` is 0. The detector stays green, and the bucket stays 0. The run replaces
    `watch.json` with the new sample (`sampled_ns` = `1791720602000000000`, `detector.level` 0) and
    leaves. A stop round was not due.
 3. It finds no hold of its own name in `detector.stop`.
@@ -1380,8 +1383,8 @@ start until it exits, in both modes of section 23.6. Each tick:
    `utime` and `stime` on Linux). It rewrites its own hold's body in place (section 7.4):
    `footprint_mib` (the tree's footprint, as section 20 measures it), `d_user_ns`, `d_sys_ns` and
    `d_page_wait_ns` (the tree's times since the run's previous tick) and `sampled_ns`. It sets
-   `child_exited` once, when the command has exited. `stops` and `victim` hold for the attempt: the
-   run writes them once, when its command starts, before its first tick.
+   `child_exited` once, when the command has exited. `stops`, `victim`, `normal_share` and `learned`
+   hold for the attempt: the run writes them once, when its command starts, before its first tick.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short
    bound leaves its part of that period to the others) and reads `watch.json`. If the stored sample
    is at least one period (2 s) old, or lies in the future, it takes a new machine sample
@@ -1425,9 +1428,11 @@ memory (section 12) but is no job of the watchdog. For each running hold,
 over its latest tick period. Its normal share `S0` is the median of `sys_s / (user_s + sys_s)` over
 the last 20 counted runs of its label (section 20) that report both times. When there are none it
 has no normal share and is **learning**: ordinary commands spend anything from 3 % to 97 % of their
-time in the kernel, so no value stands for a command nothing is known of. A run reads the run log
-once, when it starts, so a command started before the first run of its label completes is learning
-until it ends. The machine's **excess** `E`, in percentage points, is
+time in the kernel, so no value stands for a command nothing is known of. Each run decides its own
+command's `S0` and whether it is learned once, from its own read of the run log when it starts, and
+writes both in its hold (`normal_share`, `learned`, section 7.4). A machine sample takes them from the
+holds and reads no run log, so every run that samples computes the same `E`, and a command started
+before the first run of its label completes is learning until it ends. The machine's **excess** `E`, in percentage points, is
 
 ```
 E = 100 × Σ wᵢ · max(0, Sᵢ − S0ᵢ) / Σ wᵢ      wᵢ = d_userᵢ + d_sysᵢ + d_page_waitᵢ

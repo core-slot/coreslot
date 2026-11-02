@@ -263,12 +263,12 @@ func TestDecodeStrict(t *testing.T) {
 
 	// Hold: every key is required, each within its rule.
 	holdKeys := []string{"label", "pid", "start_ns", "arrival_ns", "need_mib", "stops", "footprint_mib",
-		"d_user_ns", "d_sys_ns", "d_page_wait_ns", "sampled_ns", "victim", "child_exited"}
+		"d_user_ns", "d_sys_ns", "d_page_wait_ns", "normal_share", "sampled_ns", "victim", "learned", "child_exited"}
 	holdWith := func(key, val string) string {
 		m := map[string]string{
 			"label": `"x"`, "pid": `4711`, "start_ns": `5`, "arrival_ns": `4`, "need_mib": `2048`, "stops": `0`,
-			"footprint_mib": `512`, "d_user_ns": `1`, "d_sys_ns": `2`, "d_page_wait_ns": `3`, "sampled_ns": `6`,
-			"victim": `false`, "child_exited": `false`,
+			"footprint_mib": `512`, "d_user_ns": `1`, "d_sys_ns": `2`, "d_page_wait_ns": `3`, "normal_share": `0.04`,
+			"sampled_ns": `6`, "victim": `false`, "learned": `true`, "child_exited": `false`,
 		}
 		m[key] = val
 		var parts []string
@@ -305,6 +305,11 @@ func TestDecodeStrict(t *testing.T) {
 		"d_sys_ns negative":         holdWith("d_sys_ns", `-1`),
 		"d_page_wait_ns negative":   holdWith("d_page_wait_ns", `-1`),
 		"sampled_ns negative":       holdWith("sampled_ns", `-1`),
+		"normal_share negative":     holdWith("normal_share", `-0.1`),
+		"normal_share above 1":      holdWith("normal_share", `1.5`),
+		"normal_share string":       holdWith("normal_share", `"0.04"`),
+		"normal_share out of range": holdWith("normal_share", `1e999`),
+		"learned number":            holdWith("learned", `1`),
 		"victim number":             holdWith("victim", `1`),
 		"child_exited null":         holdWith("child_exited", `null`),
 	}
@@ -353,7 +358,7 @@ func TestDecodeStrict(t *testing.T) {
 		t.Fatalf("hold with an unknown key rejected: %v", err)
 	}
 	wantHold := Hold{Label: "x", PID: 4711, StartNS: 5, ArrivalNS: 4, NeedMiB: 2048, FootprintMiB: 512,
-		DUserNS: 1, DSysNS: 2, DPageWaitNS: 3, SampledNS: 6}
+		DUserNS: 1, DSysNS: 2, DPageWaitNS: 3, NormalShare: 0.04, SampledNS: 6, Learned: true}
 	if h != wantHold {
 		t.Errorf("decoded hold = %+v, want %+v", h, wantHold)
 	}
@@ -393,7 +398,7 @@ func TestEncodeShapeAndRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := `{"label":"","pid":0,"start_ns":7,"arrival_ns":0,"need_mib":0,"stops":0,"footprint_mib":0,` +
-		`"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"sampled_ns":0,"victim":false,"child_exited":false}`; string(b) != want {
+		`"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"normal_share":0,"sampled_ns":0,"victim":false,"learned":false,"child_exited":false}`; string(b) != want {
 		t.Errorf("hold body = %s, want %s", b, want)
 	}
 	b, err = Encode(Cancel{RequestedNS: 9, RequesterPID: 4711})
@@ -462,7 +467,7 @@ func TestLargestBodiesFit(t *testing.T) {
 	lbl := largestLabel(t)
 	h := Hold{Label: lbl, PID: math.MaxInt, StartNS: math.MaxInt64, ArrivalNS: math.MaxInt64, NeedMiB: spec.MaxNeedMiB,
 		Stops: math.MaxInt, FootprintMiB: spec.MaxNeedMiB, DUserNS: math.MaxInt64, DSysNS: math.MaxInt64,
-		DPageWaitNS: math.MaxInt64, SampledNS: math.MaxInt64, Victim: true, ChildExited: true}
+		DPageWaitNS: math.MaxInt64, NormalShare: 1, SampledNS: math.MaxInt64, Victim: true, Learned: true, ChildExited: true}
 	b, err := Encode(h)
 	if err != nil {
 		t.Fatalf("largest hold refused: %v", err)
@@ -485,7 +490,7 @@ func TestLargestBodiesFit(t *testing.T) {
 
 func TestEncodeCanonicalAndStable(t *testing.T) {
 	h := Hold{Label: "x", PID: 7300, StartNS: 3, ArrivalNS: 2, NeedMiB: 2048, Stops: 1, FootprintMiB: 900,
-		DUserNS: 10, DSysNS: 20, DPageWaitNS: 30, SampledNS: 40, Victim: true}
+		DUserNS: 10, DSysNS: 20, DPageWaitNS: 30, NormalShare: 0.04, SampledNS: 40, Victim: true, Learned: true}
 	a, err := Encode(h)
 	if err != nil {
 		t.Fatal(err)
@@ -497,7 +502,7 @@ func TestEncodeCanonicalAndStable(t *testing.T) {
 		}
 	}
 	if want := `{"label":"x","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":2048,"stops":1,"footprint_mib":900,` +
-		`"d_user_ns":10,"d_sys_ns":20,"d_page_wait_ns":30,"sampled_ns":40,"victim":true,"child_exited":false}`; string(a) != want {
+		`"d_user_ns":10,"d_sys_ns":20,"d_page_wait_ns":30,"normal_share":0.04,"sampled_ns":40,"victim":true,"learned":true,"child_exited":false}`; string(a) != want {
 		t.Errorf("hold body = %s\nwant        %s", a, want)
 	}
 }

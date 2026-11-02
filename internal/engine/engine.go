@@ -87,10 +87,6 @@ type Engine struct {
 	machine func() (config.Machine, error)
 	clock   Clock
 	seq     func() int
-
-	// Normal is each label's normal S from the run log, read once and set before the engine is
-	// used; a label it lacks has none learned. The watch samples this engine takes use it.
-	Normal map[string]float64
 }
 
 // New returns an engine over st. cfgPath is the configuration file, read at every admission
