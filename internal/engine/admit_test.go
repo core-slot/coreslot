@@ -602,3 +602,23 @@ func TestReelectionWatchesATicketPublishedWithoutBump(t *testing.T) {
 		t.Fatalf("h admitted %d s after the re-election first saw x, want 10 or 11 (x watched until STALLED)", admittedAt)
 	}
 }
+
+// A restart's calm left is calm_s less the green stretch, carried to now by the sample's age: 10 s
+// of green at a sample 2 s old leaves 18 s of 30; a sample 7 s old (stale) or from the future
+// leaves all 30, however long its green. Mutations: dropping the age leaves 20 s; dropping the
+// freshness check leaves none for the stale sample.
+func TestCalmLeftCountsTheSampleAge(t *testing.T) {
+	const s = int64(time.Second)
+	c, wall, now := watch.Defaults(), 1000*s, int64(1e18)
+	sample := watch.Sample{Host: memsample.HostReading{WallNS: wall}}
+	for _, k := range []struct {
+		name          string
+		age, greenFor int64
+		want          int64
+	}{{"fresh", 2 * s, 10 * s, 18 * s}, {"stale", 7 * s, 100 * s, 30 * s}, {"from the future", -2 * s, 100 * s, 30 * s}} {
+		d := watch.Detector{Level: watch.Green, CalmSinceNS: wall - k.greenFor}
+		if got := calmLeft(d, sample, now-k.age, now, c); got != k.want {
+			t.Errorf("%s: calmLeft = %v, want %v", k.name, time.Duration(got), time.Duration(k.want))
+		}
+	}
+}
