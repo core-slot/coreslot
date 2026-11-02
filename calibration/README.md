@@ -122,7 +122,7 @@ Linux is not calibrated at all.
 
 ## The watchdog's own cost
 
-The design asks for under 1 % of one core per run. `cost.py` starts N `coreslot run --mem 64M --
+The watchdog is meant to cost under 1 % of one core per run. `cost.py` starts N `coreslot run --mem 64M --
 sleep 120`, for N = 1, 4 and 8 in turn, waits until every run has started its command, reads each
 `coreslot` process's CPU time with `ps` (the process's own: its `sleep` is another process), and
 divides the difference over a window in which all N tick by the window's wall time.
@@ -142,7 +142,7 @@ the checkout it was built from), over windows of 114 s in which all N runs ticke
 | 4 | 0.17 % to 0.24 % |
 | 8 | 0.11 % to 0.32 % |
 
-The highest is 0.32 % of one core, under the 1 % asked for. `ps` reports CPU time to 10 ms, which is
+The highest is 0.32 % of one core, under the 1 % it is meant to stay below. `ps` reports CPU time to 10 ms, which is
 0.009 % of a 114 s window. The window leaves out each run's first 3 s and its waiting in the queue;
 one machine, one build and one sitting, so it bounds the cost on this Mac and says nothing of other
 machines.
