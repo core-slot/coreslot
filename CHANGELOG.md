@@ -14,9 +14,10 @@ All notable changes to this project are recorded here. The format follows
   `sh -c`, `env`, `timeout`) can share the launcher's label, and that repositories with the same
   directory name share theirs; `--label` separates both (a `needs.toml` key on a shared label pins
   one need for all of them). The `sh -c 'a | b'` advice carries a `--label`.
-- `coreslot doctor --reset` of a format-2 directory is a repair and keeps the run log, which every
-  label's learned memory need and normal stall share come from; only a reset of another format
-  removes it, and says that every label learns again.
+- `coreslot doctor --reset` of a format-2 directory, or of one without `FORMAT`, is a repair and
+  keeps the run log, which every label's learned memory need and normal stall share come from;
+  only a reset of another format or of an unreadable `FORMAT` removes it, and says that every
+  label learns again.
 
 ## v0.4.0 (2026-11-02)
 

@@ -182,7 +182,8 @@ xattr -d com.apple.quarantine ./coreslot
 `coreslot version` prints the version and the protocol formats it implements. A state directory of
 another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`,
 which also removes that format's run log, so every label learns its memory need again. On a
-format-2 directory the reset is a repair and keeps the run log.
+format-2 directory the reset is a repair and keeps the run log; to make the labels learn again,
+remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 
 ## Usage
 

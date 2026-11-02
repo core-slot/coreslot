@@ -26,30 +26,30 @@ func (e *LiveError) Unwrap() error { return ErrRefused }
 // Reset recreates the state directory as the format this client writes (`coreslot doctor
 // --reset`), whatever format it had: inside the admission section it checks that there are no
 // holds, no tickets and no other section holder, and only then removes the entries of queue/,
-// holds/, cancel/, log/ unless store.ResetKeepsLog, gen, degraded and another format's res/, and
-// writes FORMAT, keeping admit.lock and config.toml. It returns the entries removed and keptLog.
+// holds/ and cancel/, those of log/ unless FORMAT names format 2 or none, gen, degraded and the
+// res/ another format may hold, and writes FORMAT, keeping admit.lock and config.toml. It returns
+// what store.(*Section).Reset did.
 //
 // When something is alive it removes nothing and returns a *LiveError naming it. A section that
 // ctx does not let it enter is one more live thing: another client is inside it. The state is
 // not format-checked, so a malformed or foreign FORMAT is replaced by a reset like any other.
-func (e *Engine) Reset(ctx context.Context) (removed int, keptLog bool, err error) {
+func (e *Engine) Reset(ctx context.Context) (done store.ResetDone, err error) {
 	sec, err := enterSection(e.st, ctx)
 	if err != nil {
 		if ctx.Err() != nil {
-			return 0, false, &LiveError{Reasons: []string{e.sectionHolderReason()}}
+			return done, &LiveError{Reasons: []string{e.sectionHolderReason()}}
 		}
-		return 0, false, err
+		return done, err
 	}
 	defer sec.Leave()
-	keptLog = e.st.ResetKeepsLog()
-	live, removed, err := sec.Reset()
+	live, done, err := sec.Reset()
 	if err != nil {
-		return removed, keptLog, err
+		return done, err
 	}
 	if !live.Empty() {
-		return 0, false, &LiveError{Reasons: e.liveReasons(live)}
+		return done, &LiveError{Reasons: e.liveReasons(live)}
 	}
-	return removed, keptLog, nil
+	return done, nil
 }
 
 // sectionHolderReason names the client inside the section from admit.lock's informational

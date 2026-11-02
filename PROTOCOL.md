@@ -229,11 +229,13 @@ process still locks; only then does it remove the entries of `queue/`, `holds/` 
 `gen`, `watch.json`, `degraded` and the `res/` directory a directory of another format may hold,
 and writes `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` already names format 2 the reset is a repair and keeps `log/` too: the run log is
-what every label's learned need and normal stall share come from (sections 20 and 23). Otherwise,
-when `FORMAT` is missing, malformed or names another format, it removes the entries of `log/` as
-well, and the CLI says so: every label learns its need again. A reset never deletes, renames or
-replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
+When `FORMAT` names format 2, or is missing (which the first client writes as 2, section 15.1),
+the reset is a repair and keeps `log/` too: the run log is what every label's learned need and
+normal stall share come from (sections 20 and 23). When `FORMAT` names another format or cannot be
+read, it removes the entries of `log/` as well, and the CLI says so: every label learns its need
+again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
+`log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
+never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
 the directory as format 2; a live hold or ticket of any format stops it. It does not reconcile
 first (section 10.4): it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
@@ -1041,7 +1043,7 @@ itself.
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
 | 3 | `status`: runs fail open, because degraded mode is recorded or a state error (an unusable directory, a malformed `FORMAT` or one naming a format this client does not implement, an invalid configuration) stands; `doctor`: degraded mode is recorded and nothing else is wrong |
-| 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusals of `--clear` and `--reset` are 75 |
+| 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusal of `--clear` is 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
 `status` exits 3, `doctor` exits 1 and `cancel` refuses with 75. `--help` prints on stdout and exits

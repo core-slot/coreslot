@@ -889,6 +889,70 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	}
 }
 
+// What a reset says of the run log follows what it did with log/: kept on a repair (FORMAT 2 or
+// none yet), removed with the reason under another format or an unreadable FORMAT, and not named
+// when there was none; a partial reset says it too. Mutations: choose the line from the format
+// alone; drop the note from the partial reset's line; keep log/ only under a present FORMAT 2.
+func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
+	const (
+		kept       = "; kept admit.lock, config.toml and the run log; wrote FORMAT\n"
+		none       = " entries; kept admit.lock and config.toml; wrote FORMAT\n"
+		other      = " entries, the run log of another format among them, so every label learns its memory need again; "
+		unreadable = " entries, the run log among them because FORMAT could not be read, so every label learns its memory need again; "
+	)
+	cases := []struct {
+		name, format string // "" removes FORMAT
+		log, stuck   bool
+		want         string
+	}{
+		{"format 2", "coreslot-protocol 2\n", true, false, kept},
+		{"no FORMAT", "", true, false, kept},
+		{"format 2 without a log", "coreslot-protocol 2\n", false, false, none},
+		{"format 1", "coreslot-protocol 1\n", true, false, other},
+		{"format 1 without a log", "coreslot-protocol 1\n", false, false, none},
+		{"malformed FORMAT", "coreslot-protocol x\n", true, false, unreadable},
+		{"format 1, partial", "coreslot-protocol 1\n", true, true, other},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 || !slices.Contains(entries(t, dir, "log"), "runs.jsonl") {
+				t.Fatalf("setup run: %d %q, log/ %v", r.code, r.stderr, entries(t, dir, "log"))
+			}
+			if !c.log {
+				if err := os.RemoveAll(filepath.Join(dir, "log")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			if c.format == "" {
+				err = os.Remove(filepath.Join(dir, "FORMAT"))
+			} else {
+				err = os.WriteFile(filepath.Join(dir, "FORMAT"), []byte(c.format), 0o600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCode := 0
+			if c.stuck {
+				wantCode = 1
+				stuck := filepath.Join(dir, "queue", "00000000000000000001-0000000001-000001")
+				if err := os.MkdirAll(stuck, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stuck, "x"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := cli(t, baseEnv(dir), "doctor", "--reset")
+			out := r.stdout + r.stderr
+			if r.code != wantCode || !strings.Contains(out, c.want) || (!c.log && strings.Contains(out, "run log")) {
+				t.Errorf("doctor --reset: exit %d, want %d; output %q, want %q", r.code, wantCode, out, c.want)
+			}
+		})
+	}
+}
+
 func inodeOf(t *testing.T, path string) uint64 {
 	t.Helper()
 	var st unix.Stat_t
@@ -1127,9 +1191,12 @@ func TestDoctorFormatRefusals(t *testing.T) {
 	})
 	t.Run("clear under a malformed FORMAT, then reset repairs it", func(t *testing.T) {
 		dir := setup(t, "coreslot-protocol x\n")
+		if r := cli(t, baseEnv(dir), "doctor"); r.code != 1 || !strings.Contains(r.stdout, "`coreslot doctor --reset` rewrites it when nothing is live, removing the run log") {
+			t.Errorf("doctor: exit %d, want 1 and the advice saying the reset removes the run log:\n%s", r.code, r.stdout)
+		}
 		r := cli(t, baseEnv(dir), "doctor", "--clear")
-		if r.code != 75 || !strings.Contains(r.stderr, "FORMAT is malformed") || !strings.Contains(r.stderr, "doctor --reset") {
-			t.Errorf("doctor --clear: exit %d, want 75 pointing at --reset (stderr %q)", r.code, r.stderr)
+		if r.code != 75 || !strings.Contains(r.stderr, "FORMAT is malformed") || !strings.Contains(r.stderr, "doctor --reset` rewrites it when nothing is live, removing the run log") {
+			t.Errorf("doctor --clear: exit %d, want 75 pointing at --reset and what it removes (stderr %q)", r.code, r.stderr)
 		}
 		if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
 			t.Errorf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)

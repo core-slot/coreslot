@@ -85,10 +85,10 @@ func TestResetRefusesLiveState(t *testing.T) {
 			before := treeContent(t, dir)
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
-			removed, _, err := e.Reset(ctx)
+			done, err := e.Reset(ctx)
 			var le *LiveError
-			if !errors.As(err, &le) || !errors.Is(err, ErrRefused) || removed != 0 {
-				t.Fatalf("Reset = %d, %v; want a *LiveError matching ErrRefused", removed, err)
+			if !errors.As(err, &le) || !errors.Is(err, ErrRefused) || done != (store.ResetDone{}) {
+				t.Fatalf("Reset = %+v, %v; want a *LiveError matching ErrRefused", done, err)
 			}
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("error %q does not say %q", err, c.want)
@@ -109,7 +109,7 @@ func TestResetRefusalNamesLabels(t *testing.T) {
 	enqueue(t, e, needLabel(128, "ci:o-r\x1b[2J"))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	_, _, err := e.Reset(ctx)
+	_, err := e.Reset(ctx)
 	var le *LiveError
 	if !errors.As(err, &le) {
 		t.Fatalf("Reset = %v, want a *LiveError", err)
@@ -151,14 +151,27 @@ func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 	}
 }
 
-// With nothing alive a reset empties the state and leaves a directory a client can use again.
+// writeRunLog writes a run log of one line into dir.
+func writeRunLog(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, store.LogDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.LogDir, store.RunLog), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With nothing alive a reset empties the state and leaves a directory a client can use again; it
+// returns what the store did, the run log of format 2 kept.
 func TestResetThenUse(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, need(256)).Close()
-	removed, keptLog, err := e.Reset(context.Background())
-	if err != nil || removed == 0 || !keptLog {
-		t.Fatalf("Reset = %d, kept log %v, %v; want entries removed and the run log of format 2 kept", removed, keptLog, err)
+	writeRunLog(t, dir)
+	done, err := e.Reset(context.Background())
+	if err != nil || done.Removed == 0 || done.LogKept != 1 || done.LogRemoved != 0 {
+		t.Fatalf("Reset = %+v, %v; want entries removed and the run log of format 2 kept", done, err)
 	}
 	if exists(filepath.Join(dir, store.GenFile)) {
 		t.Error("gen survived")
@@ -173,11 +186,12 @@ func TestResetThenUse(t *testing.T) {
 }
 
 // A reset under a well-formed FORMAT this client does not implement recreates the directory as
-// format 2, an entry of that format's queue included.
+// format 2, an entry of that format's queue and its run log included.
 func TestResetRecreatesAForeignFormat(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, need(128)).Close()
+	writeRunLog(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -187,8 +201,8 @@ func TestResetRecreatesAForeignFormat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, store.QueueDir, "v3-ticket"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, keptLog, err := e.Reset(context.Background()); err != nil || keptLog {
-		t.Fatalf("Reset = kept log %v, %v; want the directory recreated, its run log removed", keptLog, err)
+	if done, err := e.Reset(context.Background()); err != nil || done.LogRemoved != 1 || done.LogKept != 0 {
+		t.Fatalf("Reset = %+v, %v; want the directory recreated, its run log removed", done, err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 2\n" || exists(filepath.Join(dir, store.QueueDir, "v3-ticket")) {
 		t.Errorf("after the reset FORMAT %q, v3-ticket present %v; want format 2 and an empty queue", b, exists(filepath.Join(dir, store.QueueDir, "v3-ticket")))
