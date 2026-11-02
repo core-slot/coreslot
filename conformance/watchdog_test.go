@@ -232,3 +232,28 @@ func TestNormalShareComesFromTickShares(t *testing.T) {
 	e.ReleaseChild("ticked")
 	e.ReleaseChild("timed")
 }
+
+// A real run writes its tick share to the run log, and a later run of the label learns it as its
+// normal share. Mutation: not writing rec.TickShare in the run leaves the label learning.
+func TestRunLearnsItsTickShareForTheNextRun(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	e.SetReadings(calm(0))
+	first := e.Run("learner", "--mem", "100M")
+	e.WaitStarted("learner")
+	e.WaitTicked("learner")
+	e.Eventually(startWait, "two compared samples", func() bool { return len(e.Watch().Window) >= 3 })
+	e.ReleaseChild("learner")
+	first.ExitCode(0)
+	runs, _, err := e.Engine().Store().ReadRuns()
+	if err != nil || len(runs) != 1 || runs[0].TickShare == nil {
+		t.Fatalf("run log %+v, %v; want one run with a tick_share", runs, err)
+	}
+	e.Start("run", "--label", "learner", "--mem", "100M", "--", bins.child, "hold", e.MarkDir, "next")
+	e.WaitStarted("next")
+	h := e.HoldBody(e.WaitTicked("learner"))
+	if !h.Learned || h.NormalShare != *runs[0].TickShare {
+		t.Errorf("second run learned %v at %v; want the first run's %v", h.Learned, h.NormalShare, *runs[0].TickShare)
+	}
+	e.ReleaseChild("next")
+}
