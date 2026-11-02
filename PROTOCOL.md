@@ -455,8 +455,9 @@ carries a start-ns above 2^63 − 1 never has a well-formed body and is ignored 
 writer produces one, because the wall clock is a signed 64-bit value.
 
 A hold is published with `stops`, `footprint_mib`, the three deltas and `sampled_ns` at 0 and
-`victim` and `child_exited` false; the run's first tick (section 23.1) writes the true values. Only
-the holder writes its body, at publication and then in place at every tick: one write at offset 0
+`victim` and `child_exited` false. Once its command has started the run writes `stops` and
+`victim`, which hold for the attempt, and each tick (section 23.1) writes the measured keys. Only
+the holder writes its body, at publication and then in place: one write at offset 0
 of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
 their inode and the file never shrinks (I1). It keeps `label`, `pid` and
 `start_ns` as they were. A reader MAY still see a body that does not parse; it then treats the

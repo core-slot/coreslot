@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
@@ -18,11 +18,10 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// staleNS is the age past which a stored machine sample is no reading: three periods.
-const staleNS = int64(6 * time.Second)
-
 // fresh reports whether a reading taken at atNS, by the wall clock, is still one at nowNS.
-func fresh(atNS, nowNS int64) bool { return atNS > 0 && atNS <= nowNS && nowNS-atNS <= staleNS }
+func fresh(atNS, nowNS int64) bool {
+	return atNS > 0 && atNS <= nowNS && nowNS-atNS <= memsample.StaleNS
+}
 
 // admit is the admission attempt of the head (PROTOCOL.md section 12.1 steps 1 to 7). It returns
 // the grant when admitted, nil with no error when the ticket must keep waiting (the section was

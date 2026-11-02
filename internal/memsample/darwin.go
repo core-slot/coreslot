@@ -9,17 +9,32 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Tree returns the summed physical footprint of root and its descendants, in KiB, and their pids.
-func Tree(root int) (kib int64, pids []int, ok bool) {
+// Tree returns the summed physical footprint of root and its descendants, in KiB, and the user,
+// system and page-wait time of each, from one proc_pid_rusage per process: V6 where it carries
+// page wait, V4 elsewhere.
+func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
-	if err != nil {
+	tb, terr := timebase()
+	if err != nil || terr != nil {
 		return 0, nil, false
 	}
 	parents := make(map[int]int, len(procs))
 	for _, p := range procs {
 		parents[int(p.Proc.P_pid)] = int(p.Eproc.Ppid)
 	}
-	return treeSum(root, parents, footprint)
+	ns := func(ticks uint64) int64 { return int64(ticks * uint64(tb[0]) / uint64(tb[1])) }
+	has, flavor := pageWait(), rusageV4
+	if has {
+		flavor = rusageV6
+	}
+	return treeSum(root, parents, func(pid int) (int64, TreeTimes, bool) {
+		ri, ok := rusage(pid, flavor)
+		t := TreeTimes{UserNS: ns(ri[userAt]), SysNS: ns(ri[sysAt]), HasPageWait: has}
+		if has {
+			t.PageWaitNS = ns(ri[pageWaitAt])
+		}
+		return int64(ri[footprintAt] >> 10), t, ok
+	})
 }
 
 // Listing reads the process table once: kern.proc.all's parent and start time of every process.
@@ -33,12 +48,6 @@ func Listing() (map[int]Proc, bool) {
 		out[int(p.Proc.P_pid)] = Proc{PPID: int(p.Eproc.Ppid), StartNS: p.Proc.P_starttime.Nano()}
 	}
 	return out, true
-}
-
-// footprint reads ri_phys_footprint of pid's rusage_info_v4, in KiB.
-func footprint(pid int) (int64, bool) {
-	ri, ok := rusage(pid, rusageV4)
-	return int64(ri[footprintAt] >> 10), ok
 }
 
 // The rusage_info flavors read, and the places of their fields in 64-bit words, after the 16-byte

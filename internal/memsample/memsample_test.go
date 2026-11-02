@@ -34,24 +34,25 @@ func TestDescendants(t *testing.T) {
 // A process that exited after the listing cannot be read: it is skipped, and the rest still
 // add up. Mutation: return !ok on the first failed read.
 func TestTreeSumSkipsFailedReads(t *testing.T) {
-	read := func(pid int) (int64, bool) {
+	read := func(pid int) (int64, TreeTimes, bool) {
 		switch pid {
 		case 2:
-			return 100, true
+			return 100, TreeTimes{UserNS: 1}, true
 		case 4:
-			return 50, true
+			return 50, TreeTimes{UserNS: 2}, true
 		}
-		return 0, false
+		return 0, TreeTimes{}, false
 	}
-	if kib, pids, ok := treeSum(2, map[int]int{3: 2, 4: 2}, read); kib != 150 || fmt.Sprint(pids) != "[2 4]" || !ok {
-		t.Errorf("treeSum = %d, %v, %v; want 150, [2 4], true", kib, pids, ok)
+	if kib, times, ok := treeSum(2, map[int]int{3: 2, 4: 2}, read); kib != 150 || len(times) != 2 ||
+		times[2].UserNS != 1 || times[4].UserNS != 2 || !ok {
+		t.Errorf("treeSum = %d, %v, %v; want 150, the times of 2 and 4, true", kib, times, ok)
 	}
 }
 
 // A root that is gone and lists no descendants reads nothing: not a measured zero. Mutation:
 // return true for an empty sum.
 func TestTreeSumRootGone(t *testing.T) {
-	read := func(int) (int64, bool) { return 0, false }
+	read := func(int) (int64, TreeTimes, bool) { return 0, TreeTimes{}, false }
 	if kib, _, ok := treeSum(7, map[int]int{3: 2}, read); kib != 0 || ok {
 		t.Errorf("treeSum = %d, %v; want 0, false", kib, ok)
 	}

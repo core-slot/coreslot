@@ -125,9 +125,9 @@ func TestTreeTimesTicks(t *testing.T) {
 	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
 		t.Fatalf("helper said %q, %v; want ready", line, err)
 	}
-	tt, err := ReadTreeTimes([]int{cmd.Process.Pid})
-	if err != nil || tt.UserNS < 0.8e9 || tt.UserNS > 1.2e9 {
-		t.Errorf("ReadTreeTimes = %+v, %v; want UserNS within 20 %% of 1e9", tt, err)
+	_, times, ok := Tree(cmd.Process.Pid)
+	if tt := times[cmd.Process.Pid]; !ok || tt.UserNS < 0.8e9 || tt.UserNS > 1.2e9 {
+		t.Errorf("Tree's times = %+v, %v; want UserNS within 20 %% of 1e9", tt, ok)
 	}
 }
 

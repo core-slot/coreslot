@@ -25,6 +25,14 @@ const (
 // measured, so that an unknown command needs more evidence.
 const DefaultNormalShare = 0.25
 
+// NormalShare is label's normal S in normal, DefaultNormalShare when it has none.
+func NormalShare(normal map[string]float64, label string) float64 {
+	if s, ok := normal[label]; ok {
+		return s
+	}
+	return DefaultNormalShare
+}
+
 // minWorkShare is the part of a period a job's user, system and page-wait time must reach to count
 // toward E: an idle polling job is mostly system time and says nothing about memory. interim: the
 // calibration sets it.

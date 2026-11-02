@@ -12,37 +12,43 @@ import (
 // Tree returns, in KiB, RssAnon + VmSwap summed over root and its descendants, plus the largest
 // RssShmem among them once: shared memory is mapped by several of them but held once. It also
 // returns their pids.
-func Tree(root int) (kib int64, pids []int, ok bool) {
+func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	ents, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0, nil, false
 	}
 	parents := make(map[int]int, len(ents))
+	stats := make(map[int][]string, len(ents))
 	for _, ent := range ents {
 		pid, err := strconv.Atoi(ent.Name())
 		if err != nil {
 			continue
 		}
-		if ppid, ok := parent(pid); ok {
-			parents[pid] = ppid
+		if f, ok := stat(pid); ok && len(f) >= 13 {
+			if ppid, err := strconv.Atoi(f[1]); err == nil {
+				parents[pid], stats[pid] = ppid, f
+			}
 		}
 	}
+	const tickNS = int64(time.Second) / userHZ
 	var shmem int64
-	kib, pids, ok = treeSum(root, parents, func(pid int) (int64, bool) {
+	kib, times, ok = treeSum(root, parents, func(pid int) (int64, TreeTimes, bool) {
 		data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
 		if err != nil {
-			return 0, false
+			return 0, TreeTimes{}, false
 		}
 		anon, ok := meminfo(string(data), "RssAnon")
-		if !ok {
-			return 0, false
+		user, err1 := strconv.ParseInt(stats[pid][11], 10, 64)
+		sys, err2 := strconv.ParseInt(stats[pid][12], 10, 64)
+		if !ok || err1 != nil || err2 != nil {
+			return 0, TreeTimes{}, false
 		}
 		swap, _ := meminfo(string(data), "VmSwap")
 		shm, _ := meminfo(string(data), "RssShmem")
 		shmem = max(shmem, shm)
-		return anon + swap, true
+		return anon + swap, TreeTimes{UserNS: user * tickNS, SysNS: sys * tickNS}, true
 	})
-	return kib + shmem, pids, ok
+	return kib + shmem, times, ok
 }
 
 // userHZ is the unit of the start time in /proc/<pid>/stat: clock ticks of 1/100 s.
@@ -87,16 +93,6 @@ func Listing() (map[int]Proc, bool) {
 		procs[pid] = Proc{PPID: ppid, StartNS: btime*int64(time.Second) + ticks*(int64(time.Second)/userHZ)}
 	}
 	return procs, true
-}
-
-// parent reads pid's parent from /proc/<pid>/stat.
-func parent(pid int) (int, bool) {
-	f, ok := stat(pid)
-	if !ok || len(f) < 2 {
-		return 0, false
-	}
-	ppid, err := strconv.Atoi(f[1])
-	return ppid, err == nil
 }
 
 // stat returns the fields of /proc/<pid>/stat after the last ')', which ends the command name:

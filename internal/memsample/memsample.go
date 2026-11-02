@@ -52,19 +52,19 @@ func descendants(root int, parents map[int]int) []int {
 	return out
 }
 
-// treeSum adds read over root and its descendants in parents and returns the pids it read. A
-// process that cannot be read (it exited after the listing) is skipped; ok is false when not one
-// of them could be read.
-func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, ok bool)) (int64, []int, bool) {
+// treeSum adds the memory read gives over root and its descendants in parents and returns the
+// times it gave, by pid: one read per process. A process that cannot be read (it exited after the
+// listing) is skipped; ok is false when not one of them could be read.
+func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, t TreeTimes, ok bool)) (int64, map[int]TreeTimes, bool) {
 	var sum int64
-	var pids []int
+	times := map[int]TreeTimes{}
 	for _, pid := range descendants(root, parents) {
-		if kib, ok := read(pid); ok {
+		if kib, t, ok := read(pid); ok {
 			sum += kib
-			pids = append(pids, pid)
+			times[pid] = t
 		}
 	}
-	return sum, pids, len(pids) > 0
+	return sum, times, len(times) > 0
 }
 
 // meminfo returns the value of key, in KiB, from the text of /proc/meminfo. It lives here, not

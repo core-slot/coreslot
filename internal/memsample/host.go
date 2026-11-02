@@ -1,7 +1,6 @@
 package memsample
 
 import (
-	"errors"
 	"reflect"
 	"strconv"
 	"strings"
@@ -57,36 +56,19 @@ type TreeTimes struct {
 	HasPageWait               bool
 }
 
+// PeriodNS is the watchdog's sampling period, and StaleNS, three periods, the age past which a
+// reading is none: a pair of samples further apart is a gap.
 const (
+	PeriodNS  = int64(2 * time.Second)
+	StaleNS   = 3 * PeriodNS
 	gapSkewNS = int64(time.Second)
-	gapSpanNS = int64(6 * time.Second)
 )
 
 // Gap reports whether prev and cur are too far apart to compare: the two clocks diverged by more
 // than 1 s (the machine slept), more than 6 s passed, or the clock went back (a reboot).
 func Gap(prev, cur HostReading) bool {
 	wall, awake := cur.WallNS-prev.WallNS, cur.AwakeNS-prev.AwakeNS
-	return wall < 0 || wall > gapSpanNS || max(wall-awake, awake-wall) > gapSkewNS
-}
-
-// treeTimes adds read over pids. A process that cannot be read (it exited) is skipped; it is an
-// error when not one of them could be read.
-func treeTimes(pids []int, read func(pid int) (TreeTimes, bool)) (TreeTimes, error) {
-	var sum TreeTimes
-	found := false
-	for _, pid := range pids {
-		if t, ok := read(pid); ok {
-			sum.UserNS += t.UserNS
-			sum.SysNS += t.SysNS
-			sum.PageWaitNS += t.PageWaitNS
-			sum.HasPageWait = t.HasPageWait
-			found = true
-		}
-	}
-	if !found {
-		return sum, errors.New("no process of the tree could be read")
-	}
-	return sum, nil
+	return wall < 0 || wall > StaleNS || max(wall-awake, awake-wall) > gapSkewNS
 }
 
 // psiTotal returns the total= field of the "some" line of /proc/pressure/memory's text, in µs.

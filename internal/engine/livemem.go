@@ -124,7 +124,7 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine, normal map[string]
 }
 
 // runningJobs are the watch jobs of holds at nowNS, with their labels' normal shares: the holds
-// whose command is alive and whose run ticked within staleNS. Any other hold has no time to report.
+// whose command is alive and whose run ticked within memsample.StaleNS. Any other hold has no time to report.
 func runningJobs(holds []liveHold, nowNS int64, normal map[string]float64) []watch.Job {
 	var jobs []watch.Job
 	for _, h := range holds {
@@ -132,13 +132,9 @@ func runningJobs(holds []liveHold, nowNS int64, normal map[string]float64) []wat
 		if b.ChildExited || !fresh(b.SampledNS, nowNS) {
 			continue
 		}
-		share, ok := normal[b.Label]
-		if !ok {
-			share = watch.DefaultNormalShare
-		}
 		jobs = append(jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
 			NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
-			DPageWaitNS: b.DPageWaitNS, NormalShare: share, Victim: b.Victim, ChildExited: b.ChildExited})
+			DPageWaitNS: b.DPageWaitNS, NormalShare: watch.NormalShare(normal, b.Label), Victim: b.Victim, ChildExited: b.ChildExited})
 	}
 	return jobs
 }

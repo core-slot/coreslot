@@ -7,17 +7,13 @@ import (
 	"errors"
 	"io/fs"
 	"slices"
-	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
-const (
-	// tickNS is the sampling period: a stored sample younger than it is this period's.
-	tickNS = int64(2 * time.Second)
-	// maxWatchBytes bounds watch.json, which grows with the live holds.
-	maxWatchBytes = 1 << 20
-)
+// maxWatchBytes bounds watch.json, which grows with the live holds.
+const maxWatchBytes = 1 << 20
 
 // watchState is the body of watch.json.
 type watchState struct {
@@ -57,7 +53,7 @@ func (sec *Section) SetWatch(d watch.Detector, s watch.Sample, sampledNS int64) 
 // so one sample serves the machine per period. A failed read is stored as Unknown and returned.
 func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.Config) (watch.Detector, []string, error) {
 	d, prev, at, err := sec.Watch()
-	if err != nil || at <= now && now-at < tickNS {
+	if err != nil || at <= now && now-at < memsample.PeriodNS { // this period's sample
 		return d, d.Stop, err
 	}
 	cur, rerr := read()
@@ -96,19 +92,21 @@ func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
 // appendSample appends cur and the detector d that advanced on it to log/watch.jsonl, as the
 // calibration reads it; stop is the round written at this sample.
 func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) error {
-	h, jobs := cur.Host, []map[string]any{}
+	type sampleJob struct {
+		watch.Job
+		Share *float64 `json:"share"` // null when the job reported no time
+	}
+	h, jobs := cur.Host, []sampleJob{}
 	var psi any // null where the platform has no PSI
 	if d.Rates.HasPSI {
 		psi = d.Rates.PSISomeUSS
 	}
 	for _, j := range cur.Jobs {
-		var share any // null when the job reported no time
+		sj := sampleJob{Job: j}
 		if v, ok := watch.Share(j); ok {
-			share = v
+			sj.Share = &v
 		}
-		jobs = append(jobs, map[string]any{"hold": j.Hold, "label": j.Label, "arrival_ns": j.ArrivalNS,
-			"need_mib": j.NeedMiB, "footprint_mib": j.FootprintMiB, "share": share, "normal_share": j.NormalShare,
-			"d_user_ns": j.DUserNS, "d_sys_ns": j.DSysNS, "d_page_wait_ns": j.DPageWaitNS})
+		jobs = append(jobs, sj)
 	}
 	l := map[string]any{"t_ns": h.WallNS, "awake_ns": h.AwakeNS, "level": d.Level.String(), "excess": d.Excess,
 		"bucket": d.Bucket, "gate": d.Gate, "decomp_s": d.Rates.DecompS, "swapins_s": d.Rates.SwapInsS,

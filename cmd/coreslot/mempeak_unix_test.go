@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -18,7 +19,7 @@ func TestPeakSamplerKeepsMax(t *testing.T) {
 	calls := 0
 	saved := listTree
 	t.Cleanup(func() { listTree = saved })
-	listTree = func(pid int) (int64, []int, bool) {
+	listTree = func(pid int) (int64, map[int]memsample.TreeTimes, bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++

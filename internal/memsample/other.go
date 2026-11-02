@@ -12,13 +12,8 @@ func readHost() (HostReading, error) {
 	return HostReading{}, fmt.Errorf("the machine's readings are not implemented on %s", runtime.GOOS)
 }
 
-// ReadTreeTimes is implemented on macOS and Linux only; elsewhere it is an error.
-func ReadTreeTimes(pids []int) (TreeTimes, error) {
-	return TreeTimes{}, fmt.Errorf("process times are not implemented on %s", runtime.GOOS)
-}
-
 // Tree is implemented on macOS and Linux only; elsewhere it reads nothing.
-func Tree(root int) (kib int64, pids []int, ok bool) { return 0, nil, false }
+func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) { return 0, nil, false }
 
 // Headroom is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Headroom() (mib int64, ok bool) { return 0, false }

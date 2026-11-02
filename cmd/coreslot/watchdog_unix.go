@@ -16,9 +16,8 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// listingsPerTick is how many of the tree's 1 s listings make one watch tick: the shared period
-// is 2 s.
-const listingsPerTick = 2
+// listingsPerTick is how many of the tree's 1 s listings make one watch tick of the shared period.
+const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
 
 // listTree is the listing of the command's tree; tests replace it.
 var listTree = memsample.Tree
@@ -32,13 +31,16 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	defer t.Stop()
 	prev := map[int]memsample.TreeTimes{}
 	var round int64
+	if g != nil { // constant for the attempt: written once, before its first tick
+		r.updateHold(st, g, func(h *wire.Hold) { h.Victim, h.Stops = sup.group && !r.o.noRestart, r.stops })
+	}
 	for n := 1; ; n++ {
 		select {
 		case <-ctx.Done():
 			return false, p
 		case <-t.C:
 		}
-		kib, pids, ok := listTree(sup.pid)
+		kib, times, ok := listTree(sup.pid)
 		if ok && (!p.ok || kib > p.kib) {
 			p = peak{kib: kib, ok: true}
 		}
@@ -46,10 +48,10 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			continue
 		}
 		var d memsample.TreeTimes
-		d, prev = treeDeltas(prev, pids)
+		d, prev = treeDeltas(prev, times), times
 		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
-			h.SampledNS, h.Victim, h.Stops = store.NowNS(), sup.group && !r.o.noRestart, r.stops
+			h.SampledNS = store.NowNS()
 		}) {
 			continue
 		}
@@ -78,11 +80,8 @@ func (r *run) stopDetail(l watch.Level, kib int64, d memsample.TreeTimes) string
 	}
 	detail := fmt.Sprintf("%s, at %s", reason, spec.FormatMiB(kib>>10))
 	if share, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
-		normal, known := r.normal[r.o.label]
-		if !known {
-			normal = watch.DefaultNormalShare
-		}
-		detail += fmt.Sprintf(", %.0f%% of its time went to memory stalls against its normal %.0f%%", 100*share, 100*normal)
+		detail += fmt.Sprintf(", %.0f%% of its time went to memory stalls against its normal %.0f%%", 100*share,
+			100*watch.NormalShare(r.normal, r.o.label))
 	}
 	return detail
 }
@@ -96,17 +95,11 @@ func (r *run) updateHold(st *store.Store, g *engine.Grant, fn func(*wire.Hold)) 
 	return g.UpdateHold(fn) == nil
 }
 
-// treeDeltas returns the time the processes pids spent since prev, their times then, and their
-// times now. A process new to the tree, or whose pid was reused, counts its whole time.
-func treeDeltas(prev map[int]memsample.TreeTimes, pids []int) (memsample.TreeTimes, map[int]memsample.TreeTimes) {
+// treeDeltas returns the time the processes of cur spent since prev. A process new to the tree,
+// or whose pid was reused, counts its whole time.
+func treeDeltas(prev, cur map[int]memsample.TreeTimes) memsample.TreeTimes {
 	var d memsample.TreeTimes
-	next := make(map[int]memsample.TreeTimes, len(pids))
-	for _, pid := range pids {
-		cur, err := memsample.ReadTreeTimes([]int{pid})
-		if err != nil {
-			continue
-		}
-		next[pid] = cur
+	for pid, cur := range cur {
 		was := prev[pid]
 		if cur.UserNS < was.UserNS || cur.SysNS < was.SysNS || cur.PageWaitNS < was.PageWaitNS {
 			was = memsample.TreeTimes{}
@@ -115,5 +108,5 @@ func treeDeltas(prev map[int]memsample.TreeTimes, pids []int) (memsample.TreeTim
 		d.SysNS += cur.SysNS - was.SysNS
 		d.PageWaitNS += cur.PageWaitNS - was.PageWaitNS
 	}
-	return d, next
+	return d
 }

@@ -163,9 +163,13 @@ func doctorReadings(w engine.WatchInfo, line, problem func(format string, args .
 		headroomErr = errors.New("cannot be read")
 	}
 	check("of free memory", headroomErr)
-	times, err := memsample.ReadTreeTimes([]int{os.Getpid()})
-	check("of process times", err)
-	if err == nil && !times.HasPageWait {
+	var timesErr error
+	_, times, ok := memsample.Tree(os.Getpid())
+	if !ok {
+		timesErr = errors.New("cannot be read")
+	}
+	check("of process times", timesErr)
+	if ok && !times[os.Getpid()].HasPageWait {
 		line("reading of page wait: not reported by this system (optional)")
 	}
 	if runtime.GOOS == "linux" && !host.HasPSI {
