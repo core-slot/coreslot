@@ -258,6 +258,10 @@ func (v statusView) human() string {
 	}
 
 	p("%s", v.watchLine())
+	if n := int64(r.Watch.Learning); n > 0 {
+		p("learning: %d running %s no history; the watchdog does not count or stop a command until its first run completes",
+			n, plural(n, "command has", "commands have"))
+	}
 	if len(r.Holds) == 0 {
 		p("holds: none")
 	} else {

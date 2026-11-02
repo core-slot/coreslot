@@ -86,6 +86,18 @@ func TestStatusWatch(t *testing.T) {
 		}
 	}
 	out := buildStatus(rep(engine.WatchInfo{Level: watch.Yellow, Fresh: true}, holds), now, nil, 0).human()
+	if strings.Contains(out, "\nlearning:") {
+		t.Errorf("status:\n%s\nwant no learning line when every job has history", out)
+	}
+	for n, want := range map[int]string{
+		1: "learning: 1 running command has no history; the watchdog does not count or stop a command until its first run completes",
+		2: "learning: 2 running commands have no history; the watchdog does not count or stop a command until its first run completes",
+	} {
+		out := buildStatus(rep(engine.WatchInfo{Level: watch.Green, Fresh: true, Learning: n}, holds), now, nil, 0).human()
+		if !strings.Contains(out, "\n"+want+"\n") {
+			t.Errorf("status:\n%s\nwant the line %q", out, want)
+		}
+	}
 	for _, want := range []string{
 		"\n  go test@repo  pid 4711  mem 2 GiB  held 3m12s  footprint 1.5 GiB  arrived 3m20s ago  stops 1\n",
 		"\n  npm run build  pid 4712  mem 512 MiB  held 5s  footprint 100 MiB  arrived 5s ago  next victim\n",
