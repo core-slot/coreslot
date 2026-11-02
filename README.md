@@ -41,13 +41,14 @@ coreslot status                  # what runs, what waits, whether the watchdog i
 **Measured.** On a 16 GB MacBook Air, four agents started a VS Code type check (twice), FastAPI's
 tests and SQLAlchemy's ORM tests at once, five times unwrapped and five times under `coreslot run`,
 in alternating order. Unwrapped, the machine sat at memory pressure warn for 66 to 115 s of each set
-and wrote 8 to 13 GiB to swap; under coreslot it never left normal and wrote none, and each agent's
-mean time to its verdict was 0.41 of the unwrapped one (median over the pairs). Both held in 5 of 5
+and wrote 8 to 13 GiB to swap; under coreslot it never left normal and wrote none, and the agents'
+mean time to a verdict was 0.41 of the unwrapped one (median over the pairs). Both held in 5 of 5
 pairs against a criterion committed before them. Against the best fixed semaphore, one command at a
 time, coreslot was within 5 % in three of five pairs, not five (median 1.02, worst 1.27: it lets
-two suites that each use every core run together when both fit in memory); with room for all of
-them it cost nothing measurable (at most 1.035 of unwrapped, five of five). One machine, one stand,
-one day ([the runs, their records and their limits](evidence/air-v04/README.md)).
+two suites that each use every core run together when both fit in memory). With room for all the
+commands it stayed within 5 % of unwrapped in five of five pairs (median 1.005, worst 1.036), a
+narrow result that one slow unwrapped set carries. One machine, one stand, one day ([the runs, their
+records and their limits](evidence/air-v04/README.md)).
 
 **For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
 `go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as

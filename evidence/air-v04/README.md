@@ -8,17 +8,24 @@ stop and restart happens on the shipped rules and that every stopped job still c
 
 The stand is public code at pinned commits:
 
-| agent | gate | source | alone: learned need, median time |
-|---|---|---|---|
-| A1, A2 | `npm run --silent typecheck-client` | VS Code 1.142.0 (`d956e8a`) | 8.7 GiB, 15.4 s |
-| A3 | `ruff check fastapi tests`, then `pytest -n auto --dist loadgroup` | FastAPI 0.156.2 (`44cc742`) | 21 MiB and 2.4 GiB, 0.05 s and 17.4 s |
-| A4 | `pytest -n auto test/orm` | SQLAlchemy rel_2_1_5 (`4fbf72c`) | 2.1 GiB, 35.1 s |
+| agent | gate | source | learned need | median alone time, first run / second run |
+|---|---|---|---|---|
+| A1, A2 | `npm run --silent typecheck-client` | VS Code 1.142.0 (`d956e8a`) | 8.7 GiB | 15.4 s / 8.5 s |
+| A3 | `ruff check fastapi tests`, then `pytest -n auto --dist loadgroup` | FastAPI 0.156.2 (`44cc742`) | 21 MiB, 2.4 GiB | 0.05 s, 17.4 s / 0.06 s, 13.6 s |
+| A4 | `pytest -n auto test/orm` | SQLAlchemy rel_2_1_5 (`4fbf72c`) | 2.1 GiB | 35.1 s / 22.2 s |
+
+The first run's alone times are slow: the machine was in a worse state during its learn phase than
+later (see below), and the same type check ran alone in 9.4 to 10.4 s inside that run's own K sets.
+Toolchain, the same for both runs and not changed on the machine between them: node 26.12.1, npm
+11.20.0, uv 0.13.5, Python 3.13.0 for the stand's virtual environments and for the harness; the
+records' `meta.jsonl` of these two runs names the machine, macOS and the coreslot binary, not
+these.
 
 ## Result (2026-11-02)
 
 The [criterion](criterion.md), committed after the pilot pair and before the first counted pair
-(commit `9869326`, pushed at 18:24:33 UTC; pair 1's first set started at 18:24:59 UTC), holds in
-both parts: K spent fewer seconds at memory pressure warn or above than F in 5 of 5 pairs,
+(commit `9869326`, pushed at 18:24:37 UTC; pair 1's first set started 22 s later, at 18:24:59 UTC),
+holds in both parts: K spent fewer seconds at memory pressure warn or above than F in 5 of 5 pairs,
 and K's mean time to verdict was lower than F's in 5 of 5 pairs (each a one-sided sign test, p =
 0.031). The watchdog demo stopped the two newest of three oversized jobs on the red level, never the
 oldest, restarted both, and all three completed.
@@ -36,27 +43,45 @@ oldest, restarted both, and all three completed.
 | 5 | F | 115 | 0 | 12.9 GiB | 1376 MiB | 143.2 | 121.6 | 0 |
 | 5 | K | 0 | 0 | 0 | 0 | 65.0 | 42.2 | 0 |
 
-"Swap written" is the `vm_stat` swapouts over the set (16 KiB pages); "swap used growth" is
-`vm.swapusage` at the end against the start. Per pair, K's mean time to verdict was 0.34 to 0.46
-of F's (median 0.41) and its makespan 0.45 to 0.70 of F's (median 0.53). In K the queue held the
-agents 51 to 117 s in all per set, and no command was stopped.
+"Swap written" is the `vm_stat` swapouts over the set (16 KiB pages); "swap used growth" is the
+peak of `vm.swapusage` during the set against its start, as `analyse.py` computes it (at the end of
+a set swap used can be below its start). "Mean time to verdict" is the mean over the four agents of
+each one's time to its verdict, per set. Per pair, K's mean time to verdict was 0.34 to 0.46 of F's
+(median 0.41) and its makespan 0.45 to 0.70 of F's (median 0.53); per agent the ratio ranges from
+about 0.09 (A1) to about 0.6 (A3). In K the queue held the agents 51 to 117 s in all per set, and no
+command was stopped.
 
 Why K is faster as well: two 8.7 GiB type checks and two 2-3 GiB test suites need about 22 GiB at
-once, and coreslot's waiting lines show at most 6.4 GiB it could hand out. F starts all of them and every one of them pages;
-K starts the first type check, holds the rest until it has finished, and each then runs at the speed
-it runs alone. Median per agent over the five pairs, F against K: A1 115.1 s against 9.8 s, A2 116.4
-s against 62.1 s, A3 64.8 s against 39.1 s, A4 124.0 s against 52.3 s. The agent that waits longest
-under K (A2, the second type check) still gets its verdict sooner than under F.
+once, and in the counted K sets coreslot's waiting lines show at most 6.4 GiB it could hand out (up
+to 8 GiB in the pilot). F starts all of them and every one of them pages; K starts the first type
+check, holds the rest until it has finished, and each then runs at about the speed it runs alone.
+Median per agent over the five pairs, F against K: A1 115.1 s against 9.8 s, A2 116.4 s against 62.1
+s, A3 64.8 s against 39.1 s, A4 124.0 s against 52.3 s. The agent that waits longest under K (A2,
+the second type check) still gets its verdict sooner than under F. These per-agent medians, the
+per-pair ratios and the swap-written column are computed from `sets.jsonl` by hand, not printed by
+`analyse.py`.
 
-**The demo.** A 30 s, 256 MiB hog taught the label `demo-hog` a need of 270 MiB. Three hogs of 6
-GiB each then started a second apart under `coreslot run --label demo-hog`, so admission let all
-three in on 270 MiB each: 18 GiB of hot memory on 16 GiB. macOS reached pressure level critical 4 s
-in. The watchdog logged red for 10 samples; its first red round stopped hog 3, the newest (`memory
-stop 1 of 3: ... was stopped (memory red, at 6 GiB, 75% of its time went to memory stalls against
-its normal 0%)`), and the next round stopped hog 2; hog 1, the oldest, was never stopped. The
-pressure level was back to normal 28 s in and stayed there. Each stopped hog re-queued with its
-6 GiB peak as its need, waited for room (52 s and 161 s) and ran to completion; the outside guard
-did not fire. The stop line's "normal 0%" is the label's learned share of 0.3 %, rounded.
+**The demo.** A 30 s, 256 MiB hog taught the label `demo-hog` a need of 269 MiB (275,696 KiB; the
+waiting lines round it to 270 MiB). Three hogs of 6 GiB each then started a second apart under
+`coreslot run --label demo-hog`, so admission let all three in on that need: 18 GiB of hot memory on
+16 GiB. Timeline from the start of the hogs:
+
+- macOS's pressure level was critical from 4 to 10 s, warn, briefly normal at 12-13 s, warn again
+  from 14 to 27 s, and normal from 28 s on.
+- The watchdog's own measure (the hogs' share of time lost to memory stalls above their learned
+  normal, in points) was 54 to 90 with the paging gate open on every sample from the first hot one
+  until the second stop. Red came at its tenth hot sample, and its first red round stopped hog 3,
+  the newest, at about 22 s (`memory stop 1 of 3: ... was stopped (memory red, at 6 GiB, 75% of its
+  time went to memory stalls against its normal 0%)`).
+- Its next round stopped hog 2 at about 38 s, ten seconds after macOS's level had returned to
+  normal: by the watchdog's measure the hogs left were still losing most of their time to memory
+  stalls (75 points at that sample; hog 2's stop line says 75 % against its normal), which macOS's
+  machine-wide level, a coarser signal, no longer showed. The measure was 64 points at the next
+  sample, under 4 at the one after, and near 0 from then on. Hog 1, the oldest, was never stopped.
+- Each stopped hog re-queued with its 6 GiB peak as its need, waited for room (52 s and 161 s) and
+  ran to completion; the outside guard did not fire.
+
+The stop line's "normal 0%" is the label's learned share of 0.33 %, rounded to a whole percent.
 
 ### What this does not show, and what to know
 
@@ -68,16 +93,31 @@ did not fire. The stop line's "normal 0%" is the label's learned share of 0.3 %,
   often or how fast the watchdog acts.
 - The pilot pair (F: 105 s at warn or above, 3 s critical, makespan 118.9 s; K: 0 s, 0 s, 64.3 s)
   chose the criterion and is in no test.
-- Before the learn phase the Docker Desktop VM (9.7 GiB) was stopped, because it kept the machine at
-  pressure level warn; the level was normal from then on. The desktop apps of the person running it
-  (a chat client and its agents, a terminal) stayed open; the record's `meta.jsonl` names the
-  machine and the versions.
-- A build and a test suite of another job (about 1.6 cores, no large memory) overlapped the first
-  16 s of the learn phase, that is part of the first type check's alone run. The needs are learned
-  from memory peaks.
-- The type check label learned no normal share: alone it needs 8.7 GiB with about 7 GiB free and
-  pages throughout, and a run that pages throughout measures none. So the watchdog could stop it
-  only at the floor; admission used its learned need either way.
+- The Docker Desktop VM (9.7 GiB) was stopped before the learn phase of each run, because it kept
+  the machine at pressure level warn, and stayed stopped for every set of both runs; the level was
+  normal at the start of every set. The desktop apps of the person running it (a chat client and
+  its agents, a terminal) stayed open.
+- The learn phase of this run ran in a worse machine state than everything after it, and the cause
+  is only partly recorded. A build and a test suite of another job (about 1.6 cores, no large
+  memory) overlapped its first 16 s (`criterion.md`, written at the time, says "the first minute",
+  an estimate made before the other job's log was read). But the alone runs stayed slow beyond that:
+  the second type check run took 18.6 s about 1.5 min in, and the third SQLAlchemy run used 250 s
+  of user time against about 190 s in the second run. The same type check ran alone in 9.4 to 10.4
+  s inside this run's K sets. The learned needs come from memory peaks, which the slowness does not
+  change much; the alone times in the table above are this phase's.
+- In that state the type check paged throughout its alone runs, and a run that pages throughout
+  measures no normal share, so its label stayed learning and the watchdog could have stopped it
+  only at the floor during this run. In the second run's learn phase it did not page (2.5 to 3.4 s
+  of system time) and learned a share of about 0.02. Admission used its learned need either way.
+- K's state directory keeps learning from the sets' own runs, so K is not strictly a fixed policy
+  across the pairs (each start recomputes its need from the label's latest runs), and swap used at
+  the start of a counted set drifted from 5.8 to 8.2 GiB over the run. The sign test treats the pairs as independent; the ABBA
+  order spreads such drift over both arms.
+- `analyse.py` was extended after this run's criterion was committed (commit `4db2895` adds the
+  second run's sections); its output for `record/` is byte-identical before and after.
+- `meta.jsonl` shows `repo_dirty: true` for every counted invocation of both runs because the
+  untracked record directory counted as a change; the harness files themselves were committed.
+  `analyse.py` counts a pressure sample it could not read as normal; there were none.
 - In the committed records the machine's paths are replaced after the run: the checkout by
   `<repo>`, the stand by `<stand>`, the directory of the coreslot binary by `<bin>` and the home
   directory by `~`. Nothing else was changed, and `analyse.py` prints the same output before and
@@ -91,49 +131,70 @@ Two questions followed: does coreslot beat the best fixed-size semaphore a devel
 front of the same commands, and does it cost anything when the machine has room for everything?
 [criterion-2.md](criterion-2.md) fixed how the best semaphore is chosen before any of these sets
 ran (commit `e9ba353`), and the two criteria after the exploratory sets and before the first counted
-pair (commit `f2ad269`, pushed at 20:14:40 UTC; the first counted set started at 20:18:01 UTC). Records:
-`record-2/`, with its own learn phase.
+pair (commit `f2ad269`, pushed at 20:14:44 UTC; the first counted set started at 20:18:01 UTC).
+Records: `record-2/`, with its own learn phase. `criteria2.py` computes both criteria from the raw
+records (written after the data, because `analyse.py` was frozen and does not print them); the
+ratios below are its unrounded ones, rounded once.
 
-**The best semaphore is S1.** One exploratory set each of S1, S2 and S3 (one, two or three commands
-at a time): mean time to verdict 28.6, 41.1 and 69.7 s; S2 and S3 paged. Strictly one at a time is
-the best fixed size on this stand.
+**The best semaphore is S1, by the pre-registered rule.** One exploratory set each of S1, S2 and S3
+(one, two or three commands at a time, all agents started at once, the semaphore's waiters racing):
+mean time to verdict 28.6, 41.1 and 69.7 s; S2 and S3 paged. These are single exploratory sets.
+One exploratory K set in the same state (`sem-pilot`) took 33.5 s, K/S1 1.17.
 
 **Against S1, the criterion fails.** K's mean time to verdict was within 5 % of S1's in three of the
 five pairs, not five:
 
 | pair | arrival order | S1 mean s | K mean s | K/S1 | S1 makespan s | K makespan s |
 |---|---|---|---|---|---|---|
-| 1 | A1 A2 A3 A4 | 32.6 | 35.5 | 1.09 | 59.5 | 62.3 |
-| 2 | A2 A3 A4 A1 | 39.5 | 35.0 | 0.89 | 65.5 | 59.3 |
-| 3 | A3 A4 A1 A2 | 45.7 | 46.1 | 1.01 | 71.1 | 67.2 |
-| 4 | A4 A1 A2 A3 | 45.1 | 45.9 | 1.02 | 69.3 | 70.2 |
-| 5 | A4 A3 A2 A1 | 46.1 | 58.4 | 1.27 | 71.1 | 87.4 |
+| 1 | A1 A2 A3 A4 | 32.6 | 35.5 | 1.087 | 59.5 | 62.3 |
+| 2 | A2 A3 A4 A1 | 39.5 | 35.0 | 0.888 | 65.5 | 59.3 |
+| 3 | A3 A4 A1 A2 | 45.7 | 46.1 | 1.010 | 71.1 | 67.2 |
+| 4 | A4 A1 A2 A3 | 45.1 | 45.9 | 1.017 | 69.3 | 70.2 |
+| 5 | A4 A3 A2 A1 | 46.1 | 58.4 | 1.266 | 71.1 | 87.4 |
 
-The median K/S1 is 1.02, and K was faster in one pair, but pair 5 shows the cost of a memory-only
+The median K/S1 is 1.017, and K was faster in one pair, but pair 5 shows the cost of a memory-only
 guard: SQLAlchemy and FastAPI arrived first, both fit in memory, so coreslot ran them together, and
 each is `pytest -n auto` on every core: together they took 49 and 32 s against about 22 and 14 s
 alone, while the type checks waited behind them. A semaphore of one never overlaps them. Memory
 pressure was level: S1 spent 4 s at warn in pair 3, K 7 s in pair 5, and neither wrote to swap.
-A semaphore of the right size has to be chosen per workload, though: on this stand S2 was 1.4 times
-and S3 2.4 times slower than S1 and paged, and on the light mix below a semaphore of one would
-serialise two commands that fit together.
+What this does not settle: the right size for a semaphore depends on the workload, and on this
+stand the exploratory S2 and S3 sets were 1.4 and 2.4 times slower than S1 and paged; how a
+semaphore of one would do on the light mix below was not measured.
 
-**With room, the criterion holds.** On the light mix (FastAPI and SQLAlchemy, about 4.5 GiB against
-about 6.4 GiB coreslot could hand out), K's mean time to verdict was at most 1.05 times F's in five
-of five pairs (one-sided sign test, p = 0.031): K/F 0.66, 1.04, 1.01, 1.01 and 0.97, makespan 0.65,
-0.98, 1.04, 0.97 and 0.99. K's commands waited 0 to 1.3 s in all per set; no set paged. Pair 1's F
-set was slow for no recorded reason, which favours K there; without it the largest K/F is 1.035.
+**With room, the criterion holds, narrowly.** On the light mix (FastAPI and SQLAlchemy, about 4.5
+GiB against about 6.4 GiB coreslot could hand out in the counted pairs), K's mean time to verdict
+was at most 1.05 times F's in five of five pairs (one-sided sign test, p = 0.031): K/F 0.654, 1.036,
+1.011, 1.005 and 0.970 (median 1.005; K was slower in three of the five), makespan 0.65, 0.98,
+1.04, 0.97 and 0.99. K's commands waited 0 to 1.3 s in all per set; no set paged. Pair 1 carries the
+claim more than it should: its F set was slow (58.5 s), and both light F sets that ran right after a
+heavy set were slow (the pilot's F after the S3 set, 44.8 s; pair 1's F after the last heavy K set,
+58.5 s), while the ABBA order put F first after the heavy sets. Pair 1's K (38.3 s) was the slowest
+K of the five; against the other F sets (34.4 to 37.0 s) it would be 1.04 to 1.11, so had that F set
+been typical, pair 1 could have fallen outside 5 %. The claim holds as registered, and it is fragile.
+The two claims of this run were registered separately, each at p = 0.031; with a correction for two
+tests (0.025 each) five pairs could not reach significance at all.
 
-What to know about this run: agents arrived one second apart in the order fixed per pair (the same
-in both arms of a pair), and an agent's time to verdict counts from its own arrival; the semaphore
-granted its slot first come, first served. The exploratory sets started all agents at once with a
-semaphore that let its waiters race, and an offline model of the records showed S1's lead there
-came mostly from that race, which is why the counted pairs fix the order. The Docker Desktop VM was
-stopped again before the learn phase and before the counted pairs (Docker was running between the
-two, for other work on the machine); the level was normal at the start of every set. Swap used was
-about 6 GiB at the start of the counted pairs (about 3 GiB before the first run). In `record-2/` the
-same path placeholders are used, and the Python interpreter's framework path is shortened to
-`python3`; `analyse.py` prints the same output before and after.
+What to know about this run:
+
+- Agents arrived one second apart in an order fixed per pair (the same in both arms of a pair): the
+  four rotations of A1 A2 A3 A4 and the reversed order, chosen by hand before the counted pairs, not
+  from per-order predictions. An agent's time to verdict counts from its own arrival; the semaphore
+  granted its slot first come, first served.
+- Why the order was fixed: the exploratory sets started all agents at once with a semaphore whose
+  waiters raced, and K lost there (1.17). An offline model of the records, published in
+  [`model/`](model/README.md) with its validation and its limits, put S1 and K level when averaged
+  over all 24 arrival orders (33.0 against 33.3 s) and traced S1's lead to the order its race
+  happened to admit the agents in. The change was made after K's exploratory loss; the counted
+  claim failed anyway.
+- The Docker Desktop VM was stopped for every set; it ran only while no set was running, between the
+  exploratory sets and the counted pairs. Swap used was about 6 GiB at the start of the counted
+  pairs (about 3 GiB before the first run).
+- The machine was faster than in the first run: the alone times of the second learn phase are 22 to
+  45 % shorter.
+- In `record-2/` the same path placeholders are used, and the Python interpreter's framework path is
+  shortened to `python3`; `analyse.py` prints the same output before and after. `analyse.py
+  record-2` also prints empty sections of the first run's layout and names `criterion.md`; the
+  second run's criteria are in `criterion-2.md`.
 
 ## The phases
 
@@ -180,7 +241,12 @@ grows 6 GiB from its start or after 600 s, and the record says which.
 ## Reproducing it
 
 Quit other work first. Build the stand once (git, node with npm, uv and the network; the measured
-runs use no network), and build coreslot from the checkout under test outside the repository:
+runs use no network). `setup.sh` installs the stand's dependencies, which runs their build code:
+FastAPI's from its lock file, SQLAlchemy's build with unpinned build requirements, and the type
+declarations of Electron with install scripts disabled. Then take a coreslot binary: the runs here
+used the v0.4.0 release archive for darwin-arm64, checked with `shasum -a 256 -c` against the
+release's `checksums.txt` and with `gh attestation verify` (its SHA-256 is in `meta.jsonl`);
+building one from the checkout under test, as below, works the same way for a later version:
 
 ```bash
 STAND=/path/to/stand.noindex          # the .noindex suffix keeps Spotlight out
@@ -220,7 +286,12 @@ run2 --stagger-s 1.0 pairs --vs S --slots 1 --prefix sem- \
 run2 --mix light --stagger-s 1.0 pairs --prefix light- \
   --orders "A3,A4;A4,A3;A3,A4;A4,A3;A3,A4"                             # light-pair-1..5, F first in odd pairs, about 10 min
 python3 evidence/air-v04/analyse.py evidence/air-v04/record-2
+python3 evidence/air-v04/criteria2.py evidence/air-v04/record-2       # the two pre-registered criteria
 ```
+
+The recorded run differs from these commands in two ways: its tune sets and its exploratory K set
+(`run2 set K --tag sem-pilot`) started all agents at once, and its tune sets used the semaphore's
+racing mode, which the harness has since replaced with first-come-first-served for every S set.
 
 Without `--order` (one set) or `--orders` (one order per pair, the same for both sets of a pair)
 every agent arrives at the set's start; with them agent i of the order arrives `i x --stagger-s`
