@@ -89,7 +89,7 @@ func parseOnly(fs *flag.FlagSet, args []string, name, usage string, io IO) (int,
 }
 
 // statsCommand is `coreslot stats [--label L] [--json]`: per label, what its last runs used and
-// what they suggest. It exits 1 when the state directory, the run log or the configuration cannot
+// the need learned from them. It exits 1 when the state directory, the run log or the configuration cannot
 // be read (a state error, PROTOCOL.md section 19); a needs file that cannot be read is a notice,
 // and every label's current entry is then none.
 func statsCommand(args []string, io IO) int {
