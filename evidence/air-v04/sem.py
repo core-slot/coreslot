@@ -16,9 +16,14 @@ import sys
 import time
 
 
+def nofollow(path, flags, mode=0o600):
+    """os.open that refuses a symbolic link at the last component."""
+    return os.open(path, flags | os.O_NOFOLLOW, mode)
+
+
 def try_slot(lockdir, n):
     for i in range(n):
-        fd = os.open(os.path.join(lockdir, f"slot-{i}"), os.O_RDWR | os.O_CREAT, 0o600)
+        fd = nofollow(os.path.join(lockdir, f"slot-{i}"), os.O_RDWR | os.O_CREAT)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return fd
@@ -39,20 +44,21 @@ def alive(pid):
 
 def acquire(lockdir, n, fifo=False, poll_s=0.05):
     """The descriptor of the slot taken, waiting until one is free (and, with fifo, our turn)."""
-    me, queued = os.getpid(), False
-    qpath = os.path.join(lockdir, "queue")
+    me, qpath = os.getpid(), os.path.join(lockdir, "queue")
     while True:
         if not fifo:
             fd = try_slot(lockdir, n)
         else:
-            with open(os.path.join(lockdir, "queue.lock"), "a") as ql:
+            with open(os.path.join(lockdir, "queue.lock"), "a", opener=nofollow) as ql:
                 fcntl.flock(ql, fcntl.LOCK_EX)
-                with open(qpath, "a+") as q:
-                    q.seek(0)
-                    pids = [int(x) for x in q.read().split()] + ([] if queued else [me])
-                queued, pids = True, [p for p in pids if p == me or alive(p)]
+                with open(qpath, "a+", opener=nofollow) as q:
+                    q.seek(0)  # one pid per line; a line that is not one is dropped
+                    pids = [int(x) for x in q.read().split() if x.isdigit()]
+                pids = [p for p in pids if p == me or alive(p)]
+                if me not in pids:  # the first look, or our line was lost: queue (again) at the end
+                    pids.append(me)
                 fd = try_slot(lockdir, n) if pids[0] == me else None
-                with open(qpath, "w") as q:
+                with open(qpath, "w", opener=nofollow) as q:
                     q.write("".join(f"{p}\n" for p in pids if fd is None or p != me))
         if fd is not None:
             return fd
@@ -65,7 +71,7 @@ def main(argv):
     if len(argv) < 4 or argv[2] != "--" or not argv[1].isdigit() or int(argv[1]) < 1:
         print(__doc__.splitlines()[0], file=sys.stderr)
         return 64
-    os.makedirs(argv[0], exist_ok=True)
+    os.makedirs(argv[0], mode=0o700, exist_ok=True)
     os.set_inheritable(acquire(argv[0], int(argv[1]), fifo), True)
     try:
         os.execvp(argv[3], argv[3:])

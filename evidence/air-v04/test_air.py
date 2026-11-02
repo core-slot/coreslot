@@ -5,11 +5,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
 import analyse
 import run
+import sem
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -131,6 +133,41 @@ class SemTest(unittest.TestCase):
     def test_exit_status_is_the_commands(self):
         p = subprocess.run([sys.executable, os.path.join(HERE, "sem.py"), tempfile.mkdtemp(), "1", "--", "sh", "-c", "exit 3"])
         self.assertEqual(p.returncode, 3)
+
+    def test_dead_waiter_and_junk_are_dropped(self):
+        d = os.path.join(tempfile.mkdtemp(), "locks")
+        os.makedirs(d)
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        with open(os.path.join(d, "queue"), "w") as f:
+            f.write(f"junk\n{dead.pid}\n")
+        p = subprocess.run([sys.executable, os.path.join(HERE, "sem.py"), "--fifo", d, "1", "--", "true"], timeout=10)
+        self.assertEqual(p.returncode, 0)
+        with open(os.path.join(d, "queue")) as f:
+            self.assertEqual(f.read(), "")
+
+    def test_a_lost_queue_line_queues_again(self):
+        d = tempfile.mkdtemp()
+        held, got = sem.try_slot(d, 1), []
+        t = threading.Thread(target=lambda: got.append(sem.acquire(d, 1, fifo=True, poll_s=0.01)))
+        t.start()
+        time.sleep(0.2)
+        with open(os.path.join(d, "queue"), "w") as f:
+            f.write("junk\n")  # our own line is gone
+        os.close(held)
+        t.join(5)
+        self.assertEqual(len(got), 1)
+        os.close(got[0])
+
+    def test_lockdir_is_private_and_links_are_refused(self):
+        d = os.path.join(tempfile.mkdtemp(), "locks")
+        subprocess.run([sys.executable, os.path.join(HERE, "sem.py"), d, "1", "--", "true"], check=True)
+        self.assertEqual(os.stat(d).st_mode & 0o777, 0o700)
+        os.remove(os.path.join(d, "slot-0"))
+        os.symlink(os.path.join(d, "elsewhere"), os.path.join(d, "slot-0"))
+        p = subprocess.run([sys.executable, os.path.join(HERE, "sem.py"), d, "1", "--", "true"], capture_output=True)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertFalse(os.path.exists(os.path.join(d, "elsewhere")))
 
 
 class RunTest(unittest.TestCase):
