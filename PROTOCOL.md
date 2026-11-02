@@ -225,13 +225,15 @@ count); they are never removed except by reconciliation's rules (section 10.4).
 The directory is not a cache: liveness is decided by locks. Deleting or resetting `$S` while any
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
-process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/` and
-`log/`, `gen`, `watch.json`, `degraded` and the `res/` directory a directory of another format may
-hold, and writes
-`FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the format-stable
-file (section 15.1), whose inode live clients may hold open, and the configuration. The run
-history that needs are learned from goes with the entries of `log/`. A reset never deletes, renames
-or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
+process still locks; only then does it remove the entries of `queue/`, `holds/` and `cancel/`,
+`gen`, `watch.json`, `degraded` and the `res/` directory a directory of another format may hold,
+and writes `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
+When `FORMAT` already names format 2 the reset is a repair and keeps `log/` too: the run log is
+what every label's learned need and normal stall share come from (sections 20 and 23). Otherwise,
+when `FORMAT` is missing, malformed or names another format, it removes the entries of `log/` as
+well, and the CLI says so: every label learns its need again. A reset never deletes, renames or
+replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
 the directory as format 2; a live hold or ticket of any format stops it. It does not reconcile
 first (section 10.4): it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
@@ -949,7 +951,7 @@ Every other operation that would write follows the same rule, except a reset (se
 another format a client publishes no cancel request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
 runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 2
-when nothing of either format is live.
+when nothing of either format is live, the other format's run log removed with the rest.
 
 > **Implementation note.** The Go CLI refuses cancellation and `doctor --clear` under another
 > format, with the same notice.

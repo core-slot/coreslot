@@ -70,7 +70,8 @@ A client that finds a format it does not implement
 ([`PROTOCOL.md` section 15.2](../PROTOCOL.md#152-a-format-this-client-does-not-implement)) writes
 nothing to the state directory and its run fails open: the command runs outside the budget, with a
 notice, or is refused under `--strict`. `coreslot doctor --reset` recreates the directory in the
-client's own format once nothing is live. Mixing releases across a format change is therefore safe
+client's own format once nothing is live, removing the other format's run log, so every label
+learns its need again. Mixing releases across a format change is therefore safe
 but leaves the older clients unbudgeted; upgrade every client of a machine together.
 
 ## CLI

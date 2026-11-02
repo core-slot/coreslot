@@ -15,9 +15,10 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// resetFixture fills a state directory with one of everything a reset removes (dead tickets
-// and holds, a cancel request, a stray, a temporary file, the run log, degraded, gen, FORMAT)
-// and everything it keeps (admit.lock, config.toml). It returns the section the caller is in.
+// resetFixture fills a state directory of format 2 with one of everything a reset removes (dead
+// tickets and holds, a cancel request, a stray, a temporary file, degraded, gen, FORMAT), the run
+// and watch logs, which a repair keeps and a format change removes, and everything it keeps
+// (admit.lock, config.toml). It returns the section the caller is in.
 func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	t.Helper()
 	s := open(t, dir)
@@ -56,8 +57,10 @@ func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	if err := os.MkdirAll(filepath.Join(dir, LogDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, LogDir, RunLog), []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{RunLog, WatchLog} {
+		if err := os.WriteFile(filepath.Join(dir, LogDir, name), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte("[resources]\nmem = \"512M\"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -65,9 +68,10 @@ func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	return s, sec
 }
 
-// A reset of a state with nothing alive removes the entries of queue/, holds/, cancel/ and
-// log/, degraded and gen, writes FORMAT 2, and keeps admit.lock (with the same inode) and
-// config.toml.
+// A reset of a format-2 state with nothing alive (a repair) removes the entries of queue/,
+// holds/ and cancel/, degraded and gen, writes FORMAT 2, and keeps admit.lock (with the same
+// inode), config.toml and the run and watch logs, which every label's learned need and normal
+// stall share come from. Mutation: remove log/ on every reset and the logs are gone.
 func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
@@ -84,12 +88,17 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 	if err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %d, %v; want nothing alive and no error", live, removed, err)
 	}
-	if removed != 8 {
-		t.Errorf("removed %d entries, want 8 (ticket, stray and temporary file; hold; cancel request; log; degraded, gen)", removed)
+	if removed != 7 {
+		t.Errorf("removed %d entries, want 7 (ticket, stray and temporary file; hold; cancel request; degraded, gen)", removed)
 	}
-	for _, d := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+	for _, d := range []string{QueueDir, HoldsDir, CancelDir} {
 		if got := names(t, filepath.Join(dir, d)); len(got) != 0 {
 			t.Errorf("%s/ still holds %v", d, got)
+		}
+	}
+	for _, name := range []string{RunLog, WatchLog} {
+		if !exists(filepath.Join(dir, LogDir, name)) {
+			t.Errorf("a repair removed log/%s", name)
 		}
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, FormatFile)); err != nil || string(b) != "coreslot-protocol 2\n" {
@@ -190,8 +199,8 @@ func TestResetReportsWhatItCannotRemove(t *testing.T) {
 	if err == nil {
 		t.Fatal("Reset left a non-empty directory behind without an error")
 	}
-	if removed != 8 {
-		t.Errorf("removed %d entries alongside the error, want 8 (everything but the stuck entry)", removed)
+	if removed != 7 {
+		t.Errorf("removed %d entries alongside the error, want 7 (everything but the stuck entry and the logs)", removed)
 	}
 	var incomplete *ResetIncompleteError
 	if !errors.As(err, &incomplete) || incomplete.Left != 1 {
@@ -271,8 +280,9 @@ func setOtherLengthHolder(t *testing.T, dir string) {
 
 // A reset recreates a directory of any other format as format 2: FORMAT 1 with its res/
 // directory, a newer format with an entry no grammar of this client describes, and format 0 all
-// end as an empty layout under FORMAT 2, admit.lock kept. Mutation: skip the res/ removal and
-// the format-1 case keeps res/.
+// end as an empty layout under FORMAT 2, admit.lock kept, the run and watch logs of the other
+// format removed with the rest. Mutations: skip the res/ removal and the format-1 case keeps
+// res/; keep log/ on every reset and the logs survive.
 func TestResetRecreatesAForeignFormat(t *testing.T) {
 	for _, body := range []string{"coreslot-protocol 1\n", "coreslot-protocol 3\n", "coreslot-protocol 0", "coreslot-protocol 007\n"} {
 		t.Run(body, func(t *testing.T) {
@@ -297,6 +307,9 @@ func TestResetRecreatesAForeignFormat(t *testing.T) {
 			}
 			if exists(filepath.Join(dir, "res")) || len(names(t, filepath.Join(dir, QueueDir))) != 0 {
 				t.Errorf("res/ or queue/ entries survived: %v", names(t, dir))
+			}
+			if got := names(t, filepath.Join(dir, LogDir)); len(got) != 0 {
+				t.Errorf("log/ of another format survived the reset: %v", got)
 			}
 		})
 	}

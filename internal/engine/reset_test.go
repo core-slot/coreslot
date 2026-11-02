@@ -85,7 +85,7 @@ func TestResetRefusesLiveState(t *testing.T) {
 			before := treeContent(t, dir)
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
-			removed, err := e.Reset(ctx)
+			removed, _, err := e.Reset(ctx)
 			var le *LiveError
 			if !errors.As(err, &le) || !errors.Is(err, ErrRefused) || removed != 0 {
 				t.Fatalf("Reset = %d, %v; want a *LiveError matching ErrRefused", removed, err)
@@ -109,7 +109,7 @@ func TestResetRefusalNamesLabels(t *testing.T) {
 	enqueue(t, e, needLabel(128, "ci:o-r\x1b[2J"))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	_, err := e.Reset(ctx)
+	_, _, err := e.Reset(ctx)
 	var le *LiveError
 	if !errors.As(err, &le) {
 		t.Fatalf("Reset = %v, want a *LiveError", err)
@@ -156,9 +156,9 @@ func TestResetThenUse(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, need(256)).Close()
-	removed, err := e.Reset(context.Background())
-	if err != nil || removed == 0 {
-		t.Fatalf("Reset = %d, %v", removed, err)
+	removed, keptLog, err := e.Reset(context.Background())
+	if err != nil || removed == 0 || !keptLog {
+		t.Fatalf("Reset = %d, kept log %v, %v; want entries removed and the run log of format 2 kept", removed, keptLog, err)
 	}
 	if exists(filepath.Join(dir, store.GenFile)) {
 		t.Error("gen survived")
@@ -187,8 +187,8 @@ func TestResetRecreatesAForeignFormat(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, store.QueueDir, "v3-ticket"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Reset(context.Background()); err != nil {
-		t.Fatalf("Reset = %v; want the directory recreated", err)
+	if _, keptLog, err := e.Reset(context.Background()); err != nil || keptLog {
+		t.Fatalf("Reset = kept log %v, %v; want the directory recreated, its run log removed", keptLog, err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 2\n" || exists(filepath.Join(dir, store.QueueDir, "v3-ticket")) {
 		t.Errorf("after the reset FORMAT %q, v3-ticket present %v; want format 2 and an empty queue", b, exists(filepath.Join(dir, store.QueueDir, "v3-ticket")))

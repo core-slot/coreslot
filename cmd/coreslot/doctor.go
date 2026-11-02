@@ -29,8 +29,8 @@ const (
 // doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
 // permissions, format, the configuration and the degraded record, and
 // reports every finding. --clear removes the degraded record. --reset recreates the state as this
-// client's format, whatever format it had, but only when nothing is live (PROTOCOL.md section
-// 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
+// client's format, whatever format it had, keeping the run log of format 2, but only when nothing
+// is live (PROTOCOL.md section 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
 // a refused --clear or --reset is 75 (PROTOCOL.md section 19).
 func doctorCommand(args []string, io IO) int {
 	fs, doClear, doReset := doctorFlags()
@@ -77,7 +77,7 @@ func doctorAct(doReset bool, loc location, io IO) int {
 	if doReset {
 		ctx, cancel := context.WithTimeout(context.Background(), resetWait)
 		defer cancel()
-		removed, err := e.Reset(ctx)
+		removed, keptLog, err := e.Reset(ctx)
 		var live *engine.LiveError
 		var incomplete *store.ResetIncompleteError
 		switch {
@@ -92,7 +92,11 @@ func doctorAct(doReset bool, loc location, io IO) int {
 		case err != nil:
 			return doctorFailed(what, err, io)
 		}
-		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock and config.toml; wrote FORMAT\n", removed)
+		if keptLog {
+			fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock, config.toml and the run log; wrote FORMAT\n", removed)
+			return 0
+		}
+		fmt.Fprintf(io.Stdout, "reset: removed %d entries, the run log of another format among them, so every label learns its memory need again; kept admit.lock and config.toml; wrote FORMAT\n", removed)
 		return 0
 	}
 	why, err := formatRefusal(e.Store())

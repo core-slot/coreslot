@@ -23,12 +23,18 @@ func (l LiveState) Empty() bool { return len(l.Holds) == 0 && len(l.Tickets) == 
 // otherRes is the res/ directory a directory of another format may hold; a reset removes it.
 const otherRes = "res"
 
+// ResetKeepsLog reports that a reset is a repair, which keeps log/: FORMAT names format 2.
+func (s *Store) ResetKeepsLog() bool {
+	n, _, err := s.ReadFormat()
+	return err == nil && n == Format
+}
+
 // Reset recreates the state directory (`coreslot doctor --reset`) inside the section the caller
 // entered, whatever format its FORMAT names, malformed or absent included: it removes every entry
-// of queue/, holds/ and cancel/ and of log/, degraded, gen and another format's res/ with its files,
-// then writes FORMAT of the format written. It keeps admit.lock and config.toml (the
-// format-stable file whose inode live clients may hold open, and the configuration) and the four
-// directories themselves. It does not read the configuration.
+// of queue/, holds/, cancel/ and, unless ResetKeepsLog, log/, degraded, gen and another format's
+// res/ with its files, then writes FORMAT of the format written. It keeps admit.lock and
+// config.toml (the format-stable file whose inode live clients may hold open, and the
+// configuration) and the four directories themselves. It does not read the configuration.
 //
 // It first checks that nothing is alive: no hold or ticket whose lock is held, by names of either
 // format. When anything is alive it removes nothing and returns it. An entry that is not a
@@ -46,7 +52,11 @@ func (sec *Section) Reset() (live LiveState, removed int, err error) {
 	}
 	s := sec.s
 	listed := map[string][]string{}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+	dirs := []string{QueueDir, HoldsDir, CancelDir, LogDir}
+	if s.ResetKeepsLog() {
+		dirs = dirs[:3]
+	}
+	for _, dir := range dirs {
 		if err := CheckEntry(s.path(dir), true); err != nil {
 			return live, 0, err
 		}
@@ -98,7 +108,7 @@ func (sec *Section) Reset() (live LiveState, removed int, err error) {
 			failed = append(failed, err)
 		}
 	}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+	for _, dir := range dirs {
 		for _, name := range listed[dir] {
 			remove(s.path(dir, name))
 		}
