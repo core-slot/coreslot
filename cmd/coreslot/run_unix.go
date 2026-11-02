@@ -65,6 +65,7 @@ type run struct {
 	why       func() (string, []engine.HolderInfo) // why the request is not admitted yet, and the live holds
 	advised   bool                                 // the waiting line said once what to do about a tool's time limit
 	lastStop  string                               // what the watchdog saw when it stopped the last command
+	lastFloor bool                                 // the floor round stopped it
 	reasons   []string                             // lastStop of every stop so far
 }
 
@@ -149,8 +150,12 @@ func (r *run) ordinary() int {
 			r.notice("run %s alone, or narrow it", cmd)
 			return r.o.refusalCode
 		}
-		r.notice("memory stop %d of %d: %s was stopped (%s); coreslot restarts it by itself; do not run it again",
-			r.stops, maxStops, cmd, r.lastStop)
+		ask := ""
+		if r.lastFloor {
+			ask = "; the whole machine ran out of memory (swap nearly full); free memory outside coreslot (close something) before it comes back"
+		}
+		r.notice("memory stop %d of %d: %s was stopped (%s)%s; coreslot restarts it by itself; do not run it again",
+			r.stops, maxStops, cmd, r.lastStop, ask)
 		req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
 		r.start = time.Now()
 	}

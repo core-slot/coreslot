@@ -130,6 +130,9 @@ func TestGiveUpAfterThreeStops(t *testing.T) {
 				strings.LastIndex(out, "restarts it by itself") > marker {
 				t.Errorf("stderr:\n%s\nwant two restart notices, then the marker line", out)
 			}
+			if n := strings.Count(out[:marker], "the whole machine ran out of memory (swap nearly full); free memory outside coreslot"); n != 2 {
+				t.Errorf("stderr:\n%s\nwant both floor stops to ask for memory freed outside coreslot, got %d", out, n)
+			}
 			block := out[marker:]
 			for _, want := range []string{"coreslot: stop 1: swap room under the floor, at ", "coreslot: stop 3: ",
 				"coreslot: run `", "` alone, or narrow it\n"} {

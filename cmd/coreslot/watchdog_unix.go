@@ -66,7 +66,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if c.Observe {
 			r.notice("would stop %s (%s)", text(r.o.label), why)
 		} else if sup.KillGroup() {
-			r.lastStop = why
+			r.lastStop, r.lastFloor = why, det.Level == watch.Floor
 			return true, p
 		}
 	}

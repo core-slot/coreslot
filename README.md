@@ -103,7 +103,8 @@ kernel is actually paging:
 A stopped command is killed with `SIGKILL` and put back in the queue at its **first arrival**, so it
 keeps its place; it starts again once memory has been calm for a while and there is room for it
 with a margin. After the third stop it gives up with the refusal code and prints `coreslot: gave up
-after 3 memory stops`.
+after 3 memory stops`. After a floor stop the run also tells the agent to free memory outside
+coreslot before the command comes back.
 
 Never stopped: the oldest running command, a command whose label has `no_restart = true` in
 `needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,

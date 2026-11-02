@@ -34,7 +34,8 @@ no other default is calibrated ([what the records show](calibration/README.md#wh
   the mode (`enforce` or `observe`), the thresholds and the waits; `observe` logs what it would stop.
   The first run of a label is not judged: it does not count towards the level and no red round stops
   it; only a floor round does, after every command that has history. A round frees the memory the
-  machine is short, not what other commands have reserved and not yet used.
+  machine is short, not what other commands have reserved and not yet used. A command a floor round
+  stopped is told the whole machine ran out of memory and to free some outside coreslot.
 - Labels are automatic: without `--label`, a run is labelled with the command's shape and its
   repository, such as `go test@proj`, and the worktrees of one repository share the label. A
   `needs.toml` table such as `[needs."go test@proj"]` needs TOML quoting.
