@@ -86,18 +86,18 @@ func TestIdleJobsCarryNoExcess(t *testing.T) {
 	}
 }
 
-// 15 points of excess are yellow only with the paging gate open: system time without paging is
+// 25 points of excess are yellow only with the paging gate open: system time without paging is
 // not memory.
 func TestYellowNeedsGate(t *testing.T) {
 	c := Defaults()
 	f := newFeed(c)
 	for i := range 10 {
-		if l := f.step(c, false, job(0.40, 0.25)); l != Green {
+		if l := f.step(c, false, job(0.50, 0.25)); l != Green {
 			t.Fatalf("gate closed, sample %d: %v, want green", i, l)
 		}
 	}
-	f.step(c, true, job(0.40, 0.25))
-	if l := f.step(c, true, job(0.40, 0.25)); l != Yellow {
+	f.step(c, true, job(0.50, 0.25))
+	if l := f.step(c, true, job(0.50, 0.25)); l != Yellow {
 		t.Errorf("gate open in 2 of 3: %v, want yellow", l)
 	}
 }
@@ -135,11 +135,11 @@ func TestRedEndsOnTheFirstCalmSample(t *testing.T) {
 	}
 }
 
-// One sample at 38 points, then calm: the bucket holds 1 and drains; never red.
+// One sample at 43 points, then calm: the bucket holds 1 and drains; never red.
 func TestSpikeDoesNotRed(t *testing.T) {
 	c := Defaults()
 	f := newFeed(c)
-	f.step(c, true, job(0.63, 0.25))
+	f.step(c, true, job(0.68, 0.25))
 	if f.d.Bucket != 1 {
 		t.Fatalf("bucket after the spike %v, want 1", f.d.Bucket)
 	}

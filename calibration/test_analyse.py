@@ -21,8 +21,12 @@ def sample(t):
     return {"t_ns": t * S, "E": 0.0, "paging": 0, "band": "full"}
 
 
+# The fixture's watch.jsonl was logged by a detector at these values.
+FIXTURE = {**analyse.CHOSEN, "yellow_points": 10, "red_points": 30}
+
+
 def at(**kv):
-    return {**analyse.INTERIM, **kv}
+    return {**analyse.CHOSEN, **kv}
 
 
 class AnalyseTest(unittest.TestCase):
@@ -85,7 +89,7 @@ class AnalyseTest(unittest.TestCase):
         self.assertEqual(analyse.replay([hot, gap, hot], at())[1:], ["unknown", "yellow"])
 
     def test_replay_is_checked_against_the_logged_level(self):
-        self.assertEqual(analyse.mismatches(self.ramp, analyse.INTERIM), [])
+        self.assertEqual(analyse.mismatches(self.ramp, FIXTURE), [])
         with tempfile.TemporaryDirectory() as d:
             for name in ("watch.jsonl", "work.jsonl"):
                 with open(os.path.join(DATA, "ramp", name)) as f:
@@ -94,7 +98,7 @@ class AnalyseTest(unittest.TestCase):
                     lines[0] = lines[0].replace('"level":"green"', '"level":"yellow"')
                 with open(os.path.join(d, name), "w") as f:
                     f.write("\n".join(lines) + "\n")
-            self.assertEqual(analyse.mismatches(analyse.Record(d), analyse.INTERIM), [(0.0, "green", "yellow")])
+            self.assertEqual(analyse.mismatches(analyse.Record(d), FIXTURE), [(0.0, "green", "yellow")])
 
     def test_calm_comes_from_the_logged_level_and_a_torn_last_line(self):
         self.assertIsNone(analyse.calm_after_stop(self.ramp))  # still yellow when the record ends

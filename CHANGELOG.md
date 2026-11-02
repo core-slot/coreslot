@@ -15,8 +15,9 @@ Its on-disk protocol is format 2.
 
 A state directory of another format is not used: runs start unbudgeted with a notice (`--strict`
 refuses) until `coreslot doctor --reset` recreates it as format 2. Every client of a machine runs
-the same release. The watchdog's thresholds and the memory reserve are interim defaults until
-calibration.
+the same release. The watchdog's thresholds and the memory reserve are calibrated on two Macs
+(`calibration/records`); the floor comes from prior art, and the waits `post_kill_s` and
+`spacing_s` are still interim.
 
 ### Added
 

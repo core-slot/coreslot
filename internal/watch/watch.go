@@ -9,16 +9,23 @@ import (
 	"github.com/core-slot/coreslot/internal/memsample"
 )
 
-// The detector's thresholds. interim: the calibration sets them.
+// The detector's thresholds. The waits post_kill_s and spacing_s are interim: no calibration
+// record sets them.
 const (
-	DefaultYellowPoints  = 10
-	DefaultRedPoints     = 30
-	DefaultRedSamples    = 10
+	// calibration/records: no full-speed sample of the Pro reaches it with the gate open.
+	DefaultYellowPoints = 20
+	// calibration/records: no full-speed or slowing sample reaches it; every cliff has samples over it.
+	DefaultRedPoints = 40
+	// calibration/records: red comes inside the cliff on every Air ramp and Pro long ramp.
+	DefaultRedSamples = 10
+	// calibration/records: every cliff sample has the gate open; at 3000 some do not.
 	DefaultGatePagesPerS = 1000
-	DefaultFloorMiB      = 2048
-	DefaultCalmS         = 30
-	DefaultPostKillS     = 15
-	DefaultSpacingS      = 3
+	// From prior art: no ramp in calibration/records reaches a full disk.
+	DefaultFloorMiB = 2048
+	// calibration/records: every ramp with a cliff is green 45 to 58 s after its stop and stays so.
+	DefaultCalmS     = 30
+	DefaultPostKillS = 15
+	DefaultSpacingS  = 3
 )
 
 // minWorkShare is the part of a period a job's user, system and page-wait time must reach to count

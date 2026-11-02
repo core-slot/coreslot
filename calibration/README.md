@@ -17,7 +17,7 @@ Needs macOS, Python 3 and Go. It reads nothing that needs privileges.
 | `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. Every pass is preceded by a 30 s warm-up of its workload, and a ramp is accompanied by an observer job (below). |
 | `analyse.py` | Joins the watchdog's `watch.jsonl` with the workload's `work.jsonl`, puts each sample into a speed band, and prints the per-band excess, the samples where its replay of the levels at the chosen values differs from the level the watchdog logged, and a scoring table per candidate value. |
 | `testdata/` | A tiny record for the tests. |
-| `records/` | Where `run.sh` puts its records. |
+| `records/` | Where `run.sh` puts its records; the committed ones are the passes the shipped defaults rest on ([`records/README.md`](records/README.md)). |
 
 ## Running it
 
@@ -73,10 +73,13 @@ misses with no paging at all, so a slow sample counts as cliff only with the ker
 The tables then show, per candidate value, how many samples of each band it would fire on and, in
 the verdict column, in how many cliff bands it fires and in which pre-cliff or control bands it
 also fires. A value is justified by a property two candidates score differently on, for example:
-`red_points = 30` fires in every ramp's cliff band and in no pre-cliff band; 20 also fires in the
-`slow` band of one ramp. The yellow and red tables replay the detector's rules; each record's
-section lists every sample where that replay, at the chosen values, differs from the level the
-watchdog logged, so a replay that drifts from the code shows. `red_samples` names the band in which
+over the committed records `red_points = 40` fires in no full-speed or slowing sample, while 30
+fires in 5 slowing samples of one Mac. The yellow and red tables replay the detector's rules; each
+record's section lists every sample where that replay, at the chosen values, differs from the level
+the watchdog logged, so a replay that drifts from the code shows. The committed records were logged
+by a detector at `yellow_points` 10 and `red_points` 30, so the replay at the shipped 20 and 40
+differs from them where those values matter; `--yellow-points 10 --red-points 30` replays each with
+no mismatch. `red_samples` names the band in which
 each run first turns red; `calm_s` counts the ramps whose logged level, once green after the hog
 stopped, stayed green for that long. The floor is not calibrated.
 

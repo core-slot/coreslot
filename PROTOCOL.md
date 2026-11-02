@@ -289,8 +289,8 @@ reserve = "1G"        # memory admission keeps free beyond every need (section 1
 [watch]
 mode = "enforce"      # or "observe": everything but the stop (section 23.6)
 sample_log = false    # true: log every machine sample (section 23.6)
-yellow_points = 10    # the thresholds of section 23.4
-red_points = 30
+yellow_points = 20    # the thresholds of section 23.4
+red_points = 40
 red_samples = 10
 gate_pages_s = 1000
 floor = "2G"          # a size

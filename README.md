@@ -50,8 +50,8 @@ Other agents get the same rule as a line in their instructions
 ([the snippet](integrations/claude-code/README.md#other-coding-agents)).
 
 **Status:** `v0`. macOS on Apple silicon is the supported platform; Linux and Intel Macs are
-experimental, and Windows runs commands unbudgeted. The watchdog's defaults are interim until
-calibration, and the CLI may still change before `v1.0.0`: the
+experimental, and Windows runs commands unbudgeted. The watchdog's defaults are calibrated on two
+Macs ([the records](calibration/records)), and the CLI may still change before `v1.0.0`: the
 [compatibility policy](docs/compatibility.md) says how.
 
 ## When you do not need coreslot
@@ -108,7 +108,9 @@ Never stopped: the oldest running command, a command whose label has `no_restart
 `needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,
 or a run nested inside another run's reservation), a command whose label has no completed run yet
 and anything coreslot did not start. A command that exits `SIGKILL` for another reason is reported
-and not restarted. The thresholds are `[watch]` keys with interim defaults; see
+and not restarted. The thresholds are `[watch]` keys whose defaults come from
+[recorded runs on two Macs](calibration/records): in them the CPU-contention control stays green, and
+no full-speed or slowing sample counts toward red. See
 [`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
 the kill and says what it would have stopped.
@@ -217,8 +219,9 @@ sample_log = false    # true: log every machine sample to log/watch.jsonl
 ```
 
 `[watch]` also takes the thresholds and waits
-([`PROTOCOL.md` section 5.3](PROTOCOL.md#53-configuration-file)); their defaults are interim until
-calibration.
+([`PROTOCOL.md` section 5.3](PROTOCOL.md#53-configuration-file)); their defaults rest on the
+[calibration records](calibration/records), except `post_kill_s` and `spacing_s`, which they do not
+set.
 
 `needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
 space or an `@` is not a bare TOML key, so quote it:

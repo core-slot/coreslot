@@ -34,7 +34,7 @@ BANDS = ("full", "slowing", "slow", "cliff", "control")
 PRE_CLIFF = ("full", "slowing", "slow", "control")
 MAX_PERIOD_NS = 6_000_000_000
 
-INTERIM = {"yellow_points": 10, "red_points": 30, "red_samples": 10, "gate_pages_s": 1000}
+CHOSEN = {"yellow_points": 20, "red_points": 40, "red_samples": 10, "gate_pages_s": 1000}
 CLEAR_SAMPLES = 15  # samples in a row below yellow_points that clear yellow
 CANDIDATES = {
     "yellow_points": (5, 10, 15, 20, 30),
@@ -243,7 +243,7 @@ def table(title, rows, header):
 
 
 def report(records, chosen=None):
-    chosen = {**INTERIM, **(chosen or {})}
+    chosen = {**CHOSEN, **(chosen or {})}
     gate = chosen["gate_pages_s"]
     out = []
     for r in records:
@@ -306,7 +306,7 @@ def find_records(paths):
     for p in paths:
         if os.path.exists(os.path.join(p, "watch.jsonl")):
             found.append(p)
-        else:
+        elif os.path.isdir(p):  # a glob of the records directory also names its README
             found += sorted(os.path.join(p, d) for d in os.listdir(p) if os.path.exists(os.path.join(p, d, "watch.jsonl")))
     return found
 
@@ -314,13 +314,13 @@ def find_records(paths):
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("records", nargs="+")
-    for k, v in INTERIM.items():
+    for k, v in CHOSEN.items():
         ap.add_argument("--" + k.replace("_", "-"), type=int, default=v)
     a = ap.parse_args(argv)
     paths = find_records(a.records)
     if not paths:
         ap.error("no record directory with a watch.jsonl found")
-    print(report([Record(p) for p in paths], {k: getattr(a, k) for k in INTERIM}))
+    print(report([Record(p) for p in paths], {k: getattr(a, k) for k in CHOSEN}))
 
 
 if __name__ == "__main__":
