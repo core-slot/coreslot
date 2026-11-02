@@ -6,7 +6,7 @@ usage: analyse.py RECORD_DIR... [--yellow-points N] [--red-points N] [--red-samp
 
 A record directory holds watch.jsonl (the watchdog's sample log), work.jsonl (the hog's or the
 contention control's own log) and, optionally, meta.json (machine, OS, threads, and the share a
-warm-up run taught the watchdog as the hog's normal S0). A directory
+warm-up run taught the watchdog as the workload's normal S0). A directory
 with none of these is searched for record directories one level down.
 
 Every sample of the watchdog that falls inside a run is joined to the workload's speed over the
@@ -248,7 +248,7 @@ def report(records, chosen=None):
     out = []
     for r in records:
         out.append(f"== {r.label()}: {len(r.samples)} samples in the run, "
-                   f"{'control' if r.is_control else f'reference {r.baseline:.0f} touches/s{r.s0()}'}")
+                   f"{'control' if r.is_control else f'reference {r.baseline:.0f} touches/s'}{r.s0()}")
         out += band_table(r.samples, gate)
         calm = calm_after_stop(r)
         if not r.is_control:

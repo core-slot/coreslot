@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -118,6 +119,18 @@ class AnalyseTest(unittest.TestCase):
             self.assertEqual(analyse.calm_after_stop(rec), (4.0, 24.0))  # green from 14 s, 4 s after the stop, to 38 s
             self.assertIn("S0 learned 0.012 by a warm-up", analyse.report([rec]))
         self.assertNotIn("S0", analyse.report([self.ramp]))  # no learned share in the meta: nothing is said of one
+
+    def test_a_control_names_the_s0_its_warm_up_taught(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("watch.jsonl", "work.jsonl"):
+                shutil.copy(os.path.join(DATA, "control", name), d)
+            with open(os.path.join(d, "meta.json"), "w") as f:
+                json.dump({"kind": "control", "warmup_share": 0.0456}, f)
+            rec = analyse.Record(d)
+            self.assertTrue(rec.is_control)
+            line = next(x for x in analyse.report([rec]).splitlines() if x.startswith("=="))
+            self.assertTrue(line.endswith("control, S0 learned 0.046 by a warm-up"), line)
+        self.assertNotIn("S0", analyse.report([self.control]))
 
     def test_main_searches_a_directory_of_records(self):
         out = io.StringIO()

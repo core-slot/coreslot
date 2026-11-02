@@ -9,18 +9,20 @@
 # log on: it measures and logs, it never stops anything. `ramp` runs the hog under `coreslot run`;
 # `control` runs the busy loops. The record (watch.jsonl, work.jsonl, meta.json) lands in --out,
 # by default records/<UTC time>-<kind>. --dry prints what would run and starts nothing.
-# A ramp first runs the hog for 30 s at 0.5 GiB under the same label, so the label has a run log and the
-# ramp is scored against its learned normal share (a label with no history is never counted or stopped);
-# an observer job then keeps the sampling going for --after-s (default 90) seconds after the hog stops.
+# Either pass first runs its workload for 30 s under the same label (the hog at 0.5 GiB), so the label
+# has a run log and the pass is scored against its learned normal share (a label with no history is
+# never counted or stopped). A ramp's observer job then keeps the sampling going for --after-s
+# (default 90) seconds after the hog stops.
 set -u
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/.." && pwd)
 py=${PYTHON:-python3}
 swap_stop_mib=6144 # swap used may grow this far from the start of the pass
+warm_s=30          # the warm-up that gives the label its one counted run
 
 usage() {
-	sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+	sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 
@@ -94,28 +96,31 @@ if [ "$kind" = ramp ]; then
 	work=hog.py
 	work_args=(--log "$out/work.jsonl" --pidfile "$tmp/work.pid" --threads "$threads" --step-mib "$step_mib" --hold-s "$hold_s")
 	[ -z "$max_gib" ] || work_args+=(--max-gib "$max_gib")
+	warm_args=(--log "$tmp/warmup.jsonl" --pidfile "$tmp/work.pid" --threads "$threads" --step-mib 512 --hold-s 3600 --seconds "$warm_s")
+	warm_mem=512M
 	need="${step_mib}M"
 	max_s=7200
 else
 	work=cpu_control.py
 	work_args=(--log "$out/work.jsonl" --pidfile "$tmp/work.pid" --seconds "$seconds")
-	[ -z "$procs" ] || work_args+=(--procs "$procs")
+	warm_args=(--log "$tmp/warmup.jsonl" --pidfile "$tmp/work.pid" --seconds "$warm_s")
+	[ -z "$procs" ] || { work_args+=(--procs "$procs"); warm_args+=(--procs "$procs"); }
+	warm_mem=64M
 	need=64M
 	max_s=$((${seconds%.*} + 60))
 fi
 build_cmd=(go build -o "$tmp/coreslot" ./cmd/coreslot)
 coreslot_run=(env "CORESLOT_STATE_DIR=$tmp/state" "$tmp/coreslot" run)
 run_cmd=("${coreslot_run[@]}" --label "calibration-$kind" --mem "$need" -- "$py" -I "$here/$work" "${work_args[@]}")
-# The warm-up gives the label one counted run, so the ramp is scored against the label's own normal
+# The warm-up gives the label one counted run, so the pass is scored against the label's own normal
 # share. The observer is the first and oldest hold, never a victim, and keeps the sampling going.
-warm_cmd=("${coreslot_run[@]}" --label "calibration-$kind" --mem 512M --
-	"$py" -I "$here/$work" --log "$tmp/warmup.jsonl" --pidfile "$tmp/work.pid" --threads "$threads" --step-mib 512 --hold-s 3600 --seconds 30)
+warm_cmd=("${coreslot_run[@]}" --label "calibration-$kind" --mem "$warm_mem" -- "$py" -I "$here/$work" "${warm_args[@]}")
 observer_cmd=("${coreslot_run[@]}" --label calibration-observer --mem 64M -- sleep $((max_s + after_s + 60)))
 
 echo "state dir: $tmp/state, config.toml: [watch] mode = \"observe\", sample_log = true"
 echo "build:     (cd $repo && $(printf "%q " "${build_cmd[@]}" | sed "s/ $//"))"
+echo "warm-up:   $(printf "%q " "${warm_cmd[@]}" | sed "s/ $//")"
 if [ "$kind" = ramp ]; then
-	echo "warm-up:   $(printf "%q " "${warm_cmd[@]}" | sed "s/ $//")"
 	echo "observer:  $(printf "%q " "${observer_cmd[@]}" | sed "s/ $//"), stopped $after_s s after the workload"
 fi
 echo "run:       $(printf "%q " "${run_cmd[@]}" | sed "s/ $//")"
@@ -158,14 +163,13 @@ chmod 700 "$tmp/state"
 printf '[watch]\nmode = "observe"\nsample_log = true\n' >"$tmp/state/config.toml"
 (cd "$repo" && "${build_cmd[@]}") || exit 1
 
-if [ "$kind" = ramp ]; then
-	echo "warm-up: 30 s at 512 MiB"
-	"${warm_cmd[@]}" &
-	cpid=$!
-	wait "$cpid"
-	cpid=""
-	# the share the shipped code reads back: sys/(user+sys) of the one counted run
-	warm_share=$("$py" -I -c 'import json, sys
+echo "warm-up: $warm_s s"
+"${warm_cmd[@]}" &
+cpid=$!
+wait "$cpid"
+cpid=""
+# the share the shipped code reads back: sys/(user+sys) of the one counted run
+warm_share=$("$py" -I -c 'import json, sys
 for line in open(sys.argv[1]):
     r = json.loads(line)
     if r.get("label") == sys.argv[2] and not r.get("fail_open") and not r.get("stops") and r.get("user_s", 0) + r.get("sys_s", 0) > 0:
@@ -173,12 +177,13 @@ for line in open(sys.argv[1]):
         break
 else:
     print("null")' "$tmp/state/log/runs.jsonl" "calibration-$kind" 2>/dev/null || echo null)
-	if [ "$warm_share" = null ]; then
-		echo "the warm-up left no counted run in the run log" >&2
-		exit 1
-	fi
-	echo "warm-up share: $warm_share"
-	rm -f "$tmp/state/log/watch.jsonl" # the record starts with the observer
+if [ "$warm_share" = null ]; then
+	echo "the warm-up left no counted run in the run log" >&2
+	exit 1
+fi
+echo "warm-up share: $warm_share"
+rm -f "$tmp/state/log/watch.jsonl" # the record starts with the scored pass
+if [ "$kind" = ramp ]; then
 	"${observer_cmd[@]}" &
 	opid=$!
 	for _ in $(seq 30); do
