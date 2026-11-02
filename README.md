@@ -38,6 +38,14 @@ coreslot status                  # what runs, what waits, whether the watchdog i
   so a killed run never leaks its reservation, and a client written from
   [`PROTOCOL.md`](PROTOCOL.md) shares the same budget.
 
+**Measured.** On a 16 GB MacBook Air, four agents started a VS Code type check (twice), FastAPI's
+tests and SQLAlchemy's ORM tests at once, five times unwrapped and five times under `coreslot run`,
+in alternating order. Unwrapped, the machine sat at memory pressure warn for 66 to 115 s of each set
+and wrote 8 to 13 GiB to swap; under coreslot it never left normal and wrote none, and each agent's
+mean time to its verdict was 0.41 of the unwrapped one (median over the pairs). Both held in 5 of 5
+pairs against a criterion committed before them; one machine, one stand, one day
+([the run, its records and its limits](evidence/air-v04/README.md)).
+
 **For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
 `go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as
 `coreslot run -- <the same command>`:

@@ -8,11 +8,81 @@ stop and restart happens on the shipped rules and that every stopped job still c
 
 The stand is public code at pinned commits:
 
-| agent | gate | source | alone |
+| agent | gate | source | alone: learned need, median time |
 |---|---|---|---|
-| A1, A2 | `npm run --silent typecheck-client` | VS Code 1.142.0 (`d956e8a`) | about 8.3 GiB, 10 s |
-| A3 | `ruff check fastapi tests`, then `pytest -n auto --dist loadgroup` | FastAPI 0.156.2 (`44cc742`) | about 3 GiB, 32 s |
-| A4 | `pytest -n auto test/orm` | SQLAlchemy rel_2_1_5 (`4fbf72c`) | about 3 GiB, 30 s |
+| A1, A2 | `npm run --silent typecheck-client` | VS Code 1.142.0 (`d956e8a`) | 8.7 GiB, 15.4 s |
+| A3 | `ruff check fastapi tests`, then `pytest -n auto --dist loadgroup` | FastAPI 0.156.2 (`44cc742`) | 21 MiB and 2.4 GiB, 0.05 s and 17.4 s |
+| A4 | `pytest -n auto test/orm` | SQLAlchemy rel_2_1_5 (`4fbf72c`) | 2.1 GiB, 35.1 s |
+
+## Result (2026-11-02)
+
+The [criterion](criterion.md), committed after the pilot pair and before the first counted pair,
+holds in both parts: K spent fewer seconds at memory pressure warn or above than F in 5 of 5 pairs,
+and K's mean time to verdict was lower than F's in 5 of 5 pairs (each a one-sided sign test, p =
+0.031). The watchdog demo stopped the two newest of three oversized jobs on the red level, never the
+oldest, restarted both, and all three completed.
+
+| pair | arm | warn+ s | critical s | swap written | swap used growth | makespan s | mean time to verdict s | failures |
+|---|---|---|---|---|---|---|---|---|
+| 1 | F | 66 | 0 | 7.8 GiB | 1497 MiB | 88.9 | 76.1 | 0 |
+| 1 | K | 0 | 0 | 0 | 0 | 61.9 | 34.8 | 0 |
+| 2 | K | 0 | 0 | 0 | 0 | 62.9 | 40.5 | 0 |
+| 2 | F | 112 | 0 | 8.6 GiB | 1242 MiB | 140.0 | 118.1 | 0 |
+| 3 | F | 95 | 0 | 8.5 GiB | 1181 MiB | 124.0 | 105.1 | 0 |
+| 3 | K | 0 | 0 | 0 | 0 | 66.8 | 45.7 | 0 |
+| 4 | K | 0 | 0 | 0 | 0 | 62.1 | 40.5 | 0 |
+| 4 | F | 89 | 0 | 12.3 GiB | 2158 MiB | 117.1 | 99.0 | 0 |
+| 5 | F | 115 | 0 | 12.9 GiB | 1376 MiB | 143.2 | 121.6 | 0 |
+| 5 | K | 0 | 0 | 0 | 0 | 65.0 | 42.2 | 0 |
+
+"Swap written" is the `vm_stat` swapouts over the set (16 KiB pages); "swap used growth" is
+`vm.swapusage` at the end against the start. Per pair, K's mean time to verdict was 0.34 to 0.46
+of F's (median 0.41) and its makespan 0.45 to 0.70 of F's (median 0.53). In K the queue held the
+agents 51 to 117 s in all per set, and no command was stopped.
+
+Why K is faster as well: two 8.7 GiB type checks and two 2-3 GiB test suites need about 22 GiB at
+once, and coreslot's waiting lines show at most 6.4 GiB it could hand out. F starts all of them and every one of them pages;
+K starts the first type check, holds the rest until it has finished, and each then runs at the speed
+it runs alone. Median per agent over the five pairs, F against K: A1 115.1 s against 9.8 s, A2 116.4
+s against 62.1 s, A3 64.8 s against 39.1 s, A4 124.0 s against 52.3 s. The agent that waits longest
+under K (A2, the second type check) still gets its verdict sooner than under F.
+
+**The demo.** A 30 s, 256 MiB hog taught the label `demo-hog` a need of 270 MiB. Three hogs of 6
+GiB each then started a second apart under `coreslot run --label demo-hog`, so admission let all
+three in on 270 MiB each: 18 GiB of hot memory on 16 GiB. macOS reached pressure level critical 4 s
+in. The watchdog logged red for 10 samples; its first red round stopped hog 3, the newest (`memory
+stop 1 of 3: ... was stopped (memory red, at 6 GiB, 75% of its time went to memory stalls against
+its normal 0%)`), and the next round stopped hog 2; hog 1, the oldest, was never stopped. The
+pressure level was back to normal 28 s in and stayed there. Each stopped hog re-queued with its
+6 GiB peak as its need, waited for room (52 s and 161 s) and ran to completion; the outside guard
+did not fire. The stop line's "normal 0%" is the label's learned share of 0.3 %, rounded.
+
+### What this does not show, and what to know
+
+- One machine, one stand, one evening, five pairs. The stand is heavy on purpose: on a lighter mix
+  that never pages, unwrapped runs lose nothing and coreslot's queue only costs waiting time.
+- No false failure happened in either arm, so this run says nothing about flaky tests under memory
+  pressure.
+- The demo is one run, a functional check of the stop and restart path, not a measurement of how
+  often or how fast the watchdog acts.
+- The pilot pair (F: 105 s at warn or above, 3 s critical, makespan 118.9 s; K: 0 s, 0 s, 64.3 s)
+  chose the criterion and is in no test.
+- Before the learn phase the Docker Desktop VM (9.7 GiB) was stopped, because it kept the machine at
+  pressure level warn; the level was normal from then on. The desktop apps of the person running it
+  (a chat client and its agents, a terminal) stayed open; the record's `meta.jsonl` names the
+  machine and the versions.
+- A build and a test suite of another job (about 1.6 cores, no large memory) overlapped the first
+  16 s of the learn phase, that is part of the first type check's alone run. The needs are learned
+  from memory peaks.
+- The type check label learned no normal share: alone it needs 8.7 GiB with about 7 GiB free and
+  pages throughout, and a run that pages throughout measures none. So the watchdog could stop it
+  only at the floor; admission used its learned need either way.
+- In the committed records the machine's paths are replaced after the run: the checkout by
+  `<repo>`, the stand by `<stand>`, the directory of the coreslot binary by `<bin>` and the home
+  directory by `~`. Nothing else was changed, and `analyse.py` prints the same output before and
+  after.
+- The thermal state was "fair" (1) at the start of nine of the ten counted sets and "nominal" (0) at
+  one; it is recorded per set.
 
 ## The phases
 
