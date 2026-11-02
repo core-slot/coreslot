@@ -58,6 +58,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			continue
 		}
 		det, c, err := g.Tick(ctx)
+		r.countClosed(d, det, err)
 		if err != nil || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
@@ -111,4 +112,22 @@ func treeDeltas(prev, cur map[int]memsample.TreeTimes) memsample.TreeTimes {
 		d.PageWaitNS += cur.PageWaitNS - was.PageWaitNS
 	}
 	return d
+}
+
+// countClosed adds the tick's time d to the attempt's gate-closed time when det holds a sample the
+// tick took or read and the paging gate was closed in it.
+func (r *run) countClosed(d memsample.TreeTimes, det watch.Detector, err error) {
+	if err == nil && len(det.Window) > 0 && !det.Gate {
+		r.closed.DUserNS += d.UserNS
+		r.closed.DSysNS += d.SysNS
+		r.closed.DPageWaitNS += d.PageWaitNS
+	}
+}
+
+// tickShare is the attempt's share over its gate-closed ticks; nil when none had time.
+func (r *run) tickShare() *float64 {
+	if share, ok := watch.Share(r.closed); ok {
+		return &share
+	}
+	return nil
 }

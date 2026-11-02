@@ -13,6 +13,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -69,6 +70,7 @@ func (r *run) runChild(c child) int {
 		raiseOOMScore()
 	}
 	started := time.Now()
+	r.closed = watch.Job{}
 	status := 0
 	var released error
 	var sup *supervisor
@@ -116,6 +118,7 @@ func (r *run) runChild(c child) int {
 		maxRSS = recordUsage(&rec, sup.usage())
 	}
 	setMemPeak(&rec, maxRSS, p)
+	rec.TickShare = r.tickShare()
 	if c.log != nil {
 		if err := appendRunLog(c.log, rec, r.notice); err != nil {
 			r.notice("the run log was not written: %s", text(err.Error()))

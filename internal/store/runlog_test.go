@@ -424,10 +424,10 @@ func TestReadRunsSkipsMalformed(t *testing.T) {
 func TestRunRecordKeys(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	user, sys, peak := 3.5, 0.25, int64(2831156)
+	user, sys, tick, peak := 3.5, 0.25, 0.04, int64(2831156)
 	want := RunRecord{
 		TimeNS: 1791720000000000000, Label: "fastapi:tests", WaitedS: 1.5, RanS: 12.25, Exit: 1,
-		FailOpen: "timeout", MemPeakKiB: &peak, UserS: &user, SysS: &sys, Stops: 2,
+		FailOpen: "timeout", MemPeakKiB: &peak, UserS: &user, SysS: &sys, TickShare: &tick, Stops: 2,
 	}
 	plain := RunRecord{TimeNS: want.TimeNS, Label: "plain"}
 	for _, r := range []RunRecord{want, plain} {
@@ -447,7 +447,7 @@ func TestRunRecordKeys(t *testing.T) {
 		return slices.Sorted(maps.Keys(m))
 	}
 	full := []string{"exit", "fail_open", "label", "mem_peak_kib", "ran_s", "stops", "sys_s",
-		"time_ns", "user_s", "waited_s"}
+		"tick_share", "time_ns", "user_s", "waited_s"}
 	if got := keys(lines[0]); !slices.Equal(got, full) {
 		t.Errorf("a full record's keys %v, want %v", got, full)
 	}

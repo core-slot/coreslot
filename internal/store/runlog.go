@@ -36,6 +36,9 @@ type RunRecord struct {
 	// measured zero.
 	UserS *float64 `json:"user_s,omitempty"`
 	SysS  *float64 `json:"sys_s,omitempty"`
+	// TickShare is the run's share of time lost to memory over its ticks that had the paging gate
+	// closed (PROTOCOL.md section 20); nil, and then not encoded, when none had time.
+	TickShare *float64 `json:"tick_share,omitempty"`
 	// MemPeakKiB is the command tree's memory peak in KiB, nil when unknown and then not encoded.
 	MemPeakKiB *int64 `json:"mem_peak_kib,omitempty"`
 	Stops      int    `json:"stops,omitempty"` // times the run was stopped; encoded only above 0

@@ -75,13 +75,13 @@ func TypicalS(window []store.RunRecord) int64 {
 	return max(1, int64(math.Ceil(ran[min(len(ran)-1, len(ran)*9/10)])))
 }
 
-// NormalShare is the median share of the window's runs' rusage time spent in the system,
-// sys_s/(user_s+sys_s); ok is false when no run has a measured, non-zero time.
+// NormalShare is the median of the window's tick shares, the live measure's own definition; ok is
+// false when no run has one.
 func NormalShare(window []store.RunRecord) (share float64, ok bool) {
 	var shares []float64
 	for _, r := range window {
-		if r.UserS != nil && r.SysS != nil && *r.UserS+*r.SysS > 0 {
-			shares = append(shares, *r.SysS/(*r.UserS+*r.SysS))
+		if r.TickShare != nil {
+			shares = append(shares, *r.TickShare)
 		}
 	}
 	if len(shares) == 0 {

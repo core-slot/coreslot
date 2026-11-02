@@ -3,9 +3,13 @@
 package main
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 	"testing"
+
+	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/watch"
 )
 
 // The supervisor kills the command's group while the command is unreaped, and never after:
@@ -36,5 +40,28 @@ func TestKillAfterReapIsRefused(t *testing.T) {
 	}
 	if len(sent) != 1 || sent[0] != cmd.Process.Pid {
 		t.Errorf("signalled groups %v, want only %d, before the reap", sent, cmd.Process.Pid)
+	}
+}
+
+// A run's tick share is the share of the time it summed over the ticks whose sample had the paging
+// gate closed: a tick whose gate was open, whose sample could not be read, or that took no sample
+// adds nothing, and a run with no such tick has no share.
+// Mutation: count every tick, and the share is 0.85.
+func TestTickShareCountsClosedGateOnly(t *testing.T) {
+	sample := []watch.Point{{AtNS: 1}}
+	closed, open := watch.Detector{Window: sample}, watch.Detector{Window: sample, Gate: true}
+	var r run
+	r.countClosed(memsample.TreeTimes{UserNS: 3e9, SysNS: 1e9}, closed, nil)
+	r.countClosed(memsample.TreeTimes{SysNS: 9e9, PageWaitNS: 9e9}, open, nil)
+	r.countClosed(memsample.TreeTimes{SysNS: 9e9}, closed, errors.New("sample not read"))
+	r.countClosed(memsample.TreeTimes{SysNS: 9e9}, watch.Detector{}, nil)
+	if got := r.tickShare(); got == nil || *got != 0.25 {
+		t.Errorf("tick share %v; want 0.25", got)
+	}
+	var none run
+	none.countClosed(memsample.TreeTimes{UserNS: 1e9}, open, nil)
+	none.countClosed(memsample.TreeTimes{}, closed, nil)
+	if got := none.tickShare(); got != nil {
+		t.Errorf("tick share %v with no closed tick that had time; want none", *got)
 	}
 }

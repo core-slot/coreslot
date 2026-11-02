@@ -16,6 +16,7 @@ import (
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 )
 
 // Timing of a waiting run (PROTOCOL.md section 22).
@@ -29,7 +30,7 @@ const maxStops = 3
 
 // readLog reads the run log once for a run: the need it gives label, the p90 peak of its last
 // counted runs (ok false when unknown), the label's normal share of system time (learned false
-// when none of those runs measured it) and its typical run time (0 when unknown).
+// when none of those runs has a tick share) and its typical run time (0 when unknown).
 func readLog(loc location, label string) (needMiB int64, ok bool, share float64, learned bool, typicalS int64) {
 	if loc.err != nil {
 		return
@@ -60,6 +61,7 @@ type run struct {
 	pipeNoted bool                                 // the waiting line said once whether stdin is a pipe
 	share     float64                              // the label's normal share, from the run log read at the start
 	learned   bool                                 // the run log gave the label a normal share
+	closed    watch.Job                            // the attempt's time over the ticks whose paging gate was closed
 	stops     int                                  // memory stops so far
 	stopped   bool                                 // the last command was killed by a stop round
 	peakKiB   int64                                // the last command's sampled peak

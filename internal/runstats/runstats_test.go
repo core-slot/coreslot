@@ -119,17 +119,31 @@ func TestStoppedRunsNotCounted(t *testing.T) {
 	}
 }
 
-// The normal share is the median of sys_s/(user_s+sys_s); a run with no time adds nothing.
-func TestNormalShareIsMedian(t *testing.T) {
+// The normal share is the median of the window's tick shares; a run without one adds nothing, and
+// a run's user_s and sys_s are not a tick share.
+// Mutation: read user_s and sys_s as well, and the median is 0.4.
+func TestNormalShareIsMedianOfTickShares(t *testing.T) {
 	var window []store.RunRecord
-	for i, sys := range []float64{1, 3, 2} {
+	for i, share := range []float64{0.1, 0.5, 0.3} {
 		r := run("x", int64(i))
-		r.UserS, r.SysS = f(4-sys), f(sys)
+		r.TickShare = f(share)
 		window = append(window, r)
 	}
-	window = append(window, run("x", 9))
-	if got, ok := NormalShare(window); !ok || got != 0.5 {
-		t.Errorf("NormalShare = %v, %v; want 0.5, true", got, ok)
+	timed := run("x", 8)
+	timed.UserS, timed.SysS = f(1), f(9)
+	window = append(window, timed, run("x", 9))
+	if got, ok := NormalShare(window); !ok || got != 0.3 {
+		t.Errorf("NormalShare = %v, %v; want 0.3, true", got, ok)
+	}
+}
+
+// A window whose runs have only user_s and sys_s is learning.
+// Mutation: derive the share from sys_s/(user_s+sys_s) when there is no tick share.
+func TestTimeWithoutTickSharesIsNotLearned(t *testing.T) {
+	r := run("x", 1)
+	r.UserS, r.SysS = f(1), f(1)
+	if got, ok := NormalShare([]store.RunRecord{r}); ok {
+		t.Errorf("NormalShare = %v, true; want it unknown", got)
 	}
 }
 

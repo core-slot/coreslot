@@ -35,9 +35,9 @@ func floor(swapUsedMiB int64) map[string]int64 {
 // label with no history is never listed by a stop round.
 func (e Env) Learn(labels ...string) {
 	e.t.Helper()
-	user, sys := 0.9, 0.1
+	share := 0.1
 	for _, l := range labels {
-		if err := e.Engine().Store().AppendRun(store.RunRecord{TimeNS: store.NowNS(), Label: l, UserS: &user, SysS: &sys}); err != nil {
+		if err := e.Engine().Store().AppendRun(store.RunRecord{TimeNS: store.NowNS(), Label: l, TickShare: &share}); err != nil {
 			e.t.Fatal(err)
 		}
 	}
@@ -202,4 +202,33 @@ func TestObserveKillsNothing(t *testing.T) {
 	e.ReleaseChild("B")
 	a.ExitCode(0)
 	b.ExitCode(0)
+}
+
+// A label's normal share is the median of its earlier runs' tick shares: a run starting on them
+// carries it in its hold, and one whose label has runs with only user_s and sys_s is learning.
+// Mutation: learn from user_s and sys_s, and the second label is learned.
+func TestNormalShareComesFromTickShares(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	log := e.Engine().Store()
+	user, sys := 0.5, 0.5
+	for i, share := range []float64{0.1, 0.5, 0.2} {
+		if err := log.AppendRun(store.RunRecord{TimeNS: store.NowNS() + int64(i), Label: "ticked", TickShare: &share}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := log.AppendRun(store.RunRecord{TimeNS: store.NowNS(), Label: "timed", UserS: &user, SysS: &sys}); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"ticked", "timed"} {
+		e.Run(label, "--mem", "100M")
+		e.WaitStarted(label)
+	}
+	ticked, timed := e.HoldBody(e.WaitTicked("ticked")), e.HoldBody(e.WaitTicked("timed"))
+	if !ticked.Learned || ticked.NormalShare != 0.2 || timed.Learned {
+		t.Errorf("holds: ticked learned %v at %v, timed learned %v; want 0.2 learned, and timed learning",
+			ticked.Learned, ticked.NormalShare, timed.Learned)
+	}
+	e.ReleaseChild("ticked")
+	e.ReleaseChild("timed")
 }
