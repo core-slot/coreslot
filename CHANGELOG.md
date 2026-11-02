@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.4.1 (2026-11-02)
+
 ### Changed
 
 - README: the section on automatic labels now says that commands behind one launcher (`python -m`,
