@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // The watchdog's traces step the machine readings of every run through the readings hook: the
@@ -30,14 +32,20 @@ func floor(swapUsedMiB int64) map[string]int64 {
 }
 
 // WaitTicked waits until the run labelled label has written its tree into its hold, and returns
-// the hold's name.
+// the hold's name. A body read torn by the run's rewrite in place (PROTOCOL.md section 7.4) is read
+// again.
 func (e Env) WaitTicked(label string) string {
 	e.t.Helper()
 	var name string
 	e.Eventually(startWait, label+" writes its tree into its hold", func() bool {
 		h, ok := e.Hold(label)
 		name = h.Name
-		return ok && e.HoldBody(h.Name).SampledNS > 0
+		data, err := os.ReadFile(filepath.Join(e.Dir, store.HoldsDir, h.Name))
+		if !ok || err != nil {
+			return false
+		}
+		body, err := wire.DecodeHold(data)
+		return err == nil && body.SampledNS > 0
 	})
 	return name
 }
