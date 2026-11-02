@@ -11,6 +11,7 @@ import unittest
 
 import analyse
 import criteria2
+import criteria3
 import run
 import sem
 
@@ -125,6 +126,44 @@ class CriteriaTest(unittest.TestCase):
         self.assertIn("within in 4 of 4 pairs; one-sided sign test p = 0.1875; the test fails", text)
         self.assertIn("tune-S1 S: mean time to verdict 15.0000 s", text)
         self.assertEqual(criteria2.p_at_least(5, 5), 1 / 32)
+
+
+class Criteria3Test(unittest.TestCase):
+    def test_four_claims(self):
+        out = tempfile.mkdtemp()
+        sets = []
+        for i in range(1, 10):  # pair-9 is a tie in both measures; pair-10 never ran
+            k = (10, 10) if i == 9 else (5, 5)
+            sets += [a_set(f"pair-{i}", "F", "t", [2, 2], OK, verdicts=(10, 10)),
+                     a_set(f"pair-{i}", "K", "t", [2, 2] if i == 9 else [1, 1], OK, verdicts=k)]
+        for i in range(1, 25):  # 21 of 24 within
+            sets += [a_set(f"sem-pair-{i}", "S", "t", [1], OK, verdicts=(10, 10)),
+                     a_set(f"sem-pair-{i}", "K", "t", [1], OK, verdicts=(11, 11) if i <= 3 else (10.5, 10.5))]
+        for i in range(1, 17):  # light-pair-17..20 never ran; 15 of the 16 within
+            sets += [a_set(f"light-pair-{i}", "F", "t", [1], OK, verdicts=(10, 10)),
+                     a_set(f"light-pair-{i}", "K", "t", [1], OK, verdicts=(12, 12) if i == 1 else (10, 10))]
+        with open(os.path.join(out, "sets.jsonl"), "w") as f:
+            f.writelines(json.dumps(r) + "\n" for r in sets)
+        good = [{"hog": 1, "stops": 0, "exit": 0}, {"hog": 2, "stops": 1, "exit": 0}, {"hog": 3, "stops": 1, "exit": 0}]
+        oldest = [{"hog": 1, "stops": 1, "exit": 0}, {"hog": 2, "stops": 0, "exit": 0}]
+        for n, hogs, guard in ((1, good, None), (2, oldest, None), (4, good, "swap"), (5, good, None)):
+            os.makedirs(os.path.join(out, "demos", str(n), "demo"))
+            with open(os.path.join(out, "demos", str(n), "demo", "demo.json"), "w") as f:
+                json.dump({"hogs": hogs, "stopped_by": guard}, f)
+        text = criteria3.report(out)
+        self.assertIn("K fewer warn seconds than F: 8 of 10 (needs 9); p = 0.0547", text)
+        self.assertIn("K lower mean time to verdict than F: 8 of 10 (needs 9); p = 0.0547", text)
+        self.assertIn("claim 1: FAIL at alpha 0.05; does not hold under Bonferroni alpha 0.0167; missing pairs: pair-10", text)
+        self.assertIn("sem-pair-1: order  K 11.0000 s, S 10.0000 s, K/S 1.1000 OUTSIDE", text)
+        self.assertIn("sem-pair-4: order  K 10.5000 s, S 10.0000 s, K/S 1.0500 within", text)
+        self.assertIn("claim 2: PASS at alpha 0.05; holds under Bonferroni alpha 0.0167; missing pairs: none", text)
+        self.assertIn("K <= 1.05 x F: 15 of 20 (needs 15); p = 0.0207", text)
+        self.assertIn("claim 3: PASS at alpha 0.05; does not hold under Bonferroni alpha 0.0167;"
+                      " missing pairs: light-pair-17, light-pair-18, light-pair-19, light-pair-20", text)
+        self.assertIn("demo 2: a hog stopped yes, the oldest never stopped NO", text)
+        self.assertIn("demo 3: missing", text)
+        self.assertIn("guard did not fire NO", text)
+        self.assertIn("meet all four: 2 of 5", text)
 
 
 class SemTest(unittest.TestCase):
