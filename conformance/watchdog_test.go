@@ -146,12 +146,25 @@ func TestSharedGroupNeverVictim(t *testing.T) {
 	neverVictim(t, e, "--same-group")
 }
 
-// A label with no completed run is never a victim, even at the floor. Mutation: listing it
-// anyway lists B.
-func TestColdLabelNeverVictim(t *testing.T) {
+// A label with no completed run is a victim of the floor round, and its run asks for memory freed
+// outside coreslot. Mutation: a floor round that lists learned jobs only leaves B's command alive.
+func TestColdLabelStoppedAtTheFloor(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(watchConfig(""))
-	neverVictim(t, e)
+	a := e.Run("A", "--mem", "100M")
+	e.WaitStarted("A")
+	e.WaitTicked("A")
+	b := e.Run("B", "--mem", "100M")
+	stopAgain(t, e, b, 1024)
+	e.SetReadings(calm(2048))
+	e.WaitStarted("B")
+	e.ReleaseChild("A")
+	e.ReleaseChild("B")
+	a.ExitCode(0)
+	b.ExitCode(0)
+	if out := b.Stderr(); !strings.Contains(out, "free memory outside coreslot (close something)") {
+		t.Errorf("stderr:\n%s\nwant the stop to ask for memory freed outside coreslot", out)
+	}
 }
 
 // A label the needs file marks no_restart is never a victim. Mutation: ignoring the mark lists B.
