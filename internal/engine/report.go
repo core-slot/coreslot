@@ -77,7 +77,7 @@ type Report struct {
 	StateDirExists   bool   // false on a machine where nothing has run yet: everything else is empty
 	Format           int    // 0 when FORMAT is absent, unreadable or malformed, and when it names format 0
 	FormatPresent    bool   // FORMAT was read, well-formed or malformed; false when it is absent or unreadable
-	FormatUnderstood bool   // this client implements Format (an absent FORMAT counts as 1)
+	FormatUnderstood bool   // this client implements Format; an absent FORMAT counts as understood
 	FormatError      string // set when FORMAT is malformed or unreadable
 	FormatErr        error  // the error FormatError is the text of
 	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)

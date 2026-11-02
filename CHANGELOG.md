@@ -8,15 +8,15 @@ All notable changes to this project are recorded here. The format follows
 
 ## v0.4.0 (unreleased)
 
-coreslot is now a memory guard for the heavy commands of coding agents, and memory is its only
-resource. The on-disk protocol moves to format 2.
+coreslot is a memory guard for the heavy commands of coding agents; memory is its only resource.
+Its on-disk protocol is format 2.
 
 ### Upgrading
 
-A state directory written by an earlier release is format 1, which this release does not use: runs
-start unbudgeted with a notice (`--strict` refuses) until `coreslot doctor --reset` recreates it as
-format 2. Upgrade every client of a machine together. The watchdog's thresholds and the memory
-reserve are interim defaults until calibration.
+A state directory of another format is not used: runs start unbudgeted with a notice (`--strict`
+refuses) until `coreslot doctor --reset` recreates it as format 2. Every client of a machine runs
+the same release. The watchdog's thresholds and the memory reserve are interim defaults until
+calibration.
 
 ### Added
 
@@ -51,17 +51,7 @@ reserve are interim defaults until calibration.
 
 - The state directory is format 2. A hold is the reservation: it carries the command's need, its
   latest footprint and its time deltas in its body, and admission computes the room from the hold
-  bodies. The queue orders by arrival alone. [`PROTOCOL.md`](PROTOCOL.md) is rewritten for it.
-- The run log records memory peaks, `user_s`, `sys_s` and `stops`, and `coreslot stats` shows the window the
-  need is learned from.
+  bodies. The queue is ordered by arrival. [`PROTOCOL.md`](PROTOCOL.md) defines it.
+- The run log records memory peaks, `user_s`, `sys_s` and `stops`, and `coreslot stats` shows the
+  window the need is learned from.
 - Linux and Intel Macs are experimental.
-
-### Removed
-
-- CPU accounting of any kind: `--need`, `cpu` in the configuration and in `needs.toml`, the `{n}`
-  placeholders and `--subst`, `--light`, `--preemptible` and every priority clamp.
-- `--priority` and the `[priorities]` table.
-- `coreslot suggest`: needs are learned by `run` itself.
-- The Go library and the adoption of an existing process.
-- The Python client and the interop conformance suite.
-- The token pool, token-only mode and the static `mem` size with its `[memory] live` switch.

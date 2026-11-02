@@ -1,7 +1,7 @@
 # Compatibility policy
 
-What a coreslot release promises to keep working, and for how long.
-[`CHANGELOG.md`](../CHANGELOG.md) records every change against this policy: anything removed or
+What a coreslot release promises to keep working, and for how long. The policy applies from
+`v0.4.0` on. [`CHANGELOG.md`](../CHANGELOG.md) records every change against this policy: anything removed or
 changed incompatibly appears there under **Removed** or **Changed** first, and under
 **Deprecated** before that where this policy asks.
 

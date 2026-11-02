@@ -7,8 +7,7 @@
 //
 // The gate is its default: 100 waiters, five 120 s runs, median at most 10 % of one core, on the
 // macOS reference host; it exits 1 when the median exceeds it. Any other -n,
-// -runs or -duration is a measurement with no verdict (exit 0), for example the published
-// 1000-waiter figure.
+// -runs or -duration is a measurement with no verdict (exit 0), for example with 1000 waiters.
 //
 // CPU accounting: each waiter's CPU comes from the kernel's rusage of that child (wait4(2):
 // ru_utime + ru_stime), minus, for a waiter that already existed when the measured window

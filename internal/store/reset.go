@@ -20,12 +20,12 @@ type LiveState struct {
 // Empty reports that nothing is alive: the state may be reset.
 func (l LiveState) Empty() bool { return len(l.Holds) == 0 && len(l.Tickets) == 0 }
 
-// earlierRes is format 1's res/ directory, which a reset removes with what it holds.
-const earlierRes = "res"
+// otherRes is the res/ directory a directory of another format may hold; a reset removes it.
+const otherRes = "res"
 
 // Reset recreates the state directory (`coreslot doctor --reset`) inside the section the caller
 // entered, whatever format its FORMAT names, malformed or absent included: it removes every entry
-// of queue/, holds/ and cancel/ and of log/, degraded, gen and format 1's res/ with its files,
+// of queue/, holds/ and cancel/ and of log/, degraded, gen and another format's res/ with its files,
 // then writes FORMAT of the format written. It keeps admit.lock and config.toml (the
 // format-stable file whose inode live clients may hold open, and the configuration) and the four
 // directories themselves. It does not read the configuration.
@@ -106,8 +106,8 @@ func (sec *Section) Reset() (live LiveState, removed int, err error) {
 	for _, name := range []string{DegradedFile, GenFile, WatchFile} {
 		remove(s.path(name))
 	}
-	if _, err := os.Lstat(s.path(earlierRes)); err == nil {
-		if err := os.RemoveAll(s.path(earlierRes)); err != nil {
+	if _, err := os.Lstat(s.path(otherRes)); err == nil {
+		if err := os.RemoveAll(s.path(otherRes)); err != nil {
 			failed = append(failed, err)
 		} else {
 			removed++

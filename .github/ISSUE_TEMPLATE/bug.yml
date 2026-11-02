@@ -5,8 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. Do not paste secrets: `coreslot` never logs argv or the environment,
-        but the output of your own command may contain them.
+        Thanks for the report. Do not paste secrets: `coreslot` never logs the environment, but its
+        automatic label copies up to two leading words of the command (unless you pass `--label`),
+        and the output of your own command may contain them too.
   - type: input
     id: version
     attributes:

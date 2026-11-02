@@ -27,7 +27,7 @@ func locate() location {
 var readMachine = config.ReadMachine
 
 // openEngine opens the state directory at loc. A run creates what is missing of it; readOnly
-// creates nothing, not the directory, res/ or admit.lock (status, cancel and doctor leave a
+// creates nothing, not the directory or admit.lock (status, cancel and doctor leave a
 // machine where nothing has run as they found it), and the engine's Snapshot then reports a
 // missing directory as empty.
 func openEngine(loc location, readOnly bool) (*engine.Engine, error) {

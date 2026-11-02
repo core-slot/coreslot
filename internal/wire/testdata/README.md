@@ -61,7 +61,7 @@ Verdict reminders, all from `PROTOCOL.md`:
 - Ticket: `need_mib` is an integer in 1..1073741824 and `created_ns` is at least 0
   (`bad-need-mib-*`, `ok-need-mib-maximum`, `bad-created-ns-negative`).
 - Hold: `need_mib` and `footprint_mib` are integers in 0..1073741824, every other integer is at
-  least 0, and every key, `tree` included, is required (`bad-missing-*`, `ok-unbudgeted-run`,
+  least 0, and every key is required (`bad-missing-*`, `ok-unbudgeted-run`,
   `ok-need-and-footprint-maximum`).
 - Cancel: `requested_ns` and `requester_pid` are at least 0 (`bad-requested-ns-negative`,
   `bad-requester-pid-negative`, `ok-zeros`).

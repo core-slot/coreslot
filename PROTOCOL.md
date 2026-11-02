@@ -207,9 +207,9 @@ config.toml      configuration (section 5.3); optional, present only under the o
 needs.toml       needs file (section 5.4); optional, present only under the override; never checked
 ```
 
-`log/` may also contain `runs.1.jsonl`, `watch.jsonl` and `watch.1.jsonl` (section 23.6). Each of `queue/`,
-`holds/`, `cancel/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>` (section
-11). A client creates a directory of the layout when it first needs it, with mode `0700`;
+`log/` may also contain `runs.1.jsonl`, `watch.jsonl` and `watch.1.jsonl` (section 23.6). Each of
+`queue/`, `holds/`, `cancel/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
+(section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
 of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
 the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/` and `log/` are created only
@@ -225,7 +225,8 @@ The directory is not a cache: liveness is decided by locks. Deleting or resettin
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
 process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/` and
-`log/`, `gen`, `watch.json`, `degraded` and a `res/` directory of an earlier format, and writes
+`log/`, `gen`, `watch.json`, `degraded` and the `res/` directory a directory of another format may
+hold, and writes
 `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the format-stable
 file (section 15.1), whose inode live clients may hold open, and the configuration. The run
 history that needs are learned from goes with the entries of `log/`. A reset never deletes, renames
@@ -949,8 +950,8 @@ only. An ordinary or `--independent` request, a fail-open run removes every inhe
 `CORESLOT_GRANTED_*`, `CORESLOT_HOLD` and `CORESLOT_UNBUDGETED` from the command's environment
 before setting their own, and closes (does not pass on) exactly the inherited descriptor 3 when
 `CORESLOT_HOLD` is set, so that a grandchild does not keep a hold that is not its parent's alive.
-A descriptor 3 that is not a regular file cannot be a hold's (its number was reused after a launcher closed the original), and a client
-SHOULD leave it open. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
+A descriptor 3 that is not a regular file cannot be a hold's (its number was reused after a
+launcher closed the original), and a client SHOULD leave it open. Every other inherited descriptor (a jobserver pipe, `LISTEN_FDS` sockets, the
 user's redirections) is passed through untouched, and `CORESLOT_STATE_DIR` is not hold context and
 is passed on.
 
@@ -985,9 +986,9 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 hold of its own, so it neither ticks nor is listed by a stop round; the memory it uses is part of
 its parent's footprint.
 
-A run whose `CORESLOT_HOLD` names such a hold, a pass-through or an `--independent` run, keeps its command in the
-process group it inherited, as `--same-group` does, so that a stop round's kill of its parent's
-command reaches it; such a run is never a victim itself (section 23.5).
+A run whose `CORESLOT_HOLD` names such a hold, a pass-through or an `--independent` run, keeps its
+command in the process group it inherited, as `--same-group` does, so that a stop round's kill of
+its parent's command reaches it; such a run is never a victim itself (section 23.5).
 
 Nested runs are **not** budgeted against each other: two siblings started together under a 3 GiB
 reservation both run with 3 GiB. A parent that wants concurrent children partitions its reservation
@@ -1429,7 +1430,8 @@ machine's **excess** `E`, in percentage points, is
 E = 100 × Σ wᵢ · max(0, Sᵢ − S0ᵢ) / Σ wᵢ      wᵢ = d_userᵢ + d_sysᵢ + d_page_waitᵢ
 ```
 
-over the holds with `wᵢ > 0`, and 0 when there are none. The **paging gate** is open when the
+over the holds that worked for at least a tenth of the period, `wᵢ ≥ 0.1 × (the period)`, and 0
+when there are none: an idle job's few milliseconds, mostly system time, say nothing about memory. The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
 other system time.
@@ -1468,9 +1470,9 @@ one at a time.
 1. The ticker that advanced the detector writes the stop list into `detector.stop`, and the round's
    time into `detector.last_round_ns`. The list holds the **victims** from the newest arrival to the
    oldest: running holds whose `victim` is true, never the oldest running hold by arrival (of equal
-   arrivals the greatest hold name counts as the oldest). It takes victims
-   until their footprints sum to at least the deficit `max(−room, 0)` MiB of the sample it just
-   took, and at least one. With only the oldest hold or holds that are not victims left, the list is
+   arrivals the smallest hold name counts as the oldest, and the greatest as the newest). It takes
+   victims until their footprints sum to at least the deficit `max(−room, 0)` MiB of the sample
+   it just took, and at least one. With only the oldest hold or holds that are not victims left, the list is
    empty.
 2. A run kills only its own command, only when its own hold's name is in the list. It sends
    `SIGKILL` to the command's process group, and only while it has not reaped the command, so the
