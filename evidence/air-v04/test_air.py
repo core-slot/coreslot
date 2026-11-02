@@ -10,6 +10,7 @@ import time
 import unittest
 
 import analyse
+import criteria2
 import run
 import sem
 
@@ -102,6 +103,28 @@ class AnalyseTest(unittest.TestCase):
         self.assertIn("K/F makespan per pair: [1.1]; max 1.1", text)
         self.assertIn("makespan: K higher in 1 of 1 untied pairs; one-sided sign test p = 0.5000", text)
         self.assertLess(text.index("PAIRS (2 complete)"), text.index("TUNING"))
+
+
+class CriteriaTest(unittest.TestCase):
+    def test_both_tests_literally(self):
+        out = tempfile.mkdtemp()
+        sets = [a_set("tune-S1", "S", "t", [1], OK, verdicts=(10, 20))]
+        for i, k in enumerate((10, 10.5, 10.6, 9, 10), 1):  # K/S 1.0, 1.05 (within), 1.06 (outside)
+            sets += [a_set(f"sem-pair-{i}", "S", "t", [1], OK, verdicts=(10, 10)),
+                     a_set(f"sem-pair-{i}", "K", "t", [1], OK, verdicts=(k, k))]
+        for i in range(1, 5):  # light-pair-5 never ran
+            sets += [a_set(f"light-pair-{i}", "F", "t", [1], OK, verdicts=(20, 40)),
+                     a_set(f"light-pair-{i}", "K", "t", [1], OK, verdicts=(30, 30))]
+        with open(os.path.join(out, "sets.jsonl"), "w") as f:
+            f.writelines(json.dumps(r) + "\n" for r in sets)
+        text = criteria2.report(out)
+        self.assertIn("sem-pair-2: K 10.5000 s, S 10.0000 s, K/S 1.0500 within", text)
+        self.assertIn("sem-pair-3: K 10.6000 s, S 10.0000 s, K/S 1.0600 OUTSIDE", text)
+        self.assertIn("within in 4 of 5 pairs; one-sided sign test p = 0.1875; the test fails", text)
+        self.assertIn("light-pair-4: K 30.0000 s, F 30.0000 s, K/F 1.0000 within", text)
+        self.assertIn("within in 4 of 4 pairs; one-sided sign test p = 0.1875; the test fails", text)
+        self.assertIn("tune-S1 S: mean time to verdict 15.0000 s", text)
+        self.assertEqual(criteria2.p_at_least(5, 5), 1 / 32)
 
 
 class SemTest(unittest.TestCase):
