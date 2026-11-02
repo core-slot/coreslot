@@ -1,0 +1,1 @@
+coreslot: waiting for mem 2.4 GiB: position 1 (0s); needs 2.4 GiB, 1.8 GiB free; holders: air:sqlalchemy-orm pid 49239 mem 2.1 GiB (1s); if your tool has a time limit, run this in the background or raise the limit
