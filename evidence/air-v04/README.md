@@ -164,14 +164,24 @@ python3 evidence/air-v04/analyse.py evidence/air-v04/record-2      # TUNING name
 run2 --mix light set F --tag light-pilot     # about 1 min
 run2 --mix light set K --tag light-pilot     # about 1 min
 # write the criteria into evidence/air-v04/criterion-2.md and commit them
-run2 pairs --vs S --slots N --prefix sem-    # N of S*: sem-pair-1..5, S first in odd pairs, about 15 min
-run2 --mix light pairs --prefix light-       # light-pair-1..5, F first in odd pairs, about 10 min
+# the counted pairs: agents arrive 1 s apart in the pre-registered order of each pair
+run2 --stagger-s 1.0 pairs --vs S --slots 1 --prefix sem- \
+  --orders "A1,A2,A3,A4;A2,A3,A4,A1;A3,A4,A1,A2;A4,A1,A2,A3;A4,A3,A2,A1"   # sem-pair-1..5, S first in odd pairs, about 15 min
+run2 --mix light --stagger-s 1.0 pairs --prefix light- \
+  --orders "A3,A4;A4,A3;A3,A4;A4,A3;A3,A4"                             # light-pair-1..5, F first in odd pairs, about 10 min
 python3 evidence/air-v04/analyse.py evidence/air-v04/record-2
 ```
 
-An S set runs each command unwrapped behind `sem.py LOCKDIR N -- CMD`, a plain N-slot semaphore
-(N lock files under the set's `slots/`, taken with `flock` and held until the command exits); a
-light set runs A3 and A4 only. A tag says what it is for, and `run.py` refuses a tag that does
+Without `--order` (one set) or `--orders` (one order per pair, the same for both sets of a pair)
+every agent arrives at the set's start; with them agent i of the order arrives `i x --stagger-s`
+after it. A set records its order, each agent's `arrive_s`, and each agent's time to verdict
+counted from its own arrival; the makespan is counted from the set's start.
+
+An S set runs each command unwrapped behind `sem.py --fifo LOCKDIR N -- CMD`, a plain N-slot
+semaphore (N lock files under the set's `slots/`, taken with `flock` and held until the command
+exits) that grants the slots in arrival order, and records `sem_fifo: true`. The exploratory
+`tune` sets of `record-2` ran before that, without `--fifo`: all agents arrived at once and any
+waiter could win the race for a free slot. A light set runs A3 and A4 only. A tag says what it is for, and `run.py` refuses a tag that does
 not fit its arm or mix.
 
 `run.py` refuses to start while a process it started for an earlier set is alive (it lists them
