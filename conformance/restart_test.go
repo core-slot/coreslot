@@ -108,7 +108,8 @@ func TestStoppedAttemptLogged(t *testing.T) {
 }
 
 // After the third stop the run gives up with the refusal code, the marker line first, and
-// restarts nothing more. Mutation: giving up after the fourth stop leaves B waiting.
+// restarts nothing more; after a floor stop its last line asks for memory freed outside coreslot.
+// Mutations: giving up after the fourth stop leaves B waiting; a give-up without the ask lacks it.
 func TestGiveUpAfterThreeStops(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -135,7 +136,7 @@ func TestGiveUpAfterThreeStops(t *testing.T) {
 			}
 			block := out[marker:]
 			for _, want := range []string{"coreslot: stop 1: swap room under the floor, at ", "coreslot: stop 3: ",
-				"coreslot: run `", "` alone, or narrow it\n"} {
+				"coreslot: run `", "` alone, or narrow it; the whole machine ran out of memory (swap nearly full); free memory outside coreslot (close something)\n"} {
 				if !strings.Contains(block, want) {
 					t.Errorf("the give-up block\n%s\nlacks %q", block, want)
 				}
@@ -145,15 +146,15 @@ func TestGiveUpAfterThreeStops(t *testing.T) {
 }
 
 // A stopped --no-wait run does not wait for calm: it refuses at its first restart and says that
-// its command was stopped for memory and not restarted because of --no-wait. Mutation: restarting
-// regardless leaves B waiting.
+// its command was stopped for memory and not restarted because of --no-wait, and after a floor stop
+// asks for memory freed outside coreslot. Mutation: restarting regardless leaves B waiting.
 func TestNoWaitRefusesAtRestart(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(watchConfig(""))
 	b := stopB(t, e, "--no-wait")
 	b.ExitCode(75)
 	if out := b.Stderr(); !strings.Contains(out, "was stopped for memory (swap room under the floor, at ") ||
-		!strings.Contains(out, ") and not restarted because of --no-wait\n") {
+		!strings.Contains(out, ") and not restarted because of --no-wait; the whole machine ran out of memory (swap nearly full); free memory outside coreslot (close something)\n") {
 		t.Errorf("stderr:\n%s\nwant the stop and the refusal's reason", out)
 	}
 	if _, restarted := e.Started("B"); restarted {
@@ -170,7 +171,7 @@ func TestRestartTimeoutRefuses(t *testing.T) {
 	b := stopB(t, e, "--timeout", "5s", "--on-timeout", "run")
 	b.ExitCode(75)
 	if out := b.Stderr(); !strings.Contains(out, "was stopped for memory (swap room under the floor, at ") ||
-		!strings.Contains(out, ") and not restarted within 5s (--timeout)\n") {
+		!strings.Contains(out, ") and not restarted: the run's --timeout of 5s ran out; the whole machine ran out of memory (swap nearly full); free memory outside coreslot (close something)\n") {
 		t.Errorf("stderr:\n%s\nwant the stop and the timeout's refusal", out)
 	}
 	if _, restarted := e.Started("B"); restarted {
