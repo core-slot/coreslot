@@ -104,7 +104,8 @@ func TestHoldIsTheReservation(t *testing.T) {
 }
 
 // A need above the machine is representable, in the ticket and in the hold, with no cap: on a
-// 32 GiB machine a 40 GiB need runs alone, as asked.
+// 32 GiB machine a 40 GiB need runs alone, as asked, and is said to exceed the 31 GiB above the
+// default 1 GiB reserve. Mutation: returning the machine's memory as the bound says 32 GiB.
 func TestNoPerGrantCap(t *testing.T) {
 	dir := newStateDir(t, "")
 	st, err := store.Open(dir)
@@ -116,8 +117,8 @@ func TestNoPerGrantCap(t *testing.T) {
 			return config.Machine{MemMiB: 32768, HeadroomMiB: 20000, HeadroomOK: true}, nil
 		},
 		newFakeClock().clock())
-	if total, over := e.Oversized(40960); total != 32768 || !over {
-		t.Errorf("Oversized(40960) = %d, %v; want 32768, true", total, over)
+	if bound, over := e.Oversized(40960); bound != 31744 || !over {
+		t.Errorf("Oversized(40960) = %d, %v; want 31744, true", bound, over)
 	}
 	tk := enqueue(t, e, spec.Request{NeedMiB: 40960})
 	body, err := e.readBody(store.QueueDir, tk.Name())

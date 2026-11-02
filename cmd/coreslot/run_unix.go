@@ -122,8 +122,9 @@ func (r *run) ordinary() int {
 		return r.failOpen(nil, err)
 	}
 	req := r.o.request()
-	if total, over := e.Oversized(req.NeedMiB); over {
-		r.notice("needs %s of %s; runs only alone", spec.FormatMiB(req.NeedMiB), spec.FormatMiB(total))
+	if bound, over := e.Oversized(req.NeedMiB); over {
+		r.notice("needs %s, more than the %s the machine has above its reserve; runs only alone",
+			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

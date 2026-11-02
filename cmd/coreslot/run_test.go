@@ -977,9 +977,10 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 	}
 }
 
-// A need above what the machine has less the reserve is said once, each size in its unit, and runs
-// alone when nothing else holds. Mutations: saying it for every wait line turns the count red;
-// printing every size in GiB says "0.1 GiB" for 128 MiB.
+// A need above what the machine has less the reserve is said once, each size in its unit, with that
+// bound (0 under a reserve above the machine), and runs alone when nothing else holds. Mutations:
+// saying it for every wait line turns the count red; printing every size in GiB says "0.1 GiB" for
+// 128 MiB; printing the machine's memory says GiB for the bound under the 1000 GiB reserve.
 func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
 	big := stateDir(t, "[memory]\nreserve = \"1000G\"\n") // more than the machine has
 	budgetRoom.Store(big, int64(512))
@@ -988,7 +989,8 @@ func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
-		re := regexp.MustCompile(`coreslot: needs (1000 GiB|128 MiB) of \d+(\.\d)? GiB; runs only alone\n`)
+		re := regexp.MustCompile(`coreslot: needs (1000 GiB, more than the \d+(\.\d)? GiB|128 MiB, more than the 0 MiB) ` +
+			`the machine has above its reserve; runs only alone\n`)
 		if got := re.FindAllString(r.stderr, -1); len(got) != 1 {
 			t.Errorf("--mem %s: stderr %q, want the notice once", mem, r.stderr)
 		}

@@ -138,11 +138,11 @@ func (e *Engine) reading() (config.Config, config.Machine, error) {
 	return c, m, nil
 }
 
-// Oversized reports, with the machine's memory, a need of needMiB that no moment can satisfy:
-// more than the machine has less the reserve. Such a need starts only when no hold is live.
-func (e *Engine) Oversized(needMiB int64) (totalMiB int64, ok bool) {
+// Oversized reports a need of needMiB that no moment can satisfy, with the bound it exceeds: the
+// machine's memory less the reserve, at least 0. Such a need starts only when no hold is live.
+func (e *Engine) Oversized(needMiB int64) (boundMiB int64, ok bool) {
 	c, m, err := e.reading()
-	return m.MemMiB, err == nil && needMiB > m.MemMiB-c.ReserveMiB
+	return max(m.MemMiB-c.ReserveMiB, 0), err == nil && needMiB > m.MemMiB-c.ReserveMiB
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,

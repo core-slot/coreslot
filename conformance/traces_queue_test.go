@@ -816,7 +816,7 @@ func TestOversizeRunsAlone(t *testing.T) {
 	e.ReleaseChild("O")
 	o.ExitCode(0)
 	// The notice comes once, first; the wait that follows opens with its line and the reason.
-	if !regexp.MustCompile(`^coreslot: needs 2 GiB of \d+(\.\d)? GiB; runs only alone\n` +
+	if !regexp.MustCompile(`^coreslot: needs 2 GiB, more than the \d+(\.\d)? [MG]iB the machine has above its reserve; runs only alone\n` +
 		`coreslot: waiting for mem 2 GiB: position 1 \([^)]*\); needs 2 GiB, \d+ MiB free; holders: X pid \d+ mem 128 MiB \([^)]*\); if your tool has a time limit, [^\n]*\n$`).
 		MatchString(o.Stderr()) {
 		t.Errorf("stderr %q, want the oversize notice once, then the first waiting line", o.Stderr())
