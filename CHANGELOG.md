@@ -19,6 +19,15 @@ All notable changes to this project are recorded here. The format follows
   only a reset of another format or of an unreadable `FORMAT` removes it, and says that every
   label learns again.
 
+### Fixed
+
+- The watchdog's red bucket is also emptied by a reboot that only the paging counters show (the
+  first reading after it at a later uptime) and by the first reading after one that could not be
+  read, which can hide a sleep.
+- A need larger than any moment can hold says the bound it exceeds, the machine's memory less the
+  reserve, not the machine's memory.
+- The stop line shows a share below 1 % to one digit (`0.3%`), not as `0%`.
+
 ## v0.4.0 (2026-11-02)
 
 coreslot is a memory guard for the heavy commands of coding agents; memory is its only resource.
