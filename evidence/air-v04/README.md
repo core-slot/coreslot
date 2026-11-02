@@ -85,6 +85,56 @@ did not fire. The stop line's "normal 0%" is the label's learned share of 0.3 %,
 - The thermal state was "fair" (1) at the start of nine of the ten counted sets and "nominal" (0) at
   one; it is recorded per set.
 
+## Second result (2026-11-02): the best semaphore, and a machine with room
+
+Two questions followed: does coreslot beat the best fixed-size semaphore a developer could put in
+front of the same commands, and does it cost anything when the machine has room for everything?
+[criterion-2.md](criterion-2.md) fixed how the best semaphore is chosen before any of these sets
+ran (commit `e9ba353`), and the two criteria after the exploratory sets and before the first counted
+pair (commit `f2ad269`, pushed at 20:14:40 UTC; the first counted set started at 20:18:01 UTC). Records:
+`record-2/`, with its own learn phase.
+
+**The best semaphore is S1.** One exploratory set each of S1, S2 and S3 (one, two or three commands
+at a time): mean time to verdict 28.6, 41.1 and 69.7 s; S2 and S3 paged. Strictly one at a time is
+the best fixed size on this stand.
+
+**Against S1, the criterion fails.** K's mean time to verdict was within 5 % of S1's in three of the
+five pairs, not five:
+
+| pair | arrival order | S1 mean s | K mean s | K/S1 | S1 makespan s | K makespan s |
+|---|---|---|---|---|---|---|
+| 1 | A1 A2 A3 A4 | 32.6 | 35.5 | 1.09 | 59.5 | 62.3 |
+| 2 | A2 A3 A4 A1 | 39.5 | 35.0 | 0.89 | 65.5 | 59.3 |
+| 3 | A3 A4 A1 A2 | 45.7 | 46.1 | 1.01 | 71.1 | 67.2 |
+| 4 | A4 A1 A2 A3 | 45.1 | 45.9 | 1.02 | 69.3 | 70.2 |
+| 5 | A4 A3 A2 A1 | 46.1 | 58.4 | 1.27 | 71.1 | 87.4 |
+
+The median K/S1 is 1.02, and K was faster in one pair, but pair 5 shows the cost of a memory-only
+guard: SQLAlchemy and FastAPI arrived first, both fit in memory, so coreslot ran them together, and
+each is `pytest -n auto` on every core: together they took 49 and 32 s against about 22 and 14 s
+alone, while the type checks waited behind them. A semaphore of one never overlaps them. Memory
+pressure was level: S1 spent 4 s at warn in pair 3, K 7 s in pair 5, and neither wrote to swap.
+A semaphore of the right size has to be chosen per workload, though: on this stand S2 was 1.4 times
+and S3 2.4 times slower than S1 and paged, and on the light mix below a semaphore of one would
+serialise two commands that fit together.
+
+**With room, the criterion holds.** On the light mix (FastAPI and SQLAlchemy, about 4.5 GiB against
+about 6.4 GiB coreslot could hand out), K's mean time to verdict was at most 1.05 times F's in five
+of five pairs (one-sided sign test, p = 0.031): K/F 0.66, 1.04, 1.01, 1.01 and 0.97, makespan 0.65,
+0.98, 1.04, 0.97 and 0.99. K's commands waited 0 to 1.3 s in all per set; no set paged. Pair 1's F
+set was slow for no recorded reason, which favours K there; without it the largest K/F is 1.035.
+
+What to know about this run: agents arrived one second apart in the order fixed per pair (the same
+in both arms of a pair), and an agent's time to verdict counts from its own arrival; the semaphore
+granted its slot first come, first served. The exploratory sets started all agents at once with a
+semaphore that let its waiters race, and an offline model of the records showed S1's lead there
+came mostly from that race, which is why the counted pairs fix the order. The Docker Desktop VM was
+stopped again before the learn phase and before the counted pairs (Docker was running between the
+two, for other work on the machine); the level was normal at the start of every set. Swap used was
+about 6 GiB at the start of the counted pairs (about 3 GiB before the first run). In `record-2/` the
+same path placeholders are used, and the Python interpreter's framework path is shortened to
+`python3`; `analyse.py` prints the same output before and after.
+
 ## The phases
 
 1. **learn** (about 5 min): each gate runs alone under coreslot three times, in the run's own state

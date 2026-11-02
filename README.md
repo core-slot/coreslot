@@ -43,8 +43,11 @@ tests and SQLAlchemy's ORM tests at once, five times unwrapped and five times un
 in alternating order. Unwrapped, the machine sat at memory pressure warn for 66 to 115 s of each set
 and wrote 8 to 13 GiB to swap; under coreslot it never left normal and wrote none, and each agent's
 mean time to its verdict was 0.41 of the unwrapped one (median over the pairs). Both held in 5 of 5
-pairs against a criterion committed before them; one machine, one stand, one day
-([the run, its records and its limits](evidence/air-v04/README.md)).
+pairs against a criterion committed before them. Against the best fixed semaphore, one command at a
+time, coreslot was within 5 % in three of five pairs, not five (median 1.02, worst 1.27: it lets
+two suites that each use every core run together when both fit in memory); with room for all of
+them it cost nothing measurable (at most 1.035 of unwrapped, five of five). One machine, one stand,
+one day ([the runs, their records and their limits](evidence/air-v04/README.md)).
 
 **For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
 `go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as
