@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -101,6 +102,22 @@ class AnalyseTest(unittest.TestCase):
             with open(path, "w") as f:
                 f.write('{"event":"start","t_ns":1}\n\n{"event":"rate","t_')
             self.assertEqual(analyse.read_jsonl(path), [{"event": "start", "t_ns": 1}])
+
+    def test_calm_is_scored_on_the_samples_after_the_stop_and_s0_comes_from_the_meta(self):
+        def line(t, level):
+            return {"t_ns": t * S, "level": level, "excess": 0.0, "room_mib": 0, "jobs": []}
+
+        with tempfile.TemporaryDirectory() as d:
+            work = [{"t_ns": 0, "event": "start"}, {"t_ns": S, "event": "rate", "hot_mib": 512, "touches_s": 100},
+                    {"t_ns": 10 * S, "event": "stop", "reason": "signal"}]
+            watch = [line(t, "red" if t < 14 else "green") for t in range(2, 40, 2)]
+            for name, rows in (("work.jsonl", work), ("watch.jsonl", watch), ("meta.json", [{"warmup_share": 0.0123}])):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write("\n".join(json.dumps(r) for r in rows) + "\n")
+            rec = analyse.Record(d)
+            self.assertEqual(analyse.calm_after_stop(rec), (4.0, 24.0))  # green from 14 s, 4 s after the stop, to 38 s
+            self.assertIn("S0 learned 0.012 by a warm-up", analyse.report([rec]))
+        self.assertIn("S0 default 0.25", analyse.report([self.ramp]))
 
     def test_main_searches_a_directory_of_records(self):
         out = io.StringIO()

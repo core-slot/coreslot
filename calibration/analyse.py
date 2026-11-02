@@ -5,8 +5,9 @@ usage: analyse.py RECORD_DIR... [--yellow-points N] [--red-points N] [--red-samp
                                 [--gate-pages-s N]
 
 A record directory holds watch.jsonl (the watchdog's sample log), work.jsonl (the hog's or the
-contention control's own log) and, optionally, meta.json (machine, OS, threads). A directory with
-none of these is searched for record directories one level down.
+contention control's own log) and, optionally, meta.json (machine, OS, threads, and the share a
+warm-up run taught the watchdog as the hog's normal S0; without it S0 was the default). A directory
+with none of these is searched for record directories one level down.
 
 Every sample of the watchdog that falls inside a run is joined to the workload's speed over the
 sample's period and put into a band:
@@ -26,6 +27,7 @@ import os
 import statistics
 import sys
 
+DEFAULT_S0 = 0.25  # the normal stall share of a label the run log knows nothing of
 CLIFF_DECOMP_S = 100_000
 CLIFF_SPEED = 0.30
 PAGING_EVIDENCE_S = 1000
@@ -78,6 +80,10 @@ class Record:
         self.is_control = not any(e.get("event") == "rate" for e in self.work)
         self.stop_ns = max((e["t_ns"] for e in self.work if e.get("event") == "stop"), default=None)
         self.samples, self.baseline = join(self)
+
+    def s0(self):
+        share = self.meta.get("warmup_share")
+        return f"S0 learned {share:.3f} by a warm-up" if share is not None else f"S0 default {DEFAULT_S0}"
 
     def label(self):
         m = self.meta
@@ -243,7 +249,7 @@ def report(records, chosen=None):
     out = []
     for r in records:
         out.append(f"== {r.label()}: {len(r.samples)} samples in the run, "
-                   f"{'control' if r.is_control else f'reference {r.baseline:.0f} touches/s'}")
+                   f"{'control' if r.is_control else f'reference {r.baseline:.0f} touches/s, {r.s0()}'}")
         out += band_table(r.samples, gate)
         calm = calm_after_stop(r)
         if not r.is_control:

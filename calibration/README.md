@@ -12,9 +12,9 @@ Needs macOS, Python 3 and Go. It reads nothing that needs privileges.
 
 | file | what it does |
 |---|---|
-| `hog.py` | Grows hot memory in steps (`--step-mib` every `--hold-s`), rewrites a byte in a random page of all it holds from `--threads` threads, and logs its touches per second every second; it starts no process, so the measured tree is the hog alone. Stops itself when its speed stays under 30 % of its first step's for 5 s, or at `--max-gib`. |
+| `hog.py` | Grows hot memory in steps (`--step-mib` every `--hold-s`), rewrites a byte in a random page of all it holds from `--threads` worker processes (not threads, which would contend on the interpreter lock), and logs the summed touches per second every second; the workers are its children, so the measured tree is the hog and its workers, and they die with it. Stops itself when its speed stays under 30 % of its first step's for 5 s, at `--max-gib`, or after `--seconds`. |
 | `cpu_control.py` | The control: busy loops (default twice the number of cores) for `--seconds` and no memory pressure. The watchdog must stay calm here. |
-| `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. |
+| `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. A ramp is preceded by a 30 s warm-up of the hog and accompanied by an observer job (below). |
 | `analyse.py` | Joins the watchdog's `watch.jsonl` with the workload's `work.jsonl`, puts each sample into a speed band, and prints the per-band excess, the samples where its replay of the levels at the chosen values differs from the level the watchdog logged, and a scoring table per candidate value. |
 | `testdata/` | A tiny record for the tests. |
 | `records/` | Where `run.sh` puts its records. |
@@ -27,10 +27,21 @@ refuses to start while a process of an earlier pass is alive, and says which.
 ```bash
 calibration/run.sh --dry ramp --threads 8     # print what would run; starts nothing
 calibration/run.sh control                    # 60 s of busy loops
-calibration/run.sh ramp                       # a ramp with one thread
-calibration/run.sh ramp --threads 8           # the many-threaded check
+calibration/run.sh ramp                       # a ramp with one worker
+calibration/run.sh ramp --threads 8           # the many-worker check
+calibration/run.sh ramp --after-s 120         # observe 120 s after the hog stops (default 90)
+calibration/run.sh ramp --no-warmup           # score against the default normal share (cold start)
 python3 calibration/analyse.py calibration/records
 ```
+
+A ramp starts in two steps before the hog. A warm-up runs the hog for 30 s at 0.5 GiB under the same
+label, in the same state directory, and ends normally: the run log then holds one counted run of the
+label, so the ramp is scored against the label's learned normal share, the way the shipped code
+learns it, not against the default 0.25; `meta.json` gives that share as `warmup_share` (null with
+`--no-warmup`). Then an observer, `coreslot run --label calibration-observer -- sleep ...`, starts
+in the same state directory: as the oldest hold it is never a victim, its share stays near 0 and
+the busy-time floor leaves it out of the excess, and it keeps the sampling going for `--after-s` seconds
+after the hog stops, which is what `calm_s` is scored on.
 
 A pass stops itself by the hog's own rules and, as a second guard from outside, when swap used has
 grown 6 GiB from the start of the pass (a Mac may already carry tens of GiB of swap, so the limit is
@@ -39,8 +50,8 @@ end and on INT, TERM or HUP, and the busy loops leave on their own when their pa
 anything is left, `run.sh` prints the pids; stop them by pid.
 
 A record directory holds `watch.jsonl` (one JSON line per machine sample), `work.jsonl`, and
-`meta.json` (machine model, OS version, core count, memory, threads, swap at the start, the
-`coreslot` build). Commit the records you take with the analysis you draw from them.
+`meta.json` (machine model, OS version, core count, memory, worker count as `threads`, the warm-up's
+share, `after_s`, swap at the start, the `coreslot` build). Commit the records you take with the analysis you draw from them.
 
 ## Reading the analysis
 
@@ -70,8 +81,12 @@ stopped, stayed green for that long. The floor is not calibrated.
 
 Notes for reading numbers:
 
-- Every pass uses a fresh state directory, so the label has no history and the stall baseline is the
-  unknown-command default. That is what a command seen for the first time gets.
+- Every pass uses a fresh state directory. With the warm-up, the label's history is that one run and
+  the stall baseline is its measured share; with `--no-warmup` the label has none and the baseline is
+  the unknown-command default 0.25, which is what a command seen for the first time gets. `analyse.py`
+  names which one each run had.
+- `calm_s` can only be established as far as the observer watched: green for N seconds needs the time
+  to turn green plus N inside `--after-s`.
 - A machine that is busy for other reasons shows paging in the `full` band; the gate and the cliff
   both read the same counters. Repeat a pass that looks noisy rather than averaging it in.
 - Linux is not calibrated.
