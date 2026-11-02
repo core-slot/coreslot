@@ -153,6 +153,27 @@ run demo                             # about 6 min; --hog-gib G sets the hogs' s
 python3 evidence/air-v04/analyse.py evidence/air-v04/record
 ```
 
+The second run ([criterion-2.md](criterion-2.md)) writes a record of its own, with its own learn
+phase, so the first record stays as it is:
+
+```bash
+run2() { python3 evidence/air-v04/run.py --coreslot /tmp/air-v04/coreslot --stand "$STAND" --out evidence/air-v04/record-2 "$@"; }
+run2 learn                                   # about 5 min
+run2 tune                                    # S1, S2, S3, about 5 min
+python3 evidence/air-v04/analyse.py evidence/air-v04/record-2      # TUNING names S*
+run2 --mix light set F --tag light-pilot     # about 1 min
+run2 --mix light set K --tag light-pilot     # about 1 min
+# write the criteria into evidence/air-v04/criterion-2.md and commit them
+run2 pairs --vs S --slots N --prefix sem-    # N of S*: sem-pair-1..5, S first in odd pairs, about 15 min
+run2 --mix light pairs --prefix light-       # light-pair-1..5, F first in odd pairs, about 10 min
+python3 evidence/air-v04/analyse.py evidence/air-v04/record-2
+```
+
+An S set runs each command unwrapped behind `sem.py LOCKDIR N -- CMD`, a plain N-slot semaphore
+(N lock files under the set's `slots/`, taken with `flock` and held until the command exits); a
+light set runs A3 and A4 only. A tag says what it is for, and `run.py` refuses a tag that does
+not fit its arm or mix.
+
 `run.py` refuses to start while a process it started for an earlier set is alive (it lists them
 by pid), refuses a K set while the budget holds a live hold or a waiting ticket, and refuses a
 stand that is not at its pins. Every process it starts is stopped by its process group at exit
@@ -166,7 +187,8 @@ skips the pin check, to try the harness without loading the machine.
 |---|---|
 | `setup.sh` | builds the stand at its pins |
 | `run.py` | the phases above; stdlib only |
-| `analyse.py` | the per-pair table (warn s, critical s, swap growth, makespan, mean time to verdict, false failures, and for K the summed wait and the stops), one-sided sign tests of K against F for warn seconds, false failures and mean time to verdict, the pilot apart, and the demo's verdict |
+| `analyse.py` | the per-pair table (warn s, critical s, swap growth, makespan, mean time to verdict, false failures, and for K the summed wait and the stops), one-sided sign tests of K against F for warn seconds, false failures and mean time to verdict, the pilot apart, and the demo's verdict; for the second run TUNING (each S set and the S\* the rule picks), SEMAPHORE PAIRS (K against S\*, with K/S\* ratios) and LIGHT (its pilot apart, K against F with K/F ratios and sign tests both ways) |
+| `sem.py` | the S arm's N-slot semaphore |
 | `test_air.py` | unit tests of the analysis and of the pure parts of `run.py` (`python3 -m unittest` here) |
 | `record/meta.jsonl` | one line per invocation: machine model, macOS version, memory, `coreslot version` and its SHA-256, the commit of this repository, the stand's commits |
 | `record/learn.jsonl`, `record/learn/` | each alone run, with its run-log line, and its output |
