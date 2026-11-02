@@ -83,7 +83,7 @@ func reservations(holds []liveHold) []state.MemHold {
 
 // Tick is the grant's part in the shared watch tick: inside the section, entered within
 // sectionWait, the detector advances on a new machine sample of the host and the live holds when
-// the stored one is a period old (store.Section.Tick). It returns the detector and the [watch]
+// the stored one is 1.5 s old (store.Section.Tick). It returns the detector and the [watch]
 // configuration; a section that stayed busy returns the zero detector.
 func (g *Grant) Tick(ctx context.Context) (watch.Detector, watch.Config, error) {
 	e := g.e

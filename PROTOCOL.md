@@ -1362,7 +1362,7 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
 | run-log rotation | at 10 MiB, one generation |
 | memory sampling (CLI) | every 1 s while the command runs |
 | tick | every 2 s while the command runs; one machine sample per period |
-| stored sample | the period's below 2 s; fresh up to 6 s; a gap above 6 s or a 1 s clock skew |
+| stored sample | the period's below 1.5 s; fresh up to 6 s; a gap above 6 s or a 1 s clock skew |
 | restart | gives up after 3 stops; margin `max(256 MiB, need / 10)` |
 
 ## 23. The watchdog
@@ -1387,10 +1387,12 @@ start until it exits, in both modes of section 23.6. Each tick:
    hold for the attempt: the run writes them once, when its command starts, before its first tick.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short
    bound leaves its part of that period to the others) and reads `watch.json`. If the stored sample
-   is at least one period (2 s) old, or lies in the future, it takes a new machine sample
+   is at least 1.5 s old (a period less a quarter, so that runs ticking every 2 s never leave the
+   next sample 4 s away), or lies in the future, it takes a new machine sample
    (section 23.2), advances the detector (section 23.4) and, when a stop round is due, writes the
-   stop list (section 23.5); otherwise it only reads. One sample is taken per period machine-wide,
-   one bucket step per sample, and no writer races another: the section serializes them.
+   stop list (section 23.5); otherwise it only reads. One sample is taken per period (1.5 to 2 s)
+   machine-wide, one bucket step per sample, and no writer races another: the section serializes
+   them.
 3. **Acts.** It looks for its own hold's name in `detector.stop` (section 23.5 step 2).
 
 A stored sample more than 3 periods (6 s) old is no reading: admission ignores the level (section

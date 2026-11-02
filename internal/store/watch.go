@@ -49,11 +49,11 @@ func (sec *Section) SetWatch(d watch.Detector, s watch.Sample, sampledNS int64) 
 	return sec.replaceFile(WatchFile, body)
 }
 
-// Tick advances the detector on a new sample only when the stored one is 2 s old (now is NowNS),
-// so one sample serves the machine per period. A failed read is stored as Unknown and returned.
+// Tick advances the detector on a new sample only when the stored one is 1.5 s old (now is NowNS):
+// a ticker a little early for the period must not leave the next sample 4 s away. A failed read is stored as Unknown and returned.
 func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.Config) (watch.Detector, []string, error) {
 	d, prev, at, err := sec.Watch()
-	if err != nil || at <= now && now-at < memsample.PeriodNS { // this period's sample
+	if err != nil || at <= now && now-at < memsample.PeriodNS-memsample.PeriodNS/4 { // this period's sample
 		return d, d.Stop, err
 	}
 	cur, rerr := read()

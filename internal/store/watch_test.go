@@ -36,7 +36,7 @@ func stalled(hold string, arrival int64) watch.Job {
 }
 
 // Two runs ticking in one period share one machine sample: the second only reads it. The next
-// period's tick samples again. Mutation: sampling at every Tick calls read twice.
+// period's tick samples again, from 1.5 s on. Mutation: sampling at every Tick calls read twice.
 func TestOneSamplePerPeriod(t *testing.T) {
 	sec := enter(t, open(t, newDir(t)))
 	m := &machine{}
@@ -55,6 +55,16 @@ func TestOneSamplePerPeriod(t *testing.T) {
 	_, s, at, err := sec.Watch()
 	if err != nil || at != now+21e8 || s.Host.Decomp != 2e6 {
 		t.Errorf("stored sample at %d, decomp %d, %v; want the second, at %d", at, s.Host.Decomp, err, now+21e8)
+	}
+	// A ticker a hair under a period behind the stored sample takes the next one: ticks every
+	// 2 s from any number of runs give periods of 1.5 to 2 s, never 4.
+	for _, c := range []struct {
+		at    int64
+		calls int
+	}{{now + 31e8, 2}, {now + 40e8, 3}} {
+		if _, _, err := sec.Tick(c.at, m.read, watch.Defaults()); err != nil || m.calls != c.calls {
+			t.Errorf("tick at +%d ms: read %d times, %v; want %d", (c.at-now)/1e6, m.calls, err, c.calls)
+		}
 	}
 }
 
