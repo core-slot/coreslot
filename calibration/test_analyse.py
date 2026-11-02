@@ -117,7 +117,7 @@ class AnalyseTest(unittest.TestCase):
             rec = analyse.Record(d)
             self.assertEqual(analyse.calm_after_stop(rec), (4.0, 24.0))  # green from 14 s, 4 s after the stop, to 38 s
             self.assertIn("S0 learned 0.012 by a warm-up", analyse.report([rec]))
-        self.assertIn("S0 default 0.25", analyse.report([self.ramp]))
+        self.assertNotIn("S0", analyse.report([self.ramp]))  # no learned share in the meta: nothing is said of one
 
     def test_main_searches_a_directory_of_records(self):
         out = io.StringIO()
