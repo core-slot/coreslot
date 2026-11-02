@@ -126,6 +126,33 @@ func TestClockPairDetectsSleep(t *testing.T) {
 	}
 }
 
+// The counters count from boot, so one that went back is a reboot and a gap even one period later;
+// the stall counts only when both readings have it. Mutations: dropping any counter's term makes
+// its row comparable; comparing the stall without both readings having it makes the last row a gap.
+func TestCounterBackIsAGap(t *testing.T) {
+	const s = int64(time.Second)
+	prev := HostReading{Decomp: 100, SwapIns: 100, PSISomeUS: 100, HasPSI: true, WallNS: 1000 * s, AwakeNS: 900 * s}
+	for _, c := range []struct {
+		name string
+		edit func(*HostReading)
+		want bool
+	}{
+		{"all forward", func(*HostReading) {}, false},
+		{"decompressions back", func(r *HostReading) { r.Decomp = 1 }, true},
+		{"swap-ins back", func(r *HostReading) { r.SwapIns = 1 }, true},
+		{"stall back", func(r *HostReading) { r.PSISomeUS = 1 }, true},
+		{"stall missing", func(r *HostReading) { r.PSISomeUS, r.HasPSI = 0, false }, false},
+	} {
+		cur := prev
+		cur.Decomp, cur.SwapIns, cur.PSISomeUS = 200, 200, 200
+		cur.WallNS, cur.AwakeNS = prev.WallNS+2*s, prev.AwakeNS+2*s
+		c.edit(&cur)
+		if got := Gap(prev, cur); got != c.want {
+			t.Errorf("%s: Gap = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // Mutation: take the total of the "full" line, and the stall reads 678.
 func TestPSITotalParse(t *testing.T) {
 	const text = "some avg10=0.00 avg60=0.12 avg300=0.05 total=12345\n" +

@@ -118,7 +118,7 @@ type Point struct {
 
 // Detector is the machine's watch state between samples. Its times are HostReading.WallNS.
 type Detector struct {
-	Window          []Point  `json:"window"` // the samples of the last 20 s, oldest first
+	Window          []Point  `json:"window"` // the real readings of the last 20 s, oldest first
 	Rates           Rates    `json:"rates"`
 	Excess          float64  `json:"excess"`
 	Gate            bool     `json:"gate"`
@@ -138,12 +138,19 @@ type Detector struct {
 
 // Advance moves the detector from sample prev to cur and returns the level. A pair it cannot
 // compare (memsample.Gap) is Unknown and keeps the bucket and latch, unless the floor holds: it
-// needs no rate. A sleep or a reboot between them (memsample.Slept) empties the bucket, and so
-// does the pair after an empty sample.
+// needs no rate. The bucket keeps only fresh evidence: a reading more than the window after the
+// last real one, or before it, empties it. An empty sample leaves the window as it was.
 func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	was, now := d.Known, cur.Host.WallNS
 	r, ok := rates(prev.Host, cur.Host)
 	d.Rates, d.Excess, d.Gate = r, 0, false
+	if now == 0 { // no reading: the window's newest point stays the last real one
+		d.Level, d.CalmSinceNS = Unknown, 0
+		return Unknown
+	}
+	if n := len(d.Window); n > 0 && (now < d.Window[n-1].AtNS || now-d.Window[n-1].AtNS > windowNS) {
+		d.Bucket = 0
+	}
 	if ok {
 		d.Excess = Excess(cur.Jobs, cur.Host.WallNS-prev.Host.WallNS)
 		d.Gate = r.DecompS+r.SwapInsS >= c.GatePagesPerS || r.PSISomeUSS > 0
@@ -158,12 +165,9 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 		low = min(low, p.SwapUsedMiB)
 	}
 	h := cur.Host
-	floor := h.WallNS > 0 && h.VMVolumeFreeMiB+h.SwapFreeMiB+h.MemAvailableMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB
+	floor := h.VMVolumeFreeMiB+h.SwapFreeMiB+h.MemAvailableMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB
 	if !ok { // the floor needs no rate: a real reading still reaches it
 		d.Level, d.CalmSinceNS = Unknown, 0
-		if prev.Host.WallNS == 0 || h.WallNS > 0 && memsample.Slept(prev.Host, h) {
-			d.Bucket = 0 // red needs its samples after a sleep or a reboot, which an empty sample can hide
-		}
 		if floor {
 			d.Level, d.Known = Floor, Floor
 		}

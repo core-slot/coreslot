@@ -188,23 +188,23 @@ func TestFloorCountsMemAvailable(t *testing.T) {
 	}
 }
 
-// A sleep between two samples (the sleep-inclusive clock moved 600 s, the awake one 2 s) or a
-// reboot (the clock or a counter went back, the counters after an uptime 60 s or 2 s later) is a
-// gap: unknown, whatever the deltas say, and red needs its samples after it, so one hot sample at a
-// bucket of 9.5 is not red; a 10 s period without a sleep keeps the bucket, and that sample is, as
-// does an empty sample (a reading that could not be read). A sleep hidden by an empty sample still
-// empties it. Mutations: keeping the bucket across a sleep turns it red; dropping the counters from
-// memsample.Slept turns the later uptimes red; emptying the bucket only between two real readings
-// turns the hidden sleep red; emptying it on any gap empties it on the empty sample.
+// A sleep (the sleep-inclusive clock moved, the awake one 2 s), a long period or a reboot (the clock
+// or a counter went back) between two samples is a gap: unknown, whatever the deltas say. The red
+// bucket keeps only fresh evidence: a reading more than 20 s after the last real one, or before it,
+// empties it, so one hot sample at a bucket of 9.5 is not red; within 20 s it is, across a short
+// sleep or a reboot alike. Mutations: never emptying the bucket turns the stale rows red; emptying
+// it at 20 s turns that row yellow; dropping the clock-back term turns that row red; emptying it
+// on any sleep turns the 15 s sleep yellow.
 func TestGapIsUnknown(t *testing.T) {
 	for _, c := range []struct {
 		name            string
 		wallNS, awakeNS int64 // cur's clocks, from prev's
 		back            bool  // cur's counters restarted from 0
 		want            Level
-	}{{"sleep", 600e9, 2e9, false, Yellow}, {"reboot", -1e12, -1e12, false, Yellow},
-		{"reboot, uptime 60 s later", 60e9, 60e9, true, Yellow}, {"reboot, uptime 2 s later", 2e9, 2e9, true, Yellow},
-		{"10 s period", 10e9, 10e9, false, Red}} {
+	}{{"sleep 600 s", 600e9, 2e9, false, Yellow}, {"an hour awake", 3600e9, 3600e9, false, Yellow},
+		{"21 s period", 21e9, 21e9, false, Yellow}, {"clock went back", -1e12, -1e12, false, Yellow},
+		{"10 s period", 10e9, 10e9, false, Red}, {"20 s period", 20e9, 20e9, false, Red},
+		{"sleep 15 s", 17e9, 2e9, false, Red}, {"reboot, uptime 2 s later", 2e9, 2e9, true, Red}} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := Defaults()
 			f := newFeed(cfg)
@@ -232,23 +232,39 @@ func TestGapIsUnknown(t *testing.T) {
 			}
 		})
 	}
-	cfg := Defaults()
-	f := newFeed(cfg)
-	for range 10 {
-		f.step(cfg, true, job(0.60, 0.04))
-	}
-	if l := f.d.Advance(f.prev, Sample{}, cfg); l != Unknown || f.d.Bucket != cfg.RedSamples {
-		t.Errorf("an empty sample: %v, bucket %v; want unknown, bucket %v", l, f.d.Bucket, cfg.RedSamples)
-	}
-	woke := f.prev // the machine slept 600 s across the reading that could not be read
-	woke.Host.WallNS += 600e9
-	woke.Host.AwakeNS += 4e9
-	if l := f.d.Advance(Sample{}, woke, cfg); l != Unknown {
-		t.Errorf("after the empty sample: %v, want unknown", l)
-	}
-	f.prev = woke
-	if l := f.step(cfg, true, job(0.60, 0.04)); l != Yellow {
-		t.Errorf("one hot sample after a sleep hidden by an empty sample: %v (bucket %v), want yellow", l, f.d.Bucket)
+}
+
+// An empty sample (a reading that could not be read) keeps the bucket and leaves the window, whose
+// newest point stays the last real reading: under sustained danger, a real reading 4 s after it
+// keeps red going at once; one 600 s after it (a sleep the empty sample hid) empties the bucket.
+// Mutations: emptying the bucket on the pair after an empty sample delays red; letting the empty
+// sample clear the window does too; never emptying the bucket turns the hidden sleep red.
+func TestEmptySampleKeepsTheBucket(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		wallNS, awake int64 // the next real reading's clocks, from the last real one's
+		want          Level
+	}{{"4 s later", 4e9, 4e9, Red}, {"after a 600 s sleep", 600e9, 4e9, Yellow}} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := Defaults()
+			f := newFeed(cfg)
+			for range 10 {
+				f.step(cfg, true, job(0.60, 0.04))
+			}
+			if l := f.d.Advance(f.prev, Sample{}, cfg); l != Unknown || f.d.Bucket != cfg.RedSamples {
+				t.Errorf("an empty sample: %v, bucket %v; want unknown, bucket %v", l, f.d.Bucket, cfg.RedSamples)
+			}
+			cur := f.prev
+			cur.Host.WallNS += c.wallNS
+			cur.Host.AwakeNS += c.awake
+			if l := f.d.Advance(Sample{}, cur, cfg); l != Unknown {
+				t.Errorf("after the empty sample: %v, want unknown", l)
+			}
+			f.prev = cur
+			if l := f.step(cfg, true, job(0.60, 0.04)); l != c.want {
+				t.Errorf("one hot sample %s: %v (bucket %v), want %v", c.name, l, f.d.Bucket, c.want)
+			}
+		})
 	}
 }
 
