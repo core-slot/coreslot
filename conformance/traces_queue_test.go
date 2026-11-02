@@ -329,8 +329,8 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 
-	// A needs all 256 MiB and waits at the head; B and C need 128 MiB, which is free, but there is
-	// no backfill: they wait behind the live head.
+	// A needs all 256 MiB and waits at the head; B and C need 128 MiB, which is free, but with no
+	// earlier run they never pass: they wait behind the live head.
 	a, autoA := startStoppableHead(e, "A", "--mem", "256M")
 	e.WaitTicket("A")
 	b := e.Run("B", "--mem", "128M")

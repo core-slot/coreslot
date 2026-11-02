@@ -25,6 +25,7 @@ type Ticket struct {
 	Label     string
 	NeedMiB   int64
 	CreatedNS int64
+	Restart   bool // optional: a stopped run coming back
 }
 
 // Hold is the body of a holds entry (section 7.4): the reservation of a run and what its run last
@@ -36,6 +37,7 @@ type Hold struct {
 	PID                          int
 	StartNS, ArrivalNS           int64
 	NeedMiB                      int64
+	TypicalS                     int64 // optional: the label's typical run time in seconds, 0 unknown
 	Stops                        int
 	FootprintMiB                 int64
 	DUserNS, DSysNS, DPageWaitNS int64
@@ -56,6 +58,7 @@ type ticketJSON struct {
 	Label     string `json:"label"`
 	NeedMiB   int64  `json:"need_mib"`
 	CreatedNS int64  `json:"created_ns"`
+	Restart   bool   `json:"restart,omitempty"`
 }
 
 type holdJSON struct {
@@ -64,6 +67,7 @@ type holdJSON struct {
 	StartNS      int64   `json:"start_ns"`
 	ArrivalNS    int64   `json:"arrival_ns"`
 	NeedMiB      int64   `json:"need_mib"`
+	TypicalS     int64   `json:"typical_s,omitempty"`
 	Stops        int     `json:"stops"`
 	FootprintMiB int64   `json:"footprint_mib"`
 	DUserNS      int64   `json:"d_user_ns"`
@@ -158,7 +162,8 @@ func (h Hold) validate() error {
 	if err := spec.ValidateLabel(h.Label); err != nil {
 		return malformed("%v", err)
 	}
-	if h.PID < 0 || h.Stops < 0 || min(h.StartNS, h.ArrivalNS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS) < 0 {
+	if h.PID < 0 || h.Stops < 0 ||
+		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS) < 0 {
 		return malformed("pid, stops and every time are at least 0")
 	}
 	if h.NeedMiB < 0 || h.NeedMiB > spec.MaxNeedMiB || h.FootprintMiB < 0 || h.FootprintMiB > spec.MaxNeedMiB {
@@ -186,6 +191,9 @@ func DecodeTicket(body []byte) (Ticket, error) {
 		return Ticket{}, err
 	}
 	if t.CreatedNS, err = o.int64("created_ns"); err != nil {
+		return Ticket{}, err
+	}
+	if t.Restart, err = optional(o, "restart", o.boolean); err != nil {
 		return Ticket{}, err
 	}
 	if err := t.validate(); err != nil {
@@ -223,6 +231,9 @@ func DecodeHold(body []byte) (Hold, error) {
 		}
 	}
 	if h.NormalShare, err = o.float("normal_share"); err != nil {
+		return Hold{}, err
+	}
+	if h.TypicalS, err = optional(o, "typical_s", o.int64); err != nil {
 		return Hold{}, err
 	}
 	for _, f := range []struct {

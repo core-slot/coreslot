@@ -299,8 +299,8 @@ func TestClockStepThenHeadStops(t *testing.T) {
 // Every waiter is stopped for 15 s at once, as a laptop sleep stops them, and continued. Each
 // waiter then refreshes and the queue resumes in order: once every waiter's refresh is
 // observable, room that the head cannot use but a later waiter could is not given to the
-// later waiter (no backfill behind a live head), and the head is admitted first when its
-// minimum frees up.
+// later waiter (with no earlier run, it never passes a live head), and the head is admitted
+// first when its minimum frees up.
 //
 // Then the order holds from the resumption itself, before any refresh is observable. The head
 // W3 needs 256 MiB and W4, behind it, needs 128; both stop and 128 MiB frees up meanwhile.

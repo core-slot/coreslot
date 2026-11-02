@@ -6,6 +6,7 @@ package runstats
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -58,6 +59,20 @@ func NeedMiB(window []store.RunRecord) (mib int64, ok bool) {
 	}
 	slices.Sort(peaks)
 	return (peaks[min(len(peaks)-1, len(peaks)*9/10)] + 1023) / 1024, true
+}
+
+// TypicalS is the label's typical run time: the p90 of the window's ran_s, rounded up to a whole
+// second and at least 1; 0 when the window is empty.
+func TypicalS(window []store.RunRecord) int64 {
+	if len(window) == 0 {
+		return 0
+	}
+	ran := make([]float64, 0, len(window))
+	for _, r := range window {
+		ran = append(ran, r.RanS)
+	}
+	slices.Sort(ran)
+	return max(1, int64(math.Ceil(ran[min(len(ran)-1, len(ran)*9/10)])))
 }
 
 // NormalShare is the median share of the window's runs' rusage time spent in the system,

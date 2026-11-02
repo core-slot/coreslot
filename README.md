@@ -24,8 +24,9 @@ coreslot status                  # what runs, what waits, whether the watchdog i
 - **It starts a command when the memory is there.** A command starts when the memory the machine
   can really hand out, less what running commands are still expected to grow into and a small
   reserve, covers what that command typically needs, learned from its earlier runs. Otherwise it
-  waits in one first-in, first-out queue. When no coreslot command is running, the head of the queue
-  always starts.
+  waits in one first-in, first-out queue. A command that fits may pass the head of the queue only
+  when its earlier runs say it will be done before the head could start; a command with no earlier
+  run never passes. When no coreslot command is running, the head of the queue always starts.
 - **It stops the newest commands only under real danger.** A little swap is survivable, so it does
   not kill for a full memory. It kills when the machine is paging and coreslot's own commands are
   losing a large share of their time to it, or when swap is about to run out

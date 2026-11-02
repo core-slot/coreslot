@@ -3,10 +3,12 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/core-slot/coreslot/internal/config"
@@ -23,10 +25,11 @@ func fresh(atNS, nowNS int64) bool {
 	return atNS > 0 && atNS <= nowNS && nowNS-atNS <= memsample.StaleNS
 }
 
-// admit is the admission attempt of the head (PROTOCOL.md section 12.1 steps 1 to 7). It returns
-// the grant when admitted, nil with no error when the ticket must keep waiting (the section was
-// busy, a ticket ahead was published since the election, or the live holds leave too little), and
-// ErrCanceled when a cancel request was published before this section.
+// admit is the admission attempt of the head, or of a waiter that may pass it (PROTOCOL.md
+// section 12.1 steps 1 to 7). It returns the grant when admitted, nil with no error when the
+// ticket must keep waiting (the section was busy, a live ticket ahead may not be passed, or the
+// live holds leave too little), and ErrCanceled when a cancel request was published before this
+// section.
 func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	point("admit.before-enter")
 	sec, entered, err := t.e.enter(ctx, single)
@@ -70,8 +73,8 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		return nil, nil
 	}
-	// 5. The re-election: a ticket published ahead of this one since its election wins.
-	if ahead, err := t.reelect(); err != nil || ahead {
+	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it.
+	if head, err := t.reelect(); err != nil || head != nil && !t.passes(*head, holds, room, cfg, m) {
 		return nil, err
 	}
 	if len(holds) > 0 {
@@ -135,16 +138,16 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
-// lists the names in queue/ again and reports whether a live ticket is ahead of this one:
-// well-formed and neither gone, dead nor STALLED for this observer, reading the mtime (lstat) of
-// only well-formed tickets. A ticket this observer has never watched, such as one published after
-// the election, counts as live; the next election then rescans whatever gen says, so a ticket
-// published without a gen bump is watched from then on and cannot keep the head out for longer
-// than a stall.
-func (t *Ticket) reelect() (ahead bool, err error) {
+// lists the names in queue/ again and returns the body of the first live ticket ahead of this
+// one, the head, nil when there is none: well-formed and neither gone, dead nor STALLED for this
+// observer, reading the mtime (lstat) of only well-formed tickets. A ticket this observer has
+// never watched, such as one published after the election, counts as live; the next election
+// then rescans whatever gen says, so a ticket published without a gen bump is watched from then
+// on and cannot keep the head out for longer than a stall.
+func (t *Ticket) reelect() (*wire.Ticket, error) {
 	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	now := t.e.clock.Monotonic()
 	for _, en := range entries {
@@ -152,11 +155,11 @@ func (t *Ticket) reelect() (ahead bool, err error) {
 		if !k.Less(t.key) {
 			continue
 		}
-		ok, err := t.ticketBody(en.Name)
+		tk, err := t.ticketBody(en.Name)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		if !ok {
+		if tk == nil {
 			continue
 		}
 		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.Name))
@@ -164,14 +167,14 @@ func (t *Ticket) reelect() (ahead bool, err error) {
 			continue
 		}
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		dead, err := probe(t.e.st, store.QueueDir, en.Name)
 		if gone(err) || stray(err) || err == nil && dead {
 			continue
 		}
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if _, seen := t.obs.Seen(k); !seen {
 			t.haveGen = false // rescan at the next election, so that it is watched from then on
@@ -181,9 +184,45 @@ func (t *Ticket) reelect() (ahead bool, err error) {
 				continue
 			}
 		}
-		return true, nil
+		return tk, nil
 	}
-	return false, nil
+	return nil, nil
+}
+
+// passes reports whether this ticket may start ahead of head, the first live ticket in the queue
+// (PROTOCOL.md section 10.3): its typical run time is known and ends within W, head's expected
+// wait for the room it needs, at least the calm a restart still needs.
+func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg config.Config, m config.Machine) bool {
+	if t.req.TypicalS == 0 || !m.HeadroomOK {
+		return false
+	}
+	// W: the running jobs with a typical run time end soonest first, each freeing its need, until
+	// the room covers head's need; when they never do, W is unknown.
+	now, w := t.e.clock.Realtime(), int64(0)
+	left := func(h liveHold) int64 { return max(0, h.body.TypicalS-(now-h.body.StartNS)/1e9) }
+	known := slices.DeleteFunc(slices.Clone(holds), func(h liveHold) bool { return h.body.TypicalS == 0 })
+	slices.SortFunc(known, func(a, b liveHold) int { return cmp.Compare(left(a), left(b)) })
+	for _, h := range known {
+		if room >= head.NeedMiB {
+			break
+		}
+		room, w = room+h.body.NeedMiB, left(h)
+	}
+	if room < head.NeedMiB {
+		return false
+	}
+	if head.Restart {
+		d, s, at, err := t.e.st.ReadWatch()
+		if err != nil {
+			return false
+		}
+		calm := int64(cfg.Watch.CalmS * 1e9)
+		if fresh(at, now) && d.Level == watch.Green {
+			calm -= s.Host.WallNS + now - at - d.CalmSinceNS
+		}
+		w = max(w, calm/1e9)
+	}
+	return t.req.TypicalS <= w
 }
 
 // Grant is what an admission holds: the hold's lock-carrying descriptor, which carries the
@@ -205,7 +244,7 @@ type Grant struct {
 func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64) error {
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, PID: os.Getpid(), StartNS: start, ArrivalNS: max(arrivalNS, 0),
-		NeedMiB: needMiB}
+		NeedMiB: needMiB, TypicalS: req.TypicalS}
 	f, name, err := sec.PublishHold(h, g.e.seq())
 	if err != nil {
 		return err

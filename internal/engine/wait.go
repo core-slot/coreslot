@@ -86,20 +86,20 @@ type Ticket struct {
 	arrivalNS       int64 // the wall clock its ticket was published at
 	needBump        bool  // a refresh gap above StallAfter: bump gen in the section
 
-	obs        state.Observer
-	gen        store.Gen
-	haveGen    bool
-	ahead      []aheadEntry    // ascending: the nearest ticket ahead is the last
-	wellFormed map[string]bool // ticket name -> whether its body is well-formed
+	obs     state.Observer
+	gen     store.Gen
+	haveGen bool
+	ahead   []aheadEntry            // ascending: the nearest ticket ahead is the last
+	tickets map[string]*wire.Ticket // ticket name -> its body, nil when malformed
 
 	nextElection time.Duration
 	backoff      time.Duration
-	attempts     int // admission attempts made as the head, for tests
+	attempts     int // admission attempts made, for tests
 	last         Waiting
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
-	return &Ticket{e: e, req: req, wellFormed: map[string]bool{}, last: Waiting{Position: 1}}
+	return &Ticket{e: e, req: req, tickets: map[string]*wire.Ticket{}, last: Waiting{Position: 1}}
 }
 
 // Name is the ticket's file name in queue/.
@@ -113,7 +113,8 @@ func (t *Ticket) Name() string {
 // this ticket, and, once per second, read gen (rescanning queue/ when it changed) and hold the
 // election, which examines the tickets ahead from the nearest up to the first live, non-STALLED
 // one; the head tries admission with backoff from 0.25 s up to 0.5 s, repeating the election
-// before each attempt (PROTOCOL.md section 10.3). It returns Waiting or Admitted, or
+// before each attempt, and a waiter with a typical run time makes a single attempt per election
+// to pass the head (PROTOCOL.md section 10.3). It returns Waiting or Admitted, or
 // ErrCanceled once a cancel request was found or the ticket was withdrawn. Section entries wait
 // at most RefreshEvery/4, so a caller that calls Step in a loop keeps refreshing at least every
 // RefreshEvery (see RefreshEvery). A caller that calls Step again after Due has no more work per
@@ -227,8 +228,11 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	if !head {
 		t.backoff = 0
 		t.nextElection = now + ElectEvery
-		return t.last, nil
+		if t.req.TypicalS == 0 { // only a run with a typical run time may pass (section 10.3)
+			return t.last, nil
+		}
 	}
+	single = single || !head
 	// Refresh again before an entry that may wait, so the entry cannot stretch the gap.
 	if !single {
 		if now := t.e.clock.Monotonic(); now-t.lastRefreshMono >= RefreshEvery/4 {
@@ -244,6 +248,9 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	}
 	if g != nil {
 		return Admitted{g}, nil
+	}
+	if !head {
+		return t.last, nil
 	}
 	if t.backoff == 0 {
 		t.backoff = HeadFirstBackoff
@@ -431,17 +438,17 @@ func (t *Ticket) rescan() error {
 		if !k.Less(t.key) {
 			continue
 		}
-		ok, err := t.ticketBody(en.Name)
+		tk, err := t.ticketBody(en.Name)
 		if err != nil {
 			return err
 		}
-		if ok {
+		if tk != nil {
 			ahead = append(ahead, aheadEntry{name: en.Name, key: k})
 		}
 	}
-	for name := range t.wellFormed {
+	for name := range t.tickets {
 		if !present[name] {
-			delete(t.wellFormed, name)
+			delete(t.tickets, name)
 		}
 	}
 	for _, a := range t.ahead {
@@ -462,25 +469,27 @@ func (t *Ticket) rescan() error {
 	return nil
 }
 
-// ticketBody reports whether the body of the ticket name in queue/ is well-formed, reading it only
-// when the name is first seen: ticket bodies never change once published, so the answer is kept
-// in wellFormed. A ticket gone before its body was read is not (that answer is not kept). A stray
-// entry under the name counts as malformed and is never trusted (PROTOCOL.md section 4.2).
-func (t *Ticket) ticketBody(name string) (ok bool, err error) {
-	if ok, known := t.wellFormed[name]; known {
-		return ok, nil
+// ticketBody returns the body of the ticket name in queue/, nil when it is malformed, reading it
+// only when the name is first seen: ticket bodies never change once published, so the answer is
+// kept in tickets. A ticket gone before its body was read is nil too (that answer is not kept). A
+// stray entry under the name counts as malformed and is never trusted (PROTOCOL.md section 4.2).
+func (t *Ticket) ticketBody(name string) (*wire.Ticket, error) {
+	if tk, known := t.tickets[name]; known {
+		return tk, nil
 	}
 	body, err := t.e.readBody(store.QueueDir, name)
 	if gone(err) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil && !stray(err) {
-		return false, err
+		return nil, err
 	}
+	var tk *wire.Ticket
 	if err == nil {
-		_, derr := wire.DecodeTicket(body)
-		ok = derr == nil
+		if v, derr := wire.DecodeTicket(body); derr == nil {
+			tk = &v
+		}
 	}
-	t.wellFormed[name] = ok
-	return ok, nil
+	t.tickets[name] = tk
+	return tk, nil
 }

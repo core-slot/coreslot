@@ -17,6 +17,7 @@ type runOptions struct {
 	mem         int64 // MiB from --mem, 0 when not given
 	pinned      bool  // need is --mem or the needs file's pin: learning leaves it alone
 	noRestart   bool  // the needs file marks the label no_restart: never stopped to free memory
+	typicalS    int64 // the label's typical run time from the run log, 0 unknown
 	label       string
 	timeout     time.Duration
 	onTimeout   string // "fail" (the default) or "run"
@@ -116,7 +117,7 @@ func usagef(format string, args ...any) error {
 
 // request is the request of the run. Its hold says that the run's process tree carries the work.
 func (o runOptions) request() spec.Request {
-	return spec.Request{Label: o.label, NeedMiB: o.need}
+	return spec.Request{Label: o.label, NeedMiB: o.need, TypicalS: o.typicalS}
 }
 
 // needText is the request in the form of the waiting line: `mem 3 GiB`.

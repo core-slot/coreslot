@@ -466,7 +466,7 @@ func largestLabel(t *testing.T) string {
 func TestLargestBodiesFit(t *testing.T) {
 	lbl := largestLabel(t)
 	h := Hold{Label: lbl, PID: math.MaxInt, StartNS: math.MaxInt64, ArrivalNS: math.MaxInt64, NeedMiB: spec.MaxNeedMiB,
-		Stops: math.MaxInt, FootprintMiB: spec.MaxNeedMiB, DUserNS: math.MaxInt64, DSysNS: math.MaxInt64,
+		TypicalS: math.MaxInt64, Stops: math.MaxInt, FootprintMiB: spec.MaxNeedMiB, DUserNS: math.MaxInt64, DSysNS: math.MaxInt64,
 		DPageWaitNS: math.MaxInt64, NormalShare: 1, SampledNS: math.MaxInt64, Victim: true, Learned: true, ChildExited: true}
 	b, err := Encode(h)
 	if err != nil {
@@ -478,7 +478,7 @@ func TestLargestBodiesFit(t *testing.T) {
 	if back, err := DecodeHold(b); err != nil || back != h {
 		t.Errorf("largest hold does not round trip: %v", err)
 	}
-	tk := Ticket{Label: lbl, NeedMiB: spec.MaxNeedMiB, CreatedNS: math.MaxInt64}
+	tk := Ticket{Label: lbl, NeedMiB: spec.MaxNeedMiB, CreatedNS: math.MaxInt64, Restart: true}
 	b, err = Encode(tk)
 	if err != nil || len(b) > MaxBodyBytes {
 		t.Fatalf("largest ticket: %d bytes, %v", len(b), err)
@@ -687,7 +687,8 @@ func TestLargestFixtureMatchesEncode(t *testing.T) {
 	if !bytes.Equal(enc, body) {
 		t.Errorf("largest hold encodes to %s, the fixture is %s", enc, body)
 	}
-	if h.Label != largestLabel(t) || h.NeedMiB != spec.MaxNeedMiB || h.FootprintMiB != spec.MaxNeedMiB {
+	if h.Label != largestLabel(t) || h.NeedMiB != spec.MaxNeedMiB || h.FootprintMiB != spec.MaxNeedMiB ||
+		h.TypicalS != math.MaxInt64 {
 		t.Errorf("fixture is not the largest hold: %+v", h)
 	}
 }

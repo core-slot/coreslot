@@ -197,10 +197,11 @@ func drive(t *testing.T, clk *fakeClock, tk *Ticket, d time.Duration, before fun
 	return at
 }
 
-// A waiter that is not the head, outside the front window, Stepped when its work is due (as
-// Wait does), does all of its work once per second: one Step, one refresh, one cancel check, one
-// gen read and one election examining one ticket and watching the rest of the front window. It
-// never probes the holds, which are listed only on request, and never enters the section.
+// A waiter without a typical run time that is not the head, outside the front window, Stepped
+// when its work is due (as Wait does), does all of its work once per second: one Step, one
+// refresh, one cancel check, one gen read and one election examining one ticket and watching the
+// rest of the front window. It never probes the holds, which are listed only on request, and
+// never enters the section.
 func TestNonHeadWorksOncePerSecond(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()

@@ -132,3 +132,19 @@ func TestNormalShareIsMedian(t *testing.T) {
 		t.Errorf("NormalShare = %v, %v; want 0.5, true", got, ok)
 	}
 }
+
+// The typical run time is the p90 of the window's ran_s rounded up, at least 1 s; an empty window
+// has none. Mutations: the largest instead of the p90 gives 20, rounding down 18, no floor 0.
+func TestTypicalIsP90RoundedUp(t *testing.T) {
+	var window []store.RunRecord
+	for i := range int64(20) {
+		r := run("x", i)
+		r.RanS = float64(i) + 0.2
+		window = append(window, r)
+	}
+	instant := run("x", 0)
+	instant.RanS = 0
+	if p90, one, none := TypicalS(window), TypicalS([]store.RunRecord{instant}), TypicalS(nil); p90 != 19 || one != 1 || none != 0 {
+		t.Errorf("TypicalS = %d, %d, %d; want 19, 1 and 0", p90, one, none)
+	}
+}

@@ -161,6 +161,15 @@ func (o object) float(key string) (float64, error) {
 	return f, nil
 }
 
+// optional reads an optional key of o with read; an absent key reads as the zero value.
+func optional[T any](o object, key string, read func(string) (T, error)) (T, error) {
+	if _, ok := o[key]; !ok {
+		var zero T
+		return zero, nil
+	}
+	return read(key)
+}
+
 // smallInt is an integer that also fits the platform's int.
 func (o object) smallInt(key string) (int, error) {
 	n, err := o.int64(key)

@@ -34,9 +34,10 @@ The file name states the expected verdict:
   and a client must treat the entry as ignored. `bad-<slug>.why` holds one line saying which rule
   the body breaks. The reason is for people; no decoder needs to report it.
 
-`ok-<slug>.expect.json` is the decoded value, written as the canonical body of that kind: every key
-of the table present, collections empty rather than absent, unknown keys of the source body
-dropped, key order and whitespace not significant. Compare it with the value your decoder produced
+`ok-<slug>.expect.json` is the decoded value, written as the canonical body of that kind: every
+required key of the table present, an optional key present only when it is not zero (`false`, `0`),
+collections empty rather than absent, unknown keys of the source body dropped, key order and
+whitespace not significant. Compare it with the value your decoder produced
 **as parsed JSON** (object equality), not as text.
 
 Verdict reminders, all from `PROTOCOL.md`:
@@ -51,8 +52,10 @@ Verdict reminders, all from `PROTOCOL.md`:
   characters backslash, u, d, 8, 0, 0. Many JSON libraries replace a lone surrogate with U+FFFD or
   keep it as a lone code unit before you can see it, so scan the raw bytes. `bad-*surrogate*` and
   `ok-escaped-backslash-then-u-is-not-an-escape` exercise this.
-- Every key of the table is required. A missing key, a `null`, a value of another JSON type, or a
-  value outside the key's rule is malformed.
+- Every key of the table is required, except the ticket's `restart` and the hold's `typical_s`,
+  which are optional and read as `false` and `0` when absent (`ok-restart`, `ok-typical-s`). A
+  missing required key, a `null`, a value of another JSON type, or a value outside the key's rule
+  is malformed (`bad-restart-not-a-boolean`, `bad-typical-s-negative`).
 - An integer has no fraction and no exponent and fits a signed 64-bit integer: `1.0`, `5e0`
   and `9223372036854775808` are not integers where an integer is required.
 - A duplicate key at any depth is malformed, including inside objects and arrays of unknown keys.

@@ -113,7 +113,8 @@ func TestRestartTakesTheSampleItself(t *testing.T) {
 }
 
 // A restarted ticket at the head keeps its place while it waits for calm: a later request that
-// fits is not admitted ahead of it. Mutation: a waiter behind the head trying admission passes it.
+// fits, without a typical run time, is not admitted ahead of it. Mutation: a waiter behind the
+// head admitted without the passing rule passes it.
 func TestRestartedHeadIsNotPassed(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)

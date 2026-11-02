@@ -18,6 +18,7 @@ import (
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -154,8 +155,8 @@ func TestOversizeRunsAlone(t *testing.T) {
 	}
 }
 
-// I4: a waiter behind a blocked head whose need is the whole budget takes nothing, through Step
-// or Poll, and never tries admission: only the head does (PROTOCOL.md section 10.3).
+// I4: a waiter without a typical run time behind a blocked head whose need is the whole budget
+// takes nothing, through Step or Poll, and never tries admission (PROTOCOL.md section 10.3).
 func TestOnlyHeadTakesTheBudget(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
@@ -186,6 +187,53 @@ func TestOnlyHeadTakesTheBudget(t *testing.T) {
 	}
 	if behind.attempts != 0 {
 		t.Errorf("the waiter behind tried admission %d times", behind.attempts)
+	}
+}
+
+// Backfill by duration (PROTOCOL.md section 10.3). A (6 GiB, typical 600 s) and E (512 MiB,
+// typical 600 s) are 120 s in and leave 3 GiB of room; head B needs 5 GiB, so it expects to wait
+// 480 s, until they end. C (400 MiB) and D (300 MiB) behind it start when their typical run time
+// is known and fits in that wait. Mutations: not subtracting how long a job has run admits C in
+// "C runs longer"; passing without history (Step's and passes' checks) admits C in "C has no
+// history"; ignoring that W is unknown admits C and D in "A has no history"; dropping the calm a
+// restart still needs from W admits nobody in "B is a restart".
+func TestBackfillByDuration(t *testing.T) {
+	for _, c := range []struct {
+		name                      string
+		aTypical, bNeed, cTypical int64
+		bRestart                  bool
+		want                      string // who starts, of C, D and B stepped in that order
+	}{
+		{"the owner's case", 600, 5120, 40, false, "CD"},
+		{"C runs longer than B waits", 600, 5120, 500, false, "D"},
+		{"C has no history", 600, 5120, 0, false, "D"},
+		{"A has no history", 0, 5120, 40, false, ""},
+		{"B fits", 600, 2048, 40, false, "B"},
+		{"B is a restart with 30 s of calm left", 600, 1024, 40, true, "D"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clk := newFakeClock()
+			e := newEngine(t, capped(t, 9728), clk)
+			hold(t, e, spec.Request{Label: "a", NeedMiB: 6144, TypicalS: c.aTypical})
+			hold(t, e, spec.Request{Label: "e", NeedMiB: 512, TypicalS: 600})
+			clk.advance(120 * time.Second)
+			setWatch(t, e, clk, watch.Detector{CalmSinceNS: sampleWallNS}, 0) // green, calm from now
+			b := enqueue(t, e, spec.Request{Label: "b", NeedMiB: c.bNeed, Restart: c.bRestart})
+			cc := enqueue(t, e, spec.Request{Label: "c", NeedMiB: 400, TypicalS: c.cTypical})
+			d := enqueue(t, e, spec.Request{Label: "d", NeedMiB: 300, TypicalS: 25})
+			got := ""
+			for _, w := range []struct {
+				name string
+				tk   *Ticket
+			}{{"C", cc}, {"D", d}, {"B", b}} {
+				if isAdmitted(step(t, w.tk)) {
+					got += w.name
+				}
+			}
+			if got != c.want {
+				t.Errorf("started %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

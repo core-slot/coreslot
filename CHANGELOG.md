@@ -25,6 +25,9 @@ no other default is calibrated ([what the records show](calibration/README.md#wh
   need is learned from the label's earlier runs, else the smaller of 4 GiB and a quarter of the
   machine's memory.
   When no coreslot command is running, the head of the queue always starts.
+- Passing by duration: while the head of the queue waits for room, or a restarted command for
+  calm, a command behind it that fits starts first when its label's earlier runs typically end
+  before the head is expected to start. A command with no earlier run never passes.
 - A watchdog shared by every `coreslot run`. It measures how much of the commands' time is lost to
   memory beyond their normal share while the kernel is paging; it holds new starts when that is
   noticeable, and under real danger kills the newest commands, never the oldest, one round at a

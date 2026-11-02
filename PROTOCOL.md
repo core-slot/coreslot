@@ -112,7 +112,8 @@ Every conforming client MUST preserve these invariants:
   and an unreadable headroom (nothing gates the head), both of section 12.1.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
-  it, and a waiter is passed over only while it is STALLED, dead or canceled.
+  it except one that passes it by duration (section 10.3), and a waiter is passed over only while
+  it is STALLED, dead or canceled.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
   no process is stopped inside the admission section, the head is admitted within 3 s; up to 4
@@ -399,8 +400,9 @@ is its target's id, not its writer's `seq`; section 11 says what an existing one
 ### 7.2 Rules for every body
 
 - A body is one UTF-8 JSON object, at most 8 KiB (8 192 bytes), optionally surrounded by JSON
-  whitespace. A writer MUST write every key of its table.
-- A body is **malformed** when it is not such an object, exceeds 8 KiB, lacks a key of its table,
+  whitespace. A writer MUST write every key of its table that the table does not mark optional; an
+  absent optional key reads as `false` or `0`.
+- A body is **malformed** when it is not such an object, exceeds 8 KiB, lacks a required key,
   has a key of the wrong type or outside its rule, or has a duplicate key at any depth. Keys are
   compared after JSON unescaping: `"label"` duplicates `"label"`, so a reader that compares
   raw bytes is not conforming.
@@ -429,6 +431,7 @@ Body:
 | `label` | string | at most 128 bytes in UTF-8; may be empty |
 | `need_mib` | integer | `1..1073741824` (1 PiB); the memory the run needs, in MiB |
 | `created_ns` | integer | `≥ 0`; the run's arrival: the wall clock when the ticket was published, a restarted run's first arrival (section 24) |
+| `restart` | boolean | optional; `true` for a stopped run coming back (section 24), which waits under the restart conditions of section 12.4 |
 
 ### 7.4 Hold
 
@@ -442,6 +445,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns |
 | `arrival_ns` | integer | `≥ 0`; when the run first arrived in the queue, also after a restart (section 24) |
 | `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB: the need asked; `0` for a run outside the budget (section 14), which reserves nothing |
+| `typical_s` | integer | optional; `≥ 0`; the run's typical run time in seconds (section 10.3), as it learned it when it started; `0` when it has none |
 | `stops` | integer | `≥ 0`; how often the run was stopped for memory before this attempt |
 | `footprint_mib` | integer | `0..1073741824`; the run's footprint as it last measured it; `0` when not measured |
 | `d_user_ns`, `d_sys_ns`, `d_page_wait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_page_wait_ns` is `0` where the kernel reports no page wait (section 23.1) |
@@ -653,10 +657,34 @@ A waiter:
   (section 10.4);
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
-  rescan when `gen` changed) before each attempt.
+  rescan when `gen` changed) before each attempt;
+- behind a live ticket, when its run has a typical run time, makes a single admission attempt per
+  election to pass the head (below).
 
-Only the head tries admission: a waiter behind a live ticket never enters the section to be
-admitted, so a head held back by the level gate (section 12.4), a restart included, keeps its place.
+**Passing.** A run's **typical run time** `d`, in whole seconds, is learned from its label's
+counted runs (section 20) when it starts, and its hold carries it as `typical_s`; a run of a label
+without a counted run has none and never passes. In the section, the **head** is the first live
+ticket of the re-election (section 12.1 step 5). A waiter is admitted ahead of the head when:
+
+1. its own request fits and the level gate lets it in, as for a head (section 12.1 steps 4 and 6),
+   and the headroom is known;
+2. it has a typical run time `d`;
+3. `d ≤ W`, the head's **expected wait**: the smallest `t` at which the room plus the `need_mib` of
+   the live holds expected to end within `t` seconds covers the head's need, where a live hold is
+   expected to end `max(0, typical_s − (now − start_ns) / 10^9)` seconds from now. A hold with
+   `typical_s` 0 is never expected to end: when the others do not cover the head's need, `W` is
+   unknown and nobody passes. When the head's ticket has `restart`, `W` is at least the calm it
+   still needs (section 12.4): `calm_s`, less `host_now − calm_since_ns` while the stored sample is
+   fresh and green.
+
+Each waiter between the head and a passer is judged by the same rule on its own, so one that may not
+pass keeps nobody behind it from passing. A passer only starts when it is expected to end before the
+head could start, so the head, a restart included (section 24), keeps its place. A passer that runs
+longer than `d` is never stopped for it. A waiter without a typical run time never enters the section
+to be admitted while a live ticket is ahead of it.
+
+> **Implementation note.** The Go CLI's typical run time is the 90th percentile of the `ran_s` of
+> the window its need is learned from (section 5.4), rounded up to a whole second and at least 1.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting. It
@@ -749,7 +777,7 @@ is the larger or `need_mib` is 0 (a run outside the budget). A live hold whose b
 parse contributes the cold start need (section 5.1) in full. Stray and gone holds are left out.
 The room may be negative. A request **fits** when its need is at most the room.
 
-Inside the section the head:
+Inside the section the head, or a waiter that may pass it (section 10.3):
 
 1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1);
 2. reads the configuration and the machine's memory (section 5.1); an invalid configuration or an
@@ -762,8 +790,8 @@ Inside the section the head:
 5. repeats the election (section 10.3) over a fresh listing of `queue/`, the **re-election**: every
    well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
    this observer (its mtime from the listing counts as an observation), the head leaves the section
-   and waits. A ticket the head has never observed, such as one published after its election,
-   counts as live;
+   and waits, unless it may pass the first of them (section 10.3). A ticket the head has never
+   observed, such as one published after its election, counts as live;
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket, bumps `gen`,

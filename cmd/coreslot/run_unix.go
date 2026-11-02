@@ -28,9 +28,9 @@ const (
 const maxStops = 3
 
 // readLog reads the run log once for a run: the need it gives label, the p90 peak of its last
-// counted runs (ok false when unknown), and the label's normal share of system time (learned
-// false when none of those runs measured it).
-func readLog(loc location, label string) (needMiB int64, ok bool, share float64, learned bool) {
+// counted runs (ok false when unknown), the label's normal share of system time (learned false
+// when none of those runs measured it) and its typical run time (0 when unknown).
+func readLog(loc location, label string) (needMiB int64, ok bool, share float64, learned bool, typicalS int64) {
 	if loc.err != nil {
 		return
 	}
@@ -45,6 +45,7 @@ func readLog(loc location, label string) (needMiB int64, ok bool, share float64,
 	window := runstats.Window(runs, label, runstats.WindowRuns)
 	needMiB, ok = runstats.NeedMiB(window)
 	share, learned = runstats.NormalShare(window)
+	typicalS = runstats.TypicalS(window)
 	return
 }
 
@@ -91,7 +92,8 @@ func runCommand(args []string, io IO) int {
 		})
 	}
 	machine, _ := readMachine()
-	needMiB, known, share, learned := readLog(loc, o.label)
+	needMiB, known, share, learned, typicalS := readLog(loc, o.label)
+	o.typicalS = typicalS
 	o.resolveNeed(lookup, func() (int64, bool) { return needMiB, known }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
