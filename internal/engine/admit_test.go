@@ -237,6 +237,25 @@ func TestBackfillByDuration(t *testing.T) {
 	}
 }
 
+// With no hold live a restart head starts by the idle rule, so it expects no wait and nothing
+// passes it, whatever the passer's need. Mutation: dropping the live-hold check in passes admits C.
+func TestNothingPassesAHeadThatStartsAtOnce(t *testing.T) {
+	for _, cNeed := range []int64{512, 4096} {
+		t.Run(fmt.Sprint(cNeed), func(t *testing.T) {
+			clk := newFakeClock()
+			e := newEngine(t, capped(t, 2048), clk)
+			b := enqueue(t, e, spec.Request{Label: "b", NeedMiB: 1024, Restart: true})
+			c := enqueue(t, e, spec.Request{Label: "c", NeedMiB: cNeed, TypicalS: 20})
+			if isAdmitted(step(t, c)) {
+				t.Error("C passed the head with no hold live")
+			}
+			if !isAdmitted(step(t, b)) {
+				t.Error("B, the head, did not start")
+			}
+		})
+	}
+}
+
 // PROTOCOL.md section 13.1: a cancel published before the head's admitting section wins.
 func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	dir := newStateDir(t, "")

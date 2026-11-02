@@ -675,7 +675,8 @@ ticket of the re-election (section 12.1 step 5). A waiter is admitted ahead of t
    `typical_s` 0 is never expected to end: when the others do not cover the head's need, `W` is
    unknown and nobody passes. When the head's ticket has `restart`, `W` is at least the calm it
    still needs (section 12.4): `calm_s`, less `host_now − calm_since_ns` while the stored sample is
-   fresh and green.
+   fresh and green. With no live hold the head starts by the idle rule (section 12.4), so its
+   expected wait is 0 and nobody passes.
 
 Each waiter between the head and a passer is judged by the same rule on its own, so one that may not
 pass keeps nobody behind it from passing. A passer only starts when it is expected to end before the

@@ -193,7 +193,7 @@ func (t *Ticket) reelect() (*wire.Ticket, error) {
 // (PROTOCOL.md section 10.3): its typical run time is known and ends within W, head's expected
 // wait for the room it needs, at least the calm a restart still needs.
 func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg config.Config, m config.Machine) bool {
-	if t.req.TypicalS == 0 || !m.HeadroomOK {
+	if t.req.TypicalS == 0 || !m.HeadroomOK || len(holds) == 0 { // with no hold live the head starts at once
 		return false
 	}
 	// W: the running jobs with a typical run time end soonest first, each freeing its need, until
