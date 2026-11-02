@@ -1,0 +1,3 @@
+# The run's coreslot state directories and its process list: run.py's working files, not records
+state/
+live.json
