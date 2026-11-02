@@ -21,18 +21,6 @@ const (
 	DefaultSpacingS      = 3
 )
 
-// DefaultNormalShare is the normal S of a label the run log knows nothing of: the highest normal
-// measured, so that an unknown command needs more evidence.
-const DefaultNormalShare = 0.25
-
-// NormalShare is label's normal S in normal, DefaultNormalShare when it has none.
-func NormalShare(normal map[string]float64, label string) float64 {
-	if s, ok := normal[label]; ok {
-		return s
-	}
-	return DefaultNormalShare
-}
-
 // minWorkShare is the part of a period a job's user, system and page-wait time must reach to count
 // toward E: an idle polling job is mostly system time and says nothing about memory. interim: the
 // calibration sets it.
@@ -61,7 +49,8 @@ func Defaults() Config {
 }
 
 // Job is one live hold as its run last wrote it: its tree's footprint and the time deltas since
-// its run's previous tick, and its label's normal S (DefaultNormalShare when unknown).
+// its run's previous tick, and its label's normal S, which Learned says the run log gave: a job
+// without it is neither counted in E nor stopped.
 type Job struct {
 	Hold         string  `json:"hold"`
 	Label        string  `json:"label"`
@@ -72,6 +61,7 @@ type Job struct {
 	DSysNS       int64   `json:"d_sys_ns"`
 	DPageWaitNS  int64   `json:"d_page_wait_ns"`
 	NormalShare  float64 `json:"normal_share"`
+	Learned      bool    `json:"learned"`
 	Victim       bool    `json:"victim"`
 	ChildExited  bool    `json:"child_exited"`
 }
@@ -221,13 +211,14 @@ func Share(j Job) (s float64, ok bool) {
 	return float64(j.DSysNS+j.DPageWaitNS) / float64(total), true
 }
 
-// Excess is the stall excess E in points: the mean of max(0, S − normal) over the jobs that worked
-// for at least minWorkShare of the period of periodNS ns, weighted by their time; 0 when none did.
+// Excess is the stall excess E in points: the mean of max(0, S − normal) over the learned jobs that
+// worked for at least minWorkShare of the period of periodNS ns, weighted by their time; 0 when
+// none did.
 func Excess(jobs []Job, periodNS int64) float64 {
 	var sum, weight float64
 	for _, j := range jobs {
 		w := float64(j.DUserNS + j.DSysNS + j.DPageWaitNS)
-		if s, ok := Share(j); ok && w >= minWorkShare*float64(periodNS) {
+		if s, ok := Share(j); ok && j.Learned && w >= minWorkShare*float64(periodNS) {
 			sum += w * max(0, s-j.NormalShare)
 			weight += w
 		}

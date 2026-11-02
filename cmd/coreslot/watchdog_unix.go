@@ -55,7 +55,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}) {
 			continue
 		}
-		det, c, err := g.Tick(ctx, r.normal)
+		det, c, err := g.Tick(ctx)
 		if err != nil || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
@@ -81,7 +81,7 @@ func (r *run) stopDetail(l watch.Level, kib int64, d memsample.TreeTimes) string
 	detail := fmt.Sprintf("%s, at %s", reason, spec.FormatMiB(kib>>10))
 	if share, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
 		detail += fmt.Sprintf(", %.0f%% of its time went to memory stalls against its normal %.0f%%", 100*share,
-			100*watch.NormalShare(r.normal, r.o.label))
+			100*r.normal[r.o.label])
 	}
 	return detail
 }

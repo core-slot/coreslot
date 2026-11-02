@@ -40,18 +40,18 @@ func (f *feed) step(c Config, gate bool, jobs ...Job) Level {
 // job is one hold that spent 2 s with share of it in the system, its normal share normal.
 func job(share, normal float64) Job {
 	sys := int64(share * 2e9)
-	return Job{Hold: "h", DUserNS: 2e9 - sys, DSysNS: sys, NormalShare: normal}
+	return Job{Hold: "h", DUserNS: 2e9 - sys, DSysNS: sys, NormalShare: normal, Learned: true}
 }
 
 // The Air's ramp, at the cliff: 0.8 s user, 0.6 s system and 0.6 s waiting on pages in a period
 // is S 60 % against a normal 4 %: 56 points.
 func TestExcessFromAirRamp(t *testing.T) {
-	j := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04}
+	j := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04, Learned: true}
 	if e := Excess([]Job{j}, 2e9); math.Abs(e-56) > 1e-9 {
 		t.Errorf("excess %v, want 56", e)
 	}
 	// Weighted by time: a calm job with three times the time pulls it to a quarter.
-	calm := Job{DUserNS: 6e9, NormalShare: 0.04}
+	calm := Job{DUserNS: 6e9, NormalShare: 0.04, Learned: true}
 	if e := Excess([]Job{j, calm}, 2e9); math.Abs(e-14) > 1e-9 {
 		t.Errorf("excess with a calm job %v, want 14", e)
 	}
@@ -75,7 +75,7 @@ func TestHighNormalShareNotYellow(t *testing.T) {
 func TestIdleJobsCarryNoExcess(t *testing.T) {
 	c := Defaults()
 	f := newFeed(c)
-	idle := Job{DUserNS: 5e6, DSysNS: 20e6, NormalShare: 0.04}
+	idle := Job{DUserNS: 5e6, DSysNS: 20e6, NormalShare: 0.04, Learned: true}
 	for i := range 30 {
 		if l := f.step(c, true, idle, idle); l != Green {
 			t.Fatalf("sample %d: %v, want green", i, l)
@@ -247,12 +247,35 @@ func TestMissingOptionalReadingIsNotUnknown(t *testing.T) {
 	}
 }
 
+// A job whose label has no learned normal S is no part of E, however much of its time it spends
+// in the system: 0.82 with the gate open stays green and carries no excess.
+func TestColdJobCarriesNoExcess(t *testing.T) {
+	c := Defaults()
+	f := newFeed(c)
+	cold := job(0.82, 0)
+	cold.Learned = false
+	for i := range 30 {
+		if l := f.step(c, true, cold); l != Green || f.d.Excess != 0 {
+			t.Fatalf("sample %d: %v, E %v; want green, E 0", i, l, f.d.Excess)
+		}
+	}
+}
+
+// E comes from the learned jobs alone: a cold job with three times the time does not dilute it.
+func TestExcessIgnoresColdJobs(t *testing.T) {
+	learned := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04, Learned: true}
+	cold := Job{DUserNS: 6e9, DSysNS: 6e9}
+	if e := Excess([]Job{learned, cold}, 2e9); math.Abs(e-56) > 1e-9 {
+		t.Errorf("excess %v with a cold job, want 56", e)
+	}
+}
+
 func jobs() []Job {
 	return []Job{
-		{Hold: "1", ArrivalNS: 1, FootprintMiB: 8192, Victim: true},
-		{Hold: "5", ArrivalNS: 5, FootprintMiB: 307, Victim: true},
-		{Hold: "6", ArrivalNS: 6, FootprintMiB: 410, Victim: true},
-		{Hold: "7", ArrivalNS: 7, FootprintMiB: 512, Victim: true},
+		{Hold: "1", ArrivalNS: 1, FootprintMiB: 8192, Victim: true, Learned: true},
+		{Hold: "5", ArrivalNS: 5, FootprintMiB: 307, Victim: true, Learned: true},
+		{Hold: "6", ArrivalNS: 6, FootprintMiB: 410, Victim: true, Learned: true},
+		{Hold: "7", ArrivalNS: 7, FootprintMiB: 512, Victim: true, Learned: true},
 	}
 }
 
@@ -284,5 +307,14 @@ func TestStopListOnlyOldestLeft(t *testing.T) {
 	}
 	if got := StopList(jobs()[:1], 1024); len(got) != 0 {
 		t.Errorf("stop list of the oldest alone %v, want none", got)
+	}
+}
+
+// A cold job is never listed, even as the newest; the learned victims behind it are.
+func TestStopListSkipsColdJobs(t *testing.T) {
+	js := jobs()
+	js[3].Learned = false
+	if got := StopList(js, 1<<20); !slices.Equal(got, []string{"6", "5"}) {
+		t.Errorf("stop list %v, want [6 5]", got)
 	}
 }

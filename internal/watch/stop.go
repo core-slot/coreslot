@@ -5,7 +5,7 @@ import (
 	"slices"
 )
 
-// StopList names the holds a stop round stops: victims whose child still runs, newest arrival
+// StopList names the holds a stop round stops: learned victims whose child still runs, newest arrival
 // first, never the oldest live job, until their footprints sum to max(deficitMiB, 1).
 func StopList(jobs []Job, deficitMiB int64) []string {
 	newest := slices.Clone(jobs)
@@ -18,7 +18,7 @@ func StopList(jobs []Job, deficitMiB int64) []string {
 		if freed >= max(deficitMiB, 1) {
 			break
 		}
-		if j.Victim && !j.ChildExited {
+		if j.Victim && j.Learned && !j.ChildExited {
 			stop = append(stop, j.Hold)
 			freed += j.FootprintMiB
 		}

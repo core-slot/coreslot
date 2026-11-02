@@ -32,7 +32,7 @@ func (m *machine) read() (watch.Sample, error) {
 
 func stalled(hold string, arrival int64) watch.Job {
 	return watch.Job{Hold: hold, ArrivalNS: arrival, FootprintMiB: 512, DUserNS: 4e8, DSysNS: 16e8,
-		NormalShare: 0.05, Victim: true}
+		NormalShare: 0.05, Learned: true, Victim: true}
 }
 
 // Two runs ticking in one period share one machine sample: the second only reads it. The next

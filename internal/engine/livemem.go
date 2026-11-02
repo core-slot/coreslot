@@ -84,9 +84,8 @@ func reservations(holds []liveHold) []state.MemHold {
 // Tick is the grant's part in the shared watch tick: inside the section, entered within
 // sectionWait, the detector advances on a new machine sample of the host and the live holds when
 // the stored one is a period old (store.Section.Tick). It returns the detector and the [watch]
-// configuration; a section that stayed busy returns the zero detector. normal holds the labels'
-// normal shares; a label it lacks has watch.DefaultNormalShare.
-func (g *Grant) Tick(ctx context.Context, normal map[string]float64) (watch.Detector, watch.Config, error) {
+// configuration; a section that stayed busy returns the zero detector.
+func (g *Grant) Tick(ctx context.Context) (watch.Detector, watch.Config, error) {
 	e := g.e
 	sec, entered, err := e.enter(ctx, false)
 	if err != nil || !entered {
@@ -100,12 +99,12 @@ func (g *Grant) Tick(ctx context.Context, normal map[string]float64) (watch.Dete
 	if err != nil {
 		return watch.Detector{}, watch.Config{}, err
 	}
-	d, _, err := sec.Tick(e.clock.Realtime(), e.sampler(cfg, m, normal), cfg.Watch)
+	d, _, err := sec.Tick(e.clock.Realtime(), e.sampler(cfg, m), cfg.Watch)
 	return d, cfg.Watch, err
 }
 
 // sampler reads one machine sample: the host, the running jobs and the room.
-func (e *Engine) sampler(cfg config.Config, m config.Machine, normal map[string]float64) func() (watch.Sample, error) {
+func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Sample, error) {
 	return func() (watch.Sample, error) {
 		host, err := memsample.ReadHost()
 		if err != nil {
@@ -115,7 +114,7 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine, normal map[string]
 		if err != nil {
 			return watch.Sample{}, err
 		}
-		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime(), normal)}
+		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime(), e.Normal)}
 		if m.HeadroomOK {
 			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
 		}
@@ -123,8 +122,9 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine, normal map[string]
 	}
 }
 
-// runningJobs are the watch jobs of holds at nowNS, with their labels' normal shares: the holds
-// whose command is alive and whose run ticked within memsample.StaleNS. Any other hold has no time to report.
+// runningJobs are the watch jobs of holds at nowNS, with their labels' normal shares, Learned for a
+// label that normal has: the holds whose command is alive and whose run ticked within
+// memsample.StaleNS. Any other hold has no time to report.
 func runningJobs(holds []liveHold, nowNS int64, normal map[string]float64) []watch.Job {
 	var jobs []watch.Job
 	for _, h := range holds {
@@ -132,9 +132,10 @@ func runningJobs(holds []liveHold, nowNS int64, normal map[string]float64) []wat
 		if b.ChildExited || !fresh(b.SampledNS, nowNS) {
 			continue
 		}
+		share, learned := normal[b.Label]
 		jobs = append(jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
 			NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
-			DPageWaitNS: b.DPageWaitNS, NormalShare: watch.NormalShare(normal, b.Label), Victim: b.Victim, ChildExited: b.ChildExited})
+			DPageWaitNS: b.DPageWaitNS, NormalShare: share, Learned: learned, Victim: b.Victim, ChildExited: b.ChildExited})
 	}
 	return jobs
 }

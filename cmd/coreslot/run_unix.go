@@ -119,6 +119,7 @@ func (r *run) ordinary() int {
 	if err != nil {
 		return r.failOpen(nil, err)
 	}
+	e.Normal = r.normal
 	req := r.o.request()
 	if total, over := e.Oversized(req.NeedMiB); over {
 		r.notice("needs %.1f GiB of %.1f GiB; runs only alone", float64(req.NeedMiB)/1024, float64(total)/1024)

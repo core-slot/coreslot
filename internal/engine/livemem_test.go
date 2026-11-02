@@ -104,6 +104,16 @@ func TestOnlyTickingHoldsAreJobs(t *testing.T) {
 	}
 }
 
+// A job is learned only when the run log gave its label a normal S, even a normal of 0.
+func TestRunningJobsAreLearnedByLabel(t *testing.T) {
+	now := int64(1e18)
+	holds := []liveHold{{"a", wire.Hold{Label: "known", SampledNS: now}}, {"b", wire.Hold{Label: "new", SampledNS: now}}}
+	jobs := runningJobs(holds, now, map[string]float64{"known": 0})
+	if !jobs[0].Learned || jobs[1].Learned {
+		t.Errorf("learned = %v, %v; want true, false", jobs[0].Learned, jobs[1].Learned)
+	}
+}
+
 func TestTornLiveHoldCountsAtColdStart(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())

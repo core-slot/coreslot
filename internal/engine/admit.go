@@ -106,7 +106,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machine, need, room int64) (bool, error) {
 	c := cfg.Watch
 	if t.req.Restart {
-		_, _, _ = sec.Tick(t.e.clock.Realtime(), t.e.sampler(cfg, m, nil), c) // a failed sample is Unknown
+		_, _, _ = sec.Tick(t.e.clock.Realtime(), t.e.sampler(cfg, m), c) // a failed sample is Unknown
 	}
 	d, s, at, err := sec.Watch()
 	now := t.e.clock.Realtime()
