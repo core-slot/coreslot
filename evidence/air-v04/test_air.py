@@ -103,16 +103,30 @@ class AnalyseTest(unittest.TestCase):
 
 
 class SemTest(unittest.TestCase):
-    def two(self, slots):
+    def two(self, slots, *fifo):
         d, t = tempfile.mkdtemp(), time.monotonic()
-        ps = [subprocess.Popen([sys.executable, os.path.join(HERE, "sem.py"), d, str(slots), "--", "sleep", "0.5"])
+        ps = [subprocess.Popen([sys.executable, os.path.join(HERE, "sem.py"), *fifo, d, str(slots), "--", "sleep", "0.5"])
               for _ in range(2)]
         self.assertEqual([p.wait() for p in ps], [0, 0])
         return time.monotonic() - t
 
     def test_one_slot_serialises_two_slots_overlap(self):
-        self.assertGreaterEqual(self.two(1), 1.0)
-        self.assertLess(self.two(2), 0.9)
+        for fifo in ([], ["--fifo"]):
+            self.assertGreaterEqual(self.two(1, *fifo), 1.0)
+            self.assertLess(self.two(2, *fifo), 0.9)
+
+    def test_fifo_grants_in_arrival_order(self):
+        for order in ("abc", "cab", "bca", "acb"):
+            d = tempfile.mkdtemp()
+            log = os.path.join(d, "log")
+            ps = []
+            for name in order:  # a holds the slot while b and c queue behind it
+                ps.append(subprocess.Popen([sys.executable, os.path.join(HERE, "sem.py"), "--fifo", d, "1", "--",
+                                            "sh", "-c", f"echo {name} >> {log}; sleep 0.25"]))
+                time.sleep(0.1)
+            self.assertEqual([p.wait() for p in ps], [0, 0, 0])
+            with open(log) as f:
+                self.assertEqual(f.read().split(), list(order))
 
     def test_exit_status_is_the_commands(self):
         p = subprocess.run([sys.executable, os.path.join(HERE, "sem.py"), tempfile.mkdtemp(), "1", "--", "sh", "-c", "exit 3"])
@@ -179,6 +193,18 @@ class RunTest(unittest.TestCase):
         hogs = [x for x in self.dry("demo") if x.startswith("hog ")]
         self.assertEqual(len(hogs), 3)
         self.assertTrue(all("--label demo-hog" in x and "--slow-pct 0" in x for x in hogs))
+
+    def test_orders(self):
+        lines = self.dry("--stagger-s", "1", "set", "S", "--slots", "1", "--order", "A3,A4,A1,A2", "--tag", "sem-pair-1")
+        self.assertEqual([x.split()[2] + x.split()[5] for x in lines if x.startswith("sem-pair-1")],
+                         ["A3+0.0", "A3+0.0", "A4+1.0", "A1+2.0", "A2+3.0"])
+        self.assertTrue(all("sem.py --fifo" in x for x in lines if x.startswith("sem-pair-1")))
+        p = self.dry("--mix", "light", "pairs", "--prefix", "light-", "--last", "2", "--orders", "A4,A3;A3,A4")
+        self.assertEqual([x.split()[2] for x in p if x.startswith("light-pair-2 K")], ["A3", "A3", "A4"])
+        for bad in (["set", "F", "--order", "A1,A2,A3", "--tag", "pilot"],
+                    ["pairs", "--last", "2", "--orders", "A1,A2,A3,A4"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                run.main(["--dry", "--smoke", "--coreslot", "c", "--stand", "s", "--out", "o", *bad])
 
     def test_bad_tag(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
