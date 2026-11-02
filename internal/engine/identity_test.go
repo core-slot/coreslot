@@ -16,7 +16,7 @@ import (
 func TestAdmissionDoesNotReconcile(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	tk := enqueue(t, e, need("mem=1")) // reconciles once, as enqueue does
+	tk := enqueue(t, e, need(128)) // reconciles once, as enqueue does
 	g, err := e.st.ReadGen()
 	if err != nil {
 		t.Fatal(err)

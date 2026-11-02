@@ -53,23 +53,23 @@ func TestHoldIsTheReservation(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	holder := startHelper(t, "hold", dir, "mem=8")
+	holder := startHelper(t, "hold", dir, "1024")
 	body, err := e.readBody(store.HoldsDir, holder.detail)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h, err := wire.DecodeHold(body); err != nil || h.NeedMiB != testUnits*unit || h.PID != holder.cmd.Process.Pid {
-		t.Fatalf("the helper's hold %+v, %v; want need_mib %d of pid %d", h, err, testUnits*unit, holder.cmd.Process.Pid)
+	if h, err := wire.DecodeHold(body); err != nil || h.NeedMiB != testRoomMiB || h.PID != holder.cmd.Process.Pid {
+		t.Fatalf("the helper's hold %+v, %v; want need_mib %d of pid %d", h, err, testRoomMiB, holder.cmd.Process.Pid)
 	}
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 	if isAdmitted(step(t, tk)) {
 		t.Fatal("admitted beside a hold that reserves the whole budget")
 	}
 	holder.kill(t)
 	clk.advance(time.Second)
 	g := admitted(t, step(t, tk))
-	if h := readHold(t, e, g); h.NeedMiB != unit || h.ArrivalNS != tk.arrivalNS || h.PID != os.Getpid() {
-		t.Errorf("hold %+v, want need_mib %d, the ticket's arrival and this pid", h, unit)
+	if h := readHold(t, e, g); h.NeedMiB != 128 || h.ArrivalNS != tk.arrivalNS || h.PID != os.Getpid() {
+		t.Errorf("hold %+v, want need_mib %d, the ticket's arrival and this pid", h, 128)
 	}
 
 	path := filepath.Join(dir, store.HoldsDir, g.HoldName())
@@ -77,21 +77,21 @@ func TestHoldIsTheReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g.UpdateHold(func(h *wire.Hold) { h.NeedMiB, h.FootprintMiB, h.Label = 3*unit, 90, "renamed" }); err != nil {
+	if err := g.UpdateHold(func(h *wire.Hold) { h.NeedMiB, h.FootprintMiB, h.Label = 384, 90, "renamed" }); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.Stat(path)
 	if err != nil || !os.SameFile(before, after) {
 		t.Fatalf("UpdateHold replaced the hold's file: %v", err)
 	}
-	if h := readHold(t, e, g); h.NeedMiB != 3*unit || h.FootprintMiB != 90 || h.Label != "" {
-		t.Errorf("hold after UpdateHold %+v, want need 3 units, footprint 90 and the label of its name", h)
+	if h := readHold(t, e, g); h.NeedMiB != 384 || h.FootprintMiB != 90 || h.Label != "" {
+		t.Errorf("hold after UpdateHold %+v, want need 384 MiB, footprint 90 and the label of its name", h)
 	}
 	if dead, err := e.st.Probe(store.HoldsDir, g.HoldName()); err != nil || dead {
 		t.Errorf("the rewritten hold: dead %v, %v; want still locked", dead, err)
 	}
-	if n := reservedUnits(t, e); n != 3 {
-		t.Errorf("reserved %d units after UpdateHold, want 3", n)
+	if n := reservedMiB(t, e); n != 384 {
+		t.Errorf("reserved %d MiB after UpdateHold, want 384", n)
 	}
 	g.Close()
 	if err := g.UpdateHold(func(*wire.Hold) {}); err == nil {
@@ -138,19 +138,19 @@ func TestOversizeRunsAlone(t *testing.T) {
 	dir := capped(t, 1280)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	other := startHelper(t, "lock", dir, holdPath(t, dir, 1))
-	tk := enqueue(t, e, need("mem=16"))
+	other := startHelper(t, "lock", dir, holdPath(t, dir, 128))
+	tk := enqueue(t, e, need(2048))
 	if r := step(t, tk); isAdmitted(r) {
 		t.Fatal("an oversized request admitted beside a live hold")
 	}
 	other.stop()
 	clk.advance(time.Second)
 	g := admitted(t, step(t, tk))
-	if g.GrantMiB() != 16*unit {
-		t.Errorf("grant %d, want %d", g.GrantMiB(), 16*unit)
+	if g.GrantMiB() != 2048 {
+		t.Errorf("grant %d, want %d", g.GrantMiB(), 2048)
 	}
-	if n := reservedUnits(t, e); n != 16 {
-		t.Errorf("reserved %d units, want the 16 asked", n)
+	if n := reservedMiB(t, e); n != 2048 {
+		t.Errorf("reserved %d MiB, want the 2048 asked", n)
 	}
 }
 
@@ -160,9 +160,9 @@ func TestOnlyHeadTakesTheBudget(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, holdPath(t, dir, 1))
-	head := enqueue(t, e, need("mem=8")) // cannot be admitted: 7 of 8 free
-	behind := enqueue(t, e, need("mem=1"))
+	startHelper(t, "lock", dir, holdPath(t, dir, 128))
+	head := enqueue(t, e, need(1024)) // cannot be admitted: 896 MiB of 1024 free
+	behind := enqueue(t, e, need(128))
 	for round := 0; round < 6; round++ {
 		clk.advance(time.Second)
 		step(t, head)
@@ -180,8 +180,8 @@ func TestOnlyHeadTakesTheBudget(t *testing.T) {
 			admitted(t, r).Close()
 			t.Fatalf("round %d: the waiter behind the head was admitted (backfill)", round)
 		}
-		if n := reservedUnits(t, e); n != 1 {
-			t.Fatalf("round %d: %d units reserved, want only the helper's 1", round, n)
+		if n := reservedMiB(t, e); n != 128 {
+			t.Fatalf("round %d: %d MiB reserved, want only the helper's 128", round, n)
 		}
 	}
 	if behind.attempts != 0 {
@@ -193,7 +193,7 @@ func TestOnlyHeadTakesTheBudget(t *testing.T) {
 func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	head := enqueue(t, e, need("mem=2"))
+	head := enqueue(t, e, need(256))
 
 	reached, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
@@ -226,8 +226,8 @@ func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 		}
 		t.Fatalf("head Step: %#v, %v; want ErrCanceled", res.r, res.err)
 	}
-	if n := reservedUnits(t, e); n != 0 {
-		t.Errorf("%d units reserved by a cancelled head", n)
+	if n := reservedMiB(t, e); n != 0 {
+		t.Errorf("%d MiB reserved by a cancelled head", n)
 	}
 	if exists(filepath.Join(dir, store.CancelDir, ticketID(head).String())) {
 		t.Error("the cancel request was not removed")
@@ -278,7 +278,7 @@ func TestUnknownFormatRefuses(t *testing.T) {
 		e := newEngine(t, dir, newFakeClock())
 		writeFormat(t, dir, "coreslot-protocol 3\n")
 		before := listing(t, dir)
-		_, err := e.EnqueueContext(context.Background(), need("mem=1"))
+		_, err := e.EnqueueContext(context.Background(), need(128))
 		refused(t, err)
 		if after := listing(t, dir); after != before {
 			t.Errorf("a refused enqueue wrote to the state directory:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -288,8 +288,8 @@ func TestUnknownFormatRefuses(t *testing.T) {
 		dir := newStateDir(t, "")
 		clk := newFakeClock()
 		e := newEngine(t, dir, clk)
-		startHelper(t, "lock", dir, holdPath(t, dir, 8))
-		tk := enqueue(t, e, need("mem=1"))
+		startHelper(t, "lock", dir, holdPath(t, dir, 1024))
+		tk := enqueue(t, e, need(128))
 		step(t, tk)
 		writeFormat(t, dir, "coreslot-protocol 3\n")
 		clk.advance(time.Second)
@@ -303,7 +303,7 @@ func TestUnknownFormatRefuses(t *testing.T) {
 func TestFailOpenHold(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	g, err := e.FailOpen(need("mem=2"), "configuration invalid")
+	g, err := e.FailOpen(need(256), "configuration invalid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestFailOpenHold(t *testing.T) {
 	for _, format := range []string{"coreslot-protocol 3\n", "coreslot-protocol x\n"} {
 		writeFormat(t, dir, format)
 		before := listing(t, dir)
-		g, err := e.FailOpen(need("mem=2"), "state error")
+		g, err := e.FailOpen(need(256), "state error")
 		if err == nil || g == nil || g.HoldName() != "" {
 			t.Errorf("FORMAT %q: grant %v err %v, want a hold-less grant and an error", format, g, err)
 		}
@@ -374,8 +374,8 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	g := admitted(t, step(t, enqueue(t, e, needLabel("mem=3", "gate:\nunit"))))
-	waiter := enqueue(t, e, needLabel("mem=8", "ci"))
+	g := admitted(t, step(t, enqueue(t, e, needLabel(384, "gate:\nunit"))))
+	waiter := enqueue(t, e, needLabel(1024, "ci"))
 	startHelper(t, "section", dir, "")
 	before := listing(t, dir)
 	r, err := e.Snapshot()
@@ -388,13 +388,13 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	if !r.Section.Held || r.Section.PID == 0 {
 		t.Errorf("section %+v, want held by the helper", r.Section)
 	}
-	if len(r.Holds) != 1 || r.Holds[0].Label != "gate:\nunit" || r.Holds[0].NeedMiB != 3*unit || r.Holds[0].Name != g.HoldName() {
+	if len(r.Holds) != 1 || r.Holds[0].Label != "gate:\nunit" || r.Holds[0].NeedMiB != 384 || r.Holds[0].Name != g.HoldName() {
 		t.Errorf("holds %+v", r.Holds)
 	}
 	if len(r.Tickets) != 1 || r.Tickets[0].Name != waiter.Name() || r.Tickets[0].Dead {
 		t.Errorf("tickets %+v", r.Tickets)
 	}
-	if m := r.Mem; m.ReservedMiB != 3*unit || m.FreeMiB != 5*unit {
+	if m := r.Mem; m.ReservedMiB != 384 || m.FreeMiB != 640 {
 		t.Errorf("mem %+v, want reserved 384, free 640", m)
 	}
 	if r.Format != 2 || !r.FormatUnderstood {
@@ -409,7 +409,7 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 func TestSnapshotOwnerExited(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	admitted(t, step(t, enqueue(t, e, need("mem=2"))))
+	admitted(t, step(t, enqueue(t, e, need(256))))
 	r, err := e.Snapshot()
 	if err != nil || len(r.Holds) != 1 {
 		t.Fatalf("holds %+v, %v; want one", r.Holds, err)
@@ -444,13 +444,13 @@ func TestReelectionInsideTheSection(t *testing.T) {
 	dir := capped(t, 128)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	h := enqueue(t, e, need("mem=1"))
+	h := enqueue(t, e, need(128))
 	var p *Ticket
 	defaultPoint := point
 	point = func(name string) {
 		if name == "admit.before-enter" && p == nil {
 			early := &fakeClock{mono: clk.clock().Monotonic(), real: clk.clock().Realtime() - int64(time.Minute)}
-			p = enqueue(t, newEngine(t, dir, early), needLabel("mem=1", "p")) // an earlier arrival: ahead of h
+			p = enqueue(t, newEngine(t, dir, early), needLabel(128, "p")) // an earlier arrival: ahead of h
 		}
 	}
 	t.Cleanup(func() { point = defaultPoint })
@@ -477,13 +477,13 @@ func TestReelectionWatchesATicketPublishedWithoutBump(t *testing.T) {
 	dir := capped(t, 128)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	holder := startHelper(t, "lock", dir, holdPath(t, dir, 1))
-	h := enqueue(t, e, need("mem=1"))
+	holder := startHelper(t, "lock", dir, holdPath(t, dir, 128))
+	h := enqueue(t, e, need(128))
 	if pos := position(t, step(t, h)); pos != 1 { // elected, gen known; the budget is held
 		t.Fatalf("h at position %d, want the head", pos)
 	}
 	// x: a well-formed, live ticket ahead of h, published without bumping gen.
-	body, err := wire.Encode(wire.Ticket{Label: "x", NeedMiB: unit, CreatedNS: 1})
+	body, err := wire.Encode(wire.Ticket{Label: "x", NeedMiB: 128, CreatedNS: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

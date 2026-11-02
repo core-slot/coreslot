@@ -33,9 +33,9 @@ func setWatch(t *testing.T, e *Engine, clk *fakeClock, d watch.Detector, age tim
 func TestStaleLevelIgnored(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
-	hold(t, e, need("mem=1"))
+	hold(t, e, need(128))
 	setWatch(t, e, clk, watch.Detector{Level: watch.Yellow}, time.Second)
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 	if isAdmitted(step(t, tk)) {
 		t.Fatal("admitted while a fresh sample is yellow")
 	}
@@ -50,7 +50,7 @@ func TestIdleIgnoresLevel(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
 	setWatch(t, e, clk, watch.Detector{Level: watch.Red}, 0)
-	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+	admitted(t, step(t, enqueue(t, e, need(128))))
 }
 
 // For calm_s after the level clears, each job starts at least spacing_s after the previous one;
@@ -59,11 +59,11 @@ func TestIdleIgnoresLevel(t *testing.T) {
 func TestSpacingAfterClear(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
-	hold(t, e, need("mem=1"))
+	hold(t, e, need(128))
 	setWatch(t, e, clk, watch.Detector{YellowClearedNS: sampleWallNS - 1e9}, 0)
-	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+	admitted(t, step(t, enqueue(t, e, need(128))))
 	for i := 2; i <= 3; i++ {
-		tk := enqueue(t, e, need("mem=1"))
+		tk := enqueue(t, e, need(128))
 		if isAdmitted(step(t, tk)) {
 			t.Fatalf("job %d started within spacing_s of the previous one after the clear", i)
 		}
@@ -71,8 +71,8 @@ func TestSpacingAfterClear(t *testing.T) {
 		admitted(t, step(t, tk))
 	}
 	clk.advance(24 * time.Second) // 31 s after the clear
-	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
-	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+	admitted(t, step(t, enqueue(t, e, need(128))))
+	admitted(t, step(t, enqueue(t, e, need(128))))
 }
 
 // Detector times from another clock epoch (a reboot keeps watch.json; a failed reading stores a
@@ -80,9 +80,9 @@ func TestSpacingAfterClear(t *testing.T) {
 func TestSpacingOnlyWithinTheSampleEpoch(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
-	hold(t, e, need("mem=1"))
+	hold(t, e, need(128))
 	setWatch(t, e, clk, watch.Detector{YellowClearedNS: 5e14, LastAdmitNS: 5e14 + 1e9}, 0)
-	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+	admitted(t, step(t, enqueue(t, e, need(128))))
 
 	sec, err := e.st.Enter(context.Background())
 	if err != nil {
@@ -93,7 +93,7 @@ func TestSpacingOnlyWithinTheSampleEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted(t, step(t, enqueue(t, e, need("mem=1"))))
+	admitted(t, step(t, enqueue(t, e, need(128))))
 }
 
 // A restart beside holds whose runs do not tick takes the machine sample itself, so its calm is
@@ -101,8 +101,8 @@ func TestSpacingOnlyWithinTheSampleEpoch(t *testing.T) {
 func TestRestartTakesTheSampleItself(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
-	hold(t, e, need("mem=1"))
-	req := need("mem=1")
+	hold(t, e, need(128))
+	req := need(128)
 	req.Restart = true
 	if isAdmitted(step(t, enqueue(t, e, req))) {
 		t.Fatal("a restart started without calm")
@@ -117,11 +117,11 @@ func TestRestartTakesTheSampleItself(t *testing.T) {
 func TestRestartedHeadIsNotPassed(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
-	hold(t, e, need("mem=1"))
-	req := need("mem=1")
+	hold(t, e, need(128))
+	req := need(128)
 	req.Restart = true
 	restarted := enqueue(t, e, req)
-	later := enqueue(t, e, need("mem=1"))
+	later := enqueue(t, e, need(128))
 	for round := range 6 {
 		clk.advance(time.Second)
 		if isAdmitted(step(t, restarted)) {
@@ -134,14 +134,14 @@ func TestRestartedHeadIsNotPassed(t *testing.T) {
 }
 
 // A restarted job waits for calm_s of green and for room of its need plus max(256 MiB, need/10),
-// where a new job of the same need starts. The room beside the 1-unit hold is 896 MiB.
+// where a new job of the same need starts. The room beside the 128 MiB hold is 896 MiB.
 func TestRestartWaitsForCalmAndMargin(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
-	hold(t, e, need("mem=1"))
+	hold(t, e, need(128))
 	restart := func(mib int64) bool {
 		t.Helper()
-		req := need("mem=1")
+		req := need(128)
 		req.NeedMiB, req.Restart = mib, true
 		tk := enqueue(t, e, req)
 		ok := isAdmitted(step(t, tk))
@@ -158,7 +158,7 @@ func TestRestartWaitsForCalmAndMargin(t *testing.T) {
 	if restart(768) {
 		t.Fatal("a 768 MiB restart started with 896 MiB of room, under its 256 MiB margin")
 	}
-	admitted(t, step(t, enqueue(t, e, need("mem=768M")))).Close()
+	admitted(t, step(t, enqueue(t, e, need(768)))).Close()
 	if !restart(640) {
 		t.Error("a 640 MiB restart did not start after 31 s of calm with room for its margin")
 	}

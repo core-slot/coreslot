@@ -19,7 +19,7 @@ import (
 func TestDecideNested(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	live := hold(t, e, need("mem=1")).HoldName()
+	live := hold(t, e, need(128)).HoldName()
 	deadName := wire.HoldName(7, 4321, 1, "dead") // a hold nobody locks, left by a killed run
 	if err := os.WriteFile(filepath.Join(dir, store.HoldsDir, deadName), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)

@@ -64,18 +64,15 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.real += int64(d)
 }
 
-// unit is the need of need("mem=1"): the tests count holds in it.
-const unit = 128
-
-// testUnits is the room testMachine leaves by default, in whole units.
-const testUnits = 8
+// testRoomMiB is the room testMachine leaves by default while no hold is live.
+const testRoomMiB = 1024
 
 // testHeadroom is the headroom testMachine reports; ok false is a headroom that cannot be read.
-// The default leaves testUnits of room under the default reserve.
+// The default leaves testRoomMiB under the default reserve.
 var testHeadroom = struct {
 	mib int64
 	ok  bool
-}{testUnits*unit + config.DefaultReserveMiB, true}
+}{testRoomMiB + config.DefaultReserveMiB, true}
 
 // testMachine is the machine every test engine reads: 1707 MiB, with testHeadroom.
 func testMachine() (config.Machine, error) {
@@ -121,24 +118,21 @@ func newEngine(t *testing.T, dir string, clk *fakeClock) *Engine {
 		testMachine, c)
 }
 
-func need(spec string) spec.Request {
-	return needLabel(spec, "")
+func need(mib int64) spec.Request {
+	return needLabel(mib, "")
 }
 
-// needLabel is a request for arg: mem=N for N units, or mem=SIZE with a size such as 1G or 768M.
-func needLabel(arg, label string) spec.Request {
-	v, ok := strings.CutPrefix(arg, "mem=")
-	if !ok {
-		panic("need " + arg)
-	}
-	if n, err := strconv.Atoi(v); err == nil {
-		return spec.Request{Label: label, NeedMiB: int64(n) * unit}
-	}
-	mib, err := spec.ParseBytes(v)
+func needLabel(mib int64, label string) spec.Request {
+	return spec.Request{Label: label, NeedMiB: mib}
+}
+
+// helperMiB is the need a helper process is given, a decimal number of MiB.
+func helperMiB(arg string) int64 {
+	mib, err := strconv.ParseInt(arg, 10, 64)
 	if err != nil {
 		panic(err)
 	}
-	return spec.Request{Label: label, NeedMiB: mib}
+	return mib
 }
 
 // ticketID is the id of tk's ticket, what a cancel request names.
@@ -194,8 +188,8 @@ func isAdmitted(r StepResult) bool {
 	return ok
 }
 
-// reservedUnits is what the live holds reserve, in units, read in a section of its own.
-func reservedUnits(t *testing.T, e *Engine) int {
+// reservedMiB is what the live holds reserve, read in a section of its own.
+func reservedMiB(t *testing.T, e *Engine) int64 {
 	t.Helper()
 	sec, err := e.st.Enter(context.Background())
 	if err != nil {
@@ -210,7 +204,7 @@ func reservedUnits(t *testing.T, e *Engine) int {
 	for _, h := range holds {
 		reserved += h.body.NeedMiB
 	}
-	return int(reserved / unit)
+	return reserved
 }
 
 func exists(path string) bool {
@@ -249,8 +243,8 @@ func TestHelperProcess(t *testing.T) {
 	detail := ""
 	var tk *Ticket
 	switch mode {
-	case "enqueue": // publish a ticket and never step it: it is refreshed only on command
-		tk, err = e.EnqueueContext(context.Background(), need(arg))
+	case "enqueue": // publish a ticket for arg MiB and never step it: it is refreshed only on command
+		tk, err = e.EnqueueContext(context.Background(), need(helperMiB(arg)))
 		if err != nil {
 			fail(err)
 		}
@@ -266,8 +260,8 @@ func TestHelperProcess(t *testing.T) {
 			}
 		}
 		keep = append(keep, sec)
-	case "hold": // admitted at once with need arg; the detail is the hold's name
-		tk, err = e.EnqueueContext(context.Background(), need(arg))
+	case "hold": // admitted at once with a need of arg MiB; the detail is the hold's name
+		tk, err = e.EnqueueContext(context.Background(), need(helperMiB(arg)))
 		if err != nil {
 			fail(err)
 		}
@@ -402,11 +396,11 @@ func lockNB(f *os.File) error {
 // otherHolds numbers the holds holdPath writes, so that each has a name of its own.
 var otherHolds atomic.Int64
 
-// holdPath writes a hold reserving units into holds/ and returns its path, for the lock helper:
-// while the helper holds it, it is another client's grant.
-func holdPath(t *testing.T, dir string, units int) string {
+// holdPath writes a hold reserving needMiB into holds/ and returns its path, for the lock
+// helper: while the helper holds it, it is another client's grant.
+func holdPath(t *testing.T, dir string, needMiB int64) string {
 	t.Helper()
-	h := wire.Hold{Label: "other", PID: 4000 + int(otherHolds.Add(1)), StartNS: 1, NeedMiB: int64(units) * unit}
+	h := wire.Hold{Label: "other", PID: 4000 + int(otherHolds.Add(1)), StartNS: 1, NeedMiB: needMiB}
 	body, err := wire.Encode(h)
 	if err != nil {
 		t.Fatal(err)
@@ -428,11 +422,11 @@ func TestFIFOByArrival(t *testing.T) {
 	dir := capped(t, 128)
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	a := enqueue(t, e, needLabel("mem=1", "a"))
+	a := enqueue(t, e, needLabel(128, "a"))
 	clk.advance(time.Millisecond)
-	b := enqueue(t, e, needLabel("mem=1", "b"))
+	b := enqueue(t, e, needLabel(128, "b"))
 	clk.advance(time.Millisecond)
-	c := enqueue(t, e, needLabel("mem=1", "c"))
+	c := enqueue(t, e, needLabel(128, "c"))
 
 	var order []string
 	grants := map[string]*Grant{}
@@ -470,8 +464,8 @@ func TestStoppedHeadIsPassedOver(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 	// It enqueues and never refreshes; it needs the whole budget, so the successor cannot pass it.
-	h := startHelper(t, "enqueue", dir, "mem=8")
-	s := enqueue(t, e, need("mem=1"))
+	h := startHelper(t, "enqueue", dir, "1024")
+	s := enqueue(t, e, need(128))
 
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d behind a fresh ticket, want 2", p)
@@ -498,8 +492,8 @@ func TestWaiterAbsenceIsNotWatched(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "enqueue", dir, "mem=8") // never refreshes; needs the whole budget, so s cannot pass it
-	s := enqueue(t, e, need("mem=1"))
+	startHelper(t, "enqueue", dir, "1024") // never refreshes; needs the whole budget, so s cannot pass it
+	s := enqueue(t, e, need(128))
 
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d behind a fresh ticket, want 2", p)
@@ -524,9 +518,9 @@ func TestStalledTicketResumesItsPlace(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, holdPath(t, dir, 1)) // the successor cannot be admitted
-	h := startHelper(t, "enqueue", dir, "mem=1")
-	s := enqueue(t, e, need("mem=8"))
+	startHelper(t, "lock", dir, holdPath(t, dir, 128)) // the successor cannot be admitted
+	h := startHelper(t, "enqueue", dir, "128")
+	s := enqueue(t, e, need(1024))
 
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d, want 2", p)
@@ -562,8 +556,8 @@ func TestDeadTicketPassedOverImmediately(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	h := startHelper(t, "enqueue", dir, "mem=8") // needs the whole budget: s cannot pass it while it lives
-	s := enqueue(t, e, need("mem=1"))
+	h := startHelper(t, "enqueue", dir, "1024") // needs the whole budget: s cannot pass it while it lives
+	s := enqueue(t, e, need(128))
 	if p := position(t, step(t, s)); p != 2 {
 		t.Fatalf("position %d, want 2", p)
 	}
@@ -580,10 +574,10 @@ func blocked(t *testing.T, roomMiB int64) (dir string, e *Engine, clk *fakeClock
 	dir = capped(t, roomMiB)
 	clk = newFakeClock()
 	e = newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, holdPath(t, dir, 1))
-	tk = enqueue(t, e, need("mem=1"))
+	startHelper(t, "lock", dir, holdPath(t, dir, 128))
+	tk = enqueue(t, e, need(128))
 	if r := step(t, tk); isAdmitted(r) {
-		t.Fatal("admitted while the only unit is held")
+		t.Fatal("admitted while the whole room is held")
 	}
 	return dir, e, clk, tk
 }
@@ -617,7 +611,7 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	tk := enqueue(t, e, need("mem=2"))
+	tk := enqueue(t, e, need(256))
 	id := ticketID(tk)
 	r := step(t, tk)
 	if !isAdmitted(r) {
@@ -630,8 +624,8 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 	if exists(filepath.Join(dir, store.CancelDir, id.String())) {
 		t.Error("a cancel request was published for an admitted ticket")
 	}
-	if n := reservedUnits(t, other); n != 2 {
-		t.Errorf("locked %d after the late cancel, want the grant's 2", n)
+	if n := reservedMiB(t, other); n != 256 {
+		t.Errorf("%d MiB reserved after the late cancel, want the grant's 256", n)
 	}
 	r2, err := tk.Step(context.Background())
 	if err != nil || r2.(Admitted).Grant != r.(Admitted).Grant {
@@ -640,15 +634,15 @@ func TestLateCancelHasNoEffect(t *testing.T) {
 	if err := tk.Withdraw(); !errors.Is(err, ErrAlreadyAdmitted) {
 		t.Errorf("Withdraw after admission: %v, want ErrAlreadyAdmitted", err)
 	}
-	if n := reservedUnits(t, other); n != 2 {
-		t.Errorf("locked %d after Withdraw, want 2", n)
+	if n := reservedMiB(t, other); n != 256 {
+		t.Errorf("%d MiB reserved after Withdraw, want 256", n)
 	}
 }
 
 func TestWithdrawNeedsNoSection(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 	startHelper(t, "section", dir, "")
 
 	done := make(chan error, 1)
@@ -676,7 +670,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 	e := newEngine(t, dir, clk)
 	start := clk.clock().Realtime()
 
-	first := enqueue(t, e, need("mem=1")) // gen is absent: this section reconciles
+	first := enqueue(t, e, need(128)) // gen is absent: this section reconciles
 	g, err := e.st.ReadGen()
 	if err != nil || g.ReconciledNS != start {
 		t.Fatalf("first section: reconciled_ns %d (%v), want %d", g.ReconciledNS, err, start)
@@ -685,7 +679,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 
 	// A dead ticket that only reconciliation removes.
 	deadID := wire.ID{OrderKey: 1, PID: 999999, Seq: 1}
-	body, _ := wire.Encode(wire.Ticket{NeedMiB: unit})
+	body, _ := wire.Encode(wire.Ticket{NeedMiB: 128})
 	deadPath := filepath.Join(dir, store.QueueDir, wire.TicketName(deadID, ""))
 	if err := os.WriteFile(deadPath, body, 0o600); err != nil {
 		t.Fatal(err)
@@ -694,7 +688,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 	sections := 2 // the enqueue and the withdrawal above
 	for sections < 100 {
 		clk.advance(250 * time.Millisecond) // 100 sections in under 25 s
-		tk := enqueue(t, e, need("mem=1"))
+		tk := enqueue(t, e, need(128))
 		if err := tk.Withdraw(); err != nil {
 			t.Fatal(err)
 		}
@@ -709,7 +703,7 @@ func TestReconciliationAtMostEvery30s(t *testing.T) {
 		t.Fatal("the dead ticket was removed within 30 s of the last reconciliation")
 	}
 	clk.advance(30*time.Second - time.Duration(clk.clock().Realtime()-start) + time.Millisecond)
-	enqueue(t, e, need("mem=1"))
+	enqueue(t, e, need(128))
 	if g, _ := e.st.ReadGen(); g.ReconciledNS == start {
 		t.Fatal("no reconciliation more than 30 s after the last one")
 	}
@@ -732,7 +726,7 @@ func TestSeqWraps(t *testing.T) {
 	}
 	var ids []wire.ID
 	for i := 0; i < 3; i++ {
-		ids = append(ids, ticketID(enqueue(t, e, need("mem=1"))))
+		ids = append(ids, ticketID(enqueue(t, e, need(128))))
 	}
 	for i, want := range []int{999999, 0, 1} {
 		if ids[i].Seq != want {
@@ -749,7 +743,7 @@ func TestSeqWraps(t *testing.T) {
 	mu.Lock()
 	next = 999998
 	mu.Unlock()
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 	if ticketID(tk).Seq != 2 {
 		t.Errorf("after collisions on 999999, 0 and 1: seq %d, want 2", ticketID(tk).Seq)
 	}
@@ -777,7 +771,7 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
 
-	w := enqueue(t, e, need("mem=1"))
+	w := enqueue(t, e, need(128))
 	before := readGen(t, e)
 	if err := w.Withdraw(); err != nil {
 		t.Fatal(err)
@@ -786,9 +780,9 @@ func TestOwnRemovalsBumpGenAndCancelDoesNot(t *testing.T) {
 		t.Errorf("withdrawal with removal: gen %d -> %d, want one bump", before, got)
 	}
 
-	holder := enqueue(t, e, need("mem=1"))
+	holder := enqueue(t, e, need(128))
 	g := step(t, holder).(Admitted).Grant
-	c := enqueue(t, e, need("mem=1"))
+	c := enqueue(t, e, need(128))
 	step(t, c)
 	before = readGen(t, e)
 	if err := newEngine(t, dir, nil).CancelContext(context.Background(), ticketID(c)); err != nil {
@@ -851,9 +845,9 @@ func TestResumeBumpNeverDelaysRefresh(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, holdPath(t, dir, 8)) // nobody can be admitted
-	ahead := enqueue(t, e, need("mem=1"))
-	tk := enqueue(t, e, need("mem=1"))
+	startHelper(t, "lock", dir, holdPath(t, dir, 1024)) // nobody can be admitted
+	ahead := enqueue(t, e, need(128))
+	tk := enqueue(t, e, need(128))
 	step(t, ahead)
 	step(t, tk)
 	section := startHelper(t, "section", dir, "")
@@ -902,7 +896,7 @@ func TestRefreshCadenceWithBusySection(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 
 	oldEnter := enterSection
 	enterSection = func(st *store.Store, ctx context.Context) (*store.Section, error) {
@@ -953,7 +947,7 @@ func TestRefreshCadenceWithBusySection(t *testing.T) {
 func TestRefreshCadenceWithBusySectionRealClockSmoke(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 	startHelper(t, "section", dir, "")
 	var mu sync.Mutex
 	var refreshes []time.Time
@@ -993,8 +987,8 @@ func TestOwnTicketRemovedKeepsWaiting(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	lock := startHelper(t, "lock", dir, holdPath(t, dir, 8))
-	tk := enqueue(t, e, need("mem=1"))
+	lock := startHelper(t, "lock", dir, holdPath(t, dir, 1024))
+	tk := enqueue(t, e, need(128))
 	if err := os.Remove(filepath.Join(dir, store.QueueDir, tk.Name())); err != nil {
 		t.Fatal(err)
 	}
@@ -1033,7 +1027,7 @@ func TestHoldStartMismatchIsMalformed(t *testing.T) {
 	good := write(1000, 1000, "good")
 	bad := write(2000, 2001, "bad")
 	startHelper(t, "lock", dir, good+"\n"+bad) // both live
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 	clk.advance(time.Second)
 	step(t, tk)
 	rep, err := e.Snapshot()
@@ -1059,8 +1053,8 @@ func TestStrayEntriesAreIgnored(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	startHelper(t, "lock", dir, holdPath(t, dir, 8))
-	tk := enqueue(t, e, need("mem=1"))
+	startHelper(t, "lock", dir, holdPath(t, dir, 1024))
+	tk := enqueue(t, e, need(128))
 	for _, d := range []string{store.HoldsDir, store.CancelDir} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			t.Fatal(err)

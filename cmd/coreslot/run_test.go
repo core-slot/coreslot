@@ -360,11 +360,11 @@ func liveHolds(t *testing.T, dir string) int {
 // otherHolds numbers the holds holdOther writes, so that each has a name of its own.
 var otherHolds atomic.Int64
 
-// holdOther publishes a hold reserving units of 128 MiB and locks it from the test process until
-// the test ends: another client's grant.
-func holdOther(t *testing.T, dir string, units int) {
+// holdOther publishes a hold reserving needMiB and locks it from the test process until the test
+// ends: another client's grant.
+func holdOther(t *testing.T, dir string, needMiB int64) {
 	t.Helper()
-	f, err := os.Open(deadHold(t, dir, units))
+	f, err := os.Open(deadHold(t, dir, needMiB))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,11 +374,11 @@ func holdOther(t *testing.T, dir string, units int) {
 	t.Cleanup(func() { f.Close() })
 }
 
-// deadHold writes a hold reserving units of 128 MiB that nobody locks, as a client killed before
-// it removed its hold leaves it, and returns its path.
-func deadHold(t *testing.T, dir string, units int) string {
+// deadHold writes a hold reserving needMiB that nobody locks, as a client killed before it
+// removed its hold leaves it, and returns its path.
+func deadHold(t *testing.T, dir string, needMiB int64) string {
 	t.Helper()
-	h := wire.Hold{Label: "other", PID: 4000 + int(otherHolds.Add(1)), StartNS: 1, NeedMiB: int64(units) * 128}
+	h := wire.Hold{Label: "other", PID: 4000 + int(otherHolds.Add(1)), StartNS: 1, NeedMiB: needMiB}
 	body, err := wire.Encode(h)
 	if err != nil {
 		t.Fatal(err)
@@ -625,7 +625,7 @@ func TestCtrlCWhileWaitingExits130(t *testing.T) {
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
-	holdOther(t, dir, 1)
+	holdOther(t, dir, 128)
 	cmd := cliCmd(t, baseEnv(dir), "run", "--", "true")
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -687,7 +687,7 @@ func TestNoWaitRefusesWithin2s(t *testing.T) {
 	})
 
 	t.Run("budget full", func(t *testing.T) {
-		holdOther(t, dir, 2)
+		holdOther(t, dir, 256)
 		r := cli(t, baseEnv(dir), "run", "--no-wait", "--refusal-code", "9", "--", "true")
 		if r.code != 9 {
 			t.Errorf("exit %d stderr %q, want the refusal code 9", r.code, r.stderr)
@@ -700,7 +700,7 @@ func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
-	holdOther(t, dir, 1)
+	holdOther(t, dir, 128)
 	before := len(runLog(t, dir))
 
 	r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--timeout", "1s", "--", "true")

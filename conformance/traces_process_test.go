@@ -239,28 +239,28 @@ func TestNestedUnderFailOpenParent(t *testing.T) {
 
 // ---------------------------------------------------------------- grant truth
 
-// A 1-unit request on a free 8-unit budget reserves one unit and leaves 7 (I2): a 7-unit
-// request is then admitted at once, and nothing more is.
+// A 128 MiB request in a free room of 1024 reserves 128 and leaves 896 (I2): an 896 MiB request
+// is then admitted at once, and nothing more is.
 //
-// Mutation: the hold reserves the capacity instead of the need (publishHold given capacity):
-// the 1-unit request reserves all 8.
+// Mutation: the hold reserves the room instead of the need (publishHold given the room): the
+// 128 MiB request reserves all 1024.
 func TestOneOfEightLeavesSeven(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(8))
+	e.WriteConfig(roomConfig(1024))
 	one := e.Run("one", "--mem", "128M")
 	r := e.WaitStarted("one")
 	h := e.WaitHold("one", startWait)
 	if h.NeedMiB != 128 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
-		t.Fatalf("hold %+v, environment %v: want one unit", h, r.Env)
+		t.Fatalf("hold %+v, environment %v: want 128 MiB", h, r.Env)
 	}
 	checkDescriptors(t, e, r, h.Name)
-	if free := e.Status().Mem.FreeMiB; free != 7*128 {
-		t.Errorf("free %d MiB; want 7 units", free)
+	if free := e.Status().Mem.FreeMiB; free != 896 {
+		t.Errorf("free %d MiB; want 896", free)
 	}
 	seven := e.Run("seven", "--no-wait", "--mem", "896M")
 	e.WaitStarted("seven")
-	if got := stableReserved(e); got != 8 {
-		t.Errorf("%d units reserved, want 8", got)
+	if got := stableReserved(e); got != 1024 {
+		t.Errorf("%d MiB reserved, want 1024", got)
 	}
 	e.Start("run", "--no-wait", "--", "true").ExitCode(exitRefusal)
 	for _, p := range []*Proc{one, seven} {
@@ -277,7 +277,7 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 // before superviseChild): the reservation is gone while the command runs.
 func TestChildClosingCopiesKeepsTheHold(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(2))
+	e.WriteConfig(roomConfig(256))
 	p := e.Start("run", "--label", "closer", "--mem", "256M", "--", "sh", "-c",
 		`exec 3<&-; exec "$0" hold "$1" closer`, bins.child, e.MarkDir)
 	r := e.WaitStarted("closer")
@@ -304,7 +304,7 @@ func TestChildClosingCopiesKeepsTheHold(t *testing.T) {
 // c.release on a start error): the lock goes with the process, but the hold is never removed.
 func TestFailedSpawnFreesEverything(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(4))
+	e.WriteConfig(roomConfig(512))
 	notExec := filepath.Join(e.MarkDir, "not-executable")
 	if err := os.WriteFile(notExec, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -337,7 +337,7 @@ func TestFailedSpawnFreesEverything(t *testing.T) {
 // error.
 func TestRepeatedClose(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(2))
+	e.WriteConfig(roomConfig(256))
 	c := e.Engine()
 	admit := func(label string) *engine.Grant {
 		t.Helper()
@@ -364,8 +364,8 @@ func TestRepeatedClose(t *testing.T) {
 			t.Errorf("Close %d: %v", i+1, err)
 		}
 	}
-	if got := memReserved(e); got != 2 {
-		t.Errorf("%d units reserved after Close while the command holds the hold, want 2", got)
+	if got := memReserved(e); got != 256 {
+		t.Errorf("%d MiB reserved after Close while the command holds the hold, want 256", got)
 	}
 	e.ReleaseChild("lib-child")
 	p.ExitCode(0)
@@ -379,8 +379,8 @@ func TestRepeatedClose(t *testing.T) {
 	if err := g.Close(); err != nil {
 		t.Errorf("Close 4: %v", err)
 	}
-	if _, ok := e.Hold("lib2"); !ok || memReserved(e) != 2 {
-		t.Errorf("the second grant lost its hold to the first grant's Close (%d units reserved)", memReserved(e))
+	if _, ok := e.Hold("lib2"); !ok || memReserved(e) != 256 {
+		t.Errorf("the second grant lost its hold to the first grant's Close (%d MiB reserved)", memReserved(e))
 	}
 	for i := range 2 {
 		if err := g2.Close(); err != nil {
@@ -404,7 +404,7 @@ func TestRepeatedClose(t *testing.T) {
 // Mutation: terminal mode forwards SIGINT to the command too (it is not ignored in terminal
 // mode): the command receives Ctrl-C twice.
 func TestSignalTraces(t *testing.T) {
-	cfg := memConfig(2)
+	cfg := roomConfig(256)
 	cmdArgs := func(e Env, name string) []string {
 		return []string{bins.coreslot, "run", "--label", name, "--mem", "256M", "--", bins.child, "signals", e.MarkDir, name}
 	}

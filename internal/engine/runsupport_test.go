@@ -18,14 +18,14 @@ import (
 func TestEnqueueContextEndsWhileSectionIsHeld(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	enqueue(t, e, need("mem=1")) // FORMAT and queue/ exist
+	enqueue(t, e, need(128)) // FORMAT and queue/ exist
 	startHelper(t, "section", dir, "")
 	before, _, _ := e.st.List(store.QueueDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	tk, err := e.EnqueueContext(ctx, need("mem=1"))
+	tk, err := e.EnqueueContext(ctx, need(128))
 	if !errors.Is(err, context.DeadlineExceeded) || tk != nil {
 		t.Fatalf("EnqueueContext = %v, %v; want the context's deadline and no ticket", tk, err)
 	}
@@ -44,7 +44,7 @@ func TestEnqueueContextEndsWhileSectionIsHeld(t *testing.T) {
 func TestBoundedEntriesNameTheSectionHolder(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	tk := enqueue(t, e, need("mem=1")) // FORMAT and queue/ exist
+	tk := enqueue(t, e, need(128)) // FORMAT and queue/ exist
 	h := startHelper(t, "section-marked", dir, "")
 	pid := h.cmd.Process.Pid
 	before := listing(t, dir)
@@ -52,7 +52,7 @@ func TestBoundedEntriesNameTheSectionHolder(t *testing.T) {
 		name string
 		op   func(ctx context.Context) error
 	}{
-		{"EnqueueContext", func(ctx context.Context) error { _, err := e.EnqueueContext(ctx, need("mem=1")); return err }},
+		{"EnqueueContext", func(ctx context.Context) error { _, err := e.EnqueueContext(ctx, need(128)); return err }},
 		{"CancelContext", func(ctx context.Context) error { return e.CancelContext(ctx, ticketID(tk)) }},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -82,7 +82,7 @@ func TestUnbudgetedHoldRecordsNoDegraded(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
 	before := readGen(t, e)
-	g, err := e.UnbudgetedHold(need("mem=2"), "timeout")
+	g, err := e.UnbudgetedHold(need(256), "timeout")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ func stopAgain(t *testing.T, e Env, b *Proc, swapUsedMiB int64) {
 // arrival queues B behind C.
 func TestRestartKeepsPlace(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(capacityConfig(1000) + "[watch]\ncalm_s = 0\n")
+	e.WriteConfig(roomConfig(1000) + "[watch]\ncalm_s = 0\n")
 	a := e.Run("A", "--mem", "300M")
 	e.WaitStarted("A")
 	e.WaitTicked("A")
@@ -160,7 +160,7 @@ func TestNoWaitRefusesAtRestart(t *testing.T) {
 // for the whole run, or --on-timeout run at a restart, starts B's command again.
 func TestRestartTimeoutRefuses(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(capacityConfig(64 << 10)) // calm_s 30: no restart within the timeout
+	e.WriteConfig(roomConfig(64 << 10)) // calm_s 30: no restart within the timeout
 	b := stopB(t, e, "--timeout", "5s", "--on-timeout", "run")
 	b.ExitCode(75)
 	if out := b.Stderr(); !strings.Contains(out, "was stopped for memory (swap room under the floor, at ") ||

@@ -56,10 +56,10 @@ func writeFormat(e Env, n string) {
 	}
 }
 
-// memReserved is what the live holds reserve, in units of 128 MiB, each hold probed and read by
-// the test itself rather than through the engine, so that a defect in the clients' counting
-// cannot hide from it.
-func memReserved(e Env) int {
+// memReserved is what the live holds reserve, in MiB, each hold probed and read by the test
+// itself rather than through the engine, so that a defect in the clients' counting cannot hide
+// from it.
+func memReserved(e Env) int64 {
 	e.t.Helper()
 	dir := filepath.Join(e.Dir, store.HoldsDir)
 	entries, err := os.ReadDir(dir)
@@ -91,13 +91,13 @@ func memReserved(e Env) int {
 			e.t.Fatal(err)
 		}
 	}
-	return int(mib / 128)
+	return mib
 }
 
 // stableReserved is memReserved once it persists across two samples 100 ms apart. A client's
 // probe locks a dead hold for an instant (PROTOCOL.md section 6), so one sample taken while a
 // waiter probes may read high; a real reservation persists.
-func stableReserved(e Env) int {
+func stableReserved(e Env) int64 {
 	e.t.Helper()
 	prev := memReserved(e)
 	for range 20 {
@@ -112,10 +112,10 @@ func stableReserved(e Env) int {
 	return 0
 }
 
-// reservedSampler samples the reservations and the size every 100 ms through the engine's
-// Snapshot, until stop is called. Reservations above the size are a violation only when they
-// persist across two consecutive samples: a client's probe makes a dead hold look live for an
-// instant. It records how many samples it took and every Snapshot error.
+// reservedSampler samples the reservations every 100 ms through the engine's Snapshot, until
+// stop is called. A reservation counts only when it persists across two consecutive samples: a
+// client's probe makes a dead hold look live for an instant. It records how many samples it
+// took and every Snapshot error.
 type reservedSampler struct {
 	stop        func()
 	mu          sync.Mutex
@@ -179,8 +179,8 @@ func (s *reservedSampler) check(t *testing.T, minSamples int, maxMiB int64) {
 // ---------------------------------------------------------------- wall-clock steps
 
 // A wall-clock step of every process changes nothing, because freshness is observed on each
-// observer's monotonic clock and never computed from an mtime. The head A needs both units
-// and B, behind it, needs the free one. Twice, A is caught right after a refresh, every
+// observer's monotonic clock and never computed from an mtime. The head A needs all 256 MiB
+// and B, behind it, needs the 128 MiB free. Twice, A is caught right after a refresh, every
 // process's wall clock steps by an hour (backward, or forward), and A stays live but silent for
 // 3 s. B must not pass it. The first time A then goes on refreshing on the stepped clock, and B
 // still waits behind it for longer than the stall threshold. The second time A is stopped: B
@@ -209,7 +209,7 @@ func TestClockStepThenHeadStops(t *testing.T) {
 				t.Skip("-short: the forward step is not run")
 			}
 			e := State(t)
-			e.WriteConfig(memConfig(2))
+			e.WriteConfig(roomConfig(256))
 			x := e.Run("X", "--mem", "128M")
 			e.WaitStarted("X")
 
@@ -298,29 +298,29 @@ func TestClockStepThenHeadStops(t *testing.T) {
 
 // Every waiter is stopped for 15 s at once, as a laptop sleep stops them, and continued. Each
 // waiter then refreshes and the queue resumes in order: once every waiter's refresh is
-// observable, a unit that the head cannot use but a later waiter could is not given to the
+// observable, room that the head cannot use but a later waiter could is not given to the
 // later waiter (no backfill behind a live head), and the head is admitted first when its
 // minimum frees up.
 //
 // Then the order holds from the resumption itself, before any refresh is observable. The head
-// W3 needs two units and W4, behind it, needs one; both stop and one unit frees up meanwhile.
+// W3 needs 256 MiB and W4, behind it, needs 128; both stop and 128 MiB frees up meanwhile.
 // W3 stops first and W4 2 s later, so W4 last saw W3's final mtime before its own stop. W4 is
 // continued first and W3 about 3 s later: W4 has watched W3 unchanged for at most about 7 s (W3's
 // last refresh may precede its stop by up to 2 s, W4 watches 2 s more before its own stop, and
 // 3 s after its continuation), leaving about 3 s below the 10 s of a stall, since the 15 s in
 // which W4 itself made no pass were not watched (PROTOCOL.md section 10.2). So W3 is not STALLED
-// for it and W4 must not take the unit. Once the rest frees up, W3 is admitted
+// for it and W4 must not take the room. Once the rest frees up, W3 is admitted
 // before W4.
 //
-// Last, with capacity freed while every waiter is stopped, both remaining waiters (each fits)
+// Last, with room freed while every waiter is stopped, both remaining waiters (each fits)
 // are admitted within the I5 bound of the resumption; which goes first is not asserted, as they
 // are continued together.
 //
 // Mutation: a STALLED verdict sticks (Observer.Observe ignores a changed mtime once the ticket
-// is stalled): after the resumption W2 keeps passing over the live head W1 and takes the unit.
+// is stalled): after the resumption W2 keeps passing over the live head W1 and takes the room.
 // Mutation: count the observer's own absence as watched (Observer.Pass never adds a gap above
 // MaxPassGap to the unwatched time): W4 finds W3 STALLED as soon as it is continued and takes
-// the free unit in the second phase.
+// the free room in the second phase.
 // Mutation: a resumed waiter waits too long before its next election (refresh, on a refresh gap
 // above 10 s, also defers the next election by 25 s): in the third phase the waiter that was
 // not caught mid-attempt is admitted only after the bound.
@@ -328,7 +328,7 @@ func TestClockStepThenHeadStops(t *testing.T) {
 // -short skips the third phase.
 func TestSuspendAllWaiters(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(3))
+	e.WriteConfig(roomConfig(384))
 	x1 := e.Run("X1", "--mem", "128M")
 	e.WaitHold("X1", startWait)
 	x2 := e.Run("X2", "--mem", "256M")
@@ -367,8 +367,8 @@ func TestSuspendAllWaiters(t *testing.T) {
 	autoW3 = w3.AutoRelease("admit.before-enter")
 	defer func() { autoW3() }()
 
-	// Phase 1: no capacity was freed. Once every refresh can have been observed, one unit frees
-	// up: W2 and W4 could use it (W3 needs two), the head W1 cannot, and nobody may take it.
+	// Phase 1: no room was freed. Once every refresh can have been observed, 128 MiB frees
+	// up: W2 and W4 could use it (W3 needs 256), the head W1 cannot, and nobody may take it.
 	for name, mtime := range before {
 		waitRefreshed(e, name, mtime)
 	}
@@ -386,12 +386,12 @@ func TestSuspendAllWaiters(t *testing.T) {
 	if !admittedAt(h1).Before(admittedAt(h2)) {
 		t.Errorf("W2 (admitted %v) went before W1 (admitted %v)", admittedAt(h2), admittedAt(h1))
 	}
-	noHold(t, e, "W3", "W3 was admitted with no unit free")
+	noHold(t, e, "W3", "W3 was admitted with nothing free")
 
-	// Phase 2: the head W3 needs two units, W4 behind it one. W3 stops first, and W4 once its
+	// Phase 2: the head W3 needs 256 MiB, W4 behind it 128. W3 stops first, and W4 once its
 	// elections (one per second) can have observed W3's last refresh, so that W3's mtime does not
 	// change between W4's last pass before the suspension and its first pass after it. Meanwhile
-	// W2 finishes, freeing one unit. W4 is continued first and W3 resumptionGap later.
+	// W2 finishes, freeing 128 MiB. W4 is continued first and W3 resumptionGap later.
 	const resumptionGap = 3 * time.Second
 	stoppedAt, mtimeW3 := stopOutsideSection(e, w3, autoW3)
 	autoW3 = w3.AutoRelease("admit.before-enter")
@@ -408,15 +408,15 @@ func TestSuspendAllWaiters(t *testing.T) {
 	w4.Cont()
 	continuedW4 := time.Now()
 	for time.Since(continuedW4) < resumptionGap {
-		noHold(t, e, "W4", "W4 took the free unit from the stopped head W3 right after its own resumption")
+		noHold(t, e, "W4", "W4 took the free room from the stopped head W3 right after its own resumption")
 		time.Sleep(pollStep)
 	}
 	w3.Cont()
 	t.Logf("W3 continued %v after W4", time.Since(continuedW4))
 	waitRefreshed(e, "W3", mtimeW3)
 	time.Sleep(observeWait)
-	noHold(t, e, "W4", "W4 was admitted past the live head W3, which needs two units with one free")
-	noHold(t, e, "W3", "W3 was admitted with one unit free")
+	noHold(t, e, "W4", "W4 was admitted past the live head W3, which needs 256 MiB with 128 free")
+	noHold(t, e, "W3", "W3 was admitted with 128 MiB free")
 	e.ReleaseChild("W1")
 	w1.ExitCode(0)
 	h3 := e.WaitHold("W3", startWait)
@@ -426,7 +426,7 @@ func TestSuspendAllWaiters(t *testing.T) {
 	}
 
 	if testing.Short() {
-		t.Log("-short: the third phase (capacity freed during a common suspension) is not run")
+		t.Log("-short: the third phase (room freed during a common suspension) is not run")
 		e.ReleaseChild("W3")
 		e.ReleaseChild("W4")
 		w3.ExitCode(0)
@@ -434,8 +434,8 @@ func TestSuspendAllWaiters(t *testing.T) {
 		return
 	}
 
-	// Phase 3: W3 and W4 hold every unit. W5 is the head and W6 waits behind it; both stop and
-	// meanwhile W3 and W4 finish, freeing every unit.
+	// Phase 3: W3 and W4 hold all the room. W5 is the head and W6 waits behind it; both stop and
+	// meanwhile W3 and W4 finish, freeing all of it.
 	w5, autoW5 := startStoppableHead(e, "W5", "--mem", "128M")
 	e.WaitTicket("W5")
 	w6 := e.Run("W6", "--mem", "128M")
@@ -486,16 +486,16 @@ func TestSuspendAllWaiters(t *testing.T) {
 
 // ---------------------------------------------------------------- shrink
 
-// A shrink from 14 to 12 units while holds reserve 4 (I3): the reservations are counted whatever
-// the size, so the reduced budget is 12 minus those 4, and no admission brings the reservations
-// above 12. Releasing a hold frees capacity again (partial release); growing back to 14 lets a
-// request use the 2 units more.
+// The room shrinks from 1792 to 1536 MiB while holds reserve 512 (I3): the holds count whatever
+// the configuration, so 1024 MiB is left, and no admission brings the reservations above 1536.
+// Releasing a hold frees room again (partial release); growing back to 1792 lets a request use
+// the 256 MiB more.
 //
-// Mutation: count in reservedMiB only the holds published after the last size change: R1 and
-// R2 are both admitted and 13 units are reserved under a size of 12.
-func TestShrinkWithHoldsAboveTheSize(t *testing.T) {
+// Mutation: count in the room only the holds published after the last configuration change: R1
+// and R2 are both admitted and 1664 MiB is reserved in a room of 1536.
+func TestShrinkWithHoldsLive(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(14))
+	e.WriteConfig(roomConfig(1792))
 	l := e.Run("L", "--mem", "1280M")
 	e.WaitStarted("L")
 	h1 := e.Run("H1", "--mem", "256M")
@@ -505,13 +505,13 @@ func TestShrinkWithHoldsAboveTheSize(t *testing.T) {
 	e.ReleaseChild("L")
 	l.ExitCode(0)
 
-	writeConfigAtomic(e, memConfig(12)+"# shrunk\n")
-	if got := stableReserved(e); got != 4 {
-		t.Fatalf("after the shrink: %d units reserved, want 4", got)
+	writeConfigAtomic(e, roomConfig(1536)+"# shrunk\n")
+	if got := stableReserved(e); got != 512 {
+		t.Fatalf("after the shrink: %d MiB reserved, want 512", got)
 	}
 
 	// A request during the reduced period takes from what is free.
-	w, err := e.Engine().EnqueueContext(context.Background(), spec.Request{Label: "held-a", NeedMiB: 3 * 128})
+	w, err := e.Engine().EnqueueContext(context.Background(), spec.Request{Label: "held-a", NeedMiB: 384})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,24 +522,24 @@ func TestShrinkWithHoldsAboveTheSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ga.Close()
-	if ga.GrantMiB() != 3*128 {
-		t.Fatalf("request: grant %d MiB, want 3 units", ga.GrantMiB())
+	if ga.GrantMiB() != 384 {
+		t.Fatalf("request: grant %d MiB, want 384", ga.GrantMiB())
 	}
 
-	// A queued request may take at most what is left below the size: 5 units.
+	// A queued request may take at most what is left: 640 MiB.
 	r1 := e.Run("R1", "--mem", "640M")
 	e.WaitStarted("R1")
-	if got := stableReserved(e); got != 12 {
-		t.Errorf("%d units reserved under a size of 12", got)
+	if got := stableReserved(e); got != 1536 {
+		t.Errorf("%d MiB reserved in a room of 1536", got)
 	}
 
 	// Nothing is free: a request waits.
 	r2 := e.Run("R2", "--mem", "128M")
 	e.WaitTicket("R2")
 	time.Sleep(observeWait)
-	noHold(t, e, "R2", "R2 was admitted with 12 units reserved under a size of 12")
-	if got := stableReserved(e); got != 12 {
-		t.Errorf("%d units reserved under a size of 12", got)
+	noHold(t, e, "R2", "R2 was admitted with 1536 MiB reserved in a room of 1536")
+	if got := stableReserved(e); got != 1536 {
+		t.Errorf("%d MiB reserved in a room of 1536", got)
 	}
 
 	// Partial release: H2 goes, and R2 fits.
@@ -547,12 +547,12 @@ func TestShrinkWithHoldsAboveTheSize(t *testing.T) {
 	h2.ExitCode(0)
 	e.WaitStarted("R2")
 
-	// Growth back to 14: 3 units are free.
-	writeConfigAtomic(e, memConfig(14))
+	// Growth back to 1792: 384 MiB are free.
+	writeConfigAtomic(e, roomConfig(1792))
 	r3 := e.Run("R3", "--mem", "384M")
 	e.WaitStarted("R3")
-	if got := stableReserved(e); got != 14 {
-		t.Errorf("%d units reserved, want 14", got)
+	if got := stableReserved(e); got != 1792 {
+		t.Errorf("%d MiB reserved, want 1792", got)
 	}
 	for _, p := range []*Proc{h1, r1, r2, r3} {
 		e.ReleaseChild(p.name)
@@ -601,7 +601,7 @@ func layout(t *testing.T, e Env) map[string]string {
 // rotation check alone): H's line appears.
 func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(3))
+	e.WriteConfig(roomConfig(384))
 	h := e.Run("H", "--mem", "256M")
 	hh := e.WaitHold("H", startWait)
 	w1 := e.Run("W1", "--mem", "256M")
@@ -639,8 +639,8 @@ func TestUnknownFormatRunsUnbudgeted(t *testing.T) {
 	if _, ok := e.Ticket("N"); ok {
 		t.Error("N published a ticket under FORMAT 1")
 	}
-	if got := stableReserved(e); got != 2 {
-		t.Errorf("%d units reserved, want 2 (H's)", got)
+	if got := stableReserved(e); got != 256 {
+		t.Errorf("%d MiB reserved, want 256 (H's)", got)
 	}
 	for _, name := range []string{"H", "W1", "W2", "N"} {
 		e.ReleaseChild(name)
@@ -692,7 +692,7 @@ func mapsEqual(a, b map[string]string) bool {
 // ---------------------------------------------------------------- cancellation
 
 // A cancel request published before the owner's admitting section wins even though the owner
-// already won its election and capacity is free: admission step 1 finds it, nothing runs and
+// already won its election and room is free: admission step 1 finds it, nothing runs and
 // nothing is left. One made while the owner is inside the section that admits it waits for the
 // section, finds no ticket, and has no effect: cancellation never revokes a grant. The CLI's
 // cancel waits for the section for 1 s at most: an owner that stays inside longer makes it
@@ -706,13 +706,13 @@ func mapsEqual(a, b map[string]string) bool {
 func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 	t.Run("before", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(memConfig(1))
+		e.WriteConfig(roomConfig(128))
 		x := e.Run("X", "--mem", "128M")
 		e.WaitHold("X", startWait)
 		w := e.Pausing("admit.before-enter").Run("W", "--mem", "128M")
 		autoW := w.AutoRelease("admit.before-enter")
 		tk := e.WaitTicket("W")
-		// W is caught after an election, before a section; X then frees the unit, so that
+		// W is caught after an election, before a section; X then frees the room, so that
 		// section would admit it.
 		autoW()
 		w.WaitReached("admit.before-enter")
@@ -742,7 +742,7 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 
 	t.Run("after", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(memConfig(1))
+		e.WriteConfig(roomConfig(128))
 		v := e.Pausing("publish.after-create").Run("V", "--mem", "128M")
 		// A hold is published only inside the section that admits it, so V is paused in it.
 		v.CatchPublication("publish.after-create", store.HoldsDir)
@@ -776,7 +776,7 @@ func TestCancelBeforeAndAfterAdmittingSection(t *testing.T) {
 
 	t.Run("after, past the bound", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(memConfig(1))
+		e.WriteConfig(roomConfig(128))
 		v := e.Pausing("publish.after-create").Run("V", "--mem", "128M")
 		v.CatchPublication("publish.after-create", store.HoldsDir)
 		tk, ok := e.Ticket("V")

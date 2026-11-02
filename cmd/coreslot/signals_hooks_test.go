@@ -164,7 +164,7 @@ func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
 	if r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
-	deadHold(t, dir, 2)
+	deadHold(t, dir, 256)
 	whole := func() result {
 		return cli(t, baseEnv(dir), "run", "--no-wait", "--mem", "256M", "--", "true")
 	}

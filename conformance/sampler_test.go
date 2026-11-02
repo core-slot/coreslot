@@ -16,28 +16,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// The sampler checks the invariants I1, I2, I3 and I7 of a state directory, as the hold bodies
+// The sampler checks the invariants I1, I2 and I3 of a state directory, as the hold bodies
 // carry them, while clients of every kind run, die and stop in it. Each sample is taken inside
 // the admission section, so no admission is in flight while it reads. A violation is reported
 // only when the same violation is found by two samples at least sampleGap apart: releases happen
 // outside the section, and so do probes (a probe's momentary lock makes a dead hold look live).
-// The sampler owns the configuration: Resize rewrites it inside the section, so that every
-// admission is linearized before or after the size change and the I3 bound can follow it.
-// Because Resize writes the configuration inside the section, a client that read the
-// configuration before entering the section and admits on that stale size after the rewrite is
-// not caught as such: the sampler sees it only if the stale size takes the reservations above
-// the bound.
+// The sampler owns the configuration: SetRoom rewrites it inside the section, so that every
+// admission reads either the room before the change or the room after it.
+//
+// I3 is checked at the admissions two samples bracket: a hold the later sample lists first was
+// published between them, and every hold live in both was live at that admission, so the new
+// hold's need must fit what those left of the room. The holds published or released between the
+// samples are left out, and each kept hold counts the larger footprint of its two bodies (a body
+// is rewritten once per period): both can only leave more room than the admission saw. When no
+// hold is live in both, the idle rule may have admitted it, and nothing is checked.
 
 // sampleGap is the least time between two samples whose findings are compared.
 const sampleGap = 100 * time.Millisecond
 
 // Violation is one invariant violation found by two consecutive samples.
 type Violation struct {
-	Invariant string // I1, I2, I3, I7, or "fail-open" for an unbudgeted hold
+	Invariant string // I1, I2, I3, or "fail-open" for an unbudgeted hold
 	Key       string // the identity compared between samples
 	Msg       string
 	At        time.Time
@@ -57,41 +61,46 @@ type liveHold struct {
 // observation is what one sample read inside the section.
 type observation struct {
 	at        time.Time
+	listed    map[string]bool // every hold file listed, live or not
 	holds     []liveHold
 	malformed []string // live holds whose body does not decode
+}
+
+// admission is an I3 finding: a hold admitted past the room its witnesses left. The next sample
+// finds it again while every witness is still live, so that none looked live for a probe only.
+type admission struct {
+	witnesses []string
+	msg       string
 }
 
 // Sampler samples one state directory. Its methods are safe for concurrent use. Every amount is
 // in MiB.
 type Sampler struct {
-	// Request returns the need behind a hold's label, for I7. Holds whose label it does not know
-	// are not checked for I7.
-	Request func(label string) (needMiB int64, ok bool)
-
 	mu          sync.Mutex
 	dir         string
 	scratch     string // where a configuration is written before it is renamed into place
 	st          *store.Store
-	size        int64
-	ceiling     int64                // I3 bound: the size, or the reservations a shrink left above it
+	room        int64                // what the configuration leaves while no hold is live
+	prevRoom    int64                // the room at the previous sample
+	before      observation          // the previous sample
+	admissions  map[string]admission // the previous sample's I3 findings, by key
 	inodes      map[string][2]uint64 // each live hold's inode when the sampler first saw it
 	prev        map[string]Violation // candidates of the previous sample
 	reported    map[string]bool      // violations reported and still found by the latest sample
 	violations  []Violation
-	last        time.Time // when the previous sample was taken
 	samples     int
 	missed      int
 	configMtime time.Time
 }
 
-// NewSampler writes the configuration size into e's state directory, makes sure FORMAT is written
-// and returns a sampler of the directory.
-func NewSampler(t *testing.T, e Env, sizeMiB int64) *Sampler {
+// NewSampler writes a configuration that leaves roomMiB into e's state directory, makes sure
+// FORMAT is written and returns a sampler of the directory.
+func NewSampler(t *testing.T, e Env, roomMiB int64) *Sampler {
 	t.Helper()
 	if err := os.MkdirAll(e.Dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	s := &Sampler{dir: e.Dir, scratch: t.TempDir(),
+	s := &Sampler{dir: e.Dir, scratch: t.TempDir(), admissions: map[string]admission{},
 		inodes: map[string][2]uint64{}, prev: map[string]Violation{}, reported: map[string]bool{}}
 	var err error
 	if s.st, err = store.Open(e.Dir); err != nil {
@@ -107,18 +116,18 @@ func NewSampler(t *testing.T, e Env, sizeMiB int64) *Sampler {
 	if _, ok, err := sec.Format(); err != nil || !ok {
 		t.Fatalf("FORMAT: understood %v, %v", ok, err)
 	}
-	if err := s.writeConfig(sizeMiB); err != nil {
+	if err := s.writeConfig(roomMiB); err != nil {
 		t.Fatal(err)
 	}
-	s.size, s.ceiling = sizeMiB, sizeMiB
+	s.room, s.prevRoom = roomMiB, roomMiB
 	return s
 }
 
 // writeConfig replaces config.toml atomically, with an mtime strictly after the previous one,
 // so that a client caching the configuration by mtime and size sees every change.
-func (s *Sampler) writeConfig(sizeMiB int64) error {
+func (s *Sampler) writeConfig(roomMiB int64) error {
 	tmp := filepath.Join(s.scratch, "config.toml")
-	if err := os.WriteFile(tmp, []byte(capacityConfig(sizeMiB)), 0o600); err != nil {
+	if err := os.WriteFile(tmp, []byte(roomConfig(roomMiB)), 0o600); err != nil {
 		return err
 	}
 	m := time.Now()
@@ -132,18 +141,16 @@ func (s *Sampler) writeConfig(sizeMiB int64) error {
 	return os.Rename(tmp, filepath.Join(s.dir, store.ConfigFile))
 }
 
-// Size returns the size the configuration declares now.
-func (s *Sampler) Size() int64 {
+// Room returns what the configuration leaves now while no hold is live.
+func (s *Sampler) Room() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.size
+	return s.room
 }
 
-// Resize rewrites the configuration inside the admission section. Every admission is then
-// either before the change, with the old size, or after it, with the new one. A shrink may
-// leave more reserved than the new size; the I3 bound becomes that amount and falls with it,
-// until it reaches the size. It returns what the live holds reserve at the change.
-func (s *Sampler) Resize(ctx context.Context, sizeMiB int64) (reserved int64, err error) {
+// SetRoom rewrites the configuration inside the admission section, so that it leaves roomMiB.
+// It returns what the live holds reserve at the change.
+func (s *Sampler) SetRoom(ctx context.Context, roomMiB int64) (reserved int64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sec, err := s.st.Enter(ctx)
@@ -151,32 +158,18 @@ func (s *Sampler) Resize(ctx context.Context, sizeMiB int64) (reserved int64, er
 		return 0, err
 	}
 	defer sec.Leave()
-	if err := s.writeConfig(sizeMiB); err != nil {
+	if err := s.writeConfig(roomMiB); err != nil {
 		return 0, err
 	}
 	obs, err := s.observe()
 	if err != nil {
 		return 0, err
 	}
-	reserved = s.reserved(obs)
-	// What a shrink leaves above the new size is bounded by what the old size allowed: a resize
-	// never makes an I3 violation (or a live admission) part of the bound.
-	s.ceiling = max(sizeMiB, min(reserved, max(s.size, s.ceiling)))
-	s.size = sizeMiB
-	return reserved, nil
-}
-
-// reserved is what obs's live holds reserve; a lone hold is at most the most any admission could
-// have granted it, since a need above the capacity runs alone.
-func (s *Sampler) reserved(obs observation) int64 {
-	var n int64
 	for _, h := range obs.holds {
-		n += h.Body.NeedMiB
+		reserved += h.Body.NeedMiB
 	}
-	if len(obs.holds) == 1 {
-		n = min(n, max(s.size, s.ceiling))
-	}
-	return n
+	s.room = roomMiB
+	return reserved, nil
 }
 
 // Sample takes one sample inside the admission section, at least sampleGap after the previous
@@ -184,7 +177,7 @@ func (s *Sampler) reserved(obs observation) int64 {
 func (s *Sampler) Sample(ctx context.Context) ([]Violation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if wait := time.Until(s.last.Add(sampleGap)); wait > 0 {
+	if wait := time.Until(s.before.at.Add(sampleGap)); wait > 0 {
 		time.Sleep(wait)
 	}
 	sec, err := s.st.Enter(ctx)
@@ -198,9 +191,9 @@ func (s *Sampler) Sample(ctx context.Context) ([]Violation, error) {
 		s.missed++
 		return nil, err
 	}
-	s.last = obs.at
 	s.samples++
 	found := s.check(obs)
+	s.before, s.prevRoom = obs, s.room
 	var confirmed []Violation
 	for key, v := range found {
 		if _, again := s.prev[key]; again && !s.reported[key] {
@@ -236,14 +229,15 @@ func (s *Sampler) Violations() (v []Violation, samples, missed int) {
 	return slices.Clone(s.violations), s.samples, s.missed
 }
 
-// observe reads the live holds. The caller is inside the section.
+// observe lists the holds and reads the live ones. The caller is inside the section.
 func (s *Sampler) observe() (observation, error) {
-	obs := observation{at: time.Now()}
+	obs := observation{at: time.Now(), listed: map[string]bool{}}
 	entries, _, err := s.st.List(store.HoldsDir)
 	if err != nil {
 		return obs, err
 	}
 	for _, en := range entries {
+		obs.listed[en.Name] = true
 		dead, err := s.st.Probe(store.HoldsDir, en.Name)
 		if errors.Is(err, fs.ErrNotExist) || (err == nil && dead) {
 			continue
@@ -274,18 +268,20 @@ func (s *Sampler) observe() (observation, error) {
 	return obs, nil
 }
 
-// check returns the violations obs shows, by key, and moves the I3 bound. The caller holds mu.
+// check returns the violations obs shows, by key. The caller holds mu.
 func (s *Sampler) check(obs observation) map[string]Violation {
 	found := map[string]Violation{}
 	add := func(inv, key, format string, args ...any) {
 		found[key] = Violation{Invariant: inv, Key: key, Msg: fmt.Sprintf(format, args...), At: obs.at}
 	}
+	live := map[string]liveHold{}
+	for _, h := range obs.holds {
+		live[h.Name] = h
+	}
 
 	// I1: a live hold keeps its inode: its body is rewritten in place, never replaced. The inode
 	// a hold has when the sampler first sees it live is its identity.
-	live := map[string]bool{}
 	for _, h := range obs.holds {
-		live[h.Name] = true
 		if first, seen := s.inodes[h.Name]; !seen {
 			s.inodes[h.Name] = h.inode
 		} else if first != h.inode {
@@ -293,29 +289,40 @@ func (s *Sampler) check(obs observation) map[string]Violation {
 		}
 	}
 	for name := range s.inodes {
-		if !live[name] {
+		if _, ok := live[name]; !ok {
 			delete(s.inodes, name)
 		}
 	}
 
-	// I3: what the live holds reserve stays within the bound.
-	n := s.reserved(obs)
-	if n > max(s.size, s.ceiling) {
-		add("I3", "I3 mem", "%d MiB reserved; size %d, bound %d", n, s.size, s.ceiling)
+	// I3: the previous sample's findings stand while their witnesses live. Samples a period or
+	// more apart may have missed a footprint: the admissions between them are not checked.
+	for key, a := range s.admissions {
+		if !slices.ContainsFunc(a.witnesses, func(n string) bool { _, ok := live[n]; return !ok }) {
+			add("I3", key, "%s", a.msg)
+		}
 	}
-	s.ceiling = max(s.size, min(s.ceiling, n))
+	s.admissions = map[string]admission{}
+	if obs.at.Sub(s.before.at) < time.Duration(memsample.PeriodNS) {
+		room, witnesses := max(s.room, s.prevRoom), []string(nil)
+		for _, b := range s.before.holds {
+			if h, ok := live[b.Name]; ok {
+				room -= max(0, h.Body.NeedMiB-max(h.Body.FootprintMiB, b.Body.FootprintMiB))
+				witnesses = append(witnesses, b.Name)
+			}
+		}
+		for _, h := range obs.holds {
+			if witnesses != nil && !s.before.listed[h.Name] && h.Body.NeedMiB > room {
+				a := admission{witnesses, fmt.Sprintf("hold %s admitted for %d MiB with %d MiB of room left by %v",
+					h.Name, h.Body.NeedMiB, room, witnesses)}
+				s.admissions["I3 "+h.Name] = a
+				add("I3", "I3 "+h.Name, "%s", a.msg)
+			}
+		}
+	}
 
-	// I7: an ordinary admission reserves the need asked.
 	for _, h := range obs.holds {
 		if h.Body.NeedMiB == 0 {
 			add("fail-open", "fail-open "+h.Name, "hold %s is unbudgeted (a client failed open)", h.Name)
-			continue
-		}
-		if s.Request == nil {
-			continue
-		}
-		if need, ok := s.Request(h.Body.Label); ok && h.Body.NeedMiB != need {
-			add("I7", "I7 "+h.Name, "hold %s reserves %d MiB for a need of %d", h.Name, h.Body.NeedMiB, need)
 		}
 	}
 	// I2: a live hold's body says what it reserves.
@@ -347,9 +354,9 @@ func (s *Sampler) Leftovers(ctx context.Context) (holds []string, err error) {
 
 // ---------------------------------------------------------------- the sampler's own test
 
-// fakeHold is the body of a constructed hold labeled label that reserves units of 128 MiB.
-func fakeHold(label string, units int64) wire.Hold {
-	return wire.Hold{Label: label, NeedMiB: units * 128}
+// fakeHold is the body of a constructed hold labeled label that reserves needMiB.
+func fakeHold(label string, needMiB int64) wire.Hold {
+	return wire.Hold{Label: label, NeedMiB: needMiB}
 }
 
 // fakeHolds publishes the holds inside the section, as they are given: that is how a defective
@@ -410,13 +417,12 @@ func inSection(t *testing.T, e Env, build func(*store.Section)) {
 }
 
 // TestSamplerCatchesAViolation passes the sampler a valid history of real runs, then builds
-// real violations of I1, I2, I3 and I7 and a fail-open hold in the state directory and checks
-// that the sampler reports each one, and only it, once two samples saw it; what a shrink left
-// above the size is not reported.
+// real violations of I1, I2 and I3 and a fail-open hold in the state directory and checks that
+// the sampler reports each one, and only it, once two samples saw it; a soft room, the idle rule
+// and a room set below what is reserved are not reported.
 func TestSamplerCatchesAViolation(t *testing.T) {
 	e := State(t)
-	s := NewSampler(t, e, 4*128)
-	s.Request = stormRequest
+	s := NewSampler(t, e, 512)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	sample := func() []string {
@@ -443,75 +449,82 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 			t.Errorf("%s: two samples reported %v, want %v", what, got, want)
 		}
 	}
-	// settle takes one sample after a constructed violation is removed, so that the next case
-	// starts from a sample without it.
+	// settle takes one sample after a constructed violation is removed, or before one is built,
+	// so that the next case starts from a sample without it.
 	settle := func() {
 		t.Helper()
 		if got := sample(); len(got) != 0 {
-			t.Errorf("after the violation was removed, the sampler reported %v", got)
+			t.Errorf("the sampler reported %v", got)
 		}
 	}
-	resize := func(units int64) {
+	setRoom := func(mib int64) {
 		t.Helper()
-		if _, err := s.Resize(ctx, units*128); err != nil {
+		if _, err := s.SetRoom(ctx, mib); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// A valid history: two runs hold, a third waits for more than is free, then each is
 	// released in turn, with samples throughout.
-	a := e.Run("v1.cli.m2", "--mem", "256M")
-	e.WaitHold("v1.cli.m2", startWait)
-	b := e.Run("v2.cli.m2", "--mem", "256M")
-	e.WaitHold("v2.cli.m2", startWait)
-	c := e.Run("v3.cli.m3", "--mem", "384M")
-	e.WaitTicket("v3.cli.m3")
+	a := e.Run("v1", "--mem", "256M")
+	e.WaitHold("v1", startWait)
+	b := e.Run("v2", "--mem", "256M")
+	e.WaitHold("v2", startWait)
+	c := e.Run("v3", "--mem", "384M")
+	e.WaitTicket("v3")
 	expect("two holds and a waiter")
-	e.ReleaseChild("v1.cli.m2")
+	e.ReleaseChild("v1")
 	a.ExitCode(0)
-	e.ReleaseChild("v2.cli.m2")
+	e.ReleaseChild("v2")
 	b.ExitCode(0)
-	e.WaitHold("v3.cli.m3", startWait)
+	e.WaitHold("v3", startWait)
 	expect("the waiter admitted")
-	e.ReleaseChild("v3.cli.m3")
+	e.ReleaseChild("v3")
 	c.ExitCode(0)
 	expect("everything released")
 
-	t.Run("more reserved than the size is reported (I3)", func(t *testing.T) {
-		release := fakeHolds(t, e, fakeHold("x.cli.m3", 3), fakeHold("y.cli.m3", 3))
-		expect("6 units held under size 4", "I3 mem")
+	t.Run("an admission past the room is reported (I3)", func(t *testing.T) {
+		releaseX := fakeHolds(t, e, fakeHold("x", 384))
+		settle()
+		releaseY := fakeHolds(t, e, fakeHold("y", 384))
+		expect("384 MiB admitted with 128 MiB of room", "I3 "+holdNamed(t, e, "y"))
+		releaseX()
+		releaseY()
+		settle()
+	})
+	t.Run("a footprint gives its need back to the room (I3)", func(t *testing.T) {
+		x := fakeHold("x", 384)
+		x.FootprintMiB = 384
+		releaseX := fakeHolds(t, e, x)
+		settle()
+		releaseY := fakeHolds(t, e, fakeHold("y", 384))
+		expect("384 MiB admitted beside a hold whose footprint covers its need")
+		releaseX()
+		releaseY()
+		settle()
+	})
+	t.Run("a lone hold takes what it needs (the idle rule)", func(t *testing.T) {
+		release := fakeHolds(t, e, fakeHold("k", 1152))
+		expect("1152 MiB alone")
 		release()
 		settle()
 	})
-	t.Run("a shrink leaves reservations above the size; the bound falls with them (I3)", func(t *testing.T) {
-		releaseA := fakeHolds(t, e, fakeHold("ra.cli.m3", 3))
-		releaseB := fakeHolds(t, e, fakeHold("rb.cli.m1", 1))
-		resize(2)
-		expect("4 units held after a shrink to 2")
-		releaseB()
-		settle() // the bound falls to 3
-		releaseC := fakeHolds(t, e, fakeHold("rc.cli.m1", 1))
-		expect("a unit taken while 3 are reserved above size 2", "I3 mem")
+	t.Run("a room set below what is reserved is no violation, an admission then is (I3)", func(t *testing.T) {
+		releaseA := fakeHolds(t, e, fakeHold("ra", 384))
+		releaseB := fakeHolds(t, e, fakeHold("rb", 128))
+		setRoom(256)
+		expect("512 MiB held after the room is set to 256")
+		releaseC := fakeHolds(t, e, fakeHold("rc", 128))
+		expect("128 MiB admitted while 512 are held in a room of 256", "I3 "+holdNamed(t, e, "rc"))
 		releaseA()
+		releaseB()
 		releaseC()
 		settle()
-		resize(4)
-	})
-	t.Run("a hold that reserves other than its need is reported (I7)", func(t *testing.T) {
-		release := fakeHolds(t, e, fakeHold("w.cli.m3", 1))
-		expect("1 unit reserved for mem=3", "I7 "+holdNamed(t, e, "w.cli.m3"))
-		release()
-		settle()
-	})
-	t.Run("a need above the size reserves it whole, alone", func(t *testing.T) {
-		release := fakeHolds(t, e, fakeHold("k.cli.m9", 9))
-		expect("a clamped mem=9 alone")
-		release()
-		settle()
+		setRoom(512)
 	})
 	t.Run("an unbudgeted hold is reported (fail-open)", func(t *testing.T) {
-		release := fakeHolds(t, e, fakeHold("f.cli.m1", 0))
-		expect("a fail-open hold", "fail-open "+holdNamed(t, e, "f.cli.m1"))
+		release := fakeHolds(t, e, fakeHold("f", 0))
+		expect("a fail-open hold", "fail-open "+holdNamed(t, e, "f"))
 		release()
 		settle()
 	})
@@ -529,8 +542,8 @@ func TestSamplerCatchesAViolation(t *testing.T) {
 		settle()
 	})
 	t.Run("a live hold's file replaced is reported (I1)", func(t *testing.T) {
-		release := fakeHolds(t, e, fakeHold("i.cli.m1", 1))
-		name := holdNamed(t, e, "i.cli.m1")
+		release := fakeHolds(t, e, fakeHold("i", 128))
+		name := holdNamed(t, e, "i")
 		settle() // the sampler has seen the hold's inode
 		path := filepath.Join(e.Dir, store.HoldsDir, name)
 		body, err := os.ReadFile(path)

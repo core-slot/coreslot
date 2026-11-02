@@ -44,9 +44,6 @@ const exitRefusal = 75
 
 // ---------------------------------------------------------------- helpers
 
-// memConfig is a configuration of n units of 128 MiB.
-func memConfig(n int) string { return capacityConfig(int64(n) * 128) }
-
 func admittedAt(h engine.HolderInfo) time.Time { return time.Unix(0, h.StartNS) }
 
 // noHold fails the test when a live hold labeled label exists.
@@ -150,7 +147,7 @@ func TestStateDirWithSpace(t *testing.T) {
 	if !strings.Contains(e.Dir, " ") {
 		t.Fatalf("state directory %q has no space", e.Dir)
 	}
-	e.WriteConfig(memConfig(2))
+	e.WriteConfig(roomConfig(256))
 
 	g := e.Run("go", "--mem", "256M")
 	r := e.WaitStarted("go")
@@ -328,11 +325,11 @@ func waitRefreshed(e Env, label string, before int64) {
 // within the bound, and once continued the old head takes its place again and is admitted next.
 func TestStoppedHeadNoOtherChange(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(2))
+	e.WriteConfig(roomConfig(256))
 	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 
-	// A needs both units and waits at the head; B and C need one, which is free, but there is
+	// A needs all 256 MiB and waits at the head; B and C need 128 MiB, which is free, but there is
 	// no backfill: they wait behind the live head.
 	a, autoA := startStoppableHead(e, "A", "--mem", "256M")
 	e.WaitTicket("A")
@@ -360,7 +357,7 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	noHold(t, e, "C", "C was admitted past B")
 
 	// C has watched A (the head, in its front window) since before A stopped; observeWait more
-	// makes sure it has judged A STALLED. No unit is free (X and B hold both), so nothing can be
+	// makes sure it has judged A STALLED. Nothing is free (X and B hold it all), so nothing can be
 	// admitted meanwhile.
 	time.Sleep(observeWait)
 	a.Cont()
@@ -368,8 +365,8 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 	waitRefreshed(e, "A", mtime)
 	time.Sleep(observeWait)
 
-	// One unit frees up: C would fit, A (needing two) does not, and C, which judged A STALLED,
-	// must now see it live again (STALLED to WAITING) and wait behind it. Then the second unit:
+	// 128 MiB frees up: C would fit, A (needing 256) does not, and C, which judged A STALLED,
+	// must now see it live again (STALLED to WAITING) and wait behind it. Then the rest:
 	// A is next.
 	e.ReleaseChild("B")
 	b.ExitCode(0)
@@ -390,7 +387,7 @@ func TestStoppedHeadNoOtherChange(t *testing.T) {
 // one that first sees them already stopped; continued, they are admitted in their order again.
 func TestConsecutiveStalledTickets(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(3))
+	e.WriteConfig(roomConfig(384))
 	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 
@@ -411,7 +408,7 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 	stoppedAt, mtimeA := stopOutsideSection(e, a, autoA)
 
 	// C arrives after both stopped: its first sighting of them is already stale. E arrives too,
-	// and finds no unit left once C and D are admitted.
+	// and finds nothing left once C and D are admitted.
 	c := e.Run("C", "--mem", "128M")
 	tkC := e.WaitTicket("C")
 	f := e.Run("E", "--mem", "128M")
@@ -433,7 +430,7 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 
 	// E watches A and B (both in its front window) from its arrival, just after C's; C was
 	// admitted 10 s after it arrived, so observeWait more makes sure E has judged both STALLED.
-	// No unit is free (X, D and C hold all three), so nothing can be admitted meanwhile.
+	// Nothing is free (X, D and C hold it all), so nothing can be admitted meanwhile.
 	time.Sleep(observeWait)
 	a.Cont()
 	defer a.AutoRelease("admit.before-enter")()
@@ -442,7 +439,7 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 	waitRefreshed(e, "B", tkB.MtimeNS)
 	time.Sleep(observeWait)
 
-	// One unit frees up: E would fit, A and B (needing three) do not, and E, which judged them
+	// 128 MiB frees up: E would fit, A and B (needing 384) do not, and E, which judged them
 	// STALLED, must now see them live again (STALLED to WAITING) and wait behind them.
 	e.ReleaseChild("D")
 	d.ExitCode(0)
@@ -480,11 +477,11 @@ func TestConsecutiveStalledTickets(t *testing.T) {
 func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	t.Run("admissible P published between H's election and its admitting section", func(t *testing.T) {
 		e := State(t)
-		e.WriteConfig(memConfig(1))
+		e.WriteConfig(roomConfig(128))
 		h := e.Pausing("admit.before-enter", "section.entered").Run("H", "--mem", "128M")
 		autoSec := h.AutoRelease("section.entered")
 		e.WaitTicket("H")
-		h.WaitReached("admit.before-enter") // H won an election with the unit free
+		h.WaitReached("admit.before-enter") // H won an election with the room free
 		autoSec()
 
 		// P, ahead of H, is published and elected too, and is held before its own admitting
@@ -496,7 +493,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 			t.Fatalf("queue %v: P is not ahead of H", rep.Tickets)
 		}
 
-		// H enters the section it was elected for, with the unit free: it must not take it.
+		// H enters the section it was elected for, with the room free: it must not take it.
 		h.Release("admit.before-enter")
 		h.WaitReached("section.entered")
 		defer h.AutoRelease("admit.before-enter")()
@@ -516,7 +513,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 		h.ExitCode(0)
 	})
 	e := State(t)
-	e.WriteConfig(memConfig(2))
+	e.WriteConfig(roomConfig(256))
 	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 	y := e.Run("Y", "--mem", "128M")
@@ -529,14 +526,14 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	h.WaitReached("admit.before-enter") // H won an election: it is the head
 	autoSec()
 
-	// Before H's next section, P, which needs both units, is published ahead of H in the order.
+	// Before H's next section, P, which needs all 256 MiB, is published ahead of H in the order.
 	p := e.Offset(-time.Hour).Run("P", "--mem", "256M")
 	e.WaitTicket("P")
 	if rep := e.Status(); len(rep.Tickets) != 2 || rep.Tickets[0].Label != "P" {
 		t.Fatalf("queue %v: P is not ahead of H", rep.Tickets)
 	}
 
-	// H goes on into the section it was elected for; X and Y hold both units, so it is not
+	// H goes on into the section it was elected for; X and Y hold it all, so it is not
 	// admitted and leaves.
 	h.Release("admit.before-enter")
 	h.WaitReached("section.entered")
@@ -545,7 +542,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	defer h.AutoRelease("section.entered")()
 	e.Eventually(startWait, "H leaves its section", func() bool { return !e.Status().Section.Held })
 
-	// One unit frees up. P cannot be admitted (it needs both) and H, behind the live P, must
+	// 128 MiB frees up. P cannot be admitted (it needs 256) and H, behind the live P, must
 	// not be: it repeats the election before each attempt.
 	e.ReleaseChild("X")
 	x.ExitCode(0)
@@ -556,7 +553,7 @@ func TestArrivalBeforeAndAfterElection(t *testing.T) {
 	e.WaitHold("P", startWait)
 	noHold(t, e, "H", "H was admitted beside P")
 
-	// H is the head again. P2, ahead of H and needing both units, arrives while H is paused
+	// H is the head again. P2, ahead of H and needing all 256 MiB, arrives while H is paused
 	// inside the section that admits it: H's admission stands, and P2 is admitted after H.
 	autoPub()
 	e.ReleaseChild("P")
@@ -602,7 +599,7 @@ func TestPublishPausedAtEveryPoint(t *testing.T) {
 				}
 				t.Run(kind+"/"+strings.TrimPrefix(point, "publish.")+"/"+outcome, func(t *testing.T) {
 					e := State(t)
-					e.WriteConfig(memConfig(2))
+					e.WriteConfig(roomConfig(256))
 					// FORMAT and gen exist, and a reconciliation just ran.
 					e.Start("run", "--no-wait", "--", "true").ExitCode(0)
 					switch kind {
@@ -621,7 +618,7 @@ func TestPublishPausedAtEveryPoint(t *testing.T) {
 
 // restored checks the state after a forced reconciliation: no temporary file, nothing dead,
 // nothing ignored, and exactly the live entries listed.
-func restored(t *testing.T, e Env, tickets, holds, cancels []string, locked int) {
+func restored(t *testing.T, e Env, tickets, holds, cancels []string, reservedMiB int64) {
 	t.Helper()
 	if tmps := e.AllTmps(); len(tmps) != 0 {
 		t.Errorf("temporary files after the reconciliation: %v", tmps)
@@ -646,8 +643,8 @@ func restored(t *testing.T, e Env, tickets, holds, cancels []string, locked int)
 			t.Errorf("%d ignored entries in %s", n, dir)
 		}
 	}
-	if got := rep.Mem.ReservedMiB / 128; got != int64(locked) {
-		t.Errorf("%d units reserved, want %d", got, locked)
+	if got := rep.Mem.ReservedMiB; got != reservedMiB {
+		t.Errorf("%d MiB reserved, want %d", got, reservedMiB)
 	}
 }
 
@@ -667,7 +664,7 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 		if n := e.Reconcile(); n < 1 {
 			t.Errorf("the reconciliation removed %d entries", n)
 		}
-		restored(t, e, nil, []string{"X"}, nil, 2)
+		restored(t, e, nil, []string{"X"}, nil, 256)
 		z := e.Run("Z", "--mem", "128M")
 		e.WaitTicket("Z")
 		e.ReleaseChild("X")
@@ -689,7 +686,7 @@ func publishTicket(t *testing.T, e Env, point string, killed bool) {
 	if _, ok := e.Hold("X"); !ok {
 		t.Fatal("the reconciliation lost X's live hold")
 	}
-	restored(t, e, []string{"W"}, []string{"X"}, nil, 2)
+	restored(t, e, []string{"W"}, []string{"X"}, nil, 256)
 	e.ReleaseChild("X")
 	x.ExitCode(0)
 	e.WaitHold("W", startWait)
@@ -729,7 +726,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 	if !ok || h.NeedMiB != 128 || r.Env["CORESLOT_GRANTED_MEM"] != "128" {
 		t.Fatalf("after the reconciliation W's hold is %+v (present %v), its command saw %v", h, ok, r.Env)
 	}
-	restored(t, e, nil, []string{"W"}, nil, 1)
+	restored(t, e, nil, []string{"W"}, nil, 128)
 	e.ReleaseChild("W")
 	w.ExitCode(0)
 }
@@ -761,7 +758,7 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 		if n := e.Reconcile(); n < 1 {
 			t.Errorf("the reconciliation removed %d entries", n)
 		}
-		restored(t, e, []string{"V", "W"}, []string{"X"}, nil, 2)
+		restored(t, e, []string{"V", "W"}, []string{"X"}, nil, 256)
 		w.Cont()
 		e.Pausing().StartChild("cancel", e.Dir, tk.ID).ExitCode(0)
 		w.ExitCode(exitRefusal)
@@ -776,7 +773,7 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 		if !slices.Contains(rep.Cancels, tk.ID) {
 			t.Fatalf("the reconciliation lost the cancel request of W's live ticket: cancels %v", rep.Cancels)
 		}
-		restored(t, e, []string{"V", "W"}, []string{"X"}, []string{tk.ID}, 2)
+		restored(t, e, []string{"V", "W"}, []string{"X"}, []string{tk.ID}, 256)
 		w.Cont()
 		w.ExitCode(exitRefusal)
 	}
@@ -796,7 +793,7 @@ func publishCancel(t *testing.T, e Env, point string, killed bool) {
 // its hold reserves the need asked.
 func TestOversizeRunsAlone(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(8))
+	e.WriteConfig(roomConfig(1024))
 	x := e.Run("X", "--mem", "128M")
 	e.WaitHold("X", startWait)
 	o := e.Run("O", "--mem", "2048M")
@@ -833,7 +830,7 @@ func TestOversizeRunsAlone(t *testing.T) {
 // the run fails open (or refuses under --strict).
 func TestFullDirectoryFailsOpen(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(4))
+	e.WriteConfig(roomConfig(512))
 	e.Start("run", "--no-wait", "--", "true").ExitCode(0)
 	q := filepath.Join(e.Dir, store.QueueDir)
 	for i := range store.MaxEntries {
@@ -881,7 +878,7 @@ func TestFullDirectoryFailsOpen(t *testing.T) {
 // Wait whose deadline passes returns within 1 s, leaving a dead ticket.
 func TestStoppedInSectionDoesNotHangCallers(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(memConfig(1))
+	e.WriteConfig(roomConfig(128))
 	c := e.Engine()
 	poller, err := c.EnqueueContext(context.Background(), spec.Request{Label: "poller", NeedMiB: 128})
 	if err != nil {

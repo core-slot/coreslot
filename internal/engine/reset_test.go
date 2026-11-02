@@ -68,18 +68,18 @@ func TestResetRefusesLiveState(t *testing.T) {
 		live func(t *testing.T, e *Engine, dir string)
 		want string
 	}{
-		{"ticket", func(t *testing.T, e *Engine, dir string) { startHelper(t, "enqueue", dir, "mem=1") }, "1 live ticket (pid"},
+		{"ticket", func(t *testing.T, e *Engine, dir string) { startHelper(t, "enqueue", dir, "128") }, "1 live ticket (pid"},
 		{"hold", func(t *testing.T, e *Engine, dir string) {
-			hold(t, e, needLabel("mem=2", "gate"))
+			hold(t, e, needLabel(256, "gate"))
 		}, "1 live hold (pid"},
-		{"another client's hold", func(t *testing.T, e *Engine, dir string) { startHelper(t, "lock", dir, holdPath(t, dir, 3)) }, "1 live hold (pid 4"},
+		{"another client's hold", func(t *testing.T, e *Engine, dir string) { startHelper(t, "lock", dir, holdPath(t, dir, 384)) }, "1 live hold (pid 4"},
 		{"section", func(t *testing.T, e *Engine, dir string) { startHelper(t, "section", dir, "") }, "another client is inside the admission section"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dir := capped(t, 512)
 			e := newEngine(t, dir, nil)
-			hold(t, e, need("mem=1")).Close() // FORMAT, gen and a hold exist
+			hold(t, e, need(128)).Close() // FORMAT, gen and a hold exist
 			c.live(t, e, dir)
 			setOtherLengthHolder(t, dir)
 			before := treeContent(t, dir)
@@ -105,8 +105,8 @@ func TestResetRefusesLiveState(t *testing.T) {
 func TestResetRefusalNamesLabels(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
-	hold(t, e, needLabel("mem=1", "hold:three"))
-	enqueue(t, e, needLabel("mem=1", "ci:o-r\x1b[2J"))
+	hold(t, e, needLabel(128, "hold:three"))
+	enqueue(t, e, needLabel(128, "ci:o-r\x1b[2J"))
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	_, err := e.Reset(ctx)
@@ -132,7 +132,7 @@ func TestResetRefusalNamesLabels(t *testing.T) {
 func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
-	hold(t, e, need("mem=1")).Close()
+	hold(t, e, need(128)).Close()
 	setOtherLengthHolder(t, dir)
 	sec, err := e.st.Enter(context.Background())
 	if err != nil {
@@ -155,7 +155,7 @@ func TestAcceptedResetNamesItselfHolder(t *testing.T) {
 func TestResetThenUse(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
-	hold(t, e, need("mem=2")).Close()
+	hold(t, e, need(256)).Close()
 	removed, err := e.Reset(context.Background())
 	if err != nil || removed == 0 {
 		t.Fatalf("Reset = %d, %v", removed, err)
@@ -166,7 +166,7 @@ func TestResetThenUse(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 2\n" {
 		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 2", b)
 	}
-	tk := enqueue(t, e, need("mem=1"))
+	tk := enqueue(t, e, need(128))
 	if !isAdmitted(step(t, tk)) {
 		t.Error("a request is not admitted after the reset")
 	}
@@ -177,7 +177,7 @@ func TestResetThenUse(t *testing.T) {
 func TestResetRecreatesAForeignFormat(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
-	hold(t, e, need("mem=1")).Close()
+	hold(t, e, need(128)).Close()
 	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

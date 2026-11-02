@@ -30,9 +30,9 @@ func setLiveMem(t *testing.T, headroomMiB int64) {
 func TestRoomGatesAdmission(t *testing.T) {
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
 	setLiveMem(t, 4096)
-	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
-	admitted(t, step(t, enqueue(t, e, need("mem=2G"))))
-	if r := step(t, enqueue(t, e, need("mem=1M"))); isAdmitted(r) {
+	admitted(t, step(t, enqueue(t, e, need(1024))))
+	admitted(t, step(t, enqueue(t, e, need(2048))))
+	if r := step(t, enqueue(t, e, need(1))); isAdmitted(r) {
 		t.Fatal("a request admitted with no room left")
 	}
 }
@@ -42,11 +42,11 @@ func TestRoomGatesAdmission(t *testing.T) {
 func TestIdleHeadAlwaysStarts(t *testing.T) {
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
 	setLiveMem(t, 100) // below the reserve
-	g := admitted(t, step(t, enqueue(t, e, need("mem=4G"))))
+	g := admitted(t, step(t, enqueue(t, e, need(4096))))
 	if g.GrantMiB() != 4096 {
 		t.Errorf("grant %d, want the 4096 asked", g.GrantMiB())
 	}
-	if r := step(t, enqueue(t, e, need("mem=1M"))); isAdmitted(r) {
+	if r := step(t, enqueue(t, e, need(1))); isAdmitted(r) {
 		t.Fatal("a request admitted beside a live hold with the room negative")
 	}
 }
@@ -57,8 +57,8 @@ func TestUnreadHeadroomGatesNothing(t *testing.T) {
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
 	setLiveMem(t, 0)
 	testHeadroom.ok = false
-	admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
-	admitted(t, step(t, enqueue(t, e, need("mem=2G"))))
+	admitted(t, step(t, enqueue(t, e, need(1024))))
+	admitted(t, step(t, enqueue(t, e, need(2048))))
 }
 
 // A hold hands the room back by the footprint its run wrote: with 3584 MiB, A's 1 GiB with no
@@ -69,8 +69,8 @@ func TestRoomCountsFootprint(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)
 	setLiveMem(t, 3584)
-	a := admitted(t, step(t, enqueue(t, e, need("mem=1G"))))
-	b := enqueue(t, e, need("mem=2G"))
+	a := admitted(t, step(t, enqueue(t, e, need(1024))))
+	b := enqueue(t, e, need(2048))
 	if isAdmitted(step(t, b)) {
 		t.Fatal("B admitted beside A's whole need")
 	}
@@ -123,12 +123,12 @@ func TestTornLiveHoldCountsAtColdStart(t *testing.T) {
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		t.Fatal(err)
 	}
-	over := enqueue(t, e, need("mem=600M"))
+	over := enqueue(t, e, need(600))
 	if r := step(t, over); isAdmitted(r) {
 		t.Fatal("600 MiB admitted with the torn hold counted at zero")
 	}
 	if err := over.Withdraw(); err != nil {
 		t.Fatal(err)
 	}
-	admitted(t, step(t, enqueue(t, e, need("mem=598M"))))
+	admitted(t, step(t, enqueue(t, e, need(598))))
 }

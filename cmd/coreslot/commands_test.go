@@ -69,9 +69,9 @@ func recordDegraded(t *testing.T, st *store.Store, reason string) {
 
 // hold admits a request for the label at once, which the budget must have room for, and keeps
 // the grant until the test ends.
-func hold(t *testing.T, c *engine.Engine, label string, units int) *engine.Grant {
+func hold(t *testing.T, c *engine.Engine, label string, needMiB int64) *engine.Grant {
 	t.Helper()
-	r, err := queue(t, c, label, units).Poll()
+	r, err := queue(t, c, label, needMiB).Poll()
 	if err != nil || !admitted(r) {
 		t.Fatalf("hold %s: not admitted at once (%v, %v)", label, r, err)
 	}
@@ -85,10 +85,10 @@ func admitted(r engine.StepResult) bool {
 	return ok
 }
 
-// queue enqueues a request for units of 128 MiB and withdraws it when the test ends.
-func queue(t *testing.T, c *engine.Engine, label string, units int) *engine.Ticket {
+// queue enqueues a request for needMiB and withdraws it when the test ends.
+func queue(t *testing.T, c *engine.Engine, label string, needMiB int64) *engine.Ticket {
 	t.Helper()
-	w, err := c.EnqueueContext(context.Background(), spec.Request{Label: label, NeedMiB: int64(units) * 128})
+	w, err := c.EnqueueContext(context.Background(), spec.Request{Label: label, NeedMiB: needMiB})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,8 +187,8 @@ func treeContent(t *testing.T, dir string) string {
 func TestStatusJSONSchema(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
-	hold(t, c, "gate", 3)
-	queue(t, c, "waiting", 2)
+	hold(t, c, "gate", 384)
+	queue(t, c, "waiting", 256)
 
 	doc := statusDoc(t, dir, 0)
 	const top = "cancel_requests config_error dead_holds degraded format format_error format_present format_understood gen holds ignored mem observed_s reconciled_ns schema section state_dir state_dir_exists tickets watch"
@@ -265,9 +265,9 @@ func TestStatusJSONSchema(t *testing.T) {
 func TestStatusObserveReportsStalled(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
-	hold(t, c, "gate", 4)
-	queue(t, c, "idle", 1) // never polled: nobody refreshes it
-	live := queue(t, c, "polled", 1)
+	hold(t, c, "gate", 512)
+	queue(t, c, "idle", 128) // never polled: nobody refreshes it
+	live := queue(t, c, "polled", 128)
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -327,8 +327,8 @@ func TestStatusObserveReportsStalled(t *testing.T) {
 func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 	dir := budgetDir(t, 2048)
 	c := openLib(t, dir)
-	hold(t, c, "gate", 16)
-	queue(t, c, "wide", 12)
+	hold(t, c, "gate", 2048)
+	queue(t, c, "wide", 1536)
 	r := cli(t, baseEnv(dir), "status")
 	want := fmt.Sprintf("\n  1. wide  pid %d  need mem 1.5 GiB  waiting ", os.Getpid())
 	if r.code != 0 || !strings.Contains(r.stdout, want) {
@@ -391,9 +391,9 @@ func TestStatusEscapesLabels(t *testing.T) {
 		`back\slash "quote" <tag>`,
 		"c1\u009bcontrol",
 	}
-	hold(t, c, labels[0], 4)
+	hold(t, c, labels[0], 512)
 	for _, l := range labels[1:] {
-		queue(t, c, l, 1)
+		queue(t, c, l, 128)
 	}
 
 	r := cli(t, baseEnv(dir), "status")
@@ -486,7 +486,7 @@ func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 	}
 
 	c := openLib(t, dir)
-	hold(t, c, label, 1)
+	hold(t, c, label, 128)
 	r := cli(t, baseEnv(dir), "status", "--json")
 	if r.code != 0 {
 		t.Fatalf("status --json: exit %d (stderr %q)", r.code, r.stderr)
@@ -613,7 +613,7 @@ func TestStatusStaleSectionHolder(t *testing.T) {
 func TestStatusShowsHoldNeedStraysAndIgnored(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
-	hold(t, c, "big", 8) // clamped to the budget; the hold reserves the need asked
+	hold(t, c, "big", 1024) // more than the room, admitted alone: the hold reserves the need asked
 	for _, d := range []string{"queue", "holds"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			t.Fatal(err)
@@ -767,13 +767,13 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 		want string
 	}{
 		{"hold", func(t *testing.T, dir string, c *engine.Engine) {
-			hold(t, c, "gate", 2)
+			hold(t, c, "gate", 256)
 		}, "1 live hold (pid"},
 		{"ticket", func(t *testing.T, dir string, c *engine.Engine) {
-			hold(t, c, "gate", 4)
-			queue(t, c, "waiting", 1)
+			hold(t, c, "gate", 512)
+			queue(t, c, "waiting", 128)
 		}, "1 live ticket (pid"},
-		{"another client's hold", func(t *testing.T, dir string, c *engine.Engine) { holdOther(t, dir, 1) }, "1 live hold (pid 4"},
+		{"another client's hold", func(t *testing.T, dir string, c *engine.Engine) { holdOther(t, dir, 128) }, "1 live hold (pid 4"},
 		{"section", func(t *testing.T, dir string, c *engine.Engine) {
 			st, err := store.Open(dir)
 			if err != nil {
@@ -790,7 +790,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := budgetDir(t, 512)
 			c := openLib(t, dir)
-			hold(t, c, "", 1).Close() // FORMAT, gen and a dead hold exist
+			hold(t, c, "", 128).Close() // FORMAT, gen and a dead hold exist
 			tc.live(t, dir, c)
 			// A stale record of a pid with one digit: whatever pid the refusing process has, a
 			// reset that marked itself as holder would change the file's length as well as its
@@ -813,7 +813,7 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
-	g := hold(t, c, "gate", 2)
+	g := hold(t, c, "gate", 256)
 	g.Close() // nothing is alive any more; FORMAT, gen and a hold-less queue remain
 	st, err := store.Open(dir)
 	if err != nil {
@@ -900,10 +900,10 @@ func inodeOf(t *testing.T, path string) uint64 {
 func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
-	hold(t, c, "gate", 4)
-	a := queue(t, c, "twin", 1)
-	b := queue(t, c, "twin", 1)
-	solo := queue(t, c, "solo", 1)
+	hold(t, c, "gate", 512)
+	a := queue(t, c, "twin", 128)
+	b := queue(t, c, "twin", 128)
+	solo := queue(t, c, "solo", 128)
 
 	r := cli(t, baseEnv(dir), "cancel", "--label", "twin")
 	if r.code != 75 || !strings.Contains(r.stderr, "2 waiting tickets have the label twin") {
@@ -932,8 +932,8 @@ func TestCancelByLabelRefusesAmbiguous(t *testing.T) {
 func TestCancelByIDAndRefusals(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
-	hold(t, c, "gate", 4)
-	w := queue(t, c, "victim", 1)
+	hold(t, c, "gate", 512)
+	w := queue(t, c, "victim", 128)
 
 	var id string
 	for _, tk := range statusDoc(t, dir, 0)["tickets"].([]any) {
@@ -1440,8 +1440,8 @@ func TestCancelRefusesWhileSectionHeld(t *testing.T) {
 func TestDoctorResetRefusalNamesLabels(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
-	hold(t, c, "hold:three", 4)
-	queue(t, c, "ticket:one", 1)
+	hold(t, c, "hold:three", 512)
+	queue(t, c, "ticket:one", 128)
 	r := cli(t, baseEnv(dir), "doctor", "--reset")
 	if r.code != 75 {
 		t.Fatalf("doctor --reset: exit %d, want 75 (stderr %q)", r.code, r.stderr)

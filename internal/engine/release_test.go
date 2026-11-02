@@ -31,10 +31,10 @@ func replaceDir(t *testing.T, dir string, recreate bool) {
 func TestReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 	grants := map[string]func(t *testing.T, e *Engine) *Grant{
 		"admitted": func(t *testing.T, e *Engine) *Grant {
-			return admitted(t, step(t, enqueue(t, e, need("mem=3"))))
+			return admitted(t, step(t, enqueue(t, e, need(384))))
 		},
 		"fail-open": func(t *testing.T, e *Engine) *Grant {
-			g, err := e.FailOpen(need("mem=2"), "test")
+			g, err := e.FailOpen(need(256), "test")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -72,7 +72,7 @@ func TestReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 func TestReleaseAfterTheHoldWasReplaced(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	g := admitted(t, step(t, enqueue(t, e, need("mem=2"))))
+	g := admitted(t, step(t, enqueue(t, e, need(256))))
 	hold := filepath.Join(dir, store.HoldsDir, g.HoldName())
 	if err := os.WriteFile(hold+".new", nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestReleaseAfterTheHoldWasReplaced(t *testing.T) {
 func TestReleaseRemovesTheHold(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, nil)
-	g := admitted(t, step(t, enqueue(t, e, need("mem=2"))))
+	g := admitted(t, step(t, enqueue(t, e, need(256))))
 	hold := filepath.Join(dir, store.HoldsDir, g.HoldName())
 	if err := g.Close(); err != nil {
 		t.Fatal(err)

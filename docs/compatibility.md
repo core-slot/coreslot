@@ -27,8 +27,10 @@ Linux. That pass is necessary for `v1.0.0`, not its trigger. The suite, in
   other clients do meanwhile;
 - the stop-round and restart traces, which drive the watchdog through the readings test hook;
 - the kill storm, which for 60 s kills, stops, resumes and cancels 50 CLI clients, some of them
-  nested, while a sampler checks invariants I1, I2, I3 and I7 of
-  [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants).
+  nested, while a sampler checks invariants I1, I2 and I3 of
+  [`PROTOCOL.md` section 3](../PROTOCOL.md#3-state-machine-and-invariants) on the hold bodies,
+  and every client the storm did not kill must exit as its fate says: no run killed a command
+  other than its own (the kill side of I7).
 
 At full length means without `-short`:
 

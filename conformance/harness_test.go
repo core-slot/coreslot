@@ -133,13 +133,12 @@ func killAll() {
 }
 
 // confHeadroomMiB is the headroom every process of the traces reads, through the test hook, so
-// that a state directory's capacity is its configuration's, not the machine's: the capacity is
-// the headroom less the configuration's reserve (capacityConfig).
+// that the room of a state directory is set by its configuration's reserve, not by the machine.
 const confHeadroomMiB = 1 << 17
 
-// capacityConfig is the configuration that makes the capacity sizeMiB.
-func capacityConfig(sizeMiB int64) string {
-	return fmt.Sprintf("[memory]\nreserve = \"%dM\"\n", confHeadroomMiB-sizeMiB)
+// roomConfig is the configuration whose reserve leaves roomMiB of room while no hold is live.
+func roomConfig(roomMiB int64) string {
+	return fmt.Sprintf("[memory]\nreserve = \"%dM\"\n", confHeadroomMiB-roomMiB)
 }
 
 func TestMain(m *testing.M) {

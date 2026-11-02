@@ -97,7 +97,7 @@ func TestNestedRunsInsideParent(t *testing.T) {
 		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
 			t.Fatalf("setup run: %d %q", r.code, r.stderr)
 		}
-		holdOther(t, dir, 2) // live, the whole budget, of a pid that is no ancestor
+		holdOther(t, dir, 256) // live, the whole budget, of a pid that is no ancestor
 		other := entries(t, dir, "holds")[0]
 		r := cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+other), "run", "--no-wait", "--", "true")
 		if r.code != 75 || !strings.Contains(r.stderr, "not admitted at once") {

@@ -21,7 +21,7 @@ import (
 // watchConfig is a budget of 64 GiB whose restarts wait for no calm, with extra appended to its
 // [watch] table.
 func watchConfig(extra string) string {
-	return capacityConfig(64<<10) + "[watch]\ncalm_s = 0\n" + extra
+	return roomConfig(64<<10) + "[watch]\ncalm_s = 0\n" + extra
 }
 
 // floor is the readings of a host with no swap room left whose swap used grew to swapUsedMiB.
