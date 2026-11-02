@@ -1,3 +1,4 @@
-# The run's coreslot state directories and its process list: run.py's working files, not records
+# The run's coreslot state directories, its process list and the semaphore's lock files: run.py's working files, not records
 state/
 live.json
+slots/
