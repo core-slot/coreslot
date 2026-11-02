@@ -1,0 +1,13 @@
+{"runs": 1, "pid": 17147, "cpu_s": 0.33, "wall_s": 113.994, "core_share": 0.00289}
+{"runs": 4, "pid": 17544, "cpu_s": 0.27, "wall_s": 113.96, "core_share": 0.00237}
+{"runs": 4, "pid": 17545, "cpu_s": 0.19, "wall_s": 113.96, "core_share": 0.00167}
+{"runs": 4, "pid": 17546, "cpu_s": 0.19, "wall_s": 113.96, "core_share": 0.00167}
+{"runs": 4, "pid": 17547, "cpu_s": 0.25, "wall_s": 113.96, "core_share": 0.00219}
+{"runs": 8, "pid": 18330, "cpu_s": 0.2, "wall_s": 113.926, "core_share": 0.00176}
+{"runs": 8, "pid": 18331, "cpu_s": 0.36, "wall_s": 113.926, "core_share": 0.00316}
+{"runs": 8, "pid": 18332, "cpu_s": 0.13, "wall_s": 113.926, "core_share": 0.00114}
+{"runs": 8, "pid": 18333, "cpu_s": 0.13, "wall_s": 113.926, "core_share": 0.00114}
+{"runs": 8, "pid": 18336, "cpu_s": 0.18, "wall_s": 113.926, "core_share": 0.00158}
+{"runs": 8, "pid": 18338, "cpu_s": 0.14, "wall_s": 113.926, "core_share": 0.00123}
+{"runs": 8, "pid": 18340, "cpu_s": 0.19, "wall_s": 113.926, "core_share": 0.00167}
+{"runs": 8, "pid": 18342, "cpu_s": 0.14, "wall_s": 113.926, "core_share": 0.00123}

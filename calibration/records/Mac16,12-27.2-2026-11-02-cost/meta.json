@@ -1,0 +1,1 @@
+{"kind": "cost", "machine": "Mac16,12", "os": "27.2", "ncpu": 10, "seconds": 120, "runs": [1, 4, 8], "commit": "524e122", "started": "2026-11-02T08:44:09Z"}

@@ -1,10 +1,11 @@
 # Calibration
 
-The watchdog stops the newest jobs when memory costs them real time. Its thresholds (yellow and red
-points, red samples, the paging gate, the calm window, the reserve) are set from runs of
-this harness, not from a model: it runs a memory hog under the branch's own `coreslot run` in observe
-mode, logs what the watchdog sees at every sample, and scores candidate thresholds against how fast
-the hog actually ran.
+The watchdog stops the newest jobs when memory costs them real time. This harness runs a memory hog
+under the branch's own `coreslot run` in observe mode, logs what the watchdog sees at every sample,
+and scores candidate thresholds against how fast the hog actually ran. The yellow and red points
+were chosen on its records; the paging gate is a round value the records cannot tell from its
+neighbours, and no other default is calibrated ([what each rests
+on](#what-the-defaults-rest-on)).
 
 Needs macOS, Python 3 and Go. It reads nothing that needs privileges.
 
@@ -16,8 +17,9 @@ Needs macOS, Python 3 and Go. It reads nothing that needs privileges.
 | `cpu_control.py` | The control: busy loops (default twice the number of cores) for `--seconds` and no memory pressure. The watchdog must stay calm here. |
 | `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. Every pass is preceded by a 30 s warm-up of its workload, and a ramp is accompanied by an observer job (below). |
 | `analyse.py` | Joins the watchdog's `watch.jsonl` with the workload's `work.jsonl`, puts each sample into a speed band, and prints the per-band excess, the samples where its replay of the levels at the chosen values differs from the level the watchdog logged, and a scoring table per candidate value. |
+| `cost.py` | The watchdog's own CPU cost: N concurrent `coreslot run -- sleep S`, each run's own CPU time over the window, as a share of one core ([below](#the-watchdogs-own-cost)). |
 | `testdata/` | A tiny record for the tests. |
-| `records/` | Where `run.sh` puts its records; the committed ones are the passes the shipped defaults rest on ([`records/README.md`](records/README.md)). |
+| `records/` | Where `run.sh` puts its records; the committed ones are the passes the yellow and red points were chosen on, and one measurement of the watchdog's own cost ([`records/README.md`](records/README.md)). |
 
 ## Running it
 
@@ -96,3 +98,51 @@ Notes for reading numbers:
 ```bash
 python3 -m unittest discover calibration
 ```
+
+## What the defaults rest on
+
+Counts are samples of the ten committed passes ([`records/README.md`](records/README.md) says how
+they were taken and what they cannot show): 339 full-speed, 608 slowing, 10 slow and 202 cliff
+samples of eight ramps, and 74 samples of two controls. The points were chosen on these same
+records, with no held-out set: they are fitted to them, not validated on others.
+
+| default | status | what the records show |
+|---|---|---|
+| `yellow_points = 20` | chosen on the records | Held yellow or red by 1 of 339 full-speed samples, 31 of 608 slowing, 9 of 10 slow, 194 of 202 cliff and 0 of 74 control ones. The one full-speed sample is an Air sample (E 9.6), yellow at 10, 20 and 30 alike. At 10 and 15 one Pro full-speed sample (E 7.0) is held too; at 20 none is. 20 and 30 differ only in the slowing (31 and 15), slow (9 and 7) and cliff (194 and 193) samples held, so 20 over 30 is a judgement. |
+| `red_points = 40` | chosen on the records | With the gate open, E reaches it in 0 of 339 full-speed, 0 of 608 slowing, 4 of 10 slow, 185 of 202 cliff and 0 of 74 control samples; 30 reaches it in 5 slowing samples of the Pro. Seven of the eight ramps have such cliff samples; the eighth, the Pro's `ramp8`, reached no memory cliff. |
+| `red_samples = 10` | not calibrated | The reason is the rule that red needs danger held for tens of seconds: 10 samples at a 2 s period are about 20 s. The records allow 3 to 15: replays at 3, 5, 10 and 15 fire first in a cliff sample and in none of the 74 control samples (3 also fires in the Pro's `ramp1` cliff, which lasted 12 s); at 20 two of the three Air ramps never turn red. At 10, red came 20 to 52 s after the first cliff sample in the six ramps that turned red (Air 28 to 52 s, Pro 20 to 30 s); contiguous cliff stretches of about 24 s (Air `ramp8`) and 22 s (Pro `long1`) carry no red. |
+| `gate_pages_s = 1000` | chosen, not calibrated | The records cannot discriminate it: `analyse.py` puts a sample in the cliff band only when paging is at least 1000 per second, so the gate is open in every cliff sample by construction. Replays at 1000, 3000 and 10 000 give the same levels in all ten passes. The gate is open in 22 % of full-speed, 37 % of slowing and 45 % of control samples at 1000 (84 % of the Air's control, 5 % of the Pro's), and in 5 %, 17 % and 0 % at 10 000. |
+| `calm_s = 30` | not calibrated | Seven of the eight ramps turned green 45 to 58 s after the hog stopped, the eighth (the Pro's `ramp8`) after 3 s, and all stayed green to the end of the record (at least 92 s). The 45 to 58 s is the detector's own clearing (15 samples below yellow, the bucket draining) with only the observer job left, so E is 0 by construction: it says nothing about how long memory takes to recover. No `calm_s` from 15 to 90 is discriminated. |
+| `floor = 2G`, 256 MiB in 20 s | not calibrated | A round value. No sample of the ten passes has the level floor (1602 samples: 1249 green, 222 yellow, 131 red), and a pass stops when swap used has grown 6 GiB. |
+| `spacing_s = 3`, `post_kill_s = 15` | not calibrated | Every pass ran in observe mode: the kill, the restart, the spacing and the calm wait never ran on a real machine. |
+| busy floor, 10 % of a period | not calibrated | Chosen so that idle polling jobs, mostly system time, carry no excess; nothing in the records tests it. |
+| `reserve = 1G` | not calibrated | The room at the cliff was 0.9 to 1.0 GiB at the median on the Air and 3.5 to 4.0 GiB on the Pro, and no in-run sample had a negative room at 1 GiB. With 1 GiB more it would have been negative in 11 full-speed, 16 slowing and 62 cliff samples, all the Air's; with 2 GiB more in every sample of the Air's control. That bounds the reserve; it does not choose it. |
+
+Linux is not calibrated at all.
+
+## The watchdog's own cost
+
+The design asks for under 1 % of one core per run. `cost.py` starts N `coreslot run --mem 64M --
+sleep 120`, for N = 1, 4 and 8 in turn, waits until every run has started its command, reads each
+`coreslot` process's CPU time with `ps` (the process's own: its `sleep` is another process), and
+divides the difference over a window in which all N tick by the window's wall time.
+
+```bash
+go build -o /tmp/coreslot ./cmd/coreslot
+python3 calibration/cost.py /tmp/coreslot --seconds 120 --runs 1 4 8
+```
+
+Measured on the Air (`Mac16,12`, 10 cores, not idle: its load average was about 3) on 2026-11-02, in
+the record `records/Mac16,12-27.2-2026-11-02-cost` (`cost.jsonl` has every run's reading, `meta.json`
+the checkout it was built from), over windows of 114 s in which all N runs ticked:
+
+| concurrent runs | CPU per run, share of one core |
+|---|---|
+| 1 | 0.29 % |
+| 4 | 0.17 % to 0.24 % |
+| 8 | 0.11 % to 0.32 % |
+
+The highest is 0.32 % of one core, under the 1 % asked for. `ps` reports CPU time to 10 ms, which is
+0.009 % of a 114 s window. The window leaves out each run's first 3 s and its waiting in the queue;
+one machine, one build and one sitting, so it bounds the cost on this Mac and says nothing of other
+machines.
