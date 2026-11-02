@@ -172,17 +172,17 @@ echo "warm-up: $warm_s s"
 cpid=$!
 wait "$cpid"
 cpid=""
-# the share the shipped code reads back: sys/(user+sys) of the one counted run
+# the share the shipped code reads back: the tick_share of the one counted run
 warm_share=$("$py" -I -c 'import json, sys
 for line in open(sys.argv[1]):
     r = json.loads(line)
-    if r.get("label") == sys.argv[2] and not r.get("fail_open") and not r.get("stops") and r.get("user_s", 0) + r.get("sys_s", 0) > 0:
-        print(r["sys_s"] / (r["user_s"] + r["sys_s"]))
+    if r.get("label") == sys.argv[2] and not r.get("fail_open") and not r.get("stops") and r.get("tick_share") is not None:
+        print(r["tick_share"])
         break
 else:
     print("null")' "$tmp/state/log/runs.jsonl" "calibration-$kind" 2>/dev/null || echo null)
 if [ "$warm_share" = null ]; then
-	echo "the warm-up left no counted run in the run log" >&2
+	echo "the warm-up left no counted run with a tick_share in the run log" >&2
 	exit 1
 fi
 echo "warm-up share: $warm_share"

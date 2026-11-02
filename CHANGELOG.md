@@ -59,6 +59,7 @@ no other default is calibrated ([what the records show](calibration/README.md#wh
 - The state directory is format 2. A hold is the reservation: it carries the command's need, its
   latest footprint and its time deltas in its body, and admission computes the room from the hold
   bodies. The queue is ordered by arrival. [`PROTOCOL.md`](PROTOCOL.md) defines it.
-- The run log records memory peaks, `user_s`, `sys_s` and `stops`, and `coreslot stats` shows the
-  window the need is learned from.
+- The run log records memory peaks, `user_s`, `sys_s`, `tick_share` and `stops`, and `coreslot stats`
+  shows the window the need is learned from. What is normal for a label is learned from the same
+  measure the watchdog compares it with: the median `tick_share` of its earlier runs.
 - Linux and Intel Macs are experimental.

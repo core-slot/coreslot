@@ -1062,6 +1062,7 @@ informative string; a writer that cannot fit it writes no line. The object carri
 | `ran_s` | number | seconds the command ran |
 | `user_s` | number | optional; user seconds of the command (below) |
 | `sys_s` | number | optional; system seconds of the command (below) |
+| `tick_share` | number | optional; `0..1`; the run's share of time lost to memory over its ticks whose paging gate was closed (below) |
 | `mem_peak_kib` | integer | optional; memory peak of the command's process tree, in KiB (below) |
 | `stops` | integer | optional; on the line of a stopped attempt, how often the run has been stopped for memory, this stop included; absent on every other line |
 | `exit` | integer | the run's exit status |
@@ -1073,11 +1074,19 @@ whose value it does not know rather than write a zero: a run whose command could
 an absent key as unknown, never as zero. The values are the command's resource usage as the
 wait that reaped it reports (`wait4(2)`'s `struct rusage`, or the same from `waitid`): they cover
 the command and every descendant it waited for, but not a descendant it left running when it exited.
-They serve one reader: the stall baseline of a label (section 23.3). The same rusage's `ru_maxrss`
+They feed no baseline (the stall baseline reads `tick_share`, below). The same rusage's `ru_maxrss`
 is the peak of the largest single process among those, not a sum. It
 is in KiB on Linux and the BSDs but in bytes on macOS; a writer MUST convert it to KiB (1 024
 bytes), and MUST NOT use it on a platform whose unit it does not know. As in a body (section 7.2), a reader
 MUST ignore a key it does not know: lines only gain optional keys within a format.
+
+The key `tick_share` is OPTIONAL too, under the same rule. It is
+`(Σ d_sys + Σ d_page_wait) / (Σ d_user + Σ d_sys + Σ d_page_wait)`, summed over the attempt's ticks
+(section 23.1) of the `d_` values the run wrote into its hold, for the ticks whose sample had the
+paging gate (section 23.3) closed: the sample the tick took or read in its step 2, with `gate` false in
+`watch.json`. A tick whose sample was not read adds nothing. A writer omits the key when the sums are
+zero (no tick, every gate open, or no time). It is the only source of a label's normal share
+(section 23.3).
 
 The memory key `mem_peak_kib` is OPTIONAL too, under the same rule: a writer omits what it does not know, and a reader treats an absent key as
 unknown. A writer that samples reads the private memory of the command and every descendant every
@@ -1454,8 +1463,9 @@ A **running** hold is a live hold whose body is well-formed, whose `child_exited
 `sampled_ns` is at most 6 s old on the wall clock: its run still ticks. Any other live hold reserves
 memory (section 12) but is no job of the watchdog. For each running hold,
 `S = (d_sys + d_page_wait) / (d_user + d_sys + d_page_wait)`
-over its latest tick period. Its normal share `S0` is the median of `sys_s / (user_s + sys_s)` over
-the last 20 counted runs of its label (section 20) that report both times. When there are none it
+over its latest tick period. Its normal share `S0` is the median of `tick_share` (section 20, the same
+measure over the ticks whose gate was closed) over the last 20 counted runs of its label that report
+it. When there are none it
 has no normal share and is **learning**: no value stands for a command nothing is known of. Each run decides its own
 command's `S0` and whether it is learned once, from its own read of the run log when it starts, and
 writes both in its hold (`normal_share`, `learned`, section 7.4). A machine sample takes them from the
@@ -1472,8 +1482,8 @@ time, say nothing about memory. A learning hold is no part of `E`: it still rese
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
 have no normal share (`status --json`: `watch.learning`); at red, with no victim but the learning
 ones, it does not say that the watchdog is protecting but that only the floor can stop a command.
-A command is judged only once the first run of its label has
-completed; until then only a floor round stops it (section 23.5). The **paging gate** is open when the
+A command is judged only once a run of its label has
+completed with a `tick_share` (a run shorter than one tick, or whose every gate was open, leaves the label learning); until then only a floor round stops it (section 23.5). The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
 other system time. On Linux the stall rises in almost every period, so there the gate is nearly

@@ -43,6 +43,9 @@ hold no gap and no floor sample. The records were logged by a detector at `yello
   samples each). Eight ramps: three on the Air and five on the Pro, of which the Pro's `ramp8`
   reached no memory cliff: its slowdown came from CPU contention by other work on the machine, so it
   is kept as a negative. Seven ramps count as cliffs (3 Air, 4 Pro).
+- The records were taken when a label's normal share was learned from the warm-up's rusage, sys/(user + sys)
+  over its whole process tree; the shipped code now learns it from the run's tick shares ([PROTOCOL.md](../../PROTOCOL.md)
+  section 23.3). The committed `warmup_share` values are the rusage ones.
 - Ten passes are committed and all ten are counted. Three earlier Pro ramps (two one-worker, one
   eight-worker) were taken before the harness learned the baseline from a warm-up and before the
   workers were processes; they are not counted and not committed.

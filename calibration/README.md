@@ -39,7 +39,7 @@ python3 calibration/analyse.py calibration/records
 Every pass starts with a warm-up: the workload runs for 30 s under the same label, in the same state
 directory (the hog at 0.5 GiB, or the busy loops), and ends normally. The run log then holds one
 counted run of the label, so the pass is scored against the label's learned normal share, the way the
-shipped code learns it; a label with no history is no part of the excess, so a pass without the
+shipped code learns it (the median `tick_share` of the label's runs); a label with no history is no part of the excess, so a pass without the
 warm-up would measure nothing, and a control would show no false alarm because it measured nothing.
 `meta.json` gives that share as `warmup_share`. A ramp then starts an observer,
 `coreslot run --label calibration-observer -- sleep ...`, in the same state directory: as the

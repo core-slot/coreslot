@@ -117,8 +117,9 @@ each default, and which are not calibrated. See
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
 the kill and says what it would have stopped.
 
-A command is judged only once the first run of its label has completed. Until then coreslot does
-not know what is normal for it, so that first run does not count towards the level and no red round
+A command is judged only once a run of its label has completed and measured that. Until then coreslot does
+not know what is normal for it (the median share its earlier runs measured, the same way, while the
+kernel was not paging), so that first run does not count towards the level and no red round
 stops it; only a floor round does, after every command that has history. It still holds its memory,
 and `status` says the watchdog is learning and how many running commands have no history.
 
