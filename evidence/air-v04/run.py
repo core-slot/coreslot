@@ -3,8 +3,9 @@
 `coreslot run` (K), in ABBA pairs, plus a watchdog demo.
 
   run.py [--dry] [--smoke] --coreslot BIN --stand DIR --out DIR learn [--runs N]
-  run.py ... [--mix full|light] set F|K|S [--slots N] --tag [light-|sem-]pilot|pair-N|tune-SN
-  run.py ... [--mix full|light] pairs [--first N] [--last N] [--vs F|S --slots N] [--prefix P]
+  run.py ... [--mix full|light] [--stagger-s S] set F|K|S [--slots N] [--order A3,A4,..] --tag [light-|sem-]pilot|pair-N|tune-SN
+  run.py ... [--mix full|light] [--stagger-s S] pairs [--first N] [--last N] [--vs F|S --slots N]
+             [--prefix P] [--orders "A1,A2,..;.."]
   run.py ... tune
   run.py ... demo [--hogs N] [--hog-gib G] [--hog-s S] [--cap-s S]
 
@@ -80,7 +81,7 @@ def abba(first, last, other="F", prefix=""):
 
 
 def sem_argv(lockdir, slots, argv):
-    return [sys.executable, "-I", os.path.join(HERE, "sem.py"), lockdir, str(slots), "--"] + argv
+    return [sys.executable, "-I", os.path.join(HERE, "sem.py"), "--fifo", lockdir, str(slots), "--"] + argv
 
 
 # --- machine readings -----------------------------------------------------------------------
@@ -350,9 +351,11 @@ def run_learn(a):
             print(f"learn {gate} run {r}: exit {rc}, {rec['dur_s']} s", flush=True)
 
 
-def run_set(a, arm, tag, slots=None):
+def run_set(a, arm, tag, slots=None, order=None):
     state, g = os.path.join(a.out, "state"), gates(a.stand, a.smoke)
     setdir = os.path.join(a.out, "sets", f"{tag}-{arm}")
+    order = order or list(agents(a.mix))  # agent i of the order arrives i x --stagger-s after t0
+    arrive = {n: round(i * a.stagger_s, 2) for i, n in enumerate(order)}
 
     def argv_of(gate):
         cwd, argv = g[gate]
@@ -361,10 +364,10 @@ def run_set(a, arm, tag, slots=None):
         return cwd, wrap(a.coreslot, label(gate, a.smoke), argv) if arm == "K" else argv
 
     if a.dry:
-        for agent, chain in agents(a.mix).items():
-            for gate in chain:
+        for agent in order:
+            for gate in AGENTS[agent]:
                 cwd, argv = argv_of(gate)
-                print(f"{tag} {arm} {agent} {gate}: cd {cwd} && {shlex.join(argv)}")
+                print(f"{tag} {arm} {agent} {gate} at +{arrive[agent]} s: cd {cwd} && {shlex.join(argv)}")
         return
     if os.path.exists(setdir):
         sys.exit(f"{setdir} exists: a set is recorded once")
@@ -376,6 +379,7 @@ def run_set(a, arm, tag, slots=None):
     recs, t0, wall0 = [], time.monotonic(), datetime.now(timezone.utc)
 
     def agent(name, chain):
+        time.sleep(max(0.0, t0 + arrive[name] - time.monotonic()))
         for gate in chain:
             cwd, argv = argv_of(gate)
             s = time.monotonic() - t0
@@ -386,7 +390,7 @@ def run_set(a, arm, tag, slots=None):
             recs.append({"agent": name, "gate": gate, "label": label(gate, a.smoke),
                          "start_s": round(s, 2), "end_s": round(time.monotonic() - t0, 2), "exit": rc})
 
-    threads = [threading.Thread(target=agent, args=item, daemon=True) for item in agents(a.mix).items()]
+    threads = [threading.Thread(target=agent, args=(n, AGENTS[n]), daemon=True) for n in order]
     for t in threads:
         t.start()
     samples, reason = watch(lambda: not any(t.is_alive() for t in threads), t0,
@@ -401,12 +405,13 @@ def run_set(a, arm, tag, slots=None):
     verdicts = {}
     for name in agents(a.mix):
         mine = [r for r in recs if r["agent"] == name]
-        verdicts[name] = {"verdict_s": max(r["end_s"] for r in mine),
+        verdicts[name] = {"arrive_s": arrive[name], "verdict_s": round(max(r["end_s"] for r in mine) - arrive[name], 2),
                           "exit": next((r["exit"] for r in mine if r["exit"]), 0)}
     if arm == "K":
         with open(os.path.join(setdir, "watch.jsonl"), "w") as f:
             f.write(log_since(state, "watch.jsonl", watch_off))
-    rec = {"tag": tag, "arm": arm, "mix": a.mix, "slots": slots, "started": wall0.isoformat(timespec="seconds"), "cooldown": cd,
+    rec = {"tag": tag, "arm": arm, "mix": a.mix, "slots": slots, "sem_fifo": arm == "S", "order": order,
+           "stagger_s": a.stagger_s, "started": wall0.isoformat(timespec="seconds"), "cooldown": cd,
            "thermal_start": th, "stopped_by": reason, "gates": sorted(recs, key=lambda r: (r["agent"], r["start_s"])),
            "agents": verdicts, "makespan_s": max(r["end_s"] for r in recs),
            "swap_mib": {"start": swaps[0] if swaps else None, "end": swaps[-1] if swaps else None,
@@ -420,8 +425,8 @@ def run_set(a, arm, tag, slots=None):
 
 
 def run_pairs(a):
-    for tag, arm in abba(a.first, a.last, a.vs, a.prefix):
-        run_set(a, arm, tag, a.slots if arm == "S" else None)
+    for k, (tag, arm) in enumerate(abba(a.first, a.last, a.vs, a.prefix)):
+        run_set(a, arm, tag, a.slots if arm == "S" else None, a.orders[k // 2] if a.orders else None)
 
 
 def run_tune(a):
@@ -495,18 +500,21 @@ def main(argv=None):
     ap.add_argument("--cool-max-s", type=float, default=120)
     ap.add_argument("--set-cap-s", type=float, default=900)
     ap.add_argument("--mix", choices=("full", "light"), default="full")
+    ap.add_argument("--stagger-s", type=float, default=0.0, help="between arrivals in a set's order")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("learn").add_argument("--runs", type=int, default=3)
     s = sub.add_parser("set")
     s.add_argument("arm", choices=("F", "K", "S"))
     s.add_argument("--tag", required=True)
     s.add_argument("--slots", type=int)
+    s.add_argument("--order", help="agent names in arrival order, such as A3,A4,A1,A2")
     p = sub.add_parser("pairs")
     p.add_argument("--first", type=int, default=1)
     p.add_argument("--last", type=int, default=5)
     p.add_argument("--vs", choices=("F", "S"), default="F")
     p.add_argument("--slots", type=int)
     p.add_argument("--prefix", default="")
+    p.add_argument("--orders", help="one arrival order per pair, separated by ;")
     sub.add_parser("tune")
     d = sub.add_parser("demo")
     d.add_argument("--hogs", type=int, default=3)
@@ -526,6 +534,13 @@ def main(argv=None):
             ap.error(f"tag {tag}: an S set takes a sem- or tune- tag, an F set neither")
         if arm == "S" and a.cmd != "tune" and not (a.slots or 0) > 0:
             ap.error("an S set needs --slots N")
+    given = {"set": lambda: a.order and [a.order], "pairs": lambda: a.orders and a.orders.split(";")}.get(a.cmd, list)()
+    orders = [o.strip().split(",") for o in given or []]
+    if any(sorted(o) != sorted(agents(a.mix)) for o in orders):
+        ap.error(f"an order must name each of {', '.join(agents(a.mix))} once")
+    if a.cmd == "pairs" and orders and len(orders) != a.last - a.first + 1:
+        ap.error(f"--orders: want one order for each of pairs {a.first}..{a.last}")
+    a.order, a.orders = (orders or [None])[0], orders
     a.out, a.stand = os.path.abspath(a.out), os.path.abspath(a.stand)
     PROCS = Procs(os.path.join(a.out, "live.json"))
     left = PROCS.alive()
@@ -540,7 +555,7 @@ def main(argv=None):
             print(f"the stand is not at its pins: {bad}", file=sys.stderr)
             if not a.dry:
                 return 2
-    phase = {"learn": run_learn, "set": lambda a: run_set(a, a.arm, a.tag, a.slots if a.arm == "S" else None), "pairs": run_pairs,
+    phase = {"learn": run_learn, "set": lambda a: run_set(a, a.arm, a.tag, a.slots if a.arm == "S" else None, a.order), "pairs": run_pairs,
              "tune": run_tune, "demo": run_demo}[a.cmd]
     if a.dry:
         print(f"state: {os.path.join(a.out, 'state')}; cooldown {a.cool_min_s}..{a.cool_max_s} s")
