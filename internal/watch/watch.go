@@ -81,7 +81,7 @@ type Sample struct {
 }
 
 // Level is the machine's memory level. Admission waits at Yellow and above; Unknown is no
-// reading, which never counts toward calm and never stops anything.
+// reading, which never counts toward calm; only the floor can still stop something.
 type Level int
 
 const (
@@ -136,7 +136,8 @@ type Detector struct {
 }
 
 // Advance moves the detector from sample prev to cur and returns the level. A pair it cannot
-// compare (memsample.Gap, a counter that went back) is Unknown and keeps the bucket and latch.
+// compare (memsample.Gap, a counter that went back) is Unknown and keeps the bucket and latch,
+// unless the floor holds: it needs no rate.
 func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	was, now := d.Known, cur.Host.WallNS
 	r, ok := rates(prev.Host, cur.Host)
@@ -147,21 +148,26 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	}
 	d.Window = slices.DeleteFunc(d.Window, func(p Point) bool { return p.AtNS > now || now-p.AtNS > windowNS })
 	d.Window = append(d.Window, Point{AtNS: now, SwapUsedMiB: cur.Host.SwapUsedMiB, Hot: d.Gate && d.Excess >= c.YellowPoints})
-	if !ok {
-		d.Level, d.CalmSinceNS = Unknown, 0
-		return Unknown
-	}
-	if d.Gate && d.Excess >= c.RedPoints {
-		d.Bucket = min(d.Bucket+1, c.RedSamples) // saturated, so red ends with the danger
-	} else {
-		d.Bucket = max(0, d.Bucket-0.5)
-	}
 	hot, low := 0, cur.Host.SwapUsedMiB
 	for i, p := range d.Window {
 		if p.Hot && i >= len(d.Window)-3 {
 			hot++
 		}
 		low = min(low, p.SwapUsedMiB)
+	}
+	h := cur.Host
+	floor := h.WallNS > 0 && h.VMVolumeFreeMiB+h.SwapFreeMiB+h.MemAvailableMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB
+	if !ok { // the floor needs no rate: a real reading still reaches it
+		d.Level, d.CalmSinceNS = Unknown, 0
+		if floor {
+			d.Level, d.Known = Floor, Floor
+		}
+		return d.Level
+	}
+	if d.Gate && d.Excess >= c.RedPoints {
+		d.Bucket = min(d.Bucket+1, c.RedSamples) // saturated, so red ends with the danger
+	} else {
+		d.Bucket = max(0, d.Bucket-0.5)
 	}
 	switch {
 	case hot >= 2:
@@ -172,8 +178,8 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 		d.Below++
 		d.Yellow = d.Below < clearSamples
 	}
-	switch h := cur.Host; {
-	case h.VMVolumeFreeMiB+h.SwapFreeMiB+h.MemAvailableMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB:
+	switch {
+	case floor:
 		d.Level = Floor
 	case d.Bucket >= c.RedSamples:
 		d.Level = Red

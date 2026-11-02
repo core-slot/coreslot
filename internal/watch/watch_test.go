@@ -210,6 +210,33 @@ func TestGapIsUnknown(t *testing.T) {
 	}
 }
 
+// The floor needs no rate: a 10 s period (a gap, so no rates) that ends under the floor with 300 MiB
+// more swap used than the window's low is floor; the same pair above the floor stays unknown.
+// Mutation: returning unknown before the floor rule makes both unknown.
+func TestFloorAcrossAGap(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		swapFree int64
+		want     Level
+	}{{"under the floor", 1024, Floor}, {"above the floor", 8192, Unknown}} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := Defaults()
+			f := newFeed(cfg)
+			f.swapFree, f.vmFree, f.swapUsed = c.swapFree, 0, 4096
+			for range 3 {
+				f.step(cfg, false)
+			}
+			cur := f.prev
+			cur.Host.WallNS += 10e9
+			cur.Host.AwakeNS += 10e9
+			cur.Host.SwapUsedMiB += 300
+			if l := f.d.Advance(f.prev, cur, cfg); l != c.want || f.d.Level != c.want || c.want == Floor && f.d.Known != Floor {
+				t.Errorf("a 10 s period with +300 MiB of swap: %v (known %v), want %v", l, f.d.Known, c.want)
+			}
+		})
+	}
+}
+
 // A clear that comes through a gap is still a clear: yellow, a 10 s period (unknown), then the
 // calm sample that ends the latch turns green and records yellow_cleared_ns. Mutation: comparing
 // with the level just before, which is unknown, records nothing.

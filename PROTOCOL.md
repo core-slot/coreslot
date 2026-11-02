@@ -1455,8 +1455,10 @@ red and floor. A sample that is unknown has that level; any other has the highes
 below that applies.
 
 - **Unknown:** a gap, a counter that went back, an empty sample, or a reading that cannot be read.
-  It never counts towards calm and never stops anything; the bucket and the yellow latch are kept
-  as they were. An optional reading the platform lacks (the memory stall, page wait) is not unknown.
+  It never counts towards calm; the bucket and the yellow latch are kept as they were. The floor
+  needs no rate, so a pair that cannot be compared but whose current reading was read
+  (`wall_ns > 0`) is still tested for it, and is floor when it holds; an empty sample never is.
+  An optional reading the platform lacks (the memory stall, page wait) is not unknown.
 - **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
   stays below `yellow_points` for 15 samples in a row.
 - **Red:** a leaky bucket: +1 for a sample with `E ≥ red_points` and the gate open,
