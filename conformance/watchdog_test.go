@@ -3,7 +3,6 @@
 package conformance
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,15 +62,10 @@ func (e Env) WaitTicked(label string) string {
 	return name
 }
 
-// Watch reads the shared detector inside the section.
+// Watch reads the shared detector.
 func (e Env) Watch() watch.Detector {
 	e.t.Helper()
-	sec, err := e.Engine().Store().Enter(context.Background())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	defer sec.Leave()
-	d, _, _, err := sec.Watch()
+	d, _, _, err := e.Engine().Store().ReadWatch()
 	if err != nil {
 		e.t.Fatal(err)
 	}

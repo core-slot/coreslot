@@ -52,7 +52,7 @@ func TestOneSamplePerPeriod(t *testing.T) {
 	if _, _, err := sec.Tick(now+21e8, m.read, watch.Defaults()); err != nil || m.calls != 2 {
 		t.Errorf("the next period: read %d times, %v; want twice", m.calls, err)
 	}
-	_, s, at, err := sec.Watch()
+	_, s, at, err := sec.s.ReadWatch()
 	if err != nil || at != now+21e8 || s.Host.Decomp != 2e6 {
 		t.Errorf("stored sample at %d, decomp %d, %v; want the second, at %d", at, s.Host.Decomp, err, now+21e8)
 	}
@@ -98,7 +98,7 @@ func TestOneStopRoundPerEpisode(t *testing.T) {
 			t.Fatalf("a second round while 3 runs: %v at %d", stop, d.LastRoundNS)
 		}
 	}
-	m.jobs[2].ChildExited = true
+	m.jobs = m.jobs[:2] // the listed hold is gone from the running jobs
 	for d.LastRoundNS == round && m.calls < 40 {
 		d, stop = tick()
 	}

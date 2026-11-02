@@ -108,7 +108,7 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 	if t.req.Restart {
 		_, _, _ = sec.Tick(t.e.clock.Realtime(), t.e.sampler(cfg, m), c) // a failed sample is Unknown
 	}
-	d, s, at, err := sec.Watch()
+	d, s, at, err := t.e.st.ReadWatch()
 	now := t.e.clock.Realtime()
 	ok := fresh(at, now)
 	mono, spacing := s.Host.WallNS+now-at, int64(c.SpacingS*1e9)

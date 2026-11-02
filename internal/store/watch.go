@@ -22,11 +22,9 @@ type watchState struct {
 	Detector  watch.Detector `json:"detector"`
 }
 
-// Watch reads the shared watch state: the detector, the machine sample it last advanced on and
-// when, by NowNS, that sample was taken. A missing or malformed watch.json is the zero state.
-func (sec *Section) Watch() (watch.Detector, watch.Sample, int64, error) { return sec.s.ReadWatch() }
-
-// ReadWatch is Section.Watch outside the section: watch.json is replaced whole, never rewritten.
+// ReadWatch reads the shared watch state: the detector, the machine sample it last advanced on and
+// when, by NowNS, that sample was taken. A missing or malformed watch.json is the zero state. It
+// needs no section: watch.json is replaced whole, never rewritten.
 func (s *Store) ReadWatch() (watch.Detector, watch.Sample, int64, error) {
 	var w watchState
 	body, err := s.ReadSmall(WatchFile, maxWatchBytes)
@@ -49,10 +47,10 @@ func (sec *Section) SetWatch(d watch.Detector, s watch.Sample, sampledNS int64) 
 	return sec.replaceFile(WatchFile, body)
 }
 
-// Tick advances the detector on a new sample only when the stored one is 1.5 s old (now is NowNS):
-// a ticker a little early for the period must not leave the next sample 4 s away. A failed read is stored as Unknown and returned.
+// Tick advances the detector on a new sample only when the stored one is 1.5 s old (now is NowNS),
+// so no early ticker leaves the next one 4 s away. A failed read is stored as Unknown and returned.
 func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.Config) (watch.Detector, []string, error) {
-	d, prev, at, err := sec.Watch()
+	d, prev, at, err := sec.s.ReadWatch()
 	if err != nil || at <= now && now-at < memsample.PeriodNS-memsample.PeriodNS/4 { // this period's sample
 		return d, d.Stop, err
 	}
@@ -77,7 +75,7 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 }
 
 // roundOver reports whether a new stop round may start: post_kill_s has passed since the last
-// one, and every hold it listed is gone or reports its child exited. A round observe mode wrote,
+// one, and every hold it listed is gone from the running jobs. A round observe mode wrote,
 // whose holds never exit, holds back no round under enforce.
 func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
 	if d.Observed && !c.Observe {
@@ -86,9 +84,7 @@ func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
 	if since := cur.Host.WallNS - d.LastRoundNS; since >= 0 && since < int64(c.PostKillS*1e9) {
 		return false
 	}
-	return !slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool {
-		return !j.ChildExited && slices.Contains(d.Stop, j.Hold)
-	})
+	return !slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool { return slices.Contains(d.Stop, j.Hold) })
 }
 
 // appendSample appends cur and the detector d that advanced on it to log/watch.jsonl, as the

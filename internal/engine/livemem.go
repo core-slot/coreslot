@@ -66,7 +66,7 @@ func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []s
 func (h liveHold) info() HolderInfo {
 	b := h.body
 	return HolderInfo{Name: h.name, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
-		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Victim: b.Victim, ChildExited: b.ChildExited}
+		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops}
 }
 
 // reservations are the room's input: each live hold that reserves memory, with the footprint its
@@ -134,7 +134,7 @@ func runningJobs(holds []liveHold, nowNS int64) []watch.Job {
 		}
 		jobs = append(jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
 			NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
-			DPageWaitNS: b.DPageWaitNS, NormalShare: b.NormalShare, Learned: b.Learned, Victim: b.Victim, ChildExited: b.ChildExited})
+			DPageWaitNS: b.DPageWaitNS, NormalShare: b.NormalShare, Learned: b.Learned, Victim: b.Victim})
 	}
 	return jobs
 }

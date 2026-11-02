@@ -421,8 +421,7 @@ type jsonHolder struct {
 
 // jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
 // jsonWatch is the watchdog: the level and E of the newest sample (no level without a fresh one),
-// whether it protects and, if not, why, the hold of the next victim and the running jobs that have
-// no history.
+// whether it protects and, if not, why, the hold of the next victim and how many jobs are learning.
 type jsonWatch struct {
 	Level        string  `json:"level"`
 	ExcessPoints float64 `json:"excess_points"`

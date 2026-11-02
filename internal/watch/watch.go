@@ -70,7 +70,6 @@ type Job struct {
 	NormalShare  float64 `json:"normal_share"`
 	Learned      bool    `json:"learned"`
 	Victim       bool    `json:"victim"`
-	ChildExited  bool    `json:"child_exited"`
 }
 
 // Sample is one machine sample: the host readings, the live jobs and the admission room in MiB.
