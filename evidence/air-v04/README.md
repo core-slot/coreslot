@@ -16,8 +16,9 @@ The stand is public code at pinned commits:
 
 ## Result (2026-11-02)
 
-The [criterion](criterion.md), committed after the pilot pair and before the first counted pair,
-holds in both parts: K spent fewer seconds at memory pressure warn or above than F in 5 of 5 pairs,
+The [criterion](criterion.md), committed after the pilot pair and before the first counted pair
+(commit `9869326`, pushed at 18:24:33 UTC; pair 1's first set started at 18:24:59 UTC), holds in
+both parts: K spent fewer seconds at memory pressure warn or above than F in 5 of 5 pairs,
 and K's mean time to verdict was lower than F's in 5 of 5 pairs (each a one-sided sign test, p =
 0.031). The watchdog demo stopped the two newest of three oversized jobs on the red level, never the
 oldest, restarted both, and all three completed.
