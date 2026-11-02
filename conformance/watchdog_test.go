@@ -241,8 +241,24 @@ func TestRunLearnsItsTickShareForTheNextRun(t *testing.T) {
 	e.SetReadings(calm(0))
 	first := e.Run("learner", "--mem", "100M")
 	e.WaitStarted("learner")
-	e.WaitTicked("learner")
-	e.Eventually(startWait, "two compared samples", func() bool { return len(e.Watch().Window) >= 3 })
+	name := e.WaitTicked("learner")
+	// The idle hold child can spend under one 10 ms /proc tick in a period, so compared samples
+	// alone do not give the run a gate-closed tick that had time. Wait for one: the hold's last
+	// tick had time, and the detector that tick returned (sampled after the hold was written,
+	// which did not change meanwhile) is green with its gate closed.
+	hold := func() (wire.Hold, bool) {
+		data, err := os.ReadFile(filepath.Join(e.Dir, store.HoldsDir, name))
+		h, derr := wire.DecodeHold(data) // the run rewrites its hold in place: a read can be torn
+		return h, err == nil && derr == nil
+	}
+	e.Eventually(startWait, "a gate-closed tick that had time", func() bool {
+		h, ok := hold()
+		d, _, at, err := e.Engine().Store().ReadWatch()
+		again, ok2 := hold()
+		return ok && ok2 && err == nil && again.SampledNS == h.SampledNS && h.SampledNS > 0 &&
+			h.DUserNS+h.DSysNS+h.DPageWaitNS > 0 && at >= h.SampledNS && len(d.Window) > 0 && !d.Gate &&
+			d.Level == watch.Green
+	})
 	e.ReleaseChild("learner")
 	first.ExitCode(0)
 	runs, _, err := e.Engine().Store().ReadRuns()
