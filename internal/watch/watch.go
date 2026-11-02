@@ -137,8 +137,9 @@ type Detector struct {
 }
 
 // Advance moves the detector from sample prev to cur and returns the level. A pair it cannot
-// compare (memsample.Gap, a counter that went back) is Unknown and keeps the bucket and latch,
-// unless the floor holds: it needs no rate. A sleep or a reboot between them empties the bucket.
+// compare (memsample.Gap) is Unknown and keeps the bucket and latch, unless the floor holds: it
+// needs no rate. A sleep or a reboot between them (memsample.Slept) empties the bucket, and so
+// does the pair after an empty sample.
 func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	was, now := d.Known, cur.Host.WallNS
 	r, ok := rates(prev.Host, cur.Host)
@@ -160,8 +161,8 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	floor := h.WallNS > 0 && h.VMVolumeFreeMiB+h.SwapFreeMiB+h.MemAvailableMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB
 	if !ok { // the floor needs no rate: a real reading still reaches it
 		d.Level, d.CalmSinceNS = Unknown, 0
-		if prev.Host.WallNS > 0 && h.WallNS > 0 && memsample.Slept(prev.Host, h) {
-			d.Bucket = 0 // red needs its samples after a sleep or a reboot, not before it
+		if prev.Host.WallNS == 0 || h.WallNS > 0 && memsample.Slept(prev.Host, h) {
+			d.Bucket = 0 // red needs its samples after a sleep or a reboot, which an empty sample can hide
 		}
 		if floor {
 			d.Level, d.Known = Floor, Floor
@@ -207,8 +208,7 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 // rates are the counters' rates from prev to cur; ok is false when the two cannot be compared.
 func rates(prev, cur memsample.HostReading) (r Rates, ok bool) {
 	s := float64(cur.WallNS-prev.WallNS) / 1e9
-	if prev.WallNS == 0 || memsample.Gap(prev, cur) || s <= 0 || cur.Decomp < prev.Decomp ||
-		cur.SwapIns < prev.SwapIns || prev.HasPSI && cur.HasPSI && cur.PSISomeUS < prev.PSISomeUS {
+	if prev.WallNS == 0 || memsample.Gap(prev, cur) || s <= 0 {
 		return Rates{}, false
 	}
 	r = Rates{DecompS: float64(cur.Decomp-prev.Decomp) / s, SwapInsS: float64(cur.SwapIns-prev.SwapIns) / s}

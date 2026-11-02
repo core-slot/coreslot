@@ -69,16 +69,17 @@ const (
 )
 
 // Gap reports whether prev and cur are too far apart to compare: the two clocks diverged by more
-// than 1 s (the machine slept), more than 6 s passed, or the clock went back (a reboot).
+// than 1 s (the machine slept), more than 6 s passed, or the clock or a counter went back (a reboot).
 func Gap(prev, cur HostReading) bool {
 	return Slept(prev, cur) || cur.WallNS-prev.WallNS > StaleNS
 }
 
 // Slept reports whether the machine slept or rebooted between prev and cur: the gaps of Gap that
-// are not a long period.
+// are not a long period, and a counter that went back (they count from boot).
 func Slept(prev, cur HostReading) bool {
 	wall, awake := cur.WallNS-prev.WallNS, cur.AwakeNS-prev.AwakeNS
-	return wall < 0 || max(wall-awake, awake-wall) > gapSkewNS
+	return wall < 0 || max(wall-awake, awake-wall) > gapSkewNS || cur.Decomp < prev.Decomp ||
+		cur.SwapIns < prev.SwapIns || prev.HasPSI && cur.HasPSI && cur.PSISomeUS < prev.PSISomeUS
 }
 
 // psiTotal returns the total= field of the "some" line of /proc/pressure/memory's text, in µs.
