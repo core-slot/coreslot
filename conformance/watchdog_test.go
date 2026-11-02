@@ -24,10 +24,11 @@ func watchConfig(extra string) string {
 	return roomConfig(64<<10) + "[watch]\ncalm_s = 0\n" + extra
 }
 
-// floor is the readings of a host with no swap room left whose swap used grew to swapUsedMiB.
+// floor is the readings of a host with no swap room left whose swap used grew to swapUsedMiB. The
+// room counts MemAvailable on Linux, so the host's own would keep it above the floor.
 func floor(swapUsedMiB int64) map[string]int64 {
 	r := calm(swapUsedMiB)
-	r["SwapFreeMiB"], r["VMVolumeFreeMiB"] = 0, 0
+	r["SwapFreeMiB"], r["VMVolumeFreeMiB"], r["MemAvailableMiB"] = 0, 0, 0
 	return r
 }
 
