@@ -259,7 +259,7 @@ func (v statusView) human() string {
 
 	p("%s", v.watchLine())
 	if n := int64(r.Watch.Learning); n > 0 {
-		p("learning: %d running %s no history; the watchdog does not count or stop a command until its first run completes",
+		p("learning: %d running %s no history; the watchdog does not count a command, and only the floor can stop it, until its first run completes",
 			n, plural(n, "command has", "commands have"))
 	}
 	if len(r.Holds) == 0 {
@@ -336,6 +336,8 @@ func (v statusView) protection() (on bool, reason string) {
 		return false, "no run has sampled the machine in the last 6 s"
 	case w.Level == watch.Unknown:
 		return false, "the last sample is a gap (the machine slept, or a reading is missing)"
+	case w.Level == watch.Red && w.NextVictim == "" && w.Learning > 0:
+		return false, "only the floor can stop a command now; the others are still learning"
 	}
 	return true, ""
 }

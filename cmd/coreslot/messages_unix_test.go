@@ -72,6 +72,9 @@ func TestStatusWatch(t *testing.T) {
 		want string
 	}{
 		{rep(engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true}, holds), "watch: red, E 41.0 points; protecting"},
+		// no victim but the learning ones: red lists nobody, so it does not say "protecting"
+		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true, Learning: 1}},
+			"watch: red, E 41.0 points; not protecting: only the floor can stop a command now; the others are still learning"},
 		{rep(engine.WatchInfo{Level: watch.Green, Fresh: true, Observe: true}, holds),
 			"watch: green, E 0.0 points; not protecting: observe mode logs what it would stop and stops nothing"},
 		{rep(engine.WatchInfo{Level: watch.Unknown, Fresh: true}, holds),
@@ -90,8 +93,8 @@ func TestStatusWatch(t *testing.T) {
 		t.Errorf("status:\n%s\nwant no learning line when every job has history", out)
 	}
 	for n, want := range map[int]string{
-		1: "learning: 1 running command has no history; the watchdog does not count or stop a command until its first run completes",
-		2: "learning: 2 running commands have no history; the watchdog does not count or stop a command until its first run completes",
+		1: "learning: 1 running command has no history; the watchdog does not count a command, and only the floor can stop it, until its first run completes",
+		2: "learning: 2 running commands have no history; the watchdog does not count a command, and only the floor can stop it, until its first run completes",
 	} {
 		out := buildStatus(rep(engine.WatchInfo{Level: watch.Green, Fresh: true, Learning: n}, holds), now, nil, 0).human()
 		if !strings.Contains(out, "\n"+want+"\n") {

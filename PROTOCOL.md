@@ -1442,7 +1442,9 @@ over the holds that have a normal share and worked for at least a tenth of the p
 `wᵢ ≥ 0.1 × (the period)`, and 0 when there are none: an idle job's few milliseconds, mostly system
 time, say nothing about memory. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
-have no normal share (`status --json`: `watch.learning`). A command is judged only once the first run of its label has
+have no normal share (`status --json`: `watch.learning`); at red, with no victim but the learning
+ones, it does not say that the watchdog is protecting but that only the floor can stop a command.
+A command is judged only once the first run of its label has
 completed; until then only a floor round stops it (section 23.5). The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
