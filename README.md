@@ -88,6 +88,14 @@ up to two leading word-like arguments: `go test`, `npm run test`) and the name o
 it runs in, such as `go test@proj`. The worktrees of one repository share it, so a label's history
 and its `needs.toml` entry follow the project, not the directory.
 
+The label is only that shape and name, so commands that share them share one learned need. Two cases
+to know. A command started through a launcher (`python -m`, `sh -c`, `env`, `timeout`) gets the
+launcher's label, because the shape ends at the first flag, number or `NAME=value`: `python -m
+pytest` and `python -m mypy` both become `python@proj`. Give such commands a `--label` of their own.
+And the repository part is the directory name only, not its path, so two repositories with the same
+directory name share their automatic labels: give their commands a `--label`, or pin the need in
+`needs.toml`.
+
 ### When it kills
 
 Every running `coreslot run` measures how much of its command's time goes to memory work: system
@@ -204,7 +212,8 @@ victim). A SIGINT or SIGQUIT sent to coreslot's pid alone is then dropped and a 
 reaches only the command's pid, as in a terminal: signal the group, not coreslot's pid.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time: write
-`coreslot run -- sh -c 'a | b'` so that they are one command with one need.
+`coreslot run --label gate:pipe -- sh -c 'a | b'` so that they are one command with one need. The
+`--label` matters here: without it the pipeline is labelled `sh@proj`, like every other `sh -c`.
 
 ### Exit status
 

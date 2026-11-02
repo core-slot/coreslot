@@ -8,6 +8,13 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- README: the section on automatic labels now says that commands behind one launcher (`python -m`,
+  `sh -c`, `env`, `timeout`) share the launcher's label, and that repositories with the same
+  directory name share theirs; both are answered with `--label` (or a `needs.toml` key). The
+  `sh -c 'a | b'` advice carries a `--label`.
+
 ## v0.4.0 (2026-11-02)
 
 coreslot is a memory guard for the heavy commands of coding agents; memory is its only resource.
