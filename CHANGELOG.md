@@ -21,12 +21,13 @@ All notable changes to this project are recorded here. The format follows
 
 ### Fixed
 
-- The watchdog's red bucket is also emptied by a reboot that only the paging counters show (the
-  first reading after it at a later uptime) and by the first reading after one that could not be
-  read, which can hide a sleep.
+- The watchdog's red bucket keeps only fresh evidence: it is emptied when a reading comes more than
+  20 s after the last one that could be read, or before it, instead of when a sleep or a reboot
+  was guessed from the clocks. A bucket written long ago no longer survives a long pause without a
+  sleep, and a reading that could not be read neither empties it nor clears the 20 s window.
 - A need larger than any moment can hold says the bound it exceeds, the machine's memory less the
   reserve, not the machine's memory.
-- The stop line shows a share below 1 % to one digit (`0.3%`), not as `0%`.
+- The stop line shows a share below 1 % to one decimal (`0.3%`), not as `0%`.
 
 ## v0.4.0 (2026-11-02)
 
