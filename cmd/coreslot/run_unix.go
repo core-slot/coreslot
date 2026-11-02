@@ -111,7 +111,7 @@ func (r *run) refuse(format string, args ...any) int {
 }
 
 // ordinary is a run that queues (PROTOCOL.md section 18 rule 3). A command a stop round killed
-// queues again with its first arrival, until its third stop; --timeout bounds each wait.
+// queues again with its first arrival, until its third stop; --timeout bounds all the waits together.
 func (r *run) ordinary() int {
 	e, err := openEngine(r.loc, false)
 	if err != nil {
@@ -123,6 +123,11 @@ func (r *run) ordinary() int {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if r.o.timeout > 0 { // one deadline from the run's start, restarts included
+		var done context.CancelFunc
+		ctx, done = context.WithTimeout(ctx, r.o.timeout)
+		defer done()
+	}
 	for {
 		g, code, ok := r.wait(ctx, cancel, e, req)
 		if !ok {
@@ -168,11 +173,6 @@ func restartNeed(peakKiB, needMiB int64) int64 { return max((peakKiB+1023)/1024,
 // wait queues req and waits for its grant. ok is false when the run ends without one, with code
 // its exit status.
 func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Engine, req spec.Request) (g *engine.Grant, code int, ok bool) {
-	if r.o.timeout > 0 {
-		var c context.CancelFunc
-		ctx, c = context.WithTimeout(ctx, r.o.timeout)
-		defer c()
-	}
 	r.why = func() (string, []engine.HolderInfo) {
 		rep, err := e.Snapshot()
 		if err != nil { // informative: a failure leaves it out

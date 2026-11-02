@@ -43,7 +43,8 @@ Runs COMMAND once the budget grants it the memory it needs.
   --label L             a name for the request, shown by status and kept in the run log, so
                         never a secret; it names the request's entry in needs.toml (default
                         the command's shape and its repository, such as "go test@proj")
-  --timeout D           stop waiting after D, for example 90s or 10m (default 0, no limit)
+  --timeout D           stop waiting after D from the start, restarts included, for example 90s
+                        or 10m (default 0, no limit)
   --on-timeout run|fail when --timeout passes: fail refuses, run runs the command outside the
                         budget (default fail)
   --no-wait             refuse unless the request is admitted at once

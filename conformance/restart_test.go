@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/store"
@@ -158,8 +159,8 @@ func TestNoWaitRefusesAtRestart(t *testing.T) {
 }
 
 // --timeout counts waiting: B's restart, which waits for calm past it, refuses with the stop's
-// reason and never runs outside the budget, even with --on-timeout run. Mutation: one deadline
-// for the whole run, or --on-timeout run at a restart, starts B's command again.
+// reason and never runs outside the budget, even with --on-timeout run. Mutation: --on-timeout
+// run at a restart starts B's command again.
 func TestRestartTimeoutRefuses(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(roomConfig(64 << 10)) // calm_s 30: no restart within the timeout
@@ -172,4 +173,23 @@ func TestRestartTimeoutRefuses(t *testing.T) {
 	if _, restarted := e.Started("B"); restarted {
 		t.Error("B's command started again")
 	}
+}
+
+// --timeout is one deadline from the run's start: B's command runs 4.5 s of its 6 s, is stopped, and
+// the restart, which waits for calm, refuses when the 1.5 s left run out. Mutation: a fresh timeout
+// at each wait refuses 6 s after the stop.
+func TestTimeoutCoversTheRun(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(roomConfig(64 << 10)) // calm_s 30: no restart within the timeout
+	e.Learn("B")
+	e.Run("A", "--mem", "100M")
+	e.WaitStarted("A")
+	e.WaitTicked("A")
+	b := e.Run("B", "--mem", "100M", "--timeout", "6s")
+	e.WaitStarted("B")
+	e.WaitTicked("B")
+	time.Sleep(4500 * time.Millisecond)
+	stopAgain(t, e, b, 1024)
+	e.Eventually(4*time.Second, "B refuses with the time left", b.Exited)
+	b.ExitCode(75)
 }

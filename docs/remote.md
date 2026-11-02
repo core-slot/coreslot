@@ -50,7 +50,7 @@ What happens: Crabbox syncs the working tree to `build-host`, starts the shell c
   directory or configuration cannot be used. Without it a broken remote budget fails open: the
   command runs at once, with a diagnostic on stderr, which is the everything-at-once case again
   ([README](../README.md#exit-status)).
-- **`--timeout D`** bounds the wait (`--timeout 10m`), `--no-wait` refuses at once when the request
+- **`--timeout D`** bounds the whole wait, from the start of the run (`--timeout 10m`), `--no-wait` refuses at once when the request
   does not fit; both exit 75, so the caller can try another host.
 
 ## One lease id per agent
