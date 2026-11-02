@@ -6,7 +6,9 @@ All notable changes to this project are recorded here. The format follows
 [compatibility policy](docs/compatibility.md) applies it: the module stays at `v0` until
 `v1.0.0`, which freezes the on-disk format then current and the CLI surface.
 
-## v0.4.0 (unreleased)
+## Unreleased
+
+## v0.4.0 (2026-11-02)
 
 coreslot is a memory guard for the heavy commands of coding agents; memory is its only resource.
 Its on-disk protocol is format 2.
