@@ -40,11 +40,11 @@ func TestWaitReason(t *testing.T) {
 func TestStopMessageParts(t *testing.T) {
 	r := &run{o: runOptions{label: "x"}, share: 0.04, learned: true}
 	times := memsample.TreeTimes{UserNS: 8e8, SysNS: 6e8, PageWaitNS: 6e8}
-	if got, want := r.stopDetail(watch.Red, 2458*1024, times),
+	if got, want := r.stopDetail(false, 2458*1024, times),
 		"memory red, at 2.4 GiB, 60% of its time went to memory stalls against its normal 4%"; got != want {
 		t.Errorf("stopDetail = %q, want %q", got, want)
 	}
-	if got, want := r.stopDetail(watch.Floor, 0, memsample.TreeTimes{}), "swap room under the floor, at 0 MiB"; got != want {
+	if got, want := r.stopDetail(true, 0, memsample.TreeTimes{}), "swap room under the floor, at 0 MiB"; got != want {
 		t.Errorf("stopDetail with no time = %q, want %q", got, want)
 	}
 	if got := commandText([]string{"go", "test", "./..."}); got != "`go test ./...`" {
@@ -72,9 +72,12 @@ func TestStatusWatch(t *testing.T) {
 		want string
 	}{
 		{rep(engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true}, holds), "watch: red, E 41.0 points; protecting"},
-		// no victim but the learning ones: red lists nobody, so it does not say "protecting"
+		// no victim at red, whether the learning job is the newest or the oldest, or none is
+		// learning: red lists nobody, so it does not say "protecting"
 		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true, Learning: 1}},
-			"watch: red, E 41.0 points; not protecting: only the floor can stop a command now; the others are still learning"},
+			"watch: red, E 41.0 points; not protecting: a red round can stop no running command: each is the oldest, still learning or never stopped"},
+		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true}},
+			"watch: red, E 41.0 points; not protecting: a red round can stop no running command: each is the oldest, still learning or never stopped"},
 		{rep(engine.WatchInfo{Level: watch.Green, Fresh: true, Observe: true}, holds),
 			"watch: green, E 0.0 points; not protecting: observe mode logs what it would stop and stops nothing"},
 		{rep(engine.WatchInfo{Level: watch.Unknown, Fresh: true}, holds),
@@ -93,8 +96,8 @@ func TestStatusWatch(t *testing.T) {
 		t.Errorf("status:\n%s\nwant no learning line when every job has history", out)
 	}
 	for n, want := range map[int]string{
-		1: "learning: 1 running command has no history; the watchdog does not count a command, and only the floor can stop it, until its first run completes",
-		2: "learning: 2 running commands have no history; the watchdog does not count a command, and only the floor can stop it, until its first run completes",
+		1: "learning: 1 running command has no normal share yet; the watchdog does not count such a command, and only the floor can stop it, until a run of its label has measured one",
+		2: "learning: 2 running commands have no normal share yet; the watchdog does not count such a command, and only the floor can stop it, until a run of its label has measured one",
 	} {
 		out := buildStatus(rep(engine.WatchInfo{Level: watch.Green, Fresh: true, Learning: n}, holds), now, nil, 0).human()
 		if !strings.Contains(out, "\n"+want+"\n") {
@@ -111,11 +114,17 @@ func TestStatusWatch(t *testing.T) {
 	}
 }
 
-// status --json carries the watchdog's state too.
+// status --json carries the watchdog's state too: the snapshot's learning count and next victim.
+// Mutation: leaving Learning out of the document reports 0.
 func TestStatusJSONWatch(t *testing.T) {
 	w, _ := statusDoc(t, budgetDir(t, 8192), 0)["watch"].(map[string]any)
 	if len(w) != 6 || w["level"] != "" || w["protecting"] != false || w["reason"] != "no coreslot job is running" || w["learning"] != float64(0) {
 		t.Errorf("status --json watch = %v, want the six keys, no level, not protecting for want of a job, learning 0", w)
+	}
+	rep := engine.Report{Holds: []engine.HolderInfo{{Name: "h1"}, {Name: "h2"}},
+		Watch: engine.WatchInfo{Level: watch.Green, Fresh: true, NextVictim: "h2", Learning: 2}}
+	if got := buildStatus(rep, 0, nil, 0).document().Watch; got.Learning != 2 || got.NextVictim != "h2" || got.Level != "green" {
+		t.Errorf("status --json watch = %+v, want learning 2, next victim h2, level green", got)
 	}
 }
 

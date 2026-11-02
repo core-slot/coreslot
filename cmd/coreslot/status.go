@@ -259,7 +259,7 @@ func (v statusView) human() string {
 
 	p("%s", v.watchLine())
 	if n := int64(r.Watch.Learning); n > 0 {
-		p("learning: %d running %s no history; the watchdog does not count a command, and only the floor can stop it, until its first run completes",
+		p("learning: %d running %s no normal share yet; the watchdog does not count such a command, and only the floor can stop it, until a run of its label has measured one",
 			n, plural(n, "command has", "commands have"))
 	}
 	if len(r.Holds) == 0 {
@@ -336,8 +336,8 @@ func (v statusView) protection() (on bool, reason string) {
 		return false, "no run has sampled the machine in the last 6 s"
 	case w.Level == watch.Unknown:
 		return false, "the last sample is a gap (the machine slept, or a reading is missing)"
-	case w.Level == watch.Red && w.NextVictim == "" && w.Learning > 0:
-		return false, "only the floor can stop a command now; the others are still learning"
+	case w.Level == watch.Red && w.NextVictim == "":
+		return false, "a red round can stop no running command: each is the oldest, still learning or never stopped"
 	}
 	return true, ""
 }
@@ -421,7 +421,6 @@ type jsonHolder struct {
 	Alive     *bool   `json:"alive"`
 }
 
-// jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
 // jsonWatch is the watchdog: the level and E of the newest sample (no level without a fresh one),
 // whether it protects and, if not, why, the hold of the next victim and how many jobs are learning.
 type jsonWatch struct {
@@ -433,6 +432,7 @@ type jsonWatch struct {
 	Learning     int     `json:"learning"`
 }
 
+// jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
 type jsonMem struct {
 	ReservedMiB int64 `json:"reserved_mib"`
 	FreeMiB     int64 `json:"free_mib"`

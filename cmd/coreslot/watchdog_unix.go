@@ -57,28 +57,40 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}) {
 			continue
 		}
-		det, c, err := g.Tick(ctx)
+		det, err := g.Tick(ctx)
 		r.countClosed(d, det, err)
 		if err != nil || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
 		round = det.LastRoundNS
-		why := r.stopDetail(det.Level, kib, d)
-		if c.Observe {
-			r.notice("would stop %s (%s)", text(r.o.label), why)
-		} else if sup.KillGroup() {
-			r.lastStop, r.lastFloor = why, det.Level == watch.Floor
+		if r.stopFor(det, kib, d, sup.KillGroup) {
 			return true, p
 		}
 	}
 }
 
-// stopDetail is what the watchdog saw when a stop round listed this run: the memory level, the
-// command's footprint and the part of its last period that went to memory stalls, against its
-// normal.
-func (r *run) stopDetail(l watch.Level, kib int64, d memsample.TreeTimes) string {
-	reason := "memory " + l.String()
-	if l == watch.Floor {
+// stopFor acts on the stop round det last wrote, which lists this run, as that round was
+// written, whatever the level or the mode is now: in observe mode it says what it would stop,
+// otherwise it kills the command with kill and reports whether it did.
+func (r *run) stopFor(det watch.Detector, kib int64, d memsample.TreeTimes, kill func() bool) bool {
+	why := r.stopDetail(det.RoundFloor, kib, d)
+	if det.Observed {
+		r.notice("would stop %s (%s)", text(r.o.label), why)
+		return false
+	}
+	if !kill() {
+		return false
+	}
+	r.lastStop, r.lastFloor = why, det.RoundFloor
+	return true
+}
+
+// stopDetail is what the watchdog saw when a stop round, a floor round or a red one, listed this
+// run: the command's footprint and the part of its last period that went to memory stalls,
+// against its normal.
+func (r *run) stopDetail(floor bool, kib int64, d memsample.TreeTimes) string {
+	reason := "memory red"
+	if floor {
 		reason = "swap room under the floor"
 	}
 	detail := fmt.Sprintf("%s, at %s", reason, spec.FormatMiB(kib>>10))

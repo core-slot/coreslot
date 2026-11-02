@@ -586,6 +586,15 @@ func TestOutsideSigkillNotRestarted(t *testing.T) {
 	}
 }
 
+// A command's own exit 137 is its status, not a SIGKILL: nothing is said of one. Mutation: reading
+// the status 137 as the kill reports a SIGKILL from outside coreslot.
+func TestOwnExit137IsNoKill(t *testing.T) {
+	dir := stateDir(t, "")
+	if r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", "exit 137"); r.code != 137 || r.stderr != "" {
+		t.Errorf("exit 137: got %d, stderr %q; want 137 and nothing said", r.code, r.stderr)
+	}
+}
+
 // A stopped command comes back with the larger of its peak and its need. Mutation: keeping the
 // need gives 1 GiB.
 func TestRestartNeedIsPeak(t *testing.T) {
@@ -968,17 +977,21 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 	}
 }
 
-// A need above what the machine has is said once, in GiB, and runs alone when nothing else holds.
-// Mutation: saying it for every wait line turns the count red.
+// A need above what the machine has less the reserve is said once, each size in its unit, and runs
+// alone when nothing else holds. Mutations: saying it for every wait line turns the count red;
+// printing every size in GiB says "0.1 GiB" for 128 MiB.
 func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
-	dir := budgetDir(t, 512)
-	r := cli(t, baseEnv(dir), "run", "--mem", "1000G", "--", "true")
-	if r.code != 0 {
-		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
-	}
-	re := regexp.MustCompile(`coreslot: needs 1000\.0 GiB of \d+\.\d GiB; runs only alone\n`)
-	if got := re.FindAllString(r.stderr, -1); len(got) != 1 {
-		t.Errorf("stderr %q, want the notice once", r.stderr)
+	big := stateDir(t, "[memory]\nreserve = \"1000G\"\n") // more than the machine has
+	budgetRoom.Store(big, int64(512))
+	for dir, mem := range map[string]string{budgetDir(t, 512): "1000G", big: "128M"} {
+		r := cli(t, baseEnv(dir), "run", "--mem", mem, "--", "true")
+		if r.code != 0 {
+			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
+		}
+		re := regexp.MustCompile(`coreslot: needs (1000 GiB|128 MiB) of \d+(\.\d)? GiB; runs only alone\n`)
+		if got := re.FindAllString(r.stderr, -1); len(got) != 1 {
+			t.Errorf("--mem %s: stderr %q, want the notice once", mem, r.stderr)
+		}
 	}
 }
 

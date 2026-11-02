@@ -83,24 +83,24 @@ func reservations(holds []liveHold) []state.MemHold {
 
 // Tick is the grant's part in the shared watch tick: inside the section, entered within
 // sectionWait, the detector advances on a new machine sample of the host and the live holds when
-// the stored one is 1.5 s old (store.Section.Tick). It returns the detector and the [watch]
-// configuration; a section that stayed busy returns the zero detector.
-func (g *Grant) Tick(ctx context.Context) (watch.Detector, watch.Config, error) {
+// the stored one is 1.5 s old (store.Section.Tick). It returns the detector; a section that
+// stayed busy returns the zero detector.
+func (g *Grant) Tick(ctx context.Context) (watch.Detector, error) {
 	e := g.e
 	sec, entered, err := e.enter(ctx, false)
 	if err != nil || !entered {
-		return watch.Detector{}, watch.Config{}, err
+		return watch.Detector{}, err
 	}
 	defer sec.Leave()
 	if n, understood, err := sec.Format(); err != nil || !understood {
-		return watch.Detector{}, watch.Config{}, cmp.Or(err, refuseFormat(n, ""))
+		return watch.Detector{}, cmp.Or(err, refuseFormat(n, ""))
 	}
 	cfg, m, err := e.reading()
 	if err != nil {
-		return watch.Detector{}, watch.Config{}, err
+		return watch.Detector{}, err
 	}
 	d, _, err := sec.Tick(e.clock.Realtime(), e.sampler(cfg, m), cfg.Watch)
-	return d, cfg.Watch, err
+	return d, err
 }
 
 // sampler reads one machine sample: the host, the running jobs and the room.

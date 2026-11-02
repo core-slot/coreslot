@@ -99,8 +99,9 @@ func (r *run) runChild(c child) int {
 		childDone(terminal)
 		released = c.release()
 	}
-	r.stopped, r.peakKiB = stopped && status == 128+int(syscall.SIGKILL), p.kib
-	if c.grant != nil && status == 128+int(syscall.SIGKILL) && !r.stopped {
+	killed := sup != nil && sup.ws.Signaled() && sup.ws.Signal() == syscall.SIGKILL // not a command's own exit 137
+	r.stopped, r.peakKiB = stopped && killed, p.kib
+	if c.grant != nil && killed && !r.stopped {
 		r.notice("ended by SIGKILL from outside coreslot; not restarted")
 	}
 	if r.releaseFailed(released) {

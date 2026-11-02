@@ -130,7 +130,8 @@ type Detector struct {
 	YellowClearedNS int64    `json:"yellow_cleared_ns"`
 	CalmSinceNS     int64    `json:"calm_since_ns"` // 0 while the level is not green
 	LastRoundNS     int64    `json:"last_round_ns"`
-	Observed        bool     `json:"observed"` // the last round was written in observe mode
+	Observed        bool     `json:"observed"`    // the last round was written in observe mode
+	RoundFloor      bool     `json:"round_floor"` // the last round was a floor round
 	LastAdmitNS     int64    `json:"last_admit_ns"`
 	Stop            []string `json:"stop"` // the last stop round's holds
 }

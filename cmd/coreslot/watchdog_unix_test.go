@@ -5,8 +5,10 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -95,5 +97,40 @@ func TestTickShareIgnoresSamplesWithoutAGateReading(t *testing.T) {
 	}
 	if r.closed.DSysNS != 1e9 {
 		t.Errorf("counted %d ns of system time; want only the compared sample's 1 s", r.closed.DSysNS)
+	}
+}
+
+// A run acts on the round that listed it as that round was written: a floor round's stop asks for
+// memory outside coreslot even when the level has turned red or unknown by the run's tick, and a
+// round written in observe mode kills nothing after a switch to enforce. Mutations: keying the
+// stop to det.Level says "memory red" and asks nothing; keying it to the current mode kills.
+func TestStopFollowsTheRound(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		det                watch.Detector
+		killed, floor      bool
+		wantStop, wantSaid string
+	}{
+		{"floor round, red at the tick", watch.Detector{Level: watch.Red, RoundFloor: true}, true, true, "swap room under the floor, at 1 GiB", ""},
+		{"floor round, unknown at the tick", watch.Detector{Level: watch.Unknown, RoundFloor: true}, true, true, "swap room under the floor, at 1 GiB", ""},
+		{"red round, floor at the tick", watch.Detector{Level: watch.Floor}, true, false, "memory red, at 1 GiB", ""},
+		{"observe round under enforce", watch.Detector{Level: watch.Red, Observed: true}, false, false, "", "would stop x (memory red, at 1 GiB)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := &run{o: runOptions{label: "x"}, io: IO{Stderr: stderr}}
+			kills := 0
+			stopped := r.stopFor(c.det, 1<<20, memsample.TreeTimes{}, func() bool { kills++; return true })
+			if stopped != c.killed || kills != map[bool]int{true: 1}[c.killed] || r.lastFloor != c.floor || r.lastStop != c.wantStop {
+				t.Errorf("stopped %v after %d kills, floor %v, stop %q; want %v, floor %v, stop %q",
+					stopped, kills, r.lastFloor, r.lastStop, c.killed, c.floor, c.wantStop)
+			}
+			if said, _ := os.ReadFile(stderr.Name()); !strings.Contains(string(said), c.wantSaid) {
+				t.Errorf("stderr %q, want %q", said, c.wantSaid)
+			}
+		})
 	}
 }

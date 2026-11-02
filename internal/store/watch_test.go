@@ -93,8 +93,8 @@ func TestOneStopRoundPerEpisode(t *testing.T) {
 	for d.Level != watch.Red && m.calls < 20 {
 		d, stop = tick()
 	}
-	if d.Level != watch.Red || !slices.Equal(stop, []string{"3"}) {
-		t.Fatalf("level %v, stop %v; want red, [3]", d.Level, stop)
+	if d.Level != watch.Red || !slices.Equal(stop, []string{"3"}) || d.RoundFloor {
+		t.Fatalf("level %v, stop %v, floor round %v; want red, [3], a red round", d.Level, stop, d.RoundFloor)
 	}
 	round := d.LastRoundNS
 	for range 3 {
@@ -111,8 +111,9 @@ func TestOneStopRoundPerEpisode(t *testing.T) {
 	}
 }
 
-// A floor round lists a learning job that a red round skips. Mutation: a round that never takes
-// the level's floor lists nothing here.
+// A floor round lists a learning job that a red round skips, and is recorded as a floor round.
+// Mutations: a round that never takes the level's floor lists nothing here; one that does not
+// record its kind is not a floor round.
 func TestFloorRoundListsLearningJobs(t *testing.T) {
 	sec := enter(t, open(t, newDir(t)))
 	learning := stalled("2", 2)
@@ -125,8 +126,8 @@ func TestFloorRoundListsLearningJobs(t *testing.T) {
 		now += 2e9
 		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
 	}
-	if d.Level != watch.Floor || !slices.Equal(stop, []string{"2"}) {
-		t.Errorf("level %v, stop %v; want floor, [2]", d.Level, stop)
+	if d.Level != watch.Floor || !slices.Equal(stop, []string{"2"}) || !d.RoundFloor {
+		t.Errorf("level %v, stop %v, floor round %v; want floor, [2], a floor round", d.Level, stop, d.RoundFloor)
 	}
 }
 

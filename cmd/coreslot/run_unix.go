@@ -123,7 +123,7 @@ func (r *run) ordinary() int {
 	}
 	req := r.o.request()
 	if total, over := e.Oversized(req.NeedMiB); over {
-		r.notice("needs %.1f GiB of %.1f GiB; runs only alone", float64(req.NeedMiB)/1024, float64(total)/1024)
+		r.notice("needs %s of %s; runs only alone", spec.FormatMiB(req.NeedMiB), spec.FormatMiB(total))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -145,24 +145,32 @@ func (r *run) ordinary() int {
 		cmd := commandText(r.o.argv)
 		switch {
 		case r.o.noWait: // a restart waits for calm, which --no-wait does not
-			return r.refuse("%s was stopped for memory (%s) and not restarted because of --no-wait", cmd, r.lastStop)
+			return r.refuse("%s was stopped for memory (%s) and not restarted because of --no-wait%s", cmd, r.lastStop, r.floorAsk())
 		case r.stops == maxStops:
 			r.notice("gave up after %d memory stops (run %s)", maxStops, g.HoldName())
 			for i, why := range r.reasons {
 				r.notice("stop %d: %s", i+1, why)
 			}
-			r.notice("run %s alone, or narrow it", cmd)
+			r.notice("run %s alone, or narrow it%s", cmd, r.floorAsk())
 			return r.o.refusalCode
 		}
-		ask := ""
-		if r.lastFloor {
-			ask = "; the whole machine ran out of memory (swap nearly full); free memory outside coreslot (close something) before it comes back"
+		ask := r.floorAsk()
+		if ask != "" {
+			ask += " before it comes back"
 		}
 		r.notice("memory stop %d of %d: %s was stopped (%s)%s; coreslot restarts it by itself; do not run it again",
 			r.stops, maxStops, cmd, r.lastStop, ask)
 		req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
 		r.start = time.Now()
 	}
+}
+
+// floorAsk is what the lines that report a floor stop ask of the agent; "" after a red stop.
+func (r *run) floorAsk() string {
+	if !r.lastFloor {
+		return ""
+	}
+	return "; the whole machine ran out of memory (swap nearly full); free memory outside coreslot (close something)"
 }
 
 // commandText is the command for a message: at most 200 characters, escaped for a terminal.
@@ -236,8 +244,8 @@ func (r *run) notAdmitted(e *engine.Engine, err error, restart bool) int {
 		r.notice("not admitted at once (--no-wait)%s", r.holdersText(e))
 		return r.o.refusalCode
 	case errors.Is(err, context.DeadlineExceeded) && restart:
-		return r.refuse("%s was stopped for memory (%s) and not restarted within %v (--timeout)",
-			commandText(r.o.argv), r.lastStop, r.o.timeout)
+		return r.refuse("%s was stopped for memory (%s) and not restarted: the run's --timeout of %v ran out%s",
+			commandText(r.o.argv), r.lastStop, r.o.timeout, r.floorAsk())
 	case errors.Is(err, context.DeadlineExceeded):
 		if r.o.onTimeout == "run" {
 			return r.timeoutRun(e)
