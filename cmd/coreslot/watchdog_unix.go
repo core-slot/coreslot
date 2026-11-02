@@ -95,10 +95,19 @@ func (r *run) stopDetail(floor bool, kib int64, d memsample.TreeTimes) string {
 	}
 	detail := fmt.Sprintf("%s, at %s", reason, spec.FormatMiB(kib>>10))
 	if share, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
-		detail += fmt.Sprintf(", %.0f%% of its time went to memory stalls against its normal %.0f%%", 100*share,
-			100*r.share)
+		detail += fmt.Sprintf(", %s of its time went to memory stalls against its normal %s", percent(share),
+			percent(r.share))
 	}
 	return detail
+}
+
+// percent is a share in whole percent, or to one significant digit below 1 %, so that a small
+// normal share does not read as none.
+func percent(share float64) string {
+	if share < 0.01 {
+		return fmt.Sprintf("%.1g%%", 100*share)
+	}
+	return fmt.Sprintf("%.0f%%", 100*share)
 }
 
 // updateHold rewrites g's hold with fn, outside the section, only while the state directory's
