@@ -1084,9 +1084,10 @@ MUST ignore a key it does not know: lines only gain optional keys within a forma
 The key `tick_share` is OPTIONAL too, under the same rule. It is
 `(Σ d_sys + Σ d_page_wait) / (Σ d_user + Σ d_sys + Σ d_page_wait)`, summed over the attempt's ticks
 (section 23.1) of the `d_` values the run wrote into its hold, for the ticks whose sample had the
-paging gate (section 23.3) closed: the sample the tick took or read in its step 2, with `gate` false in
-`watch.json`. A tick whose sample was not read adds nothing. A writer omits the key when the sums are
-zero (no tick, every gate open, or no time). It is the only source of a label's normal share
+paging gate (section 23.3) closed: the sample the tick took or read in its step 2, whose pair was
+compared (`level` green or yellow in `watch.json`) and with `gate` false. A tick whose sample was
+not read, was the first or came across a gap adds nothing. A writer omits the key when the sums are
+zero (no tick, every gate open or unread, or no time). It is the only source of a label's normal share
 (section 23.3).
 
 The memory key `mem_peak_kib` is OPTIONAL too, under the same rule: a writer omits what it does not know, and a reader treats an absent key as
@@ -1465,7 +1466,7 @@ A **running** hold is a live hold whose body is well-formed, whose `child_exited
 memory (section 12) but is no job of the watchdog. For each running hold,
 `S = (d_sys + d_page_wait) / (d_user + d_sys + d_page_wait)`
 over its latest tick period. Its normal share `S0` is the median of `tick_share` (section 20, the same
-measure over the ticks whose gate was closed) over the last 20 counted runs of its label that report
+measure over the ticks whose gate was read and closed) over the last 20 counted runs of its label that report
 it. When there are none it
 has no normal share and is **learning**: no value stands for a command nothing is known of. Each run decides its own
 command's `S0` and whether it is learned once, from its own read of the run log when it starts, and
@@ -1484,7 +1485,7 @@ time, say nothing about memory. A learning hold is no part of `E`: it still rese
 have no normal share (`status --json`: `watch.learning`); at red, with no victim but the learning
 ones, it does not say that the watchdog is protecting but that only the floor can stop a command.
 A command is judged only once a run of its label has
-completed with a `tick_share` (a run shorter than one tick, or whose every gate was open, leaves the label learning); until then only a floor round stops it (section 23.5). The **paging gate** is open when the
+completed with a `tick_share` (a run shorter than one tick, or whose every gate was open or unread, leaves the label learning); until then only a floor round stops it (section 23.5). The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
 where the kernel reports it, the memory stall `some` rose. The gate only tells memory work from
 other system time. On Linux the stall rises in almost every period, so there the gate is nearly

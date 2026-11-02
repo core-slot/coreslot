@@ -3,12 +3,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
@@ -63,5 +66,34 @@ func TestTickShareCountsClosedGateOnly(t *testing.T) {
 	none.countClosed(memsample.TreeTimes{}, closed, nil)
 	if got := none.tickShare(); got != nil {
 		t.Errorf("tick share %v with no closed tick that had time; want none", *got)
+	}
+}
+
+// A tick counts only when its sample's pair was compared and the gate was closed: the first
+// sample and one across a gap have no gate reading, whatever the paging. Mutation: testing only
+// the window and the gate counts all three samples.
+func TestTickShareIgnoresSamplesWithoutAGateReading(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec, err := st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	var r run
+	now := store.NowNS()
+	for _, at := range []int64{0, 2e9, 12e9} { // the first sample, a compared one, one 10 s on
+		read := func() (watch.Sample, error) {
+			var s watch.Sample
+			s.Host.WallNS, s.Host.AwakeNS = 1e12+at, 1e12+at
+			return s, nil
+		}
+		det, _, err := sec.Tick(now+at, read, watch.Defaults())
+		r.countClosed(memsample.TreeTimes{SysNS: 1e9, UserNS: 1e9}, det, err)
+	}
+	if r.closed.DSysNS != 1e9 {
+		t.Errorf("counted %d ns of system time; want only the compared sample's 1 s", r.closed.DSysNS)
 	}
 }

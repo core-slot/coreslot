@@ -115,9 +115,10 @@ func treeDeltas(prev, cur map[int]memsample.TreeTimes) memsample.TreeTimes {
 }
 
 // countClosed adds the tick's time d to the attempt's gate-closed time when det holds a sample the
-// tick took or read and the paging gate was closed in it.
+// tick took or read, its pair was compared (only then is the level green or yellow) and the paging
+// gate was closed in it.
 func (r *run) countClosed(d memsample.TreeTimes, det watch.Detector, err error) {
-	if err == nil && len(det.Window) > 0 && !det.Gate {
+	if err == nil && len(det.Window) > 0 && !det.Gate && (det.Level == watch.Green || det.Level == watch.Yellow) {
 		r.closed.DUserNS += d.UserNS
 		r.closed.DSysNS += d.SysNS
 		r.closed.DPageWaitNS += d.PageWaitNS
