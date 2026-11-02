@@ -31,7 +31,7 @@ func (f *feed) step(c Config, gate bool, jobs ...Job) Level {
 		f.pages += 5000 // 2500/s, above the gate's 1000/s
 	}
 	cur := Sample{Host: memsample.HostReading{Decomp: f.pages, SwapUsedMiB: f.swapUsed, SwapFreeMiB: f.swapFree,
-		VMVolumeFreeMiB: f.vmFree, MemAvailableMiB: f.memAvailable, WallNS: ns, AwakeNS: ns}, Jobs: jobs}
+		VMVolumeFreeMiB: f.vmFree, MemAvailableMiB: f.memAvailable, WallNS: ns, AwakeNS: f.prev.Host.AwakeNS + 2e9}, Jobs: jobs}
 	l := f.d.Advance(f.prev, cur, c)
 	f.prev = cur
 	return l
@@ -188,25 +188,50 @@ func TestFloorCountsMemAvailable(t *testing.T) {
 	}
 }
 
-// A sleep between two samples (the sleep-inclusive clock moved 600 s, the awake one 2 s) is a
-// gap: unknown, whatever the deltas say, and the bucket stays as it was.
+// A sleep between two samples (the sleep-inclusive clock moved 600 s, the awake one 2 s) or a
+// reboot (the clock went back) is a gap: unknown, whatever the deltas say, and red needs its samples
+// after it, so one hot sample at a bucket of 9.5 is not red; a 10 s period without a sleep keeps the
+// bucket, and that sample is, as does an empty sample (a reading that could not be read).
+// Mutations: keeping the bucket across a sleep turns it red; emptying it on any gap empties it on
+// the empty sample.
 func TestGapIsUnknown(t *testing.T) {
-	c := Defaults()
-	f := newFeed(c)
-	for range 3 {
-		f.step(c, true, job(0.60, 0.04))
+	for _, c := range []struct {
+		name            string
+		wallNS, awakeNS int64 // cur's clocks, from prev's
+		want            Level
+	}{{"sleep", 600e9, 2e9, Yellow}, {"reboot", -1e12, -1e12, Yellow}, {"10 s period", 10e9, 10e9, Red}} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := Defaults()
+			f := newFeed(cfg)
+			for range 10 {
+				f.step(cfg, true, job(0.60, 0.04))
+			}
+			f.step(cfg, false, job(0.04, 0.04))
+			cur := f.prev
+			cur.Host.WallNS += c.wallNS
+			cur.Host.AwakeNS += c.awakeNS
+			f.pages += 1e6
+			cur.Host.Decomp = f.pages
+			cur.Jobs = []Job{job(0.60, 0.04)}
+			if !memsample.Gap(f.prev.Host, cur.Host) {
+				t.Fatal("the fixture is not a gap")
+			}
+			if l := f.d.Advance(f.prev, cur, cfg); l != Unknown {
+				t.Errorf("across the gap: %v, want unknown", l)
+			}
+			f.prev = cur
+			if l := f.step(cfg, true, job(0.60, 0.04)); l != c.want {
+				t.Errorf("one hot sample after the gap: %v (bucket %v), want %v", l, f.d.Bucket, c.want)
+			}
+		})
 	}
-	bucket := f.d.Bucket
-	cur := f.prev
-	cur.Host.WallNS += 600e9
-	cur.Host.AwakeNS += 2e9
-	cur.Host.Decomp += 1e6
-	cur.Jobs = []Job{job(0.60, 0.04)}
-	if !memsample.Gap(f.prev.Host, cur.Host) {
-		t.Fatal("the fixture is not a gap")
+	cfg := Defaults()
+	f := newFeed(cfg)
+	for range 10 {
+		f.step(cfg, true, job(0.60, 0.04))
 	}
-	if l := f.d.Advance(f.prev, cur, c); l != Unknown || f.d.Bucket != bucket {
-		t.Errorf("after a sleep: %v, bucket %v; want unknown, bucket %v", l, f.d.Bucket, bucket)
+	if l := f.d.Advance(f.prev, Sample{}, cfg); l != Unknown || f.d.Bucket != cfg.RedSamples {
+		t.Errorf("an empty sample: %v, bucket %v; want unknown, bucket %v", l, f.d.Bucket, cfg.RedSamples)
 	}
 }
 

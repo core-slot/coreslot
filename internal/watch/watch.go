@@ -138,7 +138,7 @@ type Detector struct {
 
 // Advance moves the detector from sample prev to cur and returns the level. A pair it cannot
 // compare (memsample.Gap, a counter that went back) is Unknown and keeps the bucket and latch,
-// unless the floor holds: it needs no rate.
+// unless the floor holds: it needs no rate. A sleep or a reboot between them empties the bucket.
 func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	was, now := d.Known, cur.Host.WallNS
 	r, ok := rates(prev.Host, cur.Host)
@@ -160,6 +160,9 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	floor := h.WallNS > 0 && h.VMVolumeFreeMiB+h.SwapFreeMiB+h.MemAvailableMiB < c.FloorMiB && h.SwapUsedMiB-low >= floorGrowthMiB
 	if !ok { // the floor needs no rate: a real reading still reaches it
 		d.Level, d.CalmSinceNS = Unknown, 0
+		if prev.Host.WallNS > 0 && h.WallNS > 0 && memsample.Slept(prev.Host, h) {
+			d.Bucket = 0 // red needs its samples after a sleep or a reboot, not before it
+		}
 		if floor {
 			d.Level, d.Known = Floor, Floor
 		}

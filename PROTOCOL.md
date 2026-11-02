@@ -1502,14 +1502,17 @@ red and floor. A sample that is unknown has that level; any other has the highes
 below that applies.
 
 - **Unknown:** a gap, a counter that went back, an empty sample, or a reading that cannot be read.
-  It never counts towards calm; the bucket and the yellow latch are kept as they were. The floor
+  It never counts towards calm; the bucket and the yellow latch are kept as they were, except that a
+  pair across a sleep or a reboot (the two clocks moved apart, or the clock went back) between two
+  real readings empties the bucket: red needs its samples after the wake. The floor
   needs no rate, so a pair that cannot be compared but whose current reading was read
   (`wall_ns > 0`) is still tested for it, and is floor when it holds; an empty sample never is.
   An optional reading the platform lacks (the memory stall, page wait) is not unknown.
 - **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
   stays below `yellow_points` for 15 samples in a row.
 - **Red:** a leaky bucket: +1 for a sample with `E ≥ red_points` and the gate open,
-  −0.5 for any other comparable sample, never below 0, never above `red_samples` and never reset.
+  −0.5 for any other comparable sample, never below 0, never above `red_samples`, and emptied only
+  by a sleep or a reboot (unknown, above).
   Red while it is at `red_samples`, so the first sample after the danger leaves red.
 - **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
   `SwapFree` plus `MemAvailable` on Linux) is under `floor`, and swap used grew by at least 256 MiB
