@@ -549,6 +549,7 @@ client that does not run the detector needs only these keys:
 | `detector.last_round_ns` | integer | the host clock of the last stop round (section 23.5); `0` before |
 | `detector.stop` | array of strings | the hold names the last stop round listed |
 | `detector.observed` | boolean | the last stop round was written in observe mode (section 23.6) |
+| `detector.round_floor` | boolean | the last stop round was a floor round, not a red one (section 23.5) |
 
 The other keys under `sample` and `detector` are the detector's own state (the readings, the
 window, the rates, the excess, the leaky bucket, the yellow latch). A detector
