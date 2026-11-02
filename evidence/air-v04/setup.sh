@@ -21,13 +21,16 @@ SQLALCHEMY_SHA=4fbf72c07f5bebcabb02e35ee8b742a217ac649d
 mkdir -p "$STAND"
 tmutil addexclusion "$STAND" 2>/dev/null || true
 
-# Git LFS objects are left as pointers: no gate reads them.
-NOLFS="-c filter.lfs.process= -c filter.lfs.smudge=cat -c filter.lfs.required=false"
+# Git LFS objects are left as pointers: no gate reads them. No hook runs: the clone checks nothing
+# out, and the pinned commit is checked out by its SHA only once the clone holds that commit.
+GITC="-c filter.lfs.process= -c filter.lfs.smudge=cat -c filter.lfs.required=false -c core.hooksPath=/dev/null -c advice.detachedHead=false"
+# shellcheck disable=SC2086 # GITC is a list of options, split on purpose
 fetch() { # fetch URL TAG SHA DIR
 	if [ ! -d "$4/.git" ]; then
-		git $NOLFS -c advice.detachedHead=false clone --quiet --depth 1 --branch "$2" "$1" "$4"
+		git $GITC clone --quiet --no-checkout --depth 1 --branch "$2" "$1" "$4"
 	fi
-	git $NOLFS -C "$4" -c advice.detachedHead=false checkout --quiet "$2"
+	git -C "$4" cat-file -e "$3^{commit}"
+	git $GITC -C "$4" checkout --quiet --detach "$3"
 	test "$(git -C "$4" rev-parse HEAD)" = "$3"
 }
 
