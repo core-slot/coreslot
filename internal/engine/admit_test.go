@@ -237,6 +237,32 @@ func TestBackfillByDuration(t *testing.T) {
 	}
 }
 
+// A running job that ends frees the larger of its need and its footprint, so W counts a job over
+// its need at its footprint: B (2816 MiB, 1536 free) needs only A to end, in 80 s, so C, typically
+// 300 s, does not pass, and C at 60 s does. Mutation: counting A's need alone waits for E too, W is
+// 580 s, and C at 300 s passes.
+func TestBackfillCountsTheFootprint(t *testing.T) {
+	for _, c := range []struct {
+		cTypical int64
+		passes   bool
+	}{{300, false}, {60, true}} {
+		t.Run(fmt.Sprint(c.cTypical), func(t *testing.T) {
+			clk := newFakeClock()
+			e := newEngine(t, capped(t, 2048), clk)
+			a := hold(t, e, spec.Request{Label: "a", NeedMiB: 1024, TypicalS: 100})
+			hold(t, e, spec.Request{Label: "e", NeedMiB: 512, TypicalS: 600})
+			if err := a.UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 3072 }); err != nil {
+				t.Fatal(err)
+			}
+			clk.advance(20 * time.Second)
+			enqueue(t, e, spec.Request{Label: "b", NeedMiB: 2816})
+			if got := isAdmitted(step(t, enqueue(t, e, spec.Request{Label: "c", NeedMiB: 256, TypicalS: c.cTypical}))); got != c.passes {
+				t.Errorf("C passed %v, want %v", got, c.passes)
+			}
+		})
+	}
+}
+
 // With no hold live a restart head starts by the idle rule, so it expects no wait and nothing
 // passes it, whatever the passer's need. Mutation: dropping the live-hold check in passes admits C.
 func TestNothingPassesAHeadThatStartsAtOnce(t *testing.T) {

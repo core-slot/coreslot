@@ -118,7 +118,7 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 	switch {
 	case err != nil:
 		return false, err
-	case t.req.Restart && (!ok || d.Level != watch.Green || mono-d.CalmSinceNS < int64(c.CalmS*1e9) ||
+	case t.req.Restart && (!ok || d.Level != watch.Green || calmLeft(d, s, at, now, c) > 0 ||
 		m.HeadroomOK && room < need+max(256, need/10)):
 		return true, nil
 	case !ok || d.Level == watch.Unknown:
@@ -196,8 +196,8 @@ func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg conf
 	if t.req.TypicalS == 0 || !m.HeadroomOK || len(holds) == 0 { // with no hold live the head starts at once
 		return false
 	}
-	// W: the running jobs with a typical run time end soonest first, each freeing its need, until
-	// the room covers head's need; when they never do, W is unknown.
+	// W: the running jobs with a typical run time end soonest first, each freeing the larger of its
+	// need and its footprint, until the room covers head's need; when they never do, W is unknown.
 	now, w := t.e.clock.Realtime(), int64(0)
 	left := func(h liveHold) int64 { return max(0, h.body.TypicalS-(now-h.body.StartNS)/1e9) }
 	known := slices.DeleteFunc(slices.Clone(holds), func(h liveHold) bool { return h.body.TypicalS == 0 })
@@ -206,7 +206,7 @@ func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg conf
 		if room >= head.NeedMiB {
 			break
 		}
-		room, w = room+h.body.NeedMiB, left(h)
+		room, w = room+max(h.body.NeedMiB, h.body.FootprintMiB), left(h)
 	}
 	if room < head.NeedMiB {
 		return false
@@ -216,13 +216,20 @@ func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg conf
 		if err != nil {
 			return false
 		}
-		calm := int64(cfg.Watch.CalmS * 1e9)
-		if fresh(at, now) && d.Level == watch.Green {
-			calm -= s.Host.WallNS + now - at - d.CalmSinceNS
-		}
-		w = max(w, calm/1e9)
+		w = max(w, calmLeft(d, s, at, now, cfg.Watch)/1e9)
 	}
 	return t.req.TypicalS <= w
+}
+
+// calmLeft is how much of calm_s, in ns, a restart still needs at now: what the sample's green
+// stretch, carried to now by the sample's age, has not covered yet; all of it without a fresh
+// green sample.
+func calmLeft(d watch.Detector, s watch.Sample, at, now int64, c watch.Config) int64 {
+	calm := int64(c.CalmS * 1e9)
+	if fresh(at, now) && d.Level == watch.Green {
+		calm -= s.Host.WallNS + now - at - d.CalmSinceNS
+	}
+	return calm
 }
 
 // Grant is what an admission holds: the hold's lock-carrying descriptor, which carries the
