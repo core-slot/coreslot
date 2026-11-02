@@ -312,6 +312,15 @@ def append(path, rec):
         f.write(json.dumps(rec) + "\n")
 
 
+def scrub(text, repo, stand, bindir, home):
+    """text with the machine's paths named: <repo>, <stand>, <bin> and ~ for home, longest first."""
+    for path, name in sorted(((repo, "<repo>"), (stand, "<stand>"), (bindir, "<bin>"), (home, "~")),
+                             key=lambda pn: -len(pn[0])):
+        if path and path != os.sep:  # a whole path only: a sibling whose name only starts with the home path stays as it is
+            text = re.sub(re.escape(path) + r"(?![\w.-])", lambda _: name, text)
+    return text
+
+
 def meta(a, cmd):
     def sha256(p):
         try:
@@ -320,14 +329,22 @@ def meta(a, cmd):
         except OSError:
             return None
     stand = {n: sh("git", "-C", os.path.join(a.stand, n), "rev-parse", "HEAD") for n in PINS}
-    return {"cmd": cmd, "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "smoke": a.smoke, "machine": sh("sysctl", "-n", "hw.model"),
-            "os": sh("sw_vers", "-productVersion"), "mem_bytes": int(sh("sysctl", "-n", "hw.memsize") or 0),
-            "ncpu": os.cpu_count(), "coreslot": os.path.abspath(a.coreslot),
-            "coreslot_version": sh(a.coreslot, "version"), "coreslot_sha256": sha256(a.coreslot),
-            "repo_commit": sh("git", "-C", REPO, "rev-parse", "HEAD"),
-            "repo_dirty": bool(sh("git", "-C", REPO, "status", "--porcelain", "--", ".")),
-            "stand": stand, "pins": PINS}
+    venv = {f"python_{n}": sh(os.path.join(a.stand, n, ".venv", "bin", "python"), "--version") for n in ("fastapi", "sqlalchemy")}
+    # the harness itself modified, not the run's own records (record*/ beside this file)
+    own = ":(exclude)" + os.path.join(os.path.relpath(HERE, REPO), "record*")
+    m = {"cmd": cmd, "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+         "smoke": a.smoke, "machine": sh("sysctl", "-n", "hw.model"),
+         "os": sh("sw_vers", "-productVersion"), "mem_bytes": int(sh("sysctl", "-n", "hw.memsize") or 0),
+         "ncpu": os.cpu_count(), "coreslot": os.path.abspath(a.coreslot),
+         "coreslot_version": sh(a.coreslot, "version"), "coreslot_sha256": sha256(a.coreslot),
+         "repo_commit": sh("git", "-C", REPO, "rev-parse", "HEAD"),
+         "repo_dirty": bool(sh("git", "-C", REPO, "status", "--porcelain", "--", ".", own)),
+         "stand": stand, "pins": PINS,
+         "toolchain": {"node": sh("node", "--version"), "npm": sh("npm", "--version"), "uv": sh("uv", "--version"),
+                       "python_run": sys.version, **venv}}
+    text = scrub(json.dumps(m, ensure_ascii=False), REPO, a.stand,
+                 os.path.dirname(os.path.abspath(a.coreslot)), os.path.expanduser("~"))
+    return json.loads(text)
 
 
 # --- phases ---------------------------------------------------------------------------------

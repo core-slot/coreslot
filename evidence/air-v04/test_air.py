@@ -204,6 +204,11 @@ class RunTest(unittest.TestCase):
         self.assertEqual(run.descendants(ps, [10]), {10: (10, "coreslot run"), 11: (11, "npm run"),
                                                       12: (11, "node tsc")})
 
+    def test_scrub(self):
+        text = "/h/u/dev/repo/evidence /h/u/bench.noindex/vscode /h/u/bin/coreslot /h/u/.cache /h/u2"
+        self.assertEqual(run.scrub(text, "/h/u/dev/repo", "/h/u/bench.noindex", "/h/u/bin", "/h/u"),
+                         "<repo>/evidence <stand>/vscode <bin>/coreslot ~/.cache /h/u2")
+
     def test_setup_pins_match(self):
         with open(os.path.join(HERE, "setup.sh")) as f:
             setup = f.read()
