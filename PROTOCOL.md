@@ -533,7 +533,7 @@ client that does not run the detector needs only these keys:
 | Key | Type | Content |
 |---|---|---|
 | `sampled_ns` | integer | the wall clock of the client that took the sample, when it did; `0` with no sample |
-| `sample.host.WallNS` | integer | the sample's host clock, on a clock that counts the time the machine slept (section 23.2); the readings under `sample.host` carry their Go field names |
+| `sample.host.wall_ns` | integer | the sample's host clock, on a clock that counts the time the machine slept (section 23.2) |
 | `detector.level` | integer | `0` green, `1` unknown, `2` yellow, `3` red, `4` floor (section 23.4) |
 | `detector.yellow_cleared_ns` | integer | the host clock when the level last fell from yellow, red or floor to green; `0` before |
 | `detector.calm_since_ns` | integer | the host clock since which the level has been green without a break; `0` while it is not green |
@@ -546,7 +546,7 @@ The other keys under `sample` and `detector` are the detector's own state (the r
 window, the rates, the excess, the leaky bucket, the yellow latch). A detector
 that finds them missing starts afresh; a client that does not run the detector ignores them.
 Times named `…_ns` under `detector` are on the host clock of the sample, not on the wall clock: a
-reader brings one to the present by adding the sample's age, `host_now = sample.host.WallNS + (now
+reader brings one to the present by adding the sample's age, `host_now = sample.host.wall_ns + (now
 − sampled_ns)`.
 
 ## 8. The admission critical section

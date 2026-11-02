@@ -13,13 +13,17 @@ import (
 // counters are cumulative since boot: pages decompressed (macOS) and swapped in, and on Linux the
 // µs some task stalled on memory (PSI), when the kernel reports it.
 type HostReading struct {
-	Decomp, SwapIns                           uint64
-	PSISomeUS                                 uint64
-	HasPSI                                    bool
-	SwapUsedMiB, SwapFreeMiB, VMVolumeFreeMiB int64
-	MemAvailableMiB                           int64 // Linux: MemAvailable, which swap room counts there; 0 elsewhere
+	Decomp          uint64 `json:"decomp"`
+	SwapIns         uint64 `json:"swap_ins"`
+	PSISomeUS       uint64 `json:"psi_some_us"`
+	HasPSI          bool   `json:"has_psi"`
+	SwapUsedMiB     int64  `json:"swap_used_mib"`
+	SwapFreeMiB     int64  `json:"swap_free_mib"`
+	VMVolumeFreeMiB int64  `json:"vm_volume_free_mib"`
+	MemAvailableMiB int64  `json:"mem_available_mib"` // Linux: MemAvailable, which swap room counts there; 0 elsewhere
 	// WallNS counts the time the machine slept and AwakeNS does not; both are in ns since boot.
-	WallNS, AwakeNS int64
+	WallNS  int64 `json:"wall_ns"`
+	AwakeNS int64 `json:"awake_ns"`
 }
 
 // ReadHost reads the machine's paging counters, swap room and clocks. In a test build the
