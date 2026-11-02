@@ -30,6 +30,7 @@ calibration/run.sh control                    # 60 s of busy loops, after a 30 s
 calibration/run.sh ramp                       # a ramp with one worker
 calibration/run.sh ramp --threads 8           # the many-worker check
 calibration/run.sh ramp --after-s 120         # observe 120 s after the hog stops (default 90)
+calibration/run.sh ramp --slow-s 40           # hold the cliff for 40 s (--slow-pct N: the speed floor, default 30)
 python3 calibration/analyse.py calibration/records
 ```
 

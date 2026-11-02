@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one calibration pass of the watchdog and record what it saw.
 #
-#   run.sh [--dry] ramp    [--threads N] [--step-mib N] [--hold-s N] [--max-gib N] [--after-s N] [--out DIR]
+#   run.sh [--dry] ramp    [--threads N] [--step-mib N] [--hold-s N] [--max-gib N] [--slow-s N] [--slow-pct N] [--after-s N] [--out DIR]
 #   run.sh [--dry] control [--procs N] [--seconds N] [--out DIR]
 #
 # The branch's own coreslot is built into a temporary directory and run against a temporary state
@@ -12,7 +12,8 @@
 # Either pass first runs its workload for 30 s under the same label (the hog at 0.5 GiB), so the label
 # has a run log and the pass is scored against its learned normal share (a label with no history is
 # never counted or stopped). A ramp's observer job then keeps the sampling going for --after-s
-# (default 90) seconds after the hog stops.
+# (default 90) seconds after the hog stops. --slow-s and --slow-pct are the hog's own stop rule (its
+# defaults, 5 s below 30 %) and reach the scored hog only: a longer --slow-s holds the cliff longer.
 set -u
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -22,11 +23,11 @@ swap_stop_mib=6144 # swap used may grow this far from the start of the pass
 warm_s=30          # the warm-up that gives the label its one counted run
 
 usage() {
-	sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+	sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 
-dry=0 kind="" threads=1 step_mib=512 hold_s=15 max_gib="" procs="" seconds=60 out="" after_s=90
+dry=0 kind="" threads=1 step_mib=512 hold_s=15 max_gib="" procs="" seconds=60 out="" after_s=90 slow_s=5 slow_pct=30 # the hog's defaults
 while [ $# -gt 0 ]; do
 	case $1 in
 	--dry) dry=1 ;;
@@ -34,13 +35,15 @@ while [ $# -gt 0 ]; do
 		[ -z "$kind" ] || usage
 		kind=$1
 		;;
-	--threads | --step-mib | --hold-s | --max-gib | --after-s | --procs | --seconds | --out)
+	--threads | --step-mib | --hold-s | --max-gib | --slow-s | --slow-pct | --after-s | --procs | --seconds | --out)
 		[ $# -ge 2 ] || usage
 		case $1 in
 		--threads) threads=$2 ;;
 		--step-mib) step_mib=$2 ;;
 		--hold-s) hold_s=$2 ;;
 		--max-gib) max_gib=$2 ;;
+		--slow-s) slow_s=$2 ;;
+		--slow-pct) slow_pct=$2 ;;
 		--after-s) after_s=$2 ;;
 		--procs) procs=$2 ;;
 		--seconds) seconds=$2 ;;
@@ -94,7 +97,7 @@ tmp=/tmp/coreslot-calibration.XXXXXX # a dry run only prints it
 
 if [ "$kind" = ramp ]; then
 	work=hog.py
-	work_args=(--log "$out/work.jsonl" --pidfile "$tmp/work.pid" --threads "$threads" --step-mib "$step_mib" --hold-s "$hold_s")
+	work_args=(--log "$out/work.jsonl" --pidfile "$tmp/work.pid" --threads "$threads" --step-mib "$step_mib" --hold-s "$hold_s" --slow-s "$slow_s" --slow-pct "$slow_pct")
 	[ -z "$max_gib" ] || work_args+=(--max-gib "$max_gib")
 	warm_args=(--log "$tmp/warmup.jsonl" --pidfile "$tmp/work.pid" --threads "$threads" --step-mib 512 --hold-s 3600 --seconds "$warm_s")
 	warm_mem=512M
@@ -141,10 +144,11 @@ cleanup() {
 	kill_pid "$opid" coreslot
 	if [ -d "$out" ]; then
 		[ ! -f "$tmp/state/log/watch.jsonl" ] || cp "$tmp/state/log/watch.jsonl" "$out/watch.jsonl"
-		printf '{"kind":"%s","machine":"%s","os":"%s","ncpu":%s,"mem_bytes":%s,"threads":%s,"warmup_share":%s,"after_s":%s,"swap_used_mib_at_start":%s,"coreslot":"%s","started":"%s","exit":"%s","stopped_by":"%s"}\n' \
+		printf '{"kind":"%s","machine":"%s","os":"%s","ncpu":%s,"mem_bytes":%s,"threads":%s,"warmup_share":%s,"slow_s":%s,"slow_pct":%s,"after_s":%s,"swap_used_mib_at_start":%s,"coreslot":"%s","started":"%s","exit":"%s","stopped_by":"%s"}\n' \
 			"$kind" "$(sysctl -n hw.model 2>/dev/null || uname -m)" "$(sw_vers -productVersion 2>/dev/null || uname -sr)" \
 			"$(sysctl -n hw.ncpu 2>/dev/null || echo 0)" "$(sysctl -n hw.memsize 2>/dev/null || echo 0)" \
 			"$([ "$kind" = ramp ] && echo "$threads" || echo 0)" "$warm_share" \
+			"$([ "$kind" = ramp ] && echo "$slow_s" || echo 0)" "$([ "$kind" = ramp ] && echo "$slow_pct" || echo 0)" \
 			"$([ "$kind" = ramp ] && echo "$after_s" || echo 0)" "${swap0:-0}" \
 			"$("$tmp/coreslot" version 2>/dev/null)" "$started" "$status" "$reason" >"$out/meta.json"
 		echo "record: $out"
