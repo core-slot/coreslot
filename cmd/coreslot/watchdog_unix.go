@@ -101,11 +101,11 @@ func (r *run) stopDetail(floor bool, kib int64, d memsample.TreeTimes) string {
 	return detail
 }
 
-// percent is a share in whole percent, or to one significant digit below 1 %, so that a small
-// normal share does not read as none.
+// percent is a share in whole percent, or to one decimal below 1 %, so that a small normal share
+// does not read as none; a share below 0 is 0.
 func percent(share float64) string {
-	if share < 0.01 {
-		return fmt.Sprintf("%.1g%%", 100*share)
+	if p := 100 * max(share, 0); p < 0.95 {
+		return fmt.Sprintf("%.1f%%", p)
 	}
 	return fmt.Sprintf("%.0f%%", 100*share)
 }
