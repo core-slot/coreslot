@@ -118,6 +118,31 @@ func TestObserveRoundDoesNotBlockEnforce(t *testing.T) {
 	}
 }
 
+// The sample log rotates under the run log's rule: at 10 MiB the ticker renames it to watch.1.jsonl
+// before it appends. Mutation: appending without the size check grows watch.jsonl past 10 MiB.
+func TestSampleLogRotates(t *testing.T) {
+	dir := newDir(t)
+	sec := enter(t, open(t, dir))
+	c := watch.Defaults()
+	c.SampleLog = true
+	m := &machine{}
+	if _, _, err := sec.Tick(NowNS(), m.read, c); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, LogDir, WatchLog)
+	if err := os.Truncate(log, RotateRunLogAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := sec.Tick(NowNS()+21e8, m.read, c); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Stat(filepath.Join(dir, LogDir, "watch.1.jsonl"))
+	cur, err2 := os.Stat(log)
+	if err != nil || err2 != nil || old.Size() != RotateRunLogAt || cur.Size() >= RotateRunLogAt {
+		t.Errorf("after the rotation: watch.1.jsonl %v (%v), watch.jsonl %v (%v)", old, err, cur, err2)
+	}
+}
+
 // With sample_log on, each machine sample is one line of log/watch.jsonl carrying every key of
 // the calibration's schema, and the sample that wrote a stop round names it; with it off nothing
 // is written. Mutation: logging at every Tick writes two lines for the first period.

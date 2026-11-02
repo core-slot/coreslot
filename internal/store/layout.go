@@ -31,6 +31,7 @@ const (
 	RunLog       = "runs.jsonl"
 	RunLogOld    = "runs.1.jsonl"
 	WatchLog     = "watch.jsonl"
+	WatchLogOld  = "watch.1.jsonl"
 	ConfigFile   = "config.toml"
 )
 
@@ -109,7 +110,8 @@ func openDir(dir string, create bool) (*Store, error) {
 		f.Close()
 	}
 	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, ConfigFile,
-		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld)} {
+		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld), filepath.Join(LogDir, WatchLog),
+		filepath.Join(LogDir, WatchLogOld)} {
 		if err := CheckEntry(s.path(name), false); err != nil {
 			return nil, err
 		}

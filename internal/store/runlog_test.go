@@ -100,7 +100,7 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 	if s.RunLogNeedsRotation() {
 		t.Error("RunLogNeedsRotation below 10 MiB")
 	}
-	if err := sec.rotateLogIfNeeded(); err != nil {
+	if err := sec.rotateLogIfNeeded(RunLog, RunLogOld); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(logPath); fi == nil || fi.Size() != RotateRunLogAt-1 {
@@ -112,7 +112,7 @@ func TestRunLogLineLimitAndRotation(t *testing.T) {
 	if !s.RunLogNeedsRotation() {
 		t.Error("RunLogNeedsRotation at 10 MiB = false")
 	}
-	if err := sec.rotateLogIfNeeded(); err != nil {
+	if err := sec.rotateLogIfNeeded(RunLog, RunLogOld); err != nil {
 		t.Fatal(err)
 	}
 	if exists(logPath) {

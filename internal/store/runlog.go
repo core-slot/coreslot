@@ -175,16 +175,16 @@ func (s *Store) RunLogNeedsRotation() bool {
 // FORMAT that is not understood, malformed or unreadable a *FormatError; it rotates nothing
 // then. It must not be called while this process holds the section: entering again would fail.
 func (s *Store) RotateLog() error {
-	return s.inSideSection(func(sec *Section) error { return sec.rotateLogIfNeeded() })
+	return s.inSideSection(func(sec *Section) error { return sec.rotateLogIfNeeded(RunLog, RunLogOld) })
 }
 
-// rotateLogIfNeeded rotates the run log inside the section: when log/runs.jsonl is still at or
-// above 10 MiB it renames it to runs.1.jsonl, replacing the previous generation.
-func (sec *Section) rotateLogIfNeeded() error {
+// rotateLogIfNeeded rotates the log name of log/ inside the section: when it is still at or above
+// 10 MiB it renames it to old, replacing the previous generation.
+func (sec *Section) rotateLogIfNeeded(name, old string) error {
 	if err := sec.live(); err != nil {
 		return err
 	}
-	p := sec.s.path(LogDir, RunLog)
+	p := sec.s.path(LogDir, name)
 	if err := CheckEntry(sec.s.path(LogDir), true); err != nil {
 		return err
 	}
@@ -201,9 +201,8 @@ func (sec *Section) rotateLogIfNeeded() error {
 	if fi.Size() < RotateRunLogAt {
 		return nil
 	}
-	old := sec.s.path(LogDir, RunLogOld)
-	if err := CheckEntry(old, false); err != nil {
+	if err := CheckEntry(sec.s.path(LogDir, old), false); err != nil {
 		return err
 	}
-	return os.Rename(p, old)
+	return os.Rename(p, sec.s.path(LogDir, old))
 }

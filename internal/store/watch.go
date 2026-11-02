@@ -65,8 +65,10 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 		round = watch.StopList(cur.Jobs, max(-cur.RoomMiB, 0))
 		d.Stop, d.LastRoundNS, d.Observed = round, cur.Host.WallNS, c.Observe
 	}
-	if c.SampleLog {
-		_ = sec.s.appendSample(cur, d, round) // a calibration aid: a failed write costs a line
+	if c.SampleLog { // a calibration aid: a failed rotation or write costs a line
+		if sec.rotateLogIfNeeded(WatchLog, WatchLogOld) == nil {
+			_ = sec.s.appendSample(cur, d, round)
+		}
 	}
 	if err := sec.SetWatch(d, cur, now); err != nil {
 		return d, d.Stop, err

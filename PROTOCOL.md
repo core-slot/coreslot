@@ -207,7 +207,7 @@ config.toml      configuration (section 5.3); optional, present only under the o
 needs.toml       needs file (section 5.4); optional, present only under the override; never checked
 ```
 
-`log/` may also contain `runs.1.jsonl` and `watch.jsonl` (section 23.6). Each of `queue/`,
+`log/` may also contain `runs.1.jsonl`, `watch.jsonl` and `watch.1.jsonl` (section 23.6). Each of `queue/`,
 `holds/`, `cancel/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>` (section
 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
@@ -1490,8 +1490,8 @@ With `mode = "observe"` every step runs, the stop list included, except the kill
 is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
 the ticker that takes a machine sample appends one JSON line to `$S/log/watch.jsonl` with the
 readings, `E`, the level and the bucket, in either mode. The file informs and nothing reads it but
-the calibration harness; a writer appends under the rules of the run log, and a reader skips lines
-it cannot parse.
+the calibration harness; a writer appends under the rules of the run log, rotating it inside the
+section to `watch.1.jsonl` at 10 MiB, and a reader skips lines it cannot parse.
 
 ## 24. Restart of a stopped run
 
