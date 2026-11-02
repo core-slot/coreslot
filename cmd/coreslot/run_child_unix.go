@@ -105,7 +105,7 @@ func (r *run) runChild(c child) int {
 		return status
 	}
 	rec := store.RunRecord{
-		TimeNS: r.startNS, Label: r.o.label, WaitedS: r.waited.Seconds(),
+		TimeNS: r.start.UnixNano(), Label: r.o.label, WaitedS: r.waited.Seconds(),
 		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen,
 	}
 	if r.stopped {

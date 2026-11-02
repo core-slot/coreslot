@@ -52,8 +52,8 @@ func readLog(loc location, label string) (needMiB int64, ok bool, share float64,
 type run struct {
 	o         runOptions
 	io        IO
-	loc       location // the state directory and configuration, located once
-	startNS   int64    // wall clock at the attempt's start: the run's, or its re-enqueue after a stop
+	loc       location  // the state directory and configuration, located once
+	start     time.Time // the attempt's start: the run's, or its re-enqueue after a stop
 	waited    time.Duration
 	env       []string                             // the command's environment before its grant: the inherited context dropped
 	pipeNoted bool                                 // the waiting line said once whether stdin is a pipe
@@ -95,7 +95,7 @@ func runCommand(args []string, io IO) int {
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, loc: loc, startNS: time.Now().UnixNano(), share: share, learned: learned}
+	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned}
 	return r.decide()
 }
 
@@ -152,7 +152,7 @@ func (r *run) ordinary() int {
 		r.notice("memory stop %d of %d: %s was stopped (%s); coreslot restarts it by itself; do not run it again",
 			r.stops, maxStops, cmd, r.lastStop)
 		req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
-		r.startNS = time.Now().UnixNano()
+		r.start = time.Now()
 	}
 }
 
@@ -201,7 +201,7 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 			_ = t.Withdraw()
 		}
 	}
-	r.waited = max(time.Since(time.Unix(0, r.startNS)), 0) // the wall clock, as startNS is
+	r.waited = time.Since(r.start)
 	if sig := watch.end(); sig != nil {
 		if g != nil {
 			_ = g.Close()
