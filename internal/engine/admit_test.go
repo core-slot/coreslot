@@ -104,7 +104,8 @@ func TestHoldIsTheReservation(t *testing.T) {
 }
 
 // A need above the machine is representable, in the ticket and in the hold, with no cap: on a
-// 32 GiB machine a 40 GiB need runs alone, as asked.
+// 32 GiB machine a 40 GiB need runs alone, as asked, and is said to exceed the 31 GiB above the
+// default 1 GiB reserve. Mutation: returning the machine's memory as the bound says 32 GiB.
 func TestNoPerGrantCap(t *testing.T) {
 	dir := newStateDir(t, "")
 	st, err := store.Open(dir)
@@ -116,8 +117,8 @@ func TestNoPerGrantCap(t *testing.T) {
 			return config.Machine{MemMiB: 32768, HeadroomMiB: 20000, HeadroomOK: true}, nil
 		},
 		newFakeClock().clock())
-	if total, over := e.Oversized(40960); total != 32768 || !over {
-		t.Errorf("Oversized(40960) = %d, %v; want 32768, true", total, over)
+	if bound, over := e.Oversized(40960); bound != 31744 || !over {
+		t.Errorf("Oversized(40960) = %d, %v; want 31744, true", bound, over)
 	}
 	tk := enqueue(t, e, spec.Request{NeedMiB: 40960})
 	body, err := e.readBody(store.QueueDir, tk.Name())
@@ -599,5 +600,25 @@ func TestReelectionWatchesATicketPublishedWithoutBump(t *testing.T) {
 	}
 	if admittedAt < 10 || admittedAt > 11 {
 		t.Fatalf("h admitted %d s after the re-election first saw x, want 10 or 11 (x watched until STALLED)", admittedAt)
+	}
+}
+
+// A restart's calm left is calm_s less the green stretch, carried to now by the sample's age: 10 s
+// of green at a sample 2 s old leaves 18 s of 30; a sample 7 s old (stale) or from the future
+// leaves all 30, however long its green. Mutations: dropping the age leaves 20 s; dropping the
+// freshness check leaves none for the stale sample.
+func TestCalmLeftCountsTheSampleAge(t *testing.T) {
+	const s = int64(time.Second)
+	c, wall, now := watch.Defaults(), 1000*s, int64(1e18)
+	sample := watch.Sample{Host: memsample.HostReading{WallNS: wall}}
+	for _, k := range []struct {
+		name          string
+		age, greenFor int64
+		want          int64
+	}{{"fresh", 2 * s, 10 * s, 18 * s}, {"stale", 7 * s, 100 * s, 30 * s}, {"from the future", -2 * s, 100 * s, 30 * s}} {
+		d := watch.Detector{Level: watch.Green, CalmSinceNS: wall - k.greenFor}
+		if got := calmLeft(d, sample, now-k.age, now, c); got != k.want {
+			t.Errorf("%s: calmLeft = %v, want %v", k.name, time.Duration(got), time.Duration(k.want))
+		}
 	}
 }

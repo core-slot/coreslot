@@ -35,14 +35,23 @@ func TestWaitReason(t *testing.T) {
 	}
 }
 
-// The stop detail names the level, the footprint and the stalls against the label's normal; the
-// command is cut at 200 characters.
+// The stop detail names the level, the footprint and the stalls against the label's normal, a share
+// under 1 % to one decimal and one below 0 as 0; the command is cut at 200 characters. Mutations:
+// whole percent everywhere says "normal 0%" for 0.3 %; one significant digit says "5e-07%" for
+// 5e-9; no clamp says "-1.0%".
 func TestStopMessageParts(t *testing.T) {
 	r := &run{o: runOptions{label: "x"}, share: 0.04, learned: true}
 	times := memsample.TreeTimes{UserNS: 8e8, SysNS: 6e8, PageWaitNS: 6e8}
 	if got, want := r.stopDetail(false, 2458*1024, times),
 		"memory red, at 2.4 GiB, 60% of its time went to memory stalls against its normal 4%"; got != want {
 		t.Errorf("stopDetail = %q, want %q", got, want)
+	}
+	for share, normal := range map[float64]string{0.003: "0.3%", 5e-9: "0.0%", -0.01: "0.0%", 0.0096: "1%"} {
+		r.share = share
+		if got, want := r.stopDetail(false, 2458*1024, times),
+			"memory red, at 2.4 GiB, 60% of its time went to memory stalls against its normal "+normal; got != want {
+			t.Errorf("stopDetail with a normal of %v = %q, want %q", share, got, want)
+		}
 	}
 	if got, want := r.stopDetail(true, 0, memsample.TreeTimes{}), "swap room under the floor, at 0 MiB"; got != want {
 		t.Errorf("stopDetail with no time = %q, want %q", got, want)

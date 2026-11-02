@@ -55,7 +55,7 @@ func cancelFlags() (fs *flag.FlagSet, label *string) {
 func doctorFlags() (fs *flag.FlagSet, doClear, doReset *bool) {
 	fs = newFlagSet("coreslot doctor")
 	return fs, fs.Bool("clear", false, "remove the degraded-mode record"),
-		fs.Bool("reset", false, "empty the state directory, if nothing is live")
+		fs.Bool("reset", false, "empty the state directory, if nothing is live; a format-2 run log is kept")
 }
 
 // newFlagSet returns a flag set that returns its errors to the caller and prints nothing itself.

@@ -225,13 +225,17 @@ count); they are never removed except by reconciliation's rules (section 10.4).
 The directory is not a cache: liveness is decided by locks. Deleting or resetting `$S` while any
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
-process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/` and
-`log/`, `gen`, `watch.json`, `degraded` and the `res/` directory a directory of another format may
-hold, and writes
-`FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the format-stable
-file (section 15.1), whose inode live clients may hold open, and the configuration. The run
-history that needs are learned from goes with the entries of `log/`. A reset never deletes, renames
-or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
+process still locks; only then does it remove the entries of `queue/`, `holds/` and `cancel/`,
+`gen`, `watch.json`, `degraded` and the `res/` directory a directory of another format may hold,
+and writes `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
+When `FORMAT` names format 2, or is missing (which the first client writes as 2, section 15.1),
+the reset is a repair and keeps `log/` too: the run log is what every label's learned need and
+normal stall share come from (sections 20 and 23). When `FORMAT` names another format or cannot be
+read, it removes the entries of `log/` as well, and the CLI says so: every label learns its need
+again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
+`log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
+never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
 the directory as format 2; a live hold or ticket of any format stops it. It does not reconcile
 first (section 10.4): it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
@@ -949,7 +953,7 @@ Every other operation that would write follows the same rule, except a reset (se
 another format a client publishes no cancel request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
 runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 2
-when nothing of either format is live.
+when nothing of either format is live, the other format's run log removed with the rest.
 
 > **Implementation note.** The Go CLI refuses cancellation and `doctor --clear` under another
 > format, with the same notice.
@@ -1039,7 +1043,7 @@ itself.
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
 | 3 | `status`: runs fail open, because degraded mode is recorded or a state error (an unusable directory, a malformed `FORMAT` or one naming a format this client does not implement, an invalid configuration) stands; `doctor`: degraded mode is recorded and nothing else is wrong |
-| 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusals of `--clear` and `--reset` are 75 |
+| 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusal of `--clear` is 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
 `status` exits 3, `doctor` exits 1 and `cancel` refuses with 75. `--help` prints on stdout and exits
@@ -1502,17 +1506,19 @@ red and floor. A sample that is unknown has that level; any other has the highes
 below that applies.
 
 - **Unknown:** a gap, a counter that went back, an empty sample, or a reading that cannot be read.
-  It never counts towards calm; the bucket and the yellow latch are kept as they were, except that a
-  pair across a sleep or a reboot (the two clocks moved apart, or the clock went back) between two
-  real readings empties the bucket: red needs its samples after the wake. The floor
+  It never counts towards calm; the bucket and the yellow latch are kept as they were, except as
+  the red bucket's freshness below says. An empty sample leaves the detector's 20 s window as it
+  was. The floor
   needs no rate, so a pair that cannot be compared but whose current reading was read
   (`wall_ns > 0`) is still tested for it, and is floor when it holds; an empty sample never is.
   An optional reading the platform lacks (the memory stall, page wait) is not unknown.
 - **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
   stays below `yellow_points` for 15 samples in a row.
 - **Red:** a leaky bucket: +1 for a sample with `E ≥ red_points` and the gate open,
-  −0.5 for any other comparable sample, never below 0, never above `red_samples`, and emptied only
-  by a sleep or a reboot (unknown, above).
+  −0.5 for any other comparable sample, never below 0, never above `red_samples`. It keeps only
+  fresh evidence: a real reading whose host clock is more than 20 s after that of the last real
+  reading, or before it, empties it. Nothing else does, so a sleep shorter than that keeps it, as
+  does an empty sample between two real readings.
   Red while it is at `red_samples`, so the first sample after the danger leaves red.
 - **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
   `SwapFree` plus `MemAvailable` on Linux) is under `floor`, and swap used grew by at least 256 MiB

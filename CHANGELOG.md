@@ -8,6 +8,27 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- README: the section on automatic labels now says that commands behind one launcher (`python -m`,
+  `sh -c`, `env`, `timeout`) can share the launcher's label, and that repositories with the same
+  directory name share theirs; `--label` separates both (a `needs.toml` key on a shared label pins
+  one need for all of them). The `sh -c 'a | b'` advice carries a `--label`.
+- `coreslot doctor --reset` of a format-2 directory, or of one without `FORMAT`, is a repair and
+  keeps the run log, which every label's learned memory need and normal stall share come from;
+  only a reset of another format or of an unreadable `FORMAT` removes it, and says that every
+  label learns again.
+
+### Fixed
+
+- The watchdog's red bucket keeps only fresh evidence: it is emptied when a reading comes more than
+  20 s after the last one that could be read, or before it, instead of when a sleep or a reboot
+  was guessed from the clocks. A bucket written long ago no longer survives a long pause without a
+  sleep, and a reading that could not be read neither empties it nor clears the 20 s window.
+- A need larger than any moment can hold says the bound it exceeds, the machine's memory less the
+  reserve, not the machine's memory.
+- The stop line shows a share below 1 % to one decimal (`0.3%`), not as `0%`.
+
 ## v0.4.0 (2026-11-02)
 
 coreslot is a memory guard for the heavy commands of coding agents; memory is its only resource.

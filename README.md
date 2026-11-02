@@ -100,6 +100,16 @@ up to two leading word-like arguments: `go test`, `npm run test`) and the name o
 it runs in, such as `go test@proj`. The worktrees of one repository share it, so a label's history
 and its `needs.toml` entry follow the project, not the directory.
 
+The label is only that shape and name, so commands that share them share one learned need. Two cases
+to know. First, the shape ends at the first argument that starts with `-` or a digit, or contains
+`/`, `=` or `.`, so a command behind a launcher often collapses to the launcher's label:
+`python -m pytest` and `python -m mypy` both become `python@proj` (`python3` gives `python3@proj`),
+`sh -c '…'` becomes `sh@proj`, `env NAME=x cmd` `env@proj` and `timeout 5 cmd` `timeout@proj`. Bare
+words after a launcher stay in the shape (`env pytest tests`). Give such commands a `--label` of
+their own. Second, the repository part is the directory name only, not its path, so two repositories
+with the same directory name share their automatic labels. A `--label` separates them; a
+`needs.toml` key on the shared label pins one need for both.
+
 ### When it kills
 
 Every running `coreslot run` measures how much of its command's time goes to memory work: system
@@ -182,7 +192,10 @@ xattr -d com.apple.quarantine ./coreslot
 ```
 
 `coreslot version` prints the version and the protocol formats it implements. A state directory of
-another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`.
+another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`,
+which also removes that format's run log, so every label learns its memory need again. On a
+format-2 directory the reset is a repair and keeps the run log; to make the labels learn again,
+remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 
 ## Usage
 
@@ -216,7 +229,8 @@ victim). A SIGINT or SIGQUIT sent to coreslot's pid alone is then dropped and a 
 reaches only the command's pid, as in a terminal: signal the group, not coreslot's pid.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time: write
-`coreslot run -- sh -c 'a | b'` so that they are one command with one need.
+`coreslot run --label gate:pipe -- sh -c 'a | b'` so that they are one command with one need. The
+`--label` matters here: without it the pipeline is labelled `sh@proj`, like every other `sh -c`.
 
 ### Exit status
 

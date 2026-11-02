@@ -810,6 +810,8 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 	}
 }
 
+// A reset of an idle format-2 directory (a repair) empties it but keeps the run log, which every
+// label's learned need comes from, and says so. Mutation: remove log/ on every reset.
 func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
@@ -826,8 +828,11 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	lockInode := inodeOf(t, filepath.Join(dir, "admit.lock"))
 
 	r := cli(t, baseEnv(dir), "doctor", "--reset")
-	if r.code != 0 || !strings.Contains(r.stdout, "reset: removed ") {
+	if r.code != 0 || !strings.Contains(r.stdout, "; kept admit.lock, config.toml and the run log; wrote FORMAT\n") {
 		t.Fatalf("doctor --reset: exit %d (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+	if got := entries(t, dir, "log"); !slices.Contains(got, "runs.jsonl") {
+		t.Errorf("a repair removed the run log: log/ holds %v", got)
 	}
 	for _, f := range []string{"gen", "degraded"} {
 		if _, err := os.Lstat(filepath.Join(dir, f)); !os.IsNotExist(err) {
@@ -837,7 +842,7 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != "coreslot-protocol 2\n" {
 		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 2", b)
 	}
-	for _, d := range []string{"queue", "holds", "cancel", "log"} {
+	for _, d := range []string{"queue", "holds", "cancel"} {
 		if got := entries(t, dir, d); len(got) != 0 {
 			t.Errorf("%s/ holds %v", d, got)
 		}
@@ -875,14 +880,76 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	if r.code != 1 {
 		t.Fatalf("doctor --reset left %s behind and exited %d, want 1: a state problem is never 70", stuck, r.code)
 	}
-	// The run log and gen were removed although the stuck entry could not be.
-	if !strings.Contains(r.stderr, "removed 2 entries; 1 could not be removed: ") {
-		t.Errorf("stderr %q: want how many entries were removed (2) and how many could not be (1)", r.stderr)
+	// gen was removed although the stuck entry could not be; the run log of format 2 is kept.
+	if !strings.Contains(r.stderr, "removed 1 entries; 1 could not be removed: ") {
+		t.Errorf("stderr %q: want how many entries were removed (1) and how many could not be (1)", r.stderr)
 	}
-	for _, f := range []string{"gen", filepath.Join("log", "runs.jsonl")} {
-		if _, err := os.Lstat(filepath.Join(dir, f)); !os.IsNotExist(err) {
-			t.Errorf("%s survived: %v", f, err)
-		}
+	if _, err := os.Lstat(filepath.Join(dir, "gen")); !os.IsNotExist(err) {
+		t.Errorf("gen survived: %v", err)
+	}
+}
+
+// What a reset says of the run log follows what it did with log/: kept on a repair (FORMAT 2 or
+// none yet), removed with the reason under another format or an unreadable FORMAT, and not named
+// when there was none; a partial reset says it too. Mutations: choose the line from the format
+// alone; drop the note from the partial reset's line; keep log/ only under a present FORMAT 2.
+func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
+	const (
+		kept       = "; kept admit.lock, config.toml and the run log; wrote FORMAT\n"
+		none       = " entries; kept admit.lock and config.toml; wrote FORMAT\n"
+		other      = " entries, the run log of another format among them, so every label learns its memory need again; "
+		unreadable = " entries, the run log among them because FORMAT could not be read, so every label learns its memory need again; "
+	)
+	cases := []struct {
+		name, format string // "" removes FORMAT
+		log, stuck   bool
+		want         string
+	}{
+		{"format 2", "coreslot-protocol 2\n", true, false, kept},
+		{"no FORMAT", "", true, false, kept},
+		{"format 2 without a log", "coreslot-protocol 2\n", false, false, none},
+		{"format 1", "coreslot-protocol 1\n", true, false, other},
+		{"format 1 without a log", "coreslot-protocol 1\n", false, false, none},
+		{"malformed FORMAT", "coreslot-protocol x\n", true, false, unreadable},
+		{"format 1, partial", "coreslot-protocol 1\n", true, true, other},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 || !slices.Contains(entries(t, dir, "log"), "runs.jsonl") {
+				t.Fatalf("setup run: %d %q, log/ %v", r.code, r.stderr, entries(t, dir, "log"))
+			}
+			if !c.log {
+				if err := os.RemoveAll(filepath.Join(dir, "log")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			if c.format == "" {
+				err = os.Remove(filepath.Join(dir, "FORMAT"))
+			} else {
+				err = os.WriteFile(filepath.Join(dir, "FORMAT"), []byte(c.format), 0o600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCode := 0
+			if c.stuck {
+				wantCode = 1
+				stuck := filepath.Join(dir, "queue", "00000000000000000001-0000000001-000001")
+				if err := os.MkdirAll(stuck, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(stuck, "x"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := cli(t, baseEnv(dir), "doctor", "--reset")
+			out := r.stdout + r.stderr
+			if r.code != wantCode || !strings.Contains(out, c.want) || (!c.log && strings.Contains(out, "run log")) {
+				t.Errorf("doctor --reset: exit %d, want %d; output %q, want %q", r.code, wantCode, out, c.want)
+			}
+		})
 	}
 }
 
@@ -1041,11 +1108,12 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 
 // A directory of format 1, with its res/ files and a dead hold, is not used: a run runs
 // unbudgeted at once with one notice that says what to do, --strict refuses, and doctor --reset
-// recreates the directory as format 2, its res/ gone. Mutations: keep format 1 in
-// store.Understood (the run queues on it and prints nothing); skip the res/ removal in Reset.
+// recreates the directory as format 2, its res/ and its run and watch logs gone, and says that
+// every label learns again. Mutations: keep format 1 in store.Understood (the run queues on it
+// and prints nothing); skip the res/ removal in Reset; keep log/ on every reset.
 func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	dir := stateDir(t, "")
-	for _, d := range []string{"res/mem", "holds"} {
+	for _, d := range []string{"res/mem", "holds", "log"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -1054,6 +1122,8 @@ func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 		"FORMAT":    "coreslot-protocol 1\n",
 		"res/mem/0": "",
 		"holds/01791720600000000000-0000004711-000001-old": `{"label":"old","grant":{"mem":[0]},"start_ns":1791720600000000000}`,
+		"log/runs.jsonl":  "{}\n",
+		"log/watch.jsonl": "{}\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -1067,14 +1137,18 @@ func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	if r := cli(t, baseEnv(dir), "run", "--strict", "--", "true"); r.code != 75 || !strings.Contains(r.stderr, notice) {
 		t.Errorf("run --strict: exit %d, stderr %q; want 75 and the notice", r.code, r.stderr)
 	}
-	if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
-		t.Fatalf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)
+	r = cli(t, baseEnv(dir), "doctor", "--reset")
+	if r.code != 0 || !strings.Contains(r.stdout, " entries, the run log of another format among them, so every label learns its memory need again; kept admit.lock and config.toml; wrote FORMAT\n") {
+		t.Fatalf("doctor --reset: exit %d (stderr %q); stdout %q does not say the run log went", r.code, r.stderr, r.stdout)
 	}
 	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 2\n" {
 		t.Errorf("FORMAT after the reset: %q, %v; want coreslot-protocol 2", b, err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "res")); !os.IsNotExist(err) {
 		t.Errorf("res/ survived the reset: %v", err)
+	}
+	if got := entries(t, dir, "log"); len(got) != 0 {
+		t.Errorf("the run and watch logs of format 1 survived the reset: %v", got)
 	}
 	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 || r.stderr != "" {
 		t.Errorf("a run after the reset: exit %d, stderr %q; want 0 and silence", r.code, r.stderr)
@@ -1117,9 +1191,12 @@ func TestDoctorFormatRefusals(t *testing.T) {
 	})
 	t.Run("clear under a malformed FORMAT, then reset repairs it", func(t *testing.T) {
 		dir := setup(t, "coreslot-protocol x\n")
+		if r := cli(t, baseEnv(dir), "doctor"); r.code != 1 || !strings.Contains(r.stdout, "`coreslot doctor --reset` rewrites it when nothing is live, removing the run log") {
+			t.Errorf("doctor: exit %d, want 1 and the advice saying the reset removes the run log:\n%s", r.code, r.stdout)
+		}
 		r := cli(t, baseEnv(dir), "doctor", "--clear")
-		if r.code != 75 || !strings.Contains(r.stderr, "FORMAT is malformed") || !strings.Contains(r.stderr, "doctor --reset") {
-			t.Errorf("doctor --clear: exit %d, want 75 pointing at --reset (stderr %q)", r.code, r.stderr)
+		if r.code != 75 || !strings.Contains(r.stderr, "FORMAT is malformed") || !strings.Contains(r.stderr, "doctor --reset` rewrites it when nothing is live, removing the run log") {
+			t.Errorf("doctor --clear: exit %d, want 75 pointing at --reset and what it removes (stderr %q)", r.code, r.stderr)
 		}
 		if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
 			t.Errorf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)

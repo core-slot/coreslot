@@ -29,9 +29,9 @@ const (
 // doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
 // permissions, format, the configuration and the degraded record, and
 // reports every finding. --clear removes the degraded record. --reset recreates the state as this
-// client's format, whatever format it had, but only when nothing is live (PROTOCOL.md section
-// 4.4). It exits 1 when it found a problem, else 3 while degraded mode is recorded, else 0;
-// a refused --clear or --reset is 75 (PROTOCOL.md section 19).
+// client's format, whatever format it had, keeping the run log of format 2, but only when nothing
+// is live (PROTOCOL.md section 4.4). It exits 1 when it found a problem, else 3 while degraded
+// mode is recorded, else 0; a refused --clear or --reset is 75 (PROTOCOL.md section 19).
 func doctorCommand(args []string, io IO) int {
 	fs, doClear, doReset := doctorFlags()
 	if err := fs.Parse(args); err != nil {
@@ -77,7 +77,7 @@ func doctorAct(doReset bool, loc location, io IO) int {
 	if doReset {
 		ctx, cancel := context.WithTimeout(context.Background(), resetWait)
 		defer cancel()
-		removed, err := e.Reset(ctx)
+		done, err := e.Reset(ctx)
 		var live *engine.LiveError
 		var incomplete *store.ResetIncompleteError
 		switch {
@@ -86,13 +86,17 @@ func doctorAct(doReset bool, loc location, io IO) int {
 			return exitRefusal
 		case errors.As(err, &incomplete):
 			// The removal is best effort: everything else was removed. Say how much, and what not.
-			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: removed %d entries; %d could not be removed: %s\n",
-				removed, incomplete.Left, text(incomplete.Err.Error()))
+			fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: removed %d entries%s; %d could not be removed: %s\n",
+				done.Removed, resetLogNote(done), incomplete.Left, text(incomplete.Err.Error()))
 			return exitProblems
 		case err != nil:
 			return doctorFailed(what, err, io)
 		}
-		fmt.Fprintf(io.Stdout, "reset: removed %d entries; kept admit.lock and config.toml; wrote FORMAT\n", removed)
+		kept := "admit.lock and config.toml"
+		if done.LogKept > 0 {
+			kept = "admit.lock, config.toml and the run log"
+		}
+		fmt.Fprintf(io.Stdout, "reset: removed %d entries%s; kept %s; wrote FORMAT\n", done.Removed, resetLogNote(done), kept)
 		return 0
 	}
 	why, err := formatRefusal(e.Store())
@@ -118,6 +122,18 @@ func doctorAct(doReset bool, loc location, io IO) int {
 	return 0
 }
 
+// resetLogNote says, after the count of what a reset removed, that the run log was among it and
+// why; empty when the reset removed no entry of log/.
+func resetLogNote(done store.ResetDone) string {
+	switch {
+	case done.LogRemoved == 0:
+		return ""
+	case done.FormatErr != nil:
+		return ", the run log among them because FORMAT could not be read, so every label learns its memory need again"
+	}
+	return ", the run log of another format among them, so every label learns its memory need again"
+}
+
 // doctorFailed reports an error that kept --clear or --reset from acting. A state error
 // (PROTOCOL.md section 14) is a problem doctor found, exit 1; anything else is an internal
 // error, exit 70.
@@ -139,7 +155,7 @@ func formatRefusal(st *store.Store) (why string, err error) {
 	case err != nil && !present:
 		return "", err
 	case err != nil:
-		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` repairs it when nothing is live", nil
+		return "FORMAT is malformed (" + err.Error() + "); `coreslot doctor --reset` rewrites it when nothing is live, removing the run log", nil
 	case present && !store.Understood(n):
 		return (&store.FormatError{N: n}).Error(), nil
 	}
@@ -231,7 +247,7 @@ func doctorReport(loc location, io IO) int {
 	switch {
 	case err != nil:
 	case rep.FormatError != "":
-		problem("format: FORMAT is malformed (%s); `coreslot doctor --reset` repairs it when nothing is live", text(rep.FormatError))
+		problem("format: FORMAT is malformed (%s); `coreslot doctor --reset` rewrites it when nothing is live, removing the run log", text(rep.FormatError))
 	case !rep.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
 		problem("format: %d, which this client does not implement; runs fail open until `coreslot doctor --reset`", rep.Format)
 	case !rep.FormatPresent:
