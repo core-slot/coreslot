@@ -18,6 +18,7 @@ import (
 // removed so that a restart can be told apart.
 func stopB(t *testing.T, e Env, flags ...string) *Proc {
 	t.Helper()
+	e.Learn("B")
 	e.Run("A", "--mem", "100M")
 	e.WaitStarted("A")
 	e.WaitTicked("A")
@@ -45,6 +46,7 @@ func stopAgain(t *testing.T, e Env, b *Proc, swapUsedMiB int64) {
 func TestRestartKeepsPlace(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(roomConfig(1000) + "[watch]\ncalm_s = 0\n")
+	e.Learn("B")
 	a := e.Run("A", "--mem", "300M")
 	e.WaitStarted("A")
 	e.WaitTicked("A")
@@ -96,11 +98,11 @@ func TestStoppedAttemptLogged(t *testing.T) {
 			lines = append(lines, fmt.Sprintf("%d/%d", r.Exit, r.Stops))
 		}
 	}
-	if got := strings.Join(lines, " "); got != "137/1 0/0" {
-		t.Errorf("B's run-log lines (exit/stops) %q, want \"137/1 0/0\"", got)
+	if got := strings.Join(lines, " "); got != "0/0 137/1 0/0" {
+		t.Errorf("B's run-log lines (exit/stops) %q, want \"0/0 137/1 0/0\"", got)
 	}
-	if w := runstats.Window(runs, "B", runstats.WindowRuns); len(w) != 1 || w[0].Exit != 0 {
-		t.Errorf("B's window %+v, want the completed attempt alone", w)
+	if w := runstats.Window(runs, "B", runstats.WindowRuns); len(w) != 2 || w[1].Exit != 0 {
+		t.Errorf("B's window %+v, want the seeded run and the completed attempt", w)
 	}
 }
 

@@ -31,6 +31,18 @@ func floor(swapUsedMiB int64) map[string]int64 {
 	return r
 }
 
+// Learn gives each label a counted run in the run log, so that the watchdog knows its normal S: a
+// label with no history is never listed by a stop round.
+func (e Env) Learn(labels ...string) {
+	e.t.Helper()
+	user, sys := 0.9, 0.1
+	for _, l := range labels {
+		if err := e.Engine().Store().AppendRun(store.RunRecord{TimeNS: store.NowNS(), Label: l, UserS: &user, SysS: &sys}); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+}
+
 // WaitTicked waits until the run labelled label has written its tree into its hold, and returns
 // the hold's name. A body read torn by the run's rewrite in place (PROTOCOL.md section 7.4) is read
 // again.
@@ -85,6 +97,7 @@ func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 func TestStopKillsNewestKeepsOldest(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(watchConfig(""))
+	e.Learn("A", "B", "C")
 	var runs []*Proc
 	var kids []ChildReport
 	for _, name := range []string{"A", "B", "C"} {
@@ -138,6 +151,14 @@ func TestSharedGroupNeverVictim(t *testing.T) {
 	neverVictim(t, e, "--same-group")
 }
 
+// A label with no completed run is never a victim, even at the floor. Mutation: listing it
+// anyway lists B.
+func TestColdLabelNeverVictim(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	neverVictim(t, e)
+}
+
 // A label the needs file marks no_restart is never a victim. Mutation: ignoring the mark lists B.
 func TestNoRestartLabelNeverVictim(t *testing.T) {
 	e := State(t)
@@ -153,6 +174,7 @@ func TestNoRestartLabelNeverVictim(t *testing.T) {
 func TestObserveKillsNothing(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(watchConfig("mode = \"observe\"\n"))
+	e.Learn("B")
 	a := e.Run("A", "--mem", "100M")
 	e.WaitStarted("A")
 	e.WaitTicked("A")
