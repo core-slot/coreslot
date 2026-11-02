@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import analyse
@@ -79,10 +80,52 @@ class AnalyseTest(unittest.TestCase):
         self.assertIn("every hog completed: yes", text)
 
 
+    def test_second_run_sections(self):
+        self.assertNotIn("TUNING", analyse.report(self.out))  # the first run's output is unchanged
+        sets = [a_set("tune-S1", "S", "u1", [1], [("tsc", 1)], verdicts=(5, 5)),  # fastest, but a false failure
+                a_set("tune-S3", "S", "u3", [1], OK, verdicts=(20, 20)),
+                a_set("tune-S2", "S", "u2", [1], OK, verdicts=(20, 20)),  # ties S3: the smaller N
+                a_set("sem-pair-1", "S", "v1", [2, 2], OK, verdicts=(40, 40)),
+                a_set("sem-pair-1", "K", "v2", [1], OK, verdicts=(20, 20)),
+                a_set("light-pilot", "F", "w0", [1], OK),
+                a_set("light-pair-1", "F", "w1", [1], OK, verdicts=(10, 10)),
+                a_set("light-pair-1", "K", "w2", [1], OK, verdicts=(11, 11))]
+        with open(os.path.join(self.out, "sets.jsonl"), "a") as f:
+            f.writelines(json.dumps(r) + "\n" for r in sets)
+        text = analyse.report(self.out)
+        self.assertIn("S* = S2 (lowest", text)
+        self.assertIn("SEMAPHORE PAIRS (1 complete", text)
+        self.assertIn("mean time to verdict: K lower in 1 of 1 untied pairs (0 tied); one-sided sign test p = 0.5000", text)
+        self.assertIn("K/S mean time to verdict per pair: [0.5]", text)
+        self.assertIn("K/F makespan per pair: [1.1]; max 1.1", text)
+        self.assertIn("makespan: K higher in 1 of 1 untied pairs; one-sided sign test p = 0.5000", text)
+        self.assertLess(text.index("PAIRS (2 complete)"), text.index("TUNING"))
+
+
+class SemTest(unittest.TestCase):
+    def two(self, slots):
+        d, t = tempfile.mkdtemp(), time.monotonic()
+        ps = [subprocess.Popen([sys.executable, os.path.join(HERE, "sem.py"), d, str(slots), "--", "sleep", "0.5"])
+              for _ in range(2)]
+        self.assertEqual([p.wait() for p in ps], [0, 0])
+        return time.monotonic() - t
+
+    def test_one_slot_serialises_two_slots_overlap(self):
+        self.assertGreaterEqual(self.two(1), 1.0)
+        self.assertLess(self.two(2), 0.9)
+
+    def test_exit_status_is_the_commands(self):
+        p = subprocess.run([sys.executable, os.path.join(HERE, "sem.py"), tempfile.mkdtemp(), "1", "--", "sh", "-c", "exit 3"])
+        self.assertEqual(p.returncode, 3)
+
+
 class RunTest(unittest.TestCase):
     def test_abba(self):
         self.assertEqual("".join(arm for _, arm in run.abba(1, 5)), "FKKFFKKFFK")
         self.assertEqual(run.abba(2, 2), [("pair-2", "K"), ("pair-2", "F")])
+        self.assertEqual("".join(arm for _, arm in run.abba(1, 4, "S", "sem-")), "SKKSSKKS")
+        self.assertEqual(run.abba(1, 1, "S", "sem-")[0][0], "sem-pair-1")
+        self.assertEqual(list(run.agents("light")), ["A3", "A4"])
 
     def test_readings(self):
         self.assertEqual(run.swap_mib("total = 5120.00M  used = 3895.50M  free = 1224.50M"), 3896)

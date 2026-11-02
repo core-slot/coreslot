@@ -103,7 +103,85 @@ def report(out):
         lines.append(f"{what}: K lower in {wins} of {n} untied pairs ({len(d) - n} tied);"
                      f" one-sided sign test p = {sign_test(wins, n):.4f}")
     lines += [""] + demo(out)
+    for section in (tuning(sets, stable), sem_pairs(sets, stable), light(sets, stable)):
+        lines += [""] + section if section else []
     return "\n".join(lines)
+
+
+def tagged(sets, prefix, arms):
+    """[(i, {arm: set})] of the complete pairs tagged PREFIXpair-i with exactly these arms."""
+    by = {}
+    for s in sets:
+        m = re.fullmatch(prefix + r"pair-(\d+)", s["tag"])
+        if m:
+            by.setdefault(int(m.group(1)), {})[s["arm"]] = s
+    return [(i, p) for i, p in sorted(by.items()) if set(p) == set(arms)]
+
+
+def pair_rows(ps, prefix, other, stable):
+    rows = []
+    for i, p in ps:
+        first = min(p.values(), key=lambda s: s["started"])["arm"]
+        rows += [(f"{prefix}{i}", arm, metrics(p[arm], stable), first if arm == other else "") for arm in (other, "K")]
+    return table(rows)
+
+
+def signs(ps, other, stable, keys, both=False):
+    out = []
+    for key, what in keys:
+        d = [metrics(p["K"], stable)[key] - metrics(p[other], stable)[key] for _, p in ps]
+        n, lower, higher = sum(x != 0 for x in d), sum(x < 0 for x in d), sum(x > 0 for x in d)
+        out.append(f"{what}: K lower in {lower} of {n} untied pairs ({len(d) - n} tied);"
+                   f" one-sided sign test p = {sign_test(lower, n):.4f}")
+        if both:
+            out.append(f"{what}: K higher in {higher} of {n} untied pairs; one-sided sign test p = {sign_test(higher, n):.4f}")
+    return out
+
+
+def ratios(ps, other, stable):
+    out = []
+    for key, what in (("verdict_s", "mean time to verdict"), ("makespan_s", "makespan")):
+        r = [round(metrics(p["K"], stable)[key] / metrics(p[other], stable)[key], 3) for _, p in ps]
+        out.append(f"K/{other} {what} per pair: {r}" + (f"; max {max(r)}" if r else ""))
+    return out
+
+
+def tuning(sets, stable):
+    ts = sorted((s for s in sets if re.fullmatch(r"tune-S\d+", s["tag"])), key=lambda s: int(s["tag"][6:]))
+    if not ts:
+        return []
+    lines = ["TUNING (exploratory; picks S* by criterion-2.md)"]
+    for s in ts:
+        m = metrics(s, stable)
+        lines.append(f"  {s['tag'][5:]}: mean verdict {m['verdict_s']} s, makespan {m['makespan_s']} s,"
+                     f" warn {m['warn_s']} s, failures {m['fail']} ({m['ff']} of stable gates)")
+    ok = [s for s in ts if metrics(s, stable)["ff"] == 0]
+    best = min(ok, key=lambda s: (metrics(s, stable)["verdict_s"], int(s["tag"][6:])), default=None)
+    lines.append(f"S* = {best['tag'][5:] if best else 'none: every set failed a stable gate'}"
+                 " (lowest mean time to verdict without a false failure; a tie goes to the smaller N)")
+    return lines
+
+
+def sem_pairs(sets, stable):
+    ps = tagged(sets, "sem-", "KS")
+    if not ps:
+        return []
+    slots = sorted({p["S"].get("slots") for _, p in ps}, key=str)
+    lines = [f"SEMAPHORE PAIRS ({len(ps)} complete; S with slots {slots})"] + pair_rows(ps, "sem-", "S", stable)
+    return lines + signs(ps, "S", stable, (("warn_s", "warn seconds"), ("verdict_s", "mean time to verdict"))) + ratios(ps, "S", stable)
+
+
+def light(sets, stable):
+    pilot, ps = [s for s in sets if s["tag"] == "light-pilot"], tagged(sets, "light-", "FK")
+    if not pilot and not ps:
+        return []
+    lines = ["LIGHT (A3 and A4 only)"]
+    if pilot:
+        lines += ["light pilot (exploratory; not part of any test)"]
+        lines += table([("l-pilot", s["arm"], metrics(s, stable), "") for s in pilot])
+    lines += [f"light pairs ({len(ps)} complete)"] + pair_rows(ps, "light-", "F", stable)
+    keys = (("verdict_s", "mean time to verdict"), ("makespan_s", "makespan"))
+    return lines + ratios(ps, "F", stable) + signs(ps, "F", stable, keys, both=True)
 
 
 def demo(out):
