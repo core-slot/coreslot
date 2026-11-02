@@ -89,12 +89,14 @@ it runs in, such as `go test@proj`. The worktrees of one repository share it, so
 and its `needs.toml` entry follow the project, not the directory.
 
 The label is only that shape and name, so commands that share them share one learned need. Two cases
-to know. A command started through a launcher (`python -m`, `sh -c`, `env`, `timeout`) gets the
-launcher's label, because the shape ends at the first flag, number or `NAME=value`: `python -m
-pytest` and `python -m mypy` both become `python@proj`. Give such commands a `--label` of their own.
-And the repository part is the directory name only, not its path, so two repositories with the same
-directory name share their automatic labels: give their commands a `--label`, or pin the need in
-`needs.toml`.
+to know. First, the shape ends at the first argument that starts with `-` or a digit, or contains
+`/`, `=` or `.`, so a command behind a launcher often collapses to the launcher's label:
+`python -m pytest` and `python -m mypy` both become `python@proj` (`python3` gives `python3@proj`),
+`sh -c '…'` becomes `sh@proj`, `env NAME=x cmd` `env@proj` and `timeout 5 cmd` `timeout@proj`. Bare
+words after a launcher stay in the shape (`env pytest tests`). Give such commands a `--label` of
+their own. Second, the repository part is the directory name only, not its path, so two repositories
+with the same directory name share their automatic labels. A `--label` separates them; a
+`needs.toml` key on the shared label pins one need for both.
 
 ### When it kills
 
