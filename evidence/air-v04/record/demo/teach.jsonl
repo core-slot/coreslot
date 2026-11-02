@@ -1,0 +1,33 @@
+{"t_ns": 57335586814791, "event": "start", "threads": 1, "step_mib": 256, "hold_s": 3600.0, "page_bytes": 16384}
+{"t_ns": 57335647641750, "event": "grow", "hot_mib": 256}
+{"t_ns": 57336657680125, "event": "rate", "hot_mib": 256, "touches_s": 2422005}
+{"t_ns": 57337667678500, "event": "rate", "hot_mib": 256, "touches_s": 2355426}
+{"t_ns": 57338674320666, "event": "rate", "hot_mib": 256, "touches_s": 2352378}
+{"t_ns": 57339684150000, "event": "rate", "hot_mib": 256, "touches_s": 2340990}
+{"t_ns": 57340694156375, "event": "rate", "hot_mib": 256, "touches_s": 2372257}
+{"t_ns": 57341703785625, "event": "rate", "hot_mib": 256, "touches_s": 2360278}
+{"t_ns": 57342713797375, "event": "rate", "hot_mib": 256, "touches_s": 2340566}
+{"t_ns": 57343719570333, "event": "rate", "hot_mib": 256, "touches_s": 2368325}
+{"t_ns": 57344726584541, "event": "rate", "hot_mib": 256, "touches_s": 2355478}
+{"t_ns": 57345736596041, "event": "rate", "hot_mib": 256, "touches_s": 2336607}
+{"t_ns": 57346746611583, "event": "rate", "hot_mib": 256, "touches_s": 2376203}
+{"t_ns": 57347750749625, "event": "rate", "hot_mib": 256, "touches_s": 2354259}
+{"t_ns": 57348760756333, "event": "rate", "hot_mib": 256, "touches_s": 2331661}
+{"t_ns": 57349770773833, "event": "rate", "hot_mib": 256, "touches_s": 2387094}
+{"t_ns": 57350780786333, "event": "rate", "hot_mib": 256, "touches_s": 2354424}
+{"t_ns": 57351790798041, "event": "rate", "hot_mib": 256, "touches_s": 2339575}
+{"t_ns": 57352800812000, "event": "rate", "hot_mib": 256, "touches_s": 2387095}
+{"t_ns": 57353809542666, "event": "rate", "hot_mib": 256, "touches_s": 2350485}
+{"t_ns": 57354817703750, "event": "rate", "hot_mib": 256, "touches_s": 2337916}
+{"t_ns": 57355827715208, "event": "rate", "hot_mib": 256, "touches_s": 2382151}
+{"t_ns": 57356837727916, "event": "rate", "hot_mib": 256, "touches_s": 2351455}
+{"t_ns": 57357847741583, "event": "rate", "hot_mib": 256, "touches_s": 2350466}
+{"t_ns": 57358857750958, "event": "rate", "hot_mib": 256, "touches_s": 2404924}
+{"t_ns": 57359867323041, "event": "rate", "hot_mib": 256, "touches_s": 2357439}
+{"t_ns": 57360871782958, "event": "rate", "hot_mib": 256, "touches_s": 2339570}
+{"t_ns": 57361873538125, "event": "rate", "hot_mib": 256, "touches_s": 2381820}
+{"t_ns": 57362883548708, "event": "rate", "hot_mib": 256, "touches_s": 2342545}
+{"t_ns": 57363893556250, "event": "rate", "hot_mib": 256, "touches_s": 2339583}
+{"t_ns": 57364903571666, "event": "rate", "hot_mib": 256, "touches_s": 2396004}
+{"t_ns": 57365910181833, "event": "rate", "hot_mib": 256, "touches_s": 2339538}
+{"t_ns": 57365910233000, "event": "stop", "reason": "time", "hot_mib": 256}
