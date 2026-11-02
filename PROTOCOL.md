@@ -1379,8 +1379,9 @@ start until it exits, in both modes of section 23.6. Each tick:
    spent waiting for pages (`ri_page_wait_time_mach` of `proc_pid_rusage`; `/proc/<pid>/stat`
    `utime` and `stime` on Linux). It rewrites its own hold's body in place (section 7.4):
    `footprint_mib` (the tree's footprint, as section 20 measures it), `d_user_ns`, `d_sys_ns` and
-   `d_page_wait_ns` (the tree's times since the run's previous tick), `sampled_ns`, `victim` and
-   `stops`. It sets `child_exited` once, when the command has exited.
+   `d_page_wait_ns` (the tree's times since the run's previous tick) and `sampled_ns`. It sets
+   `child_exited` once, when the command has exited. `stops` and `victim` hold for the attempt: the
+   run writes them once, when its command starts, before its first tick.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short
    bound leaves its part of that period to the others) and reads `watch.json`. If the stored sample
    is at least one period (2 s) old, or lies in the future, it takes a new machine sample
