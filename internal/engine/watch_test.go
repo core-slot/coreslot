@@ -164,3 +164,32 @@ func TestRestartWaitsForCalmAndMargin(t *testing.T) {
 		t.Error("a 640 MiB restart did not start after 31 s of calm with room for its margin")
 	}
 }
+
+// status marks the next victim of the level's own round: at the floor a learning job is a victim,
+// at red it is not; the learning count is every running job without a normal share. Mutation:
+// computing the next victim with red's rule at the floor marks none.
+func TestNextVictimFollowsTheLevel(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	for level, want := range map[watch.Level]string{watch.Red: "", watch.Floor: "new"} {
+		sec, err := e.st.Enter(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := watch.Sample{Jobs: []watch.Job{{Hold: "old", ArrivalNS: 1, Victim: true, Learned: true},
+			{Hold: "new", ArrivalNS: 2, Victim: true}}}
+		s.Host.WallNS = sampleWallNS
+		err = sec.SetWatch(watch.Detector{Level: level}, s, clk.clock().Realtime())
+		sec.Leave()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep, err := e.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.Watch.NextVictim != want || rep.Watch.Learning != 1 {
+			t.Errorf("at %v: next victim %q, learning %d; want %q, 1", level, rep.Watch.NextVictim, rep.Watch.Learning, want)
+		}
+	}
+}

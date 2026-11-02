@@ -26,7 +26,7 @@ type WatchInfo struct {
 	Fresh      bool    // the newest sample is young enough for admission to read
 	Observe    bool    // [watch] mode is observe: nothing is stopped
 	NextVictim string  // the hold the next stop round lists first; "" when none
-	Learning   int     // running jobs whose label has no history: no part of E, stopped by a floor round only
+	Learning   int     // running jobs whose label has no normal share yet: no part of E, stopped by a floor round only
 }
 
 // TicketInfo describes one queue entry in a snapshot.
