@@ -3,7 +3,7 @@ from sim import *
 import sim
 ETA2, ETA1, BETA, MOK = [float(x) for x in sys.argv[1:5]]
 sim.PAGEMODE = sys.argv[5]
-R = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep  # evidence/air-v04/
+R = os.environ.get("AIR_RECORDS", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))).rstrip(os.sep) + os.sep  # holds record/ and record-2/
 G2L = {"vscode-typecheck": "TC", "fastapi-ruff": "RF", "fastapi-tests": "FT", "sqlalchemy-orm": "SO"}
 def sets(rec):
     return [json.loads(l) for l in open(R + rec + "/sets.jsonl")]

@@ -1,7 +1,0 @@
-coreslot: memory stop 1 of 3: `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3 -I <repo>/calibration/hog.py --log <repo>/...` was stopped (memory red, at 6 GiB, 75% of its time went to memory stalls against its normal 0%); coreslot restarts it by itself; do not run it again
-coreslot: waiting for mem 270 MiB: position 1 (0s); needs 6 GiB, 270 MiB free; holders: demo-hog pid 93043 mem 270 MiB (22s), demo-hog pid 93047 mem 270 MiB (21s), demo-hog pid 93051 mem 270 MiB (20s); if your tool has a time limit, run this in the background or raise the limit
-coreslot: waiting for mem 270 MiB: position 2 (30s); needs 6 GiB, 4.2 GiB free; holders: demo-hog pid 93043 mem 270 MiB (52s)
-coreslot: waiting for mem 270 MiB: position 2 (1m00s); needs 6 GiB, 2.4 GiB free; holders: demo-hog pid 93043 mem 270 MiB (1m22s)
-coreslot: waiting for mem 270 MiB: position 1 (1m30s); needs 6 GiB, 2.3 GiB free; holders: demo-hog pid 93047 mem 6 GiB (21s)
-coreslot: waiting for mem 270 MiB: position 1 (2m00s); needs 6 GiB, 2.3 GiB free; holders: demo-hog pid 93047 mem 6 GiB (51s)
-coreslot: waiting for mem 270 MiB: position 1 (2m30s); needs 6 GiB, 2.2 GiB free; holders: demo-hog pid 93047 mem 6 GiB (1m21s)

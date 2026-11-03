@@ -47,8 +47,12 @@ pairs against a criterion committed before them. Against the best fixed semaphor
 time, coreslot was within 5 % in three of five pairs, not five (median 1.02, worst 1.27: it lets
 two suites that each use every core run together when both fit in memory). With room for all the
 commands it stayed within 5 % of unwrapped in five of five pairs (median 1.005, worst 1.036), a
-narrow result that one slow unwrapped set carries. One machine, one stand, one day ([the runs, their
-records and their limits](evidence/air-v04/README.md)).
+narrow result that one slow unwrapped set carries. A third, overnight run on the v0.4.1 release
+asked all of it again with more pairs, each claim registered before its sets: coreslot beat
+unwrapped in 10 of 10 pairs (K/F 0.40), was within 5 % of the semaphore of one in 23 of 24 pairs
+over all 24 arrival orders (median 1.003), and within 5 % of unwrapped with room in 20 of 20 (median
+1.000, worst 1.012); the watchdog demo met its four checks in five of five. One machine, one stand
+([the runs, their records and their limits](evidence/air-v04/README.md)).
 
 **For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
 `go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as

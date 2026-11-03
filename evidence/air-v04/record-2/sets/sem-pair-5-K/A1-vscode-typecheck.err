@@ -1,3 +1,0 @@
-coreslot: waiting for mem 8.7 GiB: position 2 (0s); needs 8.7 GiB, 807 MiB free; holders: air:sqlalchemy-orm pid 39215 mem 2.2 GiB (3s), air:fastapi-tests pid 39256 mem 2.4 GiB (1s); if your tool has a time limit, run this in the background or raise the limit
-coreslot: waiting for mem 8.7 GiB: position 2 (30s); needs 8.7 GiB, 3 GiB free; holders: air:sqlalchemy-orm pid 39215 mem 2.2 GiB (33s), air:fastapi-tests pid 39256 mem 2.4 GiB (31s)
-coreslot: waiting for mem 8.7 GiB: position 1 (1m00s); needs 8.7 GiB, 844 MiB free; holders: air:vscode-typecheck pid 39265 mem 8.7 GiB (13s)

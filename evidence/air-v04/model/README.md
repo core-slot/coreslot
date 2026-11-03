@@ -45,7 +45,9 @@ hypothetical admission rules, more speculative still.
 
 ## Running it
 
-Python 3, standard library only; it reads `../record` and `../record-2`:
+Python 3, standard library only; it reads `record/` and `record-2/` from the directory named by
+`AIR_RECORDS` (a checkout of [coreslot-evidence](https://github.com/core-slot/coreslot-evidence)'s
+`air-v04/`), or from `..` without it:
 
 ```bash
 cd evidence/air-v04/model

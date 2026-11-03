@@ -2,3 +2,6 @@
 state/
 live.json
 slots/
+# The records themselves live in core-slot/coreslot-evidence; a run writes its record here, and it is published there
+record/
+record-*/

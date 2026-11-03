@@ -6,6 +6,12 @@ pairs. The question is whether the memory guard keeps the machine out of memory 
 costing the agents their time or their verdicts. A watchdog demo then checks, once, that a real
 stop and restart happens on the shipped rules and that every stopped job still completes.
 
+The records of every run, the raw data the numbers below come from, are in a separate repository,
+[core-slot/coreslot-evidence](https://github.com/core-slot/coreslot-evidence) (`air-v04/record/`,
+`record-2/` and `record-3/`, at commit `2beb02b`), so that this one stays small; the first two were
+committed here up to commit `f63c23f`. Paths such as `record-2/` below are relative to its
+`air-v04/`; `analyse.py` and the `criteria` scripts take the record's directory as their argument.
+
 The stand is public code at pinned commits:
 
 | agent | gate | source | learned need | median alone time, first run / second run |
@@ -196,6 +202,86 @@ What to know about this run:
   record-2` also prints empty sections of the first run's layout and names `criterion.md`; the
   second run's criteria are in `criterion-2.md`.
 
+## Third result (2026-11-03): the same questions, with more pairs, overnight
+
+The first two runs were one evening each, with five pairs per claim, and the second one's two
+claims split: within 5 % of the best semaphore in three of five pairs, and within 5 % of unwrapped
+with room in five of five, narrowly. The third run asks all of it again, unattended, with more
+pairs, on the v0.4.1 release binary (SHA-256 `c13de621…88cf34` in `meta.jsonl`, checked against
+the release's `checksums.txt` and its attestation). [criterion-3.md](criterion-3.md) and
+`criteria3.py` were committed before any of its sets (commit `12d2286`, pushed to `main` at
+22:20:17 UTC on 2026-11-02; the learn phase started at 23:00:40 UTC and the first counted set at
+23:04:00 UTC). It has no exploratory sets. Records: `record-3/`, with its own learn phase (alone
+medians: type check 9.9 s, FastAPI's tests 13.4 s, SQLAlchemy's 21.9 s, the learned needs as in
+the table above). The numbers below are `criteria3.py`'s, or computed from `sets.jsonl` where
+marked.
+
+**All four claims hold.** Each p is the one-sided sign test the criterion names; all three
+statistical claims also hold with a Bonferroni correction for three tests (α = 0.0167), which the
+criterion expected only of the first.
+
+| part | pairs | criterion | result | p |
+|---|---|---|---|---|
+| 1. F against K, all agents at once | 10 | K lower in warn seconds and in mean time to verdict, each in ≥ 9 | 10 of 10 and 10 of 10 | 0.001 each |
+| 2. K against S1, arrivals 1 s apart, all 24 orders | 24 | K ≤ 1.05 × S1 in ≥ 17 | 23 of 24 | 1.5 × 10⁻⁶ |
+| 3. K against F, light mix | 20 | K ≤ 1.05 × F in ≥ 15 | 20 of 20 | 9.5 × 10⁻⁷ |
+| 4. Watchdog demo | 5 | a hog stopped, never the oldest, all exit 0, guard quiet | 5 of 5 | (not a test) |
+
+**Part 1 replicates the first run.** Unwrapped, the machine sat at warn or above for 59 to 101 s
+of each set and wrote 2.0 to 11.6 GiB to swap (computed); under coreslot it stayed at normal in
+every set and wrote nothing. K's mean time to verdict was 30.4 to 39.7 s against F's 73.1 to
+110.1 s: K/F 0.31 to 0.45, median 0.40 (the first run: 0.34 to 0.46, median 0.41), makespan 0.48
+to 0.66 of F's (computed). K's queue held the agents 45 to 96 s in all per set; no command was
+stopped and no gate failed in either arm.
+
+**Part 2: K and the best semaphore are level over every arrival order.** K/S1 was 0.961 to 1.060,
+median 1.003; K was faster in 11 of the 24 pairs, and its mean over all 24 was 38.58 s against
+S1's 38.41 s (0.4 % slower; computed), which is what the offline model in [`model/`](model/README.md)
+predicted for the average over orders. Makespan K/S1 was 0.94 to 1.04, median 0.98 (computed).
+Neither arm reached warn or wrote to swap in any of the 48 sets. The one pair outside 5 %
+(sem-pair-5, order A2 A4 A1 A3, 1.060) is the cost the second run found: coreslot let FastAPI's
+suite in beside SQLAlchemy's while the second type check waited, so A3 got its verdict in 34.5 s
+instead of 59.9 s, and A1 and A4 in 61.4 and 51.7 s instead of 44.3 and 35.3 s. The second run's
+worst order, A4 A3 A2 A1 (1.266 there), was sem-pair-10 here at 1.023; on this run's machine state
+it did not repeat.
+
+**Part 3: with room, coreslot costs nothing measurable.** K/F was 0.976 to 1.012, median 1.000;
+K was faster in 10 of the 20 pairs, and its commands waited 0.01 to 0.02 s in all per set. The
+second run's light claim rested on one slow F set; here no pair came within 3.8 points of the
+margin.
+
+**Part 4: the watchdog demo, five times.** In each demo the three 6 GiB hogs were admitted on the
+learned 270 MiB need, both newer hogs were stopped on red (the stop lines give 63 to 81 % of their
+time lost to memory stalls against a normal of 0.3 to 0.4 %), hog 1 never was, both stopped hogs
+came back and every hog exited 0. Per demo, seconds at warn or above 21 to 39 and at critical 0 to
+19, swap used growth 0.5 to 6.0 GiB.
+
+What to know about this run:
+
+- One machine, one stand, one night: 108 counted sets in 2 h 13 min, the whole run 2 h 44 min. The
+  machine was on its charger and kept awake; the Docker Desktop VM was stopped for the whole run
+  and started again after it. The desktop apps of the person running it (a chat client with the
+  idle session that launched the run, a terminal) stayed open.
+- Every set started at pressure level normal; no cooldown gave up. Swap used at the start of a set
+  was 1.8 to 4.3 GiB. The thermal state was "fair" (1) at the start of 105 of the 108 sets and
+  "nominal" (0) at three.
+- In demo 1, swap used grew 6,011 MiB, 133 MiB short of the outside guard's 6 GiB (`SWAP_STOP_MIB`
+  = 6144 MiB), so the guard did not fire, by a narrow margin. In demos 1 and 5 the harness's own
+  once-a-second sampler fell up to 4.7 s behind at critical pressure, so a brief excursion between
+  two samples cannot be ruled out; the guard reads the same samples, so its verdict is the
+  recorded one.
+- In its three alone runs the type check recorded no normal share; it recorded one in 44 of its 68
+  runs inside K sets. Until it has one the watchdog can stop it only at the floor; no command of
+  any K set came near a stop.
+- K's state directory keeps learning from the sets' own runs, as in the earlier runs, and the ABBA
+  order (F first in odd pairs of parts 1 and 3, S1 first in odd pairs of part 2) spreads that drift
+  over both arms.
+- `analyse.py record-3` prints the first two runs' sections; its DEMO section says "no record"
+  because the five demos are in `record-3/demos/1` to `5`, which `criteria3.py` reads, and it names
+  `criterion.md`; the third run's criteria are in `criterion-3.md`.
+- `meta.jsonl` shows `repo_dirty: false` for every invocation. The same path placeholders as in
+  `record-2/` are used; `analyse.py` and `criteria3.py` print the same output before and after.
+
 ## The phases
 
 1. **learn** (about 5 min): each gate runs alone under coreslot three times, in the run's own state
@@ -244,7 +330,7 @@ Quit other work first. Build the stand once (git, node with npm, uv and the netw
 runs use no network). `setup.sh` installs the stand's dependencies, which runs their build code:
 FastAPI's from its lock file, SQLAlchemy's build with unpinned build requirements, and the type
 declarations of Electron with install scripts disabled. Then take a coreslot binary: the runs here
-used the v0.4.0 release archive for darwin-arm64, checked with `shasum -a 256 -c` against the
+used the v0.4.0 release archive for darwin-arm64 (the third run v0.4.1's), checked with `shasum -a 256 -c` against the
 release's `checksums.txt` and with `gh attestation verify` (its SHA-256 is in `meta.jsonl`);
 building one from the checkout under test, as below, works the same way for a later version:
 
@@ -293,6 +379,19 @@ The recorded run differs from these commands in two ways: its tune sets and its 
 (`run2 set K --tag sem-pilot`) started all agents at once, and its tune sets used the semaphore's
 racing mode, which the harness has since replaced with first-come-first-served for every S set.
 
+The third run ([criterion-3.md](criterion-3.md)) ran these in one go, with the 24 orders and the
+light orders of the criterion in `ORD24` and `ORD20`:
+
+```bash
+run3() { python3 evidence/air-v04/run.py --coreslot /tmp/air-v04/coreslot --stand "$STAND" --out evidence/air-v04/record-3 "$@"; }
+run3 learn
+run3 pairs --first 1 --last 10
+run3 --stagger-s 1.0 pairs --vs S --slots 1 --prefix sem- --first 1 --last 24 --orders "$ORD24"
+run3 --mix light --stagger-s 1.0 pairs --prefix light- --first 1 --last 20 --orders "$ORD20"
+for i in 1 2 3 4 5; do python3 evidence/air-v04/run.py --coreslot /tmp/air-v04/coreslot --stand "$STAND" --out evidence/air-v04/record-3/demos/$i demo; done
+python3 evidence/air-v04/criteria3.py evidence/air-v04/record-3
+```
+
 Without `--order` (one set) or `--orders` (one order per pair, the same for both sets of a pair)
 every agent arrives at the set's start; with them agent i of the order arrives `i x --stagger-s`
 after it. A set records its order, each agent's `arrive_s`, and each agent's time to verdict
@@ -321,8 +420,10 @@ skips the pin check, to try the harness without loading the machine.
 | `analyse.py` | the per-pair table (warn s, critical s, swap growth, makespan, mean time to verdict, false failures, and for K the summed wait and the stops), one-sided sign tests of K against F for warn seconds, false failures and mean time to verdict, the pilot apart, and the demo's verdict; for the second run TUNING (each S set and the S\* the rule picks), SEMAPHORE PAIRS (K against S\*, with K/S\* ratios) and LIGHT (its pilot apart, K against F with K/F ratios and sign tests both ways) |
 | `sem.py` | the S arm's N-slot semaphore |
 | `test_air.py` | unit tests of the analysis and of the pure parts of `run.py` (`python3 -m unittest` here) |
+| `record*/` | the runs' records, published in coreslot-evidence and ignored here; each holds the files below |
 | `record/meta.jsonl` | one line per invocation: machine model, macOS version, memory, `coreslot version` and its SHA-256, the commit of this repository, the stand's commits |
 | `record/learn.jsonl`, `record/learn/` | each alone run, with its run-log line, and its output |
 | `record/sets.jsonl`, `record/sets/<tag>-<arm>/` | one line per set, and each gate's output and stderr (`watch.jsonl` for K) |
-| `record/demo/` | `demo.json`, the hogs' own logs, each run's stderr and `watch.jsonl` |
-| `record/state/`, `record/demo/state/`, `record/live.json` | the run's coreslot state and the processes it started; not committed |
+| `record/demo/` | `demo.json`, the hogs' own logs, each run's stderr and `watch.jsonl`; `record-3/demos/1` to `5` hold the third run's five |
+| `record/state/`, `record/demo/state/`, `record/live.json` | the run's coreslot state and the processes it started; never published |
+| `criteria2.py`, `criteria3.py` | the second and third runs' pre-registered criteria, computed from their records |
