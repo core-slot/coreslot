@@ -208,6 +208,35 @@ class SemTest(unittest.TestCase):
         with open(os.path.join(d, "queue")) as f:
             self.assertEqual(f.read(), "")
 
+    def test_a_reused_pid_is_not_a_waiter(self):
+        d = os.path.join(tempfile.mkdtemp(), "locks")
+        os.makedirs(d)
+        other = subprocess.Popen(["sleep", "30"])  # a live process that never queued: a dead waiter's pid, reused
+        try:
+            with open(os.path.join(d, "queue"), "w") as f:
+                f.write(f"{other.pid}\n")
+            p = subprocess.run([sys.executable, os.path.join(HERE, "sem.py"), "--fifo", d, "1", "--", "true"], timeout=10)
+            self.assertEqual(p.returncode, 0)
+        finally:
+            other.kill()
+            other.wait()
+
+    def test_a_live_waiter_keeps_its_place(self):
+        d = tempfile.mkdtemp()
+        held = sem.try_slot(d, 1)
+        first = subprocess.Popen([sys.executable, os.path.join(HERE, "sem.py"), "--fifo", d, "1", "--", "true"])
+        time.sleep(0.3)  # first is queued behind the held slot
+        got = []
+        t = threading.Thread(target=lambda: got.append(sem.acquire(d, 1, fifo=True, poll_s=0.01)))
+        t.start()
+        time.sleep(0.3)
+        self.assertEqual(got, [])
+        os.close(held)
+        self.assertEqual(first.wait(5), 0)
+        t.join(5)
+        self.assertEqual(len(got), 1)
+        os.close(got[0])
+
     def test_a_lost_queue_line_queues_again(self):
         d = tempfile.mkdtemp()
         held, got = sem.try_slot(d, 1), []

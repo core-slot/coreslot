@@ -8,7 +8,10 @@ status and signals are its own, since it replaces this process. 127 when CMD can
 
 With --fifo, slots go in arrival order: a waiter appends its pid to LOCKDIR/queue under an
 exclusive flock of LOCKDIR/queue.lock, and takes a slot only while its pid is the first live one
-in the queue; the pids of waiters that died are dropped. Without it, any waiter may win a race.
+in the queue; the pids of waiters that died are dropped. A waiter holds an flock on its own
+LOCKDIR/waiter-PID while it waits, and a pid counts as a live waiter only while that lock is held:
+the kernel drops it when the waiter exits, so a pid reused by another process does not stall the
+queue. Without it, any waiter may win a race.
 """
 import fcntl
 import os
@@ -32,19 +35,28 @@ def try_slot(lockdir, n):
     return None
 
 
-def alive(pid):
+def waiting(lockdir, pid):
+    """Whether pid is a waiter still alive: its waiter file's flock is held."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        fd = nofollow(os.path.join(lockdir, f"waiter-{pid}"), os.O_RDWR)
+    except FileNotFoundError:
         return False
-    except PermissionError:
-        pass
-    return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
 
 
 def acquire(lockdir, n, fifo=False, poll_s=0.05):
     """The descriptor of the slot taken, waiting until one is free (and, with fifo, our turn)."""
     me, qpath = os.getpid(), os.path.join(lockdir, "queue")
+    if fifo:
+        mine = os.path.join(lockdir, f"waiter-{me}")
+        wfd = nofollow(mine, os.O_RDWR | os.O_CREAT)
+        fcntl.flock(wfd, fcntl.LOCK_EX)
     while True:
         if not fifo:
             fd = try_slot(lockdir, n)
@@ -54,13 +66,16 @@ def acquire(lockdir, n, fifo=False, poll_s=0.05):
                 with open(qpath, "a+", opener=nofollow) as q:
                     q.seek(0)  # one pid per line; a line that is not one is dropped
                     pids = [int(x) for x in q.read().split() if x.isdigit()]
-                pids = [p for p in pids if p == me or alive(p)]
+                pids = [p for p in pids if p == me or waiting(lockdir, p)]
                 if me not in pids:  # the first look, or our line was lost: queue (again) at the end
                     pids.append(me)
                 fd = try_slot(lockdir, n) if pids[0] == me else None
                 with open(qpath, "w", opener=nofollow) as q:
                     q.write("".join(f"{p}\n" for p in pids if fd is None or p != me))
         if fd is not None:
+            if fifo:
+                os.unlink(mine)
+                os.close(wfd)
             return fd
         time.sleep(poll_s)
 
