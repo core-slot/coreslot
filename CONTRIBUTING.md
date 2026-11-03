@@ -125,6 +125,7 @@ mutation that reddens each new invariant test. Add an entry in the unreleased se
 Releases are cut by the maintainer by pushing a `v*` tag on a commit of `main`. The release
 workflow refuses a tag whose commit is not on `main`, reruns CI on it, builds the archives with
 GoReleaser (`.goreleaser.yaml`, version pinned in `.github/goreleaser-version` for CI and release
-alike), attests their build provenance in a job of its own, and only then publishes the GitHub
+alike, installed by `scripts/install-goreleaser.sh` only once its archive's attestation verifies
+against GoReleaser's own release workflow at that tag), attests their build provenance in a job of its own, and only then publishes the GitHub
 release. `goreleaser release --snapshot --clean` builds the same archives locally into `dist/`
 without publishing anything.

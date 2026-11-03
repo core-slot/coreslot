@@ -61,17 +61,12 @@ jobs:
           # library fixes govulncheck saw; no cache a pull request could have written.
           go-version: stable
           cache: false
-      - name: GoReleaser version
-        id: goreleaser
-        run: |
-          v="$(cat .github/goreleaser-version)"
-          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.github/goreleaser-version: '$v'"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
-        with:
-          distribution: goreleaser
-          version: ${{ steps.goreleaser.outputs.version }}
-          args: release --clean --skip=publish
+      - name: Install GoReleaser, attestation verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/install-goreleaser.sh
+      - name: GoReleaser
+        run: goreleaser release --clean --skip=publish
         env:
           # The tag that started this run. Without it GoReleaser picks one of the tags on the
           # commit, and a release candidate tagged on the same commit names the archives.

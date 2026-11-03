@@ -176,17 +176,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-      - name: GoReleaser version
-        id: goreleaser
-        run: |
-          v="$(cat .github/goreleaser-version)"
-          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.github/goreleaser-version: '$v'"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
-        with:
-          distribution: goreleaser
-          version: ${{ steps.goreleaser.outputs.version }}
-          args: release --snapshot --clean
+      - name: Install GoReleaser, attestation verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/install-goreleaser.sh
+      - name: GoReleaser
+        run: goreleaser release --snapshot --clean
       - name: The snapshot binaries carry no test hooks
         # The release build is never the coreslot_testhooks build: no binary records a -tags
         # setting in its build information or contains the hooks' variable prefix. Four
@@ -239,17 +234,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
-      - name: GoReleaser version
-        id: goreleaser
-        run: |
-          v="$(cat .github/goreleaser-version)"
-          [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::.github/goreleaser-version: '$v'"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
-        with:
-          distribution: goreleaser
-          version: ${{ steps.goreleaser.outputs.version }}
-          args: release --snapshot --clean
+      - name: Install GoReleaser, attestation verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/install-goreleaser.sh
+      - name: GoReleaser
+        run: goreleaser release --snapshot --clean
       - name: The snapshot binaries carry no test hooks
         # The release build is never the coreslot_testhooks build: no binary records a -tags
         # setting in its build information or contains the hooks' variable prefix. Four
