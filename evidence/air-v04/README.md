@@ -111,10 +111,10 @@ The stop line's "normal 0%" is the label's learned share of 0.33 %, rounded to a
   of user time against about 190 s in the second run. The same type check ran alone in 9.4 to 10.4
   s inside this run's K sets. The learned needs come from memory peaks, which the slowness does not
   change much; the alone times in the table above are this phase's.
-- In that state the type check paged throughout its alone runs, and a run that pages throughout
-  measures no normal share, so its label stayed learning and the watchdog could have stopped it
-  only at the floor during this run. In the second run's learn phase it did not page (2.5 to 3.4 s
-  of system time) and learned a share of about 0.02. Admission used its learned need either way.
+- The type check recorded no normal share in this run's alone runs, so its label stayed learning
+  and the watchdog could have stopped it only at the floor during this run. In the second run's
+  learn phase it recorded 0.024, 0.025 and 0.021. Admission used its learned need either way. Why,
+  and why this is the specified behaviour, is in the third result below.
 - K's state directory keeps learning from the sets' own runs, so K is not strictly a fixed policy
   across the pairs (each start recomputes its need from the label's latest runs), and swap used at
   the start of a counted set drifted from 5.8 to 8.2 GiB over the run. The sign test treats the pairs as independent; the ABBA
@@ -271,8 +271,16 @@ What to know about this run:
   two samples cannot be ruled out; the guard reads the same samples, so its verdict is the
   recorded one.
 - In its three alone runs the type check recorded no normal share; it recorded one in 44 of its 68
-  runs inside K sets. Until it has one the watchdog can stop it only at the floor; no command of
-  any K set came near a stop.
+  runs inside K sets. Until one of a label's last 20 runs has one, the watchdog can stop it only at
+  the floor; no command of any K set came near a stop. This is the rule as specified, not a defect:
+  a run records a share only from ticks at level green or yellow with the paging gate closed (under
+  1000 decompressions/s), and the type check pages while it grows, which it does until it exits.
+  From the K sets' samples (computed; the learn phases kept none): median decompressions/s at its
+  ticks of about 2, 4, 6 and 8 s were 387, 573, 1446 and 12,933, at 4.0, 5.6, 6.6 and 7.6 GiB, so a
+  10 s run has two or three ticks that can qualify, and the 24 runs without a share were over the
+  gate from their first comparable tick to their end. Replaying the rule on those samples gives 44
+  of 68, the run log's count. In the second run's learn phase the early ticks happened to qualify;
+  its write-up's "did not page" was an inference from system time that the records do not support.
 - K's state directory keeps learning from the sets' own runs, as in the earlier runs, and the ABBA
   order (F first in odd pairs of parts 1 and 3, S1 first in odd pairs of part 2) spreads that drift
   over both arms.
