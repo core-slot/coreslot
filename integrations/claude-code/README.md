@@ -40,8 +40,12 @@ command you type: the hook only refuses, it never approves anything.
    `/plugin install coreslot --marketplace core-slot/coreslot`.
 
 There is nothing to configure: coreslot learns how much memory each command needs from its past
-runs. With a coreslot older than `--restart` (its `coreslot run --help` does not name the flag), the
-hook offers `coreslot run -- ` instead; it asks once per session.
+runs.
+
+Version 0.2.0 of the plugin expects a coreslot newer than 0.4.1, whose `coreslot run` takes
+`--restart`. The hook runs nothing, not even `coreslot` (the one on `PATH` may be a repository's
+own), so it does not check: its refusal says that an older coreslot answers that `-restart` is an
+unknown flag, and that the command then runs with `coreslot run -- ` (or after updating coreslot).
 
 The hook needs `python3` (3.9 or newer) and nothing else. It does nothing on a machine where
 `coreslot` is not on `PATH`.

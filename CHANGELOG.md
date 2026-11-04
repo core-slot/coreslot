@@ -31,8 +31,9 @@ All notable changes to this project are recorded here. The format follows
   other agents asks them to choose `--restart` per command. The refusal tells the agent to change
   it to `--restart=no` when the tests or their setup or teardown scripts touch a shared database,
   external services or shared files, and says so when the shape came from the user's own shape
-  file rather than the defaults. With a coreslot older than `--restart`, as its `run --help`
-  says, once per session, it offers `coreslot run --` as before. The plugin is version 0.2.0.
+  file rather than the defaults. The hook runs no process; its refusal says what to do when an
+  older coreslot rejects the flag. The plugin is version 0.2.0 and expects a coreslot newer than
+  0.4.1.
 
 ### Added
 

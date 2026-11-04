@@ -153,43 +153,17 @@ class Responding(unittest.TestCase):
     def setUp(self) -> None:
         self.home = Path(tempfile.mkdtemp())
 
-    def respond(self, stdin: str, has_coreslot: bool = True, probe=lambda: True) -> dict | None:
-        out = hook.respond(stdin, self.home, has_coreslot, probe)
+    def respond(self, stdin: str, has_coreslot: bool = True) -> dict | None:
+        out = hook.respond(stdin, self.home, has_coreslot)
         return json.loads(out) if out else None
 
     def reason(self, command: str, **kwargs) -> str:
         return self.respond(payload(command, **kwargs))["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_an_older_coreslot_is_offered_the_old_prefix(self) -> None:
-        """A coreslot without `--restart` would refuse the flag, so it gets `coreslot run -- `.
-        Mutation: always insert PREFIX -> the old binary is offered `--restart=yes`."""
-        out = self.respond(payload("go test ./..."), probe=lambda: False)
-        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        self.assertIn("\ncoreslot run -- go test ./...\n", reason)
-        self.assertNotIn("--restart", reason)
-
-    def test_the_flag_is_probed_once_per_session(self) -> None:
-        """Mutation: probe at every refusal -> two calls in one session."""
-        calls = []
-        def probe() -> bool:
-            calls.append(1)
-            return True
-        self.respond(payload("go test ./..."), probe=probe)
-        self.respond(payload("cargo test"), probe=probe)
-        self.assertEqual(len(calls), 1)
-        self.respond(payload("cargo test", session="s2"), probe=probe)
-        self.assertEqual(len(calls), 2)
-
-    def test_the_probe_reads_run_help(self) -> None:
-        """Mutation: return True without reading the help -> the old binary counts as new."""
-        bin_dir = Path(tempfile.mkdtemp())
-        for name, help_text, want in [("new", "  --restart=yes|no  required", True), ("old", "  --mem SIZE", False)]:
-            fake = bin_dir / name
-            fake.write_text(f"#!/bin/sh\necho '{help_text}'\n")
-            fake.chmod(0o755)
-            with self.subTest(name=name):
-                self.assertEqual(hook.has_restart_flag(str(fake)), want)
-        self.assertFalse(hook.has_restart_flag(str(bin_dir / "missing")))
+    def test_the_refusal_says_what_to_do_with_an_older_coreslot(self) -> None:
+        """Mutation: drop the older-coreslot sentence -> red."""
+        self.assertIn("If coreslot answers that -restart is an unknown flag, it is older than this "
+                      "plugin: run the command with `coreslot run -- ` instead", self.reason("go test ./..."))
 
     def test_the_refusal_says_when_to_choose_no(self) -> None:
         """Mutation: drop the `--restart=no` advice from the reason -> red."""
@@ -268,11 +242,31 @@ class Process(unittest.TestCase):
                 out = io.StringIO()
                 with mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir=str(home))), \
                         mock.patch("shutil.which", return_value=found), \
-                        mock.patch.object(hook, "has_restart_flag", return_value=True), \
                         mock.patch("sys.stdin", io.StringIO(payload("go test ./...", session=str(found)))), \
                         contextlib.redirect_stdout(out):
                     self.assertEqual(hook.main(), 0)
                 self.assertEqual("coreslot run --restart=yes -- go test ./..." in out.getvalue(), refused)
+
+    def test_the_hook_starts_no_process(self) -> None:
+        """The `coreslot` on PATH may be a repository's own, so the hook runs nothing, not even it.
+        Mutation: run `coreslot run --help` from main -> a process is started."""
+        home = Path(tempfile.mkdtemp())
+        started = []
+        def spawn(*args, **kwargs):
+            started.append(args)
+            raise AssertionError("the hook started a process")
+        out = io.StringIO()
+        with mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir=str(home))), \
+                mock.patch("shutil.which", return_value="/repo/bin/coreslot"), \
+                mock.patch("subprocess.Popen", side_effect=spawn), \
+                mock.patch("os.posix_spawn", side_effect=spawn), \
+                mock.patch("os.fork", side_effect=spawn), \
+                mock.patch("os.system", side_effect=spawn), \
+                mock.patch("sys.stdin", io.StringIO(payload("go test ./..."))), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(hook.main(), 0)
+        self.assertEqual(started, [])
+        self.assertIn("coreslot run --restart=yes -- go test ./...", out.getvalue())
 
     def test_the_script_exits_0_and_prints_only_a_refusal(self) -> None:
         bin_dir = Path(tempfile.mkdtemp())

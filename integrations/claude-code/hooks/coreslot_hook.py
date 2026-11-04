@@ -43,11 +43,10 @@ import os
 import pwd
 import re
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import NamedTuple
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_SHAPES = HERE / "shapes.json"
@@ -55,7 +54,6 @@ USER_SHAPES = Path(".config", "coreslot", "claude-code-shapes.json")
 STATE = Path(".local", "state", "coreslot-claude-code")
 KEEP_SECONDS = 7 * 24 * 3600
 PREFIX = b"coreslot run --restart=yes -- "
-OLD_PREFIX = b"coreslot run -- "  # for a coreslot older than --restart, which refuses the flag
 
 _ASSIGNMENT = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*=")
 _BLANK = b" \t"
@@ -297,15 +295,15 @@ def inserts(command: str, shapes: tuple[Shape, ...]) -> list[int] | None:
     return found_at or None
 
 
-def offer(command: str, shapes: tuple[Shape, ...], prefix: bytes = PREFIX) -> str | None:
-    """The command with `prefix` inserted at the program word of every segment a shape
+def offer(command: str, shapes: tuple[Shape, ...]) -> str | None:
+    """The command with `PREFIX` inserted at the program word of every segment a shape
     matches; None when no segment matches or the command cannot be split."""
     at = inserts(command, shapes)
     if at is None:
         return None
     offered = command.encode("utf-8")
     for offset in reversed(at):
-        offered = offered[:offset] + prefix + offered[offset:]
+        offered = offered[:offset] + PREFIX + offered[offset:]
     return offered.decode("utf-8")
 
 
@@ -344,44 +342,12 @@ def refused_before(state: Path, session: str, agent: str, command: str) -> bool:
     return False
 
 
-# --- the installed coreslot ------------------------------------------------------------------------
-
-
-def has_restart_flag(coreslot: str) -> bool:
-    """Whether the coreslot at `coreslot` takes `--restart`, as its `run --help` says; False when
-    the help cannot be read."""
-    try:
-        done = subprocess.run([coreslot, "run", "--help"], capture_output=True, timeout=3, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return b"--restart" in done.stdout
-
-
-def restart_supported(state: Path, session: str, probe: Callable[[], bool]) -> bool:
-    """`probe()`, asked once per session: the answer is kept beside the session's refusals and
-    goes with them after seven days."""
-    key = hashlib.sha256(f"{session}\0restart".encode("utf-8")).hexdigest()[:32]
-    cached = state / f"{key}.txt"
-    try:
-        return cached.read_text(encoding="utf-8").strip() == "yes"
-    except FileNotFoundError:
-        pass
-    supported = probe()
-    state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor = os.open(cached, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(descriptor, b"yes\n" if supported else b"no\n")
-    finally:
-        os.close(descriptor)
-    return supported
-
-
 # --- the hook -------------------------------------------------------------------------------------
 
 
-def respond(stdin: str, home: Path, has_coreslot: bool, probe: Callable[[], bool] = lambda: True) -> str:
-    """The hook's stdout for one input: the deny JSON for a refusal, "" for everything else.
-    `probe` says whether the installed coreslot takes `--restart`."""
+def respond(stdin: str, home: Path, has_coreslot: bool) -> str:
+    """The hook's stdout for one input: the deny JSON for a refusal, "" for everything else. It
+    executes nothing: the `coreslot` on PATH may be a repository's own."""
     try:
         payload = json.loads(stdin)
         if payload.get("tool_name") != "Bash" or not has_coreslot:
@@ -396,32 +362,28 @@ def respond(stdin: str, home: Path, has_coreslot: bool, probe: Callable[[], bool
         at = inserts(command, shapes)
         if at is None or refused_before(home / STATE, session, agent, command):
             return ""
-        restart = restart_supported(home / STATE, session, probe)
-        offered = offer(command, shapes, PREFIX if restart else OLD_PREFIX)
+        offered = offer(command, shapes)
         unvetted = own and bool(set(at) - set(inserts(command, load_shapes(DEFAULT_SHAPES)) or []))
     except Exception:  # noqa: BLE001 -- a nudge never blocks a command on its own failure
         return ""
-    if restart:
-        how = (
-            "Run it with the `coreslot run --restart=yes --` prefix inserted, which starts it when "
-            "enough memory is free and, if memory runs short, may kill it and run it again from "
-            "scratch by itself:\n"
-            f"{offered}\n"
-            "`--restart=yes` says the command is safe to kill at any moment and run again. Change "
-            "it to `--restart=no` if the tests or their setup or teardown scripts touch a shared "
-            "database, external services or shared files.\n"
+    how = (
+        "Run it with the `coreslot run --restart=yes --` prefix inserted, which starts it when "
+        "enough memory is free and, if memory runs short, may kill it and run it again from "
+        "scratch by itself:\n"
+        f"{offered}\n"
+        "`--restart=yes` says the command is safe to kill at any moment and run again. Change it "
+        "to `--restart=no` if the tests or their setup or teardown scripts touch a shared "
+        "database, external services or shared files.\n"
+    )
+    if unvetted:
+        how += (
+            "This command matched a shape of your own shape file, not one of coreslot's "
+            "defaults: check that it is safe to run twice before you keep `--restart=yes`.\n"
         )
-        if unvetted:
-            how += (
-                "This command matched a shape of your own shape file, not one of coreslot's "
-                "defaults: check that it is safe to run twice before you keep `--restart=yes`.\n"
-            )
-    else:
-        how = (
-            "Run it with the `coreslot run --` prefix inserted, which starts it when enough memory "
-            "is free and, if memory runs short, stops the newest jobs and restarts them by itself:\n"
-            f"{offered}\n"
-        )
+    how += (
+        "If coreslot answers that -restart is an unknown flag, it is older than this plugin: run "
+        "the command with `coreslot run -- ` instead, or update coreslot.\n"
+    )
     reason = (
         "coreslot: several agents share this machine's memory, and this command is one of the "
         f"heavy ones. {how}"
@@ -442,9 +404,7 @@ def respond(stdin: str, home: Path, has_coreslot: bool, probe: Callable[[], bool
 def main() -> int:
     try:
         home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-        coreslot = shutil.which("coreslot")
-        out = respond(sys.stdin.read(), home, coreslot is not None,
-                      lambda: coreslot is not None and has_restart_flag(coreslot))
+        out = respond(sys.stdin.read(), home, shutil.which("coreslot") is not None)
         if out:
             sys.stdout.write(out)
     except Exception:  # noqa: BLE001
