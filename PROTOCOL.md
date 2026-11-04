@@ -296,7 +296,7 @@ mode = "enforce"      # or "observe": everything but the stop (section 23.6)
 sample_log = false    # true: log every machine sample (section 23.6)
 yellow_points = 20    # the thresholds of section 23.4
 red_points = 40
-red_samples = 10
+red_samples = 5
 gate_pages_s = 1000
 floor = "2G"          # a size
 calm_s = 10           # the waits of sections 12.4 and 23.5, in seconds
@@ -1525,12 +1525,13 @@ below that applies.
   (`wall_ns > 0`) is still tested for it, and is floor when it holds; an empty sample never is.
   An optional reading the platform lacks (the memory stall, page wait) is not unknown.
 - **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
-  stays below `yellow_points` for 15 samples in a row.
+  stays below `yellow_points` for 5 samples in a row, and when the red bucket's freshness rule
+  below empties the bucket, so that yellow does not outlast a pause.
 - **Red:** a leaky bucket: +1 for a sample with `E ≥ red_points` and the gate open,
   −0.5 for any other comparable sample, never below 0, never above `red_samples`. It keeps only
   fresh evidence: a real reading whose host clock is more than 20 s after that of the last real
-  reading, or before it, empties it. Nothing else does, so a sleep shorter than that keeps it, as
-  does an empty sample between two real readings.
+  reading, or before it, empties it and clears the yellow latch. Nothing else does, so a sleep
+  shorter than that keeps both, as does an empty sample between two real readings.
   Red while it is at `red_samples`, so the first sample after the danger leaves red.
 - **Floor:** the swap room (the free space of the swap volume plus the unused swap on macOS;
   `SwapFree` plus `MemAvailable` on Linux) is under `floor`, and swap used grew by at least 256 MiB

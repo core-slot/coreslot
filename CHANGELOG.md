@@ -25,7 +25,13 @@ All notable changes to this project are recorded here. The format follows
 - The default `[watch] calm_s` is 10 s instead of 30 s: a stopped command comes back, and starts
   are spaced, after 10 s of calm. The value rests on a simulation calibrated on the recorded runs,
   not on a measurement ([the calibration notes](calibration/README.md#what-the-defaults-rest-on));
-  the next acceptance run measures it. Yellow still clears after 15 samples below its threshold.
+  the next acceptance run measures it.
+- The watchdog acts sooner. The default `[watch] red_samples` is 5 instead of 10, so red needs about
+  10 s of danger held instead of about 20 s, and yellow clears after 5 samples below its threshold
+  instead of 15. They rest on a simulation calibrated on the recorded runs and, for `red_samples`,
+  on a replay of the samples logged by three acceptance runs, which found no false red at 5; not on
+  a measurement ([the calibration notes](calibration/README.md#what-the-defaults-rest-on)). The next
+  acceptance run measures them.
 - The Claude Code hook offers `coreslot run --restart=yes --` and no longer recognises `make -j`,
   Gradle or `xcodebuild`, whose targets can deploy, migrate or upload; its instructions snippet for
   other agents asks them to choose `--restart` per command. The refusal tells the agent to change
@@ -48,6 +54,12 @@ All notable changes to this project are recorded here. The format follows
   later stop of it says that an earlier round kept it. A floor round keeps nothing. Holds carry the
   optional keys `cpu_ns`, `typical_cpu_s` and `stall_ewma`, and `watch.json` the detector's `kept`
   records.
+
+### Fixed
+
+- The watchdog's yellow latch keeps only fresh evidence, as its red bucket does: a reading more than
+  20 s after the last one that could be read, or before it, clears it. A set of commands that
+  starts after a pause no longer starts at a yellow left over from an earlier one.
 
 ## v0.4.1 (2026-11-02)
 

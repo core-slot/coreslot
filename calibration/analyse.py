@@ -2,7 +2,7 @@
 """Score candidate watchdog thresholds on recorded calibration runs.
 
 usage: analyse.py RECORD_DIR... [--yellow-points N] [--red-points N] [--red-samples N]
-                                [--gate-pages-s N]
+                                [--gate-pages-s N] [--clear-samples N]
 
 A record directory holds watch.jsonl (the watchdog's sample log), work.jsonl (the hog's or the
 contention control's own log) and, optionally, meta.json (machine, OS, threads, and the share a
@@ -34,8 +34,8 @@ BANDS = ("full", "slowing", "slow", "cliff", "control")
 PRE_CLIFF = ("full", "slowing", "slow", "control")
 MAX_PERIOD_NS = 6_000_000_000
 
-CHOSEN = {"yellow_points": 20, "red_points": 40, "red_samples": 10, "gate_pages_s": 1000}
-CLEAR_SAMPLES = 15  # samples in a row below yellow_points that clear yellow
+# clear_samples: the samples in a row below yellow_points that clear yellow, fixed in the detector.
+CHOSEN = {"yellow_points": 20, "red_points": 40, "red_samples": 5, "gate_pages_s": 1000, "clear_samples": 5}
 CANDIDATES = {
     "yellow_points": (5, 10, 15, 20, 30),
     "red_points": (10, 15, 20, 30, 40, 50),
@@ -164,7 +164,7 @@ def band_table(samples, gate_pages_s):
 def replay(seq, c):
     """The level of each sample at the values c, as the detector computes it from E and the gate
     (the floor left out): yellow latches on 2 hot samples of the last 3 and clears after
-    CLEAR_SAMPLES in a row below yellow_points; red is the leaky bucket, saturated at red_samples.
+    clear_samples in a row below yellow_points; red is the leaky bucket, saturated at red_samples.
     A gap (level unknown) stays unknown, counts as a sample that is not hot and keeps the rest."""
     out, hot, yellow, below, bucket = [], [], False, 0, 0.0
     for s in seq:
@@ -184,7 +184,7 @@ def replay(seq, c):
             below = 0
         elif yellow:
             below += 1
-            yellow = below < CLEAR_SAMPLES
+            yellow = below < c["clear_samples"]
         out.append("red" if bucket >= c["red_samples"] else "yellow" if yellow else "green")
     return out
 

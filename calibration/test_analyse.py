@@ -22,7 +22,7 @@ def sample(t):
 
 
 # The fixture's watch.jsonl was logged by a detector at these values.
-FIXTURE = {**analyse.CHOSEN, "yellow_points": 10, "red_points": 30}
+FIXTURE = {**analyse.CHOSEN, "yellow_points": 10, "red_points": 30, "red_samples": 10, "clear_samples": 15}
 
 
 def at(**kv):
@@ -79,12 +79,12 @@ class AnalyseTest(unittest.TestCase):
         self.assertEqual(analyse.first_red(seq, at(red_points=20, red_samples=2))["band"], "slow")
         self.assertIsNone(analyse.first_red(self.control.samples, at(red_points=5, red_samples=2)))
 
-    def test_yellow_needs_two_of_three_and_clears_after_fifteen(self):
+    def test_yellow_needs_two_of_three_and_clears_after_five(self):
         hot = dict(sample(0), E=50.0, paging=5000)
         calm = dict(sample(0), E=0.0)
         self.assertEqual(set(analyse.replay([calm] * 3 + [hot] + [calm] * 30, at())), {"green"})  # one is not two
         levels = analyse.replay([hot, hot] + [calm] * 16, at())
-        self.assertEqual(levels.index("green", 2), 2 + 15)  # the first calm one still sees two hot ones
+        self.assertEqual(levels.index("green", 2), 2 + 5)  # the first calm one still sees two hot ones
         gap = dict(calm, level="unknown")
         self.assertEqual(analyse.replay([hot, gap, hot], at())[1:], ["unknown", "yellow"])
 

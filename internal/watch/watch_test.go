@@ -118,7 +118,7 @@ func TestRedLeakyBucketSurvivesFlicker(t *testing.T) {
 }
 
 // The bucket saturates at red_samples: after 15 hot samples the first calm one leaves red, so a
-// calm machine gets no second round. Mutation: an uncapped bucket stays red for 10 calm samples.
+// calm machine gets no second round. Mutation: an uncapped bucket stays red for 20 calm samples.
 func TestRedEndsOnTheFirstCalmSample(t *testing.T) {
 	c := Defaults()
 	f := newFeed(c)
@@ -132,6 +132,95 @@ func TestRedEndsOnTheFirstCalmSample(t *testing.T) {
 		if l := f.step(c, false, job(0.04, 0.04)); l >= Red {
 			t.Fatalf("calm sample %d: %v", i+1, l)
 		}
+	}
+}
+
+// Red needs red_samples hot samples in a row from an empty bucket: 5 by default, so the fourth is
+// yellow and the fifth red. Mutation: a default of 10 leaves the fifth yellow.
+func TestRedAfterFiveHotSamples(t *testing.T) {
+	for _, c := range []struct {
+		hot  int
+		want Level
+	}{{4, Yellow}, {5, Red}} {
+		cfg := Defaults()
+		f := newFeed(cfg)
+		var l Level
+		for range c.hot {
+			l = f.step(cfg, true, job(0.60, 0.04))
+		}
+		if l != c.want {
+			t.Errorf("%d hot samples: %v (bucket %v), want %v", c.hot, l, f.d.Bucket, c.want)
+		}
+	}
+}
+
+// Yellow clears after 5 samples in a row below yellow_points. After two hot samples the first calm
+// one still sees two hot ones among the last three and keeps the latch, so the count starts at the
+// second; a sample at or over yellow_points with the gate shut is not hot but restarts it.
+// Mutation: clearing after 15 keeps the green rows yellow.
+func TestYellowClearsAfterFiveBelow(t *testing.T) {
+	calm, warm := job(0.04, 0.04), job(0.50, 0.25) // E 0 and E 25
+	for _, c := range []struct {
+		name string
+		warm bool // the fourth calm sample is warm, with the gate shut
+		calm int  // calm samples after the hot ones, the warm one included
+		want Level
+	}{{"4 below", false, 5, Yellow}, {"5 below", false, 6, Green},
+		{"4 below after a warm one", true, 8, Yellow}, {"5 below after a warm one", true, 9, Green}} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := Defaults()
+			f := newFeed(cfg)
+			f.step(cfg, true, job(0.60, 0.04))
+			f.step(cfg, true, job(0.60, 0.04))
+			var l Level
+			for i := range c.calm {
+				if c.warm && i == 3 {
+					l = f.step(cfg, false, warm)
+				} else {
+					l = f.step(cfg, false, calm)
+				}
+			}
+			if l != c.want {
+				t.Errorf("after %d calm samples: %v (below %d), want %v", c.calm, l, f.d.Below, c.want)
+			}
+		})
+	}
+}
+
+// The yellow latch keeps only fresh evidence, as the bucket does: a real reading more than 20 s
+// after the last real one, or before it, clears it, so the calm sample after it is green; within
+// 20 s, across a short sleep too, the latch holds and the calm sample is yellow. Mutations: never
+// clearing the latch turns the stale rows yellow; dropping the clock-back term turns that row
+// yellow; clearing it at 20 s turns that row green.
+func TestYellowLatchKeepsOnlyFreshEvidence(t *testing.T) {
+	for _, c := range []struct {
+		name            string
+		wallNS, awakeNS int64 // the gap reading's clocks, from the last real one's
+		want            Level
+	}{{"10 s period", 10e9, 10e9, Yellow}, {"20 s period", 20e9, 20e9, Yellow},
+		{"sleep 15 s", 17e9, 2e9, Yellow}, {"21 s period", 21e9, 21e9, Green},
+		{"sleep 600 s", 600e9, 2e9, Green}, {"clock went back 10 s", -10e9, -10e9, Green}} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := Defaults()
+			f := newFeed(cfg)
+			for range 3 {
+				f.step(cfg, true, job(0.60, 0.04))
+			}
+			if f.d.Level != Yellow || f.d.Bucket >= cfg.RedSamples {
+				t.Fatalf("the fixture: %v, bucket %v; want yellow under red", f.d.Level, f.d.Bucket)
+			}
+			gap := f.prev
+			gap.Host.WallNS += c.wallNS
+			gap.Host.AwakeNS += c.awakeNS
+			gap.Jobs = nil
+			if l := f.d.Advance(f.prev, gap, cfg); l != Unknown {
+				t.Fatalf("across the gap: %v, want unknown", l)
+			}
+			f.prev = gap
+			if l := f.step(cfg, false, job(0.04, 0.04)); l != c.want {
+				t.Errorf("one calm sample after the gap: %v (yellow latch %v), want %v", l, f.d.Yellow, c.want)
+			}
+		})
 	}
 }
 
@@ -190,19 +279,19 @@ func TestFloorCountsMemAvailable(t *testing.T) {
 
 // A sleep (the sleep-inclusive clock moved, the awake one 2 s), a long period or a reboot (the clock
 // or a counter went back) between two samples is a gap: unknown, whatever the deltas say. The red
-// bucket keeps only fresh evidence: a reading more than 20 s after the last real one, or before it,
-// empties it, so one hot sample at a bucket of 9.5 is not red; within 20 s it is, across a short
-// sleep or a reboot alike. Mutations: never emptying the bucket turns the stale rows red; emptying
-// it at 20 s turns that row yellow; dropping the clock-back term turns that row red; emptying it
-// on any sleep turns the 15 s sleep yellow.
+// bucket and the yellow latch keep only fresh evidence: a reading more than 20 s after the last real
+// one, or before it, empties both, so one hot sample at a bucket of 4.5 is green; within 20 s it is
+// red, across a short sleep or a reboot alike. Mutations: never emptying the bucket turns the stale
+// rows red; emptying it at 20 s turns that row green; dropping the clock-back term turns that row
+// red; emptying it on any sleep turns the 15 s sleep green.
 func TestGapIsUnknown(t *testing.T) {
 	for _, c := range []struct {
 		name            string
 		wallNS, awakeNS int64 // cur's clocks, from prev's
 		back            bool  // cur's counters restarted from 0
 		want            Level
-	}{{"sleep 600 s", 600e9, 2e9, false, Yellow}, {"an hour awake", 3600e9, 3600e9, false, Yellow},
-		{"21 s period", 21e9, 21e9, false, Yellow}, {"clock went back", -1e12, -1e12, false, Yellow},
+	}{{"sleep 600 s", 600e9, 2e9, false, Green}, {"an hour awake", 3600e9, 3600e9, false, Green},
+		{"21 s period", 21e9, 21e9, false, Green}, {"clock went back", -1e12, -1e12, false, Green},
 		{"10 s period", 10e9, 10e9, false, Red}, {"20 s period", 20e9, 20e9, false, Red},
 		{"sleep 15 s", 17e9, 2e9, false, Red}, {"reboot, uptime 2 s later", 2e9, 2e9, true, Red}} {
 		t.Run(c.name, func(t *testing.T) {
@@ -236,7 +325,8 @@ func TestGapIsUnknown(t *testing.T) {
 
 // An empty sample (a reading that could not be read) keeps the bucket and leaves the window, whose
 // newest point stays the last real reading: under sustained danger, a real reading 4 s after it
-// keeps red going at once; one 600 s after it (a sleep the empty sample hid) empties the bucket.
+// keeps red going at once; one 600 s after it (a sleep the empty sample hid) empties the bucket and
+// the yellow latch.
 // Mutations: emptying the bucket on the pair after an empty sample delays red; letting the empty
 // sample clear the window does too; never emptying the bucket turns the hidden sleep red.
 func TestEmptySampleKeepsTheBucket(t *testing.T) {
@@ -244,7 +334,7 @@ func TestEmptySampleKeepsTheBucket(t *testing.T) {
 		name          string
 		wallNS, awake int64 // the next real reading's clocks, from the last real one's
 		want          Level
-	}{{"4 s later", 4e9, 4e9, Red}, {"after a 600 s sleep", 600e9, 4e9, Yellow}} {
+	}{{"4 s later", 4e9, 4e9, Red}, {"after a 600 s sleep", 600e9, 4e9, Green}} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := Defaults()
 			f := newFeed(cfg)
@@ -304,7 +394,7 @@ func TestClearThroughUnknownIsRecorded(t *testing.T) {
 	for range 3 {
 		f.step(c, true, job(0.60, 0.04))
 	}
-	for range 15 { // the first still has two hot samples among the last three
+	for range clearSamples { // the first still has two hot samples among the last three
 		f.step(c, false, job(0.04, 0.04))
 	}
 	gap := f.prev

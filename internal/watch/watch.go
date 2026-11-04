@@ -16,8 +16,10 @@ const (
 	DefaultYellowPoints = 20
 	// Chosen on the records: none of 947 full-speed or slowing samples reaches it.
 	DefaultRedPoints = 40
-	// Not calibrated: red needs danger held for tens of seconds (about 20 s); the records allow 3 to 15.
-	DefaultRedSamples = 10
+	// Not calibrated: a replay of three acceptance runs' samples found no false red at 5, and a
+	// simulator calibrated on the records chose it over 10 (calibration/README.md); about 10 s of
+	// danger held, and the records allow 3 to 15.
+	DefaultRedSamples = 5
 	// Chosen: the records give the same levels at 1000, 3000 and 10 000.
 	DefaultGatePagesPerS = 1000
 	// Not calibrated: a round value; no record has a floor sample.
@@ -34,7 +36,7 @@ const (
 const minWorkShare = 0.10
 
 const (
-	clearSamples   = 15                      // samples in a row below yellow_points that clear yellow
+	clearSamples   = 5                       // samples in a row below yellow_points that clear yellow
 	floorGrowthMiB = 256                     // swap growth over the floor window that makes floor an edge
 	windowNS       = int64(20 * time.Second) // the floor's growth window
 )
@@ -149,8 +151,8 @@ type Detector struct {
 
 // Advance moves the detector from sample prev to cur and returns the level. A pair it cannot
 // compare (memsample.Gap) is Unknown and keeps the bucket and latch, unless the floor holds: it
-// needs no rate. The bucket keeps only fresh evidence: a reading more than the window after the
-// last real one, or before it, empties it. An empty sample leaves the window as it was.
+// needs no rate. The bucket and the latch keep only fresh evidence: a reading more than the window
+// after the last real one, or before it, empties both. An empty sample leaves the window as it was.
 func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 	was, now := d.Known, cur.Host.WallNS
 	r, ok := rates(prev.Host, cur.Host)
@@ -160,7 +162,7 @@ func (d *Detector) Advance(prev, cur Sample, c Config) Level {
 		return Unknown
 	}
 	if n := len(d.Window); n > 0 && (now < d.Window[n-1].AtNS || now-d.Window[n-1].AtNS > windowNS) {
-		d.Bucket = 0
+		d.Bucket, d.Yellow = 0, false
 	}
 	if ok {
 		d.Excess = Excess(cur.Jobs, cur.Host.WallNS-prev.Host.WallNS)
