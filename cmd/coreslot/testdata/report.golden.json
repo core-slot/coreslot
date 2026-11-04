@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "days": 7,
+  "since_ns": 1793188800000000000,
+  "until_ns": 1793793600000000000,
+  "skipped_lines": 6,
+  "runs": 29,
+  "attempts": 33,
+  "fail_open_runs": 1,
+  "labels": 4,
+  "waits": {
+    "attempts": 11,
+    "total_s": 2515,
+    "median_s": 30,
+    "p90_s": 700,
+    "longest_s": 900,
+    "over_2_min": 4,
+    "over_10_min": 2
+  },
+  "stops": {
+    "stopped_attempts": 5,
+    "lost_s": 120,
+    "gave_up_runs": 1
+  },
+  "heaviest": [
+    {
+      "label": "e2e",
+      "runs": 2,
+      "attempts": 6,
+      "peak_mib": 4004,
+      "need_mib": 3809,
+      "ran_s": 180,
+      "waited_s": 1.5
+    },
+    {
+      "label": "build",
+      "runs": 14,
+      "attempts": 14,
+      "peak_mib": 2930,
+      "need_mib": 5860,
+      "ran_s": 840,
+      "waited_s": 2516
+    },
+    {
+      "label": "gate:unit",
+      "runs": 10,
+      "attempts": 10,
+      "peak_mib": 986,
+      "need_mib": 986,
+      "ran_s": 145,
+      "waited_s": 2.5
+    },
+    {
+      "label": "lint",
+      "runs": 3,
+      "attempts": 3,
+      "peak_mib": 196,
+      "need_mib": 196,
+      "ran_s": 15,
+      "waited_s": 0.75
+    }
+  ]
+}

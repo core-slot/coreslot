@@ -44,8 +44,8 @@ func statsFlags() (fs *flag.FlagSet, label *string, asJSON *bool) {
 const reportUsage = `usage: coreslot report [--days N] [--json]
 
 Summarizes the run log's last N days (default 7): runs, waits, memory stops and
-the heaviest labels, with one labelled estimate. It does not measure what the
-runs would have done without coreslot.`
+the heaviest labels. It does not measure what the runs would have done without
+coreslot.`
 
 // maxReportDays bounds --days, so that the window's start stays a valid time.
 const maxReportDays = 36500

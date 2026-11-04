@@ -22,26 +22,21 @@ import (
 const reportSchema = 1
 
 const (
-	waitedFromS    = 1.0 // an attempt waited when its waited_s is at least this
-	sharingMinRuns = 10  // runs a label needs both alone and alongside others for a sharing cost
-	heaviestShown  = 5   // labels the text lists; --json lists all
+	waitedFromS   = 1.0                  // an attempt waited when its waited_s is at least this
+	heaviestShown = 5                    // labels the text lists; --json lists all
+	maxRecordS    = 365 * 24 * 60 * 60.0 // a waited_s or ran_s above a year is not a measurement
 )
 
-// notMeasuredLines is the report's fixed reminder that it has no counterfactual; the JSON
-// document carries it as one sentence (notMeasured).
+// notMeasuredLines is the text's fixed reminder that the report has no counterfactual.
 var notMeasuredLines = []string{
-	"what these runs would have done without coreslot; on a different machine,",
-	"a 16 GB MacBook Air with four agents, the agents' mean time to a verdict",
-	"under coreslot was 0.40 of unwrapped:",
+	"what these runs would have done without coreslot is not measured here;",
+	"results measured on one 16 GB MacBook Air, with and without room, are in",
 	"https://github.com/core-slot/coreslot/blob/main/evidence/air-v04/README.md",
 }
 
-var notMeasured = strings.Join(notMeasuredLines, " ")
-
-const sharingCaveat = "estimate; caches and load outside coreslot not controlled"
-
-// report is what `coreslot report` prints, and its --json document. A run is a run-log line
-// without stops or a give-up; an attempt is any line, a stopped one included.
+// report is what `coreslot report` prints, and its --json document. An attempt is a run-log
+// line; a run is a line without stops, or a give-up. SkippedLines counts the lines that did not
+// decode, lie in the future or hold an impossible value.
 type report struct {
 	Schema       int           `json:"schema"`
 	Days         int           `json:"days"`
@@ -50,84 +45,70 @@ type report struct {
 	SkippedLines int           `json:"skipped_lines"`
 	Runs         int           `json:"runs"`
 	Attempts     int           `json:"attempts"`
-	FailOpen     int           `json:"fail_open"` // attempts that ran outside the budget
+	FailOpenRuns int           `json:"fail_open_runs"` // runs outside the budget
 	Labels       int           `json:"labels"`
 	Waits        reportWaits   `json:"waits"`
 	Stops        reportStops   `json:"stops"`
 	Heaviest     []reportLabel `json:"heaviest"`
-	Sharing      reportSharing `json:"sharing_cost"`
-	NotMeasured  string        `json:"not_measured"`
 }
 
-// waits are over the attempts that waited at least waitedFromS.
+// reportWaits are over the attempts that waited at least waitedFromS.
 type reportWaits struct {
-	Waited    int     `json:"waited"`
+	Attempts  int     `json:"attempts"`
 	TotalS    float64 `json:"total_s"`
 	MedianS   float64 `json:"median_s"`
 	P90S      float64 `json:"p90_s"`
 	LongestS  float64 `json:"longest_s"`
-	Over2Min  int     `json:"over_2_min"`
-	Over10Min int     `json:"over_10_min"`
+	Over2Min  int     `json:"over_2_min"`  // waited_s > 120
+	Over10Min int     `json:"over_10_min"` // waited_s > 600
 }
 
 type reportStops struct {
-	Stopped int     `json:"stopped"`  // attempts stopped for memory
-	RedoneS float64 `json:"redone_s"` // their ran_s: work run again
-	GaveUp  int     `json:"gave_up"`  // runs that gave up after maxStops stops
+	StoppedAttempts int     `json:"stopped_attempts"` // attempts stopped for memory
+	LostS           float64 `json:"lost_s"`           // the ran_s of those attempts
+	GaveUpRuns      int     `json:"gave_up_runs"`     // runs that gave up after maxStops stops
 }
 
-// reportLabel is one label in the window. MemPeakKiB is the largest peak of its attempts; Need is the
-// need coreslot learned for it from the whole log, as stats prints it. Both are null when unknown.
+// reportLabel is one label in the window. PeakMiB, RanS and WaitedS cover every attempt, stopped
+// ones included; NeedMiB is the need coreslot learned from the whole log, as stats prints it.
+// PeakMiB and NeedMiB are null when unknown.
 type reportLabel struct {
-	Label      string  `json:"label"`
-	Runs       int     `json:"runs"`
-	MemPeakKiB *int64  `json:"mem_peak_kib"`
-	Need       *string `json:"need"`
-	RanS       float64 `json:"ran_s"`
-	WaitedS    float64 `json:"waited_s"`
+	Label    string  `json:"label"`
+	Runs     int     `json:"runs"`
+	Attempts int     `json:"attempts"`
+	PeakMiB  *int64  `json:"peak_mib"`
+	NeedMiB  *int64  `json:"need_mib"`
+	RanS     float64 `json:"ran_s"`
+	WaitedS  float64 `json:"waited_s"`
 }
 
-// sharing is the estimate: per label, the median ran_s of its counted runs that overlapped
-// another coreslot attempt over the median of those that ran alone.
-type reportSharing struct {
-	Estimate string       `json:"estimate"`
-	MinRuns  int          `json:"min_runs"`
-	TooFew   int          `json:"labels_too_few"` // labels in the window below MinRuns either way
-	Labels   []shareLabel `json:"labels"`
+// plausible reports whether r can be a measurement taken before now.
+func plausible(r store.RunRecord, now time.Time) bool {
+	return r.TimeNS > 0 && r.TimeNS <= now.UnixNano() && r.Stops >= 0 &&
+		r.WaitedS >= 0 && r.WaitedS <= maxRecordS && r.RanS >= 0 && r.RanS <= maxRecordS &&
+		(r.MemPeakKiB == nil || *r.MemPeakKiB >= 0)
 }
 
-type shareLabel struct {
-	Label         string  `json:"label"`
-	Shared        int     `json:"shared"`
-	Alone         int     `json:"alone"`
-	SharedMedianS float64 `json:"shared_median_s"`
-	AloneMedianS  float64 `json:"alone_median_s"`
-	Ratio         float64 `json:"ratio"`
-}
-
-// runSpan is an attempt's run on the wall clock: it starts when its wait ends.
-type runSpan struct{ start, end float64 }
-
-func spanOf(r store.RunRecord) runSpan {
-	s := float64(r.TimeNS)/1e9 + r.WaitedS
-	return runSpan{s, s + r.RanS}
-}
-
-// buildReport reports on the attempts that started in the days before now. all is the whole log:
-// the learned needs and the overlaps read it beyond the window.
+// buildReport reports on the attempts that started in the days before now. all is the whole log,
+// from which the learned needs come; a line that is not plausible counts as skipped.
 func buildReport(all []store.RunRecord, skipped int, now time.Time, days int) report {
 	since := now.Add(-time.Duration(days) * 24 * time.Hour)
-	rep := report{Schema: reportSchema, Days: days, SinceNS: since.UnixNano(), UntilNS: now.UnixNano(),
-		SkippedLines: skipped, Heaviest: []reportLabel{}, NotMeasured: notMeasured,
-		Sharing: reportSharing{Estimate: sharingCaveat, MinRuns: sharingMinRuns, Labels: []shareLabel{}}}
-	var in []store.RunRecord
+	rep := report{Schema: reportSchema, Days: days, SinceNS: since.UnixNano(), UntilNS: now.UnixNano(), Heaviest: []reportLabel{}}
+	var valid, in []store.RunRecord
 	for _, r := range all {
-		if r.TimeNS >= rep.SinceNS {
+		switch {
+		case !plausible(r, now):
+			skipped++
+		case r.TimeNS >= rep.SinceNS:
 			in = append(in, r)
+			fallthrough
+		default:
+			valid = append(valid, r)
 		}
 	}
+	rep.SkippedLines = skipped
 	needs := map[string]int64{}
-	for _, s := range runstats.Summarize(all) {
+	for _, s := range runstats.Summarize(valid) {
 		needs[s.Label] = s.NeedMiB
 	}
 	byLabel := map[string]*reportLabel{}
@@ -138,34 +119,35 @@ func buildReport(all []store.RunRecord, skipped int, now time.Time, days int) re
 		if isRun {
 			rep.Runs++
 		}
-		if r.FailOpen != "" {
-			rep.FailOpen++
+		if r.FailOpen != "" { // never stopped: a run outside the budget ticks nothing
+			rep.FailOpenRuns++
 		}
 		if r.WaitedS >= waitedFromS {
 			waited = append(waited, r.WaitedS)
 		}
 		if r.Stops > 0 {
-			rep.Stops.Stopped++
-			rep.Stops.RedoneS += r.RanS
+			rep.Stops.StoppedAttempts++
+			rep.Stops.LostS += r.RanS
 			if r.Stops == maxStops {
-				rep.Stops.GaveUp++
+				rep.Stops.GaveUpRuns++
 			}
 		}
 		h := byLabel[r.Label]
 		if h == nil {
 			h = &reportLabel{Label: r.Label}
 			if n := needs[r.Label]; n > 0 {
-				h.Need = new(spec.NeedText(n))
+				h.NeedMiB = new(n)
 			}
 			byLabel[r.Label] = h
 		}
+		h.Attempts++
 		if isRun {
 			h.Runs++
 		}
 		h.RanS += r.RanS
 		h.WaitedS += r.WaitedS
-		if p := r.MemPeakKiB; p != nil && (h.MemPeakKiB == nil || *p > *h.MemPeakKiB) {
-			h.MemPeakKiB = new(*p)
+		if p := r.MemPeakKiB; p != nil && (h.PeakMiB == nil || (*p+1023)/1024 > *h.PeakMiB) {
+			h.PeakMiB = new((*p + 1023) / 1024)
 		}
 	}
 	rep.Labels = len(byLabel)
@@ -176,19 +158,18 @@ func buildReport(all []store.RunRecord, skipped int, now time.Time, days int) re
 	slices.SortFunc(rep.Heaviest, func(a, b reportLabel) int {
 		return cmp.Or(-cmp.Compare(peakOf(a), peakOf(b)), -cmp.Compare(a.RanS, b.RanS), strings.Compare(a.Label, b.Label))
 	})
-	rep.Sharing.Labels, rep.Sharing.TooFew = sharingOf(all, in)
 	return rep
 }
 
 func peakOf(h reportLabel) int64 {
-	if h.MemPeakKiB == nil {
+	if h.PeakMiB == nil {
 		return -1
 	}
-	return *h.MemPeakKiB
+	return *h.PeakMiB
 }
 
 func waitsOf(w []float64) reportWaits {
-	out := reportWaits{Waited: len(w)}
+	out := reportWaits{Attempts: len(w)}
 	if len(w) == 0 {
 		return out
 	}
@@ -202,83 +183,9 @@ func waitsOf(w []float64) reportWaits {
 			out.Over10Min++
 		}
 	}
-	out.MedianS, out.P90S, out.LongestS = median(w), w[min(len(w)-1, len(w)*9/10)], w[len(w)-1]
+	n := len(w)
+	out.MedianS, out.P90S, out.LongestS = (w[(n-1)/2]+w[n/2])/2, w[min(n-1, n*9/10)], w[n-1]
 	return out
-}
-
-// median of sorted xs, which is not empty.
-func median(xs []float64) float64 {
-	n := len(xs)
-	return (xs[(n-1)/2] + xs[n/2]) / 2
-}
-
-// sharingOf splits each label's counted runs in the window (in) into those whose run overlapped
-// another attempt of the whole log (all) and those that ran alone, and returns the labels with
-// sharingMinRuns of each, by label, and how many labels fell short.
-func sharingOf(all, in []store.RunRecord) ([]shareLabel, int) {
-	spans := make([]runSpan, len(all))
-	for i, r := range all {
-		spans[i] = spanOf(r)
-	}
-	slices.SortFunc(spans, func(a, b runSpan) int { return cmp.Or(cmp.Compare(a.start, b.start), cmp.Compare(a.end, b.end)) })
-	// top[i] holds the two latest ends among spans[:i], so that one of them is not the run's own.
-	top := make([][2]float64, len(spans)+1)
-	top[0] = [2]float64{-1, -1}
-	for i, s := range spans {
-		t := top[i]
-		switch {
-		case s.end >= t[0]:
-			t = [2]float64{s.end, t[0]}
-		case s.end > t[1]:
-			t[1] = s.end
-		}
-		top[i+1] = t
-	}
-	shared, alone := map[string][]float64{}, map[string][]float64{}
-	labels := map[string]bool{}
-	for _, r := range in {
-		if r.Label == "" || r.FailOpen != "" || r.Stops > 0 { // runstats' counted runs
-			continue
-		}
-		labels[r.Label] = true
-		s := spanOf(r)
-		// The spans that start before s ends: s itself is among them when it has a length.
-		k, _ := slices.BinarySearchFunc(spans, s.end, func(x runSpan, end float64) int {
-			if x.start < end {
-				return -1
-			}
-			return 1
-		})
-		latest := top[k][0]
-		if s.end > s.start && latest == s.end {
-			latest = top[k][1] // s's own end, or a tie with another's: the runner-up decides
-		}
-		if latest > s.start {
-			shared[r.Label] = append(shared[r.Label], r.RanS)
-		} else {
-			alone[r.Label] = append(alone[r.Label], r.RanS)
-		}
-	}
-	out := []shareLabel{}
-	tooFew := 0
-	for label := range labels {
-		sh, al := shared[label], alone[label]
-		if len(sh) < sharingMinRuns || len(al) < sharingMinRuns {
-			tooFew++
-			continue
-		}
-		slices.Sort(sh)
-		slices.Sort(al)
-		l := shareLabel{Label: label, Shared: len(sh), Alone: len(al), SharedMedianS: median(sh), AloneMedianS: median(al)}
-		if l.AloneMedianS <= 0 {
-			tooFew++
-			continue
-		}
-		l.Ratio = l.SharedMedianS / l.AloneMedianS
-		out = append(out, l)
-	}
-	slices.SortFunc(out, func(a, b shareLabel) int { return strings.Compare(a.Label, b.Label) })
-	return out, tooFew
 }
 
 // reportCommand is `coreslot report [--days N] [--json]`: what the run log says coreslot did in
@@ -333,62 +240,49 @@ func (rep report) human() string {
 	if rep.Attempts == 0 {
 		line("runs", "none recorded in the window")
 	} else {
-		r := fmt.Sprintf("%d in %d %s, %d %s", rep.Runs, rep.Labels, plural(int64(rep.Labels), "label", "labels"),
+		r := fmt.Sprintf("%d in %d %s (%d %s", rep.Runs, rep.Labels, plural(int64(rep.Labels), "label", "labels"),
 			rep.Attempts, plural(int64(rep.Attempts), "attempt", "attempts"))
-		if rep.FailOpen > 0 {
-			r += fmt.Sprintf(", %d outside the budget", rep.FailOpen)
+		if rep.FailOpenRuns > 0 {
+			r += fmt.Sprintf("; %d %s outside the budget", rep.FailOpenRuns, plural(int64(rep.FailOpenRuns), "run", "runs"))
 		}
-		line("runs", "%s", r)
+		line("runs", "%s)", r)
 		wt := rep.Waits
-		if wt.Waited == 0 {
+		if wt.Attempts == 0 {
 			line("waits", "no attempt waited %s or more", secs(waitedFromS))
 		} else {
-			line("waits", "%d %s waited %s or more: total %s, median %s, p90 %s, longest %s", wt.Waited,
-				plural(int64(wt.Waited), "attempt", "attempts"), secs(waitedFromS),
+			line("waits", "%d %s waited %s or more: total %s, median %s, p90 %s, longest %s", wt.Attempts,
+				plural(int64(wt.Attempts), "attempt", "attempts"), secs(waitedFromS),
 				secs(wt.TotalS), secs(wt.MedianS), secs(wt.P90S), secs(wt.LongestS))
-			line("", "%d over 2 min, %d over 10 min", wt.Over2Min, wt.Over10Min)
+			line("", "%d waited over 2 min, %d over 10 min", wt.Over2Min, wt.Over10Min)
 		}
 		st := rep.Stops
-		if st.Stopped == 0 {
+		if st.StoppedAttempts == 0 {
 			line("stops", "none")
 		} else {
-			line("stops", "%d %s stopped for memory, %s of work redone, %d gave up after %d stops", st.Stopped,
-				plural(int64(st.Stopped), "attempt", "attempts"), secs(st.RedoneS), st.GaveUp, maxStops)
+			line("stops", "%d %s stopped for memory, %s of run time lost to stops", st.StoppedAttempts,
+				plural(int64(st.StoppedAttempts), "attempt", "attempts"), secs(st.LostS))
+			line("gave up", "%d %s, after %d stops", st.GaveUpRuns, plural(int64(st.GaveUpRuns), "run", "runs"), maxStops)
 		}
 	}
 	if len(rep.Heaviest) > 0 {
-		b.WriteString("heaviest labels (peak in the window; need as learned from the whole log)\n")
+		b.WriteString("heaviest labels: peak, ran and waited cover every attempt, stopped ones included;\n" +
+			"need is what coreslot learned from the whole log\n")
 		w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "  label\truns\tpeak\tneed\tran\twaited")
+		fmt.Fprintln(w, "  label\truns\tattempts\tpeak\tneed\tran\twaited")
+		mib := func(p *int64) string {
+			if p == nil {
+				return "-"
+			}
+			return spec.FormatMiB(*p)
+		}
 		for _, h := range rep.Heaviest[:min(len(rep.Heaviest), heaviestShown)] {
-			peak, need := "-", "-"
-			if h.MemPeakKiB != nil {
-				peak = spec.FormatMiB((*h.MemPeakKiB + 1023) / 1024)
-			}
-			if h.Need != nil {
-				need = *h.Need
-			}
-			fmt.Fprintf(w, "  %s\t%d\t%s\t%s\t%s\t%s\n", labelText(h.Label), h.Runs, peak, need, secs(h.RanS), secs(h.WaitedS))
+			fmt.Fprintf(w, "  %s\t%d\t%d\t%s\t%s\t%s\t%s\n", labelText(h.Label), h.Runs, h.Attempts,
+				mib(h.PeakMiB), mib(h.NeedMiB), secs(h.RanS), secs(h.WaitedS))
 		}
 		w.Flush()
 		if n := len(rep.Heaviest) - heaviestShown; n > 0 {
 			fmt.Fprintf(&b, "  and %d more (--json lists all)\n", n)
 		}
-	}
-	sh := rep.Sharing
-	if len(sh.Labels) == 0 {
-		line("estimate", "sharing cost: no label has %d runs both alone and alongside other coreslot runs", sh.MinRuns)
-	}
-	for i, l := range sh.Labels {
-		key := ""
-		if i == 0 {
-			key = "estimate"
-		}
-		line(key, "sharing cost of %s: %.2fx, the median run %s alongside other coreslot runs (%d) against %s alone (%d)",
-			labelText(l.Label), l.Ratio, secs(l.SharedMedianS), l.Shared, secs(l.AloneMedianS), l.Alone)
-	}
-	if len(sh.Labels) > 0 {
-		line("", "(%s)", sh.Estimate)
 	}
 	for i, l := range notMeasuredLines {
 		key := ""
@@ -398,7 +292,8 @@ func (rep report) human() string {
 		line(key, "%s", l)
 	}
 	if rep.SkippedLines > 0 {
-		fmt.Fprintf(&b, "skipped %d run-log %s that did not decode\n", rep.SkippedLines, plural(int64(rep.SkippedLines), "line", "lines"))
+		line("skipped", "%d run-log %s: undecodable, in the future or holding an impossible value",
+			rep.SkippedLines, plural(int64(rep.SkippedLines), "line", "lines"))
 	}
 	return b.String()
 }

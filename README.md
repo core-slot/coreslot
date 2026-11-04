@@ -266,14 +266,13 @@ prints what was measured: the runs, their labels and attempts (a stopped command
 new attempt of the same run); the attempts that waited 1 s or more, with the total, median, p90 and
 longest wait, and how many waited over 2 and over 10 minutes, where an agent's tool call may time
 out (Claude Code's Bash tool waits 2 minutes by default, 10 at most); the attempts stopped for
-memory, the run time they lost and the runs that gave up; and the heaviest labels by memory peak,
-with their need, run time and wait. `--json` prints the same as one document (schema 1).
+memory and the run time lost to those stops, and the runs that gave up; and the heaviest labels by
+memory peak, with their need, run time and wait. `--json` prints the same as one document
+(schema 1). Lines that do not decode, lie in the future or hold an impossible value are skipped
+and counted.
 
-It prints one estimate, labelled as one: for a label with at least 10 runs both alone and
-alongside other coreslot commands, the median run time alongside over the median alone. Caches and
-load outside coreslot are not controlled, so read it as a hint, not a cost. What the runs would have
-done without coreslot is not measured, so the report claims no time saved; it points to the
-[published measurement](evidence/air-v04/README.md), made on another machine.
+What the runs would have done without coreslot is not measured, so the report claims no time
+saved; it points to the [results measured on one MacBook Air](evidence/air-v04/README.md).
 
 ### Exit status
 
