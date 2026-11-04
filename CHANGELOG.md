@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.5.0 (2026-11-04)
+
 ### Changed
 
 - **Breaking:** `coreslot run` requires `--restart=yes` or `--restart=no` wherever the watchdog
