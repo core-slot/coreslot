@@ -15,8 +15,9 @@ The offered command starts when the machine has the memory for it, so four sessi
 start a test suite do not pile four suites onto a machine that is already short; if memory still
 runs out, coreslot stops the newest commands and restarts them by itself, which `--restart=yes`
 allows: every command the hook recognises is a test suite or a build, safe to kill at any moment
-and run again from scratch. coreslot labels the
-command on its own, so the offer carries no label. It goes through your permission rules like any
+and run again from scratch. The refusal tells the agent to change it to `--restart=no` when the
+tests or their setup or teardown scripts touch a shared database, external services or shared
+files. coreslot labels the command on its own, so the offer carries no label. It goes through your permission rules like any
 command you type: the hook only refuses, it never approves anything.
 
 ## Install
@@ -39,7 +40,8 @@ command you type: the hook only refuses, it never approves anything.
    `/plugin install coreslot --marketplace core-slot/coreslot`.
 
 There is nothing to configure: coreslot learns how much memory each command needs from its past
-runs.
+runs. With a coreslot older than `--restart` (its `coreslot run --help` does not name the flag), the
+hook offers `coreslot run -- ` instead; it asks once per session.
 
 The hook needs `python3` (3.9 or newer) and nothing else. It does nothing on a machine where
 `coreslot` is not on `PATH`.
@@ -76,7 +78,8 @@ when it lists `requires`, that has a later word equal to or starting with one of
 
 To change the list, copy the file to `~/.config/coreslot/claude-code-shapes.json` and edit it;
 when that file exists it replaces the defaults. The hook offers every shape with `--restart=yes`,
-so add only commands that are safe to kill at any moment and run again from scratch:
+so add only commands that are safe to kill at any moment and run again from scratch; a refusal
+for a shape that is not one of the defaults says so:
 
 ```json
 {

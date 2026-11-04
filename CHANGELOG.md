@@ -28,7 +28,11 @@ All notable changes to this project are recorded here. The format follows
   the next acceptance run measures it. Yellow still clears after 15 samples below its threshold.
 - The Claude Code hook offers `coreslot run --restart=yes --` and no longer recognises `make -j`,
   Gradle or `xcodebuild`, whose targets can deploy, migrate or upload; its instructions snippet for
-  other agents asks them to choose `--restart` per command.
+  other agents asks them to choose `--restart` per command. The refusal tells the agent to change
+  it to `--restart=no` when the tests or their setup or teardown scripts touch a shared database,
+  external services or shared files, and says so when the shape came from the user's own shape
+  file rather than the defaults. With a coreslot older than `--restart`, as its `run --help`
+  says, once per session, it offers `coreslot run --` as before. The plugin is version 0.2.0.
 
 ### Added
 
