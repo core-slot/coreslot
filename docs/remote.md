@@ -34,7 +34,7 @@ export CRABBOX_STATIC_ID=agent-1   # one lease id per agent, see below
 
 crabbox run --provider ssh --target macos --static-host build-host --shell -- '
   export PATH="$PATH:/opt/homebrew/bin:$HOME/.local/bin"
-  coreslot run --strict --label gate:unit -- make test
+  coreslot run --restart=yes --strict --label gate:unit -- make test
 '
 ```
 

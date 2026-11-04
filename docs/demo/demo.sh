@@ -23,8 +23,8 @@ say() { printf '\n\033[1m$ %s\033[0m\n' "$*"; sleep 1; }
 
 say "# four agents each start a gate that asks for 60 % of the machine's memory"
 for agent in 1 2 3 4; do
-    printf '$ coreslot run --mem %s -- sleep 4 &   # agent %s: a test suite\n' "$need" "$agent"
-    coreslot run --mem "$need" -- sleep 4 &
+    printf '$ coreslot run --restart=yes --mem %s -- sleep 4 &   # agent %s: a test suite\n' "$need" "$agent"
+    coreslot run --restart=yes --mem "$need" -- sleep 4 &
     sleep 0.4
 done
 

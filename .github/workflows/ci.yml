@@ -216,7 +216,7 @@ jobs:
           bin=$(ls dist/coreslot_linux_amd64*/coreslot)
           "$bin" version
           "$bin" doctor
-          "$bin" run -- true
+          "$bin" run --restart=yes -- true
           "$bin" doctor
 
   # The same for the macOS binary, the platform the snapshot cannot cover from Linux.
@@ -274,7 +274,7 @@ jobs:
           bin=$(ls dist/coreslot_darwin_arm64*/coreslot)
           "$bin" version
           "$bin" doctor
-          "$bin" run -- true
+          "$bin" run --restart=yes -- true
           "$bin" doctor
 
   # THIRD_PARTY_LICENSES.md's inventory is what go-licenses reports for both release systems.
