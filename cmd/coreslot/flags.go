@@ -46,9 +46,10 @@ Runs COMMAND once the budget grants it the memory it needs.
                         changes the world outside its own output (databases, migrations,
                         deploys, pushes, sending messages, writing shared files). When
                         unsure, no. A label marked no_restart in needs.toml is never stopped,
-                        whatever this says. Not required, and ignored, where the command is
-                        never stopped anyway: in a terminal, with --same-group, inside
-                        another run's grant, or outside the budget
+                        whatever this says. Not required where the command is never stopped
+                        anyway: in a terminal, with --same-group, inside another run's grant,
+                        or outside the budget; there no only leaves the run's Linux
+                        oom_score_adj as it was, and yes changes nothing
   --mem SIZE            memory the command needs, such as 3G or 768M, more than 0. Without it
                         the run takes the label's entry in needs.toml, beside the
                         configuration, else what the label's last 20 runs needed, else the

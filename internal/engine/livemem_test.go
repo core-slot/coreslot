@@ -224,6 +224,9 @@ func TestStopRoundFreesTheShortageNotTheReservations(t *testing.T) {
 				}
 			}
 		}
+		if len(s.Live) != 4 { // every live hold, for the kept records (watch.Prune). Mutation: leaving Live empty
+			t.Errorf("sample lists %d live holds, want 4", len(s.Live))
+		}
 		if s.ShortMiB != c.short || !slices.Equal(got, c.want) {
 			t.Errorf("headroom %d: shortage %d MiB, stopped arrivals %v (room %d); want %d, %v", c.headroom, s.ShortMiB, got, s.RoomMiB, c.short, c.want)
 		}

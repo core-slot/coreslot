@@ -83,6 +83,7 @@ type Job struct {
 type Sample struct {
 	Host     memsample.HostReading `json:"host"`
 	Jobs     []Job                 `json:"jobs"`
+	Live     []string              `json:"live,omitempty"` // every live hold, running or not
 	RoomMiB  int64                 `json:"room_mib"`
 	ShortMiB int64                 `json:"short_mib"`
 }
@@ -141,7 +142,8 @@ type Detector struct {
 	RoundFloor      bool     `json:"round_floor"` // the last round was a floor round
 	LastAdmitNS     int64    `json:"last_admit_ns"`
 	Stop            []string `json:"stop"` // the last stop round's holds
-	// The jobs a red round kept as nearly finished, by hold, for the next round to compare with.
+	// The jobs a red round kept as nearly finished, by hold, for the next round to compare with; a
+	// record lasts as long as its hold is live.
 	Kept map[string]Kept `json:"kept,omitempty"`
 }
 

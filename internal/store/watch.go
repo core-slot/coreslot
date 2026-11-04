@@ -58,6 +58,9 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 	if rerr != nil {
 		cur = watch.Sample{} // no reading: Unknown, and the next sample starts afresh
 	}
+	if rerr == nil { // a listing that was read says which holds are gone
+		d.Kept = watch.Prune(d.Kept, cur.Live)
+	}
 	var round []string
 	if lvl := d.Advance(prev, cur, c); lvl >= watch.Red && roundOver(d, cur, c) { // red or floor: a stop round
 		round, d.Kept = watch.StopList(cur.Jobs, lvl == watch.Floor, cur.ShortMiB, d.Kept, cur.Host.WallNS)

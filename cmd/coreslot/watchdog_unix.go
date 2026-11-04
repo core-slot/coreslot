@@ -70,10 +70,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}
 		det, err := g.Tick(ctx)
 		r.countClosed(d, det, err)
-		if k, ok := det.Kept[g.HoldName()]; err == nil && ok && k.RoundNS == det.LastRoundNS && k.RoundNS != keptRound {
-			keptRound = k.RoundNS
-			r.sayKept(det.Observed, k)
-		}
+		keptRound = r.keptNotice(det, g.HoldName(), keptRound)
 		if err != nil || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
@@ -84,10 +81,24 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	}
 }
 
-// sayKept says that a red round kept the command as nearly finished, with its progress and the
-// estimate the round made, or in observe mode that it would have.
-func (r *run) sayKept(observed bool, k watch.Kept) {
-	why := fmt.Sprintf("memory red, about %.0f s left, %s done", k.LeftS, percent(k.Done))
+// keptNotice says so when det's last round kept the hold, unless the round at lastNS, the last
+// one it said so for, was that round; it returns the round it last said so for. A tick that
+// failed returned the zero detector, which kept nothing.
+func (r *run) keptNotice(det watch.Detector, hold string, lastNS int64) int64 {
+	k, ok := det.Kept[hold]
+	if !ok || k.RoundNS != det.LastRoundNS || k.RoundNS == lastNS {
+		return lastNS
+	}
+	r.sayKept(det.Observed, k, time.Now())
+	return k.RoundNS
+}
+
+// sayKept says that a red round kept the command as nearly finished, with its progress, the
+// estimate the round made and the wall-clock time of the deadline its first keep set (now is the
+// time of the round, to the tick), or in observe mode that it would have.
+func (r *run) sayKept(observed bool, k watch.Kept, now time.Time) {
+	until := now.Add(time.Duration(k.DeadlineNS - k.RoundNS)).Format(time.TimeOnly)
+	why := fmt.Sprintf("memory red, about %.0f s left, %s done, until %s", k.LeftS, percent(k.Done), until)
 	if observed {
 		r.notice("would keep %s (%s)", text(r.o.label), why)
 		return

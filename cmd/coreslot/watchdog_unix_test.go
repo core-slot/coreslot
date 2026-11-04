@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
@@ -135,26 +136,30 @@ func TestStopFollowsTheRound(t *testing.T) {
 	}
 }
 
-// A kept command says so with its progress and estimate, as the stop lines do; a stop of a command
-// an earlier round kept says that too. Mutation: dropping wasKept from stopFor leaves the stop
-// line without it.
+// A kept command says so once per round, with its progress, its estimate and its deadline, as
+// the stop lines do; a stop of a command an earlier round kept says that too. Mutations: dropping
+// wasKept from stopFor leaves the stop line without it; not remembering the round says it twice.
 func TestKeptLines(t *testing.T) {
 	stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := &run{o: runOptions{label: "x", argv: []string{"go", "test", "./..."}}, io: IO{Stderr: stderr}}
-	r.sayKept(false, watch.Kept{LeftS: 9.4, Done: 0.8})
-	r.sayKept(true, watch.Kept{LeftS: 9.4, Done: 0.8})
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.Local)
+	r.sayKept(true, watch.Kept{DeadlineNS: 30e9, LeftS: 9.4, Done: 0.8, RoundNS: 20e9}, at)
+	det := watch.Detector{LastRoundNS: 20e9, Kept: map[string]watch.Kept{"h": {DeadlineNS: 30e9, LeftS: 9.4, Done: 0.8, RoundNS: 20e9}}}
+	last := r.keptNotice(det, "h", 0)
+	if again := r.keptNotice(det, "h", last); last != 20e9 || again != last {
+		t.Errorf("rounds said for %d then %d, want 20e9 both", last, again)
+	}
+	r.keptNotice(watch.Detector{LastRoundNS: 40e9, Kept: det.Kept}, "h", last) // a later round that did not keep it
 	r.stopFor(watch.Detector{Level: watch.Red}, 1<<20, memsample.TreeTimes{}, true, func() bool { return true })
 	said, _ := os.ReadFile(stderr.Name())
-	for _, want := range []string{
-		"coreslot: kept `go test ./...` running (memory red, about 9 s left, 80% done)\n",
-		"coreslot: would keep x (memory red, about 9 s left, 80% done)\n",
-	} {
-		if !strings.Contains(string(said), want) {
-			t.Errorf("stderr %q, want %q", said, want)
-		}
+	if want := "coreslot: would keep x (memory red, about 9 s left, 80% done, until 12:00:10)\n"; !strings.Contains(string(said), want) {
+		t.Errorf("stderr %q, want %q", said, want)
+	}
+	if n := strings.Count(string(said), "coreslot: kept `go test ./...` running (memory red, about 9 s left, 80% done, until "); n != 1 {
+		t.Errorf("stderr %q says the keep %d times, want once", said, n)
 	}
 	if want := "memory red, at 1 GiB; an earlier round kept it as nearly finished, this one did not"; r.lastStop != want {
 		t.Errorf("stop %q, want %q", r.lastStop, want)

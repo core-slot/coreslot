@@ -349,7 +349,8 @@ reader does not know is ignored.
 > when it was started with `--restart=yes` and its label has no `no_restart = true`, which wins over
 > the flag; `--restart=no` makes it false. The CLI requires `--restart` of every run that could be a
 > victim (its command gets a process group of its own and its label is not `no_restart`), and
-> accepts and ignores it elsewhere.
+> accepts it elsewhere, where `--restart=no` only keeps the run's `oom_score_adj` (section 17) and
+> `--restart=yes` changes nothing.
 
 ## 6. Holds and descriptor ownership
 
@@ -561,7 +562,7 @@ client that does not run the detector needs only these keys:
 | `detector.stop` | array of strings | the hold names the last stop round listed |
 | `detector.observed` | boolean | the last stop round was written in observe mode (section 23.6) |
 | `detector.round_floor` | boolean | the last stop round was a floor round, not a red one (section 23.5) |
-| `detector.kept` | object | optional; by hold name, the holds a red round kept as nearly finished (section 23.5), each `{"left_s": <number>, "done": <number>, "round_ns": <integer>}`: its predicted remaining seconds and its progress at the round that last kept it, and that round's `last_round_ns` |
+| `detector.kept` | object | optional; by hold name, the holds a red round kept as nearly finished (section 23.5), each `{"deadline_ns": <integer>, "left_s": <number>, "done": <number>, "round_ns": <integer>}`: the host clock by which its first keep predicted it to end, its predicted remaining seconds and its progress at the round that last kept it, and that round's `last_round_ns` |
 
 The other keys under `sample` and `detector` are the detector's own state (the readings, the
 window, the rates, the excess, the leaky bucket, the yellow latch). A detector
@@ -1006,8 +1007,8 @@ is passed on.
 On Linux a run SHOULD raise its own `oom_score_adj` to 500, never lowering a higher one, before it
 starts the command, which inherits it, so that the kernel's out-of-memory kill takes a coreslot
 job rather than the desktop (systemd-oomd does not read the score: it picks a cgroup by its memory
-pressure or swap use). A run whose label has `no_restart` (section 5.4)
-leaves its score alone.
+pressure or swap use). A run whose label has `no_restart` (section 5.4), or that its caller
+declared not to be run again (the CLI's `--restart=no`), leaves its score alone.
 
 ## 18. Nested runs: pass-through
 
@@ -1563,14 +1564,18 @@ one at a time.
    and goes on to the next one, so that its list may be empty; a floor round passes over none.
    For a victim, with `T` its hold's `typical_s`, `C` its `typical_cpu_s` and `c` its `cpu_ns` in
    seconds, its progress is `p = c / C` and its predicted remaining time
-   `t3 = T × (1 − p) / (1 − min(stall_ewma, 0.8))`. It is nearly finished when `T > 0`, `C > 0`,
-   `0 < p < 1` and `t3 < T` and, when an earlier red round kept it, `t3` is smaller than the
-   `left_s` that round recorded: the first round may keep a job on `t3 < T` alone, every later one
-   only while the estimate keeps shrinking. The round writes `detector.kept`: the record
-   `{left_s: t3, done: p, round_ns}` of each victim it kept, and the earlier records of the
-   running holds it neither kept nor listed; it drops every other record. The rule spares work
-   that is almost done when memory is red, by coreslot's own measurements of the label; it never
-   changes the order of the victims, and the floor stays the safety net.
+   `t3 = T × (1 − p) / (1 − min(stall_ewma, 0.8))`. It is nearly finished when `C > 0`, `p < 1`
+   and `t3 < T` (which needs `T > 0` and `p > 0`) and, when an earlier red round kept it, the
+   round's time is before that record's `deadline_ns` and `t3` is smaller than its `left_s`: the
+   first keep sets the deadline to the round's time plus its `t3`, and every later one needs the
+   estimate to keep shrinking within it. A nearly finished victim is passed over only when the
+   next victim of the round's order, the one the round would stop in its place, has a smaller
+   `cpu_ns`: work done counts against work done. With no next victim it is passed over too. The
+   round writes `detector.kept`: the record `{deadline_ns, left_s: t3, done: p, round_ns}` of each
+   victim it kept, the deadline kept from the first. A record lasts as long as its hold is live,
+   also while its run misses a tick, and goes when a sample finds the hold gone. The rule spares
+   work that is almost done when memory is red, by coreslot's own measurements of the label; it
+   never changes the order of the victims, and the floor stays the safety net.
 
    > **Implementation note.** The Go CLI's `cpu_ns` sums the deltas of its tree listings, which
    > miss what a process spent between the last listing and its exit, so its progress reads low

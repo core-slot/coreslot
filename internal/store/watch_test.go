@@ -19,13 +19,17 @@ import (
 type machine struct {
 	calls    int
 	jobs     []watch.Job
-	swapStep int64 // swap used grows by it per call, with no room left in swap or on the volume
+	live     []string // live holds besides the jobs: ones whose run missed a tick
+	swapStep int64    // swap used grows by it per call, with no room left in swap or on the volume
 }
 
 func (m *machine) read() (watch.Sample, error) {
 	m.calls++
 	ns := int64(1e12) + int64(m.calls)*2e9
-	s := watch.Sample{Jobs: slices.Clone(m.jobs), ShortMiB: 100}
+	s := watch.Sample{Jobs: slices.Clone(m.jobs), ShortMiB: 100, Live: slices.Clone(m.live)}
+	for _, j := range m.jobs {
+		s.Live = append(s.Live, j.Hold)
+	}
 	s.Host.Decomp, s.Host.WallNS, s.Host.AwakeNS = uint64(m.calls)*1e6, ns, ns
 	s.Host.SwapFreeMiB, s.Host.VMVolumeFreeMiB = 8192, 100000
 	if m.swapStep > 0 {
@@ -132,8 +136,9 @@ func TestFloorRoundListsLearningJobs(t *testing.T) {
 }
 
 // A red round keeps a nearly finished job and stores the record in watch.json, so that the next
-// round, whoever takes it, compares with it: once the job's estimate stops shrinking, that round
-// lists it. Mutation: not storing the record keeps the job again as if first seen.
+// round, whoever takes it, compares with it, also after a sample in which the job's run missed its
+// tick: once the job's estimate stops shrinking, that round lists it. Mutations: not storing the
+// record, or pruning it by the running jobs, keeps the job again as if first seen.
 func TestKeptRecordOutlivesTheRound(t *testing.T) {
 	st := open(t, newDir(t))
 	sec := enter(t, st)
@@ -148,17 +153,22 @@ func TestKeptRecordOutlivesTheRound(t *testing.T) {
 		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
 	}
 	stored, _, _, err := st.ReadWatch()
-	if err != nil || !slices.Equal(stop, []string{"2"}) || stored.Kept["3"].RoundNS != d.LastRoundNS {
-		t.Fatalf("first round: stop %v, stored kept %v (%v); want [2], 3 kept at the round", stop, stored.Kept, err)
+	if k := stored.Kept["3"]; err != nil || !slices.Equal(stop, []string{"2"}) || k.RoundNS != d.LastRoundNS || k.DeadlineNS <= k.RoundNS {
+		t.Fatalf("first round: stop %v, stored kept %v (%v); want [2], 3 kept at the round with a deadline", stop, stored.Kept, err)
 	}
-	m.jobs = []watch.Job{stalled("1", 1), near} // 2 is gone; 3's estimate stays where it was
+	m.jobs, m.live = []watch.Job{stalled("1", 1)}, []string{"3"} // 2 is gone; 3's run misses a tick
+	now += 2e9
+	if d, _, _ = sec.Tick(now, m.read, watch.Defaults()); d.Kept["3"].RoundNS == 0 {
+		t.Fatalf("a sample without 3's tick dropped its record: %v", d.Kept)
+	}
+	m.jobs, m.live = []watch.Job{stalled("1", 1), near}, nil // 3's estimate stays where it was
 	round := d.LastRoundNS
 	for d.LastRoundNS == round && m.calls < 40 {
 		now += 2e9
 		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
 	}
-	if !slices.Equal(stop, []string{"3"}) || d.Kept != nil {
-		t.Errorf("next round: stop %v, kept %v; want [3], nothing kept", stop, d.Kept)
+	if !slices.Equal(stop, []string{"3"}) {
+		t.Errorf("next round: stop %v, kept %v; want [3]", stop, d.Kept)
 	}
 }
 

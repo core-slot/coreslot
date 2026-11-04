@@ -18,7 +18,8 @@ All notable changes to this project are recorded here. The format follows
   or writing shared files (`no`, never stopped). Without the flag such a run refuses before it
   queues, with a usage error (exit 64) that says which to pick; when unsure, `no`. A run in a
   terminal, with `--same-group`, nested inside another run's reservation or outside the budget is
-  never stopped and needs no flag. `needs.toml`'s `no_restart = true` still works and wins over
+  never stopped and needs no flag; there `--restart=no` only keeps the Linux `oom_score_adj` the run
+  would otherwise raise. `needs.toml`'s `no_restart = true` still works and wins over
   `--restart=yes`. Scripts and wrappers that call `coreslot run` must pass the flag. The stop line
   says that the command was declared restartable.
 - The default `[watch] calm_s` is 10 s instead of 30 s: a stopped command comes back, and starts
@@ -35,10 +36,11 @@ All notable changes to this project are recorded here. The format follows
   instead. A command is nearly finished when its label has at least 10 counted runs, its CPU time
   so far against the median CPU time of those runs gives a progress strictly between 0 and 1, and
   the remaining time that progress predicts, slowed by its recent share of time lost to memory, is
-  under the label's typical run time; a command an earlier round kept is kept again only while
-  that estimate keeps shrinking. The run prints `coreslot: kept … (memory red, about N s left,
-  P% done)`, and a later stop of it says that an earlier round kept it. A floor round keeps
-  nothing. Holds carry the optional keys `cpu_ns`, `typical_cpu_s` and `stall_ewma`, and
+  under the label's typical run time. The first keep sets a deadline, its time plus that estimate;
+  a later round keeps the command again only before the deadline and while the estimate keeps
+  shrinking. A command is kept only when the older one stopped in its place has done less CPU work.
+  The run prints `coreslot: kept … (memory red, about N s left, P% done, until HH:MM:SS)`, and a
+  later stop of it says that an earlier round kept it. A floor round keeps nothing. Holds carry the optional keys `cpu_ns`, `typical_cpu_s` and `stall_ewma`, and
   `watch.json` the detector's `kept` records.
 
 ## v0.4.1 (2026-11-02)

@@ -130,8 +130,10 @@ kernel is actually paging:
 A red round spares a command that is nearly finished and goes on to the next newest: one whose
 label has at least 10 earlier runs, whose CPU time so far, against the median CPU time of those
 runs, says it will end within the label's typical run time (slowed by the share of its recent
-time it lost to memory), and, if an earlier round spared it, whose estimate has shrunk since. The
-run says so: `coreslot: kept … (memory red, about 9 s left, 80% done)`. A floor round spares
+time it lost to memory). A later round spares it again only before the time that first estimate
+gave and while the estimate keeps shrinking, and a command is spared only when the older one
+stopped in its place has done less CPU work. The run says so:
+`coreslot: kept … (memory red, about 9 s left, 80% done, until 12:00:10)`. A floor round spares
 nothing.
 
 A stopped command is killed with `SIGKILL` and put back in the queue at its **first arrival**, so it
@@ -229,8 +231,9 @@ command that is safe to kill at any moment and run again (tests, builds, linters
 migrations, deploys, pushes, sending messages, writing shared files), which is then never
 stopped. When unsure, choose no. Without it such a run refuses with a usage error (exit 64) that
 says so. Where the command is never stopped anyway (a run in a terminal, `--same-group`, a run
-nested inside another run's reservation, a run outside the budget) the flag is not required and
-is ignored.
+nested inside another run's reservation, a run outside the budget) the flag is not required;
+there `--restart=no` only keeps the Linux `oom_score_adj` the run would otherwise raise, and
+`--restart=yes` changes nothing.
 
 `--no-wait` refuses at once instead of queueing, `--timeout D` bounds all the waiting of the run,
 restarts included, counted from its start (it never stops a running command), and

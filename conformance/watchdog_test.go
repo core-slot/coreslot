@@ -212,6 +212,70 @@ func TestHoldCarriesTheKeepEstimate(t *testing.T) {
 	b.ExitCode(0)
 }
 
+// A run's hold carries its command's CPU time so far and its smoothed stall share, measured from
+// its own tree: a shell that opens /dev/null in a loop for 8 s reaches a second of CPU and spends
+// part of it in the system. Mutations: dropping the CPU sum leaves cpu_ns at 0; dropping the
+// smoothing leaves stall_ewma at 0.
+func TestHoldCarriesCPUAndStall(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	p := e.Start("run", "--restart=yes", "--label", "spin", "--mem", "100M", "--",
+		"bash", "-c", "while [ $SECONDS -lt 8 ]; do : >/dev/null; done")
+	var h wire.Hold
+	e.Eventually(startWait, "the hold reports a second of CPU and a stall share", func() bool {
+		info, ok := e.Hold("spin")
+		if !ok {
+			return false
+		}
+		data, err := os.ReadFile(filepath.Join(e.Dir, store.HoldsDir, info.Name))
+		if err != nil {
+			return false
+		}
+		if b, err := wire.DecodeHold(data); err == nil {
+			h = b
+		}
+		return h.CPUNS >= 1e9 && h.StallEWMA > 0
+	})
+	if h.StallEWMA > 1 {
+		t.Errorf("stall_ewma %v, want a share", h.StallEWMA)
+	}
+	p.ExitCode(0)
+}
+
+// A run whose hold the last red round kept says so on stderr, with the round's estimate and its
+// deadline, once: the record the round wrote into watch.json reaches the line. Mutation: not
+// reading det.Kept in the tick prints nothing.
+func TestKeptRunSaysSo(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	r := e.Run("K", "--mem", "100M")
+	e.WaitStarted("K")
+	hold := e.WaitTicked("K")
+	sec, err := e.Engine().Store().Enter(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, smp, at, err := e.Engine().Store().ReadWatch()
+	if err == nil {
+		round := smp.Host.WallNS
+		d.LastRoundNS, d.Stop = round, nil
+		d.Kept = map[string]watch.Kept{hold: {DeadlineNS: round + 9e9, LeftS: 9, Done: 0.8, RoundNS: round}}
+		err = sec.SetWatch(d, smp, at)
+	}
+	sec.Leave()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Eventually(startWait, "K says it was kept", func() bool {
+		return strings.Contains(r.Stderr(), "coreslot: kept `"+bins.child+" hold "+e.MarkDir+" K` running (memory red, about 9 s left, 80% done, until ")
+	})
+	e.ReleaseChild("K")
+	r.ExitCode(0)
+	if n := strings.Count(r.Stderr(), "coreslot: kept "); n != 1 {
+		t.Errorf("stderr says kept %d times, want once:\n%s", n, r.Stderr())
+	}
+}
+
 // In observe mode a listed run says what it would stop and kills nothing. Mutation: killing in
 // observe mode ends B's command.
 func TestObserveKillsNothing(t *testing.T) {
