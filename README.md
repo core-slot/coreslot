@@ -17,8 +17,8 @@ brew install core-slot/tap/coreslot
 ```
 
 ```sh
-coreslot run -- go test ./...    # starts when the machine has the memory for it
-coreslot status                  # what runs, what waits, whether the watchdog is protecting
+coreslot run --restart=yes -- go test ./...   # starts when the machine has the memory for it
+coreslot status                                # what runs, what waits, whether the watchdog is protecting
 ```
 
 - **It starts a command when the memory is there.** A command starts when the memory the machine
@@ -56,7 +56,7 @@ over all 24 arrival orders (median 1.003), and within 5 % of unwrapped with room
 
 **For coding agents.** A [Claude Code plugin](integrations/claude-code/README.md) refuses a bare
 `go test ./...`, `cargo test` or `pytest -n 8` once and offers it back as
-`coreslot run -- <the same command>`:
+`coreslot run --restart=yes -- <the same command>`:
 
 ```text
 /plugin marketplace add core-slot/coreslot
@@ -133,8 +133,8 @@ with a margin. After the third stop it gives up with the refusal code and prints
 after 3 memory stops`. After a floor stop the run also tells the agent to free memory outside
 coreslot before the command comes back.
 
-Never stopped: the oldest running command, a command whose label has `no_restart = true` in
-`needs.toml`, a command that shares coreslot's process group (a run in a terminal, `--same-group`,
+Never stopped: the oldest running command, a command run with `--restart=no`, a command whose
+label has `no_restart = true` in `needs.toml` (which wins over `--restart=yes`), a command that shares coreslot's process group (a run in a terminal, `--same-group`,
 or a run nested inside another run's reservation), a run outside the budget and anything coreslot did
 not start. A stop kills the command's process group: a process that left it (`setsid`, a build
 daemon, a dev server) survives and may still hold memory or a port when the command comes back. A
@@ -155,7 +155,8 @@ leaves its label learning. A learning command still holds its memory, and `statu
 watchdog is learning and how many running commands have no normal share yet.
 
 On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
-takes a coreslot command before your desktop; a label with `no_restart = true` keeps its score.
+takes a coreslot command before your desktop; a `--restart=no` run and a label with
+`no_restart = true` keep their score.
 The floor needs swap to grow, so on a host without swap it never fires and the kernel's
 out-of-memory killer acts instead, and the paging gate opens on any rise of the memory stall, which
 is nearly every period. A label's normal share is measured only while the gate is closed, so on
@@ -204,14 +205,25 @@ remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 ## Usage
 
 ```sh
-coreslot run -- pytest -n 8                     # label "pytest@proj", need learned from earlier runs
-coreslot run --mem 3G -- make test              # say what it needs when it has no history
-coreslot run --label gate:unit -- npm test      # a label of your own
+coreslot run --restart=yes -- pytest -n 8                 # label "pytest@proj", need learned from earlier runs
+coreslot run --restart=yes --mem 3G -- make test          # say what it needs when it has no history
+coreslot run --restart=yes --label gate:unit -- npm test  # a label of your own
+coreslot run --restart=no -- ./migrate.sh                 # never killed and run twice
 coreslot status            # the watchdog's level, running commands, the queue; --json for scripts
 coreslot stats             # per label, what the need is learned from
 coreslot doctor            # state directory, filesystem, permissions, format, readings
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
 ```
+
+**`--restart=yes|no` is required** wherever coreslot could stop the command: when memory runs
+short it kills the newest commands and runs them again from scratch. `--restart=yes` is for a
+command that is safe to kill at any moment and run again (tests, builds, linters, type checks);
+`--restart=no` for anything that changes the world outside its own output (databases,
+migrations, deploys, pushes, sending messages, writing shared files), which is then never
+stopped. When unsure, choose no. Without it such a run refuses with a usage error (exit 64) that
+says so. Where the command is never stopped anyway (a run in a terminal, `--same-group`, a run
+nested inside another run's reservation, a run outside the budget) the flag is not required and
+is ignored.
 
 `--no-wait` refuses at once instead of queueing, `--timeout D` bounds all the waiting of the run,
 restarts included, counted from its start (it never stops a running command), and
@@ -233,7 +245,7 @@ victim). A SIGINT or SIGQUIT sent to coreslot's pid alone is then dropped and a 
 reaches only the command's pid, as in a terminal: signal the group, not coreslot's pid.
 
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time: write
-`coreslot run --label gate:pipe -- sh -c 'a | b'` so that they are one command with one need. The
+`coreslot run --restart=yes --label gate:pipe -- sh -c 'a | b'` so that they are one command with one need. The
 `--label` matters here: without it the pipeline is labelled `sh@proj`, like every other `sh -c`.
 
 ### Exit status
@@ -274,7 +286,7 @@ space or an `@` is not a bare TOML key, so quote it:
 mem = "3G"            # a pin: learning never replaces it
 
 [needs."gate:docker"]
-no_restart = true     # never stopped by a stop round, so never restarted
+no_restart = true     # never stopped by a stop round, so never restarted; wins over --restart=yes
 ```
 
 The state lives in `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`

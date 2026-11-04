@@ -22,12 +22,12 @@ import (
 // first point is the ticket's publication, after the entry wrote admit.lock's body.
 func TestStatusNamesSectionHolderOfPausedRun(t *testing.T) {
 	dir := budgetDir(t, 512)
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	hooks := t.TempDir()
 	env := append(baseEnv(dir), "CORESLOT_TESTHOOK_DIR="+hooks, "CORESLOT_TESTHOOK_PAUSE=publish.after-create")
-	cmd := cliCmd(t, env, "run", "--", "true")
+	cmd := cliCmd(t, env, "run", "--restart=yes", "--", "true")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestCancelStateErrorAfterTimelyEntry(t *testing.T) {
 		t.Skip("root reads a mode-000 entry")
 	}
 	dir := stateDir(t, "")
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	hooks := t.TempDir()

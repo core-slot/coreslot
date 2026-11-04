@@ -470,7 +470,7 @@ func rawTerminalControls(b []byte) []rune {
 func TestJSONOutputsEscapeTerminalControls(t *testing.T) {
 	const label = "x\x1b]0;pwn\a\u009b2J\u202ey"
 	dir := budgetDir(t, 512)
-	if r := cli(t, baseEnv(dir), "run", "--label", label, "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--label", label, "--", "true"); r.code != 0 {
 		t.Fatalf("run: exit %d (stderr %q)", r.code, r.stderr)
 	}
 	logBytes, err := os.ReadFile(filepath.Join(dir, "log", "runs.jsonl"))
@@ -822,7 +822,7 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	recordDegraded(t, st, "test")
-	if r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "128M", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	lockInode := inodeOf(t, filepath.Join(dir, "admit.lock"))
@@ -855,7 +855,7 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	if inodeOf(t, filepath.Join(dir, "admit.lock")) != lockInode {
 		t.Error("admit.lock was replaced")
 	}
-	if r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "128M", "--", "true"); r.code != 0 {
 		t.Errorf("a run after the reset exited %d (stderr %q)", r.code, r.stderr)
 	}
 }
@@ -864,7 +864,7 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 // entries it removed and how many it could not, besides the error.
 func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	dir := stateDir(t, "")
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	// A directory under a ticket's name is a stray no client owns, and os.Remove cannot remove it
@@ -916,7 +916,7 @@ func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stateDir(t, "")
-			if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 || !slices.Contains(entries(t, dir, "log"), "runs.jsonl") {
+			if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 || !slices.Contains(entries(t, dir, "log"), "runs.jsonl") {
 				t.Fatalf("setup run: %d %q, log/ %v", r.code, r.stderr, entries(t, dir, "log"))
 			}
 			if !c.log {
@@ -1130,11 +1130,11 @@ func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 		}
 	}
 	const notice = "state format 1 is not supported; run coreslot doctor --reset"
-	r := cli(t, baseEnv(dir), "run", "--", "true")
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true")
 	if r.code != 0 || strings.Count(r.stderr, "\n") != 1 || !strings.Contains(r.stderr, notice) {
 		t.Errorf("run: exit %d, stderr %q; want 0 and one notice containing %q", r.code, r.stderr, notice)
 	}
-	if r := cli(t, baseEnv(dir), "run", "--strict", "--", "true"); r.code != 75 || !strings.Contains(r.stderr, notice) {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--strict", "--", "true"); r.code != 75 || !strings.Contains(r.stderr, notice) {
 		t.Errorf("run --strict: exit %d, stderr %q; want 75 and the notice", r.code, r.stderr)
 	}
 	r = cli(t, baseEnv(dir), "doctor", "--reset")
@@ -1150,7 +1150,7 @@ func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	if got := entries(t, dir, "log"); len(got) != 0 {
 		t.Errorf("the run and watch logs of format 1 survived the reset: %v", got)
 	}
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 || r.stderr != "" {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 || r.stderr != "" {
 		t.Errorf("a run after the reset: exit %d, stderr %q; want 0 and silence", r.code, r.stderr)
 	}
 }
@@ -1228,8 +1228,8 @@ func TestCommandErrorsAreEscaped(t *testing.T) {
 	}
 	// run fails open, refuses under --strict, or cannot start a command whose name is user text
 	// too: every notice it prints is one line of its own, starting with "coreslot: ".
-	for _, args := range [][]string{{"run", "--", "true"}, {"run", "--strict", "--", "true"},
-		{"run", "--", "./no\nsuch\x1b[31m"}} {
+	for _, args := range [][]string{{"run", "--restart=yes", "--", "true"}, {"run", "--restart=yes", "--strict", "--", "true"},
+		{"run", "--restart=yes", "--", "./no\nsuch\x1b[31m"}} {
 		r := cli(t, env, args...)
 		if !strings.Contains(r.stderr, `x\ny\x1b[31m`) {
 			t.Errorf("%q: exit %d, want a notice that quotes the directory escaped:\n%q", args, r.code, r.stderr)
@@ -1244,7 +1244,7 @@ func TestCommandErrorsAreEscaped(t *testing.T) {
 		}
 	}
 	// A flag the run does not know is named escaped in the usage error.
-	if r := cli(t, env, "run", "--no\x1b[31m", "--", "true"); r.code != exitUsage || strings.ContainsAny(r.stderr, "\x1b\r") {
+	if r := cli(t, env, "run", "--restart=yes", "--no\x1b[31m", "--", "true"); r.code != exitUsage || strings.ContainsAny(r.stderr, "\x1b\r") {
 		t.Errorf("run with an unknown flag: exit %d, want %d without a raw control character:\n%q", r.code, exitUsage, r.stderr)
 	}
 }
@@ -1255,7 +1255,7 @@ func TestCommandErrorsAreEscaped(t *testing.T) {
 func TestHelpGoesToStdout(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, args := range [][]string{
-		{"help"}, {"--help"}, {"run", "--help"}, {"run", "-h"}, {"status", "--help"}, {"cancel", "--help"},
+		{"help"}, {"--help"}, {"run", "--restart=yes", "--help"}, {"run", "-h"}, {"status", "--help"}, {"cancel", "--help"},
 		{"doctor", "--help"}, {"version", "--help"}, {"version", "-h"},
 	} {
 		r := cli(t, baseEnv(dir), args...)
@@ -1263,7 +1263,7 @@ func TestHelpGoesToStdout(t *testing.T) {
 			t.Errorf("%v: exit %d, want 0 with the usage on stdout only (stdout %q, stderr %q)", args, r.code, r.stdout, r.stderr)
 		}
 	}
-	help := cli(t, baseEnv(dir), "run", "--help").stdout
+	help := cli(t, baseEnv(dir), "run", "--restart=yes", "--help").stdout
 	for _, want := range []string{
 		"  --mem SIZE ", "such as 3G or 768M",
 		"  --label L ", "  --timeout D ", "(default 0, no limit)",
@@ -1286,7 +1286,7 @@ func TestNegativeDurationsAreUsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"run", "--timeout", "-1s", "--", "true"}, "coreslot: --timeout -1s: want a duration of 0 or more (0 means no limit)"},
+		{[]string{"run", "--restart=yes", "--timeout", "-1s", "--", "true"}, "coreslot: --timeout -1s: want a duration of 0 or more (0 means no limit)"},
 		{[]string{"status", "--observe", "-1s"}, "coreslot: status: --observe -1s: want a duration of 0 or more"},
 	} {
 		r := cli(t, baseEnv(dir), c.args...)
@@ -1294,7 +1294,7 @@ func TestNegativeDurationsAreUsageErrors(t *testing.T) {
 			t.Errorf("%v: exit %d, want 64 and %q first (stderr %q)", c.args, r.code, c.want, r.stderr)
 		}
 	}
-	if r := cli(t, baseEnv(dir), "run", "--timeout", "0s", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--timeout", "0s", "--", "true"); r.code != 0 {
 		t.Errorf("--timeout 0s: exit %d, want 0 (stderr %q)", r.code, r.stderr)
 	}
 }
@@ -1362,7 +1362,7 @@ func TestUnreadableStateEntryExitStatuses(t *testing.T) {
 		{"FORMAT", []string{"doctor", "--clear"}, 1, "coreslot: doctor --clear: open "},
 	} {
 		dir := stateDir(t, "")
-		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 			t.Fatalf("setup run: exit %d (stderr %q)", r.code, r.stderr)
 		}
 		st, err := store.Open(dir)

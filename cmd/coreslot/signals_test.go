@@ -292,7 +292,7 @@ func TestTermAndHupToWrapperTerminalMode(t *testing.T) {
 		t.Run(sig.String(), func(t *testing.T) {
 			dir := budgetDir(t, 256)
 			pidFile := filepath.Join(t.TempDir(), "pid")
-			cmd := exec.Command(cliBinary(t), "run", "--mem", "256M", "--", "sh", "-c",
+			cmd := exec.Command(cliBinary(t), "run", "--restart=yes", "--mem", "256M", "--", "sh", "-c",
 				`echo $$ > "$0"; exec sleep 60`, pidFile)
 			cmd.Env = baseEnv(dir)
 			p := startPTY(t, cmd)
@@ -317,7 +317,7 @@ func TestCtrlCTerminalReachesChildOnce(t *testing.T) {
 	dir := budgetDir(t, 256)
 	tmp := t.TempDir()
 	ready, count := filepath.Join(tmp, "ready"), filepath.Join(tmp, "count")
-	cmd := exec.Command(cliBinary(t), append([]string{"run", "--mem", "256M", "--"}, helper(t, "count-int", ready, count)...)...)
+	cmd := exec.Command(cliBinary(t), append([]string{"run", "--restart=yes", "--mem", "256M", "--"}, helper(t, "count-int", ready, count)...)...)
 	cmd.Env = baseEnv(dir)
 	p := startPTY(t, cmd)
 	child, _ := readPID(t, ready)
@@ -386,7 +386,7 @@ func TestPipelineCtrlZAndFg(t *testing.T) {
 	tmp := t.TempDir()
 	pidFile, ticks, release := filepath.Join(tmp, "pid"), filepath.Join(tmp, "ticks"), filepath.Join(tmp, "release")
 	sh := shell(t, dir)
-	sh.write(t, fmt.Sprintf(`true | "$BIN" run --mem 256M --label pipeline-z -- env %s=ticker "$BIN" '%s' '%s' '%s' | cat`+"\n",
+	sh.write(t, fmt.Sprintf(`true | "$BIN" run --restart=yes --mem 256M --label pipeline-z -- env %s=ticker "$BIN" '%s' '%s' '%s' | cat`+"\n",
 		helperEnv, pidFile, ticks, release))
 	child, cs := readPID(t, pidFile)
 	killGroupOf(t, child)
@@ -445,7 +445,7 @@ func TestPipelineCtrlCTerminatesChildGroup(t *testing.T) {
 	sh := shell(t, dir)
 	// Stdin is a pipe, so coreslot is not in terminal mode although its group is the
 	// terminal's foreground group: the command gets its own group, which Ctrl-C does not reach.
-	sh.write(t, fmt.Sprintf(`true | "$BIN" run --mem 256M --label pipeline -- sh -c 'echo $$ > "$0"; exec sleep 60' '%s' | cat`+"\n", pidFile))
+	sh.write(t, fmt.Sprintf(`true | "$BIN" run --restart=yes --mem 256M --label pipeline -- sh -c 'echo $$ > "$0"; exec sleep 60' '%s' | cat`+"\n", pidFile))
 	child, _ := readPID(t, pidFile)
 	killGroupOf(t, child)
 	killGroupOf(t, parentOf(t, child)) // the pipeline's group is not the shell's
@@ -489,7 +489,7 @@ func TestIntQuitToNonTerminalWrapperPID(t *testing.T) {
 func signalNonTerminal(t *testing.T, sig syscall.Signal) {
 	dir := budgetDir(t, 256)
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	cmd := cliCmd(t, baseEnv(dir), "run", "--mem", "256M", "--", "sh", "-c",
+	cmd := cliCmd(t, baseEnv(dir), "run", "--restart=yes", "--mem", "256M", "--", "sh", "-c",
 		`ulimit -c 0; echo $$ > "$0"; exec sleep 60`, pidFile)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -582,7 +582,7 @@ func sameGroupTree(t *testing.T, dir string, sameGroup bool, attrs *syscall.SysP
 	t.Helper()
 	tmp := t.TempDir()
 	shFile, gcFile := filepath.Join(tmp, "sh"), filepath.Join(tmp, "gc")
-	args := []string{"run"}
+	args := []string{"run", "--restart=yes"}
 	if sameGroup {
 		args = append(args, "--same-group")
 	}

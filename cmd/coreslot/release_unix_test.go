@@ -28,7 +28,7 @@ func TestRunReleaseAfterTheStateDirectoryWasReplaced(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stateDir(t, c.cfg)
 			env := append(baseEnv(dir), "S="+dir)
-			r := cli(t, env, "run", "--mem", "128M", "--", "sh", "-c", c.script+" && exit 7")
+			r := cli(t, env, "run", "--restart=yes", "--mem", "128M", "--", "sh", "-c", c.script+" && exit 7")
 			if r.code != 7 {
 				t.Fatalf("exit %d, want the command's 7; stderr:\n%s", r.code, r.stderr)
 			}

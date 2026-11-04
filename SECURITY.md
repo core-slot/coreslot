@@ -67,8 +67,8 @@ The full rules are in
 - The run log (`log/runs.jsonl`) never records the environment, nor the command line beyond its
   label. A label is recorded in the run log, in `status` and in the names of tickets and holds;
   without `--label` the automatic label copies the program's name and up to two leading word-like
-  arguments (`deploy hunter2@proj` for `coreslot run -- deploy hunter2`). Pass `--label` for a
-  command whose leading words may carry a secret.
+  arguments (`deploy hunter2@proj` for `coreslot run --restart=no -- deploy hunter2`). Pass
+  `--label` for a command whose leading words may carry a secret.
 - Deleting or resetting the directory while anything is live creates a second budget;
   `coreslot doctor --reset` refuses unless nothing is live.
 

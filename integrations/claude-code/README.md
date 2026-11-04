@@ -6,14 +6,16 @@ build command bare, the hook refuses it once and offers the same command back un
 ```text
 Claude:  go test -race ./...
 hook:    coreslot: several agents share this machine's memory, and this command is one of the
-         heavy ones. Run it with the `coreslot run --` prefix inserted, ...
-         coreslot run -- go test -race ./...
-Claude:  coreslot run -- go test -race ./...
+         heavy ones. Run it with the `coreslot run --restart=yes --` prefix inserted, ...
+         coreslot run --restart=yes -- go test -race ./...
+Claude:  coreslot run --restart=yes -- go test -race ./...
 ```
 
 The offered command starts when the machine has the memory for it, so four sessions that each
 start a test suite do not pile four suites onto a machine that is already short; if memory still
-runs out, coreslot stops the newest commands and restarts them by itself. coreslot labels the
+runs out, coreslot stops the newest commands and restarts them by itself, which `--restart=yes`
+allows: every command the hook recognises is a test suite or a build, safe to kill at any moment
+and run again from scratch. coreslot labels the
 command on its own, so the offer carries no label. It goes through your permission rules like any
 command you type: the hook only refuses, it never approves anything.
 
@@ -65,14 +67,16 @@ Clone the repository and register the hook yourself, in Claude Code's user `sett
 ## What counts as heavy
 
 [`hooks/shapes.json`](hooks/shapes.json) lists the commands the hook recognises: `go test ./...`, `cargo test` / `build` / `nextest` / `clippy`, pytest with
-`-n`, `jest`, `vitest` and the `npm`/`pnpm`/`yarn`/`bun` test scripts, `make -j`, Gradle,
-`xcodebuild` and `bazel test` / `build`. A shape matches a command whose words begin with one of
+`-n`, `jest`, `vitest` and the `npm`/`pnpm`/`yarn`/`bun` test scripts, and `bazel test` / `build`.
+`make -j`, Gradle and `xcodebuild` are not in it: their targets can deploy, migrate or upload,
+which must not run twice. A shape matches a command whose words begin with one of
 its `programs` (a path such as `.venv/bin/pytest` may also be written `./.venv/bin/pytest`) and,
 when it lists `requires`, that has a later word equal to or starting with one of them (`-j` takes
 `-j8`).
 
 To change the list, copy the file to `~/.config/coreslot/claude-code-shapes.json` and edit it;
-when that file exists it replaces the defaults:
+when that file exists it replaces the defaults. The hook offers every shape with `--restart=yes`,
+so add only commands that are safe to kill at any moment and run again from scratch:
 
 ```json
 {
@@ -108,8 +112,8 @@ Two things to know about a waiting command:
   it may need a longer timeout than the same suite run bare: run it in the background or raise
   the limit.
 - When memory runs short, coreslot stops the newest commands and restarts them by itself, so a
-  command it stopped may run twice. A command that must never be restarted can be marked
-  `no_restart` in its `needs.toml` entry.
+  command it stopped may run twice. Run a command that must never run twice with
+  `coreslot run --restart=no --`, or mark its label `no_restart` in its `needs.toml` entry.
 
 ## Other coding agents
 
@@ -118,9 +122,15 @@ The same rule works as an instruction for any agent that reads an instructions f
 ```markdown
 ## Heavy commands
 Several agent sessions share this machine's memory through coreslot. Run test suites and
-builds that use a lot of it through coreslot: `coreslot run -- <command>`, for example
-`coreslot run -- go test ./...`. If your tool has a time limit, run it in the background or
-raise the limit. Never run them bare in parallel.
+builds that use a lot of it through coreslot: `coreslot run --restart=yes|no -- <command>`.
+coreslot may kill a command when memory runs short and run it again from scratch; choose for
+each command:
+- `--restart=yes` when it is safe to kill at any moment and run again: tests, builds, linters,
+  type checks, for example `coreslot run --restart=yes -- go test ./...`;
+- `--restart=no` when it changes anything outside its own output: databases, migrations,
+  deploys, pushes, sending messages, writing shared files. When unsure, choose no.
+If your tool has a time limit, run it in the background or raise the limit. Never run them bare
+in parallel.
 ```
 
 ## Tests

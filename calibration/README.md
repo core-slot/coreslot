@@ -17,7 +17,7 @@ Needs macOS, Python 3 and Go. It reads nothing that needs privileges.
 | `cpu_control.py` | The control: busy loops (default twice the number of cores) for `--seconds` and no memory pressure. The watchdog must stay calm here. |
 | `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. Every pass is preceded by a 30 s warm-up of its workload, and a ramp is accompanied by an observer job (below). |
 | `analyse.py` | Joins the watchdog's `watch.jsonl` with the workload's `work.jsonl`, puts each sample into a speed band, and prints the per-band excess, the samples where its replay of the levels at the chosen values differs from the level the watchdog logged, and a scoring table per candidate value. |
-| `cost.py` | The watchdog's own CPU cost: N concurrent `coreslot run -- sleep S`, each run's own CPU time over the window, as a share of one core ([below](#the-watchdogs-own-cost)). |
+| `cost.py` | The watchdog's own CPU cost: N concurrent `coreslot run --restart=yes -- sleep S`, each run's own CPU time over the window, as a share of one core ([below](#the-watchdogs-own-cost)). |
 | `testdata/` | A tiny record for the tests. |
 | `records/` | Where `run.sh` puts its records; the committed ones are the passes the yellow and red points were chosen on, and one measurement of the watchdog's own cost ([`records/README.md`](records/README.md)). |
 
@@ -42,8 +42,8 @@ counted run of the label, so the pass is scored against the label's learned norm
 shipped code learns it (the median `tick_share` of the label's runs); a label with no history is no part of the excess, so a pass without the
 warm-up would measure nothing, and a control would show no false alarm because it measured nothing.
 `meta.json` gives that share as `warmup_share`. A ramp then starts an observer,
-`coreslot run --label calibration-observer -- sleep ...`, in the same state directory: as the
-oldest hold it is never a victim, it has no history so it is no part of the excess, and it keeps the
+`coreslot run --restart=yes --label calibration-observer -- sleep ...`, in the same state
+directory: as the oldest hold it is never a victim, it has no history so it is no part of the excess, and it keeps the
 sampling going for `--after-s` seconds after the hog stops, which is what `calm_s` is scored on.
 
 A pass stops itself by the hog's own rules and, as a second guard from outside, when swap used has
@@ -122,8 +122,8 @@ Linux is not calibrated at all.
 
 ## The watchdog's own cost
 
-The watchdog is meant to cost under 1 % of one core per run. `cost.py` starts N `coreslot run --mem 64M --
-sleep 120`, for N = 1, 4 and 8 in turn, waits until every run has started its command, reads each
+The watchdog is meant to cost under 1 % of one core per run. `cost.py` starts N
+`coreslot run --restart=yes --mem 64M -- sleep 120`, for N = 1, 4 and 8 in turn, waits until every run has started its command, reads each
 `coreslot` process's CPU time with `ps` (the process's own: its `sleep` is another process), and
 divides the difference over a window in which all N tick by the window's wall time.
 

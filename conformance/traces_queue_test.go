@@ -601,7 +601,7 @@ func TestPublishPausedAtEveryPoint(t *testing.T) {
 					e := State(t)
 					e.WriteConfig(roomConfig(256))
 					// FORMAT and gen exist, and a reconciliation just ran.
-					e.Start("run", "--no-wait", "--", "true").ExitCode(0)
+					e.Start("run", "--restart=yes", "--no-wait", "--", "true").ExitCode(0)
 					switch kind {
 					case "ticket":
 						publishTicket(t, e, point, killed)
@@ -712,7 +712,7 @@ func publishHold(t *testing.T, e Env, point string, killed bool) {
 			t.Errorf("the reconciliation removed %d entries, want the ticket and the temporary", n)
 		}
 		restored(t, e, nil, nil, nil, 0)
-		e.Start("run", "--no-wait", "--mem", "256M", "--", "true").ExitCode(0)
+		e.Start("run", "--restart=yes", "--no-wait", "--mem", "256M", "--", "true").ExitCode(0)
 		return
 	}
 	w.Release(point)
@@ -831,7 +831,7 @@ func TestOversizeRunsAlone(t *testing.T) {
 func TestFullDirectoryFailsOpen(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(roomConfig(512))
-	e.Start("run", "--no-wait", "--", "true").ExitCode(0)
+	e.Start("run", "--restart=yes", "--no-wait", "--", "true").ExitCode(0)
 	q := filepath.Join(e.Dir, store.QueueDir)
 	for i := range store.MaxEntries {
 		f, err := os.OpenFile(filepath.Join(q, fmt.Sprintf("junk-%05d", i)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)

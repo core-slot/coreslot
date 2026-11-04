@@ -83,7 +83,7 @@ class Splitting(unittest.TestCase):
         """Offsets count UTF-8 bytes, so a multi-byte character before the segment keeps its place."""
         self.assertEqual(
             offered("echo 'é—ж' && X=1 go test ./..."),
-            "echo 'é—ж' && X=1 coreslot run -- go test ./...",
+            "echo 'é—ж' && X=1 coreslot run --restart=yes -- go test ./...",
         )
 
 
@@ -92,22 +92,21 @@ class Offering(unittest.TestCase):
         """Mutation: insert at the segment's start -> `coreslot run ... -- GOFLAGS=-race go`."""
         self.assertEqual(
             offered("GOFLAGS=-race CGO_ENABLED=1 go test ./..."),
-            "GOFLAGS=-race CGO_ENABLED=1 coreslot run -- go test ./...",
+            "GOFLAGS=-race CGO_ENABLED=1 coreslot run --restart=yes -- go test ./...",
         )
 
     def test_every_matching_segment_is_offered_and_every_other_byte_kept(self) -> None:
         """Mutation: stop after the first insert -> the cargo segment is left bare."""
         self.assertEqual(
             offered("cd 'my repo' &&  go test -race ./... ;cargo test  2>&1 | tail -5"),
-            "cd 'my repo' &&  coreslot run -- go test -race ./... ;"
-            "coreslot run -- cargo test  2>&1 | tail -5",
+            "cd 'my repo' &&  coreslot run --restart=yes -- go test -race ./... ;"
+            "coreslot run --restart=yes -- cargo test  2>&1 | tail -5",
         )
 
     def test_requires_one_of_its_words_or_a_word_starting_with_one(self) -> None:
         """Mutation: drop the `requires` check -> `go test ./internal/x` and serial pytest match."""
-        self.assertEqual(offered("make -j8 all"), "coreslot run -- make -j8 all")
-        self.assertEqual(offered("uv run pytest -n4"), "coreslot run -- uv run pytest -n4")
-        for command in ["go test ./internal/x", "pytest tests/unit", "make fmt"]:
+        self.assertEqual(offered("uv run pytest -n4"), "coreslot run --restart=yes -- uv run pytest -n4")
+        for command in ["go test ./internal/x", "pytest tests/unit"]:
             with self.subTest(command=command):
                 self.assertIsNone(offered(command))
 
@@ -115,11 +114,19 @@ class Offering(unittest.TestCase):
         """Mutation: compare program words with == only -> `./.venv/bin/pytest -n 4` passes."""
         self.assertEqual(
             offered("./.venv/bin/pytest -n 4"),
-            "coreslot run -- ./.venv/bin/pytest -n 4",
+            "coreslot run --restart=yes -- ./.venv/bin/pytest -n 4",
         )
 
+    def test_no_default_shape_runs_a_command_that_may_not_be_safe_to_rerun(self) -> None:
+        """The offer declares the command restartable, so the defaults hold only tests and builds.
+        Mutation: put `make -j`, Gradle or `xcodebuild` back -> a deploy target is offered."""
+        for command in ["make -j8 deploy", "./gradlew publish", "gradle flywayMigrate",
+                        "xcodebuild -exportArchive -archivePath build/App.xcarchive"]:
+            with self.subTest(command=command):
+                self.assertIsNone(offered(command))
+
     def test_a_wrapped_or_unknown_command_is_not_offered(self) -> None:
-        for command in ["coreslot run -- go test ./...", "ls -la",
+        for command in ["coreslot run --restart=yes -- go test ./...", "coreslot run -- go test ./...", "ls -la",
                         "ssh host go test ./...", "A=1", "echo $(go test ./...)"]:
             with self.subTest(command=command):
                 self.assertIsNone(offered(command))
@@ -154,7 +161,7 @@ class Responding(unittest.TestCase):
         decision = self.respond(payload("go test ./..."))["hookSpecificOutput"]
         self.assertEqual(decision["hookEventName"], "PreToolUse")
         self.assertEqual(decision["permissionDecision"], "deny")
-        self.assertIn("\ncoreslot run -- go test ./...\n",
+        self.assertIn("\ncoreslot run --restart=yes -- go test ./...\n",
                       decision["permissionDecisionReason"])
 
     def test_the_refusal_speaks_of_memory_and_a_time_limit(self) -> None:
@@ -190,7 +197,7 @@ class Responding(unittest.TestCase):
         user.write_text(json.dumps({"shapes": [{"programs": [["./ci.sh"]]}]}))
         self.assertIsNone(self.respond(payload("go test ./...")))
         reason = self.respond(payload("./ci.sh"))["hookSpecificOutput"]["permissionDecisionReason"]
-        self.assertIn("\ncoreslot run -- ./ci.sh\n", reason)
+        self.assertIn("\ncoreslot run --restart=yes -- ./ci.sh\n", reason)
 
     def test_its_own_failure_is_a_pass(self) -> None:
         """Mutation: re-raise in respond's handler -> a broken shape file blocks every command."""
@@ -214,7 +221,7 @@ class Process(unittest.TestCase):
                         mock.patch("sys.stdin", io.StringIO(payload("go test ./...", session=str(found)))), \
                         contextlib.redirect_stdout(out):
                     self.assertEqual(hook.main(), 0)
-                self.assertEqual("coreslot run -- go test ./..." in out.getvalue(), refused)
+                self.assertEqual("coreslot run --restart=yes -- go test ./..." in out.getvalue(), refused)
 
     def test_the_script_exits_0_and_prints_only_a_refusal(self) -> None:
         bin_dir = Path(tempfile.mkdtemp())

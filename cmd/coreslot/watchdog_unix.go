@@ -33,7 +33,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	var round int64
 	if g != nil { // constant for the attempt: written once, before its first tick
 		r.updateHold(st, g, func(h *wire.Hold) {
-			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && !r.o.noRestart, r.stops, r.share, r.learned
+			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
 		})
 	}
 	for n := 1; ; n++ {

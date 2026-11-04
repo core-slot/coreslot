@@ -68,7 +68,7 @@ func TestNoRepoShapeOnly(t *testing.T) {
 // --label wins over the automatic label, which names an unlabelled run in the run log.
 func TestExplicitLabelWins(t *testing.T) {
 	dir := stateDir(t, "")
-	for _, args := range [][]string{{"run", "--label", "mine", "--", "true"}, {"run", "--", "true"}} {
+	for _, args := range [][]string{{"run", "--restart=yes", "--label", "mine", "--", "true"}, {"run", "--restart=yes", "--", "true"}} {
 		if r := cli(t, baseEnv(dir), args...); r.code != 0 {
 			t.Fatalf("%q: exit %d (stderr %q)", args, r.code, r.stderr)
 		}

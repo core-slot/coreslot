@@ -111,7 +111,7 @@ budget and moves the configuration to `$CORESLOT_STATE_DIR/config.toml` with it:
 
 ```sh
 CORESLOT_STATE_DIR="$(mktemp -d)/state" \
-  ./coreslot run --mem 512M -- sh -c 'echo $CORESLOT_GRANTED_MEM'
+  ./coreslot run --restart=yes --mem 512M -- sh -c 'echo $CORESLOT_GRANTED_MEM'
 ```
 
 ## Pull requests

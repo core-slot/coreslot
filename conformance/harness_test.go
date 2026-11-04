@@ -441,7 +441,7 @@ func (p *Proc) kill(target int, sig syscall.Signal) bool {
 // the label is name and flags go before `--`.
 func (e Env) Run(name string, flags ...string) *Proc {
 	e.t.Helper()
-	args := append([]string{"run", "--label", name}, flags...)
+	args := append([]string{"run", "--restart=yes", "--label", name}, flags...)
 	args = append(args, "--", bins.child, "hold", e.MarkDir, name)
 	p := e.Start(args...)
 	p.name = name

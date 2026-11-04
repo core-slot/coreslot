@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the watchdog's own CPU cost: N concurrent `coreslot run -- sleep S`, for each N.
+"""Measure the watchdog's own CPU cost: N concurrent `coreslot run --restart=yes -- sleep S`, for each N.
 
 usage: cost.py CORESLOT [--seconds 120] [--runs 1 4 8] [--out DIR]
 
@@ -41,7 +41,7 @@ def admitted(pid):
 
 def measure(binary, n, seconds, state):
     env = {**os.environ, "CORESLOT_STATE_DIR": state}
-    cmd = [binary, "run", "--mem", "64M", "--", "sleep", str(seconds)]
+    cmd = [binary, "run", "--restart=yes", "--mem", "64M", "--", "sleep", str(seconds)]
     procs = [subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL) for _ in range(n)]
     try:
         pids = [p.pid for p in procs]

@@ -535,12 +535,12 @@ func TestWindowsNotice(t *testing.T) {
 func TestRunUsageErrors(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, args := range [][]string{
-		{"run", "--mem", "0", "--", "true"},
-		{"run", "--mem", "lots", "--", "true"},
-		{"run", "--mem", "1G", "--mem", "x", "--", "true"},
-		{"run", "--bogus", "--", "true"},
+		{"run", "--restart=yes", "--mem", "0", "--", "true"},
+		{"run", "--restart=yes", "--mem", "lots", "--", "true"},
+		{"run", "--restart=yes", "--mem", "1G", "--mem", "x", "--", "true"},
+		{"run", "--restart=yes", "--bogus", "--", "true"},
 		{"run"},
-		{"run", "--on-timeout", "maybe", "--", "true"},
+		{"run", "--restart=yes", "--on-timeout", "maybe", "--", "true"},
 	} {
 		if r := cli(t, baseEnv(dir), args...); r.code != 64 {
 			t.Errorf("%q: exit %d, want 64 (stderr %q)", args, r.code, r.stderr)
@@ -551,14 +551,40 @@ func TestRunUsageErrors(t *testing.T) {
 	}
 }
 
+// A run that could be stopped refuses without --restart, with a usage error that says what to
+// pick, before it queues; a run whose command shares coreslot's group (--same-group, a run nested
+// inside another's grant) or whose label is no_restart needs none. Mutation: dropping the check
+// runs the first command; requiring it everywhere refuses the others.
+func TestRestartRequired(t *testing.T) {
+	dir := stateDir(t, "")
+	r := cli(t, baseEnv(dir), "run", "--mem", "64M", "--", "true")
+	if r.code != 64 || !strings.Contains(r.stderr, "--restart is required") || !strings.Contains(r.stderr, "When unsure, --restart=no") {
+		t.Errorf("without --restart: exit %d, stderr %q; want 64 and what to pick", r.code, r.stderr)
+	}
+	if q := entries(t, dir, "queue"); len(q) != 0 {
+		t.Errorf("the refused run queued: %q", q)
+	}
+	writeNeeds(t, dir, "[needs.keep]\nno_restart = true\n")
+	for _, args := range [][]string{
+		{"run", "--same-group", "--mem", "64M", "--", "true"},
+		{"run", "--label", "keep", "--mem", "64M", "--", "true"},
+		{"run", "--restart=yes", "--mem", "64M", "--", cliBinary(t), "run", "--mem", "64M", "--", "true"},
+		{"run", "--restart=no", "--mem", "64M", "--", "true"},
+	} {
+		if r := cli(t, baseEnv(dir), args...); r.code != 0 {
+			t.Errorf("%q: exit %d, stderr %q; want 0", args, r.code, r.stderr)
+		}
+	}
+}
+
 // ---------------------------------------------------------------- runs
 
 func TestRunPassesExitStatus(t *testing.T) {
 	dir := stateDir(t, "")
-	if r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", "exit 3"); r.code != 3 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "sh", "-c", "exit 3"); r.code != 3 {
 		t.Errorf("exit 3: got %d (stderr %q)", r.code, r.stderr)
 	}
-	if r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", "kill -KILL $$"); r.code != 137 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "sh", "-c", "kill -KILL $$"); r.code != 137 {
 		t.Errorf("SIGKILL: got %d, want 137 (stderr %q)", r.code, r.stderr)
 	}
 }
@@ -567,7 +593,7 @@ func TestRunPassesExitStatus(t *testing.T) {
 // give-up prints the marker.
 func TestOwnExit75PassesThrough(t *testing.T) {
 	dir := stateDir(t, "")
-	if r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", "exit 75"); r.code != 75 || r.stderr != "" {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "sh", "-c", "exit 75"); r.code != 75 || r.stderr != "" {
 		t.Errorf("exit 75: got %d, stderr %q; want 75 and nothing said", r.code, r.stderr)
 	}
 }
@@ -577,7 +603,7 @@ func TestOwnExit75PassesThrough(t *testing.T) {
 func TestOutsideSigkillNotRestarted(t *testing.T) {
 	dir := stateDir(t, "")
 	marks := filepath.Join(t.TempDir(), "starts")
-	r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", `echo >>"$0"; kill -KILL $$`, marks)
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "sh", "-c", `echo >>"$0"; kill -KILL $$`, marks)
 	if want := "ended by SIGKILL from outside coreslot; not restarted"; r.code != 137 || !strings.Contains(r.stderr, want) {
 		t.Errorf("got %d, stderr %q; want 137 and %q", r.code, r.stderr, want)
 	}
@@ -590,7 +616,7 @@ func TestOutsideSigkillNotRestarted(t *testing.T) {
 // the status 137 as the kill reports a SIGKILL from outside coreslot.
 func TestOwnExit137IsNoKill(t *testing.T) {
 	dir := stateDir(t, "")
-	if r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", "exit 137"); r.code != 137 || r.stderr != "" {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "sh", "-c", "exit 137"); r.code != 137 || r.stderr != "" {
 		t.Errorf("exit 137: got %d, stderr %q; want 137 and nothing said", r.code, r.stderr)
 	}
 }
@@ -609,7 +635,7 @@ func TestRestartNeedIsPeak(t *testing.T) {
 func TestRunMissingCommandFreesEverything(t *testing.T) {
 	dir := budgetDir(t, 512)
 	for _, cmd := range []string{"coreslot-no-such-command", filepath.Join(dir, "missing")} {
-		r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", cmd)
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "256M", "--", cmd)
 		if r.code != 127 {
 			t.Errorf("%s: exit %d, want 127 (stderr %q)", cmd, r.code, r.stderr)
 		}
@@ -624,18 +650,18 @@ func TestRunMissingCommandFreesEverything(t *testing.T) {
 	if err := os.WriteFile(notExec, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if r := cli(t, baseEnv(dir), "run", "--", notExec); r.code != 126 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", notExec); r.code != 126 {
 		t.Errorf("not executable: exit %d, want 126 (stderr %q)", r.code, r.stderr)
 	}
 }
 
 func TestCtrlCWhileWaitingExits130(t *testing.T) {
 	dir := budgetDir(t, 128)
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	holdOther(t, dir, 128)
-	cmd := cliCmd(t, baseEnv(dir), "run", "--", "true")
+	cmd := cliCmd(t, baseEnv(dir), "run", "--restart=yes", "--", "true")
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if err := cmd.Start(); err != nil {
@@ -663,7 +689,7 @@ func TestCtrlCWhileWaitingExits130(t *testing.T) {
 
 func TestNoWaitAdmitsAtOnce(t *testing.T) {
 	dir := budgetDir(t, 512)
-	r := cli(t, baseEnv(dir), "run", "--no-wait", "--mem", "384M", "--", "sh", "-c", "echo $CORESLOT_GRANTED_MEM")
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--no-wait", "--mem", "384M", "--", "sh", "-c", "echo $CORESLOT_GRANTED_MEM")
 	if r.code != 0 || strings.TrimSpace(r.stdout) != "384" {
 		t.Errorf("exit %d stdout %q stderr %q, want 0 and a grant of 384 MiB", r.code, r.stdout, r.stderr)
 	}
@@ -672,7 +698,7 @@ func TestNoWaitAdmitsAtOnce(t *testing.T) {
 
 func TestNoWaitRefusesWithin2s(t *testing.T) {
 	dir := budgetDir(t, 256)
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 
@@ -686,7 +712,7 @@ func TestNoWaitRefusesWithin2s(t *testing.T) {
 			t.Fatal(err)
 		}
 		start := time.Now()
-		r := cli(t, baseEnv(dir), "run", "--no-wait", "--", "true")
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--no-wait", "--", "true")
 		if took := time.Since(start); took > 2*time.Second {
 			t.Errorf("refused after %v, want within 2 s (load: %s)", took, uptime())
 		}
@@ -697,7 +723,7 @@ func TestNoWaitRefusesWithin2s(t *testing.T) {
 
 	t.Run("budget full", func(t *testing.T) {
 		holdOther(t, dir, 256)
-		r := cli(t, baseEnv(dir), "run", "--no-wait", "--refusal-code", "9", "--", "true")
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--no-wait", "--refusal-code", "9", "--", "true")
 		if r.code != 9 {
 			t.Errorf("exit %d stderr %q, want the refusal code 9", r.code, r.stderr)
 		}
@@ -706,18 +732,18 @@ func TestNoWaitRefusesWithin2s(t *testing.T) {
 
 func TestTimeoutRunRecordsUnbudgeted(t *testing.T) {
 	dir := budgetDir(t, 128)
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	holdOther(t, dir, 128)
 	before := len(runLog(t, dir))
 
-	r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--timeout", "1s", "--", "true")
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "128M", "--timeout", "1s", "--", "true")
 	if r.code != 75 {
 		t.Fatalf("--on-timeout defaults to fail: exit %d, want 75 (stderr %q)", r.code, r.stderr)
 	}
 
-	r = cli(t, append(baseEnv(dir), "SNAPSHOT="+strings.Join(helper(t, "snapshot"), " ")), "run", "--mem", "128M",
+	r = cli(t, append(baseEnv(dir), "SNAPSHOT="+strings.Join(helper(t, "snapshot"), " ")), "run", "--restart=yes", "--mem", "128M",
 		"--label", "late", "--timeout", "1s", "--on-timeout", "run", "--", "sh", "-c",
 		`echo "granted=$CORESLOT_GRANTED_MEM unbudgeted=$CORESLOT_UNBUDGETED"; $SNAPSHOT`)
 	if r.code != 0 {
@@ -753,7 +779,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 		if err := os.Chmod(dir, 0o777); err != nil {
 			t.Fatal(err)
 		}
-		r := cli(t, baseEnv(dir), "run", "--mem", "384M", "--", "sh", "-c", show)
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "384M", "--", "sh", "-c", show)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -771,7 +797,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 
 	t.Run("invalid configuration", func(t *testing.T) {
 		dir := stateDir(t, "[memory]\nreserve = \"bogus\"\n")
-		r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "sh", "-c",
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "256M", "--", "sh", "-c",
 			show+`; ls "$CORESLOT_STATE_DIR/holds"`)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -798,7 +824,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 	t.Run("strict refuses", func(t *testing.T) {
 		dir := stateDir(t, "[memory]\nreserve = \"bogus\"\n")
 		marker := filepath.Join(t.TempDir(), "ran")
-		r := cli(t, baseEnv(dir), "run", "--strict", "--", "touch", marker)
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--strict", "--", "touch", marker)
 		if r.code != 75 {
 			t.Errorf("exit %d, want 75 (stderr %q)", r.code, r.stderr)
 		}
@@ -811,7 +837,7 @@ func TestFailOpenExportsUnbudgeted(t *testing.T) {
 func TestRunAppendsOneLogLine(t *testing.T) {
 	dir := budgetDir(t, 512)
 	env := append(baseEnv(dir), "CORESLOT_TEST_SECRET=env-secret-value")
-	r := cli(t, env, "run", "--mem", "384M", "--label", "gate:unit", "--", "sh", "-c", "exit 0", "argv-secret-value")
+	r := cli(t, env, "run", "--restart=yes", "--mem", "384M", "--label", "gate:unit", "--", "sh", "-c", "exit 0", "argv-secret-value")
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -869,7 +895,7 @@ func TestRunLogRecordsUsage(t *testing.T) {
 	burn := helper(t, "burn")
 	t.Run("command", func(t *testing.T) {
 		dir := budgetDir(t, 512)
-		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "128M", "--"}, burn...)...)
+		r := cli(t, baseEnv(dir), append([]string{"run", "--restart=yes", "--mem", "128M", "--"}, burn...)...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -881,7 +907,7 @@ func TestRunLogRecordsUsage(t *testing.T) {
 	})
 	t.Run("waited-for descendant", func(t *testing.T) {
 		dir := budgetDir(t, 512)
-		args := append([]string{"run", "--mem", "128M", "--", "sh", "-c", `"$@"; :`, "sh"}, burn...)
+		args := append([]string{"run", "--restart=yes", "--mem", "128M", "--", "sh", "-c", `"$@"; :`, "sh"}, burn...)
 		r := cli(t, baseEnv(dir), args...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -894,7 +920,7 @@ func TestRunLogRecordsUsage(t *testing.T) {
 	})
 	t.Run("fail-open", func(t *testing.T) {
 		dir := stateDir(t, "[memory]\nreserve = \"bogus\"\n")
-		r := cli(t, baseEnv(dir), append([]string{"run", "--mem", "128M", "--"}, burn...)...)
+		r := cli(t, baseEnv(dir), append([]string{"run", "--restart=yes", "--mem", "128M", "--"}, burn...)...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -906,8 +932,8 @@ func TestRunLogRecordsUsage(t *testing.T) {
 	})
 	t.Run("pass-through", func(t *testing.T) {
 		dir := budgetDir(t, 512)
-		args := append([]string{"run", "--mem", "256M", "--label", "outer", "--", cliBinary(t),
-			"run", "--mem", "128M", "--label", "inner", "--"}, burn...)
+		args := append([]string{"run", "--restart=yes", "--mem", "256M", "--label", "outer", "--", cliBinary(t),
+			"run", "--restart=yes", "--mem", "128M", "--label", "inner", "--"}, burn...)
 		r := cli(t, baseEnv(dir), args...)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
@@ -929,7 +955,7 @@ func TestRunLogsTreePeak(t *testing.T) {
 		t.Skip("no process-tree sampler on " + runtime.GOOS)
 	}
 	dir := stateDir(t, "")
-	args := append([]string{"run", "--label", "t", "--", "sh", "-c", `"$@" & "$@" & wait`, "sh"},
+	args := append([]string{"run", "--restart=yes", "--label", "t", "--", "sh", "-c", `"$@" & "$@" & wait`, "sh"},
 		helper(t, "hold-mem", "200", "2500ms")...)
 	r := cli(t, baseEnv(dir), args...)
 	if r.code != 0 {
@@ -959,7 +985,7 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 		label, cmd string
 		code       int
 	}{{"not-found", "coreslot-no-such-command", 127}, {"not-executable", notExec, 126}} {
-		r := cli(t, baseEnv(dir), "run", "--mem", "128M", "--label", c.label, "--", c.cmd)
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "128M", "--label", c.label, "--", c.cmd)
 		if r.code != c.code {
 			t.Errorf("%s: exit %d, want %d (stderr %q)", c.cmd, r.code, c.code, r.stderr)
 		}
@@ -985,7 +1011,7 @@ func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
 	big := stateDir(t, "[memory]\nreserve = \"1000G\"\n") // more than the machine has
 	budgetRoom.Store(big, int64(512))
 	for dir, mem := range map[string]string{budgetDir(t, 512): "1000G", big: "128M"} {
-		r := cli(t, baseEnv(dir), "run", "--mem", mem, "--", "true")
+		r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", mem, "--", "true")
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -1001,7 +1027,7 @@ func TestCLIKeepsCopiesUntilChildExits(t *testing.T) {
 	dir := budgetDir(t, 256)
 	tmp := t.TempDir()
 	closed, release := filepath.Join(tmp, "closed"), filepath.Join(tmp, "release")
-	args := append([]string{"run", "--mem", "256M", "--"}, helper(t, "close-and-wait", closed, release)...)
+	args := append([]string{"run", "--restart=yes", "--mem", "256M", "--"}, helper(t, "close-and-wait", closed, release)...)
 	cmd := cliCmd(t, baseEnv(dir), args...)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -1109,7 +1135,7 @@ var _ io.Writer = (*bytes.Buffer)(nil)
 // a timeout that expires in the queue.
 func TestTimeoutWhileSectionHeld(t *testing.T) {
 	dir := stateDir(t, "")
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	f, err := os.OpenFile(filepath.Join(dir, "admit.lock"), os.O_RDWR, 0)
@@ -1121,7 +1147,7 @@ func TestTimeoutWhileSectionHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	r := cli(t, baseEnv(dir), "run", "--timeout", "1s", "--", "true")
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--timeout", "1s", "--", "true")
 	if took := time.Since(start); took > 3*time.Second {
 		t.Errorf("refused after %v, want soon after the 1 s timeout (load: %s)", took, uptime())
 	}
@@ -1232,7 +1258,7 @@ func TestRunLogSkippedWhenFormatChangesDuringRun(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := stateDir(t, "")
 			env := append(baseEnv(dir), "S="+dir, "F="+format)
-			r := cli(t, env, "run", "--label", "changed", "--", "sh", "-c", `printf %s "$F" > "$S/FORMAT"`)
+			r := cli(t, env, "run", "--restart=yes", "--label", "changed", "--", "sh", "-c", `printf %s "$F" > "$S/FORMAT"`)
 			if r.code != 0 {
 				t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 			}
@@ -1282,7 +1308,7 @@ func TestRunLogSkippedWhenFormatMissingOrUnreadable(t *testing.T) {
 func TestRunLogAfterTheCommandRemovesFormat(t *testing.T) {
 	dir := stateDir(t, "")
 	env := append(baseEnv(dir), "S="+dir)
-	r := cli(t, env, "run", "--label", "removed", "--", "sh", "-c", `rm "$S/FORMAT"`)
+	r := cli(t, env, "run", "--restart=yes", "--label", "removed", "--", "sh", "-c", `rm "$S/FORMAT"`)
 	if r.code != 0 {
 		t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 	}
@@ -1424,7 +1450,7 @@ func TestWaitRunsOnOneP(t *testing.T) {
 			env = append(env, kv)
 		}
 	}
-	r := cli(t, env, "run", "--", "sh", "-c", "echo GOMAXPROCS=${GOMAXPROCS-unset}")
+	r := cli(t, env, "run", "--restart=yes", "--", "sh", "-c", "echo GOMAXPROCS=${GOMAXPROCS-unset}")
 	if r.code != 0 || strings.TrimSpace(r.stdout) != "GOMAXPROCS=unset" {
 		t.Fatalf("exit %d, stdout %q (stderr %q): want GOMAXPROCS unset in the command", r.code, r.stdout, r.stderr)
 	}

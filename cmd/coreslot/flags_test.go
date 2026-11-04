@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/spec"
@@ -60,6 +61,73 @@ func TestUnknownFlagIsUsage(t *testing.T) {
 		var ue *spec.UsageError
 		if !errors.As(err, &ue) {
 			t.Errorf("parseRun(%s) = %v, want a usage error", flag, err)
+		}
+	}
+}
+
+// --restart takes yes or no and nothing else; given twice, the last one counts.
+// Mutation: accept any value, and the "maybe" case reddens.
+func TestRestartFlag(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--restart=yes"}, "yes"},
+		{[]string{"--restart", "no"}, "no"},
+		{[]string{"--restart=yes", "--restart=no"}, "no"},
+		{nil, ""},
+	} {
+		o, err := parseRun(append(c.args, "--", "true"), IO{})
+		if err != nil || o.restart != c.want {
+			t.Errorf("%q: restart %q, err %v; want %q", c.args, o.restart, err, c.want)
+		}
+	}
+	for _, arg := range []string{"--restart=maybe", "--restart=", "--restart=YES", "--restart=true"} {
+		_, err := parseRun([]string{arg, "--", "true"}, IO{})
+		var ue *spec.UsageError
+		if !errors.As(err, &ue) {
+			t.Errorf("%s: parseRun = %v, want a usage error", arg, err)
+		}
+	}
+}
+
+// The choice is required only of a run that could be a victim: its command has a group of its
+// own and its label is not no_restart, which also wins over --restart=yes.
+// Mutations: dropping the shared test requires it in a terminal; letting --restart=yes win over
+// no_restart makes the marked label restartable.
+func TestRestartRequiredOnlyOfAVictim(t *testing.T) {
+	for _, c := range []struct {
+		o                          runOptions
+		shared, missing, restartOK bool
+	}{
+		{runOptions{}, false, true, false},
+		{runOptions{}, true, false, false},
+		{runOptions{noRestart: true}, false, false, false},
+		{runOptions{restart: "yes"}, false, false, true},
+		{runOptions{restart: "no"}, false, false, false},
+		{runOptions{restart: "yes", noRestart: true}, false, false, false},
+	} {
+		if got := c.o.restartMissing(c.shared); got != c.missing {
+			t.Errorf("%+v shared %v: missing %v, want %v", c.o, c.shared, got, c.missing)
+		}
+		if got := c.o.restartable(); got != c.restartOK {
+			t.Errorf("%+v: restartable %v, want %v", c.o, got, c.restartOK)
+		}
+	}
+}
+
+// The help says what each value means in plain words, and the missing-flag error says what to
+// pick. Mutation: dropping the "When unsure" line from either reddens it.
+func TestRestartHelpAndError(t *testing.T) {
+	for name, s := range map[string]string{"help": runHelp, "error": errRestartMissing.Error()} {
+		for _, want := range []string{"yes", "no", "tests, builds, linters, type checks",
+			"databases", "migrations", "deploys", "pushes", "sending messages", "writing shared files", "When"} {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s lacks %q:\n%s", name, want, s)
+			}
+		}
+		if !strings.Contains(s, "unsure, no") && !strings.Contains(s, "unsure, --restart=no") {
+			t.Errorf("%s does not say to pick no when unsure:\n%s", name, s)
 		}
 	}
 }

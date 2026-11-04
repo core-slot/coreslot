@@ -121,6 +121,10 @@ func (r *run) ordinary() int {
 	if err != nil {
 		return r.failOpen(nil, err)
 	}
+	if r.o.restartMissing(r.o.sameGroup || terminalMode(r.io.Stdin)) { // before anything queues
+		r.notice("%v", errRestartMissing)
+		return exitUsage
+	}
 	req := r.o.request()
 	if bound, over := e.Oversized(req.NeedMiB); over {
 		r.notice("needs %s, more than the %s the machine has above its reserve; runs only alone",
@@ -159,7 +163,7 @@ func (r *run) ordinary() int {
 		if ask != "" {
 			ask += " before it comes back"
 		}
-		r.notice("memory stop %d of %d: %s was stopped (%s)%s; coreslot restarts it by itself; do not run it again",
+		r.notice("memory stop %d of %d: %s was stopped (%s)%s; it was declared restartable (--restart=yes), so coreslot restarts it by itself; do not run it again",
 			r.stops, maxStops, cmd, r.lastStop, ask)
 		req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
 		r.start = time.Now()

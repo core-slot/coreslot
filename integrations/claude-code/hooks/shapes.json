@@ -4,9 +4,6 @@
     {"programs": [["cargo", "test"], ["cargo", "build"], ["cargo", "nextest"], ["cargo", "clippy"]]},
     {"programs": [["pytest"], ["python", "-m", "pytest"], ["python3", "-m", "pytest"], ["uv", "run", "pytest"], [".venv/bin/pytest"], [".venv/bin/python", "-m", "pytest"]], "requires": ["-n", "--numprocesses"]},
     {"programs": [["npx", "jest"], ["npx", "vitest"], ["npm", "test"], ["npm", "run", "test"], ["pnpm", "test"], ["yarn", "test"], ["bun", "test"]]},
-    {"programs": [["make"]], "requires": ["-j"]},
-    {"programs": [["./gradlew"], ["gradle"]]},
-    {"programs": [["xcodebuild"]]},
     {"programs": [["bazel", "test"], ["bazel", "build"]]}
   ]
 }

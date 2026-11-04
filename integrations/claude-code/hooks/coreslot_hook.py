@@ -2,12 +2,17 @@
 """Refuse a heavy Bash command once, and offer it back under coreslot's memory guard.
 
 A Claude Code `PreToolUse` hook on `Bash`. When a command runs one of the heavy shapes of the
-shape file (`go test ./...`, `cargo test`, `pytest -n`, `make -j`, ...) and `coreslot` is on
-`PATH`, it denies the call with the same command offered back: `coreslot run -- ` inserted at
+shape file (`go test ./...`, `cargo test`, `pytest -n`, ...) and `coreslot` is on `PATH`, it
+denies the call with the same command offered back: `coreslot run --restart=yes -- ` inserted at
 the program word of every recognised segment, every other byte unchanged. The model then runs
 the offered command, which starts when the machine has the memory for it instead of piling onto
 a machine that is already short; it goes through the user's permission rules like any other
 command. coreslot names the command by itself, so the offer carries no label.
+
+`--restart=yes` declares the command safe to kill at any moment and to run again from scratch,
+which coreslot does when memory runs short. Every shape must therefore be a test suite, a build
+or a check that writes nothing outside its own output: a shape that can deploy, migrate or push
+(`make -j`, Gradle, `xcodebuild`, whose targets can do anything) does not belong in the file.
 
 It is a nudge, not containment: a rephrased command escapes it. So it passes, silently, whenever
 it is not sure:
@@ -48,6 +53,7 @@ DEFAULT_SHAPES = HERE / "shapes.json"
 USER_SHAPES = Path(".config", "coreslot", "claude-code-shapes.json")
 STATE = Path(".local", "state", "coreslot-claude-code")
 KEEP_SECONDS = 7 * 24 * 3600
+PREFIX = b"coreslot run --restart=yes -- "
 
 _ASSIGNMENT = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*=")
 _BLANK = b" \t"
@@ -272,7 +278,7 @@ def matches(values: list[str], shapes: tuple[Shape, ...]) -> bool:
 
 
 def offer(command: str, shapes: tuple[Shape, ...]) -> str | None:
-    """The command with `coreslot run -- ` inserted at the program word of every segment a shape
+    """The command with `PREFIX` inserted at the program word of every segment a shape
     matches; None when no segment matches or the command cannot be split."""
     raw = command.encode("utf-8")
     segments = split_segments(raw)
@@ -290,7 +296,7 @@ def offer(command: str, shapes: tuple[Shape, ...]) -> str | None:
         return None
     offered = raw
     for offset in reversed(inserts):
-        offered = offered[:offset] + b"coreslot run -- " + offered[offset:]
+        offered = offered[:offset] + PREFIX + offered[offset:]
     return offered.decode("utf-8")
 
 
@@ -351,9 +357,9 @@ def respond(stdin: str, home: Path, has_coreslot: bool) -> str:
         return ""
     reason = (
         "coreslot: several agents share this machine's memory, and this command is one of the "
-        "heavy ones. Run it with the `coreslot run --` prefix inserted, which starts it when "
-        "enough memory is free and, if memory runs short, stops the newest jobs and restarts "
-        "them by itself:\n"
+        "heavy ones. Run it with the `coreslot run --restart=yes --` prefix inserted, which starts "
+        "it when enough memory is free and, if memory runs short, may kill it and run it again "
+        "from scratch by itself; it is a test or build command, safe to run again:\n"
         f"{offered}\n"
         "It may wait for free memory first: if your tool has a time limit, run it in the "
         "background or raise the limit. Sent again unchanged, the command runs outside coreslot."

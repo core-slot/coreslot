@@ -21,7 +21,7 @@ import (
 // binary, $FDS the fds helper's command line and $D a scratch directory.
 func outer(t *testing.T, dir string, mem string, script string, extraEnv ...string) result {
 	t.Helper()
-	args := []string{"run", "--mem", mem, "--", "sh", "-c", script}
+	args := []string{"run", "--restart=yes", "--mem", mem, "--", "sh", "-c", script}
 	env := append(baseEnv(dir), "BIN="+cliBinary(t), "D="+t.TempDir(),
 		"FDS=env "+helperEnv+"=fds "+cliBinary(t))
 	return cli(t, append(env, extraEnv...), args...)
@@ -94,12 +94,12 @@ func TestNestedRunsInsideParent(t *testing.T) {
 	})
 	t.Run("not an ancestor", func(t *testing.T) {
 		dir := budgetDir(t, 256)
-		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 			t.Fatalf("setup run: %d %q", r.code, r.stderr)
 		}
 		holdOther(t, dir, 256) // live, the whole budget, of a pid that is no ancestor
 		other := entries(t, dir, "holds")[0]
-		r := cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+other), "run", "--no-wait", "--", "true")
+		r := cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+other), "run", "--restart=yes", "--no-wait", "--", "true")
 		if r.code != 75 || !strings.Contains(r.stderr, "not admitted at once") {
 			t.Errorf("exit %d stderr %q: want an ordinary request, refused by --no-wait", r.code, r.stderr)
 		}
@@ -114,7 +114,7 @@ func TestNestedRunsInsideParent(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "holds", dead), []byte(`{}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		r = cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+dead), "run", "--no-wait", "--", "sh", "-c", `echo "$CORESLOT_HOLD"`)
+		r = cli(t, append(baseEnv(dir), "CORESLOT_HOLD="+dead), "run", "--restart=yes", "--no-wait", "--", "sh", "-c", `echo "$CORESLOT_HOLD"`)
 		if got := strings.TrimSpace(r.stdout); r.code != 0 || got == dead || got == "" {
 			t.Errorf("exit %d, the command's CORESLOT_HOLD %q: want a hold of its own, not the dead %s", r.code, got, dead)
 		}
@@ -242,7 +242,7 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 	t.Run("fresh directory", func(t *testing.T) {
 		dir := stateDir(t, "")
 		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason", "CORESLOT_GRANTED_MEM=640")
-		r := cli(t, env, "run", "--mem", "384M", "--", "sh", "-c", show)
+		r := cli(t, env, "run", "--restart=yes", "--mem", "384M", "--", "sh", "-c", show)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -266,7 +266,7 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 		dir := stateDir(t, "")
 		reason := "evil\x1b[2J\nsecond line"
 		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED="+reason)
-		r := cli(t, env, "run", "--", "sh", "-c", `printf %s "$CORESLOT_UNBUDGETED"`)
+		r := cli(t, env, "run", "--restart=yes", "--", "sh", "-c", `printf %s "$CORESLOT_UNBUDGETED"`)
 		if r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
@@ -281,12 +281,12 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 
 	t.Run("format understood", func(t *testing.T) {
 		dir := stateDir(t, "")
-		if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+		if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 			t.Fatalf("setup run: %d %q", r.code, r.stderr)
 		}
 		gen, _ := os.ReadFile(filepath.Join(dir, "gen"))
 		env := append(baseEnv(dir), "CORESLOT_UNBUDGETED=parent-reason")
-		if r := cli(t, env, "run", "--mem", "384M", "--label", "nested-unbudgeted", "--", "true"); r.code != 0 {
+		if r := cli(t, env, "run", "--restart=yes", "--mem", "384M", "--label", "nested-unbudgeted", "--", "true"); r.code != 0 {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
 		if after, _ := os.ReadFile(filepath.Join(dir, "gen")); string(after) != string(gen) {

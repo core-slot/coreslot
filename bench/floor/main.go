@@ -12,7 +12,7 @@
 //	floor -mode waiter   -procs 20 -duration 60s [-cpuprofile DIR]
 //	floor -mode cli      -procs 20 -duration 60s -coreslot BIN
 //
-// The cli mode runs `coreslot run --mem 128M -- true` waiters, which cannot report their own
+// The cli mode runs `coreslot run --restart=yes --mem 128M -- true` waiters, which cannot report their own
 // CPU: it runs two batches, one for the warm-up alone and one for the warm-up plus the window,
 // ends each waiter with SIGINT (it withdraws and exits), and reports the difference of the
 // batches' mean wait4 rusage over the window.
@@ -308,7 +308,7 @@ func cliMode(bin, dir string, procs int, warmup, duration time.Duration) int {
 	batch := func(life time.Duration) (float64, error) {
 		var cmds []*exec.Cmd
 		for i := 0; i < procs; i++ {
-			cmd := exec.Command(bin, "run", "--mem", "128M", "--", "true")
+			cmd := exec.Command(bin, "run", "--restart=yes", "--mem", "128M", "--", "true")
 			cmd.Env = append(os.Environ(), "CORESLOT_STATE_DIR="+dir)
 			if err := cmd.Start(); err != nil {
 				return 0, err

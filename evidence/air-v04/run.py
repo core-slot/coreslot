@@ -67,7 +67,7 @@ def label(gate, smoke):
 
 
 def wrap(coreslot, lab, argv):
-    return [coreslot, "run", "--label", lab, "--"] + argv
+    return [coreslot, "run", "--restart=yes", "--label", lab, "--"] + argv
 
 
 def agents(mix):

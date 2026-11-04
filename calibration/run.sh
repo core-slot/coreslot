@@ -113,7 +113,7 @@ else
 	max_s=$((${seconds%.*} + 60))
 fi
 build_cmd=(go build -o "$tmp/coreslot" ./cmd/coreslot)
-coreslot_run=(env "CORESLOT_STATE_DIR=$tmp/state" "$tmp/coreslot" run)
+coreslot_run=(env "CORESLOT_STATE_DIR=$tmp/state" "$tmp/coreslot" run --restart=yes)
 run_cmd=("${coreslot_run[@]}" --label "calibration-$kind" --mem "$need" -- "$py" -I "$here/$work" "${work_args[@]}")
 # The warm-up gives the label one counted run, so the pass is scored against the label's own normal
 # share. The observer is the first and oldest hold, never a victim, and keeps the sampling going.

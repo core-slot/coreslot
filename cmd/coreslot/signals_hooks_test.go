@@ -71,7 +71,7 @@ func finish(t *testing.T, cmd *exec.Cmd, prefix string) int {
 // that it brackets the wait as well (the run does not stop while the section stays held).
 func TestStopWhileWaitingForTheSection(t *testing.T) {
 	dir := budgetDir(t, 256)
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "admit.lock"), os.O_RDWR, 0)
@@ -84,7 +84,7 @@ func TestStopWhileWaitingForTheSection(t *testing.T) {
 	}
 	hooks := t.TempDir()
 	cmd := cliCmd(t, append(baseEnv(dir), "CORESLOT_TESTHOOK_DIR="+hooks, "CORESLOT_TESTHOOK_PAUSE=section.busy"),
-		"run", "--", "true")
+		"run", "--restart=yes", "--", "true")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -115,12 +115,12 @@ func TestStopWhileWaitingForTheSection(t *testing.T) {
 // longer calls it (the run never stops).
 func TestStopDeferredWhileHoldingTheSection(t *testing.T) {
 	dir := budgetDir(t, 256)
-	if r := cli(t, baseEnv(dir), "run", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	hooks := t.TempDir()
 	cmd := cliCmd(t, append(baseEnv(dir), "CORESLOT_TESTHOOK_DIR="+hooks, "CORESLOT_TESTHOOK_PAUSE=section.entered"),
-		"run", "--", "true")
+		"run", "--restart=yes", "--", "true")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -161,12 +161,12 @@ func TestStopDeferredWhileHoldingTheSection(t *testing.T) {
 // stopped. Mutation: ProbeLocked no longer calls the lock hooks (the status stops holding it).
 func TestStopDeferredWhileHoldingAProbeLock(t *testing.T) {
 	dir := budgetDir(t, 256)
-	if r := cli(t, baseEnv(dir), "run", "--mem", "256M", "--", "true"); r.code != 0 {
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "256M", "--", "true"); r.code != 0 {
 		t.Fatalf("setup run: %d %q", r.code, r.stderr)
 	}
 	deadHold(t, dir, 256)
 	whole := func() result {
-		return cli(t, baseEnv(dir), "run", "--no-wait", "--mem", "256M", "--", "true")
+		return cli(t, baseEnv(dir), "run", "--restart=yes", "--no-wait", "--mem", "256M", "--", "true")
 	}
 	hooks := t.TempDir()
 	cmd := cliCmd(t, append(baseEnv(dir), "CORESLOT_TESTHOOK_DIR="+hooks, "CORESLOT_TESTHOOK_PAUSE=probe.locked"),

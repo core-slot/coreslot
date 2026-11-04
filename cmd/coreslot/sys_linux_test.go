@@ -12,7 +12,7 @@ import (
 // Mutation: leaving the score alone reads 0, which differs only where the inherited score is below 500.
 func TestOOMScoreInherited(t *testing.T) {
 	dir := stateDir(t, "")
-	r := cli(t, baseEnv(dir), "run", "--", "cat", "/proc/self/oom_score_adj")
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "cat", "/proc/self/oom_score_adj")
 	if got := strings.TrimSpace(r.stdout); r.code != 0 || got != "500" {
 		t.Errorf("the command's oom_score_adj %q (exit %d, stderr %q), want 500", got, r.code, r.stderr)
 	}
@@ -27,7 +27,7 @@ func TestOOMScoreLeftForNoRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := cli(t, baseEnv(dir), "run", "--label", "keep", "--", "cat", "/proc/self/oom_score_adj")
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--label", "keep", "--", "cat", "/proc/self/oom_score_adj")
 	if got, want := strings.TrimSpace(r.stdout), strings.TrimSpace(string(own)); r.code != 0 || got != want {
 		t.Errorf("the no_restart command's oom_score_adj %q (exit %d, stderr %q), want it left at %q", got, r.code, r.stderr, want)
 	}

@@ -8,6 +8,23 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- **Breaking:** `coreslot run` requires `--restart=yes` or `--restart=no` wherever the watchdog
+  could stop the command, that is, wherever its command gets a process group of its own. When
+  memory runs short coreslot kills the newest commands and runs them again from scratch, which is
+  right for tests, builds, linters and type checks (`yes`) and wrong for anything that changes the
+  world outside its own output, such as databases, migrations, deploys, pushes, sending messages
+  or writing shared files (`no`, never stopped). Without the flag such a run refuses before it
+  queues, with a usage error (exit 64) that says which to pick; when unsure, `no`. A run in a
+  terminal, with `--same-group`, nested inside another run's reservation or outside the budget is
+  never stopped and needs no flag. `needs.toml`'s `no_restart = true` still works and wins over
+  `--restart=yes`. Scripts and wrappers that call `coreslot run` must pass the flag. The stop line
+  says that the command was declared restartable.
+- The Claude Code hook offers `coreslot run --restart=yes --` and no longer recognises `make -j`,
+  Gradle or `xcodebuild`, whose targets can deploy, migrate or upload; its instructions snippet for
+  other agents asks them to choose `--restart` per command.
+
 ## v0.4.1 (2026-11-02)
 
 ### Changed

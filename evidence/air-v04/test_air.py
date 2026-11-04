@@ -318,7 +318,7 @@ class RunTest(unittest.TestCase):
     def test_dry(self):
         k = [x for x in self.dry("set", "K", "--tag", "pilot") if x.startswith("pilot K")]
         self.assertEqual(len(k), 5)
-        self.assertTrue(all("/bin/coreslot run --label smoke:" in x for x in k))
+        self.assertTrue(all("/bin/coreslot run --restart=yes --label smoke:" in x for x in k))
         f = [x for x in self.dry("pairs", "--first", "2", "--last", "2") if x.startswith("pair-2")]
         self.assertEqual([x.split()[1] for x in f], ["K"] * 5 + ["F"] * 5)
         self.assertTrue(all("coreslot" not in x for x in f[5:]))
@@ -326,6 +326,11 @@ class RunTest(unittest.TestCase):
         hogs = [x for x in self.dry("demo") if x.startswith("hog ")]
         self.assertEqual(len(hogs), 3)
         self.assertTrue(all("--label demo-hog" in x and "--slow-pct 0" in x for x in hogs))
+
+    def test_wrap_declares_the_gates_restartable(self):
+        """Every K command may be stopped and run again: the gates are tests, type checks and linters."""
+        self.assertEqual(run.wrap("/b/coreslot", "air:x", ["npm", "test"]),
+                         ["/b/coreslot", "run", "--restart=yes", "--label", "air:x", "--", "npm", "test"])
 
     def test_orders(self):
         lines = self.dry("--stagger-s", "1", "set", "S", "--slots", "1", "--order", "A3,A4,A1,A2", "--tag", "sem-pair-1")

@@ -177,6 +177,15 @@ func TestNoRestartLabelNeverVictim(t *testing.T) {
 	neverVictim(t, e)
 }
 
+// A run declared --restart=no is never a victim, whatever its label. Mutation: deriving victim
+// from no_restart alone lists B.
+func TestRestartNoNeverVictim(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	e.Learn("B")
+	neverVictim(t, e, "--restart=no")
+}
+
 // In observe mode a listed run says what it would stop and kills nothing. Mutation: killing in
 // observe mode ends B's command.
 func TestObserveKillsNothing(t *testing.T) {
@@ -265,7 +274,7 @@ func TestRunLearnsItsTickShareForTheNextRun(t *testing.T) {
 	if err != nil || len(runs) != 1 || runs[0].TickShare == nil {
 		t.Fatalf("run log %+v, %v; want one run with a tick_share", runs, err)
 	}
-	e.Start("run", "--label", "learner", "--mem", "100M", "--", bins.child, "hold", e.MarkDir, "next")
+	e.Start("run", "--restart=yes", "--label", "learner", "--mem", "100M", "--", bins.child, "hold", e.MarkDir, "next")
 	e.WaitStarted("next")
 	h := e.HoldBody(e.WaitTicked("learner"))
 	if !h.Learned || h.NormalShare != *runs[0].TickShare {

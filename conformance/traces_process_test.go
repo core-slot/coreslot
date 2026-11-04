@@ -193,7 +193,7 @@ func settled(t *testing.T, e Env) {
 func TestNestedUnderFailOpenParent(t *testing.T) {
 	e := State(t)
 	e.WriteConfig("[memory]\nreserve = \"lots\"\n") // invalid: a state error, so the parent fails open
-	p := e.Start("run", "--label", "parent", "--mem", "256M", "--", "sh", "-c",
+	p := e.Start("run", "--restart=yes", "--label", "parent", "--mem", "256M", "--", "sh", "-c",
 		`"$0" run --label inner --mem 384M -- "$1" hold "$2" inner`, bins.coreslot, bins.child, e.MarkDir)
 	r := e.WaitStarted("inner")
 	e.SectionLeft()
@@ -262,7 +262,7 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 	if got := stableReserved(e); got != 1024 {
 		t.Errorf("%d MiB reserved, want 1024", got)
 	}
-	e.Start("run", "--no-wait", "--", "true").ExitCode(exitRefusal)
+	e.Start("run", "--restart=yes", "--no-wait", "--", "true").ExitCode(exitRefusal)
 	for _, p := range []*Proc{one, seven} {
 		e.ReleaseChild(p.name)
 		p.ExitCode(0)
@@ -278,7 +278,7 @@ func TestOneOfEightLeavesSeven(t *testing.T) {
 func TestChildClosingCopiesKeepsTheHold(t *testing.T) {
 	e := State(t)
 	e.WriteConfig(roomConfig(256))
-	p := e.Start("run", "--label", "closer", "--mem", "256M", "--", "sh", "-c",
+	p := e.Start("run", "--restart=yes", "--label", "closer", "--mem", "256M", "--", "sh", "-c",
 		`exec 3<&-; exec "$0" hold "$1" closer`, bins.child, e.MarkDir)
 	r := e.WaitStarted("closer")
 	if len(r.FDs) != 0 {
@@ -291,7 +291,7 @@ func TestChildClosingCopiesKeepsTheHold(t *testing.T) {
 		t.Errorf("while the command runs: %d MiB reserved, holds %v, dead %v; want 256 and the live hold",
 			rep.Mem.ReservedMiB, rep.Holds, rep.DeadHolds)
 	}
-	e.Start("run", "--no-wait", "--", "true").ExitCode(exitRefusal)
+	e.Start("run", "--restart=yes", "--no-wait", "--", "true").ExitCode(exitRefusal)
 	e.ReleaseChild("closer")
 	p.ExitCode(0)
 	settled(t, e)
@@ -318,14 +318,14 @@ func TestFailedSpawnFreesEverything(t *testing.T) {
 		{notExec, 126},
 	} {
 		label := filepath.Base(c.cmd)
-		e.Start("run", "--label", label, "--mem", "256M", "--", c.cmd).ExitCode(c.code)
+		e.Start("run", "--restart=yes", "--label", label, "--mem", "256M", "--", c.cmd).ExitCode(c.code)
 		settled(t, e)
 		if l := logLine(t, e, label); l["exit"] != float64(c.code) {
 			t.Errorf("run-log line %v, want exit %d", l, c.code)
 		}
 	}
 	// Everything is free for the next request.
-	e.Start("run", "--no-wait", "--mem", "512M", "--", "true").ExitCode(0)
+	e.Start("run", "--restart=yes", "--no-wait", "--mem", "512M", "--", "true").ExitCode(0)
 }
 
 // Close closes the process's copies without unlocking, so a command that inherited the grant
@@ -406,7 +406,7 @@ func TestRepeatedClose(t *testing.T) {
 func TestSignalTraces(t *testing.T) {
 	cfg := roomConfig(256)
 	cmdArgs := func(e Env, name string) []string {
-		return []string{bins.coreslot, "run", "--label", name, "--mem", "256M", "--", bins.child, "signals", e.MarkDir, name}
+		return []string{bins.coreslot, "run", "--restart=yes", "--label", name, "--mem", "256M", "--", bins.child, "signals", e.MarkDir, name}
 	}
 
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
@@ -466,7 +466,7 @@ func TestSignalTraces(t *testing.T) {
 	// group that coreslot stops and continues.
 	for _, c := range []struct{ name, line string }{
 		{"terminal/Ctrl-Z and fg", `"$BIN" run --label cmd --mem 256M -- "$CHILD" signals "$M" cmd`},
-		{"pipeline/Ctrl-Z and fg", `true | "$BIN" run --label cmd --mem 256M -- "$CHILD" signals "$M" cmd | cat`},
+		{"pipeline/Ctrl-Z and fg", `true | "$BIN" run --restart=yes --label cmd --mem 256M -- "$CHILD" signals "$M" cmd | cat`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := State(t)
@@ -511,7 +511,7 @@ func TestSignalTraces(t *testing.T) {
 		e := State(t)
 		e.WriteConfig(cfg)
 		sh := e.shell()
-		sh.write(`true | "$BIN" run --label cmd --mem 256M -- "$CHILD" signals "$M" cmd | cat` + "\n")
+		sh.write(`true | "$BIN" run --restart=yes --label cmd --mem 256M -- "$CHILD" signals "$M" cmd | cat` + "\n")
 		r := e.WaitStarted("cmd")
 		killGroupOf(t, r.PID)
 		killGroupOf(t, parentOf(r.PID))

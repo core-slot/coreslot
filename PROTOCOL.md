@@ -345,8 +345,11 @@ reader does not know is ignored.
 
 > **Implementation note.** The Go CLI takes a run's need from `--mem`, else the label's `mem`, else
 > the 90th percentile of the `mem_peak_kib` of the label's last 20 counted runs (section 20) rounded
-> up to a whole MiB, else the cold start (section 5.1). A run's `victim` (section 7.4) is false when
-> its label has `no_restart = true`.
+> up to a whole MiB, else the cold start (section 5.1). A run's `victim` (section 7.4) is true only
+> when it was started with `--restart=yes` and its label has no `no_restart = true`, which wins over
+> the flag; `--restart=no` makes it false. The CLI requires `--restart` of every run that could be a
+> victim (its command gets a process group of its own and its label is not `no_restart`), and
+> accepts and ignores it elsewhere.
 
 ## 6. Holds and descriptor ownership
 
@@ -455,7 +458,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `d_user_ns`, `d_sys_ns`, `d_page_wait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_page_wait_ns` is `0` where the kernel reports no page wait (section 23.1) |
 | `normal_share` | number | `0..1`; the label's normal share `S0` (section 23.3) as the run read it from the run log when it started; `0` when `learned` is false |
 | `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
-| `victim` | boolean | `true` when a stop round may list the hold: its label has no `no_restart` (section 5.4) and its command does not share coreslot's process group |
+| `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), and its command does not share coreslot's process group |
 | `learned` | boolean | `true` when the run log gave the label a normal share when the run started; otherwise the hold is learning (section 23.3) |
 | `child_exited` | boolean | `true` once the run's command has exited |
 
@@ -1147,8 +1150,8 @@ commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <
 
 ### 21.1 Enqueue
 
-Pid 4711 runs `coreslot run --mem 3G --label gate:unit -- pytest` at `T0`. The ticket of pid 5120
-(label `ci:o-r`, enqueued at 11:59:05) is already waiting.
+Pid 4711 runs `coreslot run --restart=yes --mem 3G --label gate:unit -- pytest` at `T0`. The
+ticket of pid 5120 (label `ci:o-r`, enqueued at 11:59:05) is already waiting.
 
 Before:
 
@@ -1197,8 +1200,8 @@ Pid 4711, resuming after a gap above 10 s, refreshes and then bumps `gen` in the
 
 ### 21.3 Admission
 
-Pid 7300 runs `coreslot run --mem 3G --label gate:big -- ./build`, enqueued at 12:09:00, and is head
-at 12:10:00. Pid 6500 holds 4 GiB for `pool:a`; its tree uses 1 536 MiB of them. The kernel's
+Pid 7300 runs `coreslot run --restart=yes --mem 3G --label gate:big -- ./build`, enqueued at
+12:09:00, and is head at 12:10:00. Pid 6500 holds 4 GiB for `pool:a`; its tree uses 1 536 MiB of them. The kernel's
 headroom reads 7 168 MiB.
 
 Before:
@@ -1555,7 +1558,8 @@ one at a time.
    has passed, except that under `mode = "enforce"` a round written in observe mode
    (`detector.observed`), whose holds never exit, holds nothing back.
 
-The oldest running hold, a hold whose label has `no_restart` and a run that shares coreslot's
+The oldest running hold, a hold whose run did not declare its command safe to run again (the
+CLI's `--restart=no`), a hold whose label has `no_restart` and a run that shares coreslot's
 process group are never victims, and a hold that is learning (it has no normal share) is a victim of
 a floor round only. A run outside the budget (section 14, `--on-timeout run`) ticks nothing, so it
 is no running hold: it is never a victim and never the oldest. A run that finds its command ended

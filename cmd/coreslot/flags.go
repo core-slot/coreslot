@@ -13,11 +13,12 @@ import (
 // runOptions are the flags of `coreslot run`, whose synopsis PROTOCOL.md section 21 gives (the
 // CLI is not part of the protocol).
 type runOptions struct {
-	need        int64 // MiB, once resolveNeed ran
-	mem         int64 // MiB from --mem, 0 when not given
-	pinned      bool  // need is --mem or the needs file's pin: learning leaves it alone
-	noRestart   bool  // the needs file marks the label no_restart: never stopped to free memory
-	typicalS    int64 // the label's typical run time from the run log, 0 unknown
+	need        int64  // MiB, once resolveNeed ran
+	mem         int64  // MiB from --mem, 0 when not given
+	pinned      bool   // need is --mem or the needs file's pin: learning leaves it alone
+	noRestart   bool   // the needs file marks the label no_restart: never stopped to free memory
+	restart     string // --restart: "yes", "no", or "" when not given
+	typicalS    int64  // the label's typical run time from the run log, 0 unknown
 	label       string
 	timeout     time.Duration
 	onTimeout   string // "fail" (the default) or "run"
@@ -29,14 +30,25 @@ type runOptions struct {
 	argv        []string
 }
 
-const runUsage = `usage: coreslot run [--mem SIZE] [--label L] [--timeout D] [--on-timeout run|fail]
-       [--no-wait] [--strict] [--independent] [--same-group] [--refusal-code N] -- COMMAND...`
+const runUsage = `usage: coreslot run --restart=yes|no [--mem SIZE] [--label L] [--timeout D]
+       [--on-timeout run|fail] [--no-wait] [--strict] [--independent] [--same-group]
+       [--refusal-code N] -- COMMAND...`
 
 // runHelp is what `coreslot run --help` prints: the synopsis, then each flag with its default.
 const runHelp = runUsage + `
 
 Runs COMMAND once the budget grants it the memory it needs.
 
+  --restart=yes|no      required for a command that coreslot could stop. When memory runs
+                        short, coreslot kills the newest commands and runs them again from
+                        scratch. yes: the command is safe to kill at any moment and to run
+                        again (tests, builds, linters, type checks). no: never stop it; it
+                        changes the world outside its own output (databases, migrations,
+                        deploys, pushes, sending messages, writing shared files). When
+                        unsure, no. A label marked no_restart in needs.toml is never stopped,
+                        whatever this says. Not required, and ignored, where the command is
+                        never stopped anyway: in a terminal, with --same-group, inside
+                        another run's grant, or outside the budget
   --mem SIZE            memory the command needs, such as 3G or 768M, more than 0. Without it
                         the run takes the label's entry in needs.toml, beside the
                         configuration, else what the label's last 20 runs needed, else the
@@ -78,6 +90,13 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 		o.mem = mib
 		return err
 	})
+	fs.Func("restart", "yes or no: may the command be stopped and run again", func(v string) error {
+		if v != "yes" && v != "no" {
+			return errors.New("want yes or no")
+		}
+		o.restart = v
+		return nil
+	})
 	fs.StringVar(&o.label, "label", "", "label of the request")
 	fs.DurationVar(&o.timeout, "timeout", 0, "give up waiting after this long")
 	fs.StringVar(&o.onTimeout, "on-timeout", "fail", "run or fail when --timeout passes")
@@ -109,6 +128,27 @@ func parseRun(args []string, streams IO) (runOptions, error) {
 		return o, usagef("--refusal-code %d: want 1 to 255", o.refusalCode)
 	}
 	return o, nil
+}
+
+// errRestartMissing is the usage error of a run that could be stopped and does not say whether
+// its command may be run again.
+var errRestartMissing = &spec.UsageError{Msg: `--restart is required: when memory runs short, coreslot may kill this command and run it again from scratch
+  --restart=yes  the command is safe to kill at any moment and to run again from scratch
+                 (tests, builds, linters, type checks)
+  --restart=no   anything that changes the world outside its own output (databases,
+                 migrations, deploys, pushes, sending messages, writing shared files)
+When unsure, --restart=no.
+` + runUsage}
+
+// restartable reports whether a stop round may stop the command and run it again: --restart=yes
+// and no no_restart mark on its label, which wins.
+func (o runOptions) restartable() bool { return o.restart == "yes" && !o.noRestart }
+
+// restartMissing reports whether the run must refuse with errRestartMissing: it could be a stop
+// round's victim (its command gets a group of its own, unless shared says it shares coreslot's;
+// its label is not no_restart) and --restart was not given.
+func (o runOptions) restartMissing(shared bool) bool {
+	return o.restart == "" && !o.noRestart && !shared
 }
 
 func usagef(format string, args ...any) error {

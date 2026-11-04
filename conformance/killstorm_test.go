@@ -208,9 +208,9 @@ func (st *storm) argv(c *stormClient) []string {
 	leaf := []string{bins.child, "hold", st.e.MarkDir, c.name}
 	cmd := leaf
 	if c.inner == "go" {
-		cmd = append([]string{bins.coreslot, "run", "--mem", "128M", "--"}, leaf...)
+		cmd = append([]string{bins.coreslot, "run", "--restart=yes", "--mem", "128M", "--"}, leaf...)
 	}
-	a := []string{bins.coreslot, "run", "--label", c.name}
+	a := []string{bins.coreslot, "run", "--restart=yes", "--label", c.name}
 	if c.timeout > 0 {
 		a = append(a, "--timeout", c.timeout.String())
 	}
