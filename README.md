@@ -127,12 +127,12 @@ kernel is actually paging:
 | red | they lose a large share of it for tens of seconds | a stop round: the newest commands are killed until their footprints cover how far free memory is under the reserve |
 | floor | swap is nearly out of room and still growing | the same stop round, at once, and it may take a command that is still learning |
 
-A red round spares a command that is nearly finished and goes on to the next newest: one whose
-label has at least 10 earlier runs, whose CPU time so far, against the median CPU time of those
-runs, says it will end within the label's typical run time (slowed by the share of its recent
-time it lost to memory). A later round spares it again only before the time that first estimate
-gave and while the estimate keeps shrinking, and a command is spared only when the older one
-stopped in its place has done less CPU work. The run says so:
+A red round may spare its newest victim when it is nearly finished and stop the next newest instead,
+if that one alone covers what the round must free and has done less CPU work. Nearly finished means
+a command whose label has at least 10 earlier runs, whose CPU time so far, against the median CPU
+time of those runs, says it will end within the label's typical run time (slowed by the share of its
+recent time it lost to memory). A later round spares it again only before the time that first
+estimate gave and while the estimate keeps shrinking. The run says so:
 `coreslot: kept … (memory red, about 9 s left, 80% done, until 12:00:10)`. A floor round spares
 nothing.
 

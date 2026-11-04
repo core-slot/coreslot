@@ -58,28 +58,40 @@ func TestKeeps(t *testing.T) {
 	}
 }
 
-// A red round passes over a nearly finished newest job only when the older victim it then stops
-// has done less CPU work; otherwise it stops the newest as before. A kept job with no older victim
-// behind it is kept and the round lists nobody. A floor round keeps nothing. Records are kept for
-// the next round, whatever it lists. Mutations: dropping the CPU comparison lists 2 in "older did
-// more"; applying the rule at the floor lists nothing there.
+// A red round passes over the nearly finished newest victim only when exactly one substitute, the
+// next victim, alone covers the shortage and has done less CPU work; otherwise it stops as before.
+// With nobody behind it, or when covering the shortage takes a chain of older jobs, it is stopped.
+// Only the newest victim is ever kept. A floor round keeps nothing. Records of other holds are
+// kept for the next round. Mutations: dropping the CPU comparison keeps 3 in "older did more";
+// dropping the coverage test keeps it in "u alone does not cover" and "chain needed"; keeping a
+// victim behind the newest lists 2 in "only the newest"; applying the rule at the floor lists
+// nothing there.
 func TestStopListKeepsNearlyFinished(t *testing.T) {
 	old := near("1", 1)
-	young := func(cpuNS int64) Job { j := near("2", 2); j.CPUNS, j.StallEWMA = cpuNS, 0.2; return j } // no estimate under T
+	young := func(hold string, arrival, cpuNS, mib int64) Job { // no estimate under T
+		j := near(hold, arrival)
+		j.CPUNS, j.StallEWMA, j.FootprintMiB = cpuNS, 0.2, mib
+		return j
+	}
 	for _, c := range []struct {
 		name  string
 		jobs  []Job
+		short int64
 		floor bool
 		stop  []string
 		kept  []string
 	}{
-		{"older did less", []Job{old, young(1e9), near("3", 3)}, false, []string{"2"}, []string{"3"}},
-		{"older did more", []Job{old, young(9e9), near("3", 3)}, false, []string{"3"}, nil},
-		{"older did as much", []Job{old, young(8e9), near("3", 3)}, false, []string{"3"}, nil},
-		{"nobody behind it", []Job{old, near("3", 3)}, false, nil, []string{"3"}},
-		{"floor", []Job{old, young(1e9), near("3", 3)}, true, []string{"3"}, nil},
+		{"older did less", []Job{old, young("2", 2, 1e9, 512), near("3", 3)}, 100, false, []string{"2"}, []string{"3"}},
+		{"older did more", []Job{old, young("2", 2, 9e9, 512), near("3", 3)}, 100, false, []string{"3"}, nil},
+		{"older did as much", []Job{old, young("2", 2, 8e9, 512), near("3", 3)}, 100, false, []string{"3"}, nil},
+		{"u alone covers", []Job{old, young("2", 2, 1e9, 512), near("3", 3)}, 512, false, []string{"2"}, []string{"3"}},
+		{"u alone does not cover", []Job{old, young("2", 2, 1e9, 512), near("3", 3)}, 800, false, []string{"3", "2"}, nil},
+		{"chain needed", []Job{old, young("2", 2, 1e9, 300), young("4", 2, 1e9, 300), near("3", 3)}, 500, false, []string{"3"}, nil},
+		{"nobody behind it", []Job{old, near("3", 3)}, 100, false, []string{"3"}, nil},
+		{"only the newest", []Job{old, young("2", 2, 1e9, 1024), near("3", 3), young("4", 4, 1e9, 512)}, 1000, false, []string{"4", "3"}, nil},
+		{"floor", []Job{old, young("2", 2, 1e9, 512), near("3", 3)}, 100, true, []string{"3"}, nil},
 	} {
-		stop, kept := StopList(c.jobs, c.floor, 100, map[string]Kept{"other": {LeftS: 1}}, 77)
+		stop, kept := StopList(c.jobs, c.floor, c.short, map[string]Kept{"other": {LeftS: 1}}, 77)
 		var names []string
 		for h := range kept {
 			if h != "other" {

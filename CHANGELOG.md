@@ -36,16 +36,17 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
-- A red stop round passes over a command that is nearly finished and stops the next newest one
-  instead. A command is nearly finished when its label has at least 10 counted runs, its CPU time
-  so far against the median CPU time of those runs gives a progress strictly between 0 and 1, and
-  the remaining time that progress predicts, slowed by its recent share of time lost to memory, is
-  under the label's typical run time. The first keep sets a deadline, its time plus that estimate;
-  a later round keeps the command again only before the deadline and while the estimate keeps
-  shrinking. A command is kept only when the older one stopped in its place has done less CPU work.
-  The run prints `coreslot: kept … (memory red, about N s left, P% done, until HH:MM:SS)`, and a
-  later stop of it says that an earlier round kept it. A floor round keeps nothing. Holds carry the optional keys `cpu_ns`, `typical_cpu_s` and `stall_ewma`, and
-  `watch.json` the detector's `kept` records.
+- A red stop round may pass over its newest victim when that command is nearly finished and stop the
+  next newest one instead, when that one alone covers what the round must free and has done less CPU
+  work. A command is nearly finished when its label has at least 10 counted runs, its CPU time so
+  far against the median CPU time of those runs gives a progress strictly between 0 and 1, and the
+  remaining time that progress predicts, slowed by its recent share of time lost to memory, is under
+  the label's typical run time. The first keep sets a deadline, its time plus that estimate; a later
+  round keeps the command again only before the deadline and while the estimate keeps shrinking. The
+  run prints `coreslot: kept … (memory red, about N s left, P% done, until HH:MM:SS)`, and a
+  later stop of it says that an earlier round kept it. A floor round keeps nothing. Holds carry the
+  optional keys `cpu_ns`, `typical_cpu_s` and `stall_ewma`, and `watch.json` the detector's `kept`
+  records.
 
 ## v0.4.1 (2026-11-02)
 

@@ -1560,22 +1560,25 @@ one at a time.
    sample it just took (the room counts reservations not yet used, which free no memory), and at
    least one. With only the oldest hold or holds that are not victims left, the list is empty.
 
-   A red round passes over a victim that is **nearly finished**, without counting its footprint,
-   and goes on to the next one, so that its list may be empty; a floor round passes over none.
+   A red round may pass over its newest victim when that victim is **nearly finished**, without
+   counting its footprint, and go on to the next one; a floor round passes over none.
    For a victim, with `T` its hold's `typical_s`, `C` its `typical_cpu_s` and `c` its `cpu_ns` in
    seconds, its progress is `p = c / C` and its predicted remaining time
    `t3 = T × (1 − p) / (1 − min(stall_ewma, 0.8))`. It is nearly finished when `C > 0`, `p < 1`
    and `t3 < T` (which needs `T > 0` and `p > 0`) and, when an earlier red round kept it, the
    round's time is before that record's `deadline_ns` and `t3` is smaller than its `left_s`: the
    first keep sets the deadline to the round's time plus its `t3`, and every later one needs the
-   estimate to keep shrinking within it. A nearly finished victim is passed over only when the
-   next victim of the round's order, the one the round would stop in its place, has a smaller
-   `cpu_ns`: work done counts against work done. With no next victim it is passed over too. The
-   round writes `detector.kept`: the record `{deadline_ns, left_s: t3, done: p, round_ns}` of each
-   victim it kept, the deadline kept from the first. A record lasts as long as its hold is live,
-   also while its run misses a tick, and goes when a sample finds the hold gone. The rule spares
-   work that is almost done when memory is red, by coreslot's own measurements of the label; it
-   never changes the order of the victims, and the floor stays the safety net.
+   estimate to keep shrinking within it. The newest victim is passed over only when exactly one
+   job takes its place: the next victim of the round's order alone has a footprint of at least
+   what the round must free, `max(shortage, 1)`, and a smaller `cpu_ns`, so that work done counts
+   against work done and the round never stops a chain of older jobs for it. With no next victim,
+   or one that does not cover the shortage alone or has done as much work, it is stopped as
+   before. The round writes `detector.kept`: the record
+   `{deadline_ns, left_s: t3, done: p, round_ns}` of the victim it kept, the deadline kept from
+   the first. A record lasts as long as its hold is live, also while its run misses a tick, and
+   goes when a sample finds the hold gone. The rule spares work that is almost done when memory
+   is red, by coreslot's own measurements of the label; it never changes the order of the
+   victims, and the floor stays the safety net.
 
    > **Implementation note.** The Go CLI's `cpu_ns` sums the deltas of its tree listings, which
    > miss what a process spent between the last listing and its exit, so its progress reads low

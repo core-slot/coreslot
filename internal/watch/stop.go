@@ -74,10 +74,10 @@ func Keeps(j Job, rec Kept, seen bool, nowNS int64) (Kept, bool) {
 
 // StopList names the holds a stop round at host time atNS stops: victims, newest arrival first,
 // never the oldest live job, until their footprints sum to max(shortMiB, 1). A red round takes
-// learned victims only, and passes over one that Keeps with its record in kept, unless the older
-// victim it would stop instead has done at least as much CPU work; a floor round keeps nothing
-// and takes every learned victim first, then the learning ones. It returns kept with the records
-// of the jobs it kept.
+// learned victims only, and passes over the newest of them when it Keeps with its record in kept
+// and the next victim alone covers what the round must free and has done less CPU work: one
+// substitute, never a chain; a floor round keeps nothing and takes every learned victim first,
+// then the learning ones. It returns kept with the record of the job it kept.
 func StopList(jobs []Job, floor bool, shortMiB int64, kept map[string]Kept, atNS int64) ([]string, map[string]Kept) {
 	newest := slices.Clone(jobs)
 	slices.SortStableFunc(newest, func(a, b Job) int {
@@ -95,9 +95,9 @@ func StopList(jobs []Job, floor bool, shortMiB int64, kept map[string]Kept, atNS
 			if freed >= max(shortMiB, 1) {
 				break
 			}
-			if !floor {
+			if i == 0 && !floor {
 				prev, seen := kept[j.Hold]
-				if rec, ok := Keeps(j, prev, seen, atNS); ok && (i+1 == len(cands) || cands[i+1].CPUNS < j.CPUNS) {
+				if rec, ok := Keeps(j, prev, seen, atNS); ok && substitutes(cands[i+1:], j, max(shortMiB, 1)) {
 					kept = maps.Clone(kept)
 					if kept == nil {
 						kept = map[string]Kept{}
@@ -111,6 +111,12 @@ func StopList(jobs []Job, floor bool, shortMiB int64, kept map[string]Kept, atNS
 		}
 	}
 	return stop, kept
+}
+
+// substitutes reports whether the next of rest, the one a round that keeps v stops in its place,
+// alone frees needMiB and has done less CPU work than v.
+func substitutes(rest []Job, v Job, needMiB int64) bool {
+	return len(rest) > 0 && rest[0].FootprintMiB >= needMiB && rest[0].CPUNS < v.CPUNS
 }
 
 // Prune drops the records of the holds that are no longer live: a record lasts as long as its
