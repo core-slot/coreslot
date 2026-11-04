@@ -135,7 +135,8 @@ func runningJobs(holds []liveHold, nowNS int64) []watch.Job {
 		}
 		jobs = append(jobs, watch.Job{Hold: h.name, Label: b.Label, ArrivalNS: b.ArrivalNS,
 			NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, DUserNS: b.DUserNS, DSysNS: b.DSysNS,
-			DPageWaitNS: b.DPageWaitNS, NormalShare: b.NormalShare, Learned: b.Learned, Victim: b.Victim})
+			DPageWaitNS: b.DPageWaitNS, NormalShare: b.NormalShare, Learned: b.Learned, Victim: b.Victim,
+			CPUNS: b.CPUNS, TypicalCPUS: b.TypicalCPUS, TypicalS: b.TypicalS, StallEWMA: b.StallEWMA})
 	}
 	return jobs
 }

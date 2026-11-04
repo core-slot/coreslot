@@ -44,6 +44,9 @@ type Hold struct {
 	NormalShare                  float64
 	SampledNS                    int64
 	Victim, Learned, ChildExited bool
+	CPUNS                        int64   // optional: the attempt's user and system time so far
+	TypicalCPUS                  float64 // optional: the label's typical user and system seconds, 0 unknown
+	StallEWMA                    float64 // optional: the run's smoothed stall share, 0..1
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -78,6 +81,9 @@ type holdJSON struct {
 	Victim       bool    `json:"victim"`
 	Learned      bool    `json:"learned"`
 	ChildExited  bool    `json:"child_exited"`
+	CPUNS        int64   `json:"cpu_ns,omitempty"`
+	TypicalCPUS  float64 `json:"typical_cpu_s,omitempty"`
+	StallEWMA    float64 `json:"stall_ewma,omitempty"`
 }
 
 type cancelJSON struct {
@@ -163,14 +169,17 @@ func (h Hold) validate() error {
 		return malformed("%v", err)
 	}
 	if h.PID < 0 || h.Stops < 0 ||
-		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS) < 0 {
+		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS, h.CPUNS) < 0 {
 		return malformed("pid, stops and every time are at least 0")
 	}
 	if h.NeedMiB < 0 || h.NeedMiB > spec.MaxNeedMiB || h.FootprintMiB < 0 || h.FootprintMiB > spec.MaxNeedMiB {
 		return malformed("need_mib and footprint_mib are in [0, %d]", spec.MaxNeedMiB)
 	}
-	if !(h.NormalShare >= 0 && h.NormalShare <= 1) {
-		return malformed("normal_share is in [0, 1]")
+	if !(h.NormalShare >= 0 && h.NormalShare <= 1) || !(h.StallEWMA >= 0 && h.StallEWMA <= 1) {
+		return malformed("normal_share and stall_ewma are in [0, 1]")
+	}
+	if !(h.TypicalCPUS >= 0) {
+		return malformed("typical_cpu_s is at least 0")
 	}
 	return nil
 }
@@ -235,6 +244,17 @@ func DecodeHold(body []byte) (Hold, error) {
 	}
 	if h.TypicalS, err = optional(o, "typical_s", o.int64); err != nil {
 		return Hold{}, err
+	}
+	if h.CPUNS, err = optional(o, "cpu_ns", o.int64); err != nil {
+		return Hold{}, err
+	}
+	for _, f := range []struct {
+		key string
+		dst *float64
+	}{{"typical_cpu_s", &h.TypicalCPUS}, {"stall_ewma", &h.StallEWMA}} {
+		if *f.dst, err = optional(o, f.key, o.float); err != nil {
+			return Hold{}, err
+		}
 	}
 	for _, f := range []struct {
 		key string

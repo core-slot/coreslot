@@ -123,7 +123,7 @@ func TestStopFollowsTheRound(t *testing.T) {
 			}
 			r := &run{o: runOptions{label: "x"}, io: IO{Stderr: stderr}}
 			kills := 0
-			stopped := r.stopFor(c.det, 1<<20, memsample.TreeTimes{}, func() bool { kills++; return true })
+			stopped := r.stopFor(c.det, 1<<20, memsample.TreeTimes{}, false, func() bool { kills++; return true })
 			if stopped != c.killed || kills != map[bool]int{true: 1}[c.killed] || r.lastFloor != c.floor || r.lastStop != c.wantStop {
 				t.Errorf("stopped %v after %d kills, floor %v, stop %q; want %v, floor %v, stop %q",
 					stopped, kills, r.lastFloor, r.lastStop, c.killed, c.floor, c.wantStop)
@@ -132,5 +132,31 @@ func TestStopFollowsTheRound(t *testing.T) {
 				t.Errorf("stderr %q, want %q", said, c.wantSaid)
 			}
 		})
+	}
+}
+
+// A kept command says so with its progress and estimate, as the stop lines do; a stop of a command
+// an earlier round kept says that too. Mutation: dropping wasKept from stopFor leaves the stop
+// line without it.
+func TestKeptLines(t *testing.T) {
+	stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &run{o: runOptions{label: "x", argv: []string{"go", "test", "./..."}}, io: IO{Stderr: stderr}}
+	r.sayKept(false, watch.Kept{LeftS: 9.4, Done: 0.8})
+	r.sayKept(true, watch.Kept{LeftS: 9.4, Done: 0.8})
+	r.stopFor(watch.Detector{Level: watch.Red}, 1<<20, memsample.TreeTimes{}, true, func() bool { return true })
+	said, _ := os.ReadFile(stderr.Name())
+	for _, want := range []string{
+		"coreslot: kept `go test ./...` running (memory red, about 9 s left, 80% done)\n",
+		"coreslot: would keep x (memory red, about 9 s left, 80% done)\n",
+	} {
+		if !strings.Contains(string(said), want) {
+			t.Errorf("stderr %q, want %q", said, want)
+		}
+	}
+	if want := "memory red, at 1 GiB; an earlier round kept it as nearly finished, this one did not"; r.lastStop != want {
+		t.Errorf("stop %q, want %q", r.lastStop, want)
 	}
 }

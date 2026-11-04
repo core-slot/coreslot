@@ -127,6 +127,13 @@ kernel is actually paging:
 | red | they lose a large share of it for tens of seconds | a stop round: the newest commands are killed until their footprints cover how far free memory is under the reserve |
 | floor | swap is nearly out of room and still growing | the same stop round, at once, and it may take a command that is still learning |
 
+A red round spares a command that is nearly finished and goes on to the next newest: one whose
+label has at least 10 earlier runs, whose CPU time so far, against the median CPU time of those
+runs, says it will end within the label's typical run time (slowed by the share of its recent
+time it lost to memory), and, if an earlier round spared it, whose estimate has shrunk since. The
+run says so: `coreslot: kept … (memory red, about 9 s left, 80% done)`. A floor round spares
+nothing.
+
 A stopped command is killed with `SIGKILL` and put back in the queue at its **first arrival**, so it
 keeps its place; it starts again once memory has been calm for a while and there is room for it
 with a margin. After the third stop it gives up with the refusal code and prints `coreslot: gave up

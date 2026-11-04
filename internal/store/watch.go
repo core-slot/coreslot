@@ -60,7 +60,7 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 	}
 	var round []string
 	if lvl := d.Advance(prev, cur, c); lvl >= watch.Red && roundOver(d, cur, c) { // red or floor: a stop round
-		round = watch.StopList(cur.Jobs, lvl == watch.Floor, cur.ShortMiB)
+		round, d.Kept = watch.StopList(cur.Jobs, lvl == watch.Floor, cur.ShortMiB, d.Kept, cur.Host.WallNS)
 		d.Stop, d.LastRoundNS, d.Observed, d.RoundFloor = round, cur.Host.WallNS, c.Observe, lvl == watch.Floor
 	}
 	if c.SampleLog { // a calibration aid: a failed rotation or write costs a line

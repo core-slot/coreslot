@@ -366,17 +366,17 @@ func jobs() []Job {
 
 // Victims go newest first until their footprints cover the deficit; the oldest never goes.
 func TestStopListNewestFirstCumulative(t *testing.T) {
-	if got := StopList(jobs(), false, 1024); !slices.Equal(got, []string{"7", "6", "5"}) {
+	if got := stopList(jobs(), false, 1024); !slices.Equal(got, []string{"7", "6", "5"}) {
 		t.Errorf("stop list %v, want [7 6 5]", got)
 	}
-	if got := StopList(jobs(), false, 1<<20); !slices.Equal(got, []string{"7", "6", "5"}) {
+	if got := stopList(jobs(), false, 1<<20); !slices.Equal(got, []string{"7", "6", "5"}) {
 		t.Errorf("stop list for a deficit nobody covers %v, want [7 6 5]", got)
 	}
 }
 
 // A round stops at least one job, even with no deficit.
 func TestStopListAtLeastOne(t *testing.T) {
-	if got := StopList(jobs(), false, 0); !slices.Equal(got, []string{"7"}) {
+	if got := stopList(jobs(), false, 0); !slices.Equal(got, []string{"7"}) {
 		t.Errorf("stop list %v, want [7]", got)
 	}
 }
@@ -387,10 +387,10 @@ func TestStopListOnlyOldestLeft(t *testing.T) {
 	for i := range js[1:] {
 		js[i+1].Victim = false
 	}
-	if got := StopList(js, false, 1024); len(got) != 0 {
+	if got := stopList(js, false, 1024); len(got) != 0 {
 		t.Errorf("stop list %v, want none", got)
 	}
-	if got := StopList(jobs()[:1], false, 1024); len(got) != 0 {
+	if got := stopList(jobs()[:1], false, 1024); len(got) != 0 {
 		t.Errorf("stop list of the oldest alone %v, want none", got)
 	}
 }
@@ -399,7 +399,7 @@ func TestStopListOnlyOldestLeft(t *testing.T) {
 func TestStopListSkipsColdJobs(t *testing.T) {
 	js := jobs()
 	js[3].Learned = false
-	if got := StopList(js, false, 1<<20); !slices.Equal(got, []string{"6", "5"}) {
+	if got := stopList(js, false, 1<<20); !slices.Equal(got, []string{"6", "5"}) {
 		t.Errorf("stop list %v, want [6 5]", got)
 	}
 }
@@ -421,8 +421,14 @@ func TestStopListFloorTakesLearningJobs(t *testing.T) {
 		want  []string
 	}{{false, 1 << 20, []string{"C"}}, {true, 200, []string{"C"}}, {true, 350, []string{"C", "D"}},
 		{true, 1 << 20, []string{"C", "D", "B"}}} {
-		if got := StopList(js, c.floor, c.short); !slices.Equal(got, c.want) {
+		if got := stopList(js, c.floor, c.short); !slices.Equal(got, c.want) {
 			t.Errorf("floor %v, shortage %d: stop list %v, want %v", c.floor, c.short, got, c.want)
 		}
 	}
+}
+
+// stopList is StopList with no job kept before.
+func stopList(jobs []Job, floor bool, shortMiB int64) []string {
+	stop, _ := StopList(jobs, floor, shortMiB, nil, 0)
+	return stop
 }

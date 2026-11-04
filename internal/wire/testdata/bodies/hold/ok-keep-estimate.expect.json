@@ -1,0 +1,1 @@
+{"label":"gate:unit","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":2048,"typical_s":40,"stops":0,"footprint_mib":0,"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"normal_share":0,"sampled_ns":0,"victim":false,"learned":false,"child_exited":false,"cpu_ns":8000000000,"typical_cpu_s":10.5,"stall_ewma":0.25}

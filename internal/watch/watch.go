@@ -69,6 +69,12 @@ type Job struct {
 	NormalShare  float64 `json:"normal_share"`
 	Learned      bool    `json:"learned"`
 	Victim       bool    `json:"victim"`
+	// What a red round estimates the job's remaining time from (Estimate): its CPU time so far, its
+	// label's typical CPU time (0 when unknown) and run time, and its smoothed stall share.
+	CPUNS       int64   `json:"cpu_ns"`
+	TypicalCPUS float64 `json:"typical_cpu_s"`
+	TypicalS    int64   `json:"typical_s"`
+	StallEWMA   float64 `json:"stall_ewma"`
 }
 
 // Sample is one machine sample: the host readings, the live jobs, the admission room in MiB and
@@ -134,6 +140,8 @@ type Detector struct {
 	RoundFloor      bool     `json:"round_floor"` // the last round was a floor round
 	LastAdmitNS     int64    `json:"last_admit_ns"`
 	Stop            []string `json:"stop"` // the last stop round's holds
+	// The jobs a red round kept as nearly finished, by hold, for the next round to compare with.
+	Kept map[string]Kept `json:"kept,omitempty"`
 }
 
 // Advance moves the detector from sample prev to cur and returns the level. A pair it cannot

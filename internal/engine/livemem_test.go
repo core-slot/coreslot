@@ -94,15 +94,21 @@ func TestOnlyTickingHoldsAreJobs(t *testing.T) {
 	frozen := wire.Hold{Label: "f", ArrivalNS: 1, DUserNS: 8e8, DSysNS: 12e8, NormalShare: 0.04, Learned: true, Victim: true, ChildExited: true, SampledNS: now - 1e9}
 	stale := wire.Hold{Label: "f", ArrivalNS: 2, DUserNS: 8e8, DSysNS: 12e8, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 7e9}
 	oldest := wire.Hold{Label: "c", ArrivalNS: 3, DUserNS: 2e9, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 1e9}
-	newest := wire.Hold{Label: "c", ArrivalNS: 4, DUserNS: 2e9, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 1e9}
+	newest := wire.Hold{Label: "c", ArrivalNS: 4, DUserNS: 2e9, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 1e9,
+		CPUNS: 1e9, TypicalCPUS: 10, TypicalS: 50, StallEWMA: 0.25}
 	holds := []liveHold{{"frozen", frozen}, {"stale", stale}, {"oldest", oldest}, {"newest", newest},
 		{"torn", wire.Hold{NeedMiB: 426}}}
 	jobs := runningJobs(holds, now)
 	if e := watch.Excess(jobs, 2e9); e != 0 {
 		t.Errorf("E %v from holds that do not tick, want 0", e)
 	}
-	if got := watch.StopList(jobs, false, 1); !slices.Equal(got, []string{"newest"}) {
+	if got, _ := watch.StopList(jobs, false, 1, nil, 0); !slices.Equal(got, []string{"newest"}) {
 		t.Errorf("stop list %v, want [newest]", got)
+	}
+	// The job carries what a red round estimates its remaining time from, as its run wrote it.
+	// Mutation: leaving the four out of runningJobs gives the job no estimate.
+	if j := jobs[len(jobs)-1]; j.CPUNS != 1e9 || j.TypicalCPUS != 10 || j.TypicalS != 50 || j.StallEWMA != 0.25 {
+		t.Errorf("newest job %+v, want its hold's CPU time, typical CPU and run time, and stall share", j)
 	}
 }
 
@@ -210,7 +216,8 @@ func TestStopRoundFreesTheShortageNotTheReservations(t *testing.T) {
 			t.Fatal(err)
 		}
 		var got []int64
-		for _, hold := range watch.StopList(s.Jobs, false, s.ShortMiB) {
+		stop, _ := watch.StopList(s.Jobs, false, s.ShortMiB, nil, 0)
+		for _, hold := range stop {
 			for _, j := range s.Jobs {
 				if j.Hold == hold {
 					got = append(got, j.ArrivalNS)

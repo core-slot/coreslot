@@ -162,3 +162,25 @@ func TestTypicalIsP90RoundedUp(t *testing.T) {
 		t.Errorf("TypicalS = %d, %d, %d; want 19, 1 and 0", p90, one, none)
 	}
 }
+
+// A label's typical CPU time is the median of user_s + sys_s over the window's runs that report
+// both, and unknown below MinCPURuns of them. Mutations: counting a run with one key reaches 10
+// with 9; taking the mean gives 12.
+func TestTypicalCPUS(t *testing.T) {
+	var window []store.RunRecord
+	for i := range int64(9) {
+		r := run("x", i)
+		r.UserS, r.SysS = f(float64(i+1)), f(1)
+		window = append(window, r)
+	}
+	halfKnown := run("x", 9)
+	halfKnown.UserS = f(100)
+	if got := TypicalCPUS(append(window, halfKnown)); got != 0 {
+		t.Errorf("9 runs with both keys: %v, want 0 (unknown)", got)
+	}
+	last := run("x", 10)
+	last.UserS, last.SysS = f(60), f(4)
+	if got := TypicalCPUS(append(window, halfKnown, last)); got != 6.5 {
+		t.Errorf("10 runs with both keys: %v, want the median 6.5", got)
+	}
+}

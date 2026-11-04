@@ -186,6 +186,32 @@ func TestRestartNoNeverVictim(t *testing.T) {
 	neverVictim(t, e, "--restart=no")
 }
 
+// A run writes its label's typical CPU time into its hold, from 10 counted runs that report it,
+// for a red round's estimate; each tick also writes the CPU time so far. Mutation: not writing
+// TypicalCPUS leaves typical_cpu_s at 0.
+func TestHoldCarriesTheKeepEstimate(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	user, sys, share := 3.0, 1.0, 0.1
+	for range 10 {
+		if err := e.Engine().Store().AppendRun(store.RunRecord{TimeNS: store.NowNS(), Label: "B", UserS: &user, SysS: &sys, TickShare: &share}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := e.Run("B", "--mem", "100M")
+	e.WaitStarted("B")
+	name := e.WaitTicked("B")
+	data, err := os.ReadFile(filepath.Join(e.Dir, store.HoldsDir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, err := wire.DecodeHold(data); err != nil || h.TypicalCPUS != 4 {
+		t.Errorf("hold %+v (%v), want typical_cpu_s 4", h, err)
+	}
+	e.ReleaseChild("B")
+	b.ExitCode(0)
+}
+
 // In observe mode a listed run says what it would stop and kills nothing. Mutation: killing in
 // observe mode ends B's command.
 func TestObserveKillsNothing(t *testing.T) {

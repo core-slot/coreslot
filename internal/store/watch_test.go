@@ -131,6 +131,37 @@ func TestFloorRoundListsLearningJobs(t *testing.T) {
 	}
 }
 
+// A red round keeps a nearly finished job and stores the record in watch.json, so that the next
+// round, whoever takes it, compares with it: once the job's estimate stops shrinking, that round
+// lists it. Mutation: not storing the record keeps the job again as if first seen.
+func TestKeptRecordOutlivesTheRound(t *testing.T) {
+	st := open(t, newDir(t))
+	sec := enter(t, st)
+	near := stalled("3", 3)
+	near.CPUNS, near.TypicalCPUS, near.TypicalS = 8e9, 10, 50
+	m := &machine{jobs: []watch.Job{stalled("1", 1), stalled("2", 2), near}}
+	now := NowNS()
+	var d watch.Detector
+	var stop []string
+	for d.LastRoundNS == 0 && m.calls < 20 {
+		now += 2e9
+		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
+	}
+	stored, _, _, err := st.ReadWatch()
+	if err != nil || !slices.Equal(stop, []string{"2"}) || stored.Kept["3"].RoundNS != d.LastRoundNS {
+		t.Fatalf("first round: stop %v, stored kept %v (%v); want [2], 3 kept at the round", stop, stored.Kept, err)
+	}
+	m.jobs = []watch.Job{stalled("1", 1), near} // 2 is gone; 3's estimate stays where it was
+	round := d.LastRoundNS
+	for d.LastRoundNS == round && m.calls < 40 {
+		now += 2e9
+		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
+	}
+	if !slices.Equal(stop, []string{"3"}) || d.Kept != nil {
+		t.Errorf("next round: stop %v, kept %v; want [3], nothing kept", stop, d.Kept)
+	}
+}
+
 // A round written in observe mode, whose listed children never exit, does not hold back the next
 // round once the mode is enforce. Mutation: one rule for both modes writes no second round.
 func TestObserveRoundDoesNotBlockEnforce(t *testing.T) {

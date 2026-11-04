@@ -23,17 +23,21 @@ const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
 var listTree = memsample.Tree
 
 // watchChild lists the command's tree every second for its memory peak until ctx ends. Every
-// second listing, when the run holds g, it writes the tree's footprint and time deltas into the
-// hold and takes its part in the shared watch tick; when a stop round lists its hold, it kills
+// second listing, when the run holds g, it writes the tree's footprint, time deltas, CPU time so
+// far and smoothed stall share into the hold and takes its part in the shared watch tick; when a
+// red round keeps it as nearly finished it says so, and when a stop round lists its hold, it kills
 // the command's group and returns stopped, or in observe mode says what it would stop.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
 	prev := map[int]memsample.TreeTimes{}
-	var round int64
+	var round, keptRound, cpuNS int64
+	var stall float64
+	smoothed := false
 	if g != nil { // constant for the attempt: written once, before its first tick
 		r.updateHold(st, g, func(h *wire.Hold) {
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
+			h.TypicalCPUS = r.cpuS
 		})
 	}
 	for n := 1; ; n++ {
@@ -51,29 +55,55 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}
 		var d memsample.TreeTimes
 		d, prev = treeDeltas(prev, times), times
+		// The CPU time so far is the sum of the tick deltas: a process that ended between two
+		// listings loses its time since the earlier one, so the progress it gives is low, never high.
+		cpuNS += d.UserNS + d.SysNS
+		if s, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
+			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
+		}
 		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
+			h.CPUNS, h.StallEWMA = cpuNS, stall
 			h.SampledNS = store.NowNS()
 		}) {
 			continue
 		}
 		det, err := g.Tick(ctx)
 		r.countClosed(d, det, err)
+		if k, ok := det.Kept[g.HoldName()]; err == nil && ok && k.RoundNS == det.LastRoundNS && k.RoundNS != keptRound {
+			keptRound = k.RoundNS
+			r.sayKept(det.Observed, k)
+		}
 		if err != nil || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
 		round = det.LastRoundNS
-		if r.stopFor(det, kib, d, sup.KillGroup) {
+		if r.stopFor(det, kib, d, keptRound != 0, sup.KillGroup) {
 			return true, p
 		}
 	}
 }
 
+// sayKept says that a red round kept the command as nearly finished, with its progress and the
+// estimate the round made, or in observe mode that it would have.
+func (r *run) sayKept(observed bool, k watch.Kept) {
+	why := fmt.Sprintf("memory red, about %.0f s left, %s done", k.LeftS, percent(k.Done))
+	if observed {
+		r.notice("would keep %s (%s)", text(r.o.label), why)
+		return
+	}
+	r.notice("kept %s running (%s)", commandText(r.o.argv), why)
+}
+
 // stopFor acts on the stop round det last wrote, which lists this run, as that round was
 // written, whatever the level or the mode is now: in observe mode it says what it would stop,
-// otherwise it kills the command with kill and reports whether it did.
-func (r *run) stopFor(det watch.Detector, kib int64, d memsample.TreeTimes, kill func() bool) bool {
+// otherwise it kills the command with kill and reports whether it did. wasKept says that an
+// earlier red round kept the command as nearly finished.
+func (r *run) stopFor(det watch.Detector, kib int64, d memsample.TreeTimes, wasKept bool, kill func() bool) bool {
 	why := r.stopDetail(det.RoundFloor, kib, d)
+	if wasKept {
+		why += "; an earlier round kept it as nearly finished, this one did not"
+	}
 	if det.Observed {
 		r.notice("would stop %s (%s)", text(r.o.label), why)
 		return false

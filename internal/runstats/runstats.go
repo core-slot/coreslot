@@ -75,6 +75,27 @@ func TypicalS(window []store.RunRecord) int64 {
 	return max(1, int64(math.Ceil(ran[min(len(ran)-1, len(ran)*9/10)])))
 }
 
+// MinCPURuns is how many runs of a label's window must report their CPU time before a red stop
+// round may keep its job as nearly finished.
+const MinCPURuns = 10
+
+// TypicalCPUS is the label's typical CPU time: the median of user_s + sys_s over the window's runs
+// that report both; 0 when fewer than MinCPURuns do.
+func TypicalCPUS(window []store.RunRecord) float64 {
+	var cpu []float64
+	for _, r := range window {
+		if r.UserS != nil && r.SysS != nil {
+			cpu = append(cpu, *r.UserS+*r.SysS)
+		}
+	}
+	if len(cpu) < MinCPURuns {
+		return 0
+	}
+	slices.Sort(cpu)
+	n := len(cpu)
+	return (cpu[(n-1)/2] + cpu[n/2]) / 2
+}
+
 // NormalShare is the median of the window's tick shares, the live measure's own definition; ok is
 // false when no run has one.
 func NormalShare(window []store.RunRecord) (share float64, ok bool) {

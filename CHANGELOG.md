@@ -25,6 +25,18 @@ All notable changes to this project are recorded here. The format follows
   Gradle or `xcodebuild`, whose targets can deploy, migrate or upload; its instructions snippet for
   other agents asks them to choose `--restart` per command.
 
+### Added
+
+- A red stop round passes over a command that is nearly finished and stops the next newest one
+  instead. A command is nearly finished when its label has at least 10 counted runs, its CPU time
+  so far against the median CPU time of those runs gives a progress strictly between 0 and 1, and
+  the remaining time that progress predicts, slowed by its recent share of time lost to memory, is
+  under the label's typical run time; a command an earlier round kept is kept again only while
+  that estimate keeps shrinking. The run prints `coreslot: kept … (memory red, about N s left,
+  P% done)`, and a later stop of it says that an earlier round kept it. A floor round keeps
+  nothing. Holds carry the optional keys `cpu_ns`, `typical_cpu_s` and `stall_ewma`, and
+  `watch.json` the detector's `kept` records.
+
 ## v0.4.1 (2026-11-02)
 
 ### Changed

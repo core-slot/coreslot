@@ -30,8 +30,9 @@ const maxStops = 3
 
 // readLog reads the run log once for a run: the need it gives label, the p90 peak of its last
 // counted runs (ok false when unknown), the label's normal share of system time (learned false
-// when none of those runs has a tick share) and its typical run time (0 when unknown).
-func readLog(loc location, label string) (needMiB int64, ok bool, share float64, learned bool, typicalS int64) {
+// when none of those runs has a tick share), its typical run time (0 when unknown) and its typical
+// CPU seconds (0 when too few of those runs report them).
+func readLog(loc location, label string) (needMiB int64, ok bool, share float64, learned bool, typicalS int64, typicalCPUS float64) {
 	if loc.err != nil {
 		return
 	}
@@ -47,6 +48,7 @@ func readLog(loc location, label string) (needMiB int64, ok bool, share float64,
 	needMiB, ok = runstats.NeedMiB(window)
 	share, learned = runstats.NormalShare(window)
 	typicalS = runstats.TypicalS(window)
+	typicalCPUS = runstats.TypicalCPUS(window)
 	return
 }
 
@@ -61,6 +63,7 @@ type run struct {
 	pipeNoted bool                                 // the waiting line said once whether stdin is a pipe
 	share     float64                              // the label's normal share, from the run log read at the start
 	learned   bool                                 // the run log gave the label a normal share
+	cpuS      float64                              // the label's typical CPU seconds, 0 unknown
 	closed    watch.Job                            // the attempt's time over the ticks whose paging gate was closed
 	stops     int                                  // memory stops so far
 	stopped   bool                                 // the last command was killed by a stop round
@@ -94,13 +97,13 @@ func runCommand(args []string, io IO) int {
 		})
 	}
 	machine, _ := readMachine()
-	needMiB, known, share, learned, typicalS := readLog(loc, o.label)
+	needMiB, known, share, learned, typicalS, cpuS := readLog(loc, o.label)
 	o.typicalS = typicalS
 	o.resolveNeed(lookup, func() (int64, bool) { return needMiB, known }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned}
+	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned, cpuS: cpuS}
 	return r.decide()
 }
 

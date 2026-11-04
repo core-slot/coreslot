@@ -461,6 +461,9 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), and its command does not share coreslot's process group |
 | `learned` | boolean | `true` when the run log gave the label a normal share when the run started; otherwise the hold is learning (section 23.3) |
 | `child_exited` | boolean | `true` once the run's command has exited |
+| `cpu_ns` | integer | optional; `≥ 0`; the user and system time its process tree spent in this attempt so far: the sum of its ticks' `d_user_ns` and `d_sys_ns` (section 23.1) |
+| `typical_cpu_s` | number | optional; `≥ 0`; the label's typical CPU seconds: the median of `user_s + sys_s` (section 20) over its last 20 counted runs that report both, when at least 10 do, as the run read it when it started; `0` otherwise |
+| `stall_ewma` | number | optional; `0..1`; its share `S` (section 23.3) smoothed over its ticks with a time constant of 10 s: the first tick's `S`, then `S̃ ← S̃ + (1 − e^(−p / 10 s)) (S − S̃)` for a tick period `p` |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -470,8 +473,9 @@ writer produces one, because the wall clock is a signed 64-bit value.
 
 A hold is published with `stops`, `footprint_mib`, the three deltas, `normal_share` and
 `sampled_ns` at 0 and `victim`, `learned` and `child_exited` false. Once its command has started
-the run writes `stops`, `victim`, `normal_share` and `learned`, which hold for the attempt, and
-each tick (section 23.1) writes the measured keys. Only
+the run writes `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s`, which hold for
+the attempt, and each tick (section 23.1) writes the measured keys, `cpu_ns` and `stall_ewma`
+among them. Only
 the holder writes its body, at publication and then in place: one write at offset 0
 of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
 their inode and the file never shrinks (I1). It keeps `label`, `pid` and
@@ -557,6 +561,7 @@ client that does not run the detector needs only these keys:
 | `detector.stop` | array of strings | the hold names the last stop round listed |
 | `detector.observed` | boolean | the last stop round was written in observe mode (section 23.6) |
 | `detector.round_floor` | boolean | the last stop round was a floor round, not a red one (section 23.5) |
+| `detector.kept` | object | optional; by hold name, the holds a red round kept as nearly finished (section 23.5), each `{"left_s": <number>, "done": <number>, "round_ns": <integer>}`: its predicted remaining seconds and its progress at the round that last kept it, and that round's `last_round_ns` |
 
 The other keys under `sample` and `detector` are the detector's own state (the readings, the
 window, the rates, the excess, the leaky bucket, the yellow latch). A detector
@@ -1084,7 +1089,8 @@ whose value it does not know rather than write a zero: a run whose command could
 an absent key as unknown, never as zero. The values are the command's resource usage as the
 wait that reaped it reports (`wait4(2)`'s `struct rusage`, or the same from `waitid`): they cover
 the command and every descendant it waited for, but not a descendant it left running when it exited.
-They feed no baseline (the stall baseline reads `tick_share`, below). The same rusage's `ru_maxrss`
+They feed no stall baseline (that reads `tick_share`, below); the median of their sum is a label's
+typical CPU time (`typical_cpu_s`, section 7.4). The same rusage's `ru_maxrss`
 is the peak of the largest single process among those, not a sum. It
 is in KiB on Linux and the BSDs but in bytes on macOS; a writer MUST convert it to KiB (1 024
 bytes), and MUST NOT use it on a platform whose unit it does not know. As in a body (section 7.2), a reader
@@ -1411,6 +1417,7 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
 | tick | every 2 s while the command runs; one machine sample per period |
 | stored sample | the period's below 1.5 s; fresh up to 6 s; a gap above 6 s or a 1 s clock skew |
 | restart | gives up after 3 stops; margin `max(256 MiB, need / 10)` |
+| stall share smoothing | time constant 10 s (`stall_ewma`) |
 
 ## 23. The watchdog
 
@@ -1429,9 +1436,10 @@ start until it exits, in both modes of section 23.6. Each tick:
    spent waiting for pages (`ri_page_wait_time_mach` of `proc_pid_rusage`; `/proc/<pid>/stat`
    `utime` and `stime` on Linux). It rewrites its own hold's body in place (section 7.4):
    `footprint_mib` (the tree's footprint, as section 20 measures it), `d_user_ns`, `d_sys_ns` and
-   `d_page_wait_ns` (the tree's times since the run's previous tick) and `sampled_ns`. It sets
-   `child_exited` once, when the command has exited. `stops`, `victim`, `normal_share` and `learned`
-   hold for the attempt: the run writes them once, when its command starts, before its first tick.
+   `d_page_wait_ns` (the tree's times since the run's previous tick), `cpu_ns` and `stall_ewma`
+   (section 7.4) and `sampled_ns`. It sets `child_exited` once, when the command has exited.
+   `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s` hold for the attempt: the run
+   writes them once, when its command starts, before its first tick.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short
    bound leaves its part of that period to the others) and reads `watch.json`. If the stored sample
    is at least 1.5 s old (a period less a quarter, so that runs ticking every 2 s never leave the
@@ -1550,6 +1558,23 @@ one at a time.
    until their footprints sum to at least the **shortage**, `max(reserve − headroom, 0)` MiB of the
    sample it just took (the room counts reservations not yet used, which free no memory), and at
    least one. With only the oldest hold or holds that are not victims left, the list is empty.
+
+   A red round passes over a victim that is **nearly finished**, without counting its footprint,
+   and goes on to the next one, so that its list may be empty; a floor round passes over none.
+   For a victim, with `T` its hold's `typical_s`, `C` its `typical_cpu_s` and `c` its `cpu_ns` in
+   seconds, its progress is `p = c / C` and its predicted remaining time
+   `t3 = T × (1 − p) / (1 − min(stall_ewma, 0.8))`. It is nearly finished when `T > 0`, `C > 0`,
+   `0 < p < 1` and `t3 < T` and, when an earlier red round kept it, `t3` is smaller than the
+   `left_s` that round recorded: the first round may keep a job on `t3 < T` alone, every later one
+   only while the estimate keeps shrinking. The round writes `detector.kept`: the record
+   `{left_s: t3, done: p, round_ns}` of each victim it kept, and the earlier records of the
+   running holds it neither kept nor listed; it drops every other record. The rule spares work
+   that is almost done when memory is red, by coreslot's own measurements of the label; it never
+   changes the order of the victims, and the floor stays the safety net.
+
+   > **Implementation note.** The Go CLI's `cpu_ns` sums the deltas of its tree listings, which
+   > miss what a process spent between the last listing and its exit, so its progress reads low
+   > against `typical_cpu_s`, which comes from the reaping `wait4`: the rule errs towards stopping.
 2. A run kills only its own command, only when its own hold's name is in the list. It sends
    `SIGKILL` to the command's process group, and only while it has not reaped the command, so the
    group id cannot have been reused. The kill and the reap are serialized under one lock in the
