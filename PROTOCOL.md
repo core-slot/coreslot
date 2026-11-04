@@ -299,7 +299,7 @@ red_points = 40
 red_samples = 10
 gate_pages_s = 1000
 floor = "2G"          # a size
-calm_s = 30           # the waits of sections 12.4 and 23.5, in seconds
+calm_s = 10           # the waits of sections 12.4 and 23.5, in seconds
 post_kill_s = 15
 spacing_s = 3
 

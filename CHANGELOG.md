@@ -21,6 +21,10 @@ All notable changes to this project are recorded here. The format follows
   never stopped and needs no flag. `needs.toml`'s `no_restart = true` still works and wins over
   `--restart=yes`. Scripts and wrappers that call `coreslot run` must pass the flag. The stop line
   says that the command was declared restartable.
+- The default `[watch] calm_s` is 10 s instead of 30 s: a stopped command comes back, and starts
+  are spaced, after 10 s of calm. The value rests on a simulation calibrated on the recorded runs,
+  not on a measurement ([the calibration notes](calibration/README.md#what-the-defaults-rest-on));
+  the next acceptance run measures it. Yellow still clears after 15 samples below its threshold.
 - The Claude Code hook offers `coreslot run --restart=yes --` and no longer recognises `make -j`,
   Gradle or `xcodebuild`, whose targets can deploy, migrate or upload; its instructions snippet for
   other agents asks them to choose `--restart` per command.

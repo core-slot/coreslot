@@ -167,7 +167,7 @@ func TestNoWaitRefusesAtRestart(t *testing.T) {
 // run at a restart starts B's command again.
 func TestRestartTimeoutRefuses(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(roomConfig(64 << 10)) // calm_s 30: no restart within the timeout
+	e.WriteConfig(roomConfig(64 << 10)) // calm_s 10: no restart within the 5 s timeout
 	b := stopB(t, e, "--timeout", "5s", "--on-timeout", "run")
 	b.ExitCode(75)
 	if out := b.Stderr(); !strings.Contains(out, "was stopped for memory (swap room under the floor, at ") ||
@@ -184,7 +184,7 @@ func TestRestartTimeoutRefuses(t *testing.T) {
 // at each wait refuses 6 s after the stop.
 func TestTimeoutCoversTheRun(t *testing.T) {
 	e := State(t)
-	e.WriteConfig(roomConfig(64 << 10)) // calm_s 30: no restart within the timeout
+	e.WriteConfig(roomConfig(64 << 10)) // calm_s 10: no restart within the 5 s timeout
 	e.Learn("B")
 	e.Run("A", "--mem", "100M")
 	e.WaitStarted("A")

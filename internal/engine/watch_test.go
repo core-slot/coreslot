@@ -151,17 +151,17 @@ func TestRestartWaitsForCalmAndMargin(t *testing.T) {
 		}
 		return ok
 	}
-	setWatch(t, e, clk, watch.Detector{CalmSinceNS: sampleWallNS - 10e9}, 0)
+	setWatch(t, e, clk, watch.Detector{CalmSinceNS: sampleWallNS - 5e9}, 0)
 	if restart(640) {
-		t.Fatal("a restart started after 10 s of calm")
+		t.Fatal("a restart started after 5 s of calm")
 	}
-	setWatch(t, e, clk, watch.Detector{CalmSinceNS: sampleWallNS - 31e9}, 0)
+	setWatch(t, e, clk, watch.Detector{CalmSinceNS: sampleWallNS - 11e9}, 0)
 	if restart(768) {
 		t.Fatal("a 768 MiB restart started with 896 MiB of room, under its 256 MiB margin")
 	}
 	admitted(t, step(t, enqueue(t, e, need(768)))).Close()
 	if !restart(640) {
-		t.Error("a 640 MiB restart did not start after 31 s of calm with room for its margin")
+		t.Error("a 640 MiB restart did not start after 11 s of calm with room for its margin")
 	}
 }
 

@@ -22,8 +22,9 @@ const (
 	DefaultGatePagesPerS = 1000
 	// Not calibrated: a round value; no record has a floor sample.
 	DefaultFloorMiB = 2048
-	// Not calibrated: ramps turn green 3 to 58 s after a stop by the detector's own clearing.
-	DefaultCalmS     = 30
+	// Not calibrated: a simulator calibrated on the records chose it over 30 s (calibration/README.md);
+	// no measured run has tested it yet.
+	DefaultCalmS     = 10
 	DefaultPostKillS = 15
 	DefaultSpacingS  = 3
 )
