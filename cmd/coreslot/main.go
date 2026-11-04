@@ -2,7 +2,7 @@
 // the flock(2) protocol of PROTOCOL.md.
 //
 //	coreslot run [--mem SIZE] [flags] -- COMMAND...
-//	coreslot status | cancel | doctor | stats | version
+//	coreslot status | cancel | doctor | stats | report | version
 //
 // All printing, signal handling and exit statuses live here; the engine does none of them.
 package main
@@ -34,6 +34,7 @@ commands:
   cancel   cancel a waiting request
   doctor   check the state directory and the configuration
   stats    show what each label's recent runs used
+  report   summarize the runs, waits and memory stops of the last days
   version  print the version and the protocol formats implemented`
 
 func main() {
@@ -61,6 +62,8 @@ func dispatch(args []string, io IO) int {
 		return doctorCommand(args[1:], io)
 	case "stats":
 		return statsCommand(args[1:], io)
+	case "report":
+		return reportCommand(args[1:], io)
 	case "help", "-h", "--help":
 		fmt.Fprintln(io.Stdout, usage)
 		return 0

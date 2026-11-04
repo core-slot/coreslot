@@ -43,6 +43,14 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- `coreslot report [--days N] [--json]` summarizes the run log's last N days (7 by default): runs,
+  labels and attempts; the attempts that waited 1 s or more (total, median, p90, longest, and how
+  many waited over 2 and over 10 minutes); the attempts stopped for memory, the run time they lost
+  and the give-ups; and the heaviest labels by memory peak. It prints one estimate, marked as such:
+  a label's median run time alongside other coreslot runs over its median alone, for labels with at
+  least 10 runs each way. It claims no time saved, since what the runs would have done without
+  coreslot is not measured, and points to the published measurement on another machine. It reads
+  the existing run log and writes nothing.
 - A red stop round may pass over its newest victim when that command is nearly finished and stop the
   next newest one instead, when that one alone covers what the round must free and has done less CPU
   work. A command is nearly finished when its label has at least 10 counted runs, its CPU time so

@@ -87,6 +87,7 @@ change in any release; parse `status --json` instead.
 | `cancel` | `<ticket-id>`, `--label LABEL` |
 | `doctor` | `--clear`, `--reset` |
 | `stats` | `--label LABEL`, `--json` |
+| `report` | `--days N`, `--json` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
 | configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `sample_log` and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`; `needs.toml` beside it: `[needs."<label>"]` with `mem` and `no_restart` |
 | environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED` (given to the command, read by nested runs) |

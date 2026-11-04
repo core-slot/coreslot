@@ -16,7 +16,7 @@ import (
 // their control characters and newlines; JSON output encodes them.
 func text(s string) string { return wire.EscapeHuman(s) }
 
-// The usage and the flags of status, cancel, doctor and stats are the same on every
+// The usage and the flags of status, cancel, doctor, stats and report are the same on every
 // platform: on Windows, where there is no budget (PROTOCOL.md section 16), they still decide
 // whether an invocation asks for help, which prints on stdout and exits 0 for every command
 // (section 19).
@@ -39,6 +39,20 @@ need run learns from it, and the label's entry in needs.toml.`
 func statsFlags() (fs *flag.FlagSet, label *string, asJSON *bool) {
 	fs = newFlagSet("coreslot stats")
 	return fs, fs.String("label", "", "only this label"), fs.Bool("json", false, "print the JSON document (schema 1)")
+}
+
+const reportUsage = `usage: coreslot report [--days N] [--json]
+
+Summarizes the run log's last N days (default 7): runs, waits, memory stops and
+the heaviest labels, with one labelled estimate. It does not measure what the
+runs would have done without coreslot.`
+
+// maxReportDays bounds --days, so that the window's start stays a valid time.
+const maxReportDays = 36500
+
+func reportFlags() (fs *flag.FlagSet, days *int, asJSON *bool) {
+	fs = newFlagSet("coreslot report")
+	return fs, fs.Int("days", 7, "the window: the last N days"), fs.Bool("json", false, "print the JSON document (schema 1)")
 }
 
 func statusFlags() (fs *flag.FlagSet, asJSON *bool, observe *time.Duration) {
@@ -65,7 +79,7 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-// noBudget is status, cancel, doctor or stats where there is no budget to inspect,
+// noBudget is status, cancel, doctor, stats or report where there is no budget to inspect,
 // cancel or repair, and no run log to learn from (Windows). A request for help, recognized by the command's own flag set exactly as on unix,
 // prints the usage on stdout and exits 0; anything else says why the command cannot work and
 // exits 70.

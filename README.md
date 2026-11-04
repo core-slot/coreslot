@@ -220,6 +220,7 @@ coreslot run --restart=yes --label gate:unit -- npm test  # a label of your own
 coreslot run --restart=no -- ./migrate.sh                 # never killed and run twice
 coreslot status            # the watchdog's level, running commands, the queue; --json for scripts
 coreslot stats             # per label, what the need is learned from
+coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
 coreslot doctor            # state directory, filesystem, permissions, format, readings
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
 ```
@@ -257,6 +258,22 @@ reaches only the command's pid, as in a terminal: signal the group, not coreslot
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time: write
 `coreslot run --restart=yes --label gate:pipe -- sh -c 'a | b'` so that they are one command with one need. The
 `--label` matters here: without it the pipeline is labelled `sh@proj`, like every other `sh -c`.
+
+### What it did: `coreslot report`
+
+`coreslot report [--days N] [--json]` reads the run log of the last N days (7 by default) and
+prints what was measured: the runs, their labels and attempts (a stopped command's restart is a
+new attempt of the same run); the attempts that waited 1 s or more, with the total, median, p90 and
+longest wait, and how many waited over 2 and over 10 minutes, where an agent's tool call may time
+out (Claude Code's Bash tool waits 2 minutes by default, 10 at most); the attempts stopped for
+memory, the run time they lost and the runs that gave up; and the heaviest labels by memory peak,
+with their need, run time and wait. `--json` prints the same as one document (schema 1).
+
+It prints one estimate, labelled as one: for a label with at least 10 runs both alone and
+alongside other coreslot commands, the median run time alongside over the median alone. Caches and
+load outside coreslot are not controlled, so read it as a hint, not a cost. What the runs would have
+done without coreslot is not measured, so the report claims no time saved; it points to the
+[published measurement](evidence/air-v04/README.md), made on another machine.
 
 ### Exit status
 

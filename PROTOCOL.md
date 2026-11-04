@@ -1126,7 +1126,7 @@ generation). One generation is kept.
 
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open`. It samples
 > memory on macOS and Linux and writes the rusage's peak elsewhere when it knows it. `coreslot
-> stats` reads both generations of the log and skips lines that do not
+> stats` and `coreslot report` read both generations of the log and skip lines that do not
 > parse. A label's need is the 90th percentile of the `mem_peak_kib` of its last 20 counted runs.
 
 ## 21. Worked examples
@@ -1153,7 +1153,8 @@ outside the budget, while a restart (section 24) refuses whatever `--on-timeout`
 is `--strict`; `--refusal-code` defaults to 75. The other
 commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
 `coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]`,
-`coreslot stats [--label LABEL] [--json]` and `coreslot version`.
+`coreslot stats [--label LABEL] [--json]`, `coreslot report [--days N] [--json]` and
+`coreslot version`.
 
 ### 21.1 Enqueue
 

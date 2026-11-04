@@ -24,3 +24,8 @@ func statsCommand(args []string, io IO) int {
 	fs, _, _ := statsFlags()
 	return noBudget("stats", statsUsage, fs, args, io)
 }
+
+func reportCommand(args []string, io IO) int {
+	fs, _, _ := reportFlags()
+	return noBudget("report", reportUsage, fs, args, io)
+}

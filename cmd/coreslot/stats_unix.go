@@ -35,21 +35,12 @@ type learned struct {
 // label is not empty) and loads the needs file. Each failure but the needs file's is a state
 // error for the caller to report.
 func learn(label string) (learned, error) {
-	loc := locate()
-	if loc.err != nil {
-		return learned{}, fmt.Errorf("state directory: %w", loc.err)
-	}
-	st, err := store.OpenReadOnly(loc.dir)
+	var l learned
+	runs, skipped, loc, err := readRunLog()
 	if err != nil {
 		return learned{}, err
 	}
-	var l learned
-	var runs []store.RunRecord
-	if st.Exists() {
-		if runs, l.skipped, err = st.ReadRuns(); err != nil {
-			return learned{}, err
-		}
-	}
+	l.skipped = skipped
 	if _, err := config.Load(loc.cfgPath); err != nil {
 		return learned{}, err
 	}
@@ -61,6 +52,23 @@ func learn(label string) (learned, error) {
 	l.needsPath = needs.PathFor(loc.cfgPath)
 	l.needs, l.needsErr = needs.Load(l.needsPath)
 	return l, nil
+}
+
+// readRunLog reads both generations of the run log under the state directory, which may not
+// exist yet; skipped counts the lines that did not decode.
+func readRunLog() (runs []store.RunRecord, skipped int, loc location, err error) {
+	loc = locate()
+	if loc.err != nil {
+		return nil, 0, loc, fmt.Errorf("state directory: %w", loc.err)
+	}
+	st, err := store.OpenReadOnly(loc.dir)
+	if err != nil {
+		return nil, 0, loc, err
+	}
+	if st.Exists() {
+		runs, skipped, err = st.ReadRuns()
+	}
+	return runs, skipped, loc, err
 }
 
 // needsNotice prints, for a needs file that cannot be read, the notice that ignores it.
