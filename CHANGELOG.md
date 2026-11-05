@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.5.1 (2026-11-05)
+
 ### Changed
 
 - The watchdog's thresholds are back to those before v0.5.0: `[watch] red_samples` defaults to 10
