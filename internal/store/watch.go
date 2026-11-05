@@ -48,13 +48,14 @@ func (sec *Section) SetWatch(d watch.Detector, s watch.Sample, sampledNS int64) 
 }
 
 // Tick advances the detector on a new sample only when the stored one is 1.5 s old (now is NowNS),
-// so no early ticker leaves the next one 4 s away. A failed read is stored as Unknown and returned.
-func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.Config) (watch.Detector, []string, error) {
+// so no early ticker leaves the next one 4 s away. read takes the new sample, given the stored
+// one. A failed read is stored as Unknown and returned.
+func (sec *Section) Tick(now int64, read func(prev watch.Sample) (watch.Sample, error), c watch.Config) (watch.Detector, []string, error) {
 	d, prev, at, err := sec.s.ReadWatch()
 	if err != nil || at <= now && now-at < memsample.PeriodNS-memsample.PeriodNS/4 { // this period's sample
 		return d, d.Stop, err
 	}
-	cur, rerr := read()
+	cur, rerr := read(prev)
 	if rerr != nil {
 		cur = watch.Sample{} // no reading: Unknown, and the next sample starts afresh
 	}
@@ -122,6 +123,13 @@ func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) 
 	if p := cur.HeadroomParts; p != nil {
 		l["headroom_free_mib"], l["headroom_speculative_mib"], l["headroom_purgeable_mib"], l["headroom_file_backed_mib"] =
 			p.FreeMiB, p.SpeculativeMiB, p.PurgeableMiB, p.FileBackedMiB
+		l["headroom_internal_mib"] = p.InternalMiB
+	}
+	if cur.HeadroomMode != "" {
+		l["headroom_mode"] = cur.HeadroomMode
+	}
+	if cur.CompressBytesS != nil {
+		l["compress_bytes_s"] = *cur.CompressBytesS
 	}
 	line, err := json.Marshal(l)
 	if err != nil {

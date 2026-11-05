@@ -148,9 +148,21 @@ func TestHeadroom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// macOS may read 0: the file cache the kernel keeps can exceed what is free.
-	if mib, _, ok := Headroom(); !ok || mib < 0 || mib > total {
+	// The strict macOS reading may be small: the file cache the kernel keeps can exceed what is
+	// free. macOS reads the parts and returns their strict reading; Linux reads none.
+	mib, parts, ok := Headroom()
+	if !ok || mib < 0 || mib > total {
 		t.Errorf("Headroom = %d, %v; want 0..%d, true", mib, ok, total)
+	}
+	switch {
+	case runtime.GOOS == "linux" && parts != nil:
+		t.Errorf("Linux Headroom has parts %+v; want none", *parts)
+	case runtime.GOOS == "darwin" && parts == nil:
+		t.Error("macOS Headroom has no parts")
+	case parts != nil:
+		if strict, _ := parts.Headroom(0, nil, true); strict != mib || parts.InternalMiB <= 0 {
+			t.Errorf("Headroom = %d, parts %+v; want their strict reading %d and the anonymous memory read", mib, *parts, strict)
+		}
 	}
 }
 

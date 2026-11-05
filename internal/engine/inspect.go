@@ -93,9 +93,12 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Holds = append(r.Holds, h.info())
 		r.Mem.ReservedMiB += h.body.NeedMiB
 	}
+	d, smp, at, _ := e.st.ReadWatch() // no readable watch.json is no sample
+	now := e.clock.Realtime()
 	if memErr == nil && machine.HeadroomOK {
+		hr, _ := headroom(machine, live, storedRate(smp, at, now))
 		r.Mem.Known = true
-		r.Mem.FreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live)))
+		r.Mem.FreeMiB = max(0, state.Room(hr, cfg.ReserveMiB, reservations(live)))
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
 	// descriptor. An unreadable process table reports nothing: unknown is not exited.
@@ -105,8 +108,6 @@ func (e *Engine) Snapshot() (Report, error) {
 		}
 	}
 
-	d, smp, at, _ := e.st.ReadWatch() // no readable watch.json is no sample
-	now := e.clock.Realtime()
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
 		Fresh: fresh(at, now)}
 	if r.Watch.Fresh { // the newest sample knows which jobs have a learned normal S; this client does not

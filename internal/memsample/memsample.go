@@ -67,27 +67,58 @@ func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, t Tre
 	return sum, times, len(times) > 0
 }
 
-// HeadroomParts are the page counts a macOS headroom reading came from, in MiB: free, speculative,
-// purgeable and file-backed (external) pageable pages. Linux reads none.
+// HeadroomParts are the page counts a macOS headroom reading comes from, in MiB: free,
+// speculative, purgeable, file-backed (external) and anonymous (internal) pageable pages. Linux
+// reads none.
 type HeadroomParts struct {
-	FreeMiB, SpeculativeMiB, PurgeableMiB, FileBackedMiB int64
+	FreeMiB, SpeculativeMiB, PurgeableMiB, FileBackedMiB, InternalMiB int64
 }
+
+// The headroom modes of macOS (HeadroomParts.Headroom), as the sample log names them.
+const (
+	HeadroomStrict = "strict"
+	HeadroomCheap  = "cheap"
+)
 
 // fileCacheKeptMiB is the file cache the macOS kernel keeps under memory pressure: below about
 // this much it compresses applications' memory instead of releasing file-backed pages, so that
 // much of the file-backed count is never handed out without paging. Measured on one 16 GB Mac
-// (about 1.6 to 1.7 GiB); it may scale with physical memory, which is not yet measured.
+// (about 1.6 to 1.7 GiB); larger Macs are not yet measured, and it may scale with their memory.
 const fileCacheKeptMiB = 1792
 
-// darwinHeadroom returns the macOS headroom of the page counts, in MiB, and its parts: free,
-// purgeable and file-backed pages times pageSize, less the file cache the kernel keeps, never
-// below 0. Speculative pages are read for the parts only: they are already file-backed. It lives
+// idleAnonShare is the share of the anonymous memory outside coreslot's jobs that the cheap
+// reading counts as room. Under pressure the kernel compresses idle applications' memory, and the
+// compressor frees 45 to 56 % of what it takes: in measurements on one 16 GB Mac, 47 to 55 % of
+// that memory became room before any job slowed. 0.4 leaves a margin under the lowest.
+const idleAnonShare = 0.4
+
+// CompressHarmBytesS is the compression rate, compressions and swap-outs in bytes/s, from which
+// the macOS headroom is the strict reading. In the same measurements, compressing idle memory ran
+// at 0.05 to 0.8 GiB/s while no job slowed, and at 1.5 GiB/s and more while jobs did.
+const CompressHarmBytesS = 1 << 30
+
+// Headroom returns the macOS headroom of the parts, in MiB, and its mode. The strict reading is
+// free and purgeable pages and the file-backed pages above the cache the kernel keeps. The cheap
+// one adds idleAnonShare of the anonymous pages (internal less purgeable) less footprintMiB, what
+// coreslot's own live jobs hold, which becomes no room. It is strict when compressBytesS, the
+// compression rate of the last period, is at least CompressHarmBytesS, and when the rate is
+// unknown (nil) while holdsLive; cheap otherwise. It is never below 0. It lives here, not in the
+// macOS file, so that it is tested on every platform.
+func (p HeadroomParts) Headroom(footprintMiB int64, compressBytesS *float64, holdsLive bool) (mib int64, mode string) {
+	strict := max(p.FreeMiB+p.PurgeableMiB+max(p.FileBackedMiB-fileCacheKeptMiB, 0), 0)
+	if compressBytesS == nil && holdsLive || compressBytesS != nil && *compressBytesS >= CompressHarmBytesS {
+		return strict, HeadroomStrict
+	}
+	anon := max(p.InternalMiB-p.PurgeableMiB-max(footprintMiB, 0), 0)
+	return strict + int64(idleAnonShare*float64(anon)), HeadroomCheap
+}
+
+// darwinParts are the headroom parts of the page counts, each times pageSize, in MiB. It lives
 // here, not in the macOS file, so that it is tested on every platform.
-func darwinHeadroom(free, speculative, purgeable, fileBacked, pageSize uint64) (int64, HeadroomParts) {
+func darwinParts(free, speculative, purgeable, fileBacked, internal, pageSize uint64) HeadroomParts {
 	mib := func(pages uint64) int64 { return int64(pages * pageSize >> 20) }
-	parts := HeadroomParts{FreeMiB: mib(free), SpeculativeMiB: mib(speculative),
-		PurgeableMiB: mib(purgeable), FileBackedMiB: mib(fileBacked)}
-	return max(mib(free+purgeable+fileBacked)-fileCacheKeptMiB, 0), parts
+	return HeadroomParts{FreeMiB: mib(free), SpeculativeMiB: mib(speculative), PurgeableMiB: mib(purgeable),
+		FileBackedMiB: mib(fileBacked), InternalMiB: mib(internal)}
 }
 
 // meminfo returns the value of key, in KiB, from the text of /proc/meminfo. It lives here, not

@@ -59,7 +59,8 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 
 	// 2-4. The room: the headroom less the reserve and what the live holds still have to grow
 	// into. With no hold live the head starts whatever the numbers say; a headroom that cannot be
-	// read gates nothing.
+	// read gates nothing. While holds are live, the macOS headroom's mode follows the compression
+	// rate of the stored sample.
 	cfg, m, err := t.e.reading()
 	if err != nil {
 		return nil, err
@@ -68,8 +69,17 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if err != nil {
 		return nil, err
 	}
+	var rate *float64
+	if len(holds) > 0 && m.HeadroomParts != nil {
+		_, s, at, err := t.e.st.ReadWatch()
+		if err != nil {
+			return nil, err
+		}
+		rate = storedRate(s, at, t.e.clock.Realtime())
+	}
 	need := t.req.NeedMiB
-	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
+	hr, _ := headroom(m, holds, rate)
+	room := state.Room(hr, cfg.ReserveMiB, reservations(holds))
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		return nil, nil
 	}

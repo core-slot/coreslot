@@ -39,10 +39,11 @@ func (e *Error) Error() string { return fmt.Sprintf("configuration %s: %s", e.Pa
 // Unwrap returns the error that made the configuration unreadable, or nil.
 func (e *Error) Unwrap() error { return e.Err }
 
-// Machine is what admission reads of the machine: its physical memory and the memory the kernel
-// can hand out without paging anything anonymous out, both in MiB. HeadroomOK is false when the
-// headroom cannot be read. HeadroomParts are the macOS page counts the headroom came from, for the
-// sample log; nil elsewhere and under the test hook.
+// Machine is what admission reads of the machine: its physical memory and its headroom, both in
+// MiB. HeadroomOK is false when the headroom cannot be read. HeadroomParts are the macOS page
+// counts the headroom is read from, in the mode admission and the watch sample choose
+// (memsample.HeadroomParts.Headroom); HeadroomMiB is then their strict reading. They are nil
+// elsewhere and under the test hook, where HeadroomMiB is the headroom as it is.
 type Machine struct {
 	MemMiB        int64
 	HeadroomMiB   int64

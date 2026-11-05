@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -170,7 +171,7 @@ func TestSamplersWithDifferentLogViewsAgree(t *testing.T) {
 		}
 	}
 	excess := func(e *Engine) float64 {
-		s, err := e.sampler(config.Config{}, config.Machine{MemMiB: 1707})()
+		s, err := e.sampler(config.Config{}, config.Machine{MemMiB: 1707})(watch.Sample{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +212,7 @@ func TestStopRoundFreesTheShortageNotTheReservations(t *testing.T) {
 		headroom, short int64
 		want            []int64 // arrivals
 	}{{1536, 0, []int64{4}}, {256, 768, []int64{4, 3}}} {
-		s, err := e.sampler(config.Config{ReserveMiB: 1024}, config.Machine{MemMiB: 65536, HeadroomMiB: c.headroom, HeadroomOK: true})()
+		s, err := e.sampler(config.Config{ReserveMiB: 1024}, config.Machine{MemMiB: 65536, HeadroomMiB: c.headroom, HeadroomOK: true})(watch.Sample{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -233,20 +234,131 @@ func TestStopRoundFreesTheShortageNotTheReservations(t *testing.T) {
 	}
 }
 
-// A machine sample carries the headroom its room came from, and its parts, for the sample log; an
-// unknown headroom carries neither. Mutation: not copying them into the sample leaves both nil.
-func TestSampleCarriesTheHeadroom(t *testing.T) {
-	dir, clk := newStateDir(t, ""), newFakeClock()
-	e := newEngine(t, dir, clk)
-	parts := &memsample.HeadroomParts{FreeMiB: 1, SpeculativeMiB: 2, PurgeableMiB: 3, FileBackedMiB: 4}
-	s, err := e.sampler(config.Config{}, config.Machine{MemMiB: 8192, HeadroomMiB: 3000, HeadroomOK: true, HeadroomParts: parts})()
+// macParts are macOS counts whose strict headroom is 1024 MiB and whose anonymous memory, 6024 MiB,
+// makes the cheap one 1024 + 0.4 x (6024 - the live jobs' footprints).
+var macParts = memsample.HeadroomParts{FreeMiB: 1024, FileBackedMiB: 1792, InternalMiB: 6024}
+
+// macEngine is an engine on dir whose machine reads macParts, with their strict reading as the
+// headroom, as memsample.Headroom gives it on macOS.
+func macEngine(t *testing.T, dir string, clk *fakeClock) *Engine {
+	t.Helper()
+	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.HeadroomMiB == nil || *s.HeadroomMiB != 3000 || s.HeadroomParts != parts {
-		t.Errorf("sample headroom %v, parts %v; want 3000, %v", s.HeadroomMiB, s.HeadroomParts, parts)
+	m := func() (config.Machine, error) {
+		p := macParts
+		return config.Machine{MemMiB: 16384, HeadroomMiB: 1024, HeadroomOK: true, HeadroomParts: &p}, nil
 	}
-	if s, err = e.sampler(config.Config{}, config.Machine{MemMiB: 8192, HeadroomParts: parts})(); err != nil || s.HeadroomMiB != nil || s.HeadroomParts != nil {
-		t.Errorf("unknown headroom: sample headroom %v, parts %v, %v; want nil, nil", s.HeadroomMiB, s.HeadroomParts, err)
+	return New(st, filepath.Join(dir, store.ConfigFile), m, clk.clock())
+}
+
+// storeRate stores a green sample taken age ago, by the engine's clock, whose compression rate is
+// rate (nil: none).
+func storeRate(t *testing.T, e *Engine, clk *fakeClock, rate *float64, age time.Duration) {
+	t.Helper()
+	sec, err := e.st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	if err := sec.SetWatch(watch.Detector{Level: watch.Green}, watch.Sample{CompressBytesS: rate}, clk.clock().Realtime()-int64(age)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With a hold live, admission reads the macOS headroom in the mode the stored sample's
+// compression rate chooses. A (1 GiB needed, all of it in use) leaves 5000 MiB of other anonymous
+// memory, so the cheap room is 1024 + 2000 - 1024 = 2000 MiB and the strict one 0: 1500 MiB starts
+// under a fresh slow rate, and waits under a fast one, a rate 7 s old, or none stored; 2200 MiB
+// waits under any. Snapshot reports the same room. Mutations: inverting the switch admits under
+// the fast rate and refuses under the slow; ignoring the sample's age admits under the stale one;
+// forgetting the footprints in the sum (room 2409) admits the 2200; Snapshot reading the headroom
+// without its mode reports 0 for the slow rate.
+func TestAdmissionHeadroomFollowsTheStoredRate(t *testing.T) {
+	slow, fast := 0.5*memsample.CompressHarmBytesS, 2.0*memsample.CompressHarmBytesS
+	for _, c := range []struct {
+		name  string
+		rate  *float64
+		age   time.Duration
+		need  int64
+		admit bool
+		free  int64
+	}{
+		{"slow", &slow, time.Second, 1500, true, 2000},
+		{"fast", &fast, time.Second, 1500, false, 0},
+		{"stale", &slow, 7 * time.Second, 1500, false, 0},
+		{"no rate", nil, time.Second, 1500, false, 0},
+		{"slow, over the cheap room", &slow, time.Second, 2200, false, 2000},
+	} {
+		clk := newFakeClock()
+		e := macEngine(t, newStateDir(t, ""), clk)
+		if err := hold(t, e, need(1024)).UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 1024 }); err != nil {
+			t.Fatal(err)
+		}
+		storeRate(t, e, clk, c.rate, c.age)
+		r, err := e.Snapshot()
+		if err != nil || r.Mem.FreeMiB != c.free {
+			t.Errorf("%s: Snapshot free %d MiB, %v; want %d", c.name, r.Mem.FreeMiB, err, c.free)
+		}
+		if got := isAdmitted(step(t, enqueue(t, e, need(c.need)))); got != c.admit {
+			t.Errorf("%s: %d MiB admitted %v, want %v", c.name, c.need, got, c.admit)
+		}
+	}
+}
+
+// Elsewhere than macOS, and under the test hook, the headroom is the kernel's reading as it is,
+// whatever the rate and the footprints. Mutation: subtracting the footprints from it, or reading
+// it through the macOS modes, fails it.
+func TestHeadroomUntouchedWithoutParts(t *testing.T) {
+	holds := []liveHold{{name: "a", body: wire.Hold{NeedMiB: 2048, FootprintMiB: 1500}}}
+	fast, slow := 2.0*memsample.CompressHarmBytesS, 0.0
+	for i, rate := range []*float64{nil, &fast, &slow} {
+		if mib, mode := headroom(config.Machine{HeadroomMiB: 777, HeadroomOK: true}, holds, rate); mib != 777 || mode != "" {
+			t.Errorf("%s rate: headroom %d, %q; want 777, none", []string{"no", "fast", "slow"}[i], mib, mode)
+		}
+	}
+}
+
+// A machine sample carries the compression rate since the stored sample, the headroom its room
+// and shortage came from in the mode that rate chooses, and the parts and mode, for the sample log
+// and the next admission. With no stored sample the rate is unknown and, a hold live, the headroom
+// strict. Without parts (Linux) no rate is kept and the headroom is the kernel's; an unknown
+// headroom carries none of it. Mutations: not storing the rate leaves it nil in the second case;
+// sizing the shortage by the strict reading in every mode, or the room by the kernel's headroom,
+// fails the second case when the rate is slow; not copying the headroom into the sample fails the
+// first.
+func TestSampleCarriesTheHeadroom(t *testing.T) {
+	dir, clk := newStateDir(t, ""), newFakeClock()
+	e := macEngine(t, dir, clk)
+	if err := hold(t, e, need(1024)).UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 1024 }); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{ReserveMiB: 2048}
+	m, _ := e.machine()
+	s, err := e.sampler(cfg, m)(watch.Sample{})
+	if err != nil || s.CompressBytesS != nil || s.HeadroomMiB == nil || *s.HeadroomMiB != 1024 ||
+		s.HeadroomMode != memsample.HeadroomStrict || s.ShortMiB != 1024 || s.RoomMiB != -1024 || *s.HeadroomParts != macParts {
+		t.Errorf("no stored sample: %+v, %v; want no rate, strict 1024, short 1024, room -1024", s, err)
+	}
+	prev, err := memsample.ReadHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, err = e.sampler(cfg, m)(watch.Sample{Host: prev}); err != nil || s.CompressBytesS == nil || s.HeadroomMiB == nil {
+		t.Fatalf("a comparable stored sample: %+v, %v; want a rate and a headroom", s, err)
+	}
+	mib, mode := macParts.Headroom(1024, s.CompressBytesS, true)
+	if *s.HeadroomMiB != mib || s.HeadroomMode != mode || s.ShortMiB != max(2048-mib, 0) || s.RoomMiB != mib-2048 {
+		t.Errorf("rate %v: headroom %d %s, short %d, room %d; want %d %s, %d, %d", *s.CompressBytesS,
+			*s.HeadroomMiB, s.HeadroomMode, s.ShortMiB, s.RoomMiB, mib, mode, max(2048-mib, 0), mib-2048)
+	}
+	if s, err = e.sampler(cfg, config.Machine{MemMiB: 8192, HeadroomMiB: 3000, HeadroomOK: true})(watch.Sample{Host: prev}); err != nil ||
+		s.CompressBytesS != nil || s.HeadroomMiB == nil || *s.HeadroomMiB != 3000 || s.HeadroomMode != "" || s.HeadroomParts != nil {
+		t.Errorf("no parts: %+v, %v; want no rate, the kernel's 3000, no mode", s, err)
+	}
+	if s, err = e.sampler(cfg, config.Machine{MemMiB: 8192, HeadroomParts: m.HeadroomParts})(watch.Sample{Host: prev}); err != nil ||
+		s.HeadroomMiB != nil || s.HeadroomParts != nil || s.CompressBytesS != nil || s.HeadroomMode != "" {
+		t.Errorf("unknown headroom: %+v, %v; want no headroom, parts, rate or mode", s, err)
 	}
 }

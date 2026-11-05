@@ -4,6 +4,7 @@ package memsample
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"golang.org/x/sys/unix"
@@ -17,9 +18,15 @@ const vmVolume = "/System/Volumes/VM"
 func readHost() (HostReading, error) {
 	var r HostReading
 	var err error
-	if r.Decomp, r.SwapIns, err = vmCounters(); err != nil {
+	var compressed uint64
+	if r.Decomp, r.SwapIns, compressed, err = vmCounters(); err != nil {
 		return r, err
 	}
+	page, ok := sysctlNum("vm.pagesize")
+	if !ok {
+		return r, errors.New("sysctl vm.pagesize: cannot be read")
+	}
+	r.CompressBytes = compressed * page
 	// struct xsw_usage: xsu_total, xsu_avail and xsu_used in bytes, then the page size.
 	b, err := unix.SysctlRaw("vm.swapusage")
 	if err != nil || len(b) < 24 {

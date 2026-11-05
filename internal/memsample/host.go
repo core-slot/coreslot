@@ -10,11 +10,13 @@ import (
 )
 
 // HostReading is one reading of the machine's paging counters, swap room and clocks. The
-// counters are cumulative since boot: pages decompressed (macOS) and swapped in, and on Linux the
-// µs some task stalled on memory (PSI), when the kernel reports it.
+// counters are cumulative since boot: pages decompressed (macOS) and swapped in, on macOS the
+// bytes compressed and swapped out, and on Linux the µs some task stalled on memory (PSI), when
+// the kernel reports it.
 type HostReading struct {
 	Decomp          uint64 `json:"decomp"`
 	SwapIns         uint64 `json:"swap_ins"`
+	CompressBytes   uint64 `json:"compress_bytes"` // macOS: compressions and swap-outs times the page size; 0 elsewhere
 	PSISomeUS       uint64 `json:"psi_some_us"`
 	HasPSI          bool   `json:"has_psi"`
 	SwapUsedMiB     int64  `json:"swap_used_mib"`
@@ -73,7 +75,18 @@ const (
 func Gap(prev, cur HostReading) bool {
 	wall, awake := cur.WallNS-prev.WallNS, cur.AwakeNS-prev.AwakeNS
 	return wall < 0 || wall > StaleNS || max(wall-awake, awake-wall) > gapSkewNS || cur.Decomp < prev.Decomp ||
-		cur.SwapIns < prev.SwapIns || prev.HasPSI && cur.HasPSI && cur.PSISomeUS < prev.PSISomeUS
+		cur.SwapIns < prev.SwapIns || cur.CompressBytes < prev.CompressBytes ||
+		prev.HasPSI && cur.HasPSI && cur.PSISomeUS < prev.PSISomeUS
+}
+
+// CompressRate is the rate, in bytes/s, at which the kernel compressed and swapped out memory
+// from prev to cur; ok is false when prev is no reading or the two cannot be compared (Gap).
+func CompressRate(prev, cur HostReading) (bytesS float64, ok bool) {
+	s := float64(cur.WallNS-prev.WallNS) / 1e9
+	if prev.WallNS == 0 || Gap(prev, cur) || s <= 0 {
+		return 0, false
+	}
+	return float64(cur.CompressBytes-prev.CompressBytes) / s, true
 }
 
 // psiTotal returns the total= field of the "some" line of /proc/pressure/memory's text, in µs.

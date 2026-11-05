@@ -93,8 +93,10 @@ the [compatibility policy](docs/compatibility.md) says how.
 **Admission.** A command's need is `--mem`, else the `mem` of its label in
 [`needs.toml`](#configuration), else the 90th percentile of the memory peaks of the label's last 20
 counted runs ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)), else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
-(on macOS free, purgeable and file-backed pageable pages less the 1.75 GiB of file cache the kernel
-keeps; on Linux `MemAvailable`),
+(on Linux `MemAvailable`; on macOS free and purgeable pages and the file cache above the 1.75 GiB
+the kernel keeps, plus, while the kernel compresses memory at under 1 GiB/s, 0.4 of the other
+applications' memory, which it can compress to make room: values measured on one 16 GB Mac,
+[`PROTOCOL.md` section 5.1](PROTOCOL.md#51-the-machines-memory)),
 less the reserve, less what each running command still has to grow into (its need less what it uses
 now). A command starts when its need fits the room. A need larger than the machine's memory less the
 reserve runs only alone. Waiting runs say why and where they stand when they begin to wait and every 30 s; a tool with

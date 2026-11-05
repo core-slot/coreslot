@@ -88,7 +88,7 @@ func TestTickShareIgnoresSamplesWithoutAGateReading(t *testing.T) {
 	var r run
 	now := store.NowNS()
 	for _, at := range []int64{0, 2e9, 12e9} { // the first sample, a compared one, one 10 s on
-		read := func() (watch.Sample, error) {
+		read := func(watch.Sample) (watch.Sample, error) {
 			var s watch.Sample
 			s.Host.WallNS, s.Host.AwakeNS = 1e12+at, 1e12+at
 			return s, nil

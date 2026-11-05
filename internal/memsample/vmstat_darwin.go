@@ -32,22 +32,25 @@ var hostPort = sync.OnceValue(func() uintptr {
 	return port
 })
 
-// vmCounters reads the pages decompressed and swapped in since boot from host_statistics64.
-func vmCounters() (decomp, swapIns uint64, err error) {
+// vmCounters reads the pages decompressed, swapped in, and compressed or swapped out since boot
+// from host_statistics64.
+func vmCounters() (decomp, swapIns, compressed uint64, err error) {
 	const (
 		hostVMInfo64 = 4  // HOST_VM_INFO64
 		rev1Count    = 38 // HOST_VM_INFO64_REV1_COUNT, in 32-bit words: every macOS fills it
 		decompAt     = 12 // decompressions, in 64-bit words
+		compAt       = 13 // compressions
 		swapInsAt    = 14 // swapins
+		swapOutsAt   = 15 // swapouts
 	)
 	var v [rev1Count / 2]uint64
 	count := uint32(rev1Count)
 	kr, _, _ := syscall_syscall6(libc_host_statistics64_trampoline_addr, hostPort(), hostVMInfo64,
 		uintptr(unsafe.Pointer(&v[0])), uintptr(unsafe.Pointer(&count)), 0, 0)
 	if int32(kr) != 0 {
-		return 0, 0, fmt.Errorf("host_statistics64: kern_return %d", int32(kr))
+		return 0, 0, 0, fmt.Errorf("host_statistics64: kern_return %d", int32(kr))
 	}
-	return v[decompAt], v[swapInsAt], nil
+	return v[decompAt], v[swapInsAt], v[compAt] + v[swapOutsAt], nil
 }
 
 // timebase is mach_timebase_info: a mach tick is numer/denom ns.

@@ -71,16 +71,18 @@ func rusage(pid, flavor int) (ri [64]uint64, ok bool) {
 }
 
 // Headroom returns the memory the kernel can hand out without paging anything anonymous out, in
-// MiB, and the page counts it came from (darwinHeadroom).
+// MiB: the strict reading of the page counts (HeadroomParts.Headroom), and the counts, from which
+// admission takes the reading of its mode.
 func Headroom() (mib int64, parts *HeadroomParts, ok bool) {
-	var n [5]uint64
+	var n [6]uint64
 	for i, name := range []string{"vm.pagesize", "vm.page_free_count", "vm.page_speculative_count",
-		"vm.page_purgeable_count", "vm.page_pageable_external_count"} {
+		"vm.page_purgeable_count", "vm.page_pageable_external_count", "vm.page_pageable_internal_count"} {
 		if n[i], ok = sysctlNum(name); !ok {
 			return 0, nil, false
 		}
 	}
-	mib, p := darwinHeadroom(n[1], n[2], n[3], n[4], n[0])
+	p := darwinParts(n[1], n[2], n[3], n[4], n[5], n[0])
+	mib, _ = p.Headroom(0, nil, true)
 	return mib, &p, true
 }
 

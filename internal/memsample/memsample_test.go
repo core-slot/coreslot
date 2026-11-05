@@ -131,7 +131,7 @@ func TestClockPairDetectsSleep(t *testing.T) {
 // its row comparable; comparing the stall without both readings having it makes the last row a gap.
 func TestCounterBackIsAGap(t *testing.T) {
 	const s = int64(time.Second)
-	prev := HostReading{Decomp: 100, SwapIns: 100, PSISomeUS: 100, HasPSI: true, WallNS: 1000 * s, AwakeNS: 900 * s}
+	prev := HostReading{Decomp: 100, SwapIns: 100, CompressBytes: 100, PSISomeUS: 100, HasPSI: true, WallNS: 1000 * s, AwakeNS: 900 * s}
 	for _, c := range []struct {
 		name string
 		edit func(*HostReading)
@@ -140,11 +140,12 @@ func TestCounterBackIsAGap(t *testing.T) {
 		{"all forward", func(*HostReading) {}, false},
 		{"decompressions back", func(r *HostReading) { r.Decomp = 1 }, true},
 		{"swap-ins back", func(r *HostReading) { r.SwapIns = 1 }, true},
+		{"compressions back", func(r *HostReading) { r.CompressBytes = 1 }, true},
 		{"stall back", func(r *HostReading) { r.PSISomeUS = 1 }, true},
 		{"stall missing", func(r *HostReading) { r.PSISomeUS, r.HasPSI = 0, false }, false},
 	} {
 		cur := prev
-		cur.Decomp, cur.SwapIns, cur.PSISomeUS = 200, 200, 200
+		cur.Decomp, cur.SwapIns, cur.CompressBytes, cur.PSISomeUS = 200, 200, 200, 200
 		cur.WallNS, cur.AwakeNS = prev.WallNS+2*s, prev.AwakeNS+2*s
 		c.edit(&cur)
 		if got := Gap(prev, cur); got != c.want {
@@ -211,41 +212,114 @@ func TestReadingsReplaceNamedFields(t *testing.T) {
 	}
 }
 
-// The macOS headroom is free, purgeable and file-backed pages less the file cache the kernel
-// keeps, speculative pages not added (they are file-backed already), and never below 0; the parts
-// carry every count. Mutations: adding speculative back reads 2048 + 1792 - 1792 + 512 = 2560
-// here, not 2048; dropping the subtraction reads 3840; dropping the clamp reads -792 for the small
-// counts.
-func TestDarwinHeadroom(t *testing.T) {
+// darwinParts converts each page count to MiB in its own field. Mutation: reading the internal
+// count into the file-backed field (or the reverse) fails it.
+func TestDarwinParts(t *testing.T) {
 	const page = 16384 // 64 pages a MiB
-	mib, parts := darwinHeadroom(1024*64, 512*64, 256*64, 2560*64, page)
-	want := HeadroomParts{FreeMiB: 1024, SpeculativeMiB: 512, PurgeableMiB: 256, FileBackedMiB: 2560}
-	if mib != 2048 || parts != want {
-		t.Errorf("darwinHeadroom = %d, %+v; want 2048, %+v", mib, parts, want)
-	}
-	if mib, _ := darwinHeadroom(500*64, 100*64, 0, 500*64, page); mib != 0 {
-		t.Errorf("darwinHeadroom under the kept file cache = %d; want 0", mib)
+	got := darwinParts(1024*64, 512*64, 256*64, 2560*64, 6000*64, page)
+	want := HeadroomParts{FreeMiB: 1024, SpeculativeMiB: 512, PurgeableMiB: 256, FileBackedMiB: 2560, InternalMiB: 6000}
+	if got != want {
+		t.Errorf("darwinParts = %+v; want %+v", got, want)
 	}
 }
 
-// The new reading never exceeds the one before it, free, speculative, purgeable and file-backed
-// pages summed, for the same counters. Mutation: adding the kept file cache instead of subtracting
-// it reads more than the old sum.
-func TestDarwinHeadroomNeverAboveOld(t *testing.T) {
-	counts := []uint64{0, 1, 63, 64, 1000, 100_000, 300_000, 1_000_000}
-	for _, page := range []uint64{4096, 16384} {
-		for _, free := range counts {
-			for _, spec := range counts {
-				for _, purg := range counts {
-					for _, ext := range counts {
-						old := int64((free + spec + purg + ext) * page >> 20)
-						if mib, _ := darwinHeadroom(free, spec, purg, ext, page); mib > old || mib < 0 {
-							t.Fatalf("darwinHeadroom(%d, %d, %d, %d, %d) = %d; want 0..%d, the old reading",
-								free, spec, purg, ext, page, mib, old)
+// headroomParts are the counts the mode tests read: strict is 1024 + 256 + (2560 - 1792) = 2048,
+// and the anonymous memory 6000 - 256 = 5744 MiB.
+var headroomParts = HeadroomParts{FreeMiB: 1024, SpeculativeMiB: 512, PurgeableMiB: 256, FileBackedMiB: 2560, InternalMiB: 6000}
+
+func rate(bytesS float64) *float64 { return &bytesS }
+
+// The strict reading is free, purgeable and the file-backed pages above the kept cache, the
+// speculative ones not added; the cheap one adds 0.4 of the anonymous memory less the live jobs'
+// footprints. Mutations: adding speculative reads 2560 strict; dropping the kept cache 3840;
+// clamping the sum instead of the file-backed term reads 0, not 500, for the small counts;
+// dropping the 0.4 term reads the cheap one as 2048; forgetting the footprints reads 4345, not
+// 3945; not leaving out purgeable from the anonymous memory reads 4048.
+func TestHeadroomModes(t *testing.T) {
+	slow := rate(0.5 * CompressHarmBytesS)
+	for _, c := range []struct {
+		name      string
+		parts     HeadroomParts
+		footprint int64
+		rate      *float64
+		mib       int64
+		mode      string
+	}{
+		{"strict", headroomParts, 1000, rate(2 * CompressHarmBytesS), 2048, HeadroomStrict},
+		{"cheap", headroomParts, 1000, slow, 2048 + 1897, HeadroomCheap}, // 0.4 x (5744 - 1000) = 1897.6
+		{"cheap, no job", headroomParts, 0, slow, 2048 + 2297, HeadroomCheap},
+		{"file cache under the kept", HeadroomParts{FreeMiB: 500, FileBackedMiB: 500}, 0, rate(CompressHarmBytesS), 500, HeadroomStrict},
+	} {
+		if mib, mode := c.parts.Headroom(c.footprint, c.rate, true); mib != c.mib || mode != c.mode {
+			t.Errorf("%s: Headroom = %d, %s; want %d, %s", c.name, mib, mode, c.mib, c.mode)
+		}
+	}
+}
+
+// The mode switches to strict at exactly 1 GiB/s, and a rate that is unknown is strict while
+// holds are live; with none live the cheap reading stands (the idle rule decides admission then).
+// Mutations: inverting the switch (rate < threshold is strict) fails the first two rows; > for >=
+// fails the first; reading an unknown rate as cheap fails the third.
+func TestHeadroomSwitch(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rate *float64
+		live bool
+		want string
+	}{
+		{"at the threshold", rate(CompressHarmBytesS), true, HeadroomStrict},
+		{"just under", rate(CompressHarmBytesS - 1), true, HeadroomCheap},
+		{"unknown, holds live", nil, true, HeadroomStrict},
+		{"unknown, no hold live", nil, false, HeadroomCheap},
+		{"fast, no hold live", rate(CompressHarmBytesS), false, HeadroomStrict},
+	} {
+		if _, mode := headroomParts.Headroom(0, c.rate, c.live); mode != c.want {
+			t.Errorf("%s: mode %s, want %s", c.name, mode, c.want)
+		}
+	}
+}
+
+// The headroom is never below 0 and the cheap reading never below the strict one, also when the
+// footprints exceed the anonymous memory; the strict one never exceeds the reading before it, free,
+// speculative, purgeable and file-backed pages summed. Mutation: dropping the clamp of the
+// anonymous term reads the cheap one under the strict one for a large footprint.
+func TestHeadroomBounds(t *testing.T) {
+	counts := []int64{0, 1, 500, 1792, 4000, 20000}
+	for _, free := range counts {
+		for _, purg := range counts {
+			for _, ext := range counts {
+				for _, internal := range counts {
+					p := HeadroomParts{FreeMiB: free, SpeculativeMiB: 7, PurgeableMiB: purg, FileBackedMiB: ext, InternalMiB: internal}
+					strict, _ := p.Headroom(0, nil, true)
+					for _, fp := range []int64{0, 300, 100000} {
+						cheap, _ := p.Headroom(fp, rate(0), true)
+						if strict < 0 || cheap < strict || strict > free+7+purg+ext {
+							t.Fatalf("%+v, footprint %d: strict %d, cheap %d; want 0 <= strict <= %d, cheap >= strict",
+								p, fp, strict, cheap, free+7+purg+ext)
 						}
 					}
 				}
 			}
 		}
+	}
+}
+
+// The compression rate is the counter's growth per second between two comparable readings, and
+// unknown without a previous reading or across a gap. Mutations: dividing by ns instead of s, or
+// rating a gap, fails it.
+func TestCompressRate(t *testing.T) {
+	const s = int64(time.Second)
+	prev := HostReading{CompressBytes: 1 << 30, WallNS: 1000 * s, AwakeNS: 900 * s}
+	cur := HostReading{CompressBytes: 3 << 30, WallNS: 1002 * s, AwakeNS: 902 * s}
+	if r, ok := CompressRate(prev, cur); !ok || r != 1<<30 {
+		t.Errorf("CompressRate = %v, %v; want 1 GiB/s, true", r, ok)
+	}
+	if _, ok := CompressRate(HostReading{}, cur); ok {
+		t.Error("CompressRate without a previous reading is known")
+	}
+	back := cur
+	back.CompressBytes = 0
+	if _, ok := CompressRate(prev, back); ok {
+		t.Error("CompressRate over a counter that went back is known")
 	}
 }

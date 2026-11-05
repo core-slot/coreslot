@@ -87,10 +87,16 @@ type Sample struct {
 	Live     []string              `json:"live,omitempty"` // every live hold, running or not
 	RoomMiB  int64                 `json:"room_mib"`
 	ShortMiB int64                 `json:"short_mib"`
-	// The headroom the room came from, nil when it is unknown, and its macOS parts: for the sample
-	// log only, watch.json does not keep them.
+	// CompressBytesS is the rate at which the kernel compressed and swapped out memory over the
+	// period this sample ends, in bytes/s; nil when it is unknown or not read (Linux). Admission
+	// reads it from the stored sample to choose the macOS headroom's mode.
+	CompressBytesS *float64 `json:"compress_bytes_s,omitempty"`
+	// The headroom the room came from, nil when it is unknown, its macOS parts and its mode
+	// (memsample.HeadroomStrict or HeadroomCheap; empty elsewhere): for the sample log only,
+	// watch.json does not keep them.
 	HeadroomMiB   *int64                   `json:"-"`
 	HeadroomParts *memsample.HeadroomParts `json:"-"`
+	HeadroomMode  string                   `json:"-"`
 }
 
 // Level is the machine's memory level. Admission waits at Yellow and above; Unknown is no

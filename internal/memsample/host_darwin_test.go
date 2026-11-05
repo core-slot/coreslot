@@ -22,7 +22,7 @@ func TestReadHostDarwinLive(t *testing.T) {
 			t.Errorf("ReadHost = %+v; want WallNS >= AwakeNS, VMVolumeFreeMiB > 0, swap >= 0", r)
 		}
 	}
-	if b.Decomp < a.Decomp || b.SwapIns < a.SwapIns {
+	if b.Decomp < a.Decomp || b.SwapIns < a.SwapIns || b.CompressBytes < a.CompressBytes {
 		t.Errorf("counters went back: %+v then %+v", a, b)
 	}
 	if span := time.Duration(b.WallNS - a.WallNS); span < time.Second || span > 3*time.Second {

@@ -103,9 +103,34 @@ func (g *Grant) Tick(ctx context.Context) (watch.Detector, error) {
 	return d, err
 }
 
-// sampler reads one machine sample: the host, the running jobs and the room.
-func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Sample, error) {
-	return func() (watch.Sample, error) {
+// headroom is the headroom the room comes from (PROTOCOL.md section 5.1), and its mode: on macOS
+// the reading of m's parts in the mode that rate, the compression rate of the last period (nil
+// when unknown or stale), and the live holds choose, with their footprints left out of the
+// anonymous memory; elsewhere, and under the test hook, m's headroom as the kernel gave it.
+func headroom(m config.Machine, holds []liveHold, rate *float64) (mib int64, mode string) {
+	if m.HeadroomParts == nil {
+		return m.HeadroomMiB, ""
+	}
+	var footprint int64
+	for _, h := range holds {
+		footprint += h.body.FootprintMiB
+	}
+	return m.HeadroomParts.Headroom(footprint, rate, len(holds) > 0)
+}
+
+// storedRate is the compression rate of the stored sample s, taken at at, while the sample is
+// fresh at now (both by the wall clock); nil otherwise.
+func storedRate(s watch.Sample, at, now int64) *float64 {
+	if !fresh(at, now) {
+		return nil
+	}
+	return s.CompressBytesS
+}
+
+// sampler reads one machine sample, given the stored one: the host, the running jobs, the
+// compression rate since the stored sample (macOS) and the room.
+func (e *Engine) sampler(cfg config.Config, m config.Machine) func(watch.Sample) (watch.Sample, error) {
+	return func(prev watch.Sample) (watch.Sample, error) {
 		host, err := memsample.ReadHost()
 		if err != nil {
 			return watch.Sample{}, err
@@ -119,9 +144,13 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Samp
 			s.Live = append(s.Live, h.name)
 		}
 		if m.HeadroomOK {
-			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
-			s.ShortMiB = max(cfg.ReserveMiB-m.HeadroomMiB, 0)
-			s.HeadroomMiB, s.HeadroomParts = &m.HeadroomMiB, m.HeadroomParts
+			if r, ok := memsample.CompressRate(prev.Host, host); ok && m.HeadroomParts != nil {
+				s.CompressBytesS = &r
+			}
+			mib, mode := headroom(m, holds, s.CompressBytesS)
+			s.RoomMiB = state.Room(mib, cfg.ReserveMiB, reservations(holds))
+			s.ShortMiB = max(cfg.ReserveMiB-mib, 0)
+			s.HeadroomMiB, s.HeadroomParts, s.HeadroomMode = &mib, m.HeadroomParts, mode
 		}
 		return s, nil
 	}

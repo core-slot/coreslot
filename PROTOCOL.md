@@ -250,16 +250,34 @@ Two readings of the machine decide admission, both in MiB:
 - **`memory`**, the physical memory, rounded down: the `hw.memsize` sysctl on macOS; `MemTotal` in
   `/proc/meminfo` on Linux, never a cgroup's limit. On another system, the system's physical
   memory; a client that cannot obtain it treats that as a state error.
-- **`headroom`**, the memory the kernel can hand out now without paging anonymous memory out. On
-  macOS, the free, purgeable and file-backed pageable pages (`vm.page_free_count`,
-  `vm.page_purgeable_count` and `vm.page_pageable_external_count`) times the page size, less
-  1 792 MiB, never below 0: below about that much file cache the kernel compresses applications'
-  memory instead of releasing cache. Speculative pages are not added, since the file-backed count
-  holds them already. The 1 792 MiB was measured on one 16 GB Mac and may scale with the machine's
-  memory; other sizes are not yet measured. On
+- **`headroom`**, the memory the kernel can hand out now without harming the work that runs. On
   Linux, `MemAvailable` of `/proc/meminfo`, and inside a memory-limited cgroup v2 at most the room
   under the tightest limit, the least `memory.max` less `memory.current` of the client's cgroup and
-  its ancestors. A headroom that cannot be read is **unknown**.
+  its ancestors. On macOS it is one of two readings of the page counts, each count times the page
+  size, in MiB:
+
+  ```
+  strict = free + purgeable + max(0, file-backed − 1792)
+  cheap  = strict + 0.4 × max(0, anonymous − Σ over live holds of footprint)
+  ```
+
+  where `free`, `purgeable` and `file-backed` are `vm.page_free_count`, `vm.page_purgeable_count`
+  and `vm.page_pageable_external_count`, `anonymous` is `vm.page_pageable_internal_count` less
+  `purgeable`, and the footprints are the live holds' `footprint_mib` (section 7.4). Speculative
+  pages are not added: the file-backed count holds them already. The 1 792 MiB is the file cache
+  the kernel keeps under pressure, compressing applications' memory instead of releasing it; it
+  was measured on one 16 GB Mac, and larger Macs are not yet measured. The cheap reading counts
+  that the kernel can compress the idle memory of other applications to make room: on the same
+  Mac, 47 to 55 % of the anonymous memory outside coreslot's jobs became room before any job
+  slowed, the compressor freeing 45 to 56 % of what it took; 0.4 leaves a margin. The jobs' own
+  footprints are left out, since compressing them is the harm. The headroom is the strict reading
+  when the **compression rate**, the bytes compressed and swapped out per second over the last
+  watchdog period (`sample.compress_bytes_s`, sections 7.11 and 23.2), is at least 1 GiB/s, or
+  when a hold is live and that rate is unknown or more than 6 s old (section 12.4's freshness);
+  otherwise it is the cheap one. On the same Mac, compressing idle memory ran at 0.05 to 0.8 GiB/s
+  while no job slowed, and at 1.5 GiB/s and more while jobs did. With no hold live the idle rule
+  (section 12.1) decides admission whatever the headroom reads. A headroom that cannot be read is
+  **unknown**.
 
 A client reads both at every admission attempt (section 12.1). The **cold start** need, for a label
 nothing is known of, is `max(1, min(4096, memory / 4))` MiB.
@@ -559,6 +577,7 @@ client that does not run the detector needs only these keys:
 |---|---|---|
 | `sampled_ns` | integer | the wall clock of the client that took the sample, when it did; `0` with no sample |
 | `sample.host.wall_ns` | integer | the sample's host clock, on a clock that counts the time the machine slept (section 23.2) |
+| `sample.compress_bytes_s` | number | optional; the compression rate over the period the sample ends, in bytes per second (section 23.2), which chooses the macOS headroom's mode (section 5.1); absent when unknown, and on Linux |
 | `detector.level` | integer | `0` green, `1` unknown, `2` yellow, `3` red, `4` floor (section 23.4) |
 | `detector.yellow_cleared_ns` | integer | the host clock when the level last fell from yellow, red or floor to green; `0` before |
 | `detector.calm_since_ns` | integer | the host clock since which the level has been green without a break; `0` while it is not green |
@@ -802,7 +821,9 @@ Inside the section the head, or a waiter that may pass it (section 10.3):
 1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1);
 2. reads the configuration and the machine's memory (section 5.1); an invalid configuration or an
    unknown `memory` is a state error (section 14);
-3. lists the live holds and computes the room;
+3. lists the live holds and computes the room. On macOS, while a hold is live, it reads
+   `watch.json` (section 7.11) for the compression rate that chooses the headroom's mode: the
+   stored sample's `compress_bytes_s` while the sample is fresh (section 12.4), unknown otherwise;
 4. applies the **idle rule**: when no hold is live, the head starts whatever the numbers say; idle
    means "no coreslot job running", never machine load. When a hold is live and the headroom is
    known, the head leaves the section and waits unless its request fits. When the headroom is
@@ -1462,14 +1483,19 @@ A stored sample more than 3 periods (6 s) old is no reading: admission ignores t
 
 ### 23.2 The machine sample
 
-A **machine sample** is the host readings, the running holds' latest measurements (section 23.3)
-and the room (section
-12.1; 0 when the headroom is unknown), taken together. The host readings, which a sample takes in
-well under a millisecond with no subprocess:
+A **machine sample** is the host readings, the running holds' latest measurements (section 23.3),
+the compression rate and the room (section
+12.1; 0 when the headroom is unknown), taken together. On macOS the **compression rate** is the
+growth of the compressions and swap-outs, in bytes, from the stored sample to the new one, per
+second of the host clock; it is unknown when the stored sample is empty or the two are a gap
+(below), and on Linux. The sample stores it as `compress_bytes_s` (section 7.11), and the room and
+the shortage (section 23.5) take the headroom in the mode it chooses (section 5.1). The host
+readings, which a sample takes in well under a millisecond with no subprocess:
 
 | Reading | macOS | Linux |
 |---|---|---|
 | decompressions and swap-ins, cumulative | `host_statistics64` (`HOST_VM_INFO64`) | swap-ins: `pswpin` of `/proc/vmstat`; no decompressions |
+| compressions and swap-outs, cumulative, in bytes | `host_statistics64` (`HOST_VM_INFO64`), times `vm.pagesize` | none |
 | memory stall (PSI) | none | the `total` of the `some` line of `/proc/pressure/memory`, in µs; absent or `EOPNOTSUPP` when the kernel does not report it, and then not used |
 | swap used, swap free | `vm.swapusage` | `SwapTotal − SwapFree` and `SwapFree` of `/proc/meminfo` |
 | free space of the volume that holds the swap files | `/System/Volumes/VM` | none |
@@ -1565,7 +1591,10 @@ one at a time.
    such victim first and only then the learning ones, newest first within each. It takes victims
    until their footprints sum to at least the **shortage**, `max(reserve − headroom, 0)` MiB of the
    sample it just took (the room counts reservations not yet used, which free no memory), and at
-   least one. With only the oldest hold or holds that are not victims left, the list is empty.
+   least one. The headroom is the one the sample's room came from, in the mode its compression
+   rate chose (section 5.1); in a red round compression is usually fast, so it is mostly the strict
+   reading. A shortage can exceed one victim's footprint, and the round then lists more than one.
+   With only the oldest hold or holds that are not victims left, the list is empty.
 
    A red round may pass over its newest victim when that victim is **nearly finished**, without
    counting its footprint, and go on to the next one; a floor round passes over none.
@@ -1621,11 +1650,14 @@ is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log 
 the ticker that takes a machine sample appends one JSON line to `$S/log/watch.jsonl` with the
 readings, `E`, the level and the bucket, in either mode. When the headroom is known the line also
 carries `headroom_mib`, the headroom the sample's room came from, and on macOS its parts, in MiB:
-`headroom_free_mib`, `headroom_speculative_mib`, `headroom_purgeable_mib` and
-`headroom_file_backed_mib` (section 5.1; the speculative pages are recorded, not added). These keys
-are optional: a reader treats an absent one as unknown. The file informs and nothing reads it but
-the calibration harness; a writer appends under the rules of the run log, rotating it inside the
-section to `watch.1.jsonl` at 10 MiB, and a reader skips lines it cannot parse.
+`headroom_free_mib`, `headroom_speculative_mib`, `headroom_purgeable_mib`,
+`headroom_file_backed_mib` and `headroom_internal_mib` (`vm.page_pageable_internal_count`, purgeable
+pages not yet left out), its mode, `headroom_mode` (`"strict"` or `"cheap"`), and, when it is known,
+the compression rate, `compress_bytes_s` (section 5.1; the speculative pages are recorded, not
+added). These keys are optional: a reader treats an absent one as unknown. The file informs and
+nothing reads it but the calibration harness; a writer appends under the rules of the run log,
+rotating it inside the section to `watch.1.jsonl` at 10 MiB, and a reader skips lines it cannot
+parse.
 
 ## 24. Restart of a stopped run
 

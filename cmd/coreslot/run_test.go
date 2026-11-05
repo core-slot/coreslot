@@ -251,7 +251,7 @@ func stateDir(t *testing.T, cfg string) string {
 func machineWithHeadroom(mib int64) func() (config.Machine, error) {
 	return func() (config.Machine, error) {
 		m, err := config.ReadMachine()
-		m.HeadroomMiB, m.HeadroomOK = mib, true
+		m.HeadroomMiB, m.HeadroomOK, m.HeadroomParts = mib, true, nil // no parts: the headroom as it is
 		return m, err
 	}
 }
