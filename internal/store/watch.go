@@ -125,6 +125,9 @@ func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) 
 			p.FreeMiB, p.SpeculativeMiB, p.PurgeableMiB, p.FileBackedMiB
 		l["headroom_internal_mib"] = p.InternalMiB
 	}
+	if cur.HeadroomCheapMiB != nil {
+		l["headroom_cheap_mib"] = *cur.HeadroomCheapMiB
+	}
 	if cur.HeadroomMode != "" {
 		l["headroom_mode"] = cur.HeadroomMode
 	}

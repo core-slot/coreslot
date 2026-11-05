@@ -15,19 +15,21 @@ All notable changes to this project are recorded here. The format follows
   1 792 MiB of file cache the kernel keeps under pressure (it compresses applications' memory
   instead of releasing that cache); speculative pages are no longer added, since the file-backed
   count holds them already. The **cheap** one adds 0.4 of the anonymous memory outside coreslot's
-  live jobs (their footprints left out), which the kernel can compress to make room. The headroom
-  is the strict reading when the kernel compressed and swapped out at least 1 GiB/s over the last
+  live jobs (their footprints left out), which the kernel can compress to make room. Admission
+  reads the strict one when the kernel compressed and swapped out at least 1 GiB/s over the last
   watchdog period, or when a job is live and that rate is unknown or older than 6 s; otherwise the
   cheap one. With no job live the idle rule decides as before. The values were measured on one
   16 GB Mac: the kernel kept about 1.6 to 1.7 GiB of file cache, 47 to 55 % of other applications'
   anonymous memory became room before any job slowed, and compressing idle memory ran at 0.05 to
   0.8 GiB/s while no job slowed and at 1.5 GiB/s and more while jobs did; larger Macs are not yet
-  measured. Compared with the release before, the strict reading is never higher, so a run may
-  wait where it started before; the cheap one may be higher. Linux is unchanged.
-- A stop round's shortage, the reserve less the headroom, takes the headroom in the same mode as
-  the sample's room. A red round usually comes with fast compression, so it mostly reads the strict
-  headroom, which is lower than before: the shortage can be larger, and a round can list more than
-  one job to cover it.
+  measured. Compared with v0.5.1, the strict reading is never higher, so a run may wait where it
+  started before; the cheap one can be higher, by up to 0.4 of other applications' anonymous
+  memory, so while compression is slow a run may start where it waited before. Linux is unchanged.
+- A stop round's shortage, the reserve less the headroom, always reads the cheap headroom on macOS,
+  whatever the compression rate: under pressure compression is fast and the strict reading near 0,
+  so a shortage on it would be nearly the whole reserve and stop several jobs where one relieves
+  the machine. Admission and stop rounds thus read different headrooms while compression is fast.
+  A shortage can still exceed one job's footprint, and a round then lists more than one.
 
 ### Added
 
@@ -35,7 +37,8 @@ All notable changes to this project are recorded here. The format follows
   optional), which admission reads while a job is live to choose the headroom's mode.
 - With `[watch] sample_log = true`, each line of `log/watch.jsonl` records the headroom the
   sample's room came from (`headroom_mib`), its mode (`headroom_mode`, `"strict"` or `"cheap"`),
-  the compression rate (`compress_bytes_s`) and, on macOS, the page counts it was read from
+  the cheap reading the shortage came from (`headroom_cheap_mib`), the compression rate
+  (`compress_bytes_s`) and, on macOS, the page counts it was read from
   (`headroom_free_mib`, `headroom_speculative_mib`, `headroom_purgeable_mib`,
   `headroom_file_backed_mib`, `headroom_internal_mib`). Every key is optional.
 

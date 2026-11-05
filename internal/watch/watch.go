@@ -80,7 +80,8 @@ type Job struct {
 }
 
 // Sample is one machine sample: the host readings, the live jobs, the admission room in MiB and
-// the shortage, how far the headroom is under the reserve (0 when it is not).
+// the shortage, how far the headroom is under the reserve (0 when it is not); on macOS the
+// shortage reads the cheap headroom, whatever the room's mode.
 type Sample struct {
 	Host     memsample.HostReading `json:"host"`
 	Jobs     []Job                 `json:"jobs"`
@@ -92,11 +93,12 @@ type Sample struct {
 	// reads it from the stored sample to choose the macOS headroom's mode.
 	CompressBytesS *float64 `json:"compress_bytes_s,omitempty"`
 	// The headroom the room came from, nil when it is unknown, its macOS parts and its mode
-	// (memsample.HeadroomStrict or HeadroomCheap; empty elsewhere): for the sample log only,
-	// watch.json does not keep them.
-	HeadroomMiB   *int64                   `json:"-"`
-	HeadroomParts *memsample.HeadroomParts `json:"-"`
-	HeadroomMode  string                   `json:"-"`
+	// (memsample.HeadroomStrict or HeadroomCheap; empty elsewhere), and on macOS the cheap reading
+	// the shortage came from: for the sample log only, watch.json does not keep them.
+	HeadroomMiB      *int64                   `json:"-"`
+	HeadroomParts    *memsample.HeadroomParts `json:"-"`
+	HeadroomMode     string                   `json:"-"`
+	HeadroomCheapMiB *int64                   `json:"-"`
 }
 
 // Level is the machine's memory level. Admission waits at Yellow and above; Unknown is no

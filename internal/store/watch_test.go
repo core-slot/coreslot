@@ -297,14 +297,14 @@ func TestSampleLog(t *testing.T) {
 	}
 }
 
-// The sample log records the headroom the room came from, its macOS parts, its mode and the
-// compression rate, each under its own key, and none of them when the headroom is unknown or, for
+// The sample log records the headroom the room came from, its macOS parts, its mode, the
+// compression rate and the cheap reading the shortage came from, each under its own key, and none of them when the headroom is unknown or, for
 // the parts, mode and rate, not read (Linux). Mutations: dropping a key, or writing one part under
 // another's key, fails the first case; writing them for an unknown headroom fails the last.
 func TestSampleLogHeadroom(t *testing.T) {
 	keys := []string{"headroom_mib", "headroom_free_mib", "headroom_speculative_mib",
-		"headroom_purgeable_mib", "headroom_file_backed_mib", "headroom_internal_mib", "headroom_mode", "compress_bytes_s"}
-	mib, rate := int64(2048), 1.5e9
+		"headroom_purgeable_mib", "headroom_file_backed_mib", "headroom_internal_mib", "headroom_mode", "compress_bytes_s", "headroom_cheap_mib"}
+	mib, cheap, rate := int64(2048), int64(2500), 1.5e9
 	parts := &memsample.HeadroomParts{FreeMiB: 1, SpeculativeMiB: 2, PurgeableMiB: 3, FileBackedMiB: 4, InternalMiB: 5}
 	for _, c := range []struct {
 		name  string
@@ -312,11 +312,12 @@ func TestSampleLogHeadroom(t *testing.T) {
 		parts *memsample.HeadroomParts
 		mode  string
 		rate  *float64
+		cheap *int64
 		want  []any // by key; absent when nil
 	}{
-		{"macOS", &mib, parts, memsample.HeadroomCheap, &rate, []any{2048.0, 1.0, 2.0, 3.0, 4.0, 5.0, "cheap", 1.5e9}},
-		{"Linux", &mib, nil, "", nil, []any{2048.0}},
-		{"unknown", nil, nil, "", nil, nil},
+		{"macOS", &mib, parts, memsample.HeadroomCheap, &rate, &cheap, []any{2048.0, 1.0, 2.0, 3.0, 4.0, 5.0, "cheap", 1.5e9, 2500.0}},
+		{"Linux", &mib, nil, "", nil, nil, []any{2048.0}},
+		{"unknown", nil, nil, "", nil, nil, nil},
 	} {
 		dir := newDir(t)
 		sec := enter(t, open(t, dir))
@@ -325,7 +326,7 @@ func TestSampleLogHeadroom(t *testing.T) {
 		m := &machine{}
 		read := func(watch.Sample) (watch.Sample, error) {
 			s, err := m.read(watch.Sample{})
-			s.HeadroomMiB, s.HeadroomParts, s.HeadroomMode, s.CompressBytesS = c.mib, c.parts, c.mode, c.rate
+			s.HeadroomMiB, s.HeadroomParts, s.HeadroomMode, s.CompressBytesS, s.HeadroomCheapMiB = c.mib, c.parts, c.mode, c.rate, c.cheap
 			return s, err
 		}
 		if _, _, err := sec.Tick(NowNS(), read, cfg); err != nil {

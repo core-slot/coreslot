@@ -323,3 +323,16 @@ func TestCompressRate(t *testing.T) {
 		t.Error("CompressRate over a counter that went back is known")
 	}
 }
+
+// vmInfoCounters reads each counter from its own word of vm_statistics64 and sums compressions and
+// swap-outs. Mutations: dropping the swap-outs reads 13, not 28; reading any counter from a
+// neighbouring word fails it.
+func TestVMInfoCounters(t *testing.T) {
+	var v [vmInfoWords]uint64
+	for i := range v {
+		v[i] = uint64(i)
+	}
+	if decomp, swapIns, compressed := vmInfoCounters(v); decomp != 12 || swapIns != 14 || compressed != 13+15 {
+		t.Errorf("vmInfoCounters = %d, %d, %d; want 12, 14, 28", decomp, swapIns, compressed)
+	}
+}

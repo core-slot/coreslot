@@ -82,8 +82,7 @@ func Headroom() (mib int64, parts *HeadroomParts, ok bool) {
 		}
 	}
 	p := darwinParts(n[1], n[2], n[3], n[4], n[5], n[0])
-	mib, _ = p.Headroom(0, nil, true)
-	return mib, &p, true
+	return p.Strict(), &p, true
 }
 
 // sysctlNum reads a numeric sysctl of 4 or 8 bytes.

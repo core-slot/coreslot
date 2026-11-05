@@ -248,9 +248,25 @@ func macEngine(t *testing.T, dir string, clk *fakeClock) *Engine {
 	}
 	m := func() (config.Machine, error) {
 		p := macParts
-		return config.Machine{MemMiB: 16384, HeadroomMiB: 1024, HeadroomOK: true, HeadroomParts: &p}, nil
+		return config.Machine{MemMiB: 16384, HeadroomMiB: p.Strict(), HeadroomOK: true, HeadroomParts: &p}, nil
 	}
 	return New(st, filepath.Join(dir, store.ConfigFile), m, clk.clock())
+}
+
+// fixedHost makes every machine sample of the test read cur as the host, and returns the stored
+// sample prev whose host lies one period before it, with compressed fewer bytes compressed and
+// swapped out: a rate of compressed / 2 per second.
+func fixedHost(t *testing.T, compressed uint64) (prev watch.Sample) {
+	t.Helper()
+	const s = int64(time.Second)
+	cur := memsample.HostReading{CompressBytes: 1 << 40, WallNS: 1000 * s, AwakeNS: 900 * s, SwapFreeMiB: 8192, VMVolumeFreeMiB: 100000}
+	saved := readHost
+	t.Cleanup(func() { readHost = saved })
+	readHost = func() (memsample.HostReading, error) { return cur, nil }
+	prev.Host = cur
+	prev.Host.CompressBytes -= compressed
+	prev.Host.WallNS, prev.Host.AwakeNS = cur.WallNS-2*s, cur.AwakeNS-2*s
+	return prev
 }
 
 // storeRate stores a green sample taken age ago, by the engine's clock, whose compression rate is
@@ -321,44 +337,140 @@ func TestHeadroomUntouchedWithoutParts(t *testing.T) {
 }
 
 // A machine sample carries the compression rate since the stored sample, the headroom its room
-// and shortage came from in the mode that rate chooses, and the parts and mode, for the sample log
-// and the next admission. With no stored sample the rate is unknown and, a hold live, the headroom
-// strict. Without parts (Linux) no rate is kept and the headroom is the kernel's; an unknown
-// headroom carries none of it. Mutations: not storing the rate leaves it nil in the second case;
-// sizing the shortage by the strict reading in every mode, or the room by the kernel's headroom,
-// fails the second case when the rate is slow; not copying the headroom into the sample fails the
-// first.
+// came from in the mode that rate chooses, its parts and mode, and the cheap reading its shortage
+// came from, whatever the mode. With no stored sample the rate is unknown and, a hold live, the
+// room's headroom strict. Without parts (Linux) no rate is kept and both are the kernel's; an
+// unknown headroom carries none of it. The counters are fixed, not live. Mutations: not storing
+// the rate fails "slow"; the shortage from the room's headroom fails "fast" and "unknown"; the
+// room from the strict reading in every mode fails "slow"; not copying the headroom into the
+// sample fails every row.
 func TestSampleCarriesTheHeadroom(t *testing.T) {
+	// A's footprint of 1024 leaves 5000 MiB of other anonymous memory: cheap 1024 + 2000 = 3024.
+	const strict, cheap, reserve = 1024, 3024, 4096
+	for _, c := range []struct {
+		name       string
+		compressed uint64 // over the 2 s period; 0 with no stored sample
+		stored     bool
+		rate       float64
+		mib        int64
+		mode       string
+	}{
+		{"slow", 1 << 30, true, 0.5 * memsample.CompressHarmBytesS, cheap, memsample.HeadroomCheap},
+		{"fast", 4 << 30, true, 2 * memsample.CompressHarmBytesS, strict, memsample.HeadroomStrict},
+		{"unknown", 0, false, 0, strict, memsample.HeadroomStrict},
+	} {
+		dir, clk := newStateDir(t, ""), newFakeClock()
+		e := macEngine(t, dir, clk)
+		if err := hold(t, e, need(1024)).UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 1024 }); err != nil {
+			t.Fatal(err)
+		}
+		prev := fixedHost(t, c.compressed)
+		if !c.stored {
+			prev = watch.Sample{}
+		}
+		m, _ := e.machine()
+		s, err := e.sampler(config.Config{ReserveMiB: reserve}, m)(prev)
+		if err != nil || s.HeadroomMiB == nil || s.HeadroomCheapMiB == nil || s.HeadroomParts == nil || *s.HeadroomParts != macParts {
+			t.Fatalf("%s: %+v, %v; want a headroom, its cheap reading and parts", c.name, s, err)
+		}
+		if c.stored != (s.CompressBytesS != nil) || c.stored && *s.CompressBytesS != c.rate {
+			t.Errorf("%s: rate %v; want %v (stored %v)", c.name, s.CompressBytesS, c.rate, c.stored)
+		}
+		if *s.HeadroomMiB != c.mib || s.HeadroomMode != c.mode || s.RoomMiB != c.mib-reserve ||
+			*s.HeadroomCheapMiB != cheap || s.ShortMiB != reserve-cheap {
+			t.Errorf("%s: headroom %d %s, room %d, cheap %d, short %d; want %d %s, %d, %d, %d", c.name, *s.HeadroomMiB,
+				s.HeadroomMode, s.RoomMiB, *s.HeadroomCheapMiB, s.ShortMiB, c.mib, c.mode, c.mib-reserve, cheap, reserve-cheap)
+		}
+	}
 	dir, clk := newStateDir(t, ""), newFakeClock()
 	e := macEngine(t, dir, clk)
-	if err := hold(t, e, need(1024)).UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 1024 }); err != nil {
-		t.Fatal(err)
+	prev := fixedHost(t, 1<<30)
+	cfg := config.Config{ReserveMiB: reserve}
+	if s, err := e.sampler(cfg, config.Machine{MemMiB: 8192, HeadroomMiB: 3000, HeadroomOK: true})(prev); err != nil ||
+		s.CompressBytesS != nil || s.HeadroomMiB == nil || *s.HeadroomMiB != 3000 || s.HeadroomMode != "" ||
+		s.HeadroomParts != nil || s.HeadroomCheapMiB != nil || s.ShortMiB != reserve-3000 {
+		t.Errorf("no parts: %+v, %v; want no rate, the kernel's 3000 for room and shortage, no mode", s, err)
 	}
-	cfg := config.Config{ReserveMiB: 2048}
-	m, _ := e.machine()
-	s, err := e.sampler(cfg, m)(watch.Sample{})
-	if err != nil || s.CompressBytesS != nil || s.HeadroomMiB == nil || *s.HeadroomMiB != 1024 ||
-		s.HeadroomMode != memsample.HeadroomStrict || s.ShortMiB != 1024 || s.RoomMiB != -1024 || *s.HeadroomParts != macParts {
-		t.Errorf("no stored sample: %+v, %v; want no rate, strict 1024, short 1024, room -1024", s, err)
-	}
-	prev, err := memsample.ReadHost()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s, err = e.sampler(cfg, m)(watch.Sample{Host: prev}); err != nil || s.CompressBytesS == nil || s.HeadroomMiB == nil {
-		t.Fatalf("a comparable stored sample: %+v, %v; want a rate and a headroom", s, err)
-	}
-	mib, mode := macParts.Headroom(1024, s.CompressBytesS, true)
-	if *s.HeadroomMiB != mib || s.HeadroomMode != mode || s.ShortMiB != max(2048-mib, 0) || s.RoomMiB != mib-2048 {
-		t.Errorf("rate %v: headroom %d %s, short %d, room %d; want %d %s, %d, %d", *s.CompressBytesS,
-			*s.HeadroomMiB, s.HeadroomMode, s.ShortMiB, s.RoomMiB, mib, mode, max(2048-mib, 0), mib-2048)
-	}
-	if s, err = e.sampler(cfg, config.Machine{MemMiB: 8192, HeadroomMiB: 3000, HeadroomOK: true})(watch.Sample{Host: prev}); err != nil ||
-		s.CompressBytesS != nil || s.HeadroomMiB == nil || *s.HeadroomMiB != 3000 || s.HeadroomMode != "" || s.HeadroomParts != nil {
-		t.Errorf("no parts: %+v, %v; want no rate, the kernel's 3000, no mode", s, err)
-	}
-	if s, err = e.sampler(cfg, config.Machine{MemMiB: 8192, HeadroomParts: m.HeadroomParts})(watch.Sample{Host: prev}); err != nil ||
-		s.HeadroomMiB != nil || s.HeadroomParts != nil || s.CompressBytesS != nil || s.HeadroomMode != "" {
+	p := macParts
+	if s, err := e.sampler(cfg, config.Machine{MemMiB: 8192, HeadroomParts: &p})(prev); err != nil ||
+		s.HeadroomMiB != nil || s.HeadroomParts != nil || s.CompressBytesS != nil || s.HeadroomMode != "" || s.HeadroomCheapMiB != nil {
 		t.Errorf("unknown headroom: %+v, %v; want no headroom, parts, rate or mode", s, err)
+	}
+}
+
+// A stop round's shortage reads the cheap headroom whatever the compression rate, so the same
+// pressure lists the same victims. Of A (the oldest, 2000 MiB in use) and B, C and D (400 MiB each),
+// the other anonymous memory is 4600 - 3200 = 1400 MiB: cheap 100 + 560 = 660, a shortage of
+// 1024 - 660 = 364 that D alone covers; the strict reading, 100, would be 924 short and list D, C
+// and B. Mutation: sizing the shortage by the room's headroom lists three under the fast rate and
+// with no rate.
+func TestStopRoundShortageReadsCheap(t *testing.T) {
+	parts := memsample.HeadroomParts{FreeMiB: 100, FileBackedMiB: 1792, InternalMiB: 4600}
+	for _, c := range []struct {
+		name       string
+		compressed uint64
+		stored     bool
+		mode       string
+	}{
+		{"fast", 4 << 30, true, memsample.HeadroomStrict},
+		{"slow", 1 << 30, true, memsample.HeadroomCheap},
+		{"unknown", 0, false, memsample.HeadroomStrict},
+	} {
+		clk := newFakeClock()
+		dir := newStateDir(t, "")
+		st, err := store.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		big := func() (config.Machine, error) { // admits the four; the sample reads parts
+			return config.Machine{MemMiB: 65536, HeadroomMiB: 65536, HeadroomOK: true}, nil
+		}
+		e := New(st, filepath.Join(dir, store.ConfigFile), big, clk.clock())
+		for i, h := range []struct{ need, footprint int64 }{{2048, 2000}, {512, 400}, {512, 400}, {512, 400}} {
+			if err := hold(t, e, need(h.need)).UpdateHold(func(b *wire.Hold) {
+				b.ArrivalNS, b.FootprintMiB, b.Victim, b.Learned = int64(i+1), h.footprint, true, true
+				b.SampledNS = clk.clock().Realtime()
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		prev := fixedHost(t, c.compressed)
+		if !c.stored {
+			prev = watch.Sample{}
+		}
+		p := parts
+		s, err := e.sampler(config.Config{ReserveMiB: 1024}, config.Machine{MemMiB: 16384, HeadroomMiB: p.Strict(), HeadroomOK: true, HeadroomParts: &p})(prev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop, _ := watch.StopList(s.Jobs, false, s.ShortMiB, nil, 0)
+		var got []int64
+		for _, hold := range stop {
+			for _, j := range s.Jobs {
+				if j.Hold == hold {
+					got = append(got, j.ArrivalNS)
+				}
+			}
+		}
+		if s.HeadroomMode != c.mode || s.ShortMiB != 364 || !slices.Equal(got, []int64{4}) {
+			t.Errorf("%s: mode %s, shortage %d, stopped arrivals %v; want %s, 364, [4]", c.name, s.HeadroomMode, s.ShortMiB, got, c.mode)
+		}
+	}
+}
+
+// Every live hold's footprint is left out of the anonymous memory, a run outside the budget's
+// (need 0) too, in admission's headroom and the shortage's alike: 1024 + 0.4 x (6024 - 1500) =
+// 2833. Mutation: summing only the holds that reserve memory reads 3033.
+func TestFootprintsOfEveryLiveHold(t *testing.T) {
+	p := macParts
+	m := config.Machine{HeadroomMiB: p.Strict(), HeadroomOK: true, HeadroomParts: &p}
+	holds := []liveHold{{name: "a", body: wire.Hold{NeedMiB: 1024, FootprintMiB: 1000}},
+		{name: "b", body: wire.Hold{NeedMiB: 0, FootprintMiB: 500}}}
+	slow := 0.0
+	if mib, mode := headroom(m, holds, &slow); mib != 2833 || mode != memsample.HeadroomCheap {
+		t.Errorf("headroom %d, %s; want 2833, cheap", mib, mode)
+	}
+	if mib := shortHeadroom(m, holds); mib != 2833 {
+		t.Errorf("shortage headroom %d; want 2833", mib)
 	}
 }

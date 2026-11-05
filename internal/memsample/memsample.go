@@ -97,20 +97,29 @@ const idleAnonShare = 0.4
 // at 0.05 to 0.8 GiB/s while no job slowed, and at 1.5 GiB/s and more while jobs did.
 const CompressHarmBytesS = 1 << 30
 
-// Headroom returns the macOS headroom of the parts, in MiB, and its mode. The strict reading is
-// free and purgeable pages and the file-backed pages above the cache the kernel keeps. The cheap
-// one adds idleAnonShare of the anonymous pages (internal less purgeable) less footprintMiB, what
-// coreslot's own live jobs hold, which becomes no room. It is strict when compressBytesS, the
-// compression rate of the last period, is at least CompressHarmBytesS, and when the rate is
-// unknown (nil) while holdsLive; cheap otherwise. It is never below 0. It lives here, not in the
-// macOS file, so that it is tested on every platform.
-func (p HeadroomParts) Headroom(footprintMiB int64, compressBytesS *float64, holdsLive bool) (mib int64, mode string) {
-	strict := max(p.FreeMiB+p.PurgeableMiB+max(p.FileBackedMiB-fileCacheKeptMiB, 0), 0)
-	if compressBytesS == nil && holdsLive || compressBytesS != nil && *compressBytesS >= CompressHarmBytesS {
-		return strict, HeadroomStrict
-	}
+// Strict is the strict macOS reading of the parts, in MiB: free and purgeable pages and the
+// file-backed pages above the cache the kernel keeps, never below 0. These functions live here,
+// not in the macOS file, so that they are tested on every platform.
+func (p HeadroomParts) Strict() int64 {
+	return max(p.FreeMiB+p.PurgeableMiB+max(p.FileBackedMiB-fileCacheKeptMiB, 0), 0)
+}
+
+// Cheap is the cheap macOS reading of the parts, in MiB: the strict one plus idleAnonShare of the
+// anonymous pages (internal less purgeable) less footprintMiB, what coreslot's own live jobs hold,
+// which becomes no room. A stop round's shortage always reads it.
+func (p HeadroomParts) Cheap(footprintMiB int64) int64 {
 	anon := max(p.InternalMiB-p.PurgeableMiB-max(footprintMiB, 0), 0)
-	return strict + int64(idleAnonShare*float64(anon)), HeadroomCheap
+	return p.Strict() + int64(idleAnonShare*float64(anon))
+}
+
+// Headroom returns the macOS headroom admission reads, in MiB, and its mode: Strict when
+// compressBytesS, the compression rate of the last period, is at least CompressHarmBytesS, and
+// when the rate is unknown (nil) while holdsLive; Cheap(footprintMiB) otherwise.
+func (p HeadroomParts) Headroom(footprintMiB int64, compressBytesS *float64, holdsLive bool) (mib int64, mode string) {
+	if compressBytesS == nil && holdsLive || compressBytesS != nil && *compressBytesS >= CompressHarmBytesS {
+		return p.Strict(), HeadroomStrict
+	}
+	return p.Cheap(footprintMiB), HeadroomCheap
 }
 
 // darwinParts are the headroom parts of the page counts, each times pageSize, in MiB. It lives

@@ -276,8 +276,8 @@ Two readings of the machine decide admission, both in MiB:
   when a hold is live and that rate is unknown or more than 6 s old (section 12.4's freshness);
   otherwise it is the cheap one. On the same Mac, compressing idle memory ran at 0.05 to 0.8 GiB/s
   while no job slowed, and at 1.5 GiB/s and more while jobs did. With no hold live the idle rule
-  (section 12.1) decides admission whatever the headroom reads. A headroom that cannot be read is
-  **unknown**.
+  (section 12.1) decides admission whatever the headroom reads. A stop round's shortage reads the
+  cheap headroom in every case (section 23.5). A headroom that cannot be read is **unknown**.
 
 A client reads both at every admission attempt (section 12.1). The **cold start** need, for a label
 nothing is known of, is `max(1, min(4096, memory / 4))` MiB.
@@ -1488,9 +1488,10 @@ the compression rate and the room (section
 12.1; 0 when the headroom is unknown), taken together. On macOS the **compression rate** is the
 growth of the compressions and swap-outs, in bytes, from the stored sample to the new one, per
 second of the host clock; it is unknown when the stored sample is empty or the two are a gap
-(below), and on Linux. The sample stores it as `compress_bytes_s` (section 7.11), and the room and
-the shortage (section 23.5) take the headroom in the mode it chooses (section 5.1). The host
-readings, which a sample takes in well under a millisecond with no subprocess:
+(below), and on Linux. The sample stores it as `compress_bytes_s` (section 7.11), and the room takes
+the headroom in the mode it chooses (section 5.1); the shortage (section 23.5) takes the cheap
+reading whatever the rate. The host readings, which a sample takes in well under a millisecond with
+no subprocess:
 
 | Reading | macOS | Linux |
 |---|---|---|
@@ -1591,10 +1592,14 @@ one at a time.
    such victim first and only then the learning ones, newest first within each. It takes victims
    until their footprints sum to at least the **shortage**, `max(reserve − headroom, 0)` MiB of the
    sample it just took (the room counts reservations not yet used, which free no memory), and at
-   least one. The headroom is the one the sample's room came from, in the mode its compression
-   rate chose (section 5.1); in a red round compression is usually fast, so it is mostly the strict
-   reading. A shortage can exceed one victim's footprint, and the round then lists more than one.
-   With only the oldest hold or holds that are not victims left, the list is empty.
+   least one. On macOS the headroom here is always the cheap reading of section 5.1, never switched
+   to the strict one: under pressure compression is fast, so the strict reading, which admission
+   then uses, is near 0 and would make the shortage nearly the whole reserve, stopping jobs until
+   that much is freed where one stop relieves the machine. Admission and stop rounds therefore read
+   different headrooms while compression is fast: admission waits on the strict one, a round frees
+   only what the cheap one is short. A shortage can still exceed one victim's footprint, and the
+   round then lists more than one. With only the oldest hold or holds that are not victims left,
+   the list is empty.
 
    A red round may pass over its newest victim when that victim is **nearly finished**, without
    counting its footprint, and go on to the next one; a floor round passes over none.
@@ -1652,9 +1657,9 @@ readings, `E`, the level and the bucket, in either mode. When the headroom is kn
 carries `headroom_mib`, the headroom the sample's room came from, and on macOS its parts, in MiB:
 `headroom_free_mib`, `headroom_speculative_mib`, `headroom_purgeable_mib`,
 `headroom_file_backed_mib` and `headroom_internal_mib` (`vm.page_pageable_internal_count`, purgeable
-pages not yet left out), its mode, `headroom_mode` (`"strict"` or `"cheap"`), and, when it is known,
-the compression rate, `compress_bytes_s` (section 5.1; the speculative pages are recorded, not
-added). These keys are optional: a reader treats an absent one as unknown. The file informs and
+pages not yet left out), its mode, `headroom_mode` (`"strict"` or `"cheap"`), the cheap reading the
+shortage came from, `headroom_cheap_mib`, and, when it is known, the compression rate,
+`compress_bytes_s` (section 5.1; the speculative pages are recorded, not added). These keys are optional: a reader treats an absent one as unknown. The file informs and
 nothing reads it but the calibration harness; a writer appends under the rules of the run log,
 rotating it inside the section to `watch.1.jsonl` at 10 MiB, and a reader skips lines it cannot
 parse.

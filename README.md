@@ -95,7 +95,8 @@ the [compatibility policy](docs/compatibility.md) says how.
 counted runs ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)), else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
 (on Linux `MemAvailable`; on macOS free and purgeable pages and the file cache above the 1.75 GiB
 the kernel keeps, plus, while the kernel compresses memory at under 1 GiB/s, 0.4 of the other
-applications' memory, which it can compress to make room: values measured on one 16 GB Mac,
+applications' memory, which it can compress to make room; with a job running, a compression rate
+that is unknown or older than 6 s counts as fast and adds nothing: values measured on one 16 GB Mac,
 [`PROTOCOL.md` section 5.1](PROTOCOL.md#51-the-machines-memory)),
 less the reserve, less what each running command still has to grow into (its need less what it uses
 now). A command starts when its need fits the room. A need larger than the machine's memory less the

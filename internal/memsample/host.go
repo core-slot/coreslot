@@ -79,6 +79,23 @@ func Gap(prev, cur HostReading) bool {
 		prev.HasPSI && cur.HasPSI && cur.PSISomeUS < prev.PSISomeUS
 }
 
+// The places, in 64-bit words, of the counters read from host_statistics64's vm_statistics64
+// (HOST_VM_INFO64_REV1_COUNT, 19 words long), and that length.
+const (
+	vmDecompAt   = 12 // decompressions
+	vmCompAt     = 13 // compressions
+	vmSwapInsAt  = 14 // swapins
+	vmSwapOutsAt = 15 // swapouts
+	vmInfoWords  = 19
+)
+
+// vmInfoCounters are the counters of a vm_statistics64 read as 64-bit words: the pages
+// decompressed, swapped in, and compressed or swapped out, the last two summed. It lives here,
+// not in the macOS file, so that it is tested on every platform.
+func vmInfoCounters(v [vmInfoWords]uint64) (decomp, swapIns, compressed uint64) {
+	return v[vmDecompAt], v[vmSwapInsAt], v[vmCompAt] + v[vmSwapOutsAt]
+}
+
 // CompressRate is the rate, in bytes/s, at which the kernel compressed and swapped out memory
 // from prev to cur; ok is false when prev is no reading or the two cannot be compared (Gap).
 func CompressRate(prev, cur HostReading) (bytesS float64, ok bool) {
