@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -78,6 +79,13 @@ class AnalyseTest(unittest.TestCase):
         self.assertIsNone(analyse.first_red(seq, at(red_samples=4)))
         self.assertEqual(analyse.first_red(seq, at(red_points=20, red_samples=2))["band"], "slow")
         self.assertIsNone(analyse.first_red(self.control.samples, at(red_points=5, red_samples=2)))
+
+    def test_chosen_matches_the_detector(self):
+        """The replay's red_samples and clear_samples are the detector's own defaults."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "internal", "watch", "watch.go")) as f:
+            go = f.read()
+        self.assertEqual(int(re.search(r"DefaultRedSamples = (\d+)", go).group(1)), analyse.CHOSEN["red_samples"])
+        self.assertEqual(int(re.search(r"clearSamples\s+= (\d+)", go).group(1)), analyse.CHOSEN["clear_samples"])
 
     def test_yellow_needs_two_of_three_and_clears_after_fifteen(self):
         hot = dict(sample(0), E=50.0, paging=5000)

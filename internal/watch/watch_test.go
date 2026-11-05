@@ -118,7 +118,7 @@ func TestRedLeakyBucketSurvivesFlicker(t *testing.T) {
 }
 
 // The bucket saturates at red_samples: after 15 hot samples the first calm one leaves red, so a
-// calm machine gets no second round. Mutation: an uncapped bucket stays red for 20 calm samples.
+// calm machine gets no second round. Mutation: an uncapped bucket stays red for 10 calm samples.
 func TestRedEndsOnTheFirstCalmSample(t *testing.T) {
 	c := Defaults()
 	f := newFeed(c)
@@ -280,7 +280,7 @@ func TestFloorCountsMemAvailable(t *testing.T) {
 // A sleep (the sleep-inclusive clock moved, the awake one 2 s), a long period or a reboot (the clock
 // or a counter went back) between two samples is a gap: unknown, whatever the deltas say. The red
 // bucket and the yellow latch keep only fresh evidence: a reading more than 20 s after the last real
-// one, or before it, empties both, so one hot sample at a bucket of 4.5 is green; within 20 s it is
+// one, or before it, empties both, so one hot sample at a bucket of 9.5 is green; within 20 s it is
 // red, across a short sleep or a reboot alike. Mutations: never emptying the bucket turns the stale
 // rows red; emptying it at 20 s turns that row green; dropping the clock-back term turns that row
 // red; emptying it on any sleep turns the 15 s sleep green.
