@@ -124,7 +124,7 @@ kernel is actually paging:
 | Level | When | Effect |
 |---|---|---|
 | yellow | the commands lose noticeably more time to memory than their normal | nothing new starts; starts resume one at a time after it clears |
-| red | they lose a large share of it for about 10 s | a stop round: the newest commands are killed until their footprints cover how far free memory is under the reserve |
+| red | they lose a large share of it for tens of seconds | a stop round: the newest commands are killed until their footprints cover how far free memory is under the reserve |
 | floor | swap is nearly out of room and still growing | the same stop round, at once, and it may take a command that is still learning |
 
 A red round may spare its newest victim when it is nearly finished and stop the next newest instead,

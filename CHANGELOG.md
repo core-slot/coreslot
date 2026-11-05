@@ -8,6 +8,14 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- The watchdog's thresholds are back to those before v0.5.0: `[watch] red_samples` defaults to 10
+  (red needs about 20 s of danger held) and yellow clears after 15 samples below its threshold.
+  v0.5.0's faster values (5 and 5) rested on a simulation alone; they are withdrawn until a
+  measurement supports them. The yellow latch still clears after a pause of more than 20 s, and
+  `calm_s` stays at 10 s.
+
 ## v0.5.0 (2026-11-04)
 
 ### Changed

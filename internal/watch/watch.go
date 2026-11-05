@@ -16,10 +16,9 @@ const (
 	DefaultYellowPoints = 20
 	// Chosen on the records: none of 947 full-speed or slowing samples reaches it.
 	DefaultRedPoints = 40
-	// Not calibrated: a replay of three acceptance runs' samples found no false red at 5, and a
-	// simulator calibrated on the records chose it over 10 (calibration/README.md); about 10 s of
-	// danger held, and the records allow 3 to 15.
-	DefaultRedSamples = 5
+	// Not calibrated: red needs danger held for tens of seconds (about 20 s); the records allow 3 to 15.
+	// v0.5.0 shipped 5 on a simulation alone; it is withdrawn until a measurement supports it.
+	DefaultRedSamples = 10
 	// Chosen: the records give the same levels at 1000, 3000 and 10 000.
 	DefaultGatePagesPerS = 1000
 	// Not calibrated: a round value; no record has a floor sample.
@@ -36,7 +35,7 @@ const (
 const minWorkShare = 0.10
 
 const (
-	clearSamples   = 5                       // samples in a row below yellow_points that clear yellow
+	clearSamples   = 15                      // samples in a row below yellow_points that clear yellow
 	floorGrowthMiB = 256                     // swap growth over the floor window that makes floor an edge
 	windowNS       = int64(20 * time.Second) // the floor's growth window
 )

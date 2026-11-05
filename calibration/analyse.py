@@ -35,7 +35,7 @@ PRE_CLIFF = ("full", "slowing", "slow", "control")
 MAX_PERIOD_NS = 6_000_000_000
 
 # clear_samples: the samples in a row below yellow_points that clear yellow, fixed in the detector.
-CHOSEN = {"yellow_points": 20, "red_points": 40, "red_samples": 5, "gate_pages_s": 1000, "clear_samples": 5}
+CHOSEN = {"yellow_points": 20, "red_points": 40, "red_samples": 10, "gate_pages_s": 1000, "clear_samples": 15}
 CANDIDATES = {
     "yellow_points": (5, 10, 15, 20, 30),
     "red_points": (10, 15, 20, 30, 40, 50),

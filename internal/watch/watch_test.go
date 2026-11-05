@@ -135,13 +135,13 @@ func TestRedEndsOnTheFirstCalmSample(t *testing.T) {
 	}
 }
 
-// Red needs red_samples hot samples in a row from an empty bucket: 5 by default, so the fourth is
-// yellow and the fifth red. Mutation: a default of 10 leaves the fifth yellow.
-func TestRedAfterFiveHotSamples(t *testing.T) {
+// Red needs red_samples hot samples in a row from an empty bucket: 10 by default, so the ninth is
+// yellow and the tenth red. Mutation: a default of 5 turns the ninth red.
+func TestRedAfterTenHotSamples(t *testing.T) {
 	for _, c := range []struct {
 		hot  int
 		want Level
-	}{{4, Yellow}, {5, Red}} {
+	}{{9, Yellow}, {10, Red}} {
 		cfg := Defaults()
 		f := newFeed(cfg)
 		var l Level
@@ -154,19 +154,19 @@ func TestRedAfterFiveHotSamples(t *testing.T) {
 	}
 }
 
-// Yellow clears after 5 samples in a row below yellow_points. After two hot samples the first calm
+// Yellow clears after 15 samples in a row below yellow_points. After two hot samples the first calm
 // one still sees two hot ones among the last three and keeps the latch, so the count starts at the
 // second; a sample at or over yellow_points with the gate shut is not hot but restarts it.
-// Mutation: clearing after 15 keeps the green rows yellow.
-func TestYellowClearsAfterFiveBelow(t *testing.T) {
+// Mutation: clearing after 5 turns the yellow rows green.
+func TestYellowClearsAfterFifteenBelow(t *testing.T) {
 	calm, warm := job(0.04, 0.04), job(0.50, 0.25) // E 0 and E 25
 	for _, c := range []struct {
 		name string
 		warm bool // the fourth calm sample is warm, with the gate shut
 		calm int  // calm samples after the hot ones, the warm one included
 		want Level
-	}{{"4 below", false, 5, Yellow}, {"5 below", false, 6, Green},
-		{"4 below after a warm one", true, 8, Yellow}, {"5 below after a warm one", true, 9, Green}} {
+	}{{"14 below", false, 15, Yellow}, {"15 below", false, 16, Green},
+		{"14 below after a warm one", true, 18, Yellow}, {"15 below after a warm one", true, 19, Green}} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := Defaults()
 			f := newFeed(cfg)

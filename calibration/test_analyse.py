@@ -79,12 +79,12 @@ class AnalyseTest(unittest.TestCase):
         self.assertEqual(analyse.first_red(seq, at(red_points=20, red_samples=2))["band"], "slow")
         self.assertIsNone(analyse.first_red(self.control.samples, at(red_points=5, red_samples=2)))
 
-    def test_yellow_needs_two_of_three_and_clears_after_five(self):
+    def test_yellow_needs_two_of_three_and_clears_after_fifteen(self):
         hot = dict(sample(0), E=50.0, paging=5000)
         calm = dict(sample(0), E=0.0)
         self.assertEqual(set(analyse.replay([calm] * 3 + [hot] + [calm] * 30, at())), {"green"})  # one is not two
         levels = analyse.replay([hot, hot] + [calm] * 16, at())
-        self.assertEqual(levels.index("green", 2), 2 + 5)  # the first calm one still sees two hot ones
+        self.assertEqual(levels.index("green", 2), 2 + 15)  # the first calm one still sees two hot ones
         gap = dict(calm, level="unknown")
         self.assertEqual(analyse.replay([hot, gap, hot], at())[1:], ["unknown", "yellow"])
 

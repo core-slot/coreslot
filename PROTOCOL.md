@@ -296,7 +296,7 @@ mode = "enforce"      # or "observe": everything but the stop (section 23.6)
 sample_log = false    # true: log every machine sample (section 23.6)
 yellow_points = 20    # the thresholds of section 23.4
 red_points = 40
-red_samples = 5
+red_samples = 10
 gate_pages_s = 1000
 floor = "2G"          # a size
 calm_s = 10           # the waits of sections 12.4 and 23.5, in seconds
@@ -1526,7 +1526,7 @@ below that applies.
   (`wall_ns > 0`) is still tested for it, and is floor when it holds; an empty sample never is.
   An optional reading the platform lacks (the memory stall, page wait) is not unknown.
 - **Yellow:** `E ≥ yellow_points` with the gate open in 2 of the last 3 samples. It clears when `E`
-  stays below `yellow_points` for 5 samples in a row, and when the red bucket's freshness rule
+  stays below `yellow_points` for 15 samples in a row, and when the red bucket's freshness rule
   below empties the bucket, so that yellow does not outlast a pause.
 - **Red:** a leaky bucket: +1 for a sample with `E ≥ red_points` and the gate open,
   −0.5 for any other comparable sample, never below 0, never above `red_samples`. It keeps only
