@@ -41,11 +41,13 @@ func (e *Error) Unwrap() error { return e.Err }
 
 // Machine is what admission reads of the machine: its physical memory and the memory the kernel
 // can hand out without paging anything anonymous out, both in MiB. HeadroomOK is false when the
-// headroom cannot be read.
+// headroom cannot be read. HeadroomParts are the macOS page counts the headroom came from, for the
+// sample log; nil elsewhere and under the test hook.
 type Machine struct {
-	MemMiB      int64
-	HeadroomMiB int64
-	HeadroomOK  bool
+	MemMiB        int64
+	HeadroomMiB   int64
+	HeadroomOK    bool
+	HeadroomParts *memsample.HeadroomParts
 }
 
 // ReadMachine reads the machine's memory. The test hook's headroom replaces the kernel's.
@@ -58,7 +60,7 @@ func ReadMachine() (Machine, error) {
 	if mib, set := testhooks.Headroom(); set {
 		m.HeadroomMiB, m.HeadroomOK = mib, true
 	} else {
-		m.HeadroomMiB, m.HeadroomOK = memsample.Headroom()
+		m.HeadroomMiB, m.HeadroomParts, m.HeadroomOK = memsample.Headroom()
 	}
 	return m, nil
 }

@@ -232,3 +232,21 @@ func TestStopRoundFreesTheShortageNotTheReservations(t *testing.T) {
 		}
 	}
 }
+
+// A machine sample carries the headroom its room came from, and its parts, for the sample log; an
+// unknown headroom carries neither. Mutation: not copying them into the sample leaves both nil.
+func TestSampleCarriesTheHeadroom(t *testing.T) {
+	dir, clk := newStateDir(t, ""), newFakeClock()
+	e := newEngine(t, dir, clk)
+	parts := &memsample.HeadroomParts{FreeMiB: 1, SpeculativeMiB: 2, PurgeableMiB: 3, FileBackedMiB: 4}
+	s, err := e.sampler(config.Config{}, config.Machine{MemMiB: 8192, HeadroomMiB: 3000, HeadroomOK: true, HeadroomParts: parts})()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.HeadroomMiB == nil || *s.HeadroomMiB != 3000 || s.HeadroomParts != parts {
+		t.Errorf("sample headroom %v, parts %v; want 3000, %v", s.HeadroomMiB, s.HeadroomParts, parts)
+	}
+	if s, err = e.sampler(config.Config{}, config.Machine{MemMiB: 8192, HeadroomParts: parts})(); err != nil || s.HeadroomMiB != nil || s.HeadroomParts != nil {
+		t.Errorf("unknown headroom: sample headroom %v, parts %v, %v; want nil, nil", s.HeadroomMiB, s.HeadroomParts, err)
+	}
+}

@@ -67,6 +67,29 @@ func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, t Tre
 	return sum, times, len(times) > 0
 }
 
+// HeadroomParts are the page counts a macOS headroom reading came from, in MiB: free, speculative,
+// purgeable and file-backed (external) pageable pages. Linux reads none.
+type HeadroomParts struct {
+	FreeMiB, SpeculativeMiB, PurgeableMiB, FileBackedMiB int64
+}
+
+// fileCacheKeptMiB is the file cache the macOS kernel keeps under memory pressure: below about
+// this much it compresses applications' memory instead of releasing file-backed pages, so that
+// much of the file-backed count is never handed out without paging. Measured on one 16 GB Mac
+// (about 1.6 to 1.7 GiB); it may scale with physical memory, which is not yet measured.
+const fileCacheKeptMiB = 1792
+
+// darwinHeadroom returns the macOS headroom of the page counts, in MiB, and its parts: free,
+// purgeable and file-backed pages times pageSize, less the file cache the kernel keeps, never
+// below 0. Speculative pages are read for the parts only: they are already file-backed. It lives
+// here, not in the macOS file, so that it is tested on every platform.
+func darwinHeadroom(free, speculative, purgeable, fileBacked, pageSize uint64) (int64, HeadroomParts) {
+	mib := func(pages uint64) int64 { return int64(pages * pageSize >> 20) }
+	parts := HeadroomParts{FreeMiB: mib(free), SpeculativeMiB: mib(speculative),
+		PurgeableMiB: mib(purgeable), FileBackedMiB: mib(fileBacked)}
+	return max(mib(free+purgeable+fileBacked)-fileCacheKeptMiB, 0), parts
+}
+
 // meminfo returns the value of key, in KiB, from the text of /proc/meminfo. It lives here, not
 // in the Linux file, so that it is tested on every platform.
 func meminfo(text, key string) (kib int64, ok bool) {

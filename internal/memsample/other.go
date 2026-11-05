@@ -16,7 +16,7 @@ func readHost() (HostReading, error) {
 func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) { return 0, nil, false }
 
 // Headroom is implemented on macOS and Linux only; elsewhere it reads nothing.
-func Headroom() (mib int64, ok bool) { return 0, false }
+func Headroom() (mib int64, parts *HeadroomParts, ok bool) { return 0, nil, false }
 
 // Listing is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Listing() (map[int]Proc, bool) { return nil, false }

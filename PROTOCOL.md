@@ -251,7 +251,12 @@ Two readings of the machine decide admission, both in MiB:
   `/proc/meminfo` on Linux, never a cgroup's limit. On another system, the system's physical
   memory; a client that cannot obtain it treats that as a state error.
 - **`headroom`**, the memory the kernel can hand out now without paging anonymous memory out. On
-  macOS, the free, speculative, purgeable and file-backed pageable pages times the page size. On
+  macOS, the free, purgeable and file-backed pageable pages (`vm.page_free_count`,
+  `vm.page_purgeable_count` and `vm.page_pageable_external_count`) times the page size, less
+  1 792 MiB, never below 0: below about that much file cache the kernel compresses applications'
+  memory instead of releasing cache. Speculative pages are not added, since the file-backed count
+  holds them already. The 1 792 MiB was measured on one 16 GB Mac and may scale with the machine's
+  memory; other sizes are not yet measured. On
   Linux, `MemAvailable` of `/proc/meminfo`, and inside a memory-limited cgroup v2 at most the room
   under the tightest limit, the least `memory.max` less `memory.current` of the client's cgroup and
   its ancestors. A headroom that cannot be read is **unknown**.
@@ -1614,7 +1619,11 @@ the mode at the run's own later tick.
 With `mode = "observe"` every step runs, the stop list included, except the kill: a run whose hold
 is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
 the ticker that takes a machine sample appends one JSON line to `$S/log/watch.jsonl` with the
-readings, `E`, the level and the bucket, in either mode. The file informs and nothing reads it but
+readings, `E`, the level and the bucket, in either mode. When the headroom is known the line also
+carries `headroom_mib`, the headroom the sample's room came from, and on macOS its parts, in MiB:
+`headroom_free_mib`, `headroom_speculative_mib`, `headroom_purgeable_mib` and
+`headroom_file_backed_mib` (section 5.1; the speculative pages are recorded, not added). These keys
+are optional: a reader treats an absent one as unknown. The file informs and nothing reads it but
 the calibration harness; a writer appends under the rules of the run log, rotating it inside the
 section to `watch.1.jsonl` at 10 MiB, and a reader skips lines it cannot parse.
 

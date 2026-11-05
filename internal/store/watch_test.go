@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
@@ -293,5 +294,51 @@ func TestSampleLog(t *testing.T) {
 	}
 	if stops != 1 {
 		t.Errorf("%d lines name a stop round, want 1", stops)
+	}
+}
+
+// The sample log records the headroom the room came from and its macOS parts, each under its own
+// key, and none of them when the headroom is unknown or, for the parts, not read (Linux).
+// Mutations: dropping the headroom keys, or writing one part under another's key, fails the first
+// case; writing them for an unknown headroom fails the second.
+func TestSampleLogHeadroom(t *testing.T) {
+	keys := []string{"headroom_mib", "headroom_free_mib", "headroom_speculative_mib",
+		"headroom_purgeable_mib", "headroom_file_backed_mib"}
+	mib := int64(2048)
+	parts := &memsample.HeadroomParts{FreeMiB: 1, SpeculativeMiB: 2, PurgeableMiB: 3, FileBackedMiB: 4}
+	for _, c := range []struct {
+		name  string
+		mib   *int64
+		parts *memsample.HeadroomParts
+		want  []float64 // by key; absent when nil
+	}{
+		{"macOS", &mib, parts, []float64{2048, 1, 2, 3, 4}},
+		{"Linux", &mib, nil, []float64{2048}},
+		{"unknown", nil, nil, nil},
+	} {
+		dir := newDir(t)
+		sec := enter(t, open(t, dir))
+		cfg := watch.Defaults()
+		cfg.SampleLog = true
+		m := &machine{}
+		read := func() (watch.Sample, error) {
+			s, err := m.read()
+			s.HeadroomMiB, s.HeadroomParts = c.mib, c.parts
+			return s, err
+		}
+		if _, _, err := sec.Tick(NowNS(), read, cfg); err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(filepath.Join(dir, LogDir, WatchLog))
+		var l map[string]any
+		if err != nil || json.Unmarshal(body, &l) != nil {
+			t.Fatalf("%s: watch.jsonl %q, %v", c.name, body, err)
+		}
+		for i, k := range keys {
+			v, ok := l[k]
+			if i < len(c.want) && v != c.want[i] || i >= len(c.want) && ok {
+				t.Errorf("%s: %s = %v (present %v); want %v", c.name, k, v, ok, c.want)
+			}
+		}
 	}
 }

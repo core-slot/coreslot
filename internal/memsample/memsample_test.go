@@ -210,3 +210,42 @@ func TestReadingsReplaceNamedFields(t *testing.T) {
 		t.Errorf("overlay = %+v, want %+v", r, want)
 	}
 }
+
+// The macOS headroom is free, purgeable and file-backed pages less the file cache the kernel
+// keeps, speculative pages not added (they are file-backed already), and never below 0; the parts
+// carry every count. Mutations: adding speculative back reads 2048 + 1792 - 1792 + 512 = 2560
+// here, not 2048; dropping the subtraction reads 3840; dropping the clamp reads -792 for the small
+// counts.
+func TestDarwinHeadroom(t *testing.T) {
+	const page = 16384 // 64 pages a MiB
+	mib, parts := darwinHeadroom(1024*64, 512*64, 256*64, 2560*64, page)
+	want := HeadroomParts{FreeMiB: 1024, SpeculativeMiB: 512, PurgeableMiB: 256, FileBackedMiB: 2560}
+	if mib != 2048 || parts != want {
+		t.Errorf("darwinHeadroom = %d, %+v; want 2048, %+v", mib, parts, want)
+	}
+	if mib, _ := darwinHeadroom(500*64, 100*64, 0, 500*64, page); mib != 0 {
+		t.Errorf("darwinHeadroom under the kept file cache = %d; want 0", mib)
+	}
+}
+
+// The new reading never exceeds the one before it, free, speculative, purgeable and file-backed
+// pages summed, for the same counters. Mutation: adding the kept file cache instead of subtracting
+// it reads more than the old sum.
+func TestDarwinHeadroomNeverAboveOld(t *testing.T) {
+	counts := []uint64{0, 1, 63, 64, 1000, 100_000, 300_000, 1_000_000}
+	for _, page := range []uint64{4096, 16384} {
+		for _, free := range counts {
+			for _, spec := range counts {
+				for _, purg := range counts {
+					for _, ext := range counts {
+						old := int64((free + spec + purg + ext) * page >> 20)
+						if mib, _ := darwinHeadroom(free, spec, purg, ext, page); mib > old || mib < 0 {
+							t.Fatalf("darwinHeadroom(%d, %d, %d, %d, %d) = %d; want 0..%d, the old reading",
+								free, spec, purg, ext, page, mib, old)
+						}
+					}
+				}
+			}
+		}
+	}
+}

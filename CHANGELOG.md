@@ -8,6 +8,23 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- Admission and stop rounds read less free memory on macOS, so a run may wait where it started
+  before, and never starts where it waited before. The headroom no longer adds speculative pages,
+  which the file-backed count already holds, and leaves out the 1 792 MiB of file cache the kernel
+  keeps: below about that much it compresses applications' memory instead of releasing cache, so
+  the old reading never fell under about 1.75 GiB even while the machine paged, and a small job
+  could start into a machine already paging. The headroom is never below 0. The 1 792 MiB was
+  measured on one 16 GB Mac; other sizes are not yet measured. Linux is unchanged.
+
+### Added
+
+- With `[watch] sample_log = true`, each line of `log/watch.jsonl` records the headroom the
+  sample's room came from (`headroom_mib`) and, on macOS, the page counts it was read from
+  (`headroom_free_mib`, `headroom_speculative_mib`, `headroom_purgeable_mib`,
+  `headroom_file_backed_mib`).
+
 ## v0.5.1 (2026-11-05)
 
 ### Changed

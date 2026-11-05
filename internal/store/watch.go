@@ -116,6 +116,13 @@ func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) 
 	if len(stop) > 0 {
 		l["stop"] = stop
 	}
+	if cur.HeadroomMiB != nil {
+		l["headroom_mib"] = *cur.HeadroomMiB
+	}
+	if p := cur.HeadroomParts; p != nil {
+		l["headroom_free_mib"], l["headroom_speculative_mib"], l["headroom_purgeable_mib"], l["headroom_file_backed_mib"] =
+			p.FreeMiB, p.SpeculativeMiB, p.PurgeableMiB, p.FileBackedMiB
+	}
 	line, err := json.Marshal(l)
 	if err != nil {
 		return err

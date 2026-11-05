@@ -148,8 +148,9 @@ func TestHeadroom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mib, ok := Headroom(); !ok || mib <= 0 || mib > total {
-		t.Errorf("Headroom = %d, %v; want 1..%d, true", mib, ok, total)
+	// macOS may read 0: the file cache the kernel keeps can exceed what is free.
+	if mib, _, ok := Headroom(); !ok || mib < 0 || mib > total {
+		t.Errorf("Headroom = %d, %v; want 0..%d, true", mib, ok, total)
 	}
 }
 

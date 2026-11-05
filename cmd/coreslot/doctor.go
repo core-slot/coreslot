@@ -175,7 +175,7 @@ func doctorReadings(w engine.WatchInfo, line, problem func(format string, args .
 	host, err := memsample.ReadHost()
 	check("of paging counters, swap and clocks", err)
 	var headroomErr error
-	if _, ok := memsample.Headroom(); !ok {
+	if _, _, ok := memsample.Headroom(); !ok {
 		headroomErr = errors.New("cannot be read")
 	}
 	check("of free memory", headroomErr)

@@ -71,22 +71,17 @@ func rusage(pid, flavor int) (ri [64]uint64, ok bool) {
 }
 
 // Headroom returns the memory the kernel can hand out without paging anything anonymous out, in
-// MiB: free, speculative, purgeable and file-backed pageable pages, times the page size.
-func Headroom() (mib int64, ok bool) {
-	size, ok := sysctlNum("vm.pagesize")
-	if !ok {
-		return 0, false
-	}
-	var pages uint64
-	for _, name := range []string{"vm.page_free_count", "vm.page_speculative_count",
+// MiB, and the page counts it came from (darwinHeadroom).
+func Headroom() (mib int64, parts *HeadroomParts, ok bool) {
+	var n [5]uint64
+	for i, name := range []string{"vm.pagesize", "vm.page_free_count", "vm.page_speculative_count",
 		"vm.page_purgeable_count", "vm.page_pageable_external_count"} {
-		n, ok := sysctlNum(name)
-		if !ok {
-			return 0, false
+		if n[i], ok = sysctlNum(name); !ok {
+			return 0, nil, false
 		}
-		pages += n
 	}
-	return int64(pages * size >> 20), true
+	mib, p := darwinHeadroom(n[1], n[2], n[3], n[4], n[0])
+	return mib, &p, true
 }
 
 // sysctlNum reads a numeric sysctl of 4 or 8 bytes.
