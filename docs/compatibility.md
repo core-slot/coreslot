@@ -38,8 +38,10 @@ At full length means without `-short`:
 go test -tags coreslot_testhooks -race ./conformance/
 ```
 
-CI runs the suite on every change, on Linux and macOS, but shortened with `-short`. What is still
-missing is a full-length pass on each system.
+CI runs the suite on every change, on Linux and macOS, but shortened with `-short`. The full-length
+pass was last made on 2026-11-06 at `7aeef03` (v0.5.2), on an Apple M4 MacBook Air: macOS arm64
+with Go 1.27.3 in 466 s, and Linux arm64 with Go 1.26.10 in 461 s, in a `golang:1.26` container
+under Docker Desktop (kernel 7.0.14-linuxkit), which is not a Linux host of its own.
 
 Until `v1.0.0` a minor release (`0.x`) may change the CLI surface within the deprecation window,
 and may introduce a new format number. `v1.0.0` freezes the format then current and the CLI surface
