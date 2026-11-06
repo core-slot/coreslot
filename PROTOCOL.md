@@ -1141,7 +1141,7 @@ and its reading is skipped. `mem_peak_kib` is the largest sum, or the rusage's `
 reading succeeded or that is larger.
 
 The key `container` is OPTIONAL too: a writer writes it only when true, and a reader treats an
-absent key as false. It says that the run's memory peak is its client's alone, not its containers'.
+absent key as false. It says that the run's memory peak leaves out its containers.
 It changes no counting: such a run counts as any other.
 
 The line of a stopped attempt carries the attempt's own peak and `stops`; the line of the attempt that

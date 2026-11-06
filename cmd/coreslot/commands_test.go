@@ -658,7 +658,7 @@ func TestStatusShowsContainer(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
 	}
-	const said = "container: memory inside the VM is not measured"
+	const said = "container: its containers' memory is not measured"
 	if !strings.Contains(r.stdout, "mem 1 MiB  "+said+"  held") || strings.Count(r.stdout, said) != 1 {
 		t.Errorf("status says %q not once, after a's need:\n%s", said, r.stdout)
 	}

@@ -17,8 +17,8 @@ All notable changes to this project are recorded here. The format follows
   reserve or the level gate. A run whose process tree holds such a command or, on macOS, talks to a
   Docker or Podman socket is marked once it is seen; it is admitted as before. Neither is ever
   stopped by a stop round. Holds and run-log lines gain an optional `container` key, `status`
-  says a hold's container memory is not measured, and `report` names the labels whose peak and need
-  are the client's alone. Learning does not change.
+  says a hold's containers' memory is not measured, and `report` names the labels whose peak and need
+  leave out their containers. Learning does not change.
 
 ## v0.5.1 (2026-11-05)
 

@@ -142,7 +142,7 @@ func TestReportMarksContainerLabel(t *testing.T) {
 	}
 	rep := buildReport(recs, 0, reportNow, 7)
 	out := rep.human()
-	if want := "container labels: a (peak and need are the client's)\n"; !strings.Contains(out, want) {
+	if want := "container labels: a (peak and need leave out their containers)\n"; !strings.Contains(out, want) {
 		t.Errorf("report lacks %q:\n%s", want, out)
 	}
 	plain := slices.Clone(recs)

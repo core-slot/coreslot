@@ -80,8 +80,8 @@ type reportLabel struct {
 	NeedMiB  *int64  `json:"need_mib"`
 	RanS     float64 `json:"ran_s"`
 	WaitedS  float64 `json:"waited_s"`
-	// Container says an attempt in the window was container work: the peak and the need are its
-	// client's alone.
+	// Container says an attempt in the window was container work: the peak and the need leave out
+	// its containers.
 	Container bool `json:"container,omitempty"`
 }
 
@@ -292,7 +292,7 @@ func (rep report) human() string {
 			fmt.Fprintf(&b, "  and %d more (--json lists all)\n", n)
 		}
 		if len(containers) > 0 {
-			fmt.Fprintf(&b, "  container labels: %s (peak and need are the client's)\n", strings.Join(containers, ", "))
+			fmt.Fprintf(&b, "  container labels: %s (peak and need leave out their containers)\n", strings.Join(containers, ", "))
 		}
 	}
 	for i, l := range notMeasuredLines {

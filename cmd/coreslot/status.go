@@ -270,7 +270,7 @@ func (v statusView) human() string {
 	for _, h := range r.Holds {
 		need := holdNeed(h)
 		if h.Container {
-			need += "  container: memory inside the VM is not measured"
+			need += "  container: its containers' memory is not measured"
 		}
 		line := fmt.Sprintf("  %s  pid %d  %s  held %s  footprint %s", labelText(h.Label), h.PID, need,
 			duration(time.Duration(max(v.nowNS-h.StartNS, 0))), spec.FormatMiB(h.FootprintMiB))

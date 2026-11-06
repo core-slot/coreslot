@@ -285,7 +285,7 @@ longest wait, and how many waited over 2 and over 10 minutes, where an agent's t
 out (Claude Code's Bash tool waits 2 minutes by default, 10 at most); the attempts stopped for
 memory and the run time lost to those stops, and the runs that gave up; and the heaviest labels by
 memory peak, with their need, run time and wait; a label with container work is marked, since its
-peak and need are the client's alone. `--json` prints the same as one document (schema 1). Lines that do not decode, lie in the future or hold an impossible value are skipped
+peak and need leave out its containers. `--json` prints the same as one document (schema 1). Lines that do not decode, lie in the future or hold an impossible value are skipped
 and counted.
 
 What the runs would have done without coreslot is not measured, so the report claims no time
