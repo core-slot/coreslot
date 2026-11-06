@@ -121,9 +121,10 @@ Every conforming client MUST preserve these invariants:
   consecutive stopped tickets at the front of the queue stop blocking it within ≈ 11 s (10 s
   without an observed change plus one poll). A stopped ticket further back stops blocking a waiter
   within 11 s of becoming the nearest ticket that waiter has not passed over. While a hold is live,
-  container requests (section 12.1) may take the room a head waits for and so delay it, for as long
-  as they keep coming and within its own timeout; the head keeps its place. With no hold live they
-  leave the head its start.
+  container requests (section 12.1) may take the room a head waits for, or the start that spacing
+  allows after a yellow clear (section 12.4), and so delay it for as long as they keep coming or
+  run; only a timeout of its own, if it has one, bounds that. The head keeps its place. With no hold
+  live they leave the head its start.
 - **I6 one budget:** every client of format 2 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
@@ -347,13 +348,15 @@ Each key of `[needs]` is a label, matched exactly. An entry's `mem` is a size ab
 `no_restart` a boolean; a known key with another value makes the entry unreadable. A key the
 reader does not know is ignored.
 
+A **container command** is one whose argv[0] has the basename `docker`, `docker-compose` or
+`podman`, whatever the program is; `sh -c 'docker run ...'` is not one.
+
 > **Implementation note.** The Go CLI takes a run's need from `--mem`, else the label's `mem`, else
 > the 90th percentile of the `mem_peak_kib` of the label's last 20 counted runs (section 20) rounded
 > up to a whole MiB, else, for a container command, 1 MiB, else the cold start (section 5.1). A
-> **container command** is one whose argv[0] has the basename `docker`, `docker-compose` or
-> `podman`; `sh -c 'docker run ...'` is not one. A run's `victim` (section 7.4) is true only when it
-> was started with `--restart=yes` and its label has no `no_restart = true`, which wins over the
-> flag; `--restart=no` makes it false. A container command counts as `no_restart` however its need
+> run's `victim` (section 7.4) is true only when it was started with `--restart=yes` and its label
+> has no `no_restart = true`, which wins over the flag; `--restart=no` makes it false. A container
+> command counts as `no_restart` however its need
 > was settled, a pin included: a stop would kill the client and leave its container running. The CLI
 > requires `--restart` of every run that could be a victim (its command gets a process group of its
 > own and it is not `no_restart`), and accepts it elsewhere, where `--restart=no` only keeps the
@@ -823,17 +826,20 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket, bumps `gen`,
    and leaves the section.
 
-A **container request** waits only on real memory while a hold is live. Its room then leaves out the
-live holds, so it is `headroom − reserve`, and step 5 does not apply: it needs no pass and starts
-ahead of any live ticket, at most once per election (section 10.3). With no hold live it is an
-ordinary ticket: step 5 applies, so the head goes first by the idle rule. Steps 4 and 6 apply as to
-any request, so while a hold is live it waits while the level gate holds it and while the headroom
-is below the reserve plus its need. Only its own process knows a request is one: nothing marks its ticket or its hold, and the
-format is unchanged.
+A **container request** is the request of a container command (section 5.4) whose need neither its
+caller nor a `mem` in the needs file named: a person who pins a need chose to reserve it and to wait
+for it. A client MAY make a container request of such a command, and MUST NOT make one of anything
+else. While a hold is live it waits only on real memory: its room leaves out the live holds, so it
+is `headroom − reserve`, and step 5 does not apply, so it needs no pass and starts ahead of any live
+ticket, at most once per election (section 10.3). With no hold live it is an ordinary ticket: step 5
+applies, so the head goes first by the idle rule. Steps 4 and 6 apply as to any request, so while a
+hold is live it waits while the level gate holds it and while the headroom is below the reserve plus
+its need. Only its own process knows a request is one: no body carries a request's mode. A hold's
+`container` key (section 7.4) says something else, that the run is container work, for `status`; no
+admission reads it.
 
-> **Implementation note.** The Go CLI makes a container request of a container command (section 5.4)
-> with neither `--mem` nor a `mem` in the needs file: a person who pins a need chose to reserve it
-> and to wait for it.
+> **Implementation note.** The Go CLI makes a container request of every container command with
+> neither `--mem` nor a `mem` in the needs file.
 
 ### 12.2 Oversized request
 
