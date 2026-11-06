@@ -133,11 +133,8 @@ func ContainerProgram(name string) bool {
 }
 
 // containerSocket reports whether p, the path a unix socket is connected to, is a container
-// engine's: its basename is docker.sock, or podman*.sock.
-func containerSocket(p string) bool {
-	base := path.Base(p)
-	return base == "docker.sock" || strings.HasPrefix(base, "podman") && strings.HasSuffix(base, ".sock")
-}
+// engine's: its basename is docker.sock.
+func containerSocket(p string) bool { return path.Base(p) == "docker.sock" }
 
 // commName returns the process name in the text of /proc/PID/comm, which ends in a newline. It
 // lives here, not in the Linux file, so that it is tested on every platform.

@@ -101,7 +101,7 @@ a time limit of its own can expire first, so run coreslot in the background or r
 
 **Container work.** A container's processes are not in the command's tree, so coreslot cannot measure
 them. Container work is a command named `docker`, `docker-compose` or `podman`, or a run whose tree
-holds one or, on macOS, talks to a Docker or Podman socket. While another command runs, a command so
+holds one or, on macOS, talks to a socket named `docker.sock`. While another command runs, a command so
 named waits only on the machine's real memory: it passes the queue and ignores what running commands
 still have to grow into, but it waits below the reserve and at the yellow level and above. With none
 running it queues like any other, so the head of the queue goes first. A `mem` pin in `needs.toml`
@@ -109,8 +109,8 @@ or `--mem` reserves and queues as usual. No container work is stopped to free me
 cannot see inside a VM, so it does not prevent a container being killed there, and after its work a
 VM's memory can stay out of the host's free memory for a long time, which later commands wait on.
 A run marked from its tree starts like any other, and is only spared from then on. On Linux coreslot
-goes by process names alone. It does not see a client that connects by TCP, a call shorter than a
-second, or a client outside the run's tree.
+goes by process names alone. It does not see a client that connects by TCP, a Podman library client
+on macOS, a call shorter than a second, or a client outside the run's tree.
 
 **Labels are automatic.** Without `--label`, the label is the command's shape (its executable and
 up to two leading word-like arguments: `go test`, `npm run test`) and the name of the git repository

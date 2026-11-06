@@ -15,7 +15,8 @@ All notable changes to this project are recorded here. The format follows
   and does not honour `--restart=yes`, and without a `needs.toml` `mem` pin or `--mem` it waits only
   on the machine's real memory: past the queue and past what other runs reserved, but not past the
   reserve or the level gate. A run whose process tree holds such a command or, on macOS, talks to a
-  Docker or Podman socket is marked once it is seen; it is admitted as before. Neither is ever
+  socket named `docker.sock` is marked once it is seen; it is admitted as before. A Podman library
+  client on macOS is not seen. Neither is ever
   stopped by a stop round. Holds and run-log lines gain an optional `container` key, `status`
   says a hold's containers' memory is not measured, and `report` names the labels whose peak and need
   leave out their containers. Learning does not change.
