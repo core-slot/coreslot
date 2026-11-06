@@ -77,16 +77,18 @@ func client(t *testing.T, path string, fds int) (pid int, close func()) {
 	}
 }
 
-// A child that holds a connection to docker.sock is a container client, and is none once it has
-// closed it. Mutation: read unsi_addr (the socket's own address) instead of unsi_caddr in peers,
-// and the child, which has bound nothing, reads as no client.
+// A tree whose child holds a connection to docker.sock has a container client, and has none once the
+// child has closed it; the scan starts at this process, so the socket sits below the root. Mutations:
+// read unsi_addr (the socket's own address) instead of unsi_caddr in peers → the child, which has
+// bound nothing, reads as no client, red; read the root's sockets alone in ContainerClient → the
+// child's is missed, red.
 func TestClientOfDockerSocket(t *testing.T) {
-	pid, closeConn := client(t, listen(t, "docker.sock"), 0)
-	if !ContainerClient(pid) {
-		t.Errorf("ContainerClient(holder of docker.sock) = false, want true")
+	_, closeConn := client(t, listen(t, "docker.sock"), 0)
+	if !ContainerClient(os.Getpid()) {
+		t.Errorf("ContainerClient(parent of a holder of docker.sock) = false, want true")
 	}
 	closeConn()
-	if ContainerClient(pid) {
+	if ContainerClient(os.Getpid()) {
 		t.Errorf("ContainerClient(after close) = true, want false")
 	}
 }
