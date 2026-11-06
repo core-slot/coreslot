@@ -120,10 +120,16 @@ func TestStopKillsNewestKeepsOldest(t *testing.T) {
 // round lists nothing and B's command lives on.
 func neverVictim(t *testing.T, e Env, flags ...string) {
 	t.Helper()
+	spared(t, e, func() *Proc { return e.Run("B", append([]string{"--mem", "100M"}, flags...)...) })
+}
+
+// spared is neverVictim's check, with B as start starts it.
+func spared(t *testing.T, e Env, start func() *Proc) {
+	t.Helper()
 	a := e.Run("A", "--mem", "100M")
 	e.WaitStarted("A")
 	e.WaitTicked("A")
-	b := e.Run("B", append([]string{"--mem", "100M"}, flags...)...)
+	b := start()
 	kid := e.WaitStarted("B")
 	e.WaitTicked("B")
 	e.SetReadings(floor(1024))
@@ -372,6 +378,15 @@ func TestRunLearnsItsTickShareForTheNextRun(t *testing.T) {
 		t.Errorf("second run learned %v at %v; want the first run's %v", h.Learned, h.NormalShare, *runs[0].TickShare)
 	}
 	e.ReleaseChild("next")
+}
+
+// A docker command is never stopped, whatever --restart says: A is the oldest, so B is the only
+// candidate. Its --mem is what starts it beside A. Mutation: leave containerCommand out of
+// resolveNeed's noRestart → the round lists B, red.
+func TestContainerRunIsNeverStopped(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	spared(t, e, func() *Proc { return e.runDocker("B", "--mem", "100M", "--restart=yes") })
 }
 
 // A docker command waits for what is real: the headroom below the reserve, then the level gate, and

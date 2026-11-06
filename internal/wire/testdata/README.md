@@ -53,11 +53,11 @@ Verdict reminders, all from `PROTOCOL.md`:
   keep it as a lone code unit before you can see it, so scan the raw bytes. `bad-*surrogate*` and
   `ok-escaped-backslash-then-u-is-not-an-escape` exercise this.
 - Every key of the table is required, except the ticket's `restart` and the hold's `typical_s`,
-  `cpu_ns`, `typical_cpu_s` and `stall_ewma`, which are optional and read as `false` and `0` when
-  absent (`ok-restart`, `ok-typical-s`, `ok-keep-estimate`). A missing required key, a `null`, a
-  value of another JSON type, or a value outside the key's rule is malformed
-  (`bad-restart-not-a-boolean`, `bad-typical-s-negative`, `bad-cpu-ns-negative`,
-  `bad-typical-cpu-s-negative`, `bad-stall-ewma-above-one`).
+  `cpu_ns`, `typical_cpu_s`, `stall_ewma` and `container`, which are optional and read as `false`
+  and `0` when absent (`ok-restart`, `ok-typical-s`, `ok-keep-estimate`, `ok-container`). A missing
+  required key, a `null`, a value of another JSON type, or a value outside the key's rule is
+  malformed (`bad-restart-not-a-boolean`, `bad-typical-s-negative`, `bad-cpu-ns-negative`,
+  `bad-typical-cpu-s-negative`, `bad-stall-ewma-above-one`, `bad-container-not-a-boolean`).
 - An integer has no fraction and no exponent and fits a signed 64-bit integer: `1.0`, `5e0`
   and `9223372036854775808` are not integers where an integer is required.
 - A duplicate key at any depth is malformed, including inside objects and arrays of unknown keys.

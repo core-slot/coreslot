@@ -47,6 +47,7 @@ type Hold struct {
 	CPUNS                        int64   // optional: the attempt's user and system time so far
 	TypicalCPUS                  float64 // optional: the label's typical user and system seconds, 0 unknown
 	StallEWMA                    float64 // optional: the run's smoothed stall share, 0..1
+	Container                    bool    // optional: container work, so never a stop round's victim
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -84,6 +85,7 @@ type holdJSON struct {
 	CPUNS        int64   `json:"cpu_ns,omitempty"`
 	TypicalCPUS  float64 `json:"typical_cpu_s,omitempty"`
 	StallEWMA    float64 `json:"stall_ewma,omitempty"`
+	Container    bool    `json:"container,omitempty"`
 }
 
 type cancelJSON struct {
@@ -246,6 +248,9 @@ func DecodeHold(body []byte) (Hold, error) {
 		return Hold{}, err
 	}
 	if h.CPUNS, err = optional(o, "cpu_ns", o.int64); err != nil {
+		return Hold{}, err
+	}
+	if h.Container, err = optional(o, "container", o.boolean); err != nil {
 		return Hold{}, err
 	}
 	for _, f := range []struct {

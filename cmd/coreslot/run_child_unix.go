@@ -109,7 +109,7 @@ func (r *run) runChild(c child) int {
 	}
 	rec := store.RunRecord{
 		TimeNS: r.start.UnixNano(), Label: r.o.label, WaitedS: r.waited.Seconds(),
-		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen,
+		RanS: time.Since(started).Seconds(), Exit: status, FailOpen: c.failOpen, Container: p.container,
 	}
 	if r.stopped {
 		rec.Stops = r.stops + 1

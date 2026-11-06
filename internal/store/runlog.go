@@ -44,6 +44,8 @@ type RunRecord struct {
 	Stops      int    `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
 	Exit       int    `json:"exit"`
 	FailOpen   string `json:"fail_open"`
+	// Container says the run was container work (PROTOCOL.md section 20); encoded only when true.
+	Container bool `json:"container,omitempty"`
 }
 
 // ReadRuns reads the run log, the rotated generation (log/runs.1.jsonl) first and then

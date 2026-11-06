@@ -608,6 +608,58 @@ func TestWrappedDockerStillNeedsRestart(t *testing.T) {
 	}
 }
 
+// dockerClient copies the test binary to a file named docker: a process really named so, which a
+// script is not (its name is its interpreter's). Its first argument picks a helper.
+func dockerClient(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(cliBinary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(path, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A docker command's record says so; another's has no key. Mutation: leave rec.Container out →
+// no key, red.
+func TestRecordCarriesContainer(t *testing.T) {
+	dir := stateDir(t, "")
+	if r := cli(t, baseEnv(dir), "run", "--", dockerClient(t), "helper:hold-mem", "1", "3s"); r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", "true"); r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := runLog(t, dir)
+	if len(lines) != 2 || lines[0]["container"] != true {
+		t.Fatalf("records %v; want two, the first with container true", lines)
+	}
+	if v, ok := lines[1]["container"]; ok {
+		t.Errorf("the true run's record has container %v", v)
+	}
+}
+
+// A client under sh is found in the tree, and its run still counts for learning: the mark takes no
+// measurement away. Mutations: ignore listClient → no key, red; leave a marked record out of the
+// label's counted runs → nothing learned, red.
+func TestWrappedClientIsMarked(t *testing.T) {
+	dir := stateDir(t, "")
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--label", "w", "--", "sh", "-c", `"$0" helper:hold-mem 1 3s`, dockerClient(t))
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr %q", r.code, r.stderr)
+	}
+	lines := runLog(t, dir)
+	if len(lines) != 1 || lines[0]["container"] != true || lines[0]["mem_peak_kib"] == nil {
+		t.Fatalf("records %v; want one with container true and a peak", lines)
+	}
+	if need, ok, _, _, _, _ := readLog(location{dir: dir}, "w"); !ok || need <= 0 {
+		t.Errorf("learned need %d, %v; want one", need, ok)
+	}
+}
+
 // ---------------------------------------------------------------- runs
 
 func TestRunPassesExitStatus(t *testing.T) {

@@ -22,11 +22,17 @@ const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
 // listTree is the listing of the command's tree; tests replace it.
 var listTree = memsample.Tree
 
+// listClient scans the command's tree for a container client; tests replace it.
+var listClient = memsample.ContainerClient
+
 // watchChild lists the command's tree every second for its memory peak until ctx ends. Every
 // second listing, when the run holds g, it writes the tree's footprint, time deltas, CPU time so
 // far and smoothed stall share into the hold and takes its part in the shared watch tick; when a
 // red round keeps it as nearly finished it says so, and when a stop round lists its hold, it kills
-// the command's group and returns stopped, or in observe mode says what it would stop.
+// the command's group and returns stopped, or in observe mode says what it would stop. A command
+// named as a container client is container work from the start; any other is from the first
+// listing that finds a client in its tree, which then clears its Victim and takes no stop. The
+// scan needs a log, the one reader that outlives the hold: a pass-through has none.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
@@ -34,10 +40,12 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	var round, keptRound, cpuNS int64
 	var stall float64
 	smoothed := false
-	if g != nil { // constant for the attempt: written once, before its first tick
+	p.container = r.o.containerCommand()
+	marked := p.container
+	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
 		r.updateHold(st, g, func(h *wire.Hold) {
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
-			h.TypicalCPUS = r.cpuS
+			h.TypicalCPUS, h.Container = r.cpuS, p.container
 		})
 	}
 	for n := 1; ; n++ {
@@ -48,7 +56,13 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}
 		kib, times, ok := listTree(sup.pid)
 		if ok && (!p.ok || kib > p.kib) {
-			p = peak{kib: kib, ok: true}
+			p.kib, p.ok = kib, true
+		}
+		if !p.container && st != nil {
+			p.container = listClient(sup.pid)
+		}
+		if p.container && g != nil && !marked {
+			marked = r.updateHold(st, g, func(h *wire.Hold) { h.Victim, h.Container = false, true })
 		}
 		if g == nil || n%listingsPerTick != 0 {
 			continue
@@ -71,7 +85,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		det, err := g.Tick(ctx)
 		r.countClosed(d, det, err)
 		keptRound = r.keptNotice(det, g.HoldName(), keptRound)
-		if err != nil || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
+		if err != nil || p.container || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
 		round = det.LastRoundNS

@@ -144,8 +144,9 @@ coreslot before the command comes back.
 
 Never stopped: the oldest running command, a command run with `--restart=no`, a command whose
 label has `no_restart = true` in `needs.toml` (which wins over `--restart=yes`), a command that shares coreslot's process group (a run in a terminal, `--same-group`,
-or a run nested inside another run's reservation), a run outside the budget and anything coreslot did
-not start. A stop kills the command's process group: a process that left it (`setsid`, a build
+or a run nested inside another run's reservation), container work (a command named `docker`,
+`docker-compose` or `podman`, or a run seen using one), a run outside the budget and anything
+coreslot did not start. A stop kills the command's process group: a process that left it (`setsid`, a build
 daemon, a dev server) survives and may still hold memory or a port when the command comes back. A
 command that exits `SIGKILL` for another reason is reported and not restarted. A `--no-wait` run
 whose command is stopped refuses instead of restarting it. The thresholds are `[watch]` keys; [the calibration

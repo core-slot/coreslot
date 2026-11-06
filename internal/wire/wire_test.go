@@ -467,7 +467,8 @@ func TestLargestBodiesFit(t *testing.T) {
 	lbl := largestLabel(t)
 	h := Hold{Label: lbl, PID: math.MaxInt, StartNS: math.MaxInt64, ArrivalNS: math.MaxInt64, NeedMiB: spec.MaxNeedMiB,
 		TypicalS: math.MaxInt64, Stops: math.MaxInt, FootprintMiB: spec.MaxNeedMiB, DUserNS: math.MaxInt64, DSysNS: math.MaxInt64,
-		DPageWaitNS: math.MaxInt64, NormalShare: 1, SampledNS: math.MaxInt64, Victim: true, Learned: true, ChildExited: true}
+		DPageWaitNS: math.MaxInt64, NormalShare: 1, SampledNS: math.MaxInt64, Victim: true, Learned: true, ChildExited: true,
+		Container: true}
 	b, err := Encode(h)
 	if err != nil {
 		t.Fatalf("largest hold refused: %v", err)
@@ -504,6 +505,31 @@ func TestEncodeCanonicalAndStable(t *testing.T) {
 	if want := `{"label":"x","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":2048,"stops":1,"footprint_mib":900,` +
 		`"d_user_ns":10,"d_sys_ns":20,"d_page_wait_ns":30,"normal_share":0.04,"sampled_ns":40,"victim":true,"learned":true,"child_exited":false}`; string(a) != want {
 		t.Errorf("hold body = %s\nwant        %s", a, want)
+	}
+}
+
+// A hold from a build without the key reads as no container, the mark round-trips, and a false
+// mark leaves the body byte for byte what such a build wrote. Mutations: move container into the
+// required-boolean loop → the old body is refused; drop its omitempty → the plain body gains the
+// key, or read it nowhere → true does not come back.
+func TestHoldContainerKey(t *testing.T) {
+	old := `{"label":"x","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":1,"stops":0,"footprint_mib":0,` +
+		`"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"normal_share":0,"sampled_ns":0,"victim":true,"learned":false,"child_exited":false}`
+	h, err := DecodeHold([]byte(old))
+	if err != nil || h.Container {
+		t.Fatalf("a hold without the key: %+v, %v; want Container false", h, err)
+	}
+	b, err := Encode(h)
+	if err != nil || string(b) != old {
+		t.Errorf("a hold with no mark encodes to %s, %v; want the same bytes as %s", b, err, old)
+	}
+	h.Container = true
+	b, err = Encode(h)
+	if err != nil || !bytes.HasSuffix(b, []byte(`"child_exited":false,"container":true}`)) {
+		t.Fatalf("a marked hold encodes to %s, %v", b, err)
+	}
+	if back, err := DecodeHold(b); err != nil || back != h {
+		t.Errorf("a marked hold reads back as %+v, %v; want %+v", back, err, h)
 	}
 }
 

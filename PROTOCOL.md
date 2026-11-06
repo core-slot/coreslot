@@ -465,12 +465,13 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `d_user_ns`, `d_sys_ns`, `d_page_wait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_page_wait_ns` is `0` where the kernel reports no page wait (section 23.1) |
 | `normal_share` | number | `0..1`; the label's normal share `S0` (section 23.3) as the run read it from the run log when it started; `0` when `learned` is false |
 | `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
-| `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), and its command does not share coreslot's process group |
+| `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), its command does not share coreslot's process group, and it is not container work (section 23.5) |
 | `learned` | boolean | `true` when the run log gave the label a normal share when the run started; otherwise the hold is learning (section 23.3) |
 | `child_exited` | boolean | `true` once the run's command has exited |
 | `cpu_ns` | integer | optional; `≥ 0`; the user and system time its process tree spent in this attempt so far: the sum of its ticks' `d_user_ns` and `d_sys_ns` (section 23.1) |
 | `typical_cpu_s` | number | optional; `≥ 0`; the label's typical CPU seconds: the median of `user_s + sys_s` (section 20) over its last 20 counted runs that report both, when at least 10 do, as the run read it when it started; `0` otherwise |
 | `stall_ewma` | number | optional; `0..1`; its share `S` (section 23.3) smoothed over its ticks with a time constant of 10 s: the first tick's `S`, then `S̃ ← S̃ + (1 − e^(−p / 10 s)) (S − S̃)` for a tick period `p` |
+| `container` | boolean | optional; `true` once the run is container work (section 23.5); absent means `false`, and a writer omits it then |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -480,9 +481,10 @@ writer produces one, because the wall clock is a signed 64-bit value.
 
 A hold is published with `stops`, `footprint_mib`, the three deltas, `normal_share` and
 `sampled_ns` at 0 and `victim`, `learned` and `child_exited` false. Once its command has started
-the run writes `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s`, which hold for
-the attempt, and each tick (section 23.1) writes the measured keys, `cpu_ns` and `stall_ewma`
-among them. Only
+the run writes `stops`, `victim`, `normal_share`, `learned`, `typical_cpu_s` and a container
+command's `container`, which hold for the attempt, except that finding a client in its tree clears
+`victim` and sets `container` (section 23.5). Each tick (section 23.1) writes the measured keys,
+`cpu_ns` and `stall_ewma` among them. Only
 the holder writes its body, at publication and then in place: one write at offset 0
 of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
 their inode and the file never shrinks (I1). It keeps `label`, `pid` and
@@ -1103,6 +1105,7 @@ informative string; a writer that cannot fit it writes no line. The object carri
 | `stops` | integer | optional; on the line of a stopped attempt, how often the run has been stopped for memory, this stop included; absent on every other line |
 | `exit` | integer | the run's exit status |
 | `fail_open` | string | the fail-open reason, or empty |
+| `container` | boolean | optional; `true` when the run was container work (section 23.5); absent otherwise |
 
 The usage keys `user_s` and `sys_s` are OPTIONAL. A writer MUST omit a key
 whose value it does not know rather than write a zero: a run whose command could not be started
@@ -1133,6 +1136,10 @@ each process's `RssAnon` plus `VmSwap` from `/proc/<pid>/status`, with the large
 among them added once, since shared memory is held once. A process that exits between the listing
 and its reading is skipped. `mem_peak_kib` is the largest sum, or the rusage's `ru_maxrss` when no
 reading succeeded or that is larger.
+
+The key `container` is OPTIONAL too: a writer writes it only when true, and a reader treats an
+absent key as false. It says that the run's memory peak is its client's alone, not its containers'.
+It changes no counting: such a run counts as any other.
 
 The line of a stopped attempt carries the attempt's own peak and `stops`; the line of the attempt that
 ends the run carries neither mark and counts like any other. A **counted** run is one that is
@@ -1614,13 +1621,33 @@ one at a time.
    (`detector.observed`), whose holds never exit, holds nothing back.
 
 The oldest running hold, a hold whose run did not declare its command safe to run again (the
-CLI's `--restart=no`), a hold whose label has `no_restart` and a run that shares coreslot's
-process group are never victims, and a hold that is learning (it has no normal share) is a victim of
+CLI's `--restart=no`), a hold whose label has `no_restart`, container work and a run that shares
+coreslot's process group are never victims, and a hold that is learning (it has no normal share) is a victim of
 a floor round only. A run outside the budget (section 14, `--on-timeout run`) ticks nothing, so it
 is no running hold: it is never a victim and never the oldest. A run that finds its command ended
 by a `SIGKILL` it did not send does not restart it (section 24.3). The kill reaches the command's
 process group only: a descendant that left it (`setsid`, a daemon) survives the stop and may still
 hold memory, ports or files when the command comes back, although its footprint counted as freed.
+
+**Container work** is a run whose command is a container command (section 5.4) or whose process
+tree holds a container client. A stop would kill the client and leave its container running, so it
+is never a victim. A run that writes a run-log line and is not yet container work looks for a
+client at every listing of its tree, every 1 s, until the first hit: a process named `docker`,
+`docker-compose` or `podman`, or, where the platform reports it, a process with a unix socket
+connected to a socket whose basename is `docker.sock` or matches `podman*.sock`. A process that
+cannot be read is skipped. A hit lasts for the attempt, since a client may close while its
+containers run on. On a hit the run writes `victim` false and `container` true into its hold, on a
+later listing when that write fails, and from then on ignores every stop list, one written before
+the hit included; `--restart` and the Linux score (section 17) stay as they were settled before the
+start. A stop in the window before the hit can still stop the run. A run outside the budget has no
+ticking hold to mark and scans for its run-log line alone; a pass-through (section 18) writes no
+line and does not scan. The scan sees only the run's own tree, at its own pace: a client that
+connects by TCP, a call shorter than a second and a client outside the tree are not seen, and such
+work stays ordinary.
+
+> **Implementation note.** The Go CLI reads `p_comm` and, on macOS, the peer path of each unix
+> socket with `proc_pidfdinfo`. On Linux it reads `/proc/PID/comm` alone: a client socket has no path
+> of its own there, so a library client stays ordinary work.
 
 A run stopped by a floor round tells its agent that the whole machine ran out of memory (swap
 nearly full) and to free memory outside coreslot before the command comes back, and restarts it by

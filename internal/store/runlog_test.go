@@ -334,6 +334,31 @@ func TestRunRecordMemKeys(t *testing.T) {
 	}
 }
 
+// A record without the key reads as no container, the mark round-trips, and a false mark leaves
+// the line byte for byte what a build without it wrote. Mutation: drop container's omitempty → the
+// plain line gains the key.
+func TestRunRecordContainerKey(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	plain := RunRecord{TimeNS: 1791720000000000000, Label: "x"}
+	marked := plain
+	marked.Container = true
+	for _, r := range []RunRecord{plain, marked} {
+		if err := s.AppendRun(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := readLines(t, filepath.Join(dir, LogDir, RunLog))
+	const old = `{"time_ns":1791720000000000000,"label":"x","waited_s":0,"ran_s":0,"exit":0,"fail_open":""`
+	if len(lines) != 2 || lines[0] != old+"}" || lines[1] != old+`,"container":true}` {
+		t.Fatalf("lines %q; want %s} and the same with the key", lines, old)
+	}
+	runs, skipped, err := s.ReadRuns()
+	if err != nil || skipped != 0 || len(runs) != 2 || runs[0].Container || !runs[1].Container {
+		t.Errorf("read back %+v (%d skipped, %v); want the mark on the second only", runs, skipped, err)
+	}
+}
+
 // AppendRun appends outside the section and never rotates: it leaves a log at or
 // above 10 MiB where it is, and only RotateLog renames it.
 func TestAppendRunNeverRotates(t *testing.T) {

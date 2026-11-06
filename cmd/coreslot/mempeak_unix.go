@@ -5,9 +5,11 @@ package main
 import "github.com/core-slot/coreslot/internal/store"
 
 // peak is the largest reading of the command tree's memory; ok is false when no reading succeeded.
+// container says the run was container work, which carries no reading.
 type peak struct {
-	kib int64
-	ok  bool
+	kib       int64
+	ok        bool
+	container bool
 }
 
 // setMemPeak records the larger of the sampled peak and the rusage's maxRSSKiB (nil when unknown)
