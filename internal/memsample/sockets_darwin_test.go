@@ -123,8 +123,8 @@ func TestClientThroughSymlink(t *testing.T) {
 	}
 }
 
-// A process with thousands of descriptors still shows its socket. Mutation: read the descriptor
-// list into a fixed 4096-entry buffer, and a socket past descriptor 4096 is missed.
+// A process with thousands of descriptors still shows its socket. Mutation: drop the sizing call
+// and read the descriptor list into a fixed 4096-entry buffer → the socket past it is missed, red.
 func TestClientPastManyDescriptors(t *testing.T) {
 	pid, _ := client(t, listen(t, "docker.sock"), 5000)
 	if !ContainerClient(pid) {

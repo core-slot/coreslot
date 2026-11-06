@@ -12,8 +12,8 @@ import (
 
 // The proc_info calls and the layout of struct socket_fdinfo read, from sys/proc_info.h of the
 // macOS SDK. Its fields are fixed-width and clang lays them out the same on arm64 and x86_64:
-// offsetof(struct socket_fdinfo, psi.soi_family) is 184, psi.soi_kind 256 and
-// psi.soi_proto.pri_un.unsi_caddr 535, and sizeof is 792.
+// offsetof(struct socket_fdinfo, psi.soi_kind) is 256 and psi.soi_proto.pri_un.unsi_caddr 535, and
+// sizeof is 792.
 const (
 	callPidInfo   = 2 // PROC_INFO_CALL_PIDINFO
 	callPidFdInfo = 3 // PROC_INFO_CALL_PIDFDINFO
@@ -22,10 +22,8 @@ const (
 	fdTypeSocket  = 2 // PROX_FDTYPE_SOCKET
 
 	sockFdInfoSize = 792 // sizeof(struct socket_fdinfo)
-	familyAt       = 184 // psi.soi_family, an int32
 	kindAt         = 256 // psi.soi_kind, an int32
 	caddrAt        = 535 // psi.soi_proto.pri_un.unsi_caddr, a struct sockaddr_un
-	afUnix         = 1   // AF_UNIX
 	sockinfoUn     = 3   // SOCKINFO_UN
 	sunPathAt      = 2   // offsetof(struct sockaddr_un, sun_path)
 	sunPathLen     = 104 // sizeof(sun_path)
@@ -48,27 +46,20 @@ func info(call, pid, flavor, arg int, b []byte) (int, error) {
 }
 
 // peers returns the bound paths that pid's unix sockets are connected to. A process that is gone,
-// or that the caller may not read, has none.
+// or that the caller may not read, has none. A descriptor opened after the sizing call may be
+// missed: the scan comes round again in a second.
 func peers(pid int) []string {
 	n, err := info(callPidInfo, pid, pidListFds, 0, nil)
 	if err != nil || n <= 0 {
 		return nil
 	}
 	b := make([]byte, n)
-	for {
-		m, err := info(callPidInfo, pid, pidListFds, 0, b)
-		if err != nil {
-			return nil
-		}
-		if m < len(b) {
-			b = b[:m]
-			break
-		}
-		b = make([]byte, 2*len(b)) // descriptors opened since the sizing call
+	if n, err = info(callPidInfo, pid, pidListFds, 0, b); err != nil {
+		return nil
 	}
 	var out []string
 	s := make([]byte, sockFdInfoSize)
-	for i := 0; i+8 <= len(b); i += 8 {
+	for i := 0; i+8 <= n; i += 8 {
 		fd, typ := int(int32(binary.LittleEndian.Uint32(b[i:]))), binary.LittleEndian.Uint32(b[i+4:])
 		if typ != fdTypeSocket {
 			continue
@@ -76,15 +67,11 @@ func peers(pid int) []string {
 		if m, err := info(callPidFdInfo, pid, pidFdSocket, fd, s); err != nil || m < len(s) {
 			continue
 		}
-		if binary.LittleEndian.Uint32(s[familyAt:]) != afUnix || binary.LittleEndian.Uint32(s[kindAt:]) != sockinfoUn {
+		if binary.LittleEndian.Uint32(s[kindAt:]) != sockinfoUn {
 			continue
 		}
-		p := s[caddrAt+sunPathAt : caddrAt+sunPathAt+sunPathLen]
-		if j := indexNUL(p); j >= 0 {
-			p = p[:j]
-		}
-		if len(p) > 0 {
-			out = append(out, string(p))
+		if p := unix.ByteSliceToString(s[caddrAt+sunPathAt : caddrAt+sunPathAt+sunPathLen]); p != "" {
+			out = append(out, p)
 		}
 	}
 	return out
@@ -92,13 +79,3 @@ func peers(pid int) []string {
 
 // holdsDockerSocket reports whether pid holds a unix socket connected to one containerSocket accepts.
 func holdsDockerSocket(pid int) bool { return slices.ContainsFunc(peers(pid), containerSocket) }
-
-// indexNUL returns the index of the first NUL in b, or -1.
-func indexNUL(b []byte) int {
-	for i, c := range b {
-		if c == 0 {
-			return i
-		}
-	}
-	return -1
-}
