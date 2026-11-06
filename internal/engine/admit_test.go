@@ -307,6 +307,22 @@ func TestContainerPassesALiveHead(t *testing.T) {
 	}
 }
 
+// With no hold live a container request is an ordinary ticket: the idle start is the head's, here one
+// that fits no room, and that start is the only one it has. Once the head holds, the request starts
+// beside it. Mutation: drop the len(holds) condition of step 5 → admitted ahead of the head, red.
+func TestContainerLeavesTheIdleStartToTheHead(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, capped(t, 2048), clk)
+	head := enqueue(t, e, need(4096))
+	c := enqueue(t, e, container())
+	if isAdmitted(step(t, c)) {
+		t.Fatal("the container request took the idle start from a live head")
+	}
+	admitted(t, step(t, head))
+	clk.advance(time.Second)
+	admitted(t, step(t, c))
+}
+
 // The wait loop's check, not only the section's: a waiter with no typical run time behind a live head
 // does not try the section, so room that appears while the head stays reaches a container request
 // and not an ordinary one. Mutation: drop the !RealMemory of Step's check → it never tries, red.

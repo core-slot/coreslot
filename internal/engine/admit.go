@@ -77,9 +77,9 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		return nil, nil
 	}
-	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. A
-	// container request needs no pass.
-	if !t.req.RealMemory {
+	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
+	// hold live a container request needs no pass; with none the idle start is the head's.
+	if !t.req.RealMemory || len(holds) == 0 {
 		if head, err := t.reelect(); err != nil || head != nil && !t.passes(*head, holds, room, cfg, m) {
 			return nil, err
 		}

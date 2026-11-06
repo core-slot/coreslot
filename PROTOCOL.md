@@ -113,16 +113,17 @@ Every conforming client MUST preserve these invariants:
   (section 12.1), whose room leaves out the hold bodies.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
-  it except one that passes it by duration (section 10.3) and a container request (section 12.1),
-  and a waiter is passed over only while it is STALLED, dead or canceled.
+  it except one that passes it by duration (section 10.3) and, while a hold is live, a container
+  request (section 12.1), and a waiter is passed over only while it is STALLED, dead or canceled.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
   no process is stopped inside the admission section, the head is admitted within 3 s; up to 4
   consecutive stopped tickets at the front of the queue stop blocking it within ≈ 11 s (10 s
   without an observed change plus one poll). A stopped ticket further back stops blocking a waiter
-  within 11 s of becoming the nearest ticket that waiter has not passed over. Container requests
-  (section 12.1) may take the room a head waits for and so delay it, for as long as they keep
-  coming and within its own timeout; the head keeps its place.
+  within 11 s of becoming the nearest ticket that waiter has not passed over. While a hold is live,
+  container requests (section 12.1) may take the room a head waits for and so delay it, for as long
+  as they keep coming and within its own timeout; the head keeps its place. With no hold live they
+  leave the head its start.
 - **I6 one budget:** every client of format 2 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
@@ -698,14 +699,14 @@ ticket of the re-election (section 12.1 step 5). A waiter is admitted ahead of t
    unknown and nobody passes. When the head's ticket has `restart`, `W` is at least the calm it
    still needs (section 12.4): `calm_s`, less `host_now − calm_since_ns` while the stored sample is
    fresh and green. With no live hold the head starts by the idle rule (section 12.4), so its
-   expected wait is 0 and nobody passes.
+   expected wait is 0 and nobody passes, a container request included (section 12.1).
 
 Each waiter between the head and a passer is judged by the same rule on its own, so one that may not
 pass keeps nobody behind it from passing. A passer only starts when it is expected to end before the
 head could start, so the head, a restart included (section 24), keeps its place. A passer that runs
 longer than `d` is never stopped for it. A waiter without a typical run time never enters the section
-to be admitted while a live ticket is ahead of it, unless it is a container request, which needs no
-pass (section 12.1) and leaves the head its place.
+to be admitted while a live ticket is ahead of it, unless it is a container request, which while a
+hold is live needs no pass (section 12.1) and leaves the head its place.
 
 > **Implementation note.** The Go CLI's typical run time is the 90th percentile of the `ran_s` of
 > the window its need is learned from (section 5.4), rounded up to a whole second and at least 1.
@@ -822,11 +823,12 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket, bumps `gen`,
    and leaves the section.
 
-A **container request** waits only on real memory. Its room leaves out the live holds, so it is
-`headroom − reserve`, and step 5 does not apply: it needs no pass and starts ahead of any live ticket,
-at most once per election (section 10.3). Steps 4 and 6 apply as to any request, so it waits while
-the level gate holds it and, while a hold is live, while the headroom is below the reserve plus its
-need. Only its own process knows a request is one: nothing marks its ticket or its hold, and the
+A **container request** waits only on real memory while a hold is live. Its room then leaves out the
+live holds, so it is `headroom − reserve`, and step 5 does not apply: it needs no pass and starts
+ahead of any live ticket, at most once per election (section 10.3). With no hold live it is an
+ordinary ticket: step 5 applies, so the head goes first by the idle rule. Steps 4 and 6 apply as to
+any request, so while a hold is live it waits while the level gate holds it and while the headroom
+is below the reserve plus its need. Only its own process knows a request is one: nothing marks its ticket or its hold, and the
 format is unchanged.
 
 > **Implementation note.** The Go CLI makes a container request of a container command (section 5.4)
@@ -836,8 +838,9 @@ format is unchanged.
 ### 12.2 Oversized request
 
 A need above `memory` less `reserve` fits no room, since the room never exceeds the headroom less
-the reserve. Such a request starts only under the idle rule, when no hold is live, and runs alone:
-its remaining growth, the need less its footprint, keeps the room of every later request negative.
+the reserve. Such a request starts only under the idle rule, when no hold is live, a start no
+container request behind it takes (section 12.1), and runs alone: its remaining growth, the need
+less its footprint, keeps the room of every later ordinary request negative.
 The hold's `need_mib` is the need asked, and so is `CORESLOT_GRANTED_MEM`. A CLI run says so once,
 before it queues.
 
