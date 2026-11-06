@@ -598,6 +598,16 @@ func TestDockerNeedsNoRestartFlag(t *testing.T) {
 	}
 }
 
+// A docker that cannot exec is container work by its name, though nothing watched it: its record
+// says so. Mutation: take the record's mark from the peak alone → no key, red.
+func TestDockerThatCannotExecIsMarked(t *testing.T) {
+	dir := stateDir(t, "")
+	r := cli(t, baseEnv(dir), "run", "--", filepath.Join(t.TempDir(), "docker"), "ps")
+	if lines := runLog(t, dir); r.code != 127 || len(lines) != 1 || lines[0]["container"] != true {
+		t.Errorf("exit %d, records %v; want 127 and one with container true", r.code, lines)
+	}
+}
+
 // A wrapped docker is no program-rule command: argv[0] is sh, so at admission it is ordinary work
 // and the choice is required. Mutation: look at every argument in containerCommand → exit 0, red.
 func TestWrappedDockerStillNeedsRestart(t *testing.T) {
