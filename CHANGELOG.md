@@ -10,16 +10,14 @@ All notable changes to this project are recorded here. The format follows
 
 ### Changed
 
-- Container work is treated as what coreslot can see of it. A command named `docker`,
-  `docker-compose` or `podman` takes 1 MiB when it has no pin and no history, needs no `--restart`
-  and does not honour `--restart=yes`, and without a `needs.toml` `mem` pin or `--mem` it waits only
-  on the machine's real memory: past the queue and past what other runs reserved, but not past the
-  reserve or the level gate. A run whose process tree holds such a command or, on macOS, talks to a
-  socket named `docker.sock` is marked once it is seen; it is admitted as before. A Podman library
-  client on macOS is not seen. Neither is ever
-  stopped by a stop round. Holds and run-log lines gain an optional `container` key, `status`
-  says a hold's containers' memory is not measured, and `report` names the labels whose peak and need
-  leave out their containers. Learning does not change.
+- A command named `docker`, `docker-compose` or `podman` needs no `--restart`, does not honour
+  `--restart=yes` and takes 1 MiB when it has no pin and no history. Without a pin (`--mem`, or `mem`
+  in `needs.toml`) it passes the queue while another run is live and ignores what other runs
+  reserved, but still waits below the reserve and at the yellow level. A stop round never stops it,
+  nor a run from the moment coreslot sees such a command in its tree or, on macOS, a connection to a
+  socket named `docker.sock`; a stop before that can still land. A Podman library client on macOS is
+  not seen. Holds and run-log lines gain an optional `container` key, and `status` and `report` say
+  what such work leaves unmeasured.
 
 ## v0.5.1 (2026-11-05)
 

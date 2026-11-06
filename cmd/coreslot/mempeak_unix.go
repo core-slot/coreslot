@@ -5,7 +5,7 @@ package main
 import "github.com/core-slot/coreslot/internal/store"
 
 // peak is the largest reading of the command tree's memory; ok is false when no reading succeeded.
-// container says the run was container work, which carries no reading.
+// container says the run was container work: kib is its tree's, which leaves out its containers.
 type peak struct {
 	kib       int64
 	ok        bool

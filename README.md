@@ -26,7 +26,10 @@ coreslot status                                # what runs, what waits, whether 
   reserve, covers what that command typically needs, learned from its earlier runs. Otherwise it
   waits in one first-in, first-out queue. A command that fits may pass the head of the queue only
   when its earlier runs say it will be done before the head could start; a command with no earlier
-  run never passes. When no coreslot command is running, the head of the queue always starts.
+  run never passes. The exception is container work: while another command runs, a command named
+  `docker`, `docker-compose` or `podman` with no pinned need passes the queue, with or without
+  earlier runs ([how it decides](#how-it-decides)). When no coreslot command is running, the head of
+  the queue always starts.
 - **It stops the newest commands only under real danger.** A little swap is survivable, so it does
   not kill for a full memory. It kills when the machine is paging and coreslot's own commands are
   losing a large share of their time to it, or when swap is about to run out
@@ -92,7 +95,8 @@ the [compatibility policy](docs/compatibility.md) says how.
 
 **Admission.** A command's need is `--mem`, else the `mem` of its label in
 [`needs.toml`](#configuration), else the 90th percentile of the memory peaks of the label's last 20
-counted runs ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)), else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
+counted runs ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)), else 1 MiB for a command named
+`docker`, `docker-compose` or `podman`, else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
 (on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
 less the reserve, less what each running command still has to grow into (its need less what it uses
 now). A command starts when its need fits the room. A need larger than the machine's memory less the
@@ -101,7 +105,8 @@ a time limit of its own can expire first, so run coreslot in the background or r
 
 **Container work.** A container's processes are not in the command's tree, so coreslot cannot measure
 them. Container work is a command named `docker`, `docker-compose` or `podman`, or a run whose tree
-holds one or, on macOS, talks to a socket named `docker.sock`. While another command runs, a command so
+holds one or, on macOS, talks to a socket named `docker.sock`. A program named `docker` counts
+whatever it is, a wrapper script of your own included. While another command runs, a command so
 named waits only on the machine's real memory: it passes the queue and ignores what running commands
 still have to grow into, but it waits below the reserve and at the yellow level and above. With none
 running it queues like any other, so the head of the queue goes first. A `mem` pin in `needs.toml`
@@ -110,7 +115,9 @@ cannot see inside a VM, so it does not prevent a container being killed there, a
 VM's memory can stay out of the host's free memory for a long time, which later commands wait on.
 A run marked from its tree starts like any other, and is only spared from then on. On Linux coreslot
 goes by process names alone. It does not see a client that connects by TCP, a Podman library client
-on macOS, a call shorter than a second, or a client outside the run's tree.
+on macOS, a call shorter than a second, or a client outside the run's tree. So an indirect command
+whose only Docker call is a quick `docker run -d` stays ordinary work and can be stopped: give it
+`--restart=no`, or `no_restart` in `needs.toml`.
 
 **Labels are automatic.** Without `--label`, the label is the command's shape (its executable and
 up to two leading word-like arguments: `go test`, `npm run test`) and the name of the git repository
@@ -349,8 +356,9 @@ on Linux. `CORESLOT_STATE_DIR` overrides it for tests and moves the configuratio
   with a warning.
 
 A `coreslot run` inside a container sees the container's filesystem and therefore its own budget.
-Containers take part through a client on the host. The memory a run measures is its process tree's,
-so a command whose work happens in a container or on another host looks small to it.
+Containers take part through a client on the host, as container work
+([how it decides](#how-it-decides)). The memory a run measures is its process tree's, so a command
+whose work happens in a container or on another host looks small to it.
 
 ## More
 

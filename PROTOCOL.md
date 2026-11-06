@@ -356,11 +356,11 @@ A **container command** is one whose argv[0] has the basename `docker`, `docker-
 > up to a whole MiB, else, for a container command, 1 MiB, else the cold start (section 5.1). A
 > run's `victim` (section 7.4) is true only when it was started with `--restart=yes` and its label
 > has no `no_restart = true`, which wins over the flag; `--restart=no` makes it false. A container
-> command counts as `no_restart` however its need
-> was settled, a pin included: a stop would kill the client and leave its container running. The CLI
-> requires `--restart` of every run that could be a victim (its command gets a process group of its
-> own and it is not `no_restart`), and accepts it elsewhere, where `--restart=no` only keeps the
-> run's `oom_score_adj` (section 17) and `--restart=yes` changes nothing.
+> command counts as `no_restart` however its need was settled, a pin included: a stop would kill the
+> client and leave its container running. The CLI requires `--restart` of every run that could be a
+> victim (its command gets a process group of its own and it is not `no_restart`), and accepts it
+> elsewhere, where `--restart=no` only keeps the run's `oom_score_adj` (section 17) and
+> `--restart=yes` changes nothing.
 
 ## 6. Holds and descriptor ownership
 
