@@ -644,6 +644,32 @@ func TestStatusShowsHoldNeedStraysAndIgnored(t *testing.T) {
 	}
 }
 
+// A container hold says what coreslot cannot see, in both forms, and another says nothing.
+// Mutation: drop the hold key from info() → no line and no key, red.
+func TestStatusShowsContainer(t *testing.T) {
+	dir := budgetDir(t, 4096)
+	c := openLib(t, dir)
+	marked := hold(t, c, "a", 1)
+	if err := marked.UpdateHold(func(h *wire.Hold) { h.Container = true }); err != nil {
+		t.Fatal(err)
+	}
+	hold(t, c, "b", 1)
+	r := cli(t, baseEnv(dir), "status")
+	if r.code != 0 {
+		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
+	}
+	const said = "container: memory inside the VM is not measured"
+	if !strings.Contains(r.stdout, "mem 1 MiB  "+said+"  held") || strings.Count(r.stdout, said) != 1 {
+		t.Errorf("status says %q not once, after a's need:\n%s", said, r.stdout)
+	}
+	for _, h := range statusDoc(t, dir, 0)["holds"].([]any) {
+		h := h.(map[string]any)
+		if v, ok := h["container"]; (h["label"] == "a") != ok || ok && v != true {
+			t.Errorf("hold %v: container %v, %v; want true on a alone", h["label"], v, ok)
+		}
+	}
+}
+
 func TestStatusUsage(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, args := range [][]string{{"status", "--bogus"}, {"status", "extra"}, {"status", "--observe", "-1s"}} {

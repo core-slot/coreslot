@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +124,64 @@ func TestBuildReport(t *testing.T) {
 				t.Errorf("report:\n%s\nwant:\n%s", g, w)
 			}
 		})
+	}
+}
+
+// A label with container work in the window says so, and only says so: its figures are those of
+// the same records without the mark. Mutations: set the flag from the whole log → c is marked, red;
+// let the flag leave a record out of the peak → the equality fails, red; drop the
+// shown-labels-only cut → hidden is named, red.
+func TestReportMarksContainerLabel(t *testing.T) {
+	at := reportNow.Add(-time.Hour).UnixNano()
+	recs := []store.RunRecord{
+		{TimeNS: at, Label: "a", RanS: 10, MemPeakKiB: mib(4096), Container: true},
+		{TimeNS: at, Label: "a", RanS: 20, MemPeakKiB: mib(2048)},
+		{TimeNS: at, Label: "b", RanS: 30, MemPeakKiB: mib(1024)},
+		{TimeNS: reportNow.Add(-30 * 24 * time.Hour).UnixNano(), Label: "c", Container: true},
+		{TimeNS: at, Label: "c", RanS: 40, MemPeakKiB: mib(512)},
+	}
+	rep := buildReport(recs, 0, reportNow, 7)
+	out := rep.human()
+	if want := "container labels: a (peak and need are the client's)\n"; !strings.Contains(out, want) {
+		t.Errorf("report lacks %q:\n%s", want, out)
+	}
+	plain := slices.Clone(recs)
+	for i := range plain {
+		plain[i].Container = false
+	}
+	want := buildReport(plain, 0, reportNow, 7)
+	if strings.Contains(want.human(), "container labels") {
+		t.Errorf("a report with no container label says so:\n%s", want.human())
+	}
+	got := rep
+	got.Heaviest = slices.Clone(rep.Heaviest)
+	for i := range got.Heaviest {
+		got.Heaviest[i].Container = false
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("figures with the mark:\n%+v\nwithout it:\n%+v", got, want)
+	}
+	b, err := json.Marshal(rep.Heaviest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc []map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range doc {
+		if v, ok := l["container"]; (l["label"] == "a") != ok || ok && v != true {
+			t.Errorf("label %v: container %v, %v; want true on a alone", l["label"], v, ok)
+		}
+	}
+
+	recs = recs[:0]
+	for i := range heaviestShown + 1 {
+		recs = append(recs, store.RunRecord{TimeNS: at, Label: strconv.Itoa(i), MemPeakKiB: mib(int64(9-i) << 10)})
+	}
+	recs[heaviestShown].Label, recs[heaviestShown].Container = "hidden", true
+	if out := buildReport(recs, 0, reportNow, 7).human(); strings.Contains(out, "container labels") {
+		t.Errorf("the line names a label the table does not show:\n%s", out)
 	}
 }
 

@@ -99,6 +99,18 @@ now). A command starts when its need fits the room. A need larger than the machi
 reserve runs only alone. Waiting runs say why and where they stand when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
+**Container work.** A container's processes are not in the command's tree, so coreslot cannot measure
+them. Container work is a command named `docker`, `docker-compose` or `podman`, or a run whose tree
+holds one or, on macOS, talks to a Docker or Podman socket. A command so named waits only on the
+machine's real memory: it passes the queue and ignores what running commands still have to grow
+into, but it waits below the reserve and at the yellow level and above. A `mem` pin in `needs.toml`
+or `--mem` reserves and queues as usual. No container work is stopped to free memory. coreslot
+cannot see inside a VM, so it does not prevent a container being killed there, and after its work a
+VM's memory can stay out of the host's free memory for a long time, which later commands wait on.
+A run marked from its tree starts like any other, and is only spared from then on. On Linux coreslot
+goes by process names alone. It does not see a client that connects by TCP, a call shorter than a
+second, or a client outside the run's tree.
+
 **Labels are automatic.** Without `--label`, the label is the command's shape (its executable and
 up to two leading word-like arguments: `go test`, `npm run test`) and the name of the git repository
 it runs in, such as `go test@proj`. The worktrees of one repository share it, so a label's history
@@ -271,8 +283,8 @@ new attempt of the same run); the attempts that waited 1 s or more, with the tot
 longest wait, and how many waited over 2 and over 10 minutes, where an agent's tool call may time
 out (Claude Code's Bash tool waits 2 minutes by default, 10 at most); the attempts stopped for
 memory and the run time lost to those stops, and the runs that gave up; and the heaviest labels by
-memory peak, with their need, run time and wait. `--json` prints the same as one document
-(schema 1). Lines that do not decode, lie in the future or hold an impossible value are skipped
+memory peak, with their need, run time and wait; a label with container work is marked, since its
+peak and need are the client's alone. `--json` prints the same as one document (schema 1). Lines that do not decode, lie in the future or hold an impossible value are skipped
 and counted.
 
 What the runs would have done without coreslot is not measured, so the report claims no time

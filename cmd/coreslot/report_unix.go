@@ -80,6 +80,9 @@ type reportLabel struct {
 	NeedMiB  *int64  `json:"need_mib"`
 	RanS     float64 `json:"ran_s"`
 	WaitedS  float64 `json:"waited_s"`
+	// Container says an attempt in the window was container work: the peak and the need are its
+	// client's alone.
+	Container bool `json:"container,omitempty"`
 }
 
 // plausible reports whether r can be a measurement taken before now.
@@ -146,6 +149,7 @@ func buildReport(all []store.RunRecord, skipped int, now time.Time, days int) re
 		}
 		h.RanS += r.RanS
 		h.WaitedS += r.WaitedS
+		h.Container = h.Container || r.Container
 		if p := r.MemPeakKiB; p != nil && (h.PeakMiB == nil || (*p+1023)/1024 > *h.PeakMiB) {
 			h.PeakMiB = new((*p + 1023) / 1024)
 		}
@@ -275,13 +279,20 @@ func (rep report) human() string {
 			}
 			return spec.FormatMiB(*p)
 		}
+		var containers []string
 		for _, h := range rep.Heaviest[:min(len(rep.Heaviest), heaviestShown)] {
 			fmt.Fprintf(w, "  %s\t%d\t%d\t%s\t%s\t%s\t%s\n", labelText(h.Label), h.Runs, h.Attempts,
 				mib(h.PeakMiB), mib(h.NeedMiB), secs(h.RanS), secs(h.WaitedS))
+			if h.Container {
+				containers = append(containers, labelText(h.Label))
+			}
 		}
 		w.Flush()
 		if n := len(rep.Heaviest) - heaviestShown; n > 0 {
 			fmt.Fprintf(&b, "  and %d more (--json lists all)\n", n)
+		}
+		if len(containers) > 0 {
+			fmt.Fprintf(&b, "  container labels: %s (peak and need are the client's)\n", strings.Join(containers, ", "))
 		}
 	}
 	for i, l := range notMeasuredLines {

@@ -268,7 +268,11 @@ func (v statusView) human() string {
 		p("holds:")
 	}
 	for _, h := range r.Holds {
-		line := fmt.Sprintf("  %s  pid %d  %s  held %s  footprint %s", labelText(h.Label), h.PID, holdNeed(h),
+		need := holdNeed(h)
+		if h.Container {
+			need += "  container: memory inside the VM is not measured"
+		}
+		line := fmt.Sprintf("  %s  pid %d  %s  held %s  footprint %s", labelText(h.Label), h.PID, need,
 			duration(time.Duration(max(v.nowNS-h.StartNS, 0))), spec.FormatMiB(h.FootprintMiB))
 		if h.ArrivalNS > 0 {
 			line += "  arrived " + duration(time.Duration(max(v.nowNS-h.ArrivalNS, 0))) + " ago"
@@ -449,6 +453,7 @@ type jsonHold struct {
 	FootprintMiB int64   `json:"footprint_mib"`
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
+	Container    bool    `json:"container,omitempty"`
 }
 
 type jsonTicket struct {
@@ -497,7 +502,8 @@ func (v statusView) document() jsonStatus {
 	for _, h := range r.Holds {
 		d.Holds = append(d.Holds, jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
-			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited})
+			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
+			Container: h.Container})
 	}
 	for _, t := range v.tickets {
 		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
