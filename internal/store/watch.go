@@ -78,8 +78,9 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 }
 
 // roundOver reports whether a new stop round may start: post_kill_s has passed since the last
-// one, and every hold it listed is gone from the running jobs. A round observe mode wrote,
-// whose holds never exit, holds back no round under enforce.
+// one, and every hold it listed is gone from the running jobs or no victim any more: a run that
+// found a container client since ignores the stop. A round observe mode wrote, whose holds never
+// exit, holds back no round under enforce.
 func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
 	if d.Observed && !c.Observe {
 		return true
@@ -87,7 +88,7 @@ func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
 	if since := cur.Host.WallNS - d.LastRoundNS; since >= 0 && since < int64(c.PostKillS*1e9) {
 		return false
 	}
-	return !slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool { return slices.Contains(d.Stop, j.Hold) })
+	return !slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool { return j.Victim && slices.Contains(d.Stop, j.Hold) })
 }
 
 // appendSample appends cur and the detector d that advanced on it to log/watch.jsonl, as the

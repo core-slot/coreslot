@@ -1576,8 +1576,8 @@ yellow, red or floor to green, unknown samples between the two left out.
 ### 23.5 Stop rounds
 
 A **round** is due when a sample leaves the level at red or floor, `post_kill_s` has passed since
-the last round, and every hold the last round listed is gone or reports `child_exited`. Rounds are
-one at a time.
+the last round, and every hold the last round listed is gone, reports `child_exited` or no longer
+has `victim` true. Rounds are one at a time.
 
 1. The ticker that advanced the detector writes the stop list into `detector.stop`, and the round's
    time into `detector.last_round_ns`. The list holds the **victims** from the newest arrival to the
@@ -1616,8 +1616,9 @@ one at a time.
    `SIGKILL` to the command's process group, and only while it has not reaped the command, so the
    group id cannot have been reused. The kill and the reap are serialized under one lock in the
    run's supervisor. That is the one control: no other signal, no pid list.
-3. No new round starts until every listed hold reports `child_exited` or is gone and `post_kill_s`
-   has passed, except that under `mode = "enforce"` a round written in observe mode
+3. No new round starts until every listed hold reports `child_exited`, is gone or no longer has
+   `victim` true (a run that became container work ignores the stop, and may run for hours), and
+   `post_kill_s` has passed, except that under `mode = "enforce"` a round written in observe mode
    (`detector.observed`), whose holds never exit, holds nothing back.
 
 The oldest running hold, a hold whose run did not declare its command safe to run again (the

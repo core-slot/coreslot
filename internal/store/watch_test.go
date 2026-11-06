@@ -115,6 +115,33 @@ func TestOneStopRoundPerEpisode(t *testing.T) {
 	}
 }
 
+// A listed hold that is no victim any more, a run that found a container client in its tree after
+// the round, ignores the stop and may run for hours: it holds back no next round. Mutation: count
+// every listed running job in roundOver, as before → no next round, red.
+func TestClearedVictimHoldsBackNoRound(t *testing.T) {
+	sec := enter(t, open(t, newDir(t)))
+	m := &machine{jobs: []watch.Job{stalled("1", 1), stalled("2", 2), stalled("3", 3)}}
+	now := NowNS()
+	var d watch.Detector
+	var stop []string
+	for d.LastRoundNS == 0 && m.calls < 20 {
+		now += 2e9
+		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
+	}
+	if !slices.Equal(stop, []string{"3"}) {
+		t.Fatalf("first round: stop %v; want [3]", stop)
+	}
+	round := d.LastRoundNS
+	m.jobs[2].Victim = false // 3 runs on, cleared
+	for d.LastRoundNS == round && m.calls < 40 {
+		now += 2e9
+		d, stop, _ = sec.Tick(now, m.read, watch.Defaults())
+	}
+	if !slices.Equal(stop, []string{"2"}) {
+		t.Errorf("next round: stop %v at %d, after %d; want [2]", stop, d.LastRoundNS, round)
+	}
+}
+
 // A floor round lists a learning job that a red round skips, and is recorded as a floor round.
 // Mutations: a round that never takes the level's floor lists nothing here; one that does not
 // record its kind is not a floor round.
