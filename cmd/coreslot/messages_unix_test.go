@@ -37,14 +37,14 @@ func TestWaitReason(t *testing.T) {
 
 // A container request is not short of FreeMiB, which subtracts reservations it ignores: its reasons
 // are the level, then the reserve, and an ordinary request's lines stay. Neither is claimed when the
-// room says nothing: the headroom unread, or FreeMiB enough. Mutations: leave out !req.Container →
+// room says nothing: the headroom unread, or FreeMiB enough. Mutations: leave out !req.RealMemory →
 // "needs 1 MiB, 0 MiB free" for the first two; say the reserve whenever nothing else holds it → the
 // last two.
 func TestWaitReasonForContainer(t *testing.T) {
 	holds := []engine.HolderInfo{{Label: "a", NeedMiB: 1024}}
 	short := engine.MemInfo{Known: true, FreeMiB: 0}
 	yellow := engine.WatchInfo{Level: watch.Yellow, Fresh: true}
-	box := spec.Request{NeedMiB: 1, Container: true}
+	box := spec.Request{NeedMiB: 1, RealMemory: true}
 	for _, c := range []struct {
 		rep  engine.Report
 		req  spec.Request

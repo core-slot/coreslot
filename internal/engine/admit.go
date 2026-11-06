@@ -70,7 +70,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	}
 	need := t.req.NeedMiB
 	var reserved []state.MemHold
-	if !t.req.Container {
+	if !t.req.RealMemory {
 		reserved = reservations(holds)
 	}
 	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reserved)
@@ -79,7 +79,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	}
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. A
 	// container request needs no pass.
-	if !t.req.Container {
+	if !t.req.RealMemory {
 		if head, err := t.reelect(); err != nil || head != nil && !t.passes(*head, holds, room, cfg, m) {
 			return nil, err
 		}

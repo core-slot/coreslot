@@ -141,8 +141,8 @@ func TestRequestContainerMark(t *testing.T) {
 			t.Fatalf("parseRun(%q): %v", c.args, err)
 		}
 		o.resolveNeed(lookup, noLearned, 32768)
-		if got := o.request().Container; got != c.want {
-			t.Errorf("%q: Container %v, want %v", c.args, got, c.want)
+		if got := o.request().RealMemory; got != c.want {
+			t.Errorf("%q: RealMemory %v, want %v", c.args, got, c.want)
 		}
 	}
 }

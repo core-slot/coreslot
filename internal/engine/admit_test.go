@@ -284,7 +284,7 @@ func TestNothingPassesAHeadThatStartsAtOnce(t *testing.T) {
 }
 
 // container is a container request with no history: it needs 1 MiB and has no typical run time.
-func container() spec.Request { return spec.Request{Label: "c", NeedMiB: 1, Container: true} }
+func container() spec.Request { return spec.Request{Label: "c", NeedMiB: 1, RealMemory: true} }
 
 // A container request needs no pass (PROTOCOL.md section 10.3): it starts ahead of a live head that
 // does not fit, whose ticket stays and stays head. Mutation: leaving step 5 in for it keeps it behind
@@ -309,7 +309,7 @@ func TestContainerPassesALiveHead(t *testing.T) {
 
 // The wait loop's check, not only the section's: a waiter with no typical run time behind a live head
 // does not try the section, so room that appears while the head stays reaches a container request
-// and not an ordinary one. Mutation: drop the !Container of Step's check → it never tries, red.
+// and not an ordinary one. Mutation: drop the !RealMemory of Step's check → it never tries, red.
 func TestContainerOutsideTheWaitLoopHeadCheck(t *testing.T) {
 	clk := newFakeClock()
 	e := newEngine(t, newStateDir(t, ""), clk)

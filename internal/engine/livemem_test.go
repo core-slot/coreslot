@@ -65,8 +65,8 @@ func TestContainerIgnoresUnrealisedNeed(t *testing.T) {
 		if err := g.UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 100 }); err != nil {
 			t.Fatal(err)
 		}
-		if got := isAdmitted(step(t, enqueue(t, e, req))); got != req.Container {
-			t.Errorf("%+v: admitted %v, want %v", req, got, req.Container)
+		if got := isAdmitted(step(t, enqueue(t, e, req))); got != req.RealMemory {
+			t.Errorf("%+v: admitted %v, want %v", req, got, req.RealMemory)
 		}
 	}
 }

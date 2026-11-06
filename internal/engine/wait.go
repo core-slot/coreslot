@@ -228,7 +228,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	if !head {
 		t.backoff = 0
 		t.nextElection = now + ElectEvery
-		if t.req.TypicalS == 0 && !t.req.Container { // nothing else may start ahead of the head (section 10.3)
+		if t.req.TypicalS == 0 && !t.req.RealMemory { // nothing else may start ahead of the head (section 10.3)
 			return t.last, nil
 		}
 	}

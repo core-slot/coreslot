@@ -135,7 +135,7 @@ func waitReason(rep engine.Report, req spec.Request) string {
 	w := rep.Watch
 	short := rep.Mem.Known && len(rep.Holds) > 0 && req.NeedMiB > rep.Mem.FreeMiB
 	switch {
-	case short && !req.Container:
+	case short && !req.RealMemory:
 		return fmt.Sprintf("needs %s, %s free", spec.FormatMiB(req.NeedMiB), spec.FormatMiB(rep.Mem.FreeMiB))
 	case w.Fresh && w.Level >= watch.Yellow:
 		return "memory is " + w.Level.String()
