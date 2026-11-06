@@ -1639,9 +1639,9 @@ is never a victim. A run that writes a run-log line and is not yet container wor
 client at every listing of its tree, every 1 s, until the first hit: a process named `docker`,
 `docker-compose` or `podman`, or, where the platform reports it, a process with a unix socket
 connected to a socket whose basename is `docker.sock`. A process that cannot be read is skipped. A
-hit lasts for the attempt, since a client may close while its containers run on. On a hit the run writes `victim` false and `container` true into its hold, on a
-later listing when that write fails, and from then on ignores every stop list, one written before
-the hit included; `--restart` and the Linux score (section 17) stay as they were settled before the
+hit lasts for the attempt, since a client may close while its containers run on. On a hit the run writes `victim` false and `container` true into its hold at its
+next tick, and at each one after, and from then on ignores every stop list, one written before the
+hit included; `--restart` and the Linux score (section 17) stay as they were settled before the
 start. A stop in the window before the hit can still stop the run. A run outside the budget has no
 ticking hold to mark and scans for its run-log line alone; a pass-through (section 18) writes no
 line and does not scan. The scan sees only the run's own tree, at its own pace: a client that

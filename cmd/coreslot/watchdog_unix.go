@@ -31,8 +31,8 @@ var listClient = memsample.ContainerClient
 // red round keeps it as nearly finished it says so, and when a stop round lists its hold, it kills
 // the command's group and returns stopped, or in observe mode says what it would stop. A command
 // named as a container client is container work from the start; any other is from the first
-// listing that finds a client in its tree, which then clears its Victim and takes no stop. The
-// scan needs a log, the one reader that outlives the hold: a pass-through has none.
+// listing that finds a client in its tree: it takes no stop from then on, and the next tick's hold
+// update clears its Victim. The scan needs a log, the one reader that outlives the hold: a pass-through has none.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
@@ -41,7 +41,6 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	var stall float64
 	smoothed := false
 	p.container = r.o.containerCommand()
-	marked := p.container
 	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
 		r.updateHold(st, g, func(h *wire.Hold) {
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
@@ -61,9 +60,6 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if !p.container && st != nil {
 			p.container = listClient(sup.pid)
 		}
-		if p.container && g != nil && !marked {
-			marked = r.updateHold(st, g, func(h *wire.Hold) { h.Victim, h.Container = false, true })
-		}
 		if g == nil || n%listingsPerTick != 0 {
 			continue
 		}
@@ -79,6 +75,9 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA = cpuNS, stall
 			h.SampledNS = store.NowNS()
+			if p.container { // every update, so that a failed one repeats by itself
+				h.Victim, h.Container = false, true
+			}
 		}) {
 			continue
 		}

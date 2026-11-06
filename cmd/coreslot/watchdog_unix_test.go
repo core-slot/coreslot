@@ -234,8 +234,8 @@ func TestProgramRuleHoldStartsContainer(t *testing.T) {
 	}
 }
 
-// A run's tree finds a client: the next write clears Victim and sets the mark, and the scan is
-// done. Mutation: set Victim true on the hit → still a victim, red; scan on after the hit → 4
+// A run's tree finds a client: the next tick's write clears Victim and sets the mark, and the scan
+// is done. Mutation: set Victim true on the hit → still a victim, red; scan on after the hit → 4
 // scans, red.
 func TestTreeHitClearsVictim(t *testing.T) {
 	g, st := watchedHold(t)
@@ -294,8 +294,8 @@ func TestHitIgnoresAStoredStop(t *testing.T) {
 	}
 }
 
-// A hit whose hold update failed is written on a later listing, or the hold stays a victim for good.
-// Mutation: set marked whatever updateHold says → Victim stays true, red.
+// A hit whose hold update failed is written by a later tick, or the hold stays a victim for good.
+// Mutation: write the mark only on the listing of the hit → Victim stays true, red.
 func TestHitUpdateIsRetried(t *testing.T) {
 	g, st := watchedHold(t)
 	format := filepath.Join(st.Dir(), store.FormatFile)
@@ -305,7 +305,7 @@ func TestHitUpdateIsRetried(t *testing.T) {
 			if err := os.Rename(format, format+".away"); err != nil {
 				t.Fatal(err)
 			}
-		case 2:
+		case 3:
 			if err := os.Rename(format+".away", format); err != nil {
 				t.Fatal(err)
 			}
@@ -315,9 +315,9 @@ func TestHitUpdateIsRetried(t *testing.T) {
 		}
 	}
 	client := func(int) bool { return true }
-	watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 2, client, each)
+	watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, client, each)
 	if h := body(t, st, g); h.Victim || !h.Container {
-		t.Errorf("Victim %v Container %v; want false, true on the later listing", h.Victim, h.Container)
+		t.Errorf("Victim %v Container %v; want false, true on the later tick", h.Victim, h.Container)
 	}
 }
 
