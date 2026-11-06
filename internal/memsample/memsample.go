@@ -125,3 +125,16 @@ func cgroupLimit(selfCgroup string, read func(path string) (string, error)) (mib
 	}
 	return mib, ok
 }
+
+// ContainerProgram reports whether name, a process's name, is a container client: docker,
+// docker-compose or podman, matched exactly.
+func ContainerProgram(name string) bool {
+	return name == "docker" || name == "docker-compose" || name == "podman"
+}
+
+// containerSocket reports whether p, the path a unix socket is connected to, is a container
+// engine's: its basename is docker.sock, or podman*.sock.
+func containerSocket(p string) bool {
+	base := path.Base(p)
+	return base == "docker.sock" || strings.HasPrefix(base, "podman") && strings.HasSuffix(base, ".sock")
+}

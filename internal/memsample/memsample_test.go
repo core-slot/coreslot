@@ -210,3 +210,31 @@ func TestReadingsReplaceNamedFields(t *testing.T) {
 		t.Errorf("overlay = %+v, want %+v", r, want)
 	}
 }
+
+// Names match exactly: no case folding, no prefix. Mutation: fold the case of the name, and the
+// Docker row reddens.
+func TestContainerProgram(t *testing.T) {
+	for name, want := range map[string]bool{
+		"docker": true, "docker-compose": true, "podman": true,
+		"dockerd": false, "docker.sh": false, "Docker": false, "": false, "com.docker.backend": false,
+	} {
+		if got := ContainerProgram(name); got != want {
+			t.Errorf("ContainerProgram(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A socket is named by its basename: docker.sock, or podman*.sock. Mutation: match the substring
+// "docker" anywhere in the path, and /x/mydocker.sock reddens.
+func TestContainerSocket(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/Users/ana/.docker/run/docker.sock": true, "docker.sock": true, "/x/podman.sock": true,
+		"/tmp/podman/podman-machine-default-api.sock": true,
+		"": false, "/x/docker.sock.bak": false, "/x/mydocker.sock": false,
+		"/var/run/syslog": false, "/x/docker_cli_1b.sock": false,
+	} {
+		if got := containerSocket(path); got != want {
+			t.Errorf("containerSocket(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

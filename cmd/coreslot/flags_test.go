@@ -131,3 +131,23 @@ func TestRestartHelpAndError(t *testing.T) {
 		}
 	}
 }
+
+// A command is container work when argv[0] is a container program by its basename; a wrapper
+// (sh -c, env, time) is not. Mutation: look at every argument, and the sh -c row reddens.
+func TestContainerCommand(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"docker", "run"}, true},
+		{[]string{"/usr/local/bin/docker", "run"}, true},
+		{[]string{"make", "test"}, false},
+		{[]string{"sh", "-c", "docker run"}, false},
+		{[]string{"/x/dockerd"}, false},
+		{nil, false},
+	} {
+		if got := (runOptions{argv: c.argv}).containerCommand(); got != c.want {
+			t.Errorf("containerCommand(%q) = %v, want %v", c.argv, got, c.want)
+		}
+	}
+}

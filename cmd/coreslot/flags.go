@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
@@ -150,6 +152,12 @@ func (o runOptions) restartable() bool { return o.restart == "yes" && !o.noResta
 // its label is not no_restart) and --restart was not given.
 func (o runOptions) restartMissing(shared bool) bool {
 	return o.restart == "" && !o.noRestart && !shared
+}
+
+// containerCommand reports whether the command itself is a container client: argv[0] names one by
+// its basename. A wrapped command (sh -c, env, time) is not.
+func (o runOptions) containerCommand() bool {
+	return len(o.argv) > 0 && memsample.ContainerProgram(filepath.Base(o.argv[0]))
 }
 
 func usagef(format string, args ...any) error {
