@@ -238,3 +238,13 @@ func TestContainerSocket(t *testing.T) {
 		}
 	}
 }
+
+// The text of /proc/PID/comm ends in a newline, which is no part of the name. Mutation: return
+// the text as it is, and the name is "docker\n".
+func TestCommNewline(t *testing.T) {
+	for text, want := range map[string]string{"docker\n": "docker", "docker": "docker", "": ""} {
+		if got := commName(text); got != want {
+			t.Errorf("commName(%q) = %q, want %q", text, got, want)
+		}
+	}
+}

@@ -138,3 +138,7 @@ func containerSocket(p string) bool {
 	base := path.Base(p)
 	return base == "docker.sock" || strings.HasPrefix(base, "podman") && strings.HasSuffix(base, ".sock")
 }
+
+// commName returns the process name in the text of /proc/PID/comm, which ends in a newline. It
+// lives here, not in the Linux file, so that it is tested on every platform.
+func commName(text string) string { return strings.TrimSuffix(text, "\n") }

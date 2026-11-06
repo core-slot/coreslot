@@ -6,8 +6,10 @@ import (
 	"bufio"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -23,7 +25,39 @@ const helperEnv = "MEMSAMPLE_HELPER_MIB"
 // "ready" and sleeps for a minute.
 const spinEnv = "MEMSAMPLE_HELPER_SPIN"
 
+// dialEnv makes the test binary a helper that opens FDS descriptors of /dev/null, dials the unix
+// socket at that path, prints "ready", and on a line of stdin closes the connection, prints
+// "closed" and sleeps for a minute.
+const dialEnv = "MEMSAMPLE_HELPER_DIAL"
+
+// fdsEnv is how many descriptors the dial helper opens first.
+const fdsEnv = "MEMSAMPLE_HELPER_FDS"
+
 func TestMain(m *testing.M) {
+	if path := os.Getenv(dialEnv); path != "" {
+		var held []*os.File
+		n, _ := strconv.Atoi(os.Getenv(fdsEnv))
+		for range n {
+			f, err := os.Open("/dev/null")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+			held = append(held, f)
+		}
+		c, err := net.Dial("unix", path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		fmt.Println("ready")
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		_ = c.Close()
+		fmt.Println("closed")
+		time.Sleep(time.Minute)
+		runtime.KeepAlive(held)
+		os.Exit(0)
+	}
 	if os.Getenv(spinEnv) != "" {
 		for n := 0; ; n++ {
 			var ru syscall.Rusage
@@ -173,5 +207,70 @@ func TestListingHasSelf(t *testing.T) {
 	}
 	if start := time.Unix(0, p.StartNS); start.Before(now.Add(-time.Hour)) || start.After(now) {
 		t.Errorf("StartNS = %v; want within the last hour before %v", start, now)
+	}
+}
+
+// A process named docker is a container client, one named dockerd is not, and the walk goes
+// below the root. The binary is a copy of the test binary, in helper mode: a copy of sleep is
+// killed at exec on a current macOS, and a symlink or a script reports the name of its target or
+// its interpreter. Mutation: test the root's name alone, and the sh case reddens; make
+// ContainerProgram accept dockerd, and the dockerd cases redden.
+func TestContainerClientName(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name  string
+		shell bool
+		want  bool
+	}{{"docker", false, true}, {"dockerd", false, false}, {"docker", true, true}, {"dockerd", true, false}} {
+		bin := filepath.Join(dir, c.name)
+		if err := os.WriteFile(bin, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(bin)
+		if c.shell {
+			cmd = exec.Command("/bin/sh", "-c", `"$0" & wait`, bin)
+		}
+		cmd.Env = append(os.Environ(), helperEnv+"=1")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		out, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
+			t.Fatalf("helper %s said %q, %v; want ready", c.name, line, err)
+		}
+		if got := ContainerClient(cmd.Process.Pid); got != c.want {
+			t.Errorf("ContainerClient(%s, shell %v) = %v, want %v", c.name, c.shell, got, c.want)
+		}
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	}
+}
+
+// A tree of 50 sleeping children, the size of a build's.
+func BenchmarkContainerClient(b *testing.B) {
+	cmd := exec.Command("/bin/sh", "-c", `i=0; while [ $i -lt 50 ]; do sleep 60 & i=$((i+1)); done; wait`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+	time.Sleep(time.Second)
+	for b.Loop() {
+		ContainerClient(cmd.Process.Pid)
 	}
 }

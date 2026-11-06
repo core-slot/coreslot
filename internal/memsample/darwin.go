@@ -37,6 +37,37 @@ func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	})
 }
 
+// ContainerClient reports whether root or a descendant is named by ContainerProgram or holds a
+// unix socket connected to one containerSocket accepts. A process that cannot be read is skipped.
+func ContainerClient(root int) bool {
+	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return false
+	}
+	parents := make(map[int]int, len(procs))
+	comms := make(map[int]string, len(procs))
+	for _, p := range procs {
+		pid := int(p.Proc.P_pid)
+		parents[pid] = int(p.Eproc.Ppid)
+		comm := p.Proc.P_comm[:]
+		if j := indexNUL(comm); j >= 0 {
+			comm = comm[:j]
+		}
+		comms[pid] = string(comm)
+	}
+	for _, pid := range descendants(root, parents) {
+		if ContainerProgram(comms[pid]) {
+			return true
+		}
+		for _, peer := range peers(pid) {
+			if containerSocket(peer) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Listing reads the process table once: kern.proc.all's parent and start time of every process.
 func Listing() (map[int]Proc, bool) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")

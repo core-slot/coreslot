@@ -51,6 +51,25 @@ func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	return kib + shmem, times, ok
 }
 
+// ContainerClient reports whether root or a descendant is named by ContainerProgram, by its
+// /proc/PID/comm. A process that cannot be read is skipped.
+func ContainerClient(root int) bool {
+	procs, ok := Listing()
+	if !ok {
+		return false
+	}
+	parents := make(map[int]int, len(procs))
+	for pid, p := range procs {
+		parents[pid] = p.PPID
+	}
+	for _, pid := range descendants(root, parents) {
+		if data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm"); err == nil && ContainerProgram(commName(string(data))) {
+			return true
+		}
+	}
+	return false
+}
+
 // userHZ is the unit of the start time in /proc/<pid>/stat: clock ticks of 1/100 s.
 const userHZ = 100
 
