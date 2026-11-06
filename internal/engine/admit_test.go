@@ -104,7 +104,7 @@ func TestHoldIsTheReservation(t *testing.T) {
 }
 
 // A need above the machine is representable, in the ticket and in the hold, with no cap: on a
-// 32 GiB machine a 40 GiB need runs alone, as asked, and is said to exceed the 31 GiB above the
+// 32 GiB machine a 40 GiB need starts when idle, as asked, and is said to exceed the 31 GiB above the
 // default 1 GiB reserve. Mutation: returning the machine's memory as the bound says 32 GiB.
 func TestNoPerGrantCap(t *testing.T) {
 	dir := newStateDir(t, "")
@@ -134,7 +134,23 @@ func TestNoPerGrantCap(t *testing.T) {
 	}
 }
 
-// A need above what the room can ever be waits for the machine to be idle, then runs alone, its
+// With the headroom unreadable nothing gates an oversized need, so it is not reported as waiting for
+// idle. Mutation: drop HeadroomOK from Oversized → red.
+func TestOversizedNeedsAReading(t *testing.T) {
+	dir := newStateDir(t, "")
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(st, filepath.Join(dir, store.ConfigFile),
+		func() (config.Machine, error) { return config.Machine{MemMiB: 32768}, nil },
+		newFakeClock().clock())
+	if _, over := e.Oversized(40960); over {
+		t.Errorf("Oversized(40960) with no headroom = true, want false")
+	}
+}
+
+// A need above what the room can ever be waits for the machine to be idle, then starts, its
 // hold reserving the need asked.
 func TestOversizeRunsAlone(t *testing.T) {
 	dir := capped(t, 1280)

@@ -173,7 +173,10 @@ func (r *run) holdersText(e *engine.Engine) string {
 	if err != nil {
 		return ""
 	}
-	s := holderList(rep.Holds, time.Now().UnixNano())
+	s := ""
+	if !r.o.request().RealMemory { // a container request does not wait on them
+		s = holderList(rep.Holds, time.Now().UnixNano())
+	}
 	if rep.Section.Held && rep.Section.PID != 0 {
 		s += fmt.Sprintf("; the admission section is held by pid %d", rep.Section.PID)
 	} else if rep.Section.Held {

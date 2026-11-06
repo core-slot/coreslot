@@ -403,6 +403,12 @@ func TestContainerWaitsOnRealShortage(t *testing.T) {
 	time.Sleep(observeWait)
 	noHold(t, e, "D", "D started with the headroom at the reserve")
 	e.WaitTicket("D")
+	// Its refusal names no hold, as it waits on none. Mutation: list them in holdersText → red.
+	n := e.runDocker("N", "--no-wait")
+	n.ExitCode(75)
+	if s := n.Stderr(); !strings.Contains(s, "not admitted at once") || strings.Contains(s, "holders:") {
+		t.Errorf("--no-wait stderr %q, want a refusal that names no holders", s)
+	}
 
 	e.SetReadings(floor(1024))
 	e.Eventually(startWait, "the level is at the floor", func() bool { return e.Watch().Level == watch.Floor })

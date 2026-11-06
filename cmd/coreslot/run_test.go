@@ -1097,7 +1097,7 @@ func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
 		re := regexp.MustCompile(`coreslot: needs (1000 GiB, more than the \d+(\.\d)? GiB|128 MiB, more than the 0 MiB) ` +
-			`the machine has above its reserve; starts only when nothing else runs\n`)
+			`the machine has above its reserve; starts only when no other coreslot job runs\n`)
 		if got := re.FindAllString(r.stderr, -1); len(got) != 1 {
 			t.Errorf("--mem %s: stderr %q, want the notice once", mem, r.stderr)
 		}
@@ -1211,7 +1211,7 @@ func TestWaitingLineEvery30s(t *testing.T) {
 
 // A container request with a hold live waits on neither the queue nor the holds, so its line gives
 // neither; with no hold live it is an ordinary ticket and gives its place. A pin makes it ordinary.
-// Mutations: drop the holders check → the second row, red; drop the mark → the first, red.
+// Mutations: drop the holders check → the second row, red; drop the mark → the third, red.
 func TestWaitingLineOfContainer(t *testing.T) {
 	holders := []engine.HolderInfo{{Label: "gate", PID: 4711, NeedMiB: 1536, StartNS: time.Now().UnixNano()}}
 	for _, c := range []struct {
