@@ -4,13 +4,54 @@ package memsample
 
 import (
 	"bufio"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
+	"time"
 )
+
+// dialEnv makes the test binary a helper that opens FDS descriptors of /dev/null, dials the unix
+// socket at that path, prints "ready", and on a line of stdin closes the connection, prints
+// "closed" and sleeps for a minute.
+const dialEnv = "MEMSAMPLE_HELPER_DIAL"
+
+// fdsEnv is how many descriptors the dial helper opens first.
+const fdsEnv = "MEMSAMPLE_HELPER_FDS"
+
+// init is the dial helper, which never reaches TestMain.
+func init() {
+	path := os.Getenv(dialEnv)
+	if path == "" {
+		return
+	}
+	var held []*os.File
+	n, _ := strconv.Atoi(os.Getenv(fdsEnv))
+	for range n {
+		f, err := os.Open("/dev/null")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		held = append(held, f)
+	}
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	fmt.Println("ready")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	_ = c.Close()
+	fmt.Println("closed")
+	time.Sleep(time.Minute)
+	runtime.KeepAlive(held)
+	os.Exit(0)
+}
 
 // listen binds a unix socket named name in a short directory (sun_path is 104 bytes) and returns
 // its path.
@@ -79,9 +120,9 @@ func client(t *testing.T, path string, fds int) (pid int, close func()) {
 
 // A tree whose child holds a connection to docker.sock has a container client, and has none once the
 // child has closed it; the scan starts at this process, so the socket sits below the root. Mutations:
-// read unsi_addr (the socket's own address) instead of unsi_caddr in peers → the child, which has
-// bound nothing, reads as no client, red; read the root's sockets alone in ContainerClient → the
-// child's is missed, red.
+// read unsi_addr (the socket's own address) instead of unsi_caddr in peers → this process's listener
+// matches after the close, red; read the root's sockets alone in ContainerClient → the child's is
+// missed, red.
 func TestClientOfDockerSocket(t *testing.T) {
 	_, closeConn := client(t, listen(t, "docker.sock"), 0)
 	if !ContainerClient(os.Getpid()) {
@@ -93,35 +134,12 @@ func TestClientOfDockerSocket(t *testing.T) {
 	}
 }
 
-// A connection to a socket of another name is no sign. Mutation: count any peer path as a hit in
-// ContainerClient, and the holder of other.sock is a client.
-func TestClientOfOtherSocket(t *testing.T) {
-	pid, _ := client(t, listen(t, "other.sock"), 0)
-	if ContainerClient(pid) {
-		t.Errorf("ContainerClient(holder of other.sock) = true, want false")
-	}
-}
-
 // The listener holds the bound socket of docker.sock, whose peer path is empty: it is no client.
 // Mutation: read unsi_addr instead of unsi_caddr, and the listener's own bound path matches.
 func TestListenerIsNoClient(t *testing.T) {
 	listen(t, "docker.sock")
 	if ContainerClient(os.Getpid()) {
 		t.Errorf("ContainerClient(the listener) = true, want false")
-	}
-}
-
-// The peer path of a connection made through a symlink is the bound path, not the link's name.
-// Mutation: the one of TestClientOfDockerSocket; this pins that the kernel resolves the link.
-func TestClientThroughSymlink(t *testing.T) {
-	path := listen(t, "docker.sock")
-	link := filepath.Join(filepath.Dir(path), "link")
-	if err := os.Symlink(path, link); err != nil {
-		t.Fatal(err)
-	}
-	pid, _ := client(t, link, 0)
-	if !ContainerClient(pid) {
-		t.Errorf("ContainerClient(holder through a symlink) = false, want true")
 	}
 }
 

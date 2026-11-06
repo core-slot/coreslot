@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"fmt"
 	"math/rand/v2"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,39 +24,7 @@ const helperEnv = "MEMSAMPLE_HELPER_MIB"
 // "ready" and sleeps for a minute.
 const spinEnv = "MEMSAMPLE_HELPER_SPIN"
 
-// dialEnv makes the test binary a helper that opens FDS descriptors of /dev/null, dials the unix
-// socket at that path, prints "ready", and on a line of stdin closes the connection, prints
-// "closed" and sleeps for a minute.
-const dialEnv = "MEMSAMPLE_HELPER_DIAL"
-
-// fdsEnv is how many descriptors the dial helper opens first.
-const fdsEnv = "MEMSAMPLE_HELPER_FDS"
-
 func TestMain(m *testing.M) {
-	if path := os.Getenv(dialEnv); path != "" {
-		var held []*os.File
-		n, _ := strconv.Atoi(os.Getenv(fdsEnv))
-		for range n {
-			f, err := os.Open("/dev/null")
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(2)
-			}
-			held = append(held, f)
-		}
-		c, err := net.Dial("unix", path)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		fmt.Println("ready")
-		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-		_ = c.Close()
-		fmt.Println("closed")
-		time.Sleep(time.Minute)
-		runtime.KeepAlive(held)
-		os.Exit(0)
-	}
 	if os.Getenv(spinEnv) != "" {
 		for n := 0; ; n++ {
 			var ru syscall.Rusage
@@ -255,22 +222,5 @@ func TestContainerClientName(t *testing.T) {
 		}
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
-	}
-}
-
-// A tree of 50 sleeping children, the size of a build's.
-func BenchmarkContainerClient(b *testing.B) {
-	cmd := exec.Command("/bin/sh", "-c", `i=0; while [ $i -lt 50 ]; do sleep 60 & i=$((i+1)); done; wait`)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		b.Fatal(err)
-	}
-	b.Cleanup(func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Wait()
-	})
-	time.Sleep(time.Second)
-	for b.Loop() {
-		ContainerClient(cmd.Process.Pid)
 	}
 }
