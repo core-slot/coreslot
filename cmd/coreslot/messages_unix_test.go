@@ -35,14 +35,14 @@ func TestWaitReason(t *testing.T) {
 	}
 }
 
-// A container request is not short of FreeMiB, which subtracts reservations it ignores: its reasons
-// are the level, then the reserve, and an ordinary request's lines stay. Neither is claimed when the
-// room says nothing: the headroom unread, or FreeMiB enough. Mutations: leave out !req.RealMemory →
-// "needs 1 MiB, 0 MiB free" for the first two; say the reserve whenever nothing else holds it → the
-// last two.
+// A container request is short of the headroom less the reserve, not of FreeMiB, which subtracts the
+// reservations it ignores: reservations alone give it no line, the real figure does, and an ordinary
+// request's line stays. Mutation: read FreeMiB for it too → "needs 1 MiB, 0 MiB free" in the row of
+// reservations alone, red.
 func TestWaitReasonForContainer(t *testing.T) {
 	holds := []engine.HolderInfo{{Label: "a", NeedMiB: 1024}}
-	short := engine.MemInfo{Known: true, FreeMiB: 0}
+	reserved := engine.MemInfo{Known: true, FreeMiB: 0, RealFreeMiB: 512}
+	short := engine.MemInfo{Known: true}
 	yellow := engine.WatchInfo{Level: watch.Yellow, Fresh: true}
 	box := spec.Request{NeedMiB: 1, RealMemory: true}
 	for _, c := range []struct {
@@ -50,11 +50,11 @@ func TestWaitReasonForContainer(t *testing.T) {
 		req  spec.Request
 		want string
 	}{
-		{engine.Report{Holds: holds, Mem: short, Watch: yellow}, box, "memory is yellow"},
-		{engine.Report{Holds: holds, Mem: short}, box, "the machine is below its memory reserve"},
-		{engine.Report{Holds: holds, Mem: short}, spec.Request{NeedMiB: 1}, "needs 1 MiB, 0 MiB free"},
+		{engine.Report{Holds: holds, Mem: reserved}, box, ""},
+		{engine.Report{Holds: holds, Mem: reserved, Watch: yellow}, box, "memory is yellow"},
+		{engine.Report{Holds: holds, Mem: reserved}, spec.Request{NeedMiB: 1}, "needs 1 MiB, 0 MiB free"},
+		{engine.Report{Holds: holds, Mem: short}, box, "needs 1 MiB, 0 MiB free"},
 		{engine.Report{Holds: holds}, box, ""},
-		{engine.Report{Holds: holds, Mem: engine.MemInfo{Known: true, FreeMiB: 512}}, box, ""},
 	} {
 		if got := waitReason(c.rep, c.req); got != c.want {
 			t.Errorf("waitReason(%+v) = %q, want %q", c.req, got, c.want)

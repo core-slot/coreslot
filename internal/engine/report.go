@@ -50,6 +50,7 @@ type MemInfo struct {
 	Known       bool
 	ReservedMiB int64 // what the live holds reserve
 	FreeMiB     int64 // the room a new job may take, never below 0
+	RealFreeMiB int64 // the headroom less the reserve, never below 0: a container request's room
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.

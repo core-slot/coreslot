@@ -96,6 +96,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	if memErr == nil && machine.HeadroomOK {
 		r.Mem.Known = true
 		r.Mem.FreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live)))
+		r.Mem.RealFreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, nil))
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
 	// descriptor. An unreadable process table reports nothing: unknown is not exited.

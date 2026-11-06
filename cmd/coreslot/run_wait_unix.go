@@ -129,18 +129,18 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 
 // waitReason says why a waiting request is not admitted: the room it lacks, else the memory level
 // that holds admissions, else that a restarted command waits for calm. A container request's room
-// is not FreeMiB, which subtracts the reservations it ignores: only the reserve and the level hold
-// it, the level first.
+// is not FreeMiB, which subtracts the reservations it ignores.
 func waitReason(rep engine.Report, req spec.Request) string {
 	w := rep.Watch
-	short := rep.Mem.Known && len(rep.Holds) > 0 && req.NeedMiB > rep.Mem.FreeMiB
+	free := rep.Mem.FreeMiB
+	if req.RealMemory {
+		free = rep.Mem.RealFreeMiB
+	}
 	switch {
-	case short && !req.RealMemory:
-		return fmt.Sprintf("needs %s, %s free", spec.FormatMiB(req.NeedMiB), spec.FormatMiB(rep.Mem.FreeMiB))
+	case rep.Mem.Known && len(rep.Holds) > 0 && req.NeedMiB > free:
+		return fmt.Sprintf("needs %s, %s free", spec.FormatMiB(req.NeedMiB), spec.FormatMiB(free))
 	case w.Fresh && w.Level >= watch.Yellow:
 		return "memory is " + w.Level.String()
-	case short:
-		return "the machine is below its memory reserve"
 	case req.Restart:
 		return "a stopped command restarts when memory has been calm for a while"
 	}
