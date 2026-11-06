@@ -8,6 +8,13 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- A need above what the machine has less the reserve now says it `starts only when nothing else
+  runs`, in place of `runs only alone`: a container request may start beside it.
+- A container request's waiting line no longer gives a queue position or holders while a hold is
+  live, as it waits on neither.
+
 ## v0.5.2 (2026-11-06)
 
 ### Changed

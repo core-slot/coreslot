@@ -103,7 +103,11 @@ func stat(pid int) (name string, f []string, ok bool) {
 	if err != nil {
 		return "", nil, false
 	}
-	s := string(data)
+	return parseStat(string(data))
+}
+
+// parseStat is stat's reading of one line.
+func parseStat(s string) (name string, f []string, ok bool) {
 	end := strings.LastIndexByte(s, ')')
 	if end < 0 {
 		return "", nil, false

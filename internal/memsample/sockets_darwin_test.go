@@ -4,6 +4,7 @@ package memsample
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
@@ -140,6 +141,21 @@ func TestListenerIsNoClient(t *testing.T) {
 	listen(t, "docker.sock")
 	if ContainerClient(os.Getpid()) {
 		t.Errorf("ContainerClient(the listener) = true, want false")
+	}
+}
+
+// A socket of another kind has no peer path, whatever its bytes at that offset. Mutation: drop the kind
+// check in peerPath, and the second call returns the bytes.
+func TestPeerPathOfKind(t *testing.T) {
+	s := make([]byte, sockFdInfoSize)
+	copy(s[caddrAt+sunPathAt:], "/run/docker.sock")
+	binary.LittleEndian.PutUint32(s[kindAt:], sockinfoUn)
+	if got := peerPath(s); got != "/run/docker.sock" {
+		t.Errorf("peerPath(unix) = %q", got)
+	}
+	binary.LittleEndian.PutUint32(s[kindAt:], sockinfoUn+1)
+	if got := peerPath(s); got != "" {
+		t.Errorf("peerPath(another kind) = %q, want none", got)
 	}
 }
 

@@ -123,7 +123,11 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 	if !r.advised {
 		r.advised, advice = true, "; if your tool has a time limit, run this in the background or raise the limit"
 	}
-	return fmt.Sprintf("coreslot: waiting for %s: position %d (%s)%s%s%s%s", r.o.needText(), w.Position,
+	place := fmt.Sprintf(": position %d", w.Position)
+	if r.o.request().RealMemory && len(holders) > 0 { // it waits on neither the queue nor the holds
+		place, holders = "", nil
+	}
+	return fmt.Sprintf("coreslot: waiting for %s%s (%s)%s%s%s%s", r.o.needText(), place,
 		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
 }
 

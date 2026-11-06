@@ -67,14 +67,20 @@ func peers(pid int) []string {
 		if m, err := info(callPidFdInfo, pid, pidFdSocket, fd, s); err != nil || m < len(s) {
 			continue
 		}
-		if binary.LittleEndian.Uint32(s[kindAt:]) != sockinfoUn {
-			continue
-		}
-		if p := unix.ByteSliceToString(s[caddrAt+sunPathAt : caddrAt+sunPathAt+sunPathLen]); p != "" {
+		if p := peerPath(s); p != "" {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// peerPath is the path a socket_fdinfo's unix socket is connected to, empty for any other kind, whose
+// bytes at that offset are no path.
+func peerPath(s []byte) string {
+	if binary.LittleEndian.Uint32(s[kindAt:]) != sockinfoUn {
+		return ""
+	}
+	return unix.ByteSliceToString(s[caddrAt+sunPathAt : caddrAt+sunPathAt+sunPathLen])
 }
 
 // holdsDockerSocket reports whether pid holds a unix socket connected to one containerSocket accepts.

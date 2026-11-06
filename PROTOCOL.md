@@ -724,7 +724,8 @@ ticket name is gone (section 10.4, step 2). When it later removes its ticket (ad
 cancellation, withdrawal), `ENOENT` counts as success.
 
 A waiting CLI prints a line when it begins to wait and then every 30 s: why it waits, its position
-and the live holds with their needs and ages (informative). The position is one plus the tickets
+and the live holds with their needs and ages (informative). A container request with a hold live
+waits on neither and says only why. The position is one plus the tickets
 ahead that the examination has not passed over, an upper bound: tickets beyond the one that ended
 the examination are counted without being examined.
 
@@ -845,8 +846,8 @@ admission reads it.
 
 A need above `memory` less `reserve` fits no room, since the room never exceeds the headroom less
 the reserve. Such a request starts only under the idle rule, when no hold is live, a start no
-container request behind it takes (section 12.1), and runs alone: its remaining growth, the need
-less its footprint, keeps the room of every later ordinary request negative.
+container request behind it takes (section 12.1). No later ordinary request starts beside it: its
+remaining growth, the need less its footprint, keeps their room negative. A container request may.
 The hold's `need_mib` is the need asked, and so is `CORESLOT_GRANTED_MEM`. A CLI run says so once,
 before it queues.
 

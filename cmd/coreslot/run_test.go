@@ -1085,7 +1085,7 @@ func TestRunLogOmitsUsageWhenTheCommandDidNotStart(t *testing.T) {
 }
 
 // A need above what the machine has less the reserve is said once, each size in its unit, with that
-// bound (0 under a reserve above the machine), and runs alone when nothing else holds. Mutations:
+// bound (0 under a reserve above the machine), and starts when nothing else holds. Mutations:
 // saying it for every wait line turns the count red; printing every size in GiB says "0.1 GiB" for
 // 128 MiB; printing the machine's memory says GiB for the bound under the 1000 GiB reserve.
 func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
@@ -1097,7 +1097,7 @@ func TestUnsatisfiableNeedSaidOnce(t *testing.T) {
 			t.Fatalf("exit %d (stderr %q)", r.code, r.stderr)
 		}
 		re := regexp.MustCompile(`coreslot: needs (1000 GiB, more than the \d+(\.\d)? GiB|128 MiB, more than the 0 MiB) ` +
-			`the machine has above its reserve; runs only alone\n`)
+			`the machine has above its reserve; starts only when nothing else runs\n`)
 		if got := re.FindAllString(r.stderr, -1); len(got) != 1 {
 			t.Errorf("--mem %s: stderr %q, want the notice once", mem, r.stderr)
 		}
@@ -1206,6 +1206,33 @@ func TestWaitingLineEvery30s(t *testing.T) {
 	}
 	if s.calls != 96 {
 		t.Errorf("%d steps in 95 s, want 96: one at the start and one each time the next is due (1 s)", s.calls)
+	}
+}
+
+// A container request with a hold live waits on neither the queue nor the holds, so its line gives
+// neither; with no hold live it is an ordinary ticket and gives its place. A pin makes it ordinary.
+// Mutations: drop the holders check → the second row, red; drop the mark → the first, red.
+func TestWaitingLineOfContainer(t *testing.T) {
+	holders := []engine.HolderInfo{{Label: "gate", PID: 4711, NeedMiB: 1536, StartNS: time.Now().UnixNano()}}
+	for _, c := range []struct {
+		args    []string
+		holders []engine.HolderInfo
+		want    string
+	}{
+		{[]string{"--", "docker", "run"}, holders, "coreslot: waiting for mem 1 MiB (0s); low; if"},
+		{[]string{"--", "docker", "run"}, nil, "coreslot: waiting for mem 1 MiB: position 2 (0s); low; if"},
+		{[]string{"--mem", "1M", "--", "docker", "run"}, holders, "coreslot: waiting for mem 1 MiB: position 2 (0s); low; holders: gate"},
+	} {
+		o, err := parseRun(c.args, IO{})
+		if err != nil {
+			t.Fatalf("parseRun(%q): %v", c.args, err)
+		}
+		lookup, _ := lookupOf(t, "")
+		o.resolveNeed(lookup, noLearned, 32768)
+		r := &run{o: o, why: func() (string, []engine.HolderInfo) { return "low", c.holders }}
+		if got := r.waitingLine(engine.Waiting{Position: 2}, 0); !strings.HasPrefix(got, c.want) {
+			t.Errorf("%q, %d holders: %q, want prefix %q", c.args, len(c.holders), got, c.want)
+		}
 	}
 }
 

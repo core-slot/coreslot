@@ -100,7 +100,7 @@ counted runs ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)), else 1 MiB fo
 (on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
 less the reserve, less what each running command still has to grow into (its need less what it uses
 now). A command starts when its need fits the room. A need larger than the machine's memory less the
-reserve runs only alone. Waiting runs say why and where they stand when they begin to wait and every 30 s; a tool with
+reserve starts only when nothing else runs. Waiting runs say why and where they stand when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
 **Container work.** A container's processes are not in the command's tree, so coreslot cannot measure

@@ -130,7 +130,7 @@ func (r *run) ordinary() int {
 	}
 	req := r.o.request()
 	if bound, over := e.Oversized(req.NeedMiB); over {
-		r.notice("needs %s, more than the %s the machine has above its reserve; runs only alone",
+		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when nothing else runs",
 			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
