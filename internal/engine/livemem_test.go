@@ -13,6 +13,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/memsample"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -50,6 +51,49 @@ func TestIdleHeadAlwaysStarts(t *testing.T) {
 	}
 	if r := step(t, enqueue(t, e, need(1))); isAdmitted(r) {
 		t.Fatal("a request admitted beside a live hold with the room negative")
+	}
+}
+
+// A container request's room leaves out the holds: of 8000 MiB, less the reserve, a hold's need of
+// 40000 with a footprint of 100 leaves nothing to an ordinary request and 6976 MiB to it. Mutation:
+// compute its room with the holds → not admitted, red.
+func TestContainerIgnoresUnrealisedNeed(t *testing.T) {
+	for _, req := range []spec.Request{container(), need(1)} {
+		e := newEngine(t, newStateDir(t, ""), newFakeClock())
+		setLiveMem(t, 8000)
+		g := hold(t, e, need(40000))
+		if err := g.UpdateHold(func(h *wire.Hold) { h.FootprintMiB = 100 }); err != nil {
+			t.Fatal(err)
+		}
+		if got := isAdmitted(step(t, enqueue(t, e, req))); got != req.Container {
+			t.Errorf("%+v: admitted %v, want %v", req, got, req.Container)
+		}
+	}
+}
+
+// Its room is still the real memory above the reserve: of 1000 MiB it has none, whatever the holds
+// reserve. This passes without the container rule; it guards it. Mutation: reserve 0 in its room →
+// admitted, red.
+func TestContainerWaitsBelowTheReserve(t *testing.T) {
+	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	setLiveMem(t, 1000)
+	hold(t, e, need(1))
+	if isAdmitted(step(t, enqueue(t, e, container()))) {
+		t.Fatal("a container request admitted below the reserve")
+	}
+}
+
+// The level gate holds it as it holds any request. This passes without the container rule; it guards
+// it. Mutation: skip watchWait for it → admitted, red.
+func TestContainerWaitsAtYellow(t *testing.T) {
+	for _, level := range []watch.Level{watch.Yellow, watch.Red} {
+		clk := newFakeClock()
+		e := newEngine(t, capped(t, 8192), clk)
+		hold(t, e, need(1))
+		setWatch(t, e, clk, watch.Detector{Level: level}, time.Second)
+		if isAdmitted(step(t, enqueue(t, e, container()))) {
+			t.Errorf("a container request admitted at %v", level)
+		}
 	}
 }
 

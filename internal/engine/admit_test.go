@@ -283,6 +283,56 @@ func TestNothingPassesAHeadThatStartsAtOnce(t *testing.T) {
 	}
 }
 
+// container is a container request with no history: it needs 1 MiB and has no typical run time.
+func container() spec.Request { return spec.Request{Label: "c", NeedMiB: 1, Container: true} }
+
+// A container request needs no pass (PROTOCOL.md section 10.3): it starts ahead of a live head that
+// does not fit, whose ticket stays and stays head. Mutation: leaving step 5 in for it keeps it behind
+// the head.
+func TestContainerPassesALiveHead(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, capped(t, 2048), clk)
+	hold(t, e, need(1024))
+	head := enqueue(t, e, need(2048))
+	if isAdmitted(step(t, head)) {
+		t.Fatal("the head fits: the test shows nothing")
+	}
+	admitted(t, step(t, enqueue(t, e, container())))
+	clk.advance(time.Second)
+	if got := position(t, step(t, head)); got != 1 {
+		t.Errorf("the head's position is %d after the container request, want 1", got)
+	}
+	if q, _, _ := e.st.List(store.QueueDir); len(q) != 1 || q[0].Name != head.Name() {
+		t.Errorf("queue %v, want only the head's ticket %s", q, head.Name())
+	}
+}
+
+// The wait loop's check, not only the section's: a waiter with no typical run time behind a live head
+// does not try the section, so room that appears while the head stays reaches a container request
+// and not an ordinary one. Mutation: drop the !Container of Step's check → it never tries, red.
+func TestContainerOutsideTheWaitLoopHeadCheck(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	setLiveMem(t, 1000) // below the reserve
+	hold(t, e, need(1))
+	head := enqueue(t, e, need(1<<20))
+	c, o := enqueue(t, e, container()), enqueue(t, e, need(1))
+	for _, tk := range []*Ticket{head, c, o} {
+		if isAdmitted(step(t, tk)) {
+			t.Fatalf("%+v admitted below the reserve", tk.req)
+		}
+	}
+	setLiveMem(t, 8000)
+	clk.advance(time.Second)
+	if isAdmitted(step(t, o)) {
+		t.Fatal("the ordinary waiter passed the head")
+	}
+	admitted(t, step(t, c))
+	if o.attempts != 0 {
+		t.Errorf("the ordinary waiter tried admission %d times", o.attempts)
+	}
+}
+
 // PROTOCOL.md section 13.1: a cancel published before the head's admitting section wins.
 func TestCancelPublishedBeforeAdmissionWins(t *testing.T) {
 	dir := newStateDir(t, "")

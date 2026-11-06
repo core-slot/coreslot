@@ -113,8 +113,8 @@ func (t *Ticket) Name() string {
 // this ticket, and, once per second, read gen (rescanning queue/ when it changed) and hold the
 // election, which examines the tickets ahead from the nearest up to the first live, non-STALLED
 // one; the head tries admission with backoff from 0.25 s up to 0.5 s, repeating the election
-// before each attempt, and a waiter with a typical run time makes a single attempt per election
-// to pass the head (PROTOCOL.md section 10.3). It returns Waiting or Admitted, or
+// before each attempt, and a waiter with a typical run time or a container request makes a single
+// attempt per election to pass the head (PROTOCOL.md section 10.3). It returns Waiting or Admitted, or
 // ErrCanceled once a cancel request was found or the ticket was withdrawn. Section entries wait
 // at most RefreshEvery/4, so a caller that calls Step in a loop keeps refreshing at least every
 // RefreshEvery (see RefreshEvery). A caller that calls Step again after Due has no more work per
@@ -228,7 +228,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	if !head {
 		t.backoff = 0
 		t.nextElection = now + ElectEvery
-		if t.req.TypicalS == 0 { // only a run with a typical run time may pass (section 10.3)
+		if t.req.TypicalS == 0 && !t.req.Container { // nothing else may start ahead of the head (section 10.3)
 			return t.last, nil
 		}
 	}

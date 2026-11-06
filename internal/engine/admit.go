@@ -25,11 +25,11 @@ func fresh(atNS, nowNS int64) bool {
 	return atNS > 0 && atNS <= nowNS && nowNS-atNS <= memsample.StaleNS
 }
 
-// admit is the admission attempt of the head, or of a waiter that may pass it (PROTOCOL.md
-// section 12.1 steps 1 to 7). It returns the grant when admitted, nil with no error when the
-// ticket must keep waiting (the section was busy, a live ticket ahead may not be passed, or the
-// live holds leave too little), and ErrCanceled when a cancel request was published before this
-// section.
+// admit is the admission attempt of the head, of a waiter that may pass it, or of a container
+// request, which waits only on real memory (PROTOCOL.md section 12.1 steps 1 to 7). It returns the
+// grant when admitted, nil with no error when the ticket must keep waiting (the section was busy, a
+// live ticket ahead may not be passed, or the live holds leave too little), and ErrCanceled when a
+// cancel request was published before this section.
 func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	point("admit.before-enter")
 	sec, entered, err := t.e.enter(ctx, single)
@@ -59,7 +59,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 
 	// 2-4. The room: the headroom less the reserve and what the live holds still have to grow
 	// into. With no hold live the head starts whatever the numbers say; a headroom that cannot be
-	// read gates nothing.
+	// read gates nothing. A container request's room leaves the holds out.
 	cfg, m, err := t.e.reading()
 	if err != nil {
 		return nil, err
@@ -69,13 +69,20 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		return nil, err
 	}
 	need := t.req.NeedMiB
-	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
+	var reserved []state.MemHold
+	if !t.req.Container {
+		reserved = reservations(holds)
+	}
+	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		return nil, nil
 	}
-	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it.
-	if head, err := t.reelect(); err != nil || head != nil && !t.passes(*head, holds, room, cfg, m) {
-		return nil, err
+	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. A
+	// container request needs no pass.
+	if !t.req.Container {
+		if head, err := t.reelect(); err != nil || head != nil && !t.passes(*head, holds, room, cfg, m) {
+			return nil, err
+		}
 	}
 	if len(holds) > 0 {
 		if wait, err := t.watchWait(sec, cfg, m, need, room); wait || err != nil {

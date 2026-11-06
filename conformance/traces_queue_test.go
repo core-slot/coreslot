@@ -964,3 +964,76 @@ func TestStoppedInSectionDoesNotHangCallers(t *testing.T) {
 	}
 	s.ExitCode(0)
 }
+
+// runDocker starts `coreslot run` of a helper child named docker, which reports and holds until
+// ReleaseChild(name): a real program-rule command with no --restart. The label is name and flags go
+// before `--`.
+func (e Env) runDocker(name string, flags ...string) *Proc {
+	e.t.Helper()
+	child, err := os.ReadFile(bins.child)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	docker := filepath.Join(e.t.TempDir(), "docker")
+	if err := os.WriteFile(docker, child, 0o700); err != nil {
+		e.t.Fatal(err)
+	}
+	args := append([]string{"run", "--label", name}, flags...)
+	p := e.Start(append(args, "--", docker, "hold", e.MarkDir, name)...)
+	p.name = name
+	return p
+}
+
+// A docker command with no history starts past a live ticket and beside a hold whose unrealised need
+// leaves an ordinary request nothing; the tickets keep their place and start after it, in order. With
+// --mem it is ordinary work and queues. Mutations: keep step 5 for it, or room with the holds → D
+// stays out, red; leave !o.pinned out of the mark → the --mem D starts first, red.
+func TestContainerAheadOfQueue(t *testing.T) {
+	queued := func(t *testing.T, flags ...string) (e Env, a, b, c, d *Proc) {
+		e = State(t)
+		e.WriteConfig(roomConfig(1024))
+		a = e.Run("A", "--mem", "2048M")
+		e.WaitStarted("A")
+		b = e.Run("B", "--mem", "600M")
+		e.WaitTicket("B")
+		c = e.Run("C", "--mem", "600M")
+		e.WaitTicket("C")
+		return e, a, b, c, e.runDocker("D", flags...)
+	}
+	inOrder := func(e Env, a, b, c *Proc) {
+		e.ReleaseChild("A")
+		a.ExitCode(0)
+		e.WaitStarted("B")
+		noHold(e.t, e, "C", "C was admitted while B, ahead of it, holds the room")
+		e.ReleaseChild("B")
+		b.ExitCode(0)
+		e.WaitStarted("C")
+		e.ReleaseChild("C")
+		c.ExitCode(0)
+	}
+	t.Run("program rule", func(t *testing.T) {
+		e, a, b, c, d := queued(t)
+		e.WaitStarted("D")
+		if h, _ := e.Hold("D"); h.NeedMiB != 1 {
+			t.Errorf("D holds %d MiB, want 1", h.NeedMiB)
+		}
+		for _, label := range []string{"B", "C"} {
+			if _, ok := e.Ticket(label); !ok {
+				t.Errorf("%s's ticket is gone", label)
+			}
+		}
+		inOrder(e, a, b, c)
+		e.ReleaseChild("D")
+		d.ExitCode(0)
+	})
+	t.Run("--mem", func(t *testing.T) {
+		e, a, b, c, d := queued(t, "--mem", "1M")
+		time.Sleep(observeWait)
+		noHold(t, e, "D", "D, pinned, was admitted past the live tickets")
+		e.WaitTicket("D")
+		inOrder(e, a, b, c)
+		e.WaitStarted("D")
+		e.ReleaseChild("D")
+		d.ExitCode(0)
+	})
+}

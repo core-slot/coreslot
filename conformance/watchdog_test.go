@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
@@ -371,4 +372,33 @@ func TestRunLearnsItsTickShareForTheNextRun(t *testing.T) {
 		t.Errorf("second run learned %v at %v; want the first run's %v", h.Learned, h.NormalShare, *runs[0].TickShare)
 	}
 	e.ReleaseChild("next")
+}
+
+// A docker command waits for what is real: the headroom below the reserve, then the level gate, and
+// starts once both clear. The headroom of the traces is a fixed hook, so the reserve moves instead.
+// Mutations: reserve 0 in its room, or skip the level gate for it → D starts, red.
+func TestContainerWaitsOnRealShortage(t *testing.T) {
+	e := State(t)
+	e.WriteConfig(watchConfig(""))
+	a := e.Run("A", "--mem", "100M")
+	e.WaitStarted("A")
+	e.WaitTicked("A")
+	e.WriteConfig(roomConfig(0)) // before D starts: a reader between the truncate and the write sees the default
+	d := e.runDocker("D")
+	time.Sleep(observeWait)
+	noHold(t, e, "D", "D started with the headroom at the reserve")
+	e.WaitTicket("D")
+
+	e.SetReadings(floor(1024))
+	e.Eventually(startWait, "the level is at the floor", func() bool { return e.Watch().Level == watch.Floor })
+	e.WriteConfig(watchConfig(""))
+	time.Sleep(observeWait)
+	noHold(t, e, "D", "D started at the floor")
+
+	e.SetReadings(calm(1024))
+	e.WaitStarted("D")
+	e.ReleaseChild("A")
+	a.ExitCode(0)
+	e.ReleaseChild("D")
+	d.ExitCode(0)
 }

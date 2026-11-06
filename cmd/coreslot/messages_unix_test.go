@@ -35,6 +35,33 @@ func TestWaitReason(t *testing.T) {
 	}
 }
 
+// A container request is not short of FreeMiB, which subtracts reservations it ignores: its reasons
+// are the level, then the reserve, and an ordinary request's lines stay. Neither is claimed when the
+// room says nothing: the headroom unread, or FreeMiB enough. Mutations: leave out !req.Container →
+// "needs 1 MiB, 0 MiB free" for the first two; say the reserve whenever nothing else holds it → the
+// last two.
+func TestWaitReasonForContainer(t *testing.T) {
+	holds := []engine.HolderInfo{{Label: "a", NeedMiB: 1024}}
+	short := engine.MemInfo{Known: true, FreeMiB: 0}
+	yellow := engine.WatchInfo{Level: watch.Yellow, Fresh: true}
+	box := spec.Request{NeedMiB: 1, Container: true}
+	for _, c := range []struct {
+		rep  engine.Report
+		req  spec.Request
+		want string
+	}{
+		{engine.Report{Holds: holds, Mem: short, Watch: yellow}, box, "memory is yellow"},
+		{engine.Report{Holds: holds, Mem: short}, box, "the machine is below its memory reserve"},
+		{engine.Report{Holds: holds, Mem: short}, spec.Request{NeedMiB: 1}, "needs 1 MiB, 0 MiB free"},
+		{engine.Report{Holds: holds}, box, ""},
+		{engine.Report{Holds: holds, Mem: engine.MemInfo{Known: true, FreeMiB: 512}}, box, ""},
+	} {
+		if got := waitReason(c.rep, c.req); got != c.want {
+			t.Errorf("waitReason(%+v) = %q, want %q", c.req, got, c.want)
+		}
+	}
+}
+
 // The stop detail names the level, the footprint and the stalls against the label's normal, a share
 // under 1 % to one decimal and one below 0 as 0; the command is cut at 200 characters. Mutations:
 // whole percent everywhere says "normal 0%" for 0.3 %; one significant digit says "5e-07%" for
