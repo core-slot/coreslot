@@ -18,7 +18,7 @@ type runOptions struct {
 	need        int64  // MiB, once resolveNeed ran
 	mem         int64  // MiB from --mem, 0 when not given
 	pinned      bool   // need is --mem or the needs file's pin: learning leaves it alone
-	noRestart   bool   // the needs file marks the label no_restart: never stopped to free memory
+	noRestart   bool   // no_restart in the needs file, or a container command: never stopped to free memory
 	restart     string // --restart: "yes", "no", or "" when not given
 	typicalS    int64  // the label's typical run time from the run log, 0 unknown
 	label       string
@@ -47,14 +47,17 @@ Runs COMMAND once the budget grants it the memory it needs.
                         again (tests, builds, linters, type checks). no: never stop it; it
                         changes the world outside its own output (databases, migrations,
                         deploys, pushes, sending messages, writing shared files). When
-                        unsure, no. A label marked no_restart in needs.toml is never stopped,
-                        whatever this says. Not required where the command is never stopped
+                        unsure, no. A label marked no_restart in needs.toml and a command
+                        named docker, docker-compose or podman are never stopped, whatever
+                        this says, and need no flag; such a command keeps its Linux
+                        oom_score_adj. Not required where the command is never stopped
                         anyway: in a terminal, with --same-group, inside another run's grant,
                         or outside the budget; there no only leaves the run's Linux
                         oom_score_adj as it was, and yes changes nothing
   --mem SIZE            memory the command needs, such as 3G or 768M, more than 0. Without it
                         the run takes the label's entry in needs.toml, beside the
-                        configuration, else what the label's last 20 runs needed, else the
+                        configuration, else what the label's last 20 runs needed, else 1M
+                        for a command named docker, docker-compose or podman, else the
                         smaller of 4G and a quarter of the machine's memory
   --label L             a name for the request, shown by status and kept in the run log, so
                         never a secret; it names the request's entry in needs.toml (default
@@ -166,7 +169,7 @@ func usagef(format string, args ...any) error {
 
 // request is the request of the run. Its hold says that the run's process tree carries the work.
 func (o runOptions) request() spec.Request {
-	return spec.Request{Label: o.label, NeedMiB: o.need, TypicalS: o.typicalS}
+	return spec.Request{Label: o.label, NeedMiB: o.need, TypicalS: o.typicalS, Container: o.containerCommand() && !o.pinned}
 }
 
 // needText is the request in the form of the waiting line: `mem 3 GiB`.

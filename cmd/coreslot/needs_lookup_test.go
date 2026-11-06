@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,6 +58,93 @@ func TestNeedPrecedence(t *testing.T) {
 	wantNeed(t, []string{"--label", "other", "--", "true"}, lookup, noLearned, 32768, 4096)
 	wantNeed(t, []string{"--label", "other", "--", "true"}, lookup, noLearned, 16384, 4096)
 	wantNeed(t, []string{"--label", "other", "--", "true"}, lookup, noLearned, 8192, 2048)
+}
+
+// The need's order for a command named by the program rule: --mem, the pin, the learned need, 1 MiB,
+// and only for other commands the cold start. A pin is what makes a run pinned: a learned need or
+// the program rule's 1 MiB is not. Mutations: put the program rule above the learned need → 1 for
+// learned 31, red; drop the program rule → 4096 for a docker with no history, red; apply it to every
+// command → 1 for make, red.
+func TestNeedOrder(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"pin\"]\nmem = \"2G\"\n")
+	learned := func() (int64, bool) { return 31, true }
+	const total = 48 << 10
+	for _, c := range []struct {
+		name    string
+		args    []string
+		learned func() (int64, bool)
+		want    int64
+		pinned  bool
+	}{
+		{"--mem beats all", []string{"--label", "pin", "--mem", "512M", "--", "docker", "run"}, learned, 512, true},
+		{"the pin beats learned", []string{"--label", "pin", "--", "docker", "run"}, learned, 2048, true},
+		{"learned beats the program rule", []string{"--", "docker", "run"}, learned, 31, false},
+		{"the program rule", []string{"--", "docker", "run"}, noLearned, 1, false},
+		{"the program rule on a path", []string{"--", "/usr/local/bin/podman", "run"}, noLearned, 1, false},
+		{"the cold start", []string{"--", "make", "test"}, noLearned, 4096, false},
+	} {
+		o, err := parseRun(c.args, IO{})
+		if err != nil {
+			t.Fatalf("parseRun(%q): %v", c.args, err)
+		}
+		o.resolveNeed(lookup, c.learned, total)
+		if o.need != c.want || o.pinned != c.pinned {
+			t.Errorf("%s: need %d MiB, pinned %v; want %d, %v", c.name, o.need, o.pinned, c.want, c.pinned)
+		}
+	}
+}
+
+// A command named by the program rule is no_restart however its need was settled: stopping the
+// client would leave its container running and start a second one, so --restart is neither required
+// nor honoured. Mutation: set noRestart after the --mem return → the --mem row, red.
+func TestContainerCommandIsNoRestart(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"pin\"]\nmem = \"2G\"\n")
+	for name, flags := range map[string][]string{
+		"no pin":         nil,
+		"--mem":          {"--mem", "512M"},
+		"needs.toml pin": {"--label", "pin"},
+	} {
+		for _, restart := range []string{"", "--restart=yes"} {
+			args := append(slices.Clone(flags), "--", "docker", "run")
+			if restart != "" {
+				args = append([]string{restart}, args...)
+			}
+			o, err := parseRun(args, IO{})
+			if err != nil {
+				t.Fatalf("parseRun(%q): %v", args, err)
+			}
+			o.resolveNeed(lookup, noLearned, 32768)
+			if !o.noRestart || o.restartable() || o.restartMissing(false) {
+				t.Errorf("%s %q: noRestart %v, restartable %v, restartMissing %v; want true, false, false",
+					name, restart, o.noRestart, o.restartable(), o.restartMissing(false))
+			}
+		}
+	}
+}
+
+// The request carries the mark only for a program-rule command with no pin: a pin restores ordinary
+// admission. Mutation: leave out !o.pinned → the --mem and pin rows, red; drop containerCommand →
+// the make row, red.
+func TestRequestContainerMark(t *testing.T) {
+	lookup, _ := lookupOf(t, "[needs.\"pin\"]\nmem = \"2G\"\n")
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--", "docker", "run"}, true},
+		{[]string{"--mem", "512M", "--", "docker", "run"}, false},
+		{[]string{"--label", "pin", "--", "docker", "run"}, false},
+		{[]string{"--", "make", "test"}, false},
+	} {
+		o, err := parseRun(c.args, IO{})
+		if err != nil {
+			t.Fatalf("parseRun(%q): %v", c.args, err)
+		}
+		o.resolveNeed(lookup, noLearned, 32768)
+		if got := o.request().Container; got != c.want {
+			t.Errorf("%q: Container %v, want %v", c.args, got, c.want)
+		}
+	}
 }
 
 // A run with no label never reads the needs file. Mutation: drop the label check → red.

@@ -38,14 +38,16 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 }
 
 // resolveNeed sets the run's need: --mem, else the needs file's pin for its label, else what its
-// last runs needed (learned, read only when neither is set), else the cold start of a machine of
-// totalMiB. It also takes the label's no_restart mark.
+// last runs needed (learned, read only when neither is set), else 1 MiB for a container command,
+// else the cold start of a machine of totalMiB. It also takes the label's no_restart mark, which a
+// container command has whatever its label says: a stop would kill the client and leave its
+// container.
 func (o *runOptions) resolveNeed(lookup needsLookup, learned func() (int64, bool), totalMiB int64) {
 	var e needs.Entry
 	if lookup != nil && o.label != "" {
 		e, _ = lookup(o.label)
 	}
-	o.noRestart = e.NoRestart
+	o.noRestart = e.NoRestart || o.containerCommand()
 	if mib := o.mem; mib > 0 {
 		o.need, o.pinned = mib, true
 		return
@@ -56,6 +58,10 @@ func (o *runOptions) resolveNeed(lookup needsLookup, learned func() (int64, bool
 	}
 	if mib, ok := learned(); ok {
 		o.need = mib
+		return
+	}
+	if o.containerCommand() {
+		o.need = 1
 		return
 	}
 	o.need = spec.ColdStartMiB(totalMiB)

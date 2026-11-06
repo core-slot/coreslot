@@ -32,3 +32,17 @@ func TestOOMScoreLeftForNoRestart(t *testing.T) {
 		t.Errorf("the no_restart command's oom_score_adj %q (exit %d, stderr %q), want it left at %q", got, r.code, r.stderr, want)
 	}
 }
+
+// A container client is not put first in line either, whatever --restart says: the kernel would kill
+// the client and leave its container running. Mutation: raising every run's score.
+func TestOOMScoreLeftForDocker(t *testing.T) {
+	dir := stateDir(t, "")
+	own, err := os.ReadFile("/proc/self/oom_score_adj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--", dockerStandIn(t, "cat /proc/self/oom_score_adj"))
+	if got, want := strings.TrimSpace(r.stdout), strings.TrimSpace(string(own)); r.code != 0 || got != want {
+		t.Errorf("the docker command's oom_score_adj %q (exit %d, stderr %q), want it left at %q", got, r.code, r.stderr, want)
+	}
+}

@@ -345,12 +345,15 @@ reader does not know is ignored.
 
 > **Implementation note.** The Go CLI takes a run's need from `--mem`, else the label's `mem`, else
 > the 90th percentile of the `mem_peak_kib` of the label's last 20 counted runs (section 20) rounded
-> up to a whole MiB, else the cold start (section 5.1). A run's `victim` (section 7.4) is true only
-> when it was started with `--restart=yes` and its label has no `no_restart = true`, which wins over
-> the flag; `--restart=no` makes it false. The CLI requires `--restart` of every run that could be a
-> victim (its command gets a process group of its own and its label is not `no_restart`), and
-> accepts it elsewhere, where `--restart=no` only keeps the run's `oom_score_adj` (section 17) and
-> `--restart=yes` changes nothing.
+> up to a whole MiB, else, for a container command, 1 MiB, else the cold start (section 5.1). A
+> **container command** is one whose argv[0] has the basename `docker`, `docker-compose` or
+> `podman`; `sh -c 'docker run ...'` is not one. A run's `victim` (section 7.4) is true only when it
+> was started with `--restart=yes` and its label has no `no_restart = true`, which wins over the
+> flag; `--restart=no` makes it false. A container command counts as `no_restart` however its need
+> was settled, a pin included: a stop would kill the client and leave its container running. The CLI
+> requires `--restart` of every run that could be a victim (its command gets a process group of its
+> own and it is not `no_restart`), and accepts it elsewhere, where `--restart=no` only keeps the
+> run's `oom_score_adj` (section 17) and `--restart=yes` changes nothing.
 
 ## 6. Holds and descriptor ownership
 
@@ -1007,8 +1010,9 @@ is passed on.
 On Linux a run SHOULD raise its own `oom_score_adj` to 500, never lowering a higher one, before it
 starts the command, which inherits it, so that the kernel's out-of-memory kill takes a coreslot
 job rather than the desktop (systemd-oomd does not read the score: it picks a cgroup by its memory
-pressure or swap use). A run whose label has `no_restart` (section 5.4), or that its caller
-declared not to be run again (the CLI's `--restart=no`), leaves its score alone.
+pressure or swap use). A run whose label has `no_restart` or whose command is a container command
+(section 5.4), or that its caller declared not to be run again (the CLI's `--restart=no`), leaves
+its score alone: the kernel would kill a container's client and leave the container.
 
 ## 18. Nested runs: pass-through
 
@@ -1145,8 +1149,8 @@ and hold names and their temporaries from one counter and the temporaries of `ge
 The examples use the `coreslot` CLI, which is not part of the protocol: `coreslot run [--mem SIZE]
 [--label L] [--timeout D] [--on-timeout run|fail] [--no-wait] [--strict] [--independent]
 [--same-group] [--refusal-code N] -- COMMAND...`. Without `--mem` the need is the label's entry in
-the needs file (section 5.4), else what the label's last counted runs needed (section 20), else the
-cold start (section 5.1). `--timeout` defaults to 0, no limit, and is one deadline from the run's start for
+the needs file (section 5.4), else what the label's last counted runs needed (section 20), else
+1 MiB for a container command (section 5.4), else the cold start (section 5.1). `--timeout` defaults to 0, no limit, and is one deadline from the run's start for
 every wait of every attempt, restarts included; it never stops a running command; a negative one is a usage error. `--on-timeout`
 defaults to `fail`, so a `--timeout` that expires refuses; with `run` an ordinary request runs
 outside the budget, while a restart (section 24) refuses whatever `--on-timeout` says. Strict mode

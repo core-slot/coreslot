@@ -27,6 +27,7 @@ type Request struct {
 	ArrivalNS int64 // a stopped command's first arrival, which keeps its place; 0 arrives now
 	Restart   bool  // a stopped command coming back: it waits for calm and a margin over its need
 	TypicalS  int64 // the label's typical run time in whole seconds; 0 is unknown, which never passes
+	Container bool  // container work by the program rule, no pin: the waiter's own, never written (PROTOCOL.md section 12.1)
 }
 
 // UsageError reports input that can never be valid: the CLI's exit 64.

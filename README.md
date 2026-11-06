@@ -164,8 +164,8 @@ leaves its label learning. A learning command still holds its memory, and `statu
 watchdog is learning and how many running commands have no normal share yet.
 
 On Linux the run also raises its own `oom_score_adj` to 500, so the kernel's out-of-memory kill
-takes a coreslot command before your desktop; a `--restart=no` run and a label with
-`no_restart = true` keep their score.
+takes a coreslot command before your desktop; a `--restart=no` run, a label with
+`no_restart = true` and a command named `docker`, `docker-compose` or `podman` keep their score.
 The floor needs swap to grow, so on a host without swap it never fires and the kernel's
 out-of-memory killer acts instead, and the paging gate opens on any rise of the memory stall, which
 is nearly every period. A label's normal share is measured only while the gate is closed, so on
@@ -234,7 +234,10 @@ stopped. When unsure, choose no. Without it such a run refuses with a usage erro
 says so. Where the command is never stopped anyway (a run in a terminal, `--same-group`, a run
 nested inside another run's reservation, a run outside the budget) the flag is not required;
 there `--restart=no` only keeps the Linux `oom_score_adj` the run would otherwise raise, and
-`--restart=yes` changes nothing.
+`--restart=yes` changes nothing. A command named `docker`, `docker-compose` or `podman` needs no
+flag and does not honour `--restart=yes`: a stop would kill the client and leave its container
+running. With no pin and no history it needs 1 MiB. `sh -c 'docker run ...'` is not such a command:
+only the name of the command itself counts.
 
 `--no-wait` refuses at once instead of queueing, `--timeout D` bounds all the waiting of the run,
 restarts included, counted from its start (it never stops a running command), and

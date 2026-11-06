@@ -577,6 +577,37 @@ func TestRestartRequired(t *testing.T) {
 	}
 }
 
+// dockerStandIn writes an executable script named docker running body. The program rule reads
+// argv[0]'s basename only, so a script stands in for the client.
+func dockerStandIn(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A command named docker could be stopped by nothing, so it is not asked the choice; stdin here is
+// no terminal, which alone would waive it. Mutation: leave containerCommand out of resolveNeed's
+// noRestart → exit 64, red.
+func TestDockerNeedsNoRestartFlag(t *testing.T) {
+	dir := stateDir(t, "")
+	if r := cli(t, baseEnv(dir), "run", "--", dockerStandIn(t, "exit 0"), "0"); r.code != 0 {
+		t.Errorf("exit %d, stderr %q; want 0", r.code, r.stderr)
+	}
+}
+
+// A wrapped docker is no program-rule command: argv[0] is sh, so at admission it is ordinary work
+// and the choice is required. Mutation: look at every argument in containerCommand → exit 0, red.
+func TestWrappedDockerStillNeedsRestart(t *testing.T) {
+	dir := stateDir(t, "")
+	r := cli(t, baseEnv(dir), "run", "--", "sh", "-c", dockerStandIn(t, "exit 0")+" 0")
+	if r.code != 64 || !strings.Contains(r.stderr, errRestartMissing.Error()) {
+		t.Errorf("exit %d, stderr %q; want 64 and errRestartMissing", r.code, r.stderr)
+	}
+}
+
 // ---------------------------------------------------------------- runs
 
 func TestRunPassesExitStatus(t *testing.T) {
