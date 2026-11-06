@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.5.2 (2026-11-06)
+
 ### Changed
 
 - A command named `docker`, `docker-compose` or `podman` needs no `--restart`, does not honour
