@@ -12,10 +12,11 @@ import (
 	"time"
 )
 
-// Proc is one process of a listing: its parent and its start time, in ns since the epoch.
+// Proc is one process of a listing: its parent, its start time, in ns since the epoch, and its name.
 type Proc struct {
 	PPID    int
 	StartNS int64
+	Name    string
 }
 
 // startSlack is how much later than its hold's start a holder may have started: the listing's
@@ -136,6 +137,22 @@ func ContainerProgram(name string) bool {
 // engine's: its basename is docker.sock.
 func containerSocket(p string) bool { return path.Base(p) == "docker.sock" }
 
-// commName returns the process name in the text of /proc/PID/comm, which ends in a newline. It
-// lives here, not in the Linux file, so that it is tested on every platform.
-func commName(text string) string { return strings.TrimSuffix(text, "\n") }
+// ContainerClient reports whether root or a descendant is named by ContainerProgram or, on macOS,
+// holds a unix socket connected to one containerSocket accepts. A process that cannot be read is
+// skipped.
+func ContainerClient(root int) bool {
+	procs, ok := Listing()
+	if !ok {
+		return false
+	}
+	parents := make(map[int]int, len(procs))
+	for pid, p := range procs {
+		parents[pid] = p.PPID
+	}
+	for _, pid := range descendants(root, parents) {
+		if ContainerProgram(procs[pid].Name) || holdsDockerSocket(pid) {
+			return true
+		}
+	}
+	return false
+}

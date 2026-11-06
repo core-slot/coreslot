@@ -20,6 +20,3 @@ func Headroom() (mib int64, ok bool) { return 0, false }
 
 // Listing is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Listing() (map[int]Proc, bool) { return nil, false }
-
-// ContainerClient is implemented on macOS and Linux only; elsewhere it finds nothing.
-func ContainerClient(root int) bool { return false }

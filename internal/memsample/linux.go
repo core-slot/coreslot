@@ -24,7 +24,7 @@ func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 		if err != nil {
 			continue
 		}
-		if f, ok := stat(pid); ok && len(f) >= 13 {
+		if _, f, ok := stat(pid); ok && len(f) >= 13 {
 			if ppid, err := strconv.Atoi(f[1]); err == nil {
 				parents[pid], stats[pid] = ppid, f
 			}
@@ -51,30 +51,11 @@ func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	return kib + shmem, times, ok
 }
 
-// ContainerClient reports whether root or a descendant is named by ContainerProgram, by its
-// /proc/PID/comm. A process that cannot be read is skipped.
-func ContainerClient(root int) bool {
-	procs, ok := Listing()
-	if !ok {
-		return false
-	}
-	parents := make(map[int]int, len(procs))
-	for pid, p := range procs {
-		parents[pid] = p.PPID
-	}
-	for _, pid := range descendants(root, parents) {
-		if data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm"); err == nil && ContainerProgram(commName(string(data))) {
-			return true
-		}
-	}
-	return false
-}
-
 // userHZ is the unit of the start time in /proc/<pid>/stat: clock ticks of 1/100 s.
 const userHZ = 100
 
-// Listing reads the process table once: every process's parent and start time from /proc, the
-// start time as its ticks after boot plus the boot time of /proc/stat.
+// Listing reads the process table once: every process's parent, start time and name from /proc,
+// the start time as its ticks after boot plus the boot time of /proc/stat.
 func Listing() (map[int]Proc, bool) {
 	data, err := os.ReadFile("/proc/stat")
 	if err != nil {
@@ -100,7 +81,7 @@ func Listing() (map[int]Proc, bool) {
 		if err != nil {
 			continue
 		}
-		f, ok := stat(pid)
+		name, f, ok := stat(pid)
 		if !ok || len(f) < 20 {
 			continue
 		}
@@ -109,20 +90,26 @@ func Listing() (map[int]Proc, bool) {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		procs[pid] = Proc{PPID: ppid, StartNS: btime*int64(time.Second) + ticks*(int64(time.Second)/userHZ)}
+		procs[pid] = Proc{PPID: ppid, StartNS: btime*int64(time.Second) + ticks*(int64(time.Second)/userHZ), Name: name}
 	}
 	return procs, true
 }
 
-// stat returns the fields of /proc/<pid>/stat after the last ')', which ends the command name:
-// f[0] is the state (field 3), f[1] the parent pid, f[19] the start time in ticks (field 22).
-func stat(pid int) ([]string, bool) {
+// stat returns the command name of /proc/<pid>/stat, between the first '(' and the last ')' (a name
+// may hold either, and spaces), and the fields after it: f[0] is the state (field 3), f[1] the
+// parent pid, f[19] the start time in ticks (field 22).
+func stat(pid int) (name string, f []string, ok bool) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		return nil, false
+		return "", nil, false
 	}
 	s := string(data)
-	return strings.Fields(s[strings.LastIndexByte(s, ')')+1:]), true
+	end := strings.LastIndexByte(s, ')')
+	if end < 0 {
+		return "", nil, false
+	}
+	_, name, _ = strings.Cut(s[:end], "(")
+	return name, strings.Fields(s[end+1:]), true
 }
 
 // Headroom returns MemAvailable of /proc/meminfo in MiB, or the room under this process's cgroup

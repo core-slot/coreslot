@@ -1649,7 +1649,7 @@ connects by TCP, a call shorter than a second and a client outside the tree are 
 work stays ordinary.
 
 > **Implementation note.** The Go CLI reads `p_comm` and, on macOS, the peer path of each unix
-> socket with `proc_pidfdinfo`. On Linux it reads `/proc/PID/comm` alone: a client socket has no path
+> socket with `proc_pidfdinfo`. On Linux it reads the name in `/proc/PID/stat` alone: a client socket has no path
 > of its own there, so a library client stays ordinary work.
 
 A run stopped by a floor round tells its agent that the whole machine ran out of memory (swap

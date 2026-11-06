@@ -4,6 +4,7 @@ package memsample
 
 import (
 	"encoding/binary"
+	"slices"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -88,6 +89,9 @@ func peers(pid int) []string {
 	}
 	return out
 }
+
+// holdsDockerSocket reports whether pid holds a unix socket connected to one containerSocket accepts.
+func holdsDockerSocket(pid int) bool { return slices.ContainsFunc(peers(pid), containerSocket) }
 
 // indexNUL returns the index of the first NUL in b, or -1.
 func indexNUL(b []byte) int {
