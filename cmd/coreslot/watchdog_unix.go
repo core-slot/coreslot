@@ -32,7 +32,8 @@ var listClient = memsample.ContainerClient
 // the command's group and returns stopped, or in observe mode says what it would stop. A command
 // named as a container client is container work from the start; any other is from the first
 // listing that finds a client in its tree: it takes no stop from then on, and the next tick's hold
-// update clears its Victim. The scan needs a log, the one reader that outlives the hold: a pass-through has none.
+// update clears its Victim. The scan needs a log, the one reader that outlives the hold: a
+// pass-through has none.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
