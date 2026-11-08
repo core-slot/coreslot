@@ -10,6 +10,8 @@ type peak struct {
 	kib       int64
 	ok        bool
 	container bool
+	sumKiB    int64 // the readings that succeeded, summed
+	samples   int64 // and counted, for the mean footprint
 }
 
 // setMemPeak records the larger of the sampled peak and the rusage's maxRSSKiB (nil when unknown)

@@ -79,6 +79,16 @@ func (r *Recorder) Stop() {
 	r.mu.Unlock()
 }
 
+// Stopped reports that no line is written any more; a nil recorder is stopped.
+func (r *Recorder) Stopped() bool {
+	if r == nil {
+		return true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopped
+}
+
 func (r *Recorder) emit(event string, f Fields, run bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

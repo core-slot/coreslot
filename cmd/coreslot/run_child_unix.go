@@ -11,8 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/telemetry"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
@@ -39,6 +42,7 @@ type child struct {
 	files    []*os.File // ExtraFiles: fd 3, nil without a hold
 	grantMiB int64
 	failOpen string
+	failCode string        // the closed code of failOpen the telemetry line carries
 	release  func() error  // closes the run's copies of the grant once the command exited
 	log      *store.Store  // the run log to append to; nil writes none
 	grant    *engine.Grant // the admitted grant the watchdog ticks for; nil outside the budget
@@ -59,8 +63,10 @@ func (r *run) runChild(c child) int {
 	}
 	if sig := pendingSignal(); sig != 0 {
 		// Interrupted between the admission and the start: the command never runs.
-		_ = c.release()
 		code, _ := classify(&interruptError{Sig: sig})
+		if r.identityMismatch(c.release()) == nil {
+			r.rec.Emit("not_started", telemetry.Fields{"reason": unix.SignalName(sig)})
+		}
 		return code
 	}
 	// --same-group takes the terminal-mode branch: the command stays in coreslot's group.
@@ -76,12 +82,14 @@ func (r *run) runChild(c child) int {
 	var sup *supervisor
 	var p peak
 	stopped := false
+	notStarted := ""
 	if err := exposeInherited(cmd.Start); err != nil {
 		childDone(terminal)
 		released = c.release()
 		code, _ := classify(&execError{Err: err})
 		r.notice("cannot run %s: %s", text(argv[0]), text(err.Error()))
 		status = code
+		notStarted = "exec"
 	} else {
 		sup = newSupervisor(cmd, !terminal)
 		ctx, stop := context.WithCancel(context.Background())
@@ -126,13 +134,40 @@ func (r *run) runChild(c child) int {
 			r.notice("the run log was not written: %s", text(err.Error()))
 		}
 	}
+	if notStarted != "" {
+		r.rec.Emit("not_started", telemetry.Fields{"reason": notStarted})
+		return status
+	}
+	rec.FailOpen = ""
+	f := telemetry.Fields{"record": rec}
+	if c.grant != nil && c.grant.HoldName() != "" {
+		f["hold"] = c.grant.HoldName()
+	}
+	if c.failCode != "" {
+		f["fail_open"] = c.failCode
+	}
+	if sup.ws.Signaled() {
+		f["signal"] = unix.SignalName(sup.ws.Signal())
+	}
+	switch {
+	case r.stopped && r.lastFloor:
+		f["stopped_by"] = "watchdog_floor"
+	case r.stopped:
+		f["stopped_by"] = "watchdog_red"
+	case killed:
+		f["stopped_by"] = "outside"
+	}
+	if p.samples > 0 {
+		f["mean_footprint_mib"] = p.sumKiB / p.samples / 1024
+	}
+	r.rec.Emit("ended", f)
 	return status
 }
 
-// childEnv is the command's environment: with a recorder, env and the mark a run nested in the
+// childEnv is the command's environment: with a live recorder, env and the mark a run nested in the
 // command reads, since it cannot read the switch without a new read of its own.
 func (r *run) childEnv(env []string) []string {
-	if r.rec == nil {
+	if r.rec.Stopped() {
 		return env
 	}
 	return append(slices.Clone(env), engine.EnvTelemetry+"=1")
@@ -161,11 +196,10 @@ func recordUsage(rec *store.RunRecord, ru *syscall.Rusage) (maxRSS *int64) {
 // release wrote nothing into the state directory as it now exists, and neither does the run, not
 // even its run-log line. A descriptor that failed to close is reported, and the run goes on.
 func (r *run) releaseFailed(err error) (stop bool) {
-	var mismatch *engine.IdentityError
-	switch {
-	case err == nil:
+	if err == nil {
 		return false
-	case errors.As(err, &mismatch):
+	}
+	if mismatch := r.identityMismatch(err); mismatch != nil {
 		reason, ok := stateReason(mismatch.Err)
 		if !ok {
 			reason = mismatch.Error()
@@ -175,6 +209,17 @@ func (r *run) releaseFailed(err error) (stop bool) {
 	}
 	r.notice("the grant's descriptors did not all close: %s", text(err.Error()))
 	return false
+}
+
+// identityMismatch returns err's identity mismatch, if it is one, and silences the recorder: it
+// writes nothing into a state directory that was replaced under the run.
+func (r *run) identityMismatch(err error) *engine.IdentityError {
+	var mismatch *engine.IdentityError
+	if !errors.As(err, &mismatch) {
+		return nil
+	}
+	r.rec.Stop()
+	return mismatch
 }
 
 // errFormatChanged is the outcome of a run-log append that found a FORMAT this client does not

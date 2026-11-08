@@ -123,3 +123,21 @@ fails writes none of them.
 | `cancelled` | | `coreslot cancel` ended the wait |
 | `refused` | `reason`, `no_wait` or `strict` | `--no-wait` was not admitted at once, or `--strict` met a state error; not written when FORMAT is what could not be read |
 | `timeout` | `on_timeout`, as on `enqueue` | `--timeout` ran out; a restart's wait never runs outside the budget, whatever this says |
+
+### `ended`
+
+Written after the run-log line, when the command ran and was reaped.
+
+| key | meaning |
+|---|---|
+| `hold` | the hold's name; absent without one |
+| `record` | the run-log line of the attempt, with `fail_open` emptied |
+| `fail_open` | why the run was outside the budget: `timeout`, `state_error`, `format`, `parent_unbudgeted`; absent otherwise |
+| `signal` | the signal that killed the command, by name; an `exit 137` of the command's own is not one |
+| `stopped_by` | `watchdog_red` or `watchdog_floor` when a stop round killed it, `outside` when a SIGKILL did that coreslot did not send; absent otherwise |
+| `mean_footprint_mib` | the mean of the tree's 1 s readings, in whole MiB; absent for a run with no reading |
+
+### `not_started`
+
+The command was never started: `reason` is `exec` when it could not be started, or the name of the
+signal that came between the admission and the start.

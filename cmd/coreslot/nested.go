@@ -198,5 +198,5 @@ func (r *run) passThrough(env map[string]string) int {
 // 1): with its need, passing CORESLOT_UNBUDGETED on, writing no degraded record.
 func (r *run) passThroughUnbudgeted(reason string) int {
 	r.notice("the parent run is unbudgeted (%s); running unbudgeted with mem=%s", text(reason), spec.FormatMiB(r.o.need))
-	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, release: func() error { return nil }})
+	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, failCode: "parent_unbudgeted", release: func() error { return nil }})
 }

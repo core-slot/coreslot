@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/telemetry"
@@ -945,5 +947,208 @@ func TestRestartEnqueueFailureRecordsNothing(t *testing.T) {
 	}
 	if got := eventNames(events(t, b.dir)); got != "enqueue admitted" {
 		t.Errorf("events %q, want the first attempt's alone", got)
+	}
+}
+
+// ended is an in-process run whose command ends, over a state directory with its layout and
+// telemetry on.
+type ended struct {
+	dir string
+	st  *store.Store
+	r   *run
+}
+
+func newEnded(t *testing.T, argv ...string) *ended {
+	t.Helper()
+	dir := recordedDir(t, 512)
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { null.Close() })
+	r := &run{o: runOptions{need: 1, restart: "no", noRestart: true, label: "go test", onTimeout: "fail", refusalCode: exitRefusal, argv: argv},
+		io: IO{Stdin: null, Stdout: null, Stderr: null}, loc: location{dir: dir, cfgPath: filepath.Join(dir, "config.toml")},
+		start: time.Now(), telemetry: true}
+	r.rec = telemetry.New(dir, "1-1", "go test")
+	return &ended{dir: dir, st: st, r: r}
+}
+
+func (b *ended) child(failOpen, code string) child {
+	return child{env: os.Environ(), release: func() error { return nil }, log: b.st, failOpen: failOpen, failCode: code}
+}
+
+// ended is the run log's line, joined: its record is the appended line with fail_open emptied, and
+// its time_ns is exact. Mutations: a time_ns taken again at the end; the record built apart from
+// the one appended.
+func TestEndedJoinsTheRunLog(t *testing.T) {
+	b := newEnded(t, "true")
+	if code := b.r.runChild(b.child("", "")); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	data, err := os.ReadFile(filepath.Join(b.dir, store.TelemetryDir, store.EventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line struct {
+		E      string          `json:"e"`
+		Record store.RunRecord `json:"record"`
+	}
+	if err := json.Unmarshal(bytes.Split(bytes.TrimSpace(data), []byte("\n"))[0], &line); err != nil {
+		t.Fatal(err)
+	}
+	runs, _, err := b.st.ReadRuns()
+	if err != nil || len(runs) != 2 { // the setup run's line and this one
+		t.Fatalf("run log %v, %d lines", err, len(runs))
+	}
+	if line.E != "ended" || !reflect.DeepEqual(line.Record, runs[1]) || line.Record.TimeNS != b.r.start.UnixNano() {
+		t.Errorf("ended %+v, the run log's %+v, want start %d", line, runs[1], b.r.start.UnixNano())
+	}
+}
+
+// A death by SIGKILL is a signal and an outsider's; a command's own exit 137 is neither.
+// Mutation: reading exit == 137 for the signal.
+func TestEndedSignalNotExit137(t *testing.T) {
+	b := newEnded(t, "sh", "-c", "exit 137")
+	if code := b.r.runChild(b.child("", "")); code != 137 {
+		t.Fatalf("exit %d", code)
+	}
+	m := event(t, events(t, b.dir), "ended")
+	if _, ok := m["signal"]; ok {
+		t.Errorf("signal on an exit 137: %v", m["signal"])
+	}
+	if _, ok := m["stopped_by"]; ok {
+		t.Errorf("stopped_by on an exit 137: %v", m["stopped_by"])
+	}
+	k := newEnded(t, "sh", "-c", "kill -9 $$")
+	k.r.runChild(k.child("", ""))
+	m = event(t, events(t, k.dir), "ended")
+	if m["signal"] != "SIGKILL" || m["stopped_by"] != "outside" {
+		t.Errorf("signal %v stopped_by %v, want SIGKILL and outside", m["signal"], m["stopped_by"])
+	}
+}
+
+// The mean is the integer MiB of the sampled sum over the readings that succeeded.
+// Mutations: dividing by the peak's reading or by the ticks; keeping the rounding of a float.
+func TestMeanFootprint(t *testing.T) {
+	var n atomic.Int64
+	saved, savedClient := listTree, listClient
+	listTree = func(int) (int64, map[int]memsample.TreeTimes, bool) {
+		switch n.Add(1) {
+		case 1:
+			return 100 << 10, nil, true
+		case 2:
+			return 301 << 10, nil, true
+		}
+		return 0, nil, false
+	}
+	listClient = func(int) bool { return false }
+	t.Cleanup(func() { listTree, listClient = saved, savedClient })
+	b := newEnded(t, "sleep", "2.6")
+	b.r.runChild(b.child("", ""))
+	if got := event(t, events(t, b.dir), "ended")["mean_footprint_mib"]; got != 200.0 {
+		t.Errorf("mean_footprint_mib %v, want 200 (the integer of 200.5)", got)
+	}
+}
+
+// A run under a second has no sample: no mean, and the exit status and the run-log line stand.
+// Mutation: the mean taken as sum/samples without the guard divides by zero and loses the line.
+func TestSubSecondRunHasNoMean(t *testing.T) {
+	b := newEnded(t, "true")
+	if code := b.r.runChild(b.child("", "")); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	m := event(t, events(t, b.dir), "ended")
+	if _, ok := m["mean_footprint_mib"]; ok {
+		t.Errorf("a mean with no sample: %v", m["mean_footprint_mib"])
+	}
+	if runs := runLog(t, b.dir); len(runs) != 2 {
+		t.Errorf("%d run-log lines, want the setup's and this run's", len(runs))
+	}
+}
+
+// The line carries a closed code for a fail-open run, never the reason a state error gave.
+// Mutation: fail_open set from the run log's text.
+func TestFailOpenCodeHasNoPath(t *testing.T) {
+	b := newEnded(t, "true")
+	b.r.runChild(b.child("/Users/ana/state/holds: permission denied", "state_error"))
+	data, err := os.ReadFile(filepath.Join(b.dir, store.TelemetryDir, store.EventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "/") || strings.Contains(string(data), "ana") {
+		t.Errorf("a path in %s", data)
+	}
+	if got := event(t, events(t, b.dir), "ended")["fail_open"]; got != "state_error" {
+		t.Errorf("fail_open %v", got)
+	}
+}
+
+// A command that cannot be started ends in not_started with reason exec, and in no ended.
+// Mutation: ended emitted for it as well.
+func TestNotStartedExec(t *testing.T) {
+	b := newEnded(t, filepath.Join(t.TempDir(), "no-such-command"))
+	if code := b.r.runChild(b.child("", "")); code == 0 {
+		t.Fatal("exit 0")
+	}
+	evs := events(t, b.dir)
+	if eventNames(evs) != "not_started" || evs[0]["reason"] != "exec" {
+		t.Errorf("events %q, line %v", eventNames(evs), evs)
+	}
+}
+
+// A signal between the admission and the start names itself; a release that found its files
+// replaced silences the line. Mutation: the release error dropped, as before.
+func TestNotStartedSignal(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		release error
+		want    string
+	}{
+		{"released", nil, "not_started"},
+		{"identity mismatch", &engine.IdentityError{Err: &store.StateError{Reason: "x"}}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newEnded(t, "true")
+			runSignals <- syscall.SIGTERM
+			ch := b.child("", "")
+			ch.release = func() error { return c.release }
+			b.r.runChild(ch)
+			evs := events(t, b.dir)
+			if eventNames(evs) != c.want {
+				t.Fatalf("events %q, want %q", eventNames(evs), c.want)
+			}
+			if c.want != "" && evs[0]["reason"] != "SIGTERM" {
+				t.Errorf("reason %v", evs[0]["reason"])
+			}
+		})
+	}
+}
+
+// After a release identity mismatch the recorder writes nothing more. Mutation: dropping Stop.
+func TestReleaseFailedSilencesRecorder(t *testing.T) {
+	b := newEnded(t, "true")
+	b.r.rec.Emit("probe", nil)
+	if !b.r.releaseFailed(&engine.IdentityError{Err: &store.StateError{Reason: "x"}}) {
+		t.Fatal("a mismatch did not stop the run")
+	}
+	b.r.rec.Emit("after", nil)
+	if got := eventNames(events(t, b.dir)); got != "probe" {
+		t.Errorf("events %q, want only probe", got)
+	}
+}
+
+// A stopped recorder's run hands its command no mark. Mutation: the mark added by r.rec != nil.
+func TestStoppedRecorderLeavesNoMark(t *testing.T) {
+	b := newEnded(t, "true")
+	if env := b.r.childEnv(nil); len(env) != 1 || env[0] != engine.EnvTelemetry+"=1" {
+		t.Fatalf("env %q with a live recorder", env)
+	}
+	b.r.rec.Stop()
+	if env := b.r.childEnv([]string{"A=1"}); len(env) != 1 {
+		t.Errorf("env %q after Stop, want A=1 only", env)
 	}
 }

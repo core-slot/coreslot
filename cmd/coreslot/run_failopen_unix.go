@@ -27,7 +27,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 			return code
 		}
 		r.notice("%s; running unbudgeted with mem=%s", format.Error(), spec.FormatMiB(r.o.need))
-		return r.runChild(r.unbudgetedChild(format.Error(), nil))
+		return r.runChild(r.unbudgetedChild(format.Error(), "format", nil))
 	}
 	reason, ok := stateReason(err)
 	if !ok {
@@ -47,7 +47,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	if e != nil {
 		g, ferr = e.FailOpen(r.o.request(), reason)
 	}
-	c := r.unbudgetedChild(reason, g)
+	c := r.unbudgetedChild(reason, "state_error", g)
 	if g != nil && g.HoldName() != "" {
 		c.log = e.Store() // FORMAT was understood in the section that published the hold
 	}
@@ -57,11 +57,12 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	return r.runChild(c)
 }
 
-// unbudgetedChild is the child of a run outside the budget for reason, with its need: g's
+// unbudgetedChild is the child of a run outside the budget for reason (code is its closed name
+// on the telemetry line), with its need: g's
 // environment and descriptor when its unbudgeted hold g was published (g may be nil), else the
 // unbudgeted environment engine.ChildEnv builds. The caller decides whether it logs.
-func (r *run) unbudgetedChild(reason string, g *engine.Grant) child {
-	c := child{grantMiB: r.o.need, failOpen: reason, release: func() error { return nil }}
+func (r *run) unbudgetedChild(reason, code string, g *engine.Grant) child {
+	c := child{grantMiB: r.o.need, failOpen: reason, failCode: code, release: func() error { return nil }}
 	if g != nil {
 		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
 	} else {
@@ -102,7 +103,7 @@ func (r *run) timeoutRun(e *engine.Engine) int {
 	r.notice("not admitted within %v (--timeout); running without the budget with mem=%s (--on-timeout run)",
 		r.o.timeout, spec.FormatMiB(r.o.need))
 	g, herr := e.UnbudgetedHold(r.o.request(), timeoutReason)
-	c := r.unbudgetedChild(timeoutReason, g)
+	c := r.unbudgetedChild(timeoutReason, "timeout", g)
 	if timeoutLogs(g != nil && g.HoldName() != "", herr) {
 		c.log = e.Store()
 	}

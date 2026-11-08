@@ -55,8 +55,11 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		case <-t.C:
 		}
 		kib, times, ok := listTree(sup.pid)
-		if ok && (!p.ok || kib > p.kib) {
-			p.kib, p.ok = kib, true
+		if ok {
+			p.sumKiB, p.samples = p.sumKiB+kib, p.samples+1
+			if !p.ok || kib > p.kib {
+				p.kib, p.ok = kib, true
+			}
 		}
 		if !p.container && st != nil {
 			p.container = listClient(sup.pid)
