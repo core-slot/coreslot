@@ -10,6 +10,7 @@ import (
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/telemetry"
 )
 
 // failOpen handles a state error (PROTOCOL.md section 14): under --strict a refusal, otherwise
@@ -35,6 +36,9 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	if r.o.strict {
 		code, _ := classify(strictRefusal(err, r.o.refusalCode))
 		r.notice("state error: %s; refusing (--strict)", text(reason))
+		if format == nil { // a directory whose FORMAT cannot be read takes no line
+			r.recordWaitEnd("refused", telemetry.Fields{"reason": "strict"})
+		}
 		return code
 	}
 	r.notice("state error: %s; running unbudgeted with mem=%s (fail-open)", text(reason), spec.FormatMiB(r.o.need))

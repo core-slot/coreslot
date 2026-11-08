@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -694,5 +695,255 @@ func TestOversizedReadsOnce(t *testing.T) {
 				t.Errorf("%d readings, want 1", reads)
 			}
 		})
+	}
+}
+
+// wantWaitEnd checks what every event that ends a wait carries.
+func wantWaitEnd(t *testing.T, m map[string]any, lastReason string) {
+	t.Helper()
+	if _, ok := m["waited_s"].(float64); !ok {
+		t.Errorf("no waited_s: %v", m)
+	}
+	if _, ok := m["reason_s"].(map[string]any); !ok {
+		t.Errorf("no reason_s: %v", m)
+	}
+	if m["last_reason"] != lastReason {
+		t.Errorf("last_reason %v, want %q", m["last_reason"], lastReason)
+	}
+}
+
+// blockedRun starts a run that waits on room in a directory whose budget a live hold takes, and
+// returns it once its first waiting line is written.
+func blockedRun(t *testing.T, args ...string) (dir string, cmd *exec.Cmd) {
+	t.Helper()
+	dir = recordedDir(t, 128)
+	holdOther(t, dir, 128)
+	cmd = cliCmd(t, baseEnv(dir), append([]string{"run", "--restart=yes", "--mem", "64M"}, append(args, "--", "true")...)...)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 30*time.Second, "the waiting line", func() bool { return strings.Contains(eventNames(events(t, dir)), "waiting") })
+	return dir, cmd
+}
+
+// A signal ends a wait with the signal's name. Mutation: sig.String() writes "interrupt".
+func TestInterruptedLine(t *testing.T) {
+	dir, cmd := blockedRun(t)
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if got := exitStatus(cmd.ProcessState); got != 130 {
+		t.Fatalf("exit %d, want 130", got)
+	}
+	evs := events(t, dir)
+	if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, " interrupted") {
+		t.Fatalf("events %q", got)
+	}
+	m := evs[len(evs)-1]
+	if m["signal"] != "SIGINT" {
+		t.Errorf("signal %v", m["signal"])
+	}
+	wantWaitEnd(t, m, "room_short")
+}
+
+// A signal that comes with the grant already in hand still ends the wait: the grant is given
+// back, so the run was never admitted. Mutation: recording only when no grant is in hand.
+func TestInterruptedLineWithGrantInHand(t *testing.T) {
+	b := newBed(t, 1024)
+	req := b.r.o.request()
+	tk, err := b.e.EnqueueContext(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.r.recordEnqueue(b.e, tk, req)
+	res, err := tk.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, code, ok := b.r.waitOver(b.e, res.(engine.Admitted).Grant, nil, syscall.SIGTERM, false); ok || code != 143 {
+		t.Fatalf("code %d, ok %v; want 143 and no grant", code, ok)
+	}
+	evs := events(t, b.dir)
+	if got := eventNames(evs); got != "enqueue interrupted" {
+		t.Fatalf("events %q", got)
+	}
+	if evs[1]["signal"] != "SIGTERM" {
+		t.Errorf("signal %v", evs[1]["signal"])
+	}
+	wantWaitEnd(t, evs[1], "")
+	if n := liveHolds(t, b.dir); n != 0 {
+		t.Errorf("%d live holds after the interrupt", n)
+	}
+}
+
+// A --no-wait that is not admitted says why. Mutation: leaving the line out of notAdmitted.
+func TestRefusedNoWait(t *testing.T) {
+	dir := recordedDir(t, 256)
+	holdOther(t, dir, 256)
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--no-wait", "--mem", "64M", "--", "true"); r.code != 75 {
+		t.Fatalf("exit %d: %q", r.code, r.stderr)
+	}
+	evs := events(t, dir)
+	if got := eventNames(evs); got != "enqueue refused" {
+		t.Fatalf("events %q", got)
+	}
+	if evs[1]["reason"] != "no_wait" {
+		t.Errorf("reason %v", evs[1]["reason"])
+	}
+	wantWaitEnd(t, evs[1], "room_short")
+}
+
+// A state error under --strict after an enqueue refuses the run and says so, unless FORMAT is
+// what failed. Mutations: leaving the line out reddens the first row, the FORMAT check the second.
+func TestRefusedStrictAfterEnqueue(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"a state error", &store.StateError{Reason: "queue is gone", Err: errors.New("gone")}, "refused"},
+		{"a malformed FORMAT", &store.FormatError{Err: errors.New("not a number")}, ""},
+		{"a foreign FORMAT", &store.FormatError{N: 99}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := stateDir(t, "")
+			null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer null.Close()
+			r := &run{o: runOptions{strict: true, refusalCode: exitRefusal}, io: IO{Stderr: null}, rec: telemetry.New(dir, "run-1", "x"), queued: true,
+				waited: 3 * time.Second, trace: tracedStepper{reason: "room_short", secs: map[string]float64{"room_short": 2}}}
+			if code := r.failOpen(nil, c.err); code != exitRefusal {
+				t.Fatalf("exit %d", code)
+			}
+			evs := events(t, dir)
+			if got := eventNames(evs); got != c.want {
+				t.Fatalf("events %q, want %q", got, c.want)
+			}
+			if c.want == "" {
+				return
+			}
+			if evs[0]["reason"] != "strict" || evs[0]["waited_s"] != 3.0 {
+				t.Errorf("line %v", evs[0])
+			}
+			if s, _ := evs[0]["reason_s"].(map[string]any); s["room_short"] != 2.0 {
+				t.Errorf("reason_s %v", evs[0]["reason_s"])
+			}
+			wantWaitEnd(t, evs[0], "room_short")
+		})
+	}
+}
+
+// coreslot cancel ends a wait with its own event. Mutation: leaving the line out of notAdmitted.
+func TestCancelledLine(t *testing.T) {
+	dir, cmd := blockedRun(t)
+	q := entries(t, dir, "queue")
+	if len(q) != 1 {
+		t.Fatalf("queue %q", q)
+	}
+	id, ok := wire.ParseName(q[0])
+	if !ok {
+		t.Fatalf("ticket name %q", q[0])
+	}
+	if r := cli(t, baseEnv(dir), "cancel", id.String()); r.code != 0 {
+		t.Fatalf("cancel: exit %d: %q", r.code, r.stderr)
+	}
+	_ = cmd.Wait()
+	if got := exitStatus(cmd.ProcessState); got != 75 {
+		t.Fatalf("exit %d, want 75", got)
+	}
+	evs := events(t, dir)
+	if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, " cancelled") {
+		t.Fatalf("events %q", got)
+	}
+	wantWaitEnd(t, evs[len(evs)-1], "room_short")
+}
+
+// A timeout says what --on-timeout asked. Mutation: on_timeout written as a constant reddens a row.
+func TestTimeoutLine(t *testing.T) {
+	for _, c := range []struct {
+		onTimeout string
+		code      int
+	}{{"fail", 75}, {"run", 0}} {
+		t.Run(c.onTimeout, func(t *testing.T) {
+			dir := recordedDir(t, 128)
+			holdOther(t, dir, 128)
+			r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "64M", "--timeout", "1s", "--on-timeout", c.onTimeout, "--", "true")
+			if r.code != c.code {
+				t.Fatalf("exit %d: %q", r.code, r.stderr)
+			}
+			evs := events(t, dir)
+			if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, " timeout") {
+				t.Fatalf("events %q", got)
+			}
+			m := evs[len(evs)-1]
+			if m["on_timeout"] != c.onTimeout {
+				t.Errorf("on_timeout %v", m["on_timeout"])
+			}
+			wantWaitEnd(t, m, "room_short")
+			if s, _ := m["reason_s"].(map[string]any); s["room_short"] == nil {
+				t.Errorf("reason_s %v, want seconds of room_short", m["reason_s"])
+			}
+		})
+	}
+}
+
+// A timeout in a restart's wait is the second attempt's, and the run goes no further. Mutation:
+// recording only the first attempt's timeout loses the line.
+func TestTimeoutLineOfARestart(t *testing.T) {
+	b := newBed(t, 1024)
+	req := b.r.o.request()
+	first, _, ok := b.r.wait(context.Background(), func() {}, b.e, req)
+	if !ok {
+		t.Fatalf("not admitted: %q", b.notices(t))
+	}
+	b.r.peakKiB, b.r.stops = 300<<10, 1
+	b.r.requeue(&req, first)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	holdUntil(t, b.dir, 100)
+	b.r.o.timeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), b.r.o.timeout)
+	defer cancel()
+	if _, _, ok := b.r.wait(ctx, cancel, b.e, req); ok {
+		t.Fatal("a restart with no calm was admitted")
+	}
+	evs := events(t, b.dir)
+	if got := eventNames(evs); !strings.HasPrefix(got, "enqueue admitted enqueue") || !strings.HasSuffix(got, " timeout") {
+		t.Fatalf("events %q", got)
+	}
+	m := evs[len(evs)-1]
+	if m["attempt"] != 2.0 {
+		t.Errorf("attempt %v, want 2", m["attempt"])
+	}
+	if why, _ := m["last_reason"].(string); !strings.HasPrefix(why, "restart_") { // which one is the machine's first sample's
+		t.Errorf("last_reason %v, want one of a restart's", m["last_reason"])
+	}
+}
+
+// A restart whose enqueue fails has no wait to report. Mutation: dropping the queued check in
+// recordWaitEnd writes a timeout for an attempt that never queued.
+func TestRestartEnqueueFailureRecordsNothing(t *testing.T) {
+	b := newBed(t, 1024)
+	req := b.r.o.request()
+	first, _, ok := b.r.wait(context.Background(), func() {}, b.e, req)
+	if !ok {
+		t.Fatalf("not admitted: %q", b.notices(t))
+	}
+	b.r.stops = 1
+	b.r.requeue(&req, first)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if _, _, ok := b.r.wait(ctx, cancel, b.e, req); ok {
+		t.Fatal("admitted")
+	}
+	if got := eventNames(events(t, b.dir)); got != "enqueue admitted" {
+		t.Errorf("events %q, want the first attempt's alone", got)
 	}
 }

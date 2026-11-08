@@ -222,6 +222,7 @@ func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request
 			"floor_mib": w.FloorMiB, "calm_s": w.CalmS, "post_kill_s": w.PostKillS, "spacing_s": w.SpacingS}
 	}
 	r.rec.Emit("enqueue", f)
+	r.queued = true
 }
 
 // recordWaiting writes a waiting line beside the one a person reads, from the same snapshot.
@@ -265,6 +266,15 @@ func (r *run) recordAdmitted(g *engine.Grant) {
 		f["w_s"] = a.W
 	}
 	r.rec.Emit("admitted", f)
+}
+
+// recordWaitEnd writes event, the end of a wait that gave no start, with where the wait went.
+func (r *run) recordWaitEnd(event string, f telemetry.Fields) {
+	if r.rec == nil || !r.queued {
+		return
+	}
+	f["waited_s"], f["reason_s"], f["last_reason"] = r.waited.Seconds(), r.trace.take(), r.trace.reason
+	r.rec.Emit(event, f)
 }
 
 // maxHolderLines bounds the holders of a waiting line, so that the line fits MaxRunLine.

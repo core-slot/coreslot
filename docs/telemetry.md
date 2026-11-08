@@ -110,3 +110,16 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
 | `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
 | `w_s` | the expected wait, when computed |
+
+### A wait that ends without a start
+
+Each of these has `waited_s`, `reason_s` (seconds per reason since the last `waiting`) and
+`last_reason`, as `admitted` has them. A restart's lines have `attempt` above 1. An enqueue that
+fails writes none of them.
+
+| event | added keys | meaning |
+|---|---|---|
+| `interrupted` | `signal`, the signal's name | a signal ended the wait, with or without a grant in hand |
+| `cancelled` | | `coreslot cancel` ended the wait |
+| `refused` | `reason`, `no_wait` or `strict` | `--no-wait` was not admitted at once, or `--strict` met a state error; not written when FORMAT is what could not be read |
+| `timeout` | `on_timeout`, as on `enqueue` | `--timeout` ran out; a restart's wait never runs outside the budget, whatever this says |

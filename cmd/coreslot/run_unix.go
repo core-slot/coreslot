@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -82,6 +84,7 @@ type run struct {
 	memMiB     int64               // the machine's memory, from the run's start
 	oversized  bool                // the need can never fit beside another job
 	needBefore int64               // a restart's need before its peak replaced it
+	queued     bool                // this attempt's enqueue succeeded and was recorded: its wait has an end to report
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -214,6 +217,7 @@ func restartNeed(peakKiB, needMiB int64) int64 { return max((peakKiB+1023)/1024,
 // wait queues req and waits for its grant. ok is false when the run ends without one, with code
 // its exit status.
 func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Engine, req spec.Request) (g *engine.Grant, code int, ok bool) {
+	r.queued = false
 	r.why = func() (string, []engine.HolderInfo) {
 		rep, err := e.Snapshot()
 		if err != nil { // informative: a failure leaves it out
@@ -249,18 +253,24 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 		}
 	}
 	r.waited = time.Since(r.start)
-	if sig := watch.end(); sig != nil {
+	return r.waitOver(e, g, err, watch.end(), req.Restart)
+}
+
+// waitOver settles a wait that ended with g or err, or with sig whatever it had got by then.
+func (r *run) waitOver(e *engine.Engine, g *engine.Grant, err error, sig os.Signal, restart bool) (*engine.Grant, int, bool) {
+	if sig != nil {
 		if g != nil {
 			_ = g.Close()
 		}
 		if sig == syscall.SIGINT {
 			r.notice("interrupted while waiting")
 		}
+		r.recordWaitEnd("interrupted", telemetry.Fields{"signal": unix.SignalName(sig.(syscall.Signal))})
 		code, _ := classify(&interruptError{Sig: sig.(syscall.Signal)})
 		return nil, code, false
 	}
 	if err != nil {
-		return nil, r.notAdmitted(e, err, req.Restart), false
+		return nil, r.notAdmitted(e, err, restart), false
 	}
 	r.recordAdmitted(g)
 	return g, 0, true
@@ -270,14 +280,18 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 func (r *run) notAdmitted(e *engine.Engine, err error, restart bool) int {
 	switch {
 	case errors.Is(err, engine.ErrCanceled):
+		r.recordWaitEnd("cancelled", telemetry.Fields{})
 		return r.refuse("the request was cancelled")
 	case r.o.noWait && (errors.Is(err, errNotAtOnce) || errors.Is(err, context.DeadlineExceeded)):
+		r.recordWaitEnd("refused", telemetry.Fields{"reason": "no_wait"})
 		r.notice("not admitted at once (--no-wait)%s", r.holdersText(e))
 		return r.o.refusalCode
-	case errors.Is(err, context.DeadlineExceeded) && restart:
-		return r.refuse("%s was stopped for memory (%s) and not restarted: the run's --timeout of %v ran out%s",
-			commandText(r.o.argv), r.lastStop, r.o.timeout, r.floorAsk())
 	case errors.Is(err, context.DeadlineExceeded):
+		r.recordWaitEnd("timeout", telemetry.Fields{"on_timeout": r.o.onTimeout})
+		if restart {
+			return r.refuse("%s was stopped for memory (%s) and not restarted: the run's --timeout of %v ran out%s",
+				commandText(r.o.argv), r.lastStop, r.o.timeout, r.floorAsk())
+		}
 		if r.o.onTimeout == "run" {
 			return r.timeoutRun(e)
 		}
