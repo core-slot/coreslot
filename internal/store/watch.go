@@ -174,7 +174,7 @@ func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop
 			l["pressure_level"] = pressure
 		}
 	}
-	line, err := json.Marshal(l)
+	line, err := EncodeJSON(l)
 	if err != nil {
 		return err
 	}

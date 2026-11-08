@@ -69,7 +69,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 func (r *run) unbudgetedChild(reason, code string, g *engine.Grant) child {
 	c := child{grantMiB: r.o.need, failOpen: reason, failCode: code, release: func() error { return nil }}
 	if g != nil {
-		c.env, c.files, c.release = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close
+		c.env, c.files, c.release, c.hold = append(slices.Clone(r.env), g.Env()...), g.Files(), g.Close, g.HoldName()
 	} else {
 		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.need, "", reason)...)
 	}
@@ -90,6 +90,7 @@ func (r *run) recordOutside(understood bool, kind, reason, parent string) {
 	if parent != "" {
 		f["parent"] = parent
 	}
+	r.rec.SetAttempt(r.stops + 1)
 	r.rec.Emit("outside", f)
 }
 

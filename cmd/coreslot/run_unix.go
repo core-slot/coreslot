@@ -83,11 +83,12 @@ type run struct {
 	trace      tracedStepper       // where the attempt's wait went; used only with rec
 	snap       *engine.Report      // the last waiting line's snapshot; kept only with rec
 	memMiB     int64               // the machine's memory, from the run's start
-	oversized  bool                // the need can never fit beside another job
+	overMiB    int64               // above this need a run can never fit beside another job
 	needBefore int64               // a restart's need before its peak replaced it
 	queued     bool                // this attempt's enqueue succeeded and was recorded: its wait has an end to report
 	nestedMiss string              // why an inherited CORESLOT_HOLD did not count; "" with none
 	parentHold string              // the live parent hold of an --independent run
+	inherited  bool                // a parent's context is in its environment: it never connects to the socket
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -149,7 +150,7 @@ func (r *run) ordinary() int {
 		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when no other coreslot job runs",
 			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))
 	}
-	r.telemetry, r.oversized = recording, over
+	r.telemetry, r.overMiB = recording, bound
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if r.o.timeout > 0 { // one deadline from the run's start, restarts included
@@ -263,7 +264,7 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 func (r *run) waitOver(e *engine.Engine, g *engine.Grant, err error, sig os.Signal, restart bool) (*engine.Grant, int, bool) {
 	if sig != nil {
 		if g != nil {
-			_ = g.Close()
+			r.identityMismatch(g.Close())
 		}
 		if sig == syscall.SIGINT {
 			r.notice("interrupted while waiting")

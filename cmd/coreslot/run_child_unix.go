@@ -33,6 +33,7 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		release:  g.Close,
 		log:      e.Store(), // FORMAT was understood in the admitting section
 		grant:    g,
+		hold:     g.HoldName(),
 	}
 	return r.runChild(c)
 }
@@ -47,6 +48,7 @@ type child struct {
 	release  func() error  // closes the run's copies of the grant once the command exited
 	log      *store.Store  // the run log to append to; nil writes none
 	grant    *engine.Grant // the admitted grant the watchdog ticks for; nil outside the budget
+	hold     string        // the published hold of the run, admitted or unbudgeted; "" with none
 	recheck  *store.Store  // a pass-through's directory: its FORMAT is read again before the last line
 }
 
@@ -134,7 +136,7 @@ func (r *run) runChild(c child) int {
 	rec.TickShare = r.tickShare()
 	if c.log != nil {
 		if err := appendRunLog(c.log, rec, r.notice); err != nil {
-			r.rec.Stop()
+			r.confirmFormat(c.log) // a plain write failure keeps ended: its record is the attempt's only copy
 			r.notice("the run log was not written: %s", text(err.Error()))
 		}
 	}
@@ -145,8 +147,8 @@ func (r *run) runChild(c child) int {
 	}
 	rec.FailOpen = ""
 	f := telemetry.Fields{"record": rec}
-	if c.grant != nil && c.grant.HoldName() != "" {
-		f["hold"] = c.grant.HoldName()
+	if c.hold != "" {
+		f["hold"] = c.hold
 	}
 	if c.failCode != "" {
 		f["fail_open"] = c.failCode
@@ -169,10 +171,10 @@ func (r *run) runChild(c child) int {
 	return status
 }
 
-// confirmFormat silences the recorder of a pass-through whose FORMAT changed under it: st is the
-// directory it read FORMAT in, nil when it records nothing.
+// confirmFormat silences the recorder of a run whose FORMAT changed under it: st is the directory
+// it read FORMAT in, nil when a pass-through records nothing. With no live recorder it reads nothing.
 func (r *run) confirmFormat(st *store.Store) {
-	if st != nil && formatStillUnderstood(st) != nil {
+	if st != nil && !r.rec.Stopped() && formatStillUnderstood(st) != nil {
 		r.rec.Stop()
 	}
 }

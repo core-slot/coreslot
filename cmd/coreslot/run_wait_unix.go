@@ -76,21 +76,27 @@ type tracedStepper struct {
 
 func (s *tracedStepper) step(ctx context.Context) (engine.StepResult, error) {
 	res, err := s.stepper.step(ctx)
-	now := s.clk.Now()
-	if gap := now - s.at; s.stepped {
-		s.maxGap = max(s.maxGap, gap)
-		if s.reason != "" {
-			if s.secs == nil {
-				s.secs = map[string]float64{}
-			}
-			s.secs[s.reason] += gap.Seconds()
-		}
-	}
-	s.at, s.stepped = now, true
+	s.charge()
+	s.at, s.stepped = s.clk.Now(), true
 	if w, ok := res.(engine.Waiting); ok {
 		s.reason = string(w.Outcome.Reason)
 	}
 	return res, err
+}
+
+// charge gives the time since the last step to that step's reason.
+func (s *tracedStepper) charge() {
+	if !s.stepped {
+		return
+	}
+	gap := s.clk.Now() - s.at
+	s.maxGap = max(s.maxGap, gap)
+	if s.reason != "" {
+		if s.secs == nil {
+			s.secs = map[string]float64{}
+		}
+		s.secs[s.reason] += gap.Seconds()
+	}
 }
 
 // take returns the seconds per reason, to the millisecond a line is worth, and clears them.
@@ -211,7 +217,7 @@ func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request
 	}
 	r.rec.SetAttempt(r.stops + 1)
 	f := telemetry.Fields{"ticket": t.Name(), "need_mib": req.NeedMiB, "need_source": r.o.needSource, "real_memory": req.RealMemory,
-		"typical_s": req.TypicalS, "oversized": r.oversized, "timeout_s": r.o.timeout.Seconds(), "on_timeout": r.o.onTimeout,
+		"typical_s": req.TypicalS, "oversized": req.NeedMiB > r.overMiB, "timeout_s": r.o.timeout.Seconds(), "on_timeout": r.o.onTimeout,
 		"version": cliVersion(), "mem_mib": r.memMiB}
 	if r.o.needSource == "restart_peak" {
 		f["need_before_mib"] = r.needBefore
@@ -285,6 +291,7 @@ func (r *run) recordWaitEnd(event string, f telemetry.Fields) {
 	if r.rec == nil || !r.queued {
 		return
 	}
+	r.trace.charge() // such a wait ends in its sleep, after the last step
 	f["waited_s"], f["reason_s"], f["last_reason"] = r.waited.Seconds(), r.trace.take(), r.trace.reason
 	r.rec.Emit(event, f)
 }

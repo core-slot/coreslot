@@ -40,6 +40,7 @@ const (
 	helperEnv   = "CORESLOT_CLI_TEST_HELPER"
 	asMainEnv   = "CORESLOT_CLI_TEST_AS_MAIN"
 	headroomEnv = "CORESLOT_CLI_TEST_HEADROOM_MIB" // the headroom coreslot reads, in MiB
+	ticksEnv    = "CORESLOT_CLI_TEST_TICKS"        // the listings that make one telemetry tick
 )
 
 func TestMain(m *testing.M) {
@@ -59,6 +60,9 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			readMachine = machineWithHeadroom(mib)
+		}
+		if n, err := strconv.Atoi(os.Getenv(ticksEnv)); err == nil {
+			telemetryTicks = n
 		}
 		main()
 	}

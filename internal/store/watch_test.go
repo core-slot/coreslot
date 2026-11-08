@@ -380,6 +380,26 @@ func TestTelemetryFilesRotateAtTheBound(t *testing.T) {
 	}
 }
 
+// A label's C1 controls are escaped on a sample line, as on an event line. Mutation: json.Marshal
+// for the encoder leaves U+0085 raw, which a reader that splits on it takes for a line's end.
+func TestSampleLineEscapesLabels(t *testing.T) {
+	dir := newDir(t)
+	sec := enter(t, open(t, dir))
+	c := watch.Defaults()
+	c.SampleLog = true
+	m := &machine{jobs: []watch.Job{{Hold: "h", Label: "a\u0085b"}}}
+	if _, _, err := sec.Tick(NowNS(), m.read, c); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, TelemetryDir, SamplesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "\u0085") {
+		t.Errorf("a raw U+0085 in %q", body)
+	}
+}
+
 // With sample_log on, each machine sample is one line of telemetry/samples.jsonl carrying every key of
 // the calibration's schema, and the sample that wrote a stop round names it; with it off nothing
 // is written. Mutation: logging at every Tick writes two lines for the first period.

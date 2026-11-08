@@ -244,7 +244,7 @@ func TestEnqueueLine(t *testing.T) {
 	}
 
 	b := newBed(t, 1024)
-	b.r.o.timeout, b.r.o.typicalS, b.r.oversized = 90*time.Second, 12, true
+	b.r.o.timeout, b.r.o.typicalS, b.r.overMiB = 90*time.Second, 12, 64
 	b.admit(t)
 	evs := events(t, b.dir)
 	if eventNames(evs) != "enqueue admitted" {
@@ -284,10 +284,12 @@ func TestEnqueueSaysOversized(t *testing.T) {
 	}
 }
 
-// A restart's enqueue is attempt n+1, with its peak as its need and what the need was before.
-// Mutation: requeue leaving needSource alone reads flag; a stale attempt reads 1.
+// A restart's enqueue is attempt n+1, with its peak as its need, what the need was before, and
+// oversized judged on that need. Mutations: requeue leaving needSource alone reads flag; a stale
+// attempt reads 1; oversized kept from the first attempt reads false.
 func TestEnqueueOfARestart(t *testing.T) {
 	b := newBed(t, 1024)
+	b.r.overMiB = 200
 	req := b.r.o.request()
 	first, _, ok := b.r.wait(context.Background(), func() {}, b.e, req)
 	if !ok {
@@ -312,8 +314,11 @@ func TestEnqueueOfARestart(t *testing.T) {
 			m = l
 		}
 	}
-	if m["attempt"] != 2.0 || m["need_source"] != "restart_peak" || m["need_mib"] != 300.0 || m["need_before_mib"] != 128.0 {
+	if m["attempt"] != 2.0 || m["need_source"] != "restart_peak" || m["need_mib"] != 300.0 || m["need_before_mib"] != 128.0 || m["oversized"] != true {
 		t.Errorf("the restart's enqueue: %v", m)
+	}
+	if evs[0]["oversized"] != false {
+		t.Errorf("the first enqueue, under the bound: oversized %v", evs[0]["oversized"])
 	}
 	if evs[0]["run"] != m["run"] {
 		t.Errorf("the run's id changed across attempts: %v, %v", evs[0]["run"], m["run"])
@@ -462,6 +467,25 @@ func TestReasonSecondsAddUp(t *testing.T) {
 	}
 	if g := tr.takeGap(); g != 0 {
 		t.Errorf("gap after takeGap: %v", g)
+	}
+}
+
+// A wait that ends in its sleep charges that stretch to its last reason, so reason_s adds up to the
+// wait. Mutation: recordWaitEnd without charge reads room_short 2.
+func TestWaitEndChargesItsLastStretch(t *testing.T) {
+	clk := &fakeClock{}
+	dir := stateDir(t, "")
+	r := &run{rec: telemetry.New(dir, "1-1", "x"), queued: true, trace: tracedStepper{clk: clk, stepper: &scriptedStepper{clk: clk, steps: []scriptedStep{
+		{0, engine.ReasonRoomShort}, {2 * time.Second, engine.ReasonRoomShort}}}}}
+	for range 2 {
+		if _, err := r.trace.step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.now += time.Second
+	r.recordWaitEnd("timeout", telemetry.Fields{})
+	if s, _ := event(t, events(t, dir), "timeout")["reason_s"].(map[string]any); s["room_short"] != 3.0 {
+		t.Errorf("reason_s %v, want room_short 3", s)
 	}
 }
 
@@ -651,40 +675,42 @@ func TestOffAddsNoEnv(t *testing.T) {
 	}
 }
 
-// With telemetry off a whole run calls none of the recorder's readers and makes no directory.
-// A panic there would be recovered, so the seam counts. Mutation: a recorder made regardless of
-// the switch calls Clocks; a sample line built with the log off calls Parts; a call site of
-// MemoryAsync that skips the nil test calls Sweep. The socket's off row, whose run ticks, is in
-// TestNoContainerRunNeverConnects.
+// With telemetry off a run that waits, writes a waiting line and ticks calls none of the recorder's
+// readers and makes no directory. A panic there would be recovered, so the seams count. Mutations:
+// a recorder made regardless of the switch calls Clocks; MemoryAsync on a nil recorder calls Sweep;
+// sampling with the log off calls Parts.
 func TestOffCallsNothing(t *testing.T) {
-	var calls atomic.Int64
+	var calls, listings atomic.Int64
+	replaceTicks(t, 1)
 	replaceClocks(t, func() (int64, int64) { calls.Add(1); panic("the recorder read the clocks") })
-	savedParts := store.Parts
+	savedParts, savedSweep, savedConnect, savedList := store.Parts, telemetry.Sweep, telemetry.Connect, listTree
 	store.Parts = func() (map[string]int64, int, bool) { calls.Add(1); panic("the sample read the parts") }
-	savedSweep := telemetry.Sweep
 	telemetry.Sweep = func(int) ([]memsample.ProcMem, *memsample.ProcMem, bool) { calls.Add(1); panic("the recorder swept") }
-	savedConnect := telemetry.Connect
 	telemetry.Connect = func(string, time.Time) (int, string) { calls.Add(1); panic("the recorder connected") }
-	t.Cleanup(func() { store.Parts, telemetry.Sweep, telemetry.Connect = savedParts, savedSweep, savedConnect })
-	dir := stateDir(t, "")
-	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
+	listTree = func(pid int) (int64, map[int]memsample.TreeTimes, bool) { listings.Add(1); return savedList(pid) }
+	t.Cleanup(func() {
+		store.Parts, telemetry.Sweep, telemetry.Connect, listTree = savedParts, savedSweep, savedConnect, savedList
+	})
+	b := newBed(t, 128)
+	writeConfig(t, b.dir, "[memory]\nreserve = \"0\"\n")
+	b.r.telemetry, b.r.o.argv = false, []string{"sleep", "2.5"}
+	timer := time.AfterFunc(700*time.Millisecond, holdUntil(t, b.dir, 128))
+	defer timer.Stop()
+	g, code, ok := b.wait(t, context.Background())
+	if !ok {
+		t.Fatalf("not admitted: code %d, stderr %q", code, b.notices(t))
 	}
-	defer null.Close()
-	r := &run{o: runOptions{need: 1, restart: "no", label: "x", onTimeout: "fail", refusalCode: exitRefusal, argv: []string{"true"}},
-		io: IO{Stdin: null, Stdout: null, Stderr: null}, loc: location{dir: dir, cfgPath: filepath.Join(dir, "config.toml")}, start: time.Now()}
-	if code := r.ordinary(); code != 0 {
+	if code := b.r.admitted(b.e, g); code != 0 {
 		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(b.notices(t), "waiting for") || listings.Load() < 2 {
+		t.Fatalf("the run wrote no waiting line or ticked %d times: %q", listings.Load(), b.notices(t))
 	}
 	if n := calls.Load(); n != 0 {
 		t.Errorf("a telemetry reader was called %d times with telemetry off", n)
 	}
-	if hasTelemetryDir(dir) {
-		t.Error("telemetry/ exists with telemetry off")
-	}
-	if r.rec != nil {
-		t.Error("a recorder exists with telemetry off")
+	if hasTelemetryDir(b.dir) || b.r.rec != nil {
+		t.Errorf("telemetry/ %v, recorder %v with telemetry off", hasTelemetryDir(b.dir), b.r.rec)
 	}
 }
 
@@ -800,6 +826,27 @@ func TestInterruptedLineWithGrantInHand(t *testing.T) {
 	wantWaitEnd(t, evs[1], "")
 	if n := liveHolds(t, b.dir); n != 0 {
 		t.Errorf("%d live holds after the interrupt", n)
+	}
+}
+
+// A release that finds the hold replaced writes nothing after it, on a signal too. Mutation:
+// waitOver discarding Close's error writes interrupted.
+func TestNoInterruptedAfterFailedRelease(t *testing.T) {
+	b := newBed(t, 1024)
+	g, code, ok := b.wait(t, context.Background())
+	if !ok {
+		t.Fatalf("not admitted: %d", code)
+	}
+	hold := filepath.Join(b.dir, "holds", g.HoldName())
+	if err := os.Remove(hold); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hold, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.r.waitOver(b.e, g, nil, syscall.SIGTERM, false)
+	if got := eventNames(events(t, b.dir)); got != "enqueue admitted" || !b.r.rec.Stopped() {
+		t.Errorf("events %q, stopped %v", got, b.r.rec.Stopped())
 	}
 }
 
@@ -1433,6 +1480,44 @@ func TestOutsideFailOpen(t *testing.T) {
 	}
 }
 
+// A restart that fails open is its own attempt, and its ended names the hold it published.
+// Mutations: no SetAttempt before outside reads attempt 1; hold taken from the grant is absent.
+func TestRestartFailOpenAttemptAndHold(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
+	b := newBed(t, 1024)
+	b.r.env = os.Environ()
+	req := b.r.o.request()
+	first, _, ok := b.r.wait(context.Background(), func() {}, b.e, req)
+	if !ok {
+		t.Fatalf("not admitted: %q", b.notices(t))
+	}
+	b.r.stops = 1
+	b.r.requeue(&req, first)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	queue := filepath.Join(b.dir, "queue")
+	if err := os.Chmod(queue, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(queue, 0o700) })
+	if _, code, ok := b.r.wait(context.Background(), func() {}, b.e, req); ok || code != 0 {
+		t.Fatalf("ok %v, exit %d: %q", ok, code, b.notices(t))
+	}
+	evs := events(t, b.dir)
+	if got := eventNames(evs); got != "enqueue admitted outside ended" {
+		t.Fatalf("events %q", got)
+	}
+	if evs[2]["attempt"] != 2.0 || evs[3]["attempt"] != 2.0 {
+		t.Errorf("attempts %v, %v, want 2", evs[2]["attempt"], evs[3]["attempt"])
+	}
+	if _, ok := wire.ParseName(fmt.Sprint(evs[3]["hold"])); !ok {
+		t.Errorf("ended's hold %v", evs[3]["hold"])
+	}
+}
+
 // failOpenBed is a bed whose run has already queued: a live recorder and one line written.
 func failOpenBed(t *testing.T) *bed {
 	t.Helper()
@@ -1705,7 +1790,8 @@ func TestWaiterNeverConnects(t *testing.T) {
 // Only a supervised run that is container work, with telemetry on, reads the socket: not one that
 // is not, not one with telemetry off, not a pass-through. Mutations: the call without the p.container
 // test reddens the first row; the call outside the log test reddens the pass-through; a read that
-// does not go through the recorder reddens the off row; leaving the call out reddens the last.
+// does not go through the recorder, or MemoryAsync on a nil recorder calling Sweep, reddens the off
+// row; leaving the call out reddens the last.
 func TestNoContainerRunNeverConnects(t *testing.T) {
 	for _, c := range []struct {
 		name               string
@@ -1719,7 +1805,7 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			replaceTicks(t, 1)
-			fakeSweep(t)
+			sweeps := fakeSweep(t)
 			conns, dials := fakeEngine(t)
 			saved := listClient
 			listClient = func(int) bool { return c.client }
@@ -1755,6 +1841,46 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 			if conns.Load() != c.want || dials.Load() != c.want {
 				t.Errorf("%d connections, %d dials, want %d", conns.Load(), dials.Load(), c.want)
+			}
+			if c.off && sweeps.Load() != 0 {
+				t.Errorf("%d sweeps with telemetry off", sweeps.Load())
+			}
+		})
+	}
+}
+
+// A process inside another run's command never connects, even --independent with container work
+// of its own: its socket would read as the outer command's. Mutations: the inherited test left out
+// of watchChild reddens both rows; either half of it left out of decide reddens its row.
+func TestNestedIndependentNeverConnects(t *testing.T) {
+	conns, _ := fakeEngine(t)
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := recordedDir(t, 1024)
+	for _, c := range []struct {
+		name string
+		run  func() result
+	}{
+		{"inherited hold", func() result {
+			return outer(t, dir, "256M", `"$BIN" run --independent --label inner --mem 128M -- "$DOCKER"`, ticksEnv+"=1", "DOCKER="+docker)
+		}},
+		{"inherited unbudgeted", func() result {
+			return cli(t, append(baseEnv(dir), ticksEnv+"=1", engine.EnvUnbudgeted+"=parent"), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := len(labelled(events(t, dir), "inner"))
+			if r := c.run(); r.code != 0 {
+				t.Fatalf("exit %d: %q", r.code, r.stderr)
+			}
+			if got := labelled(events(t, dir), "inner"); len(got) == before || got[len(got)-1]["e"] != "ended" {
+				t.Fatalf("the nested run did not record: %q", eventNames(got))
+			}
+			if conns.Load() != 0 || len(containerLines(t, dir)) != 0 {
+				t.Errorf("%d connections, %d lines from a nested run", conns.Load(), len(containerLines(t, dir)))
 			}
 		})
 	}
@@ -1876,8 +2002,8 @@ func TestEnqueueNamesIndependentParent(t *testing.T) {
 }
 
 // Nothing is written after a FORMAT the run cannot read, wherever the run sees it. Mutations:
-// the Stop on a failed run-log append reddens "run log"; the one in updateHold "hold update"; the
-// one on a tick's refusal "tick".
+// the FORMAT check on a failed run-log append reddens "run log", a Stop on any failed append "a
+// plain failure"; the Stop in updateHold reddens "hold update"; the one on a tick's refusal "tick".
 func TestNoEndedAfterFormatChange(t *testing.T) {
 	for name, format := range map[string]string{"unknown": "coreslot-protocol 3\n", "malformed": "coreslot-protocol x\n"} {
 		t.Run(name, func(t *testing.T) {
@@ -1901,7 +2027,7 @@ func TestNoEndedAfterFormatChange(t *testing.T) {
 			t.Errorf("events %q", got)
 		}
 	})
-	t.Run("a run log that cannot be appended", func(t *testing.T) {
+	t.Run("a plain failure of the run log keeps ended", func(t *testing.T) { // its record is the attempt's only copy
 		b := newEnded(t, "true")
 		path := filepath.Join(b.dir, "log", "runs.jsonl")
 		if err := os.Remove(path); err != nil {
@@ -1913,8 +2039,8 @@ func TestNoEndedAfterFormatChange(t *testing.T) {
 		if code := b.r.runChild(b.child("", "")); code != 0 {
 			t.Fatalf("exit %d", code)
 		}
-		if got := eventNames(events(t, b.dir)); got != "" {
-			t.Errorf("events %q", got)
+		if got := eventNames(events(t, b.dir)); got != "ended" {
+			t.Errorf("events %q, want ended", got)
 		}
 	})
 	seen := func(t *testing.T, see func(b *bed, g *engine.Grant)) {

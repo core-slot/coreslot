@@ -95,7 +95,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 				r.rec.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
 			}
 			r.rec.MemoryAsync()
-			if p.container && r.rec != nil {
+			if p.container && r.rec != nil && !r.inherited { // a descendant's socket would mark its parent's command
 				if sockets == nil {
 					sockets = dockerSockets(os.Getenv("DOCKER_HOST"), r.loc.home)
 				}
