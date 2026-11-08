@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,11 +158,11 @@ func TestCounterBackIsAGap(t *testing.T) {
 func TestPSITotalParse(t *testing.T) {
 	const text = "some avg10=0.00 avg60=0.12 avg300=0.05 total=12345\n" +
 		"full avg10=0.00 avg60=0.00 avg300=0.00 total=678\n"
-	if us, ok := psiTotal(text); !ok || us != 12345 {
+	if us, ok := psiTotal(text, "some"); !ok || us != 12345 {
 		t.Errorf("psiTotal = %d, %v; want 12345, true", us, ok)
 	}
 	for _, bad := range []string{"", "full avg10=0.00 total=678\n", "some avg10=0.00 total=x\n"} {
-		if us, ok := psiTotal(bad); ok {
+		if us, ok := psiTotal(bad, "some"); ok {
 			t.Errorf("psiTotal(%q) = %d, true; want not found", bad, us)
 		}
 	}
@@ -236,5 +237,40 @@ func TestContainerSocket(t *testing.T) {
 		if got := containerSocket(path); got != want {
 			t.Errorf("containerSocket(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+// The Linux parts come from the three files' text on every platform. Mutations: reading "some" for
+// "full" gives 12345; dividing oom_kill by 1024 gives 0; leaving the kB out of the division reads
+// Slab in KiB.
+func TestLinuxPartsFromFixture(t *testing.T) {
+	const meminfoText = "MemTotal:       16384000 kB\nAnonPages:       2097152 kB\nShmem:            524288 kB\n" +
+		"Slab:             307200 kB\nSReclaimable:     204800 kB\nPageTables:        51200 kB\nZswap:            102400 kB\n"
+	const vmstatText = "nr_free_pages 1000\noom_kill 3\n"
+	const psiText = "some avg10=0.00 avg60=0.12 avg300=0.05 total=12345\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=678\n"
+	parts, ok := linuxParts(meminfoText, vmstatText, psiText)
+	want := map[string]int64{"AnonPages": 2048, "Shmem": 512, "Slab": 300, "SReclaimable": 200, "PageTables": 50, "Zswap": 100,
+		"oom_kill": 3, "psi_full_us": 678}
+	if !ok || !maps.Equal(parts, want) {
+		t.Errorf("linuxParts = %v, %v; want %v", parts, ok, want)
+	}
+	// A kernel without PSI, vmstat or Zswap leaves those keys out.
+	parts, ok = linuxParts("AnonPages: 1024 kB\n", "", "")
+	if !ok || !maps.Equal(parts, map[string]int64{"AnonPages": 1}) {
+		t.Errorf("linuxParts(sparse) = %v, %v", parts, ok)
+	}
+	if _, ok := linuxParts("MemTotal: 1 kB\n", vmstatText, psiText); ok {
+		t.Error("linuxParts without a meminfo part is ok")
+	}
+}
+
+// Mutation: the "some" line for "full", and the full stall reads 12345.
+func TestPSITotalFull(t *testing.T) {
+	const text = "some avg10=0.00 total=12345\nfull avg10=0.00 total=678\n"
+	if us, ok := psiTotal(text, "full"); !ok || us != 678 {
+		t.Errorf("psiTotal(full) = %d, %v; want 678, true", us, ok)
+	}
+	if _, ok := psiTotal("some avg10=0.00 total=1\n", "full"); ok {
+		t.Error("psiTotal(full) found a full line in a text with only some")
 	}
 }

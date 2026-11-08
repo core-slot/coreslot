@@ -23,3 +23,6 @@ func Listing() (map[int]Proc, bool) { return nil, false }
 
 // Clocks is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Clocks() (upNS, awakeNS int64) { return 0, 0 }
+
+// Parts is implemented on macOS and Linux only; elsewhere it reads nothing.
+func Parts() (parts map[string]int64, pressure int, ok bool) { return nil, 0, false }

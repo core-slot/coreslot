@@ -639,10 +639,13 @@ func TestOffAddsNoEnv(t *testing.T) {
 
 // With telemetry off a whole run calls none of the recorder's readers and makes no directory.
 // A panic there would be recovered, so the seam counts. Mutation: a recorder made regardless of
-// the switch calls Clocks.
+// the switch calls Clocks; a sample line built with the log off calls Parts.
 func TestOffCallsNothing(t *testing.T) {
 	var calls atomic.Int64
 	replaceClocks(t, func() (int64, int64) { calls.Add(1); panic("the recorder read the clocks") })
+	savedParts := store.Parts
+	store.Parts = func() (map[string]int64, int, bool) { calls.Add(1); panic("the sample read the parts") }
+	t.Cleanup(func() { store.Parts = savedParts })
 	dir := stateDir(t, "")
 	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -655,7 +658,7 @@ func TestOffCallsNothing(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	if n := calls.Load(); n != 0 {
-		t.Errorf("Clocks called %d times with telemetry off", n)
+		t.Errorf("a telemetry reader was called %d times with telemetry off", n)
 	}
 	if hasTelemetryDir(dir) {
 		t.Error("telemetry/ exists with telemetry off")

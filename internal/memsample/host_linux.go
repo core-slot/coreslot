@@ -14,7 +14,7 @@ const procPSI = "/proc/pressure/memory"
 // file, and one booted with psi=0 fails the read with EOPNOTSUPP.
 var hasPSI = sync.OnceValue(func() bool {
 	data, err := os.ReadFile(procPSI)
-	_, ok := psiTotal(string(data))
+	_, ok := psiTotal(string(data), "some")
 	return err == nil && ok
 })
 
@@ -44,7 +44,7 @@ func readHost() (HostReading, error) {
 	}
 	if hasPSI() {
 		if data, err := os.ReadFile(procPSI); err == nil {
-			r.PSISomeUS, r.HasPSI = psiTotal(string(data))
+			r.PSISomeUS, r.HasPSI = psiTotal(string(data), "some")
 		}
 	}
 	r.WallNS, r.AwakeNS, err = clocks()

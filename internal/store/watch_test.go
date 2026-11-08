@@ -609,3 +609,55 @@ func TestSampleKeptIsThisRounds(t *testing.T) {
 		t.Errorf("second round: kept %v, but the record is the first round's", k)
 	}
 }
+
+// A sample line carries the parts the seam gives and the pressure level when there is one; a read
+// that fails leaves the keys out and the line in, and with the sample log off the seam is not
+// called. Mutations: calling Parts before the SampleLog test turns the off row red; writing the
+// keys when ok is false turns the failed row red.
+func TestSampleLogParts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		on, ok   bool
+		pressure int
+		calls    int
+	}{{"on", true, true, 2, 1}, {"failed read", true, false, 0, 1}, {"no pressure", true, true, 0, 1}, {"off", false, true, 1, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			saved := Parts
+			Parts = func() (map[string]int64, int, bool) {
+				calls++
+				if !tc.ok {
+					return map[string]int64{"wired": 9}, 4, false
+				}
+				return map[string]int64{"wired": 9, "oom_kill": 2}, tc.pressure, true
+			}
+			t.Cleanup(func() { Parts = saved })
+			dir := newDir(t)
+			sec := enter(t, open(t, dir))
+			c := watch.Defaults()
+			c.SampleLog = tc.on
+			m := &machine{jobs: []watch.Job{stalled("1", 1)}}
+			if _, _, err := sec.Tick(NowNS(), m.read, c); err != nil {
+				t.Fatal(err)
+			}
+			if calls != tc.calls {
+				t.Errorf("Parts called %d times, want %d", calls, tc.calls)
+			}
+			if !tc.on {
+				return
+			}
+			l := samplesLines(t, dir)
+			if len(l) != 1 {
+				t.Fatalf("%d lines, want 1", len(l))
+			}
+			_, hasWired := l[0]["wired"]
+			_, hasPressure := l[0]["pressure_level"]
+			if hasWired != tc.ok || hasPressure != (tc.ok && tc.pressure != 0) {
+				t.Errorf("wired %v, pressure_level %v in %v", hasWired, hasPressure, l[0])
+			}
+			if tc.ok && (l[0]["wired"] != float64(9) || l[0]["oom_kill"] != float64(2)) {
+				t.Errorf("parts not copied: %v", l[0])
+			}
+		})
+	}
+}

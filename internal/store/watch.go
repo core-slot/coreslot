@@ -15,6 +15,10 @@ import (
 // maxWatchBytes bounds watch.json, which grows with the live holds.
 const maxWatchBytes = 1 << 20
 
+// Parts reads the machine's memory by part for a sample line; tests replace it. It is called only
+// when the sample log is on.
+var Parts = memsample.Parts
+
 // rotateTelemetryAt is RotateTelemetryAt; tests lower it.
 var rotateTelemetryAt int64 = RotateTelemetryAt
 
@@ -160,6 +164,14 @@ func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop
 		l["candidates"], l["short_mib"] = victims, cur.ShortMiB
 		if len(kept) > 0 {
 			l["kept"] = kept
+		}
+	}
+	if parts, pressure, ok := Parts(); ok { // a failed read costs the keys, not the line
+		for k, v := range parts {
+			l[k] = v
+		}
+		if pressure != 0 {
+			l["pressure_level"] = pressure
 		}
 	}
 	line, err := json.Marshal(l)

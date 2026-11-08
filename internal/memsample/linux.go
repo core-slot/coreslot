@@ -141,3 +141,19 @@ func readString(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	return string(data), err
 }
+
+// Parts reads the machine's memory by part from /proc/meminfo, /proc/vmstat and, where the kernel
+// reports it, /proc/pressure/memory; a Linux kernel has no pressure level, so it is 0.
+func Parts() (parts map[string]int64, pressure int, ok bool) {
+	mi, err := os.ReadFile(procMeminfo)
+	if err != nil {
+		return nil, 0, false
+	}
+	vm, _ := os.ReadFile("/proc/vmstat")
+	var psi []byte
+	if hasPSI() {
+		psi, _ = os.ReadFile(procPSI)
+	}
+	parts, ok = linuxParts(string(mi), string(vm), string(psi))
+	return parts, 0, ok
+}

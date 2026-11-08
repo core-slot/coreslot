@@ -76,12 +76,13 @@ func Gap(prev, cur HostReading) bool {
 		cur.SwapIns < prev.SwapIns || prev.HasPSI && cur.HasPSI && cur.PSISomeUS < prev.PSISomeUS
 }
 
-// psiTotal returns the total= field of the "some" line of /proc/pressure/memory's text, in µs.
-// It lives here, not in the Linux file, so that it is tested on every platform.
-func psiTotal(text string) (us uint64, ok bool) {
+// psiTotal returns the total= field of the line of /proc/pressure/memory's text that starts with
+// kind ("some" or "full"), in µs. It lives here, not in the Linux file, so that it is tested on
+// every platform.
+func psiTotal(text, kind string) (us uint64, ok bool) {
 	for line := range strings.Lines(text) {
 		f := strings.Fields(line)
-		if len(f) == 0 || f[0] != "some" {
+		if len(f) == 0 || f[0] != kind {
 			continue
 		}
 		for _, kv := range f[1:] {
@@ -92,6 +93,29 @@ func psiTotal(text string) (us uint64, ok bool) {
 		}
 	}
 	return 0, false
+}
+
+// linuxParts is the machine's parts from the text of /proc/meminfo, /proc/vmstat and
+// /proc/pressure/memory: the meminfo ones in MiB, oom_kill a count and psi_full_us in µs. A key
+// whose reading is missing is absent; ok is false when meminfo gives none. It lives here so that
+// it is tested on every platform.
+func linuxParts(meminfoText, vmstatText, psiText string) (parts map[string]int64, ok bool) {
+	parts = map[string]int64{}
+	for _, k := range []string{"AnonPages", "Shmem", "Slab", "SReclaimable", "PageTables", "Zswap"} {
+		if kib, found := meminfo(meminfoText, k); found {
+			parts[k] = kib / 1024
+		}
+	}
+	if len(parts) == 0 {
+		return nil, false
+	}
+	if n, found := vmstat(vmstatText, "oom_kill"); found {
+		parts["oom_kill"] = int64(n)
+	}
+	if us, found := psiTotal(psiText, "full"); found {
+		parts["psi_full_us"] = int64(us)
+	}
+	return parts, true
 }
 
 // vmstat returns the value of key in the text of /proc/vmstat. It lives here, not in the Linux
