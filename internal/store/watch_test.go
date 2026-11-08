@@ -320,12 +320,12 @@ func TestHeadroomUnknownSaysSo(t *testing.T) {
 // Mutations: rotate only samples.jsonl; compare with > and the file at the bound stays; a second
 // generation kept, or a bound other than 256 MiB.
 func TestTelemetryFilesRotateAtTheBound(t *testing.T) {
-	if RotateTelemetryAt != 256<<20 || rotateTelemetryAt != RotateTelemetryAt {
-		t.Fatalf("bound %d, in use %d; want 256 MiB", RotateTelemetryAt, rotateTelemetryAt)
+	if rotateTelemetryAt != 256<<20 {
+		t.Fatalf("bound %d, want 256 MiB", rotateTelemetryAt)
 	}
 	const bound = 64
 	rotateTelemetryAt = bound
-	t.Cleanup(func() { rotateTelemetryAt = RotateTelemetryAt })
+	t.Cleanup(func() { rotateTelemetryAt = 256 << 20 })
 	dir := newDir(t)
 	sec := enter(t, open(t, dir))
 	c := watch.Defaults()

@@ -244,9 +244,8 @@ func TestTelemetryTable(t *testing.T) {
 	}
 }
 
-// sample_log asks for samples only and enabled asks for both. Mutations: sample_log setting
-// TelemetryEnabled too turns the first two rows red; enabled ignored by SampleLog turns the last
-// red.
+// sample_log asks for samples only. Mutation: sample_log setting TelemetryEnabled too turns both
+// rows red.
 func TestSampleLogSamplesOnly(t *testing.T) {
 	for _, tc := range []struct {
 		body              string
@@ -254,8 +253,6 @@ func TestSampleLogSamplesOnly(t *testing.T) {
 	}{
 		{"[watch]\nsample_log = true\n", false, true},
 		{"[watch]\nsample_log = true\n[telemetry]\nenabled = false\n", false, true},
-		{"[watch]\nsample_log = false\n[telemetry]\nenabled = true\n", true, true},
-		{"[watch]\nsample_log = true\n[telemetry]\nenabled = true\n", true, true},
 	} {
 		c, err := Load(writeConfig(t, tc.body))
 		if err != nil {

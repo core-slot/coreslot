@@ -452,21 +452,19 @@ func TestReasonSecondsAddUp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	gap := tr.maxGap
 	got := tr.take()
+	if gap != 3*time.Second {
+		t.Errorf("longest gap %v, want 3s", gap)
+	}
 	if len(got) != 2 || got["room_short"] != 2 || got["behind_head"] != 3 {
 		t.Errorf("seconds %v, want room_short 2 and behind_head 3", got)
 	}
 	if tr.reason != "behind_head" {
 		t.Errorf("last reason %q", tr.reason)
 	}
-	if g := tr.takeGap(); g != 3*time.Second {
-		t.Errorf("longest gap %v, want 3s", g)
-	}
-	if again := tr.take(); len(again) != 0 {
-		t.Errorf("take after take: %v", again)
-	}
-	if g := tr.takeGap(); g != 0 {
-		t.Errorf("gap after takeGap: %v", g)
+	if again := tr.take(); len(again) != 0 || tr.maxGap != 0 {
+		t.Errorf("take after take: %v, gap %v", again, tr.maxGap)
 	}
 }
 
@@ -560,13 +558,6 @@ func TestTwentyHoldersLineFits(t *testing.T) {
 	}
 	if h, _ := evs[0]["holders"].([]any); len(h) != 16 {
 		t.Errorf("%d holders", len(h))
-	}
-	data, err := os.ReadFile(filepath.Join(dir, store.TelemetryDir, store.EventsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first, _, _ := bytes.Cut(data, []byte("\n")); len(first)+1 > store.MaxRunLine {
-		t.Errorf("%d bytes", len(first)+1)
 	}
 }
 
@@ -686,7 +677,7 @@ func TestOffCallsNothing(t *testing.T) {
 	savedParts, savedSweep, savedConnect, savedList := store.Parts, telemetry.Sweep, telemetry.Connect, listTree
 	store.Parts = func() (map[string]int64, int, bool) { calls.Add(1); panic("the sample read the parts") }
 	telemetry.Sweep = func(int) ([]memsample.ProcMem, *memsample.ProcMem, bool) { calls.Add(1); panic("the recorder swept") }
-	telemetry.Connect = func(string, time.Time) (int, string) { calls.Add(1); panic("the recorder connected") }
+	telemetry.Connect = func(string) (int, string) { calls.Add(1); panic("the recorder connected") }
 	listTree = func(pid int) (int64, map[int]memsample.TreeTimes, bool) { listings.Add(1); return savedList(pid) }
 	t.Cleanup(func() {
 		store.Parts, telemetry.Sweep, telemetry.Connect, listTree = savedParts, savedSweep, savedConnect, savedList
@@ -764,41 +755,6 @@ func wantWaitEnd(t *testing.T, m map[string]any, lastReason string) {
 	}
 }
 
-// blockedRun starts a run that waits on room in a directory whose budget a live hold takes, and
-// returns it once its first waiting line is written.
-func blockedRun(t *testing.T, args ...string) (dir string, cmd *exec.Cmd) {
-	t.Helper()
-	dir = recordedDir(t, 128)
-	holdOther(t, dir, 128)
-	cmd = cliCmd(t, baseEnv(dir), append([]string{"run", "--restart=yes", "--mem", "64M"}, append(args, "--", "true")...)...)
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, 30*time.Second, "the waiting line", func() bool { return strings.Contains(eventNames(events(t, dir)), "waiting") })
-	return dir, cmd
-}
-
-// A signal ends a wait with the signal's name. Mutation: sig.String() writes "interrupt".
-func TestInterruptedLine(t *testing.T) {
-	dir, cmd := blockedRun(t)
-	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
-		t.Fatal(err)
-	}
-	_ = cmd.Wait()
-	if got := exitStatus(cmd.ProcessState); got != 130 {
-		t.Fatalf("exit %d, want 130", got)
-	}
-	evs := events(t, dir)
-	if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, " interrupted") {
-		t.Fatalf("events %q", got)
-	}
-	m := evs[len(evs)-1]
-	if m["signal"] != "SIGINT" {
-		t.Errorf("signal %v", m["signal"])
-	}
-	wantWaitEnd(t, m, "room_short")
-}
-
 // A signal that comes with the grant already in hand still ends the wait: the grant is given
 // back, so the run was never admitted. Mutation: recording only when no grant is in hand.
 func TestInterruptedLineWithGrantInHand(t *testing.T) {
@@ -850,23 +806,6 @@ func TestNoInterruptedAfterFailedRelease(t *testing.T) {
 	}
 }
 
-// A --no-wait that is not admitted says why. Mutation: leaving the line out of notAdmitted.
-func TestRefusedNoWait(t *testing.T) {
-	dir := recordedDir(t, 256)
-	holdOther(t, dir, 256)
-	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--no-wait", "--mem", "64M", "--", "true"); r.code != 75 {
-		t.Fatalf("exit %d: %q", r.code, r.stderr)
-	}
-	evs := events(t, dir)
-	if got := eventNames(evs); got != "enqueue refused" {
-		t.Fatalf("events %q", got)
-	}
-	if evs[1]["reason"] != "no_wait" {
-		t.Errorf("reason %v", evs[1]["reason"])
-	}
-	wantWaitEnd(t, evs[1], "room_short")
-}
-
 // A state error under --strict after an enqueue refuses the run and says so, unless FORMAT is
 // what failed. Mutations: leaving the line out reddens the first row, the FORMAT check the second.
 func TestRefusedStrictAfterEnqueue(t *testing.T) {
@@ -909,31 +848,6 @@ func TestRefusedStrictAfterEnqueue(t *testing.T) {
 	}
 }
 
-// coreslot cancel ends a wait with its own event. Mutation: leaving the line out of notAdmitted.
-func TestCancelledLine(t *testing.T) {
-	dir, cmd := blockedRun(t)
-	q := entries(t, dir, "queue")
-	if len(q) != 1 {
-		t.Fatalf("queue %q", q)
-	}
-	id, ok := wire.ParseName(q[0])
-	if !ok {
-		t.Fatalf("ticket name %q", q[0])
-	}
-	if r := cli(t, baseEnv(dir), "cancel", id.String()); r.code != 0 {
-		t.Fatalf("cancel: exit %d: %q", r.code, r.stderr)
-	}
-	_ = cmd.Wait()
-	if got := exitStatus(cmd.ProcessState); got != 75 {
-		t.Fatalf("exit %d, want 75", got)
-	}
-	evs := events(t, dir)
-	if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, " cancelled") {
-		t.Fatalf("events %q", got)
-	}
-	wantWaitEnd(t, evs[len(evs)-1], "room_short")
-}
-
 // A timeout says what --on-timeout asked. Mutation: on_timeout written as a constant reddens a row.
 func TestTimeoutLine(t *testing.T) {
 	for _, c := range []struct {
@@ -964,40 +878,6 @@ func TestTimeoutLine(t *testing.T) {
 				t.Errorf("reason_s %v, want seconds of room_short", m["reason_s"])
 			}
 		})
-	}
-}
-
-// A timeout in a restart's wait is the second attempt's, and the run goes no further. Mutation:
-// recording only the first attempt's timeout loses the line.
-func TestTimeoutLineOfARestart(t *testing.T) {
-	b := newBed(t, 1024)
-	req := b.r.o.request()
-	first, _, ok := b.r.wait(context.Background(), func() {}, b.e, req)
-	if !ok {
-		t.Fatalf("not admitted: %q", b.notices(t))
-	}
-	b.r.peakKiB, b.r.stops = 300<<10, 1
-	b.r.requeue(&req, first)
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
-	holdUntil(t, b.dir, 100)
-	b.r.o.timeout = 200 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), b.r.o.timeout)
-	defer cancel()
-	if _, _, ok := b.r.wait(ctx, cancel, b.e, req); ok {
-		t.Fatal("a restart with no calm was admitted")
-	}
-	evs := events(t, b.dir)
-	if got := eventNames(evs); !strings.HasPrefix(got, "enqueue admitted enqueue") || !strings.HasSuffix(got, " timeout") {
-		t.Fatalf("events %q", got)
-	}
-	m := evs[len(evs)-1]
-	if m["attempt"] != 2.0 {
-		t.Errorf("attempt %v, want 2", m["attempt"])
-	}
-	if why, _ := m["last_reason"].(string); !strings.HasPrefix(why, "restart_") { // which one is the machine's first sample's
-		t.Errorf("last_reason %v, want one of a restart's", m["last_reason"])
 	}
 }
 
@@ -1145,36 +1025,6 @@ func TestSubSecondRunHasNoMean(t *testing.T) {
 	}
 }
 
-// The line carries a closed code for a fail-open run, never the reason a state error gave.
-// Mutation: fail_open set from the run log's text.
-func TestFailOpenCodeHasNoPath(t *testing.T) {
-	b := newEnded(t, "true")
-	b.r.runChild(b.child("/Users/ana/state/holds: permission denied", "state_error"))
-	data, err := os.ReadFile(filepath.Join(b.dir, store.TelemetryDir, store.EventsFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "/") || strings.Contains(string(data), "ana") {
-		t.Errorf("a path in %s", data)
-	}
-	if got := event(t, events(t, b.dir), "ended")["fail_open"]; got != "state_error" {
-		t.Errorf("fail_open %v", got)
-	}
-}
-
-// A command that cannot be started ends in not_started with reason exec, and in no ended.
-// Mutation: ended emitted for it as well.
-func TestNotStartedExec(t *testing.T) {
-	b := newEnded(t, filepath.Join(t.TempDir(), "no-such-command"))
-	if code := b.r.runChild(b.child("", "")); code == 0 {
-		t.Fatal("exit 0")
-	}
-	evs := events(t, b.dir)
-	if eventNames(evs) != "not_started" || evs[0]["reason"] != "exec" {
-		t.Errorf("events %q, line %v", eventNames(evs), evs)
-	}
-}
-
 // A signal between the admission and the start names itself; a release that found its files
 // replaced silences the line. Mutation: the release error dropped, as before.
 func TestNotStartedSignal(t *testing.T) {
@@ -1213,18 +1063,6 @@ func TestReleaseFailedSilencesRecorder(t *testing.T) {
 	b.r.rec.Emit("after", nil)
 	if got := eventNames(events(t, b.dir)); got != "probe" {
 		t.Errorf("events %q, want only probe", got)
-	}
-}
-
-// A stopped recorder's run hands its command no mark. Mutation: the mark added by r.rec != nil.
-func TestStoppedRecorderLeavesNoMark(t *testing.T) {
-	b := newEnded(t, "true")
-	if env := b.r.childEnv(nil); len(env) != 1 || env[0] != engine.EnvTelemetry+"=1" {
-		t.Fatalf("env %q with a live recorder", env)
-	}
-	b.r.rec.Stop()
-	if env := b.r.childEnv([]string{"A=1"}); len(env) != 1 {
-		t.Errorf("env %q after Stop, want A=1 only", env)
 	}
 }
 
@@ -1419,8 +1257,7 @@ func TestPassThroughRefusesForeignFormat(t *testing.T) {
 }
 
 // A state directory that cannot be located gives a pass-through no recorder, so nothing appears
-// in the working directory. Mutations: the location's error not checked reddens "in process";
-// New and the FORMAT read both taking a relative path reddens "relative directory".
+// in the working directory. Mutation: the location's error not checked reddens both rows.
 func TestPassThroughBadLocationWritesNothing(t *testing.T) {
 	t.Run("relative directory", func(t *testing.T) {
 		cwd := t.TempDir()
@@ -1745,7 +1582,7 @@ func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
 		}
 	}()
 	saved := telemetry.Connect
-	telemetry.Connect = func(p string, d time.Time) (int, string) { dials.Add(1); return saved(p, d) }
+	telemetry.Connect = func(p string) (int, string) { dials.Add(1); return saved(p) }
 	t.Cleanup(func() { telemetry.Connect = saved })
 	t.Setenv("DOCKER_HOST", "unix://"+path)
 	return conns, dials

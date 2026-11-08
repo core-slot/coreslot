@@ -141,12 +141,12 @@ func usedBytes(s dockerStats) uint64 {
 
 // get makes one HTTP/1.0 request on a connection of its own and returns the body of a 200.
 func get(sock, target string, deadline time.Time) ([]byte, string) {
-	fd, code := Connect(sock, deadline)
+	fd, code := Connect(sock)
 	if code != "" {
 		return nil, code
 	}
 	defer unix.Close(fd)
-	if code := send(fd, []byte("GET "+target+" HTTP/1.0\r\nHost: docker\r\n\r\n"), deadline); code != "" {
+	if code := send(fd, []byte("GET "+target+" HTTP/1.0\r\nHost: docker\r\n\r\n")); code != "" {
 		return nil, code
 	}
 	resp, code := receive(fd, deadline)
@@ -162,7 +162,7 @@ func get(sock, target string, deadline time.Time) ([]byte, string) {
 
 // connect opens a non-blocking stream socket to path. The socket is made and marked under the
 // fork lock, since a child that inherited it would read as a container client.
-func connect(path string, deadline time.Time) (int, string) {
+func connect(path string) (int, string) {
 	syscall.ForkLock.RLock()
 	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err == nil {
@@ -172,14 +172,15 @@ func connect(path string, deadline time.Time) (int, string) {
 	if err != nil {
 		return -1, errConnect
 	}
-	if code := dial(fd, path, deadline); code != "" {
+	if code := dial(fd, path); code != "" {
 		unix.Close(fd)
 		return -1, code
 	}
 	return fd, ""
 }
 
-func dial(fd int, path string, deadline time.Time) string {
+// dial connects fd without blocking: a unix socket's connect completes or fails at once.
+func dial(fd int, path string) string {
 	if unix.SetNonblock(fd, true) != nil {
 		return errConnect
 	}
@@ -189,28 +190,14 @@ func dial(fd int, path string, deadline time.Time) string {
 		return ""
 	case errors.Is(err, unix.ENOENT):
 		return errNoSocket
-	case !errors.Is(err, unix.EINPROGRESS) && !errors.Is(err, unix.EINTR):
-		return errConnect
 	}
-	if !ready(fd, unix.POLLOUT, deadline) {
-		return errDeadline
-	}
-	if soErr, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_ERROR); err != nil || soErr != 0 {
-		return errConnect
-	}
-	return ""
+	return errConnect
 }
 
-func send(fd int, b []byte, deadline time.Time) string {
-	for len(b) > 0 {
-		if !ready(fd, unix.POLLOUT, deadline) {
-			return errDeadline
-		}
-		n, err := unix.Write(fd, b)
-		if err != nil && !errors.Is(err, unix.EAGAIN) && !errors.Is(err, unix.EINTR) {
-			return errConnect
-		}
-		b = b[max(n, 0):]
+// send writes the request in one write: it is far smaller than a fresh connection's empty buffer.
+func send(fd int, b []byte) string {
+	if n, err := unix.Write(fd, b); err != nil || n != len(b) {
+		return errConnect
 	}
 	return ""
 }

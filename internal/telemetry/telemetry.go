@@ -14,9 +14,6 @@ import (
 	"github.com/core-slot/coreslot/internal/store"
 )
 
-// Schema is the version in the "v" key of every line.
-const Schema = store.TelemetrySchema
-
 // Fields are the keys an event adds to the common ones of its line.
 type Fields = map[string]any
 
@@ -37,12 +34,9 @@ type Recorder struct {
 	memWG sync.WaitGroup // the memory line goroutines in flight; tests wait on it
 }
 
-// New returns the recorder of a run; nil when stateDir is not absolute. It creates nothing: the
-// directory and the file are made by the first line.
+// New returns the recorder of a run. It creates nothing: the directory and the file are made by
+// the first line.
 func New(stateDir, runID, label string) *Recorder {
-	if !filepath.IsAbs(stateDir) {
-		return nil
-	}
 	return &Recorder{dir: filepath.Join(stateDir, store.TelemetryDir), runID: runID, label: label, attempt: 1}
 }
 
@@ -107,7 +101,7 @@ func (r *Recorder) emit(event string, f Fields, run bool) {
 		m[k] = v
 	}
 	up, awake := Clocks()
-	m["v"], m["e"], m["time_ns"], m["up_ns"], m["awake_ns"], m["lost"] = Schema, event, time.Now().UnixNano(), up, awake, r.lost
+	m["v"], m["e"], m["time_ns"], m["up_ns"], m["awake_ns"], m["lost"] = store.TelemetrySchema, event, time.Now().UnixNano(), up, awake, r.lost
 	if run {
 		r.n++
 		m["run"], m["attempt"], m["n"], m["label"] = r.runID, r.attempt, r.n, r.label

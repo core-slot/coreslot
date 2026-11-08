@@ -71,7 +71,7 @@ func TestEventLineFields(t *testing.T) {
 				t.Errorf("line %d lacks %q: %v", i+1, k, m)
 			}
 		}
-		if m["v"] != float64(Schema) || m["run"] != "run-1" || m["label"] != "go test" || m["lost"] != float64(0) {
+		if m["v"] != float64(store.TelemetrySchema) || m["run"] != "run-1" || m["label"] != "go test" || m["lost"] != float64(0) {
 			t.Errorf("line %d: %v", i+1, m)
 		}
 	}
@@ -113,15 +113,6 @@ func TestNilWritesNothing(t *testing.T) {
 	r.Emit("enqueue", Fields{"a": 1})
 	r.EmitMachine("memory", nil)
 	r.Stop()
-}
-
-func TestNewRefusesRelativeDir(t *testing.T) {
-	if r := New("state", "run", "x"); r != nil {
-		t.Errorf("New of a relative directory = %v, want nil", r)
-	}
-	if r := New("", "run", "x"); r != nil {
-		t.Errorf("New of an empty directory = %v, want nil", r)
-	}
 }
 
 // Writes into a directory that cannot be written return nothing and are counted; the next line

@@ -64,7 +64,6 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	prev := map[int]memsample.TreeTimes{}
 	var round, keptRound, cpuNS int64
 	var stall float64
-	var sockets []string // of the containers line, looked up once
 	smoothed := false
 	p.container = r.o.containerCommand()
 	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
@@ -96,10 +95,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			}
 			r.rec.MemoryAsync()
 			if p.container && r.rec != nil && !r.inherited { // a descendant's socket would mark its parent's command
-				if sockets == nil {
-					sockets = dockerSockets(os.Getenv("DOCKER_HOST"), r.loc.home)
-				}
-				r.rec.ContainersAsync(sockets)
+				r.rec.ContainersAsync(dockerSockets(os.Getenv("DOCKER_HOST"), r.loc.home))
 			}
 		}
 		if g == nil || n%listingsPerTick != 0 {

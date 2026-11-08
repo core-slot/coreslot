@@ -368,7 +368,7 @@ func TestConnectErrorHasNoPath(t *testing.T) {
 }
 
 // replaceConnect makes the recorder connect with fn; the test's end restores it.
-func replaceConnect(t *testing.T, fn func(string, time.Time) (int, string)) {
+func replaceConnect(t *testing.T, fn func(string) (int, string)) {
 	t.Helper()
 	saved := Connect
 	Connect = fn
@@ -379,7 +379,7 @@ func replaceConnect(t *testing.T, fn func(string, time.Time) (int, string)) {
 // connects to the marker as a path.
 func TestTCPDockerHost(t *testing.T) {
 	var calls atomic.Int64
-	replaceConnect(t, func(string, time.Time) (int, string) { calls.Add(1); return -1, "connect" })
+	replaceConnect(t, func(string) (int, string) { calls.Add(1); return -1, "connect" })
 	if list, total, code := Containers(soon(), []string{TCPHost}); code != "tcp_host" || total != 0 || list != nil {
 		t.Errorf("list %v total %d code %q", list, total, code)
 	}
@@ -457,7 +457,7 @@ func TestContainersLineOncePerWindow(t *testing.T) {
 // A panic in the read is recovered and counted in the next line's lost. Mutation: dropping the
 // recover in the goroutine kills the test binary.
 func TestContainersPanicRecovered(t *testing.T) {
-	replaceConnect(t, func(string, time.Time) (int, string) { panic("socket") })
+	replaceConnect(t, func(string) (int, string) { panic("socket") })
 	dir := stateDir(t)
 	r := New(dir, "run-1", "x")
 	r.ContainersAsync([]string{"/tmp/docker.sock"})
@@ -472,7 +472,7 @@ func TestContainersPanicRecovered(t *testing.T) {
 // It is non-blocking, or a poll is not what bounds it. Mutations: no CloseOnExec; no SetNonblock.
 func TestSocketIsCloseOnExec(t *testing.T) {
 	d := engine(t)
-	fd, code := connect(d.path, soon())
+	fd, code := connect(d.path)
 	if code != "" {
 		t.Fatalf("code %q", code)
 	}

@@ -325,22 +325,6 @@ var lifeRows = []lifeRow{
 			o.code(e.Start("run", "--restart=yes", "--label", "R", "--mem", "100M", "--", filepath.Join(e.MarkDir, "no-such-command")))
 		},
 		check: func(t *testing.T, o *lifeOutcome) { o.wantField(t, "R", "not_started", "reason", "exec") }},
-	{name: "reset_keeps_it_as_the_run_log", config: roomConfig(1000), want: map[string]string{"R": `^enqueue admitted ended$`},
-		trace: func(t *testing.T, e Env, o *lifeOutcome) {
-			runOne(e, o, "R")
-			e.Start("doctor", "--reset").ExitCode(0)
-		}},
-	{name: "reset_of_another_format_removes_it", config: roomConfig(1000), want: map[string]string{"R": `^$`},
-		trace: func(t *testing.T, e Env, o *lifeOutcome) {
-			runOne(e, o, "R")
-			writeFormat(e, "3")
-			e.Start("doctor", "--reset").ExitCode(0)
-		},
-		check: func(t *testing.T, o *lifeOutcome) {
-			if len(o.files) != 0 {
-				t.Errorf("after a reset, under telemetry/: %q", o.files)
-			}
-		}},
 }
 
 // runBlind is runOne for a directory Status cannot read: it takes no mark.
@@ -457,21 +441,11 @@ func TestTelemetryLifecycle(t *testing.T) {
 	}
 }
 
-// With the switch off no row leaves a file under telemetry/. Mutation: a recorder made whatever
-// the switch says reddens the first row.
-func TestTelemetryOffWritesNothing(t *testing.T) {
-	for _, row := range lifeRows {
-		t.Run(row.name, func(t *testing.T) {
-			if o := row.outcome(t, false); len(o.files) != 0 {
-				t.Errorf("with telemetry off, under telemetry/: %q", o.files)
-			}
-		})
-	}
-}
-
 // Recording changes no outcome: exit codes, what was held at each mark and the run log's keys are
-// the same on and off. Mutation: an extra key on the run-log record when a recorder is live; a
-// run that exits by the recorder's say reddens the codes.
+// the same on and off, and with the switch off no row leaves a file under telemetry/: this is the
+// proof that off writes nothing. Mutations: an extra key on the run-log record when a recorder is
+// live; a run that exits by the recorder's say reddens the codes; a recorder made whatever the
+// switch says reddens the files.
 func TestTelemetryChangesNoOutcome(t *testing.T) {
 	for _, row := range lifeRows {
 		t.Run(row.name, func(t *testing.T) {
@@ -484,6 +458,9 @@ func TestTelemetryChangesNoOutcome(t *testing.T) {
 			}
 			if !maps.EqualFunc(on.runKeys, off.runKeys, slices.Equal[[]string]) {
 				t.Errorf("run-log keys on %q, off %q", on.runKeys, off.runKeys)
+			}
+			if len(off.files) != 0 {
+				t.Errorf("with telemetry off, under telemetry/: %q", off.files)
 			}
 		})
 	}

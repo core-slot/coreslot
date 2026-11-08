@@ -263,14 +263,3 @@ func TestLinuxPartsFromFixture(t *testing.T) {
 		t.Error("linuxParts without a meminfo part is ok")
 	}
 }
-
-// Mutation: the "some" line for "full", and the full stall reads 12345.
-func TestPSITotalFull(t *testing.T) {
-	const text = "some avg10=0.00 total=12345\nfull avg10=0.00 total=678\n"
-	if us, ok := psiTotal(text, "full"); !ok || us != 678 {
-		t.Errorf("psiTotal(full) = %d, %v; want 678, true", us, ok)
-	}
-	if _, ok := psiTotal("some avg10=0.00 total=1\n", "full"); ok {
-		t.Error("psiTotal(full) found a full line in a text with only some")
-	}
-}

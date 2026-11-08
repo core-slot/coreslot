@@ -73,12 +73,3 @@ func TestSweepReadsLongName(t *testing.T) {
 		t.Errorf("vm = %+v (ok %v), want %q with a footprint", vm, ok, name[:31])
 	}
 }
-
-// A sweep costs a few ms; BenchmarkSweep prints how many.
-func BenchmarkSweep(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		if _, _, ok := Sweep(5); !ok {
-			b.Fatal("not ok")
-		}
-	}
-}

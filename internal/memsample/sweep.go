@@ -1,6 +1,7 @@
 package memsample
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 )
@@ -42,14 +43,6 @@ func pickVM(procs []ProcMem) *ProcMem {
 // rank returns the n largest of procs by footprint and the VM among all of them.
 func rank(procs []ProcMem, n int) (top []ProcMem, vm *ProcMem) {
 	vm = pickVM(procs)
-	slices.SortStableFunc(procs, func(a, b ProcMem) int {
-		switch {
-		case a.FootprintMiB > b.FootprintMiB:
-			return -1
-		case a.FootprintMiB < b.FootprintMiB:
-			return 1
-		}
-		return 0
-	})
+	slices.SortStableFunc(procs, func(a, b ProcMem) int { return cmp.Compare(b.FootprintMiB, a.FootprintMiB) })
 	return procs[:min(max(n, 0), len(procs))], vm
 }

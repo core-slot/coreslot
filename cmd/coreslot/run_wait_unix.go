@@ -99,21 +99,15 @@ func (s *tracedStepper) charge() {
 	}
 }
 
-// take returns the seconds per reason, to the millisecond a line is worth, and clears them.
+// take returns the seconds per reason, to the millisecond a line is worth, and clears them and
+// the longest gap.
 func (s *tracedStepper) take() map[string]float64 {
 	out := make(map[string]float64, len(s.secs))
 	for why, v := range s.secs {
 		out[why] = math.Round(v*1e3) / 1e3
 	}
-	s.secs = nil
+	s.secs, s.maxGap = nil, 0
 	return out
-}
-
-// takeGap returns the longest time between two steps and clears it.
-func (s *tracedStepper) takeGap() time.Duration {
-	g := s.maxGap
-	s.maxGap = 0
-	return g
 }
 
 // waitOneP runs wait with the Go runtime limited to one P (runtime.GOMAXPROCS(1)) and restores
@@ -200,7 +194,7 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
 }
 
-// newRecorder is the run's recorder; nil when the state directory is not absolute.
+// newRecorder is the run's recorder.
 func (r *run) newRecorder() *telemetry.Recorder {
 	return telemetry.New(r.loc.dir, fmt.Sprintf("%d-%d", r.start.UnixNano(), os.Getpid()), r.o.label)
 }
@@ -211,9 +205,7 @@ func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request
 		return
 	}
 	if r.rec == nil {
-		if r.rec = r.newRecorder(); r.rec == nil {
-			return
-		}
+		r.rec = r.newRecorder()
 	}
 	r.rec.SetAttempt(r.stops + 1)
 	f := telemetry.Fields{"ticket": t.Name(), "need_mib": req.NeedMiB, "need_source": r.o.needSource, "real_memory": req.RealMemory,
@@ -248,7 +240,8 @@ func (r *run) recordWaiting(w engine.Waiting) {
 		return
 	}
 	out := w.Outcome
-	f := telemetry.Fields{"reason": string(out.Reason), "reason_s": r.trace.take(), "evals": w.Evals, "max_gap_ms": r.trace.takeGap().Milliseconds()}
+	gap := r.trace.maxGap
+	f := telemetry.Fields{"reason": string(out.Reason), "reason_s": r.trace.take(), "evals": w.Evals, "max_gap_ms": gap.Milliseconds()}
 	if w.Ahead != "" {
 		f["ahead"] = w.Ahead
 	}
