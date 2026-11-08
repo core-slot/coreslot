@@ -322,3 +322,69 @@ func TestSampleLog(t *testing.T) {
 		t.Errorf("%d lines name a stop round, want 1", stops)
 	}
 }
+
+// roundScene is a detector whose last round was at 100 s on the sample clock, with hold "1" listed.
+func roundScene() (watch.Detector, watch.Config) {
+	c := watch.Defaults()
+	c.PostKillS = 15
+	return watch.Detector{LastRoundNS: 100e9, Stop: []string{"1"}}, c
+}
+
+func sampleAt(wallNS int64, jobs ...watch.Job) watch.Sample {
+	var s watch.Sample
+	s.Host.WallNS, s.Jobs = wallNS, jobs
+	return s
+}
+
+// A new round waits out post_kill_s after the last one, and a sample from before it (another
+// clock epoch) does not. Mutations: dropping the window clause lets a round start inside it;
+// dropping `since >= 0` holds back a sample that reads before the last round.
+func TestRoundOverPostKillWindow(t *testing.T) {
+	d, c := roundScene()
+	for _, tc := range []struct {
+		wallNS int64
+		want   bool
+	}{{100e9, false}, {114e9, false}, {115e9, true}, {99e9, true}} {
+		if got := roundOver(d, sampleAt(tc.wallNS), c); got != tc.want {
+			t.Errorf("sample at %d s, last round at 100 s: roundOver = %v, want %v", tc.wallNS/1e9, got, tc.want)
+		}
+	}
+}
+
+// A listed hold still running as a victim holds back the next round; one that is gone, no victim
+// or not listed does not. Mutations: dropping the victim test, the membership test or the whole
+// clause.
+func TestRoundOverListedAlive(t *testing.T) {
+	d, c := roundScene()
+	for _, tc := range []struct {
+		name string
+		job  watch.Job
+		want bool
+	}{
+		{"listed and a victim", watch.Job{Hold: "1", Victim: true}, false},
+		{"listed, no victim any more", watch.Job{Hold: "1"}, true},
+		{"a victim, not listed", watch.Job{Hold: "2", Victim: true}, true},
+	} {
+		if got := roundOver(d, sampleAt(120e9, tc.job), c); got != tc.want {
+			t.Errorf("%s: roundOver = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if !roundOver(d, sampleAt(120e9), c) {
+		t.Error("the listed hold is gone: roundOver = false, want true")
+	}
+}
+
+// A round observe mode wrote holds back no round under enforce, inside the window and with its
+// victim alive; under observe it still does. Mutation: drop the first clause of roundOver.
+func TestRoundOverObservedRound(t *testing.T) {
+	d, c := roundScene()
+	d.Observed = true
+	cur := sampleAt(105e9, watch.Job{Hold: "1", Victim: true})
+	if !roundOver(d, cur, c) {
+		t.Error("enforce after an observed round: roundOver = false, want true")
+	}
+	c.Observe = true
+	if roundOver(d, cur, c) {
+		t.Error("observe after an observed round: roundOver = true, want false")
+	}
+}
