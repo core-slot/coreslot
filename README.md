@@ -337,7 +337,8 @@ coreslot sends nothing anywhere and opens no network connection itself; looking 
 directory may contact a directory service such as LDAP ([SECURITY.md](SECURITY.md)). While the
 record is on, a run doing container work talks to the local Docker socket, a unix socket, about
 every 30 s, to read each container's memory. [The keys](docs/telemetry.md) say what each line
-means, what the record holds and how large it grows. `sample_log` is deprecated: alone, it writes the machine samples and nothing else.
+means, what the record holds and how large it grows. `sample_log` is deprecated: alone, it writes
+the machine samples and nothing else.
 
 `needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
 space or an `@` is not a bare TOML key, so quote it:

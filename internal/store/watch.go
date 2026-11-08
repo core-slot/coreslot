@@ -150,19 +150,14 @@ func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop
 		l["no_round"] = note.noRound
 	}
 	if note.started {
-		var victims, kept []string
-		for _, j := range cur.Jobs {
-			if j.Victim {
-				victims = append(victims, j.Hold)
-			}
-		}
+		var kept []string
 		for hold, k := range d.Kept {
 			if k.RoundNS == cur.Host.WallNS { // an older round's record is not this round's
 				kept = append(kept, hold)
 			}
 		}
 		slices.Sort(kept)
-		l["candidates"], l["short_mib"] = victims, cur.ShortMiB
+		l["short_mib"] = cur.ShortMiB
 		if len(kept) > 0 {
 			l["kept"] = kept
 		}

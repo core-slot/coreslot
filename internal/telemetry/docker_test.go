@@ -141,6 +141,16 @@ func TestContainersParsesStats(t *testing.T) {
 	}
 }
 
+// A container that stopped between the list and its stats answers with zeros: it is counted in the
+// total, left out of the list and is no error. Mutation: without the limit test it is listed at 0.
+func TestStoppedContainerLeftOut(t *testing.T) {
+	d := engine(t, fakeContainer{"gone", "alpine", stats(0, 0, ``)}, fakeContainer{"abc", "alpine", stats(5<<20, 1024<<20, ``)})
+	list, total, code := Containers(time.Now().Add(2*time.Second), []string{d.path})
+	if code != "" || total != 2 || len(list) != 1 || list[0].ID != "abc" {
+		t.Errorf("list %v, total %d, code %q; want only abc of 2, no code", list, total, code)
+	}
+}
+
 // Usage is what `docker stats` shows. Mutations: subtracting without the smaller-than test wraps
 // around in the third and fifth rows; reading only inactive_file reddens v1; falling out of the v1
 // branch without trying v2 reddens the fourth.
@@ -409,6 +419,9 @@ func TestHungSocketLineStillWritten(t *testing.T) {
 	if len(got) != 1 || got[0]["e"] != "containers" || got[0]["containers_err"] != "deadline" {
 		t.Fatalf("lines %v", got)
 	}
+	if ms, _ := got[0]["read_ms"].(float64); ms < 1900 {
+		t.Errorf("read_ms %v, want the deadline's 2 s", got[0]["read_ms"])
+	}
 	if l, ok := got[0]["containers"].([]any); !ok || len(l) != 0 || got[0]["containers_total"] != float64(0) {
 		t.Errorf("line %v, want an empty list and a total of 0", got[0])
 	}
@@ -438,6 +451,9 @@ func TestContainersLineOncePerWindow(t *testing.T) {
 	}
 	if _, has := l["containers_err"]; has {
 		t.Errorf("a clean read has containers_err: %v", l)
+	}
+	if _, has := l["read_ms"]; !has {
+		t.Errorf("no read_ms: %v", l)
 	}
 	c := l["containers"].([]any)[0].(map[string]any)
 	if c["id"] != longID[:12] || c["image"] != "postgres:16" || c["usage_mib"] != float64(300) || c["limit_mib"] != float64(2048) {

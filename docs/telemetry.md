@@ -18,7 +18,9 @@ The directory is optional and its absence is normal: no admission reads it, and 
 Each log is JSON lines. The tick that writes samples rotates `samples.jsonl` and `events.jsonl`,
 each to one older generation at 256 MiB, so while anything ticks the directory stays within about
 1 GiB; runs that end within 2 s and pass-throughs do not tick, and alone rotate nothing. A write
-that fails costs its line. A reader skips a line it cannot parse.
+that fails costs its line. A reader skips a line it cannot parse. A line's `v` rises when a key is
+removed, renamed or given another meaning; a new key does not raise it, so a reader ignores the keys
+it does not know.
 
 The record holds labels (an auto-label copies up to two leading arguments of the command and the
 repository's directory name, as the run log does), process names, which are executable file names,
@@ -58,7 +60,9 @@ There is no daemon: only a live coreslot process records, so with none alive not
 ## Switching it during a run
 
 A run's events follow the switch as it read it at its start, even if the switch changes while it
-runs. Samples follow whichever process ticks, so they can start or stop in the middle of a run.
+runs. Samples follow whichever process ticks, so they can start or stop in the middle of a run. A
+run of a release before 0.6.0 takes the tick too and writes its sample to `log/watch.jsonl`: while
+one lives `samples.jsonl` can stay empty, so upgrade with none running.
 
 ## `samples.jsonl`
 
@@ -91,13 +95,14 @@ One line per machine sample, written by whichever run takes the sample.
 | `pressure_level` | macOS: the kernel's memory pressure, 1 normal, 2 warning, 4 critical |
 | `AnonPages`, `Shmem`, `Slab`, `SReclaimable`, `PageTables`, `Zswap` | Linux, MiB, from `/proc/meminfo`; a key the kernel does not report is absent |
 | `oom_kill`, `psi_full_us` | Linux: the count of OOM kills since boot (`/proc/vmstat`) and the PSI `full` stall, in total µs since boot, where the kernel reports it |
-| `candidates`, `short_mib`, `kept`, `no_round` | why a round stopped or kept whom, or why none was written; see `stopped` and `kept` |
+| `short_mib`, `kept`, `no_round` | why a round stopped or kept whom, or why none was written; see `stopped` and `kept` |
 
 A sample whose reading failed reports `level` `unknown`, zero readings and `headroom_ok` false.
 
 ## `events.jsonl`
 
-One line per event of a run, written by that run. Every line has:
+One line per event of a run, written by that run. Every line has the keys below, but for the
+machine-wide `memory` and `containers`, which have no `run`, `attempt`, `n` or `label`:
 
 | key | meaning |
 |---|---|
@@ -121,7 +126,6 @@ Written once the ticket is published; an enqueue that fails writes nothing.
 | `ticket` | the ticket's name in `queue/` |
 | `need_mib` | what it asks for |
 | `need_source` | where the need came from: `flag`, `pin`, `learned`, `cold`, `container`, `restart_peak` |
-| `need_before_mib` | with `restart_peak`: the need before the peak replaced it |
 | `real_memory` | a container request, judged against the real free memory |
 | `typical_s` | the label's typical run time, 0 unknown |
 | `oversized` | the need is above what the machine has above its reserve |
@@ -143,7 +147,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | key | meaning |
 |---|---|
 | `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin` |
-| `reason_s` | seconds waited on each reason since the last line |
+| `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time up to the end of its first step: publishing the ticket, which waits for the admission section while that is held, and that step |
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
 | `ahead` | the ticket examined ahead of it; absent for the head |
@@ -163,7 +167,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `hold` | the hold's name |
 | `waited_s` | the attempt's wait, the run log's `waited_s` |
 | `reason_s` | seconds per reason since the last `waiting` |
-| `last_reason` | the reason of the last step before the admission; empty for a run admitted at once |
+| `last_reason` | the reason of the last step before the admission; empty when the first step admitted the run, which says nothing of how long that took: see `reason_s` |
 | `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
 | `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
 | `w_s` | the expected wait, when computed |
@@ -209,25 +213,26 @@ pass-through killed with its parent's group by a stop round.
 | `reason` | `parent_hold`, `parent_unbudgeted`, `state_error`, `timeout`; a closed code, never the reason's text |
 | `need_mib` | the run's need |
 | `parent` | a pass-through's parent hold; absent otherwise |
+| `waited_s`, `reason_s`, `last_reason` | on `fail_open`, when a state error ended a wait: as on the lines of a wait that ends without a start |
 
 `live` is written every 30 s by a run outside the budget (not by a pass-through, whose memory is
 its parent's), which no sample sees: `footprint_mib` is its tree's footprint at that listing.
 
 ### `memory`
 
-A machine-wide line that names no run (no `run`, `attempt`, `n` or `label`), written on macOS once
-per 30 s window by whichever process is due; two processes may each write one in a window. Nothing
-is written where processes cannot be swept.
+A machine-wide line that names no run, written on macOS at most about every 30 s: a process that
+asks claims `memory.stamp` when it is 25 s old, so two processes may each write one close together.
+Nothing is written where processes cannot be swept.
 
 | key | meaning |
 |---|---|
-| `vm` | the largest footprint among the Docker VM's processes (names starting `com.docker.krun`, `com.docker.virtualization` or `com.apple.Virtualization`): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart; absent when none runs |
+| `vm` | the largest footprint among the Docker VM's processes (names starting `com.docker.krun`, `com.docker.sailor`, `com.docker.virtualization` or `com.apple.Virtualization`): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when none runs, or when an engine goes by another name |
 | `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
 
 ### `containers`
 
-A machine-wide line that names no run, written once per 30 s window (`containers.stamp`, as for
-`memory`, so two processes may each write one in a window) from the supervision of a run whose own
+A machine-wide line that names no run, written at most about every 30 s (`containers.stamp`, as for
+`memory`, so two processes may each write one close together) from the supervision of a run whose own
 command is container work and which is not inside another coreslot run's command, and from nothing
 else: no waiter, no pass-through and no process that inherited a non-empty `CORESLOT_HOLD` or
 `CORESLOT_UNBUDGETED` ever opens the socket, so a nested `--independent` container run writes no
@@ -235,7 +240,8 @@ else: no waiter, no pass-through and no process that inherited a non-empty `CORE
 
 It reads the Docker socket: the unix socket `DOCKER_HOST` names, or else
 `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and `/var/run/docker.sock`, in that
-order (the system's alone when `CORESLOT_STATE_DIR` is set, which looks up no home). One request for
+order (the system's alone when `CORESLOT_STATE_DIR` is set, which looks up no home). The Docker
+context is not read, so another engine has to be named by `DOCKER_HOST`. One request for
 the list and one per container, up to 17, read-only, under one 2 s deadline, which cannot interrupt
 a connect while it resolves the socket's path; the line is written at the deadline with what was
 read.
@@ -243,8 +249,9 @@ read.
 | key | meaning |
 |---|---|
 | `containers` | up to 16 running containers: `id` (12 characters), `image` (up to 64 bytes), `usage_mib` as `docker stats` computes it, `limit_mib` |
-| `containers_total` | how many are running, read or not |
-| `containers_err` | absent when all was read, else a closed code: `no_socket`, `connect`, `deadline`, `http` (a status other than 200, or a response over 1 MiB), `parse`, `tcp_host` (`DOCKER_HOST` is not a unix socket; nothing is read) |
+| `containers_total` | how many are running, read or not; one that stopped between the list and its read is counted here and not listed |
+| `read_ms` | how long the read took: against the 2 s deadline, the margin the machine had |
+| `containers_err` | absent when all was read, else a closed code: `no_socket`, `connect`, `deadline` (also when Resource Saver is bringing an idle VM back), `http` (a status other than 200, or a response over 1 MiB), `parse`, `tcp_host` (`DOCKER_HOST` is not a unix socket; nothing is read) |
 
 ### `not_started`
 
@@ -266,8 +273,8 @@ a command that ended by itself first has a `stopped` and then an `ended` with no
 | `list_pos` | the hold's place in the round's list; absent on `kept`, which the round spared |
 | `excess` | the stall excess E, in points |
 
-A sample that wrote a stop round also has `candidates` (the running holds that were victims),
-`short_mib` (what the round had to free) and `kept` (the holds that round spared). A red or floor
+A sample that wrote a stop round also has `short_mib` (what the round had to free) and `kept` (the
+holds that round spared); the candidates are the `jobs` with `victim`. A red or floor
 sample that wrote none has `no_round`: `post_kill` (the last round is inside `post_kill_s`),
 `listed_alive` (a hold it listed still runs as a victim) or `nobody_stoppable` (a round that had
 no one to list).

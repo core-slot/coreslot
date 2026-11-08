@@ -58,9 +58,13 @@ func (r *run) stepperOf(t *engine.Ticket) stepper {
 	if r.rec == nil {
 		return ticketStepper{t}
 	}
-	r.trace = tracedStepper{stepper: ticketStepper{t}, clk: newRealClock()}
+	r.trace.stepper = ticketStepper{t}
 	return &r.trace
 }
+
+// reasonEnqueue is the reason_s key of an attempt's time up to the end of its first step: publishing
+// the ticket, which waits for the admission section for as long as that is held, and that step.
+const reasonEnqueue = "enqueue"
 
 // tracedStepper keeps where a wait's time went. The time between two steps is charged to the
 // first one's reason: that is what the run waited on meanwhile.
@@ -68,7 +72,7 @@ type tracedStepper struct {
 	stepper
 	clk     waitClock
 	stepped bool
-	at      time.Duration // when the last step returned
+	at      time.Duration // when the last step returned; before the first, when the attempt started
 	reason  string        // the last step's
 	secs    map[string]float64
 	maxGap  time.Duration
@@ -86,16 +90,17 @@ func (s *tracedStepper) step(ctx context.Context) (engine.StepResult, error) {
 
 // charge gives the time since the last step to that step's reason.
 func (s *tracedStepper) charge() {
-	if !s.stepped {
-		return
+	gap, why := s.clk.Now()-s.at, s.reason
+	if s.stepped {
+		s.maxGap = max(s.maxGap, gap)
+	} else {
+		why = reasonEnqueue
 	}
-	gap := s.clk.Now() - s.at
-	s.maxGap = max(s.maxGap, gap)
-	if s.reason != "" {
+	if why != "" {
 		if s.secs == nil {
 			s.secs = map[string]float64{}
 		}
-		s.secs[s.reason] += gap.Seconds()
+		s.secs[why] += gap.Seconds()
 	}
 }
 
@@ -207,13 +212,11 @@ func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request
 	if r.rec == nil {
 		r.rec = r.newRecorder()
 	}
+	r.trace = tracedStepper{clk: newRealClock(), at: -r.enqueued} // from here a wait can end, and be charged
 	r.rec.SetAttempt(r.stops + 1)
 	f := telemetry.Fields{"ticket": t.Name(), "need_mib": req.NeedMiB, "need_source": r.o.needSource, "real_memory": req.RealMemory,
 		"typical_s": req.TypicalS, "oversized": req.NeedMiB > r.overMiB, "timeout_s": r.o.timeout.Seconds(), "on_timeout": r.o.onTimeout,
 		"version": cliVersion(), "mem_mib": r.memMiB}
-	if r.o.needSource == "restart_peak" {
-		f["need_before_mib"] = r.needBefore
-	}
 	if r.nestedMiss != "" {
 		f["nested_miss"] = r.nestedMiss
 	}
@@ -281,12 +284,17 @@ func (r *run) recordAdmitted(g *engine.Grant) {
 
 // recordWaitEnd writes event, the end of a wait that gave no start, with where the wait went.
 func (r *run) recordWaitEnd(event string, f telemetry.Fields) {
-	if r.rec == nil || !r.queued {
+	if r.rec.Stopped() || !r.queued {
 		return
 	}
+	r.closeWait(f)
+	r.rec.Emit(event, f)
+}
+
+// closeWait adds to f where a wait that gave no start went.
+func (r *run) closeWait(f telemetry.Fields) {
 	r.trace.charge() // such a wait ends in its sleep, after the last step
 	f["waited_s"], f["reason_s"], f["last_reason"] = r.waited.Seconds(), r.trace.take(), r.trace.reason
-	r.rec.Emit(event, f)
 }
 
 // maxHolderLines bounds the holders of a waiting line, so that the line fits MaxRunLine.

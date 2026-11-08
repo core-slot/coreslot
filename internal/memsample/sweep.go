@@ -17,7 +17,7 @@ type ProcMem struct {
 
 // vmNames are the names, by prefix, of the processes that hold the Docker VM's memory. The kernel
 // keeps 31 bytes of a name, so only a prefix is compared.
-var vmNames = []string{"com.docker.krun", "com.docker.virtualization", "com.apple.Virtualization"}
+var vmNames = []string{"com.docker.krun", "com.docker.sailor", "com.docker.virtualization", "com.apple.Virtualization"}
 
 // isVM reports whether name is one of the Docker VM's process names.
 func isVM(name string) bool {

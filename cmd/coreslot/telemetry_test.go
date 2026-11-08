@@ -301,9 +301,6 @@ func TestEnqueueLine(t *testing.T) {
 			t.Errorf("%s = %v, want %v", k, m[k], want)
 		}
 	}
-	if _, ok := m["need_before_mib"]; ok {
-		t.Errorf("a first attempt has need_before_mib: %v", m)
-	}
 	wc, _ := m["watch_config"].(map[string]any)
 	for _, k := range []string{"yellow_points", "red_points", "red_samples", "gate_pages_s", "floor_mib", "calm_s", "post_kill_s", "spacing_s"} {
 		if _, ok := wc[k]; !ok {
@@ -354,7 +351,7 @@ func TestEnqueueOfARestart(t *testing.T) {
 			m = l
 		}
 	}
-	if m["attempt"] != 2.0 || m["need_source"] != "restart_peak" || m["need_mib"] != 300.0 || m["need_before_mib"] != 128.0 || m["oversized"] != true {
+	if m["attempt"] != 2.0 || m["need_source"] != "restart_peak" || m["need_mib"] != 300.0 || m["oversized"] != true {
 		t.Errorf("the restart's enqueue: %v", m)
 	}
 	if evs[0]["oversized"] != false {
@@ -482,10 +479,12 @@ func (s *scriptedStepper) step(context.Context) (engine.StepResult, error) {
 }
 
 // The time between two steps is the first step's reason's: that is what the run waited on
-// meanwhile. take clears. Mutation: charging the step's own reason gives room_short 2, behind_head 3.
+// meanwhile; the time before the first step is the enqueue's. take clears. Mutations: charging the
+// step's own reason gives room_short 2, behind_head 3; counting the enqueue as a gap gives 7 s; leaving
+// it uncharged drops the key.
 func TestReasonSecondsAddUp(t *testing.T) {
 	clk := &fakeClock{}
-	tr := &tracedStepper{clk: clk, stepper: &scriptedStepper{clk: clk, steps: []scriptedStep{
+	tr := &tracedStepper{clk: clk, at: -7 * time.Second, stepper: &scriptedStepper{clk: clk, steps: []scriptedStep{
 		{0, engine.ReasonRoomShort}, {2 * time.Second, engine.ReasonBehindHead}, {3 * time.Second, engine.ReasonBehindHead}}}}
 	for range 3 {
 		if _, err := tr.step(context.Background()); err != nil {
@@ -497,8 +496,8 @@ func TestReasonSecondsAddUp(t *testing.T) {
 	if gap != 3*time.Second {
 		t.Errorf("longest gap %v, want 3s", gap)
 	}
-	if len(got) != 2 || got["room_short"] != 2 || got["behind_head"] != 3 {
-		t.Errorf("seconds %v, want room_short 2 and behind_head 3", got)
+	if len(got) != 3 || got[reasonEnqueue] != 7 || got["room_short"] != 2 || got["behind_head"] != 3 {
+		t.Errorf("seconds %v, want enqueue 7, room_short 2 and behind_head 3", got)
 	}
 	if tr.reason != "behind_head" {
 		t.Errorf("last reason %q", tr.reason)
@@ -525,6 +524,61 @@ func TestWaitEndChargesItsLastStretch(t *testing.T) {
 	if s, _ := event(t, events(t, dir), "timeout")["reason_s"].(map[string]any); s["room_short"] != 3.0 {
 		t.Errorf("reason_s %v, want room_short 3", s)
 	}
+}
+
+// A section held across the enqueue is named, not lost, and a first step that admits leaves
+// last_reason empty. Mutation: stepperOf without the enqueue's start reads a few milliseconds.
+func TestEnqueueWaitIsNamed(t *testing.T) {
+	dir := recordedDir(t, 512)
+	lock, err := os.OpenFile(filepath.Join(dir, "admit.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	timer := time.AfterFunc(600*time.Millisecond, func() { lock.Close() })
+	defer timer.Stop()
+	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "128M", "--", "true"); r.code != 0 {
+		t.Fatalf("exit %d: %q", r.code, r.stderr)
+	}
+	m := event(t, events(t, dir), "admitted")
+	s, _ := m["reason_s"].(map[string]any)
+	if v, _ := s[reasonEnqueue].(float64); v < 0.3 {
+		t.Errorf("reason_s %v, want the held section's time under enqueue", s)
+	}
+	if m["last_reason"] != "" {
+		t.Errorf("last_reason %v, want empty for a first step that admits", m["last_reason"])
+	}
+}
+
+// A fail-open run's outside line closes the wait a state error ended; a timed-out run's wait was
+// closed by its timeout line. Mutation: without the kind test the timeout_run row has the keys.
+func TestOutsideClosesAFailOpenWait(t *testing.T) {
+	for _, c := range []struct {
+		kind string
+		want bool
+	}{{"fail_open", true}, {"timeout_run", false}} {
+		t.Run(c.kind, func(t *testing.T) {
+			dir := stateDir(t, "")
+			r := &run{telemetry: true, rec: trackedRecorder(t, dir, "1-1", "x"), queued: true, waited: 3 * time.Second,
+				trace: tracedStepper{clk: &fakeClock{}, stepped: true, reason: "room_short", secs: map[string]float64{"room_short": 2}}}
+			r.recordOutside(true, c.kind, "state_error", "")
+			m := event(t, events(t, dir), "outside")
+			if _, got := m["reason_s"]; got != c.want {
+				t.Errorf("reason_s present %v, want %v: %v", got, c.want, m)
+			}
+			if _, got := m["waited_s"]; got != c.want {
+				t.Errorf("waited_s present %v, want %v: %v", got, c.want, m)
+			}
+		})
+	}
+}
+
+// With no recorder nothing of ended is built. Mutation: without the guard the nil supervisor panics.
+func TestEndedBuiltOnlyWithARecorder(t *testing.T) {
+	(&run{}).recordEnded(child{}, store.RunRecord{}, nil, peak{}, false)
 }
 
 // A wait under 30 s writes only the line at its start, so its admission carries where the time
@@ -584,7 +638,7 @@ func TestTwentyHoldersLineFits(t *testing.T) {
 			ChildExited: true, OwnerExited: true, SampleAgeMS: 24 * 3600 * 1000})
 	}
 	secs := map[string]float64{}
-	for _, why := range []string{"behind_ticket", "section_busy", "room_short", "behind_head", "watch_level", "watch_spacing", "restart_stale", "restart_level", "restart_calm", "restart_margin"} {
+	for _, why := range []string{reasonEnqueue, "behind_ticket", "section_busy", "room_short", "behind_head", "watch_level", "watch_spacing", "restart_stale", "restart_level", "restart_calm", "restart_margin"} {
 		secs[why] = 29.999
 	}
 	r := &run{o: runOptions{need: 1, label: label}, rec: trackedRecorder(t, dir, "1762600000000000000-2147483647", label), trace: tracedStepper{secs: secs, maxGap: time.Hour}}
@@ -622,8 +676,8 @@ func TestAdmittedLine(t *testing.T) {
 			t.Errorf("%s = %v, want %v", k, m[k], want)
 		}
 	}
-	if s, ok := m["reason_s"].(map[string]any); !ok || len(s) != 0 {
-		t.Errorf("reason_s %v, want an empty object for a run admitted at once", m["reason_s"])
+	if s, ok := m["reason_s"].(map[string]any); !ok || len(s) != 1 || s[reasonEnqueue] == nil {
+		t.Errorf("reason_s %v, want only the enqueue for a run admitted at once", m["reason_s"])
 	}
 	if _, ok := m["w_s"]; ok {
 		t.Errorf("w_s on a run that computed none: %v", m)
@@ -870,7 +924,7 @@ func TestRefusedStrictAfterEnqueue(t *testing.T) {
 			}
 			defer null.Close()
 			r := &run{o: runOptions{strict: true, refusalCode: exitRefusal}, io: IO{Stderr: null}, rec: trackedRecorder(t, dir, "run-1", "x"), queued: true,
-				waited: 3 * time.Second, trace: tracedStepper{reason: "room_short", secs: map[string]float64{"room_short": 2}}}
+				waited: 3 * time.Second, trace: tracedStepper{clk: &fakeClock{}, stepped: true, reason: "room_short", secs: map[string]float64{"room_short": 2}}}
 			if code := r.failOpen(nil, c.err); code != exitRefusal {
 				t.Fatalf("exit %d", code)
 			}
@@ -1739,14 +1793,46 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct{ name, mark string }{
-		{"inherited hold", engine.EnvHold},
-		{"inherited unbudgeted", engine.EnvUnbudgeted},
+	// hold is the name of a hold of this process, an ancestor of the run, whose lock makes it live.
+	hold := func(t *testing.T, dir string, live bool) string {
+		h := wire.Hold{Label: "parent", PID: os.Getpid(), StartNS: 1, NeedMiB: 128}
+		body, err := wire.Encode(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := wire.HoldName(h.StartNS, h.PID, 1, h.Label)
+		p := filepath.Join(dir, "holds", name)
+		if err := os.WriteFile(p, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if live {
+			f, err := os.Open(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { f.Close() })
+			if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return name
+	}
+	for _, c := range []struct {
+		name, mark string
+		live       bool
+	}{
+		{"a live parent's hold", engine.EnvHold, true},
+		{"an ancestor's dead hold", engine.EnvHold, false},
+		{"inherited unbudgeted", engine.EnvUnbudgeted, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			conns, _ := fakeEngine(t)
 			dir := recordedDir(t, 1024)
-			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"=parent"), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
+			value := "parent"
+			if c.mark == engine.EnvHold {
+				value = hold(t, dir, c.live)
+			}
+			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"="+value), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
 			if r.code != 0 {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
@@ -1755,6 +1841,35 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 			}
 			if conns.Load() != 0 || len(containerLines(t, dir)) != 0 {
 				t.Errorf("%d connections, %d lines from a nested run", conns.Load(), len(containerLines(t, dir)))
+			}
+		})
+	}
+}
+
+// A stale exported CORESLOT_HOLD names no parent of this run, so it costs nothing: the run still
+// reads the socket and says why the hold did not count. Mutation: any non-empty hold counting as
+// inherited leaves both rows with no connection.
+func TestStaleHoldStillConnects(t *testing.T) {
+	docker := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, hold, miss string }{
+		{"names no ancestor", wire.HoldName(1, 999999, 1, "stale"), "not_ancestor"},
+		{"malformed", "parent", "malformed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			conns, _ := fakeEngine(t)
+			dir := recordedDir(t, 1024)
+			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", engine.EnvHold+"="+c.hold), "run", "--restart=yes", "--label", "stale", "--mem", "128M", "--", docker)
+			if r.code != 0 {
+				t.Fatalf("exit %d: %q", r.code, r.stderr)
+			}
+			if conns.Load() == 0 || len(containerLines(t, dir)) == 0 {
+				t.Errorf("%d connections, %d lines from a run no parent holds", conns.Load(), len(containerLines(t, dir)))
+			}
+			if m := event(t, events(t, dir), "enqueue"); m["nested_miss"] != c.miss {
+				t.Errorf("nested_miss %v, want %s", m["nested_miss"], c.miss)
 			}
 		})
 	}

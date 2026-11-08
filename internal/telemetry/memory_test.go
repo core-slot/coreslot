@@ -61,15 +61,16 @@ func TestMemoryOncePerWindow(t *testing.T) {
 	}
 }
 
-// A stamp whose time is in the future (a clock that went back) is due, and so is one older than
-// 30 s; one 29 s old is not. Mutations: dropping the future test leaves the first row silent;
-// comparing against 29 s or 31 s moves the edge rows.
+// A stamp whose time is in the future (a clock that went back) is due, and so is one past the
+// window, which ends before a run's 30 s cadence, so a lone run's next ask finds it due; one inside
+// the window is not. Mutations: dropping the future test leaves the first row silent; a window of
+// 30 s silences the "past" row; one of 20 s sweeps in the "inside" row.
 func TestFutureStampIsDue(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		age  time.Duration
 		due  bool
-	}{{"future", -time.Hour, true}, {"old", 31 * time.Second, true}, {"fresh", 10 * time.Second, false}} {
+	}{{"future", -time.Hour, true}, {"old", 31 * time.Second, true}, {"past the window", 27 * time.Second, true}, {"inside the window", 23 * time.Second, false}, {"fresh", 10 * time.Second, false}} {
 		t.Run(c.name, func(t *testing.T) {
 			calls := fakeSweep(t, goodSweep)
 			dir := stateDir(t)

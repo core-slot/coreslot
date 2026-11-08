@@ -36,12 +36,13 @@ func environ() map[string]string {
 // command's process group, so that a stop round's kill of that group reaches it; it is no victim.
 func (r *run) decide() int {
 	env := environ()
-	r.inherited = env[engine.EnvHold] != "" || env[engine.EnvUnbudgeted] != ""
 	if reason := env[engine.EnvUnbudgeted]; reason != "" && !r.o.independent {
 		return r.passThroughUnbudgeted(env, reason)
 	}
 	inside, hold, miss := engine.DecideNested(os.Environ(), isAncestor)
 	r.nestedMiss = miss
+	// A stale exported variable names no parent; a dead hold of an ancestor may still have one.
+	r.inherited = env[engine.EnvUnbudgeted] != "" || hold != "" && miss != "not_ancestor" && miss != "malformed"
 	if inside {
 		r.o.sameGroup = true
 		if !r.o.independent {

@@ -43,7 +43,7 @@ type Container struct {
 // Connect opens the unix socket at path; a test replaces it.
 var Connect = connect
 
-// ContainersAsync writes a containers line when none was written in the last 30 s by any process,
+// ContainersAsync writes a containers line when none was written within lineEvery by any process,
 // in a goroutine, so the caller never waits for the socket. The line names no run.
 func (r *Recorder) ContainersAsync(sockets []string) {
 	if r == nil || r.Stopped() || !r.claim(store.ContainersStamp) {
@@ -53,12 +53,14 @@ func (r *Recorder) ContainersAsync(sockets []string) {
 	go func() {
 		defer r.memWG.Done()
 		defer r.recoverLost()
-		list, total, code := Containers(time.Now().Add(containersBudget), sockets)
+		start := time.Now()
+		list, total, code := Containers(start.Add(containersBudget), sockets)
+		readMS := time.Since(start).Milliseconds()
 		items := make([]Fields, 0, len(list))
 		for _, c := range list {
 			items = append(items, Fields{"id": c.ID, "image": c.Image, "usage_mib": c.UsageMiB, "limit_mib": c.LimitMiB})
 		}
-		f := Fields{"containers": items, "containers_total": total}
+		f := Fields{"containers": items, "containers_total": total, "read_ms": readMS}
 		if code != "" {
 			f["containers_err"] = code
 		}
@@ -110,6 +112,9 @@ func Containers(deadline time.Time, sockets []string) (list []Container, total i
 			if code == errDeadline {
 				return list, total, errCode
 			}
+			continue
+		}
+		if s.MemoryStats.Limit == 0 { // it stopped after the list; its zeros are no reading
 			continue
 		}
 		list = append(list, Container{ID: c.ID[:min(12, len(c.ID))], Image: c.Image[:min(imageMax, len(c.Image))],

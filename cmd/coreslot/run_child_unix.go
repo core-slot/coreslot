@@ -145,6 +145,15 @@ func (r *run) runChild(c child) int {
 		r.rec.Emit("not_started", telemetry.Fields{"reason": notStarted})
 		return status
 	}
+	r.recordEnded(c, rec, sup, p, killed)
+	return status
+}
+
+// recordEnded writes the attempt's outcome: the run-log line and what that line cannot say.
+func (r *run) recordEnded(c child, rec store.RunRecord, sup *supervisor, p peak, killed bool) {
+	if r.rec.Stopped() {
+		return
+	}
 	rec.FailOpen = ""
 	f := telemetry.Fields{"record": rec}
 	if c.hold != "" {
@@ -168,7 +177,6 @@ func (r *run) runChild(c child) int {
 		f["mean_footprint_mib"] = p.sumKiB / p.samples / 1024
 	}
 	r.rec.Emit("ended", f)
-	return status
 }
 
 // confirmFormat silences the recorder of a run whose FORMAT changed under it: st is the directory

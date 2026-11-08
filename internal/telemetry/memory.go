@@ -12,13 +12,17 @@ import (
 // Sweep is the process sweep the memory line reads; a test replaces it.
 var Sweep = memsample.Sweep
 
-// lineEvery is how long a memory or containers line holds its stamp.
-const lineEvery = 30 * time.Second
+// Cadence is how often a run asks for the machine-wide lines.
+const Cadence = 30 * time.Second
+
+// lineEvery is how long a memory or containers line holds its stamp: under Cadence, so that a lone
+// run whose ask comes a moment early does not miss a window and write every other time.
+const lineEvery = Cadence - 5*time.Second
 
 // topN is how many of the largest processes a memory line names.
 const topN = 5
 
-// MemoryAsync writes a memory line when none was written in the last 30 s by any process: it
+// MemoryAsync writes a memory line when none was written within lineEvery by any process: it
 // claims memory.stamp, and the claimant sweeps and writes in a goroutine, so the caller never waits
 // for the sweep. Two processes may both claim in one window and write two lines. The line names
 // no run and is written only where Sweep reads, which is macOS; it never reads the Docker socket.
@@ -55,8 +59,8 @@ func topLines(top []memsample.ProcMem) []Fields {
 }
 
 // claim reports whether the named stamp is due and touches it through its descriptor, with no
-// lock: the race of two claimants is accepted. It is due when never claimed (empty), 30 s old or in
-// the future (the clock went back). A stamp it cannot open or touch is not claimed.
+// lock: the race of two claimants is accepted. It is due when never claimed (empty), lineEvery old or
+// in the future (the clock went back). A stamp it cannot open or touch is not claimed.
 func (r *Recorder) claim(stamp string) (won bool) {
 	defer r.recoverLost()
 	f, err := store.OpenStamp(r.dir, stamp)

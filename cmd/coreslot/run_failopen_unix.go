@@ -90,6 +90,9 @@ func (r *run) recordOutside(understood bool, kind, reason, parent string) {
 	if parent != "" {
 		f["parent"] = parent
 	}
+	if kind == "fail_open" && r.queued { // no other line closes this wait
+		r.closeWait(f)
+	}
 	r.rec.SetAttempt(r.stops + 1)
 	r.rec.Emit("outside", f)
 }

@@ -24,8 +24,8 @@ import (
 // listingsPerTick is how many of the tree's 1 s listings make one watch tick of the shared period.
 const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
 
-// telemetryTicks is how many of the tree's listings make one live line of a run outside the budget.
-var telemetryTicks = 30
+// telemetryTicks is how many of the tree's listings make one telemetry.Cadence.
+var telemetryTicks = int(telemetry.Cadence / memSampleEvery)
 
 // listTree is the listing of the command's tree; tests replace it.
 var listTree = memsample.Tree

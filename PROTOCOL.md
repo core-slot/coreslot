@@ -216,7 +216,7 @@ config.toml      configuration (section 5.3); optional, present only under the o
 needs.toml       needs file (section 5.4); optional, present only under the override; never checked
 ```
 
-`log/` may also contain `runs.1.jsonl` and, left by an older client, `watch.jsonl` and
+`log/` may also contain `runs.1.jsonl` and, left or still written by an older client, `watch.jsonl` and
 `watch.1.jsonl`. Each of
 `queue/`, `holds/`, `cancel/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
 (section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;

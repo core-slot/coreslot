@@ -588,7 +588,7 @@ func TestSampleSaysWhyNoRound(t *testing.T) {
 	}
 }
 
-// A round's sample line names the candidates, the holds that round spared and the shortage; a
+// A round's sample line names the holds that round spared and the shortage; a
 // record of an older round is not this round's. Mutation: listing every d.Kept entry.
 func TestSampleKeptIsThisRounds(t *testing.T) {
 	dir := newDir(t)
@@ -621,9 +621,6 @@ func TestSampleKeptIsThisRounds(t *testing.T) {
 	}
 	if k, _ := rounds[0]["kept"].([]any); len(k) != 1 || k[0] != "3" || rounds[0]["short_mib"] != 100.0 {
 		t.Errorf("first round: kept %v short_mib %v, want [3] and 100", rounds[0]["kept"], rounds[0]["short_mib"])
-	}
-	if c, _ := rounds[0]["candidates"].([]any); len(c) != 3 {
-		t.Errorf("candidates %v, want the three victims", rounds[0]["candidates"])
 	}
 	if k, ok := rounds[1]["kept"]; ok {
 		t.Errorf("second round: kept %v, but the record is the first round's", k)

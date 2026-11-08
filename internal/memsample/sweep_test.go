@@ -24,7 +24,7 @@ func TestVMPicksLargest(t *testing.T) {
 // The kernel keeps 31 bytes of a name, so a VM process's name is matched by prefix. Mutation: an
 // exact match of the full names leaves every truncated form unmatched.
 func TestVMNameMatchesTruncated(t *testing.T) {
-	for _, full := range []string{"com.docker.krun", "com.docker.virtualization", "com.apple.Virtualization.VirtualMachine",
+	for _, full := range []string{"com.docker.krun", "com.docker.sailor", "com.docker.virtualization", "com.apple.Virtualization.VirtualMachine",
 		"com.docker.virtualization.something-long-here"} {
 		name := full[:min(len(full), 31)]
 		if !isVM(name) {

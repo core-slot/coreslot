@@ -56,7 +56,7 @@ listed here; after it, an incompatible change to either needs a new major versio
 `coreslot version` prints the formats a binary implements, for example
 `coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 2.
 
-`telemetry/`, and the `log/watch.jsonl` an older client may have left, need no new format number:
+`telemetry/`, and the `log/watch.jsonl` an older client may have left or still write, need no new format number:
 they are optional files that no reader of the format needs, and no admission reads them
 ([`PROTOCOL.md` section 4.4](../PROTOCOL.md#44-layout)).
 
@@ -67,7 +67,7 @@ a body or a run-log line, which a writer may leave out and which every reader of
 when it does not know it
 ([`PROTOCOL.md` section 7.2](../PROTOCOL.md#72-rules-for-every-body) and
 [section 20](../PROTOCOL.md#20-run-log)). A key a reader must understand, a key removed, renamed
-or given another type or meaning, and any change to names or layout bump the number. `admit.lock`,
+or given another type or meaning, and any other change to names or layout bump the number. `admit.lock`,
 an exclusive `flock` held briefly by whoever changes admission state, never changes with a format,
 so a format change never creates a second budget
 ([`PROTOCOL.md` section 15.1](../PROTOCOL.md#151-what-every-format-keeps)).

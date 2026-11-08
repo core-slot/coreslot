@@ -84,11 +84,11 @@ type run struct {
 	snap       *engine.Report      // the last waiting line's snapshot; kept only with rec
 	memMiB     int64               // the machine's memory, from the run's start
 	overMiB    int64               // above this need a run can never fit beside another job
-	needBefore int64               // a restart's need before its peak replaced it
+	enqueued   time.Duration       // from the attempt's start to its ticket being published
 	queued     bool                // this attempt's enqueue succeeded and was recorded: its wait has an end to report
 	nestedMiss string              // why an inherited CORESLOT_HOLD did not count; "" with none
 	parentHold string              // the live parent hold of an --independent run
-	inherited  bool                // a parent's context is in its environment: it never connects to the socket
+	inherited  bool                // it runs inside another run's command, so it never connects to the socket
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -192,7 +192,7 @@ func (r *run) ordinary() int {
 
 // requeue makes req the request of the command g ran, coming back after a stop.
 func (r *run) requeue(req *spec.Request, g *engine.Grant) {
-	r.needBefore, r.o.needSource = req.NeedMiB, "restart_peak"
+	r.o.needSource = "restart_peak"
 	req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
 	r.start = time.Now()
 }
@@ -243,6 +243,7 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 		defer c()
 	}
 	t, err := e.EnqueueContext(enqCtx, req)
+	r.enqueued = time.Since(r.start)
 	if err == nil {
 		r.recordEnqueue(e, t, req)
 		if r.o.noWait {

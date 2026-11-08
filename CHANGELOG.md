@@ -14,6 +14,8 @@ All notable changes to this project are recorded here. The format follows
   state directory why each run waited, how it ended, the machine's memory by part and by process and,
   for container work, each container's memory, read from the local Docker socket. Nothing leaves the
   machine and coreslot opens no network connection. Keys in `docs/telemetry.md`; up to about 1 GiB.
+  A run that records sets `CORESLOT_TELEMETRY` for its command, so that a run nested in it records
+  without reading the switch again.
 
 ### Changed
 
@@ -23,12 +25,15 @@ All notable changes to this project are recorded here. The format follows
 - A container request's waiting line no longer gives a queue position or holders while a hold is
   live, as it waits on neither.
 - Machine samples move from `log/watch.jsonl` to `telemetry/samples.jsonl`. A file left by an older
-  release stays where it is; no reader of the format needs either.
+  release stays where it is; no reader of the format needs either, but the harness under
+  `evidence/air-v04` reads the old file. A run of an older release still alive takes the sample too
+  and writes it to the old file, so `samples.jsonl` can stay empty while one lives: upgrade with none
+  running.
 
 ### Deprecated
 
 - `[watch] sample_log`, in favour of `[telemetry] enabled`. It still works and writes the machine
-  samples alone.
+  samples alone, now to `telemetry/samples.jsonl`, rotated at 256 MiB in place of 10 MiB.
 
 ## v0.5.2 (2026-11-06)
 
