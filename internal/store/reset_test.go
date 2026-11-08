@@ -442,3 +442,48 @@ func TestSectionHeldProbe(t *testing.T) {
 		t.Errorf("a left section: %v, %v", held, err)
 	}
 }
+
+// telemetry/ is handled as log/ is: a repair keeps its files and a format change removes them,
+// and its files are counted in Removed only, never in LogKept or LogRemoved. Mutation: leaving
+// TelemetryDir out of the reset keeps the files in the second case; counting them as the run log
+// raises LogKept or LogRemoved.
+func TestResetHandlesTelemetryDir(t *testing.T) {
+	for _, tc := range []struct {
+		name, format string
+		kept         bool
+	}{{"repair", "coreslot-protocol 2\n", true}, {"format change", "coreslot-protocol 3\n", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newDir(t)
+			_, sec := resetFixture(t, dir)
+			if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte(tc.format), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(dir, TelemetryDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{EventsFile, SamplesFile} {
+				if err := os.WriteFile(filepath.Join(dir, TelemetryDir, name), []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			live, done, err := sec.Reset()
+			if err != nil || !live.Empty() {
+				t.Fatalf("Reset = %+v, %+v, %v", live, done, err)
+			}
+			got := names(t, filepath.Join(dir, TelemetryDir))
+			if !exists(filepath.Join(dir, TelemetryDir)) {
+				t.Fatal("the reset removed telemetry/ itself")
+			}
+			// 7 entries outside log/ and telemetry/ (as the repair test counts), and the run log's
+			// two when they go with the format.
+			wantRemoved, wantLogKept, wantLogRemoved := 7, 2, 0
+			if !tc.kept {
+				wantRemoved, wantLogKept, wantLogRemoved = 7+2+2, 0, 2
+			}
+			if tc.kept != (len(got) == 2) || done.Removed != wantRemoved || done.LogKept != wantLogKept || done.LogRemoved != wantLogRemoved {
+				t.Errorf("telemetry/ holds %v after the reset, which did %+v; want kept %v, Removed %d, LogKept %d, LogRemoved %d",
+					got, done, tc.kept, wantRemoved, wantLogKept, wantLogRemoved)
+			}
+		})
+	}
+}

@@ -35,9 +35,10 @@ type ResetDone struct {
 // entered, whatever format its FORMAT names, malformed or absent included: it removes every entry
 // of queue/, holds/ and cancel/, degraded, gen and another format's res/ with its files, then
 // writes FORMAT of the format written. Under FORMAT 2, or none yet (which the first client writes
-// as 2), it is a repair and keeps the entries of log/; otherwise it removes them too. It keeps
-// admit.lock and config.toml (the format-stable file whose inode live clients may hold open, and
-// the configuration) and the four directories themselves. It does not read the configuration.
+// as 2), it is a repair and keeps the entries of log/ and telemetry/; otherwise it removes them
+// too, those of telemetry/ counted in Removed only. It keeps admit.lock and config.toml (the
+// format-stable file whose inode live clients may hold open, and the configuration) and the
+// directories themselves. It does not read the configuration.
 //
 // It first checks that nothing is alive: no hold or ticket whose lock is held, by names of either
 // format. When anything is alive it removes nothing and returns it. An entry that is not a
@@ -55,7 +56,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 	}
 	s := sec.s
 	listed := map[string][]string{}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, LogDir, TelemetryDir} {
 		if err := CheckEntry(s.path(dir), true); err != nil {
 			return live, done, err
 		}
@@ -112,15 +113,19 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 		}
 		return false
 	}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, LogDir, TelemetryDir} {
 		for _, name := range listed[dir] {
 			switch {
-			case dir != LogDir:
+			case dir != LogDir && dir != TelemetryDir:
 				remove(s.path(dir, name))
 			case keepLog:
-				done.LogKept++
+				if dir == LogDir {
+					done.LogKept++
+				}
 			case remove(s.path(dir, name)):
-				done.LogRemoved++
+				if dir == LogDir {
+					done.LogRemoved++
+				}
 			}
 		}
 	}

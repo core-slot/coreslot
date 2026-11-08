@@ -20,3 +20,6 @@ func Headroom() (mib int64, ok bool) { return 0, false }
 
 // Listing is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Listing() (map[int]Proc, bool) { return nil, false }
+
+// Clocks is implemented on macOS and Linux only; elsewhere it reads nothing.
+func Clocks() (upNS, awakeNS int64) { return 0, 0 }

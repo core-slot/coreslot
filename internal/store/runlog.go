@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
@@ -81,7 +82,7 @@ func (s *Store) ReadRuns() (runs []RunRecord, skipped int, err error) {
 // fail-open reason when that alone makes it fit.
 func (r RunRecord) line() ([]byte, error) {
 	for {
-		b, err := encodeJSON(r)
+		b, err := EncodeJSON(r)
 		if err != nil {
 			return nil, err
 		}
@@ -101,7 +102,8 @@ func (r RunRecord) line() ([]byte, error) {
 	}
 }
 
-func encodeJSON(v any) ([]byte, error) {
+// EncodeJSON is the run log's encoder: no HTML escaping, and the non-ASCII separators escaped.
+func EncodeJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -126,10 +128,16 @@ func (s *Store) AppendRun(r RunRecord) error {
 
 // appendLine appends line to log/name with one write, recreating log/ when a reset removed it.
 func (s *Store) appendLine(name string, line []byte) error {
-	if err := ensureDir(s.path(LogDir)); err != nil {
+	return AppendFile(s.path(LogDir), name, line)
+}
+
+// AppendFile makes dir with ensureDir (mode 0700, checked as section 4.2 requires) and appends
+// line to name in it with one O_APPEND write through OpenFile.
+func AppendFile(dir, name string, line []byte) error {
+	if err := ensureDir(dir); err != nil {
 		return err
 	}
-	f, err := OpenFile(s.path(LogDir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE)
+	f, err := OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE)
 	if err != nil {
 		return err
 	}

@@ -35,6 +35,18 @@ const (
 	ConfigFile   = "config.toml"
 )
 
+// The telemetry directory and its files (an opt-in recorder; no admission reads them).
+const (
+	TelemetryDir = "telemetry"
+	SamplesFile  = "samples.jsonl"
+	SamplesOld   = "samples.1.jsonl"
+	EventsFile   = "events.jsonl"
+	EventsOld    = "events.1.jsonl"
+)
+
+// RotateTelemetryAt is the size at which a telemetry file is rotated to its one older generation.
+const RotateTelemetryAt = 256 << 20
+
 // MaxEntries is the most entries one directory of the layout may hold (section 4.4).
 const MaxEntries = 65536
 

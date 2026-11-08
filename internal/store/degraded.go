@@ -81,7 +81,7 @@ func encodeDegraded(r DegradedRecord) ([]byte, error) {
 		if err == nil {
 			return body, nil
 		}
-		raw, jerr := encodeJSON(r.Reason)
+		raw, jerr := EncodeJSON(r.Reason)
 		if jerr != nil || r.Reason == "" {
 			return nil, err
 		}
