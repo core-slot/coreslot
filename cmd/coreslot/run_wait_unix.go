@@ -194,13 +194,18 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
 }
 
+// newRecorder is the run's recorder; nil when the state directory is not absolute.
+func (r *run) newRecorder() *telemetry.Recorder {
+	return telemetry.New(r.loc.dir, fmt.Sprintf("%d-%d", r.start.UnixNano(), os.Getpid()), r.o.label)
+}
+
 // recordEnqueue writes the attempt's enqueue, making the run's recorder on its first.
 func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request) {
 	if !r.telemetry {
 		return
 	}
 	if r.rec == nil {
-		if r.rec = telemetry.New(r.loc.dir, fmt.Sprintf("%d-%d", r.start.UnixNano(), os.Getpid()), r.o.label); r.rec == nil {
+		if r.rec = r.newRecorder(); r.rec == nil {
 			return
 		}
 	}
@@ -210,6 +215,12 @@ func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request
 		"version": cliVersion(), "mem_mib": r.memMiB}
 	if r.o.needSource == "restart_peak" {
 		f["need_before_mib"] = r.needBefore
+	}
+	if r.nestedMiss != "" {
+		f["nested_miss"] = r.nestedMiss
+	}
+	if r.parentHold != "" {
+		f["parent_hold"] = r.parentHold
 	}
 	if c, err := e.Config(); err == nil {
 		mode := "enforce"

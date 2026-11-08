@@ -86,6 +86,8 @@ type run struct {
 	oversized  bool                // the need can never fit beside another job
 	needBefore int64               // a restart's need before its peak replaced it
 	queued     bool                // this attempt's enqueue succeeded and was recorded: its wait has an end to report
+	nestedMiss string              // why an inherited CORESLOT_HOLD did not count; "" with none
+	parentHold string              // the live parent hold of an --independent run
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).

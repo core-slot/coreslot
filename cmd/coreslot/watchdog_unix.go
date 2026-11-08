@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -19,6 +20,9 @@ import (
 
 // listingsPerTick is how many of the tree's 1 s listings make one watch tick of the shared period.
 const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
+
+// telemetryTicks is how many of the tree's listings make one live line of a run outside the budget.
+var telemetryTicks = 30
 
 // listTree is the listing of the command's tree; tests replace it.
 var listTree = memsample.Tree
@@ -66,6 +70,9 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if !p.container && st != nil {
 			p.container = listClient(sup.pid)
 		}
+		if g == nil && st != nil && ok && n%telemetryTicks == 0 { // a pass-through's memory is its parent's
+			r.rec.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
+		}
 		if g == nil || n%listingsPerTick != 0 {
 			continue
 		}
@@ -87,7 +94,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}) {
 			continue
 		}
-		det, err := g.Tick(ctx)
+		det, err := r.tick(ctx, g)
 		r.countClosed(d, det, err)
 		keptRound = r.keptNotice(det, g.HoldName(), keptRound)
 		if err != nil || p.container || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
@@ -98,6 +105,16 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			return true, p
 		}
 	}
+}
+
+// tick takes the run's part in the shared watch tick; a FORMAT the section refused ends its
+// recording.
+func (r *run) tick(ctx context.Context, g *engine.Grant) (watch.Detector, error) {
+	det, err := g.Tick(ctx)
+	if errors.Is(err, engine.ErrRefused) {
+		r.rec.Stop()
+	}
+	return det, err
 }
 
 // keptNotice says so when det's last round kept the hold, unless the round at lastNS, the last
@@ -192,6 +209,7 @@ func percent(share float64) string {
 // FORMAT is one this client implements (PROTOCOL.md section 14); it reports whether it wrote.
 func (r *run) updateHold(st *store.Store, g *engine.Grant, fn func(*wire.Hold)) bool {
 	if err := formatStillUnderstood(st); err != nil {
+		r.rec.Stop()
 		return false
 	}
 	return g.UpdateHold(fn) == nil

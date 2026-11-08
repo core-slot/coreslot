@@ -14,6 +14,7 @@ import (
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
 )
 
 // environ is the environment as a map; a later duplicate wins, as for exec.
@@ -36,13 +37,16 @@ func environ() map[string]string {
 func (r *run) decide() int {
 	env := environ()
 	if reason := env[engine.EnvUnbudgeted]; reason != "" && !r.o.independent {
-		return r.passThroughUnbudgeted(reason)
+		return r.passThroughUnbudgeted(env, reason)
 	}
-	if inside, _ := engine.DecideNested(os.Environ(), isAncestor); inside {
+	inside, hold, miss := engine.DecideNested(os.Environ(), isAncestor)
+	r.nestedMiss = miss
+	if inside {
 		r.o.sameGroup = true
 		if !r.o.independent {
-			return r.passThrough(env)
+			return r.passThrough(env, hold)
 		}
+		r.parentHold = hold
 	}
 	r.env = dropInherited(env)
 	return r.ordinary()
@@ -64,6 +68,9 @@ func isAncestor(pid int) bool {
 	}
 	return false
 }
+
+// openReadOnly opens the state directory for a pass-through's reading of FORMAT; tests replace it.
+var openReadOnly = store.OpenReadOnly
 
 // shielded is the inherited hold's descriptor that shieldInherited made close-on-exec, with its
 // flags from before; dropInherited closing it forgets it.
@@ -181,7 +188,7 @@ func withGrant(grantMiB int64) []string {
 // passThrough runs the command inside the parent's reservation (PROTOCOL.md section 18): no
 // queue, no section, no lock. The inherited hold's descriptor is passed on as it is, and
 // CORESLOT_GRANTED_MEM is narrowed to the run's need when the parent's grant is larger.
-func (r *run) passThrough(env map[string]string) int {
+func (r *run) passThrough(env map[string]string, parentHold string) int {
 	grant := r.o.need
 	parent, err := strconv.ParseInt(env[engine.EnvGrantedMem], 10, 64)
 	if err == nil && parent >= 0 && parent < grant {
@@ -191,12 +198,30 @@ func (r *run) passThrough(env map[string]string) int {
 		}
 		grant = parent
 	}
-	return r.runChild(child{env: withGrant(grant), grantMiB: grant, release: func() error { return nil }})
+	st := r.recordPassThrough(env, "parent_hold", parentHold)
+	return r.runChild(child{env: withGrant(grant), grantMiB: grant, recheck: st, release: func() error { return nil }})
+}
+
+// recordPassThrough makes a pass-through's recorder and writes its outside line. It takes the mark
+// in its environment and a FORMAT it understands, read once; with no mark it reads nothing. It
+// returns the directory whose FORMAT to re-read before the run's last line, nil with no recorder.
+func (r *run) recordPassThrough(env map[string]string, reason, parent string) *store.Store {
+	if env[engine.EnvTelemetry] != "1" || r.loc.err != nil {
+		return nil
+	}
+	st, err := openReadOnly(r.loc.dir)
+	if err != nil || formatStillUnderstood(st) != nil {
+		return nil
+	}
+	r.telemetry = true
+	r.recordOutside(true, "pass_through", reason, parent)
+	return st
 }
 
 // passThroughUnbudgeted runs under a parent that runs unbudgeted (PROTOCOL.md section 18 rule
 // 1): with its need, passing CORESLOT_UNBUDGETED on, writing no degraded record.
-func (r *run) passThroughUnbudgeted(reason string) int {
+func (r *run) passThroughUnbudgeted(env map[string]string, reason string) int {
 	r.notice("the parent run is unbudgeted (%s); running unbudgeted with mem=%s", text(reason), spec.FormatMiB(r.o.need))
-	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, failCode: "parent_unbudgeted", release: func() error { return nil }})
+	st := r.recordPassThrough(env, "parent_unbudgeted", "")
+	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, failCode: "parent_unbudgeted", recheck: st, release: func() error { return nil }})
 }

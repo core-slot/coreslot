@@ -16,9 +16,10 @@ import (
 // CORESLOT_HOLD names a hold whose pid isAncestor reports as an ancestor of this process and
 // whose lock some process still holds in the state directory env names (its CORESLOT_STATE_DIR,
 // or the default). hold is the CORESLOT_HOLD it read. A hold that is malformed, dead, gone, not
-// an ancestor's or in a directory that cannot be resolved makes the run an ordinary request. It
-// writes nothing.
-func DecideNested(env []string, isAncestor func(pid int) bool) (inside bool, hold string) {
+// an ancestor's or in a directory that cannot be resolved makes the run an ordinary request, and
+// miss names which ("malformed", "not_ancestor", "unresolved", "dead"; "" with no hold or inside
+// one). It writes nothing.
+func DecideNested(env []string, isAncestor func(pid int) bool) (inside bool, hold, miss string) {
 	vars := map[string]string{}
 	for _, kv := range env {
 		if k, v, ok := strings.Cut(kv, "="); ok {
@@ -26,14 +27,23 @@ func DecideNested(env []string, isAncestor func(pid int) bool) (inside bool, hol
 		}
 	}
 	hold = vars[EnvHold]
+	if hold == "" {
+		return false, "", ""
+	}
 	id, ok := wire.ParseName(hold)
-	if !ok || !isAncestor(id.PID) {
-		return false, hold
+	if !ok {
+		return false, hold, "malformed"
+	}
+	if !isAncestor(id.PID) {
+		return false, hold, "not_ancestor"
 	}
 	dir, _, err := config.StateDirFrom(func(k string) string { return vars[k] })
 	if err != nil {
-		return false, hold
+		return false, hold, "unresolved"
 	}
 	locked, err := store.ProbeLocked(filepath.Join(dir, store.HoldsDir, hold))
-	return err == nil && locked, hold
+	if err != nil || !locked {
+		return false, hold, "dead"
+	}
+	return true, hold, ""
 }

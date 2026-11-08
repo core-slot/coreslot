@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,6 +47,7 @@ type child struct {
 	release  func() error  // closes the run's copies of the grant once the command exited
 	log      *store.Store  // the run log to append to; nil writes none
 	grant    *engine.Grant // the admitted grant the watchdog ticks for; nil outside the budget
+	recheck  *store.Store  // a pass-through's directory: its FORMAT is read again before the last line
 }
 
 // runChild starts the command with c, waits for it, releases the grant and appends the run
@@ -64,6 +66,7 @@ func (r *run) runChild(c child) int {
 	if sig := pendingSignal(); sig != 0 {
 		// Interrupted between the admission and the start: the command never runs.
 		code, _ := classify(&interruptError{Sig: sig})
+		r.confirmFormat(c.recheck)
 		if r.identityMismatch(c.release()) == nil {
 			r.rec.Emit("not_started", telemetry.Fields{"reason": unix.SignalName(sig)})
 		}
@@ -131,9 +134,11 @@ func (r *run) runChild(c child) int {
 	rec.TickShare = r.tickShare()
 	if c.log != nil {
 		if err := appendRunLog(c.log, rec, r.notice); err != nil {
+			r.rec.Stop()
 			r.notice("the run log was not written: %s", text(err.Error()))
 		}
 	}
+	r.confirmFormat(c.recheck)
 	if notStarted != "" {
 		r.rec.Emit("not_started", telemetry.Fields{"reason": notStarted})
 		return status
@@ -164,13 +169,23 @@ func (r *run) runChild(c child) int {
 	return status
 }
 
-// childEnv is the command's environment: with a live recorder, env and the mark a run nested in the
-// command reads, since it cannot read the switch without a new read of its own.
+// confirmFormat silences the recorder of a pass-through whose FORMAT changed under it: st is the
+// directory it read FORMAT in, nil when it records nothing.
+func (r *run) confirmFormat(st *store.Store) {
+	if st != nil && formatStillUnderstood(st) != nil {
+		r.rec.Stop()
+	}
+}
+
+// childEnv is the command's environment: env without an inherited mark and, with a live recorder,
+// with the mark a run nested in the command reads, since it cannot read the switch without a new
+// read of its own.
 func (r *run) childEnv(env []string) []string {
+	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, engine.EnvTelemetry+"=") })
 	if r.rec.Stopped() {
 		return env
 	}
-	return append(slices.Clone(env), engine.EnvTelemetry+"=1")
+	return append(env, engine.EnvTelemetry+"=1")
 }
 
 // recordUsage copies the command's user and system seconds from its wait4 rusage into rec

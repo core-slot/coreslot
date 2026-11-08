@@ -1073,6 +1073,10 @@ A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and wri
 hold of its own, so it neither ticks nor is listed by a stop round; the memory it uses is part of
 its parent's footprint.
 
+The one exception is telemetry: a run recording it (section 5.3) gives its command
+`CORESLOT_TELEMETRY=1`, and a pass-through that inherited it, reads `$S` without error and finds a
+FORMAT it understands appends its own lines to `$S/telemetry/events.jsonl`, outside any section.
+
 A run whose `CORESLOT_HOLD` names such a hold, a pass-through or an `--independent` run, keeps its
 command in the process group it inherited, as `--same-group` does, so that a stop round's kill of
 its parent's command reaches it; such a run is never a victim itself (section 23.5).

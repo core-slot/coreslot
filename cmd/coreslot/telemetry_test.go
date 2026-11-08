@@ -878,9 +878,9 @@ func TestTimeoutLine(t *testing.T) {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
 			evs := events(t, dir)
-			tail := " timeout" // a run outside the budget ends too
+			tail := " timeout" // a run outside the budget says so and ends too
 			if c.onTimeout == "run" {
-				tail = " timeout ended"
+				tail = " timeout outside ended"
 			}
 			if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, tail) {
 				t.Fatalf("events %q", got)
@@ -1218,4 +1218,482 @@ func TestKeptLine(t *testing.T) {
 	if _, ok := evs[0]["list_pos"]; ok {
 		t.Errorf("a kept hold is not in the list: %v", evs[0]["list_pos"])
 	}
+}
+
+// setFormat replaces the state directory's FORMAT.
+func setFormat(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// labelled is the lines of the run labelled label.
+func labelled(evs []map[string]any, label string) []map[string]any {
+	var out []map[string]any
+	for _, m := range evs {
+		if m["label"] == label {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// replaceTicks makes every n listings a live line; the test's end restores it.
+func replaceTicks(t *testing.T, n int) {
+	t.Helper()
+	saved := telemetryTicks
+	telemetryTicks = n
+	t.Cleanup(func() { telemetryTicks = saved })
+}
+
+// A pass-through inside its parent, and one under an unbudgeted parent, record an outside line
+// and an ended line, with a closed reason. Mutations: the parent's free-text reason on the line;
+// a pass-through that records nothing; ended left out.
+func TestOutsidePassThrough(t *testing.T) {
+	t.Run("inside the parent", func(t *testing.T) {
+		dir := recordedDir(t, 1024)
+		r := outer(t, dir, "256M", `"$BIN" run --label inner --mem 128M -- true`)
+		if r.code != 0 {
+			t.Fatalf("exit %d: %q", r.code, r.stderr)
+		}
+		evs := events(t, dir)
+		inner := labelled(evs, "inner")
+		if got := eventNames(inner); got != "outside ended" {
+			t.Fatalf("inner events %q among %q", got, eventNames(evs))
+		}
+		o := inner[0]
+		if o["kind"] != "pass_through" || o["reason"] != "parent_hold" || o["need_mib"] != 128.0 {
+			t.Errorf("outside %v", o)
+		}
+		if want := event(t, evs, "admitted")["hold"]; o["parent"] != want {
+			t.Errorf("parent %v, want the outer hold %v", o["parent"], want)
+		}
+		if _, ok := inner[1]["hold"]; ok {
+			t.Errorf("ended of a pass-through has a hold: %v", inner[1])
+		}
+	})
+	t.Run("under an unbudgeted parent", func(t *testing.T) {
+		dir := recordedDir(t, 1024)
+		env := append(baseEnv(dir), engine.EnvUnbudgeted+"=/Users/ana/secret", engine.EnvTelemetry+"=1")
+		if r := cli(t, env, "run", "--restart=yes", "--label", "inner", "--", "true"); r.code != 0 {
+			t.Fatalf("exit %d: %q", r.code, r.stderr)
+		}
+		evs := events(t, dir)
+		if got := eventNames(evs); got != "outside ended" {
+			t.Fatalf("events %q", got)
+		}
+		if evs[0]["reason"] != "parent_unbudgeted" || evs[1]["fail_open"] != "parent_unbudgeted" {
+			t.Errorf("lines %v", evs)
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, store.TelemetryDir, store.EventsFile))
+		if strings.Contains(string(data), "secret") {
+			t.Errorf("the parent's reason reached the line: %s", data)
+		}
+	})
+}
+
+// With no mark in its environment a pass-through opens nothing; with one it opens the directory
+// once. Mutation: the mark checked after the read makes the count 1 with telemetry off.
+func TestPassThroughOffReadsNothing(t *testing.T) {
+	b := newEnded(t, "true")
+	b.r.rec = nil
+	opens := 0
+	saved := openReadOnly
+	openReadOnly = func(dir string) (*store.Store, error) { opens++; return saved(dir) }
+	t.Cleanup(func() { openReadOnly = saved })
+	if code := b.r.passThrough(map[string]string{}, "parent"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if opens != 0 || b.r.rec != nil || hasTelemetryDir(b.dir) {
+		t.Errorf("off: %d opens, recorder %v, telemetry/ %v", opens, b.r.rec, hasTelemetryDir(b.dir))
+	}
+	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if opens != 1 {
+		t.Errorf("on: %d opens, want 1", opens)
+	}
+}
+
+// A pass-through into a FORMAT it cannot read writes nothing and hands its command no mark, and
+// one whose command changes FORMAT writes no last line. Mutations: the FORMAT read left out; the
+// re-read before the last line left out; the inherited mark passed on.
+func TestPassThroughRefusesForeignFormat(t *testing.T) {
+	env := func(dir string) []string {
+		return append(baseEnv(dir), engine.EnvUnbudgeted+"=parent", engine.EnvTelemetry+"=1")
+	}
+	for name, body := range map[string]string{"foreign": "coreslot-protocol 3\n", "malformed": "coreslot-protocol x\n"} {
+		t.Run(name, func(t *testing.T) {
+			dir := recordedDir(t, 1024)
+			setFormat(t, dir, body)
+			r := cli(t, env(dir), append([]string{"run", "--restart=yes", "--"}, helper(t, "getenv", engine.EnvTelemetry)...)...)
+			if r.code != 0 || strings.TrimSpace(r.stdout) != "" {
+				t.Errorf("exit %d stdout %q stderr %q", r.code, r.stdout, r.stderr)
+			}
+			if hasTelemetryDir(dir) {
+				t.Errorf("events %q", eventNames(events(t, dir)))
+			}
+		})
+	}
+	t.Run("changed while it ran", func(t *testing.T) {
+		dir := recordedDir(t, 1024)
+		e := append(env(dir), "S="+dir)
+		if r := cli(t, e, "run", "--restart=yes", "--", "sh", "-c", `printf 'coreslot-protocol 3\n' > "$S/FORMAT"`); r.code != 0 {
+			t.Fatalf("exit %d: %q", r.code, r.stderr)
+		}
+		if got := eventNames(events(t, dir)); got != "outside" {
+			t.Errorf("events %q, want the outside line alone", got)
+		}
+	})
+}
+
+// A state directory that cannot be located gives a pass-through no recorder, so nothing appears
+// in the working directory. Mutations: the location's error not checked reddens "in process";
+// New and the FORMAT read both taking a relative path reddens "relative directory".
+func TestPassThroughBadLocationWritesNothing(t *testing.T) {
+	t.Run("relative directory", func(t *testing.T) {
+		cwd := t.TempDir()
+		cmd := exec.Command(cliBinary(t), "run", "--restart=yes", "--", "true")
+		cmd.Dir = cwd
+		for _, kv := range baseEnv(cwd) {
+			if !strings.HasPrefix(kv, "CORESLOT_STATE_DIR=") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		cmd.Env = append(cmd.Env, "CORESLOT_STATE_DIR=state", engine.EnvUnbudgeted+"=parent", engine.EnvTelemetry+"=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		if names := entries(t, cwd, ""); len(names) != 0 {
+			t.Errorf("the working directory got %q", names)
+		}
+	})
+	t.Run("in process", func(t *testing.T) {
+		b := newEnded(t, "true")
+		b.r.rec, b.r.loc.err = nil, errors.New("no home")
+		if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		if hasTelemetryDir(b.dir) {
+			t.Errorf("events %q", eventNames(events(t, b.dir)))
+		}
+	})
+}
+
+// A state error with its unbudgeted hold published makes the recorder, if it has none yet, and
+// says why the run is outside the budget. Mutation: a recorder only after an enqueue loses both
+// lines.
+func TestOutsideFailOpen(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
+	dir := recordedDir(t, 1024)
+	queue := filepath.Join(dir, "queue")
+	if err := os.Chmod(queue, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(queue, 0o700) })
+	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "64M", "--", "true")
+	if r.code != 0 || !strings.Contains(r.stderr, "fail-open") {
+		t.Fatalf("exit %d: %q", r.code, r.stderr)
+	}
+	evs := events(t, dir)
+	if got := eventNames(evs); got != "outside ended" {
+		t.Fatalf("events %q", got)
+	}
+	if evs[0]["kind"] != "fail_open" || evs[0]["reason"] != "state_error" || evs[0]["need_mib"] != 64.0 || evs[1]["fail_open"] != "state_error" {
+		t.Errorf("lines %v", evs)
+	}
+	if strings.Contains(fmt.Sprint(evs), dir) {
+		t.Errorf("a path on a line: %v", evs)
+	}
+}
+
+// failOpenBed is a bed whose run has already queued: a live recorder and one line written.
+func failOpenBed(t *testing.T) *bed {
+	t.Helper()
+	b := newBed(t, 1024)
+	b.r.rec = telemetry.New(b.dir, "1-1", "go test")
+	b.r.rec.Emit("probe", nil)
+	b.r.o.argv = []string{"sh", "-c", `test -z "$` + engine.EnvTelemetry + `"`} // exit 1 with the mark
+	return b
+}
+
+// Each of these has a command that fails if it was given the mark.
+func wantSilent(t *testing.T, b *bed, code, want int) {
+	t.Helper()
+	if code != want {
+		t.Errorf("exit %d, want %d (stderr %q)", code, want, b.notices(t))
+	}
+	if got := eventNames(events(t, b.dir)); got != "probe" {
+		t.Errorf("events %q, want the probe alone", got)
+	}
+}
+
+// A foreign FORMAT ends the recording, under --strict too, and the command gets no mark.
+// Mutation: dropping the Stop at the head of failOpen.
+func TestFailOpenForeignFormatRecordsNothing(t *testing.T) {
+	t.Run("first sight", func(t *testing.T) {
+		dir := recordedDir(t, 1024)
+		setFormat(t, dir, "coreslot-protocol 3\n")
+		r := cli(t, baseEnv(dir), append([]string{"run", "--restart=yes", "--"}, helper(t, "getenv", engine.EnvTelemetry)...)...)
+		if r.code != 0 || strings.TrimSpace(r.stdout) != "" || hasTelemetryDir(dir) {
+			t.Errorf("exit %d stdout %q telemetry/ %v", r.code, r.stdout, hasTelemetryDir(dir))
+		}
+	})
+	t.Run("after an enqueue", func(t *testing.T) {
+		b := failOpenBed(t)
+		setFormat(t, b.dir, "coreslot-protocol 3\n")
+		wantSilent(t, b, b.r.failOpen(b.e, &store.FormatError{N: 3}), 0)
+	})
+}
+
+// A malformed FORMAT reaches failOpen as a plain state error from a step: no hold can be
+// published, and --strict has nothing to record. Mutations: the else branch's Stop; the FORMAT
+// re-read at the head of failOpen reddens "strict".
+func TestFailOpenMalformedFormatRecordsNothing(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fail-open", true: "strict"}[strict], func(t *testing.T) {
+			b := failOpenBed(t)
+			b.r.o.strict, b.r.queued = strict, true
+			setFormat(t, b.dir, "coreslot-protocol x\n")
+			want := 0
+			if strict {
+				want = exitRefusal
+			}
+			wantSilent(t, b, b.r.failOpen(b.e, &store.StateError{Reason: `malformed FORMAT "coreslot-protocol x"`}), want)
+		})
+	}
+}
+
+// With no state directory no recorder survives. Mutation: dropping the Stop lets ended through.
+func TestFailOpenNilEngineRecordsNothing(t *testing.T) {
+	b := failOpenBed(t)
+	wantSilent(t, b, b.r.failOpen(nil, &store.StateError{Reason: "no directory"}), 0)
+}
+
+// A run that timed out and runs outside the budget says so and reports its footprint while it
+// runs. Mutations: the outside line left out; the live line needs a grant; a listing's KiB
+// written as MiB.
+func TestOutsideTimeoutRunThenLive(t *testing.T) {
+	replaceTicks(t, 1)
+	b := newBed(t, 128)
+	holdUntil(t, b.dir, 128)
+	b.r.o.need, b.r.o.onTimeout, b.r.o.timeout = 64, "run", 300*time.Millisecond
+	b.r.o.argv = []string{"sleep", "2.5"}
+	saved := listTree
+	listTree = func(int) (int64, map[int]memsample.TreeTimes, bool) { return 5 << 10, nil, true }
+	t.Cleanup(func() { listTree = saved })
+	ctx, cancel := context.WithTimeout(context.Background(), b.r.o.timeout)
+	defer cancel()
+	if _, code, ok := b.r.wait(ctx, cancel, b.e, b.r.o.request()); ok || code != 0 {
+		t.Fatalf("ok %v, exit %d: %q", ok, code, b.notices(t))
+	}
+	evs := events(t, b.dir)
+	got := eventNames(evs)
+	if !strings.HasPrefix(got, "enqueue waiting") || !strings.Contains(got, " timeout outside live") || !strings.HasSuffix(got, " live ended") {
+		t.Fatalf("events %q", got)
+	}
+	o := event(t, evs, "outside")
+	if o["kind"] != "timeout_run" || o["reason"] != "timeout" || o["need_mib"] != 64.0 {
+		t.Errorf("outside %v", o)
+	}
+	if got := event(t, evs, "live")["footprint_mib"]; got != 5.0 {
+		t.Errorf("footprint_mib %v, want 5", got)
+	}
+}
+
+// A section that stays busy past the wait leaves the timeout run with no hold and, without an
+// enqueue, no recorder: nothing read FORMAT in a section. Mutation: making the recorder whenever
+// the run log is kept.
+func TestTimeoutRunWithoutEnqueueRecordsNothing(t *testing.T) {
+	b := newBed(t, 1024)
+	b.r.o.argv = []string{"true"}
+	sec, err := b.e.Store().Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	if code := b.r.timeoutRun(b.e); code != 0 {
+		t.Fatalf("exit %d: %q", code, b.notices(t))
+	}
+	if !strings.Contains(b.notices(t), "the unbudgeted hold was not published") {
+		t.Errorf("stderr %q: the section was not busy", b.notices(t))
+	}
+	if hasTelemetryDir(b.dir) {
+		t.Errorf("events %q", eventNames(events(t, b.dir)))
+	}
+}
+
+// A timeout run that finds a FORMAT it cannot read writes nothing more and hands its command no
+// mark. Mutation: dropping the Stop in timeoutRun lets ended through.
+func TestTimeoutRunForeignFormatRecordsNothing(t *testing.T) {
+	b := failOpenBed(t)
+	setFormat(t, b.dir, "coreslot-protocol 3\n")
+	wantSilent(t, b, b.r.timeoutRun(b.e), 0)
+}
+
+// The memory of a pass-through is its parent's: no live lines. Mutation: live for any run with
+// no grant.
+func TestNoLiveForPassThrough(t *testing.T) {
+	replaceTicks(t, 1)
+	b := newEnded(t, "sleep", "1.5")
+	b.r.rec = nil
+	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if got := eventNames(events(t, b.dir)); got != "outside ended" {
+		t.Errorf("events %q", got)
+	}
+}
+
+// Each way an inherited hold fails to count is named on enqueue, a closed code and never the
+// variable's value. Mutations: any two codes swapped; the value written instead of the code.
+func TestNestedMissReason(t *testing.T) {
+	cases := map[string]func(t *testing.T, dir string) string{
+		"malformed": func(*testing.T, string) string { return "../holds" },
+		"not_ancestor": func(t *testing.T, dir string) string {
+			holdOther(t, dir, 1)
+			return entries(t, dir, "holds")[0]
+		},
+		"dead": func(t *testing.T, dir string) string {
+			dead := wire.HoldName(1, os.Getpid(), 1, "dead") // the test process is an ancestor
+			if err := os.WriteFile(filepath.Join(dir, "holds", dead), []byte(`{}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return dead
+		},
+	}
+	for want, set := range cases {
+		t.Run(want, func(t *testing.T) {
+			dir := recordedDir(t, 1024)
+			hold := set(t, dir)
+			r := cli(t, append(baseEnv(dir), engine.EnvHold+"="+hold), "run", "--restart=yes", "--no-wait", "--mem", "1M", "--", "true")
+			if r.code != 0 {
+				t.Fatalf("exit %d: %q", r.code, r.stderr)
+			}
+			if got := event(t, events(t, dir), "enqueue")["nested_miss"]; got != want {
+				t.Errorf("nested_miss %v, want %s", got, want)
+			}
+		})
+	}
+	// A directory that cannot be resolved fails the run's own location too, so no enqueue says it.
+	t.Run("unresolved", func(t *testing.T) {
+		env := []string{"CORESLOT_STATE_DIR=state", engine.EnvHold + "=" + wire.HoldName(1, os.Getpid(), 1, "x")}
+		if inside, _, miss := engine.DecideNested(env, func(int) bool { return true }); inside || miss != "unresolved" {
+			t.Errorf("inside %v, miss %q", inside, miss)
+		}
+	})
+}
+
+// A run with no inherited hold has no miss to name, empty counting as unset. Mutation: a hold
+// that does not parse named malformed without looking whether one was set.
+func TestTopLevelRunHasNoNestedMiss(t *testing.T) {
+	for name, env := range map[string][]string{"unset": nil, "empty": {engine.EnvHold + "="}} {
+		t.Run(name, func(t *testing.T) {
+			dir := recordedDir(t, 1024)
+			if r := cli(t, append(baseEnv(dir), env...), "run", "--restart=yes", "--", "true"); r.code != 0 {
+				t.Fatalf("exit %d: %q", r.code, r.stderr)
+			}
+			m := event(t, events(t, dir), "enqueue")
+			if _, ok := m["nested_miss"]; ok {
+				t.Errorf("nested_miss %v", m["nested_miss"])
+			}
+			if _, ok := m["parent_hold"]; ok {
+				t.Errorf("parent_hold %v", m["parent_hold"])
+			}
+		})
+	}
+}
+
+// An --independent run inside a live parent names the parent on its enqueue. Mutation: leaving
+// parent_hold out.
+func TestEnqueueNamesIndependentParent(t *testing.T) {
+	dir := recordedDir(t, 1024)
+	if r := outer(t, dir, "256M", `"$BIN" run --independent --label inner --mem 128M -- true`); r.code != 0 {
+		t.Fatalf("exit %d: %q", r.code, r.stderr)
+	}
+	evs := events(t, dir)
+	inner := event(t, labelled(evs, "inner"), "enqueue")
+	if want := event(t, evs, "admitted")["hold"]; inner["parent_hold"] != want || want == nil { // the outer run's comes first
+		t.Errorf("parent_hold %v, want %v", inner["parent_hold"], want)
+	}
+}
+
+// Nothing is written after a FORMAT the run cannot read, wherever the run sees it. Mutations:
+// the Stop on a failed run-log append reddens "run log"; the one in updateHold "hold update"; the
+// one on a tick's refusal "tick".
+func TestNoEndedAfterFormatChange(t *testing.T) {
+	for name, format := range map[string]string{"unknown": "coreslot-protocol 3\n", "malformed": "coreslot-protocol x\n"} {
+		t.Run(name, func(t *testing.T) {
+			dir := recordedDir(t, 1024)
+			env := append(baseEnv(dir), "S="+dir, "F="+format)
+			if r := cli(t, env, "run", "--restart=yes", "--", "sh", "-c", `printf %s "$F" > "$S/FORMAT"`); r.code != 0 {
+				t.Fatalf("exit %d: %q", r.code, r.stderr)
+			}
+			if got := eventNames(events(t, dir)); got != "enqueue admitted" {
+				t.Errorf("events %q, want nothing after admitted", got)
+			}
+		})
+	}
+	t.Run("run log", func(t *testing.T) {
+		b := newEnded(t, "sh", "-c", `printf 'coreslot-protocol 3\n' > "$S/FORMAT"`)
+		t.Setenv("S", b.dir)
+		if code := b.r.runChild(b.child("", "")); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		if got := eventNames(events(t, b.dir)); got != "" {
+			t.Errorf("events %q", got)
+		}
+	})
+	t.Run("a run log that cannot be appended", func(t *testing.T) {
+		b := newEnded(t, "true")
+		path := filepath.Join(b.dir, "log", "runs.jsonl")
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if code := b.r.runChild(b.child("", "")); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		if got := eventNames(events(t, b.dir)); got != "" {
+			t.Errorf("events %q", got)
+		}
+	})
+	seen := func(t *testing.T, see func(b *bed, g *engine.Grant)) {
+		b := newBed(t, 1024)
+		g, code, ok := b.wait(t, context.Background())
+		if !ok {
+			t.Fatalf("not admitted: %d %q", code, b.notices(t))
+		}
+		defer g.Close()
+		before := eventNames(events(t, b.dir))
+		setFormat(t, b.dir, "coreslot-protocol 3\n")
+		see(b, g)
+		setFormat(t, b.dir, "coreslot-protocol 2\n") // the way back does not bring the recorder back
+		b.r.rec.Emit("after", nil)
+		if got := eventNames(events(t, b.dir)); got != before {
+			t.Errorf("events %q, want %q", got, before)
+		}
+		if !b.r.rec.Stopped() {
+			t.Error("the recorder is live")
+		}
+	}
+	t.Run("hold update", func(t *testing.T) {
+		seen(t, func(b *bed, g *engine.Grant) {
+			if b.r.updateHold(b.e.Store(), g, func(*wire.Hold) {}) {
+				t.Error("the hold was updated under a foreign FORMAT")
+			}
+		})
+	})
+	t.Run("tick", func(t *testing.T) {
+		seen(t, func(b *bed, g *engine.Grant) {
+			if _, err := b.r.tick(context.Background(), g); !errors.Is(err, engine.ErrRefused) {
+				t.Errorf("tick: %v", err)
+			}
+		})
+	})
 }

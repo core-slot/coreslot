@@ -78,6 +78,8 @@ Written once the ticket is published; an enqueue that fails writes nothing.
 | `mode` | `[watch] mode`, `enforce` or `observe`; absent when the configuration cannot be read |
 | `reserve_mib` | the reserve; absent likewise |
 | `watch_config` | the effective `[watch]` thresholds: `yellow_points`, `red_points`, `red_samples`, `gate_pages_s`, `floor_mib`, `calm_s`, `post_kill_s`, `spacing_s`; absent likewise |
+| `nested_miss` | why an inherited `CORESLOT_HOLD` did not count: `malformed`, `not_ancestor`, `dead`, `unresolved`; absent without one |
+| `parent_hold` | for `--independent` inside a live parent: the parent's hold |
 
 ### `waiting`
 
@@ -133,10 +135,36 @@ Written after the run-log line, when the command ran and was reaped.
 |---|---|
 | `hold` | the hold's name; absent without one |
 | `record` | the run-log line of the attempt, with `fail_open` emptied |
-| `fail_open` | why the run was outside the budget: `timeout`, `state_error`, `format`, `parent_unbudgeted`; absent otherwise |
+| `fail_open` | why the run was outside the budget: `timeout`, `state_error`, `parent_unbudgeted`; absent otherwise |
 | `signal` | the signal that killed the command, by name; an `exit 137` of the command's own is not one |
 | `stopped_by` | `watchdog_red` or `watchdog_floor` when a stop round killed it, `outside` when a SIGKILL did that coreslot did not send; absent otherwise |
 | `mean_footprint_mib` | the mean of the tree's 1 s readings, in whole MiB; absent for a run with no reading |
+
+### `outside` and `live`
+
+`outside` is written by a run that holds no ticket when it starts its command, or whose ticket is
+gone: a pass-through inside a parent's reservation, a fail-open run with its unbudgeted hold
+published, and a timed-out run with `--on-timeout run`. It is followed by `ended`, except for a
+pass-through killed with its parent's group by a stop round.
+
+| key | meaning |
+|---|---|
+| `kind` | `pass_through`, `fail_open`, `timeout_run` |
+| `reason` | `parent_hold`, `parent_unbudgeted`, `state_error`, `timeout`; a closed code, never the reason's text |
+| `need_mib` | the run's need |
+| `parent` | a pass-through's parent hold; absent otherwise |
+
+`live` is written every 30 s by a run outside the budget (not by a pass-through, whose memory is
+its parent's), which no sample sees: `footprint_mib` is its tree's footprint at that listing.
+
+### When nothing more is written
+
+A recorder is made only once FORMAT was read and understood: in the section of a successful
+enqueue or of a published unbudgeted hold, or by a pass-through itself. A run that then sees a
+FORMAT it cannot read (at a hold update, a tick, the run-log append, or a pass-through's check
+before its last line), or a failed append or release, writes nothing more, even if FORMAT comes
+back, and hands its command no `CORESLOT_TELEMETRY`. A fail-open run with no published hold writes
+nothing.
 
 ### `not_started`
 

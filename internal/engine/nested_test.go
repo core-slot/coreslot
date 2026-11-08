@@ -46,7 +46,7 @@ func TestDecideNested(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			asked := 0
-			inside, _ := DecideNested(tc.env, func(pid int) bool {
+			inside, _, _ := DecideNested(tc.env, func(pid int) bool {
 				asked = pid
 				return tc.ancestor
 			})

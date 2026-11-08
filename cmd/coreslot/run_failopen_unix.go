@@ -19,7 +19,11 @@ import (
 // CORESLOT_UNBUDGETED. e is nil when the directory could not be opened.
 func (r *run) failOpen(e *engine.Engine, err error) int {
 	var format *store.FormatError
-	if errors.As(err, &format) && format.Err == nil {
+	// A step's malformed FORMAT is a plain state error, so the recorder reads it for itself.
+	if errors.As(err, &format) || e != nil && !r.rec.Stopped() && formatStillUnderstood(e.Store()) != nil {
+		r.rec.Stop()
+	}
+	if format != nil && format.Err == nil {
 		// A foreign format: the one notice says what to do, and nothing can be written there.
 		if r.o.strict {
 			code, _ := classify(strictRefusal(err, r.o.refusalCode))
@@ -27,7 +31,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 			return code
 		}
 		r.notice("%s; running unbudgeted with mem=%s", format.Error(), spec.FormatMiB(r.o.need))
-		return r.runChild(r.unbudgetedChild(format.Error(), "format", nil))
+		return r.runChild(r.unbudgetedChild(format.Error(), "", nil))
 	}
 	reason, ok := stateReason(err)
 	if !ok {
@@ -36,9 +40,7 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	if r.o.strict {
 		code, _ := classify(strictRefusal(err, r.o.refusalCode))
 		r.notice("state error: %s; refusing (--strict)", text(reason))
-		if format == nil { // a directory whose FORMAT cannot be read takes no line
-			r.recordWaitEnd("refused", telemetry.Fields{"reason": "strict"})
-		}
+		r.recordWaitEnd("refused", telemetry.Fields{"reason": "strict"})
 		return code
 	}
 	r.notice("state error: %s; running unbudgeted with mem=%s (fail-open)", text(reason), spec.FormatMiB(r.o.need))
@@ -50,6 +52,9 @@ func (r *run) failOpen(e *engine.Engine, err error) int {
 	c := r.unbudgetedChild(reason, "state_error", g)
 	if g != nil && g.HoldName() != "" {
 		c.log = e.Store() // FORMAT was understood in the section that published the hold
+		r.recordOutside(true, "fail_open", "state_error", "")
+	} else {
+		r.rec.Stop()
 	}
 	if msg := failOpenNotice(e != nil, g != nil && g.HoldName() != "", ferr); msg != "" {
 		r.notice("%s", msg)
@@ -69,6 +74,23 @@ func (r *run) unbudgetedChild(reason, code string, g *engine.Grant) child {
 		c.env = append(slices.Clone(r.env), engine.ChildEnv(r.o.need, "", reason)...)
 	}
 	return c
+}
+
+// recordOutside writes the line of a run with no ticket, or whose ticket is gone: kind and the
+// closed reason, with the parent's hold when it has one. understood says this run read FORMAT and
+// understood it, in its hold's section or as a pass-through: only then may it make a recorder.
+func (r *run) recordOutside(understood bool, kind, reason, parent string) {
+	if !r.telemetry {
+		return
+	}
+	if r.rec == nil && understood {
+		r.rec = r.newRecorder()
+	}
+	f := telemetry.Fields{"kind": kind, "reason": reason, "need_mib": r.o.need}
+	if parent != "" {
+		f["parent"] = parent
+	}
+	r.rec.Emit("outside", f)
 }
 
 // strictRefusal is what --strict makes of a state error: a refusal with the run's refusal code.
@@ -104,8 +126,12 @@ func (r *run) timeoutRun(e *engine.Engine) int {
 		r.o.timeout, spec.FormatMiB(r.o.need))
 	g, herr := e.UnbudgetedHold(r.o.request(), timeoutReason)
 	c := r.unbudgetedChild(timeoutReason, "timeout", g)
-	if timeoutLogs(g != nil && g.HoldName() != "", herr) {
+	published := g != nil && g.HoldName() != ""
+	if timeoutLogs(published, herr) {
 		c.log = e.Store()
+		r.recordOutside(published, "timeout_run", "timeout", "")
+	} else {
+		r.rec.Stop()
 	}
 	if herr != nil {
 		r.notice("the unbudgeted hold was not published: %s", text(herr.Error()))
