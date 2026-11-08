@@ -27,6 +27,9 @@ type StepResult interface{ stepResult() }
 // caller needs them (the CLI's waiting line, every 30 s).
 type Waiting struct {
 	Position int
+	Ahead    string // the ticket examined ahead, for a non-head
+	Evals    int    // t.attempts
+	Outcome  Outcome
 }
 
 // Admitted carries the grant of an admitted ticket.
@@ -94,8 +97,9 @@ type Ticket struct {
 
 	nextElection time.Duration
 	backoff      time.Duration
-	attempts     int // admission attempts made, for tests
+	attempts     int // admission attempts made
 	last         Waiting
+	out          Outcome // what the last attempt, or the step that made none, decided
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
@@ -219,7 +223,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		return nil, t.onCancelled()
 	}
 	if now < t.nextElection {
-		return t.last, nil
+		return t.waiting(), nil
 	}
 	head, err := t.elect(now)
 	if err != nil {
@@ -229,7 +233,8 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		t.backoff = 0
 		t.nextElection = now + ElectEvery
 		if t.req.TypicalS == 0 && !t.req.RealMemory { // nothing else may start ahead of the head (section 10.3)
-			return t.last, nil
+			t.out = Outcome{Reason: ReasonBehindTicket}
+			return t.waiting(), nil
 		}
 	}
 	single = single || !head
@@ -242,6 +247,10 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		}
 	}
 	t.attempts++
+	t.out = Outcome{Reason: ReasonBehindTicket} // what a busy section leaves; admit overwrites it inside
+	if head {
+		t.out.Reason = ReasonSectionBusy
+	}
 	g, err := t.admit(ctx, single)
 	if err != nil {
 		return t.settledOr(err)
@@ -250,7 +259,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		return Admitted{g}, nil
 	}
 	if !head {
-		return t.last, nil
+		return t.waiting(), nil
 	}
 	if t.backoff == 0 {
 		t.backoff = HeadFirstBackoff
@@ -258,7 +267,14 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 		t.backoff = min(2*t.backoff, HeadMaxBackoff)
 	}
 	t.nextElection = now + t.backoff
-	return t.last, nil
+	return t.waiting(), nil
+}
+
+// waiting is the last election's answer with what the last attempt decided.
+func (t *Ticket) waiting() Waiting {
+	w := t.last
+	w.Evals, w.Outcome = t.attempts, t.out
+	return w
 }
 
 // settled reports the outcome of a ticket that is no longer waiting.
@@ -347,6 +363,7 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 	head = true
 	passed := 0 // tickets examined and passed over, still listed
 	stop := 0   // the scan examined t.ahead[stop:]
+	examined := ""
 	for i := len(t.ahead) - 1; i >= 0; i-- {
 		stop = i
 		a := t.ahead[i]
@@ -376,7 +393,7 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 			passed++
 			continue
 		}
-		head = false
+		head, examined = false, a.name
 		break
 	}
 	if err := t.watchFront(stop, now); err != nil {
@@ -386,7 +403,7 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 	if !head {
 		position += len(t.ahead) - passed
 	}
-	t.last = Waiting{Position: position}
+	t.last = Waiting{Position: position, Ahead: examined}
 	return head, nil
 }
 

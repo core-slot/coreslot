@@ -74,20 +74,29 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 		reserved = reservations(holds)
 	}
 	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reserved)
+	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
 	if m.HeadroomOK && len(holds) > 0 && need > room {
+		t.out.Reason = ReasonRoomShort
 		return nil, nil
 	}
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
 	// hold live a container request needs no pass; with none the idle start is the head's.
 	if !t.req.RealMemory || len(holds) == 0 {
-		if head, err := t.reelect(); err != nil || head != nil && !t.passes(*head, holds, room, cfg, m) {
+		head, err := t.reelect()
+		if err != nil {
 			return nil, err
+		}
+		if head != nil && !t.passes(*head, holds, room, cfg, m) {
+			t.out.Reason = ReasonBehindHead
+			return nil, nil
 		}
 	}
 	if len(holds) > 0 {
 		if wait, err := t.watchWait(sec, cfg, m, need, room); wait || err != nil {
 			return nil, err
 		}
+	} else {
+		t.out.WatchGate = "no_holds"
 	}
 
 	// 7. Publish the hold, close and unlink the ticket, bump gen. A Withdraw that came first
@@ -97,7 +106,7 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	if t.status != statusWaiting {
 		return nil, ErrCanceled
 	}
-	g := &Grant{e: t.e, grantMiB: need}
+	g := &Grant{e: t.e, grantMiB: need, admission: t.out}
 	if err := g.publishHold(sec, t.req, t.arrivalNS, need); err != nil {
 		return nil, err
 	}
@@ -122,20 +131,28 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 	now := t.e.clock.Realtime()
 	ok := fresh(at, now)
 	mono, spacing := s.Host.WallNS+now-at, int64(c.SpacingS*1e9)
+	t.out.WatchGate = watchGate(ok, d.Level)
+	var refused WaitReason
+	var calmNS int64
+	if t.req.Restart && err == nil {
+		refused, calmNS = restartRefusal(ok, d, s, at, now, c, m, need, room)
+	}
 	switch {
 	case err != nil:
 		return false, err
-	case t.req.Restart && (!ok || d.Level != watch.Green || calmLeft(d, s, at, now, c) > 0 ||
-		m.HeadroomOK && room < need+max(256, need/10)):
+	case refused != "":
+		t.out.Reason, t.out.CalmLeftS = refused, float64(calmNS)/1e9
 		return true, nil
 	case !ok || d.Level == watch.Unknown:
 		return false, nil
 	case d.Level >= watch.Yellow:
+		t.out.Reason = ReasonWatchLevel
 		return true, nil
 	// Spacing needs the clear and the last start on this sample's clock: a reboot keeps watch.json.
 	case s.Host.WallNS == 0 || d.YellowClearedNS > mono || d.LastAdmitNS > mono ||
 		mono-d.YellowClearedNS >= int64(c.CalmS*1e9): // no clear within calm_s: no spacing
 	case d.LastAdmitNS >= d.YellowClearedNS && mono-d.LastAdmitNS < spacing:
+		t.out.Reason = ReasonWatchSpacing
 		return true, nil
 	default:
 		d.LastAdmitNS = mono
@@ -200,7 +217,15 @@ func (t *Ticket) reelect() (*wire.Ticket, error) {
 // (PROTOCOL.md section 10.3): its typical run time is known and ends within W, head's expected
 // wait for the room it needs, at least the calm a restart still needs.
 func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg config.Config, m config.Machine) bool {
-	if t.req.TypicalS == 0 || !m.HeadroomOK || len(holds) == 0 { // with no hold live the head starts at once
+	switch { // with no hold live the head starts at once
+	case t.req.TypicalS == 0:
+		t.out.NoPass = "no_typical"
+		return false
+	case !m.HeadroomOK:
+		t.out.NoPass = "headroom_unknown"
+		return false
+	case len(holds) == 0:
+		t.out.NoPass = "no_holds"
 		return false
 	}
 	// W: the running jobs with a typical run time end soonest first, each freeing the larger of its
@@ -216,16 +241,23 @@ func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg conf
 		room, w = room+max(h.body.NeedMiB, h.body.FootprintMiB), left(h)
 	}
 	if room < head.NeedMiB {
+		t.out.NoPass = "wait_unknown"
 		return false
 	}
 	if head.Restart {
 		d, s, at, err := t.e.st.ReadWatch()
 		if err != nil {
+			t.out.NoPass = "watch_unreadable"
 			return false
 		}
 		w = max(w, calmLeft(d, s, at, now, cfg.Watch)/1e9)
 	}
-	return t.req.TypicalS <= w
+	t.out.W, t.out.WKnown = w, true
+	if t.req.TypicalS <= w {
+		return true
+	}
+	t.out.NoPass = "too_long"
+	return false
 }
 
 // calmLeft is how much of calm_s, in ns, a restart still needs at now: what the sample's green
@@ -242,11 +274,12 @@ func calmLeft(d watch.Detector, s watch.Sample, at, now int64, c watch.Config) i
 // Grant is what an admission holds: the hold's lock-carrying descriptor, which carries the
 // reservation in its body. Its methods are safe for concurrent use.
 type Grant struct {
-	e        *Engine
-	hold     *os.File
-	holdName string
-	grantMiB int64  // the need the command was granted
-	failOpen string // the reason of a fail-open run's grant
+	e         *Engine
+	hold      *os.File
+	holdName  string
+	grantMiB  int64   // the need the command was granted
+	failOpen  string  // the reason of a fail-open run's grant
+	admission Outcome // the attempt that admitted it; never changes
 
 	mu     sync.Mutex
 	body   wire.Hold // the hold's body as last written
