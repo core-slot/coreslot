@@ -2,7 +2,7 @@
 
 With `[telemetry] enabled = true` coreslot keeps a local record of what the machine and each run
 did in `$S/telemetry/`. It is off by default. coreslot sends nothing anywhere and opens no network
-connection; while the record is on, a run doing container work talks to the local Docker socket, a
+connection itself; while the record is on, a run doing container work talks to the local Docker socket, a
 unix socket, to read memory ([`containers`](#containers)). `[watch] sample_log = true`, deprecated,
 writes `samples.jsonl` alone and nothing else.
 
@@ -16,12 +16,15 @@ The directory is optional and its absence is normal: no admission reads it, and 
 | `memory.stamp`, `containers.stamp` | when each machine-wide line was last claimed; no content that matters |
 
 Each log is JSON lines. The tick that writes samples rotates `samples.jsonl` and `events.jsonl`,
-each to one older generation at 256 MiB, so the directory may grow to about 1 GiB. A write that
-fails costs its line. A reader skips a line it cannot parse.
+each to one older generation at 256 MiB, so while anything ticks the directory stays within about
+1 GiB; runs that end within 2 s and pass-throughs do not tick, and alone rotate nothing. A write
+that fails costs its line. A reader skips a line it cannot parse.
 
-The record holds labels (an auto-label copies up to two leading arguments of the command, as the run
-log does), process names and container image names. It holds no command line, environment or paths,
-and every reason in it is a closed code.
+The record holds labels (an auto-label copies up to two leading arguments of the command and the
+repository's directory name, as the run log does), process names, which are executable file names,
+and container image names. A `waiting` line's `holders` carry hold names, which embed up to 32 bytes
+of a label. It holds no command line, environment or whole path, and every reason in it is a closed
+code.
 
 ## Clocks
 
@@ -35,7 +38,8 @@ The boot clocks compare only within one boot.
 
 - A run's lines share `run`; `attempt` tells its restarts apart and `n` orders them.
 - `hold` on `admitted` and `ended` is a hold of the sample lines' `jobs` and `stop`.
-- `ended.record.time_ns` is the `time_ns` of the run's line in `log/runs.jsonl`.
+- `ended.record.time_ns` is the `time_ns` of the run's line in `log/runs.jsonl`; a pass-through's
+  `ended` has a `record` and no line there.
 - `memory` and `containers` name no run, and a sample names only holds: join them by time, on
   `up_ns` and `t_ns`.
 
@@ -45,6 +49,8 @@ The boot clocks compare only within one boot.
 - An `enqueue` with no terminal line (`ended`, `refused`, `cancelled`, `interrupted`, `not_started`
   or `timeout` without a run after it) was killed or lost.
 - `lost` is carried by the next line of the same process, and dies with it.
+- A run writes nothing more once it has seen a FORMAT it cannot read or a failed release, and a
+  fail-open run with no published hold writes nothing.
 - A gap in `memory` lines with no coreslot process alive is "nothing recorded", not "nothing happened".
 
 There is no daemon: only a live coreslot process records, so with none alive nothing does.
@@ -81,7 +87,7 @@ One line per machine sample, written by whichever run takes the sample.
 | `reserve_mib` | the reserve admission used |
 | `jobs` | the running, freshly ticked holds: `hold`, `label`, `arrival_ns`, `need_mib`, `footprint_mib`, the time deltas `d_user_ns`, `d_sys_ns`, `d_page_wait_ns`, `share` (null when the job reported no time), `normal_share`, `learned`, `victim`, `cpu_ns`, `typical_cpu_s`, `typical_s`, `stall_ewma` |
 | `stop` | present on the sample that wrote a stop round: the holds it lists |
-| `wired`, `compressor`, `internal`, `free`, `speculative`, `purgeable`, `external` | macOS, MiB, from the same host reading as the paging counters: wired, compressor-held, anonymous and file-backed pages, and free ones as the host reports them, speculative pages included. Absent when the read failed |
+| `wired`, `compressor`, `internal`, `free`, `speculative`, `purgeable`, `external` | macOS, MiB, from their own read, a moment after the paging counters: wired, compressor-held, anonymous and file-backed pages, and free ones as the host reports them, speculative pages included. Absent when the read failed |
 | `pressure_level` | macOS: the kernel's memory pressure, 1 normal, 2 warning, 4 critical |
 | `AnonPages`, `Shmem`, `Slab`, `SReclaimable`, `PageTables`, `Zswap` | Linux, MiB, from `/proc/meminfo`; a key the kernel does not report is absent |
 | `oom_kill`, `psi_full_us` | Linux: the count of OOM kills since boot (`/proc/vmstat`) and the PSI `full` stall, in total µs since boot, where the kernel reports it |
@@ -98,9 +104,9 @@ One line per event of a run, written by that run. Every line has:
 | `v` | the schema of the line, 1 |
 | `e` | the event |
 | `time_ns` | when it was written, ns since the epoch |
-| `up_ns` | the clock since boot that counts sleep; slept = delta `up_ns` less delta `awake_ns` |
+| `up_ns` | the clock since boot that counts sleep |
 | `awake_ns` | the same clock without sleep |
-| `lost` | lines not written since the last line that was |
+| `lost` | lines not written, and panics of the recorder recovered, since the last line that was; a recovered panic may have cost no line |
 | `run` | the run, the same across its attempts |
 | `attempt` | the attempt, from 1; above 1 is a restart |
 | `n` | the run's line number |
@@ -177,7 +183,9 @@ fails writes none of them.
 
 ### `ended`
 
-Written after the run-log line, when the command ran and was reaped.
+Written after the run-log line, when the command ran and was reaped. If that line could not be
+appended and FORMAT is not what failed, `ended` is still written, and its `record` is then the
+attempt's only copy.
 
 | key | meaning |
 |---|---|
@@ -207,11 +215,9 @@ its parent's), which no sample sees: `footprint_mib` is its tree's footprint at 
 
 ### `memory`
 
-A machine-wide line that names no run (no `run`, `attempt`, `n` or `label`), written on macOS at most
-every 30 s by whichever process is due: `memory.stamp` is touched through its descriptor, with no
-lock, so two processes may write one each in the same window. A waiting run writes it with its 30 s
-waiting line, and a run holding a reservation or running outside the budget every 30 s of its
-command; a pass-through never does. Nothing is written where processes cannot be swept.
+A machine-wide line that names no run (no `run`, `attempt`, `n` or `label`), written on macOS once
+per 30 s window by whichever process is due; two processes may each write one in a window. Nothing
+is written where processes cannot be swept.
 
 | key | meaning |
 |---|---|
@@ -220,30 +226,25 @@ command; a pass-through never does. Nothing is written where processes cannot be
 
 ### `containers`
 
-A machine-wide line that names no run, written at most every 30 s (`containers.stamp`, as for
-`memory`) from the supervision of a run whose own command is container work, and from nothing else:
-no waiter and no pass-through ever opens the socket. It reads the Docker socket: the unix socket
-`DOCKER_HOST` names, or else `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and
-`/var/run/docker.sock`, in that order (the system's alone when `CORESLOT_STATE_DIR` is set, which
-looks up no home). Two requests, read-only, with one 2 s deadline for all of it; the line is written
-at the deadline with what was read.
+A machine-wide line that names no run, written once per 30 s window (`containers.stamp`, as for
+`memory`, so two processes may each write one in a window) from the supervision of a run whose own
+command is container work and which is not inside another coreslot run's command, and from nothing
+else: no waiter, no pass-through and no process that inherited a non-empty `CORESLOT_HOLD` or
+`CORESLOT_UNBUDGETED` ever opens the socket, so a nested `--independent` container run writes no
+`containers` line. Its connection would otherwise read as its parent command's container work.
+
+It reads the Docker socket: the unix socket `DOCKER_HOST` names, or else
+`~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and `/var/run/docker.sock`, in that
+order (the system's alone when `CORESLOT_STATE_DIR` is set, which looks up no home). One request for
+the list and one per container, up to 17, read-only, under one 2 s deadline, which cannot interrupt
+a connect while it resolves the socket's path; the line is written at the deadline with what was
+read.
 
 | key | meaning |
 |---|---|
 | `containers` | up to 16 running containers: `id` (12 characters), `image` (up to 64 bytes), `usage_mib` as `docker stats` computes it, `limit_mib` |
 | `containers_total` | how many are running, read or not |
 | `containers_err` | absent when all was read, else a closed code: `no_socket`, `connect`, `deadline`, `http` (a status other than 200, or a response over 1 MiB), `parse`, `tcp_host` (`DOCKER_HOST` is not a unix socket; nothing is read) |
-
-A container cannot be tied to a run by these lines: join them by time.
-
-### When nothing more is written
-
-A recorder is made only once FORMAT was read and understood: in the section of a successful
-enqueue or of a published unbudgeted hold, or by a pass-through itself. A run that then sees a
-FORMAT it cannot read (at a hold update, a tick, the run-log append, or a pass-through's check
-before its last line), or a failed append or release, writes nothing more, even if FORMAT comes
-back, and hands its command no `CORESLOT_TELEMETRY`. A fail-open run with no published hold writes
-nothing.
 
 ### `not_started`
 
@@ -253,8 +254,9 @@ signal that came between the admission and the start.
 ### `stopped` and `kept`
 
 Thin markers: the numbers behind them are on the `samples.jsonl` line of the same round.
-`stopped` is written when the watchdog killed the command, or, in observe mode, when it said it
-would; `kept` once for the round that kept the command as nearly finished.
+`stopped` is written when the watchdog sent the kill, or, in observe mode, when it said it would;
+a command that ended by itself first has a `stopped` and then an `ended` with no `stopped_by`.
+`kept` is written once for the round that kept the command as nearly finished.
 
 | key | meaning |
 |---|---|

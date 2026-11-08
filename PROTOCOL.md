@@ -228,7 +228,8 @@ by a client that has read a `FORMAT` it understands (section 15.2).
 `telemetry/` is optional, and its absence is normal: it exists only once a client has recorded
 something under `[telemetry] enabled = true` or `sample_log = true` (section 5.3), and such a
 client creates it as it does `log/`. No admission reads it, it is not part of `FORMAT`, and a client
-that does not record neither creates nor checks it. A reader of the format needs nothing in it.
+that does not record does not create it and checks it only in `doctor --reset`, which handles it as
+it does `log/` whatever the switch says. A reader of the format needs nothing in it.
 [`docs/telemetry.md`](docs/telemetry.md) lists its files and their keys.
 
 Directory listings are bounded: a directory holds at most 65 536 entries. A reader MUST NOT read
@@ -1038,9 +1039,6 @@ places them above. It sets this environment:
 | `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor, which is always fd 3 |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 | `CORESLOT_TELEMETRY` | `1`, for a run that is recording (section 5.3); absent otherwise, an inherited value included |
-
-`CORESLOT_TELEMETRY` is a mark, not a contract a command needs: it tells a pass-through nested in
-the command that it may record (section 18).
 
 Every descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section
 4.2). A run that starts its command again after a stop (section 24) builds the contract from the

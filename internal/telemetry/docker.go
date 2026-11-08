@@ -28,7 +28,7 @@ const (
 )
 
 const (
-	containersBudget = 2 * time.Second // the whole read, from the connect to the last byte
+	containersBudget = 2 * time.Second // the whole read, but for a connect resolving its path, which nothing interrupts
 	containersMax    = 16
 	responseMax      = 1 << 20
 	imageMax         = 64

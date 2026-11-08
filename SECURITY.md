@@ -58,14 +58,17 @@ The full rules are in
 - Every directory coreslot creates is mode `0700`, every file `0600`, created with `O_NOFOLLOW`.
 - Every existing path of the layout must be of the expected type, owned by the real user id, not a
   symlink, and not group- or world-writable; anything else is a state error. coreslot then fails
-  open (runs the command unbudgeted and says so) or, with `--strict`, refuses. An entry inside
+  open (runs the command unbudgeted and says so) or, with `--strict`, refuses. `telemetry/` is the
+  exception: a recorder that finds it wrong loses the line and no run's outcome changes, while
+  `coreslot doctor --reset` checks it as it does `log/`, whatever the switch says. An entry inside
   `queue/`, `holds/` or `cancel/` that fails these checks is ignored and counted, never trusted or
   removed.
 - A process whose effective user id differs from its real one (setuid) is unsupported.
 - Descriptors on state files are close-on-exec, except the hold descriptor deliberately passed to
   the command, which keeps the reservation alive for as long as any process holds it.
 - The run log (`log/runs.jsonl`) never records the environment, nor the command line beyond its
-  label. A label is recorded in the run log, in `status` and in the names of tickets and holds;
+  label. A label is recorded in the run log, in `status`, in the names of tickets and holds and,
+  with the local record on, in `telemetry/events.jsonl` and `samples.jsonl` (up to about 1 GiB);
   without `--label` the automatic label copies the program's name and up to two leading word-like
   arguments (`deploy hunter2@proj` for `coreslot run --restart=no -- deploy hunter2`). Pass
   `--label` for a command whose leading words may carry a secret.
@@ -80,7 +83,8 @@ a command that uses more than its need. Reports about them are welcome as ordina
 the situation better.
 
 coreslot sends nothing anywhere and opens no network connection itself. Its optional local record
-(`[telemetry]`, off by default) stays in the state directory; while it is on, a run doing container
+(`[telemetry]`, off by default) stays in the state directory and holds labels, the names of the
+user's largest processes, whether or not coreslot runs them, and container image names; while it is on, a run doing container
 work talks to the local Docker socket, a unix socket, to read memory. Looking up the user's home
 directory (`getpwuid`, or the `getent` fallback) goes through the system's name services (NSS on
 Linux, Open Directory on macOS), which may contact a directory service such as LDAP, as any
