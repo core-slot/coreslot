@@ -44,6 +44,9 @@ const (
 	EventsOld    = "events.1.jsonl"
 )
 
+// TelemetrySchema is the version in the "v" key of every line of a telemetry file.
+const TelemetrySchema = 1
+
 // RotateTelemetryAt is the size at which a telemetry file is rotated to its one older generation.
 const RotateTelemetryAt = 256 << 20
 

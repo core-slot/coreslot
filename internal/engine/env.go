@@ -12,7 +12,8 @@ const (
 	EnvGrantedMem = "CORESLOT_GRANTED_MEM"
 	EnvHold       = "CORESLOT_HOLD"
 	EnvUnbudgeted = "CORESLOT_UNBUDGETED"
-	envGranted    = "CORESLOT_GRANTED_" // the prefix every grant variable has
+	EnvTelemetry  = "CORESLOT_TELEMETRY" // telemetry is on for the run this command runs under
+	envGranted    = "CORESLOT_GRANTED_"  // the prefix every grant variable has
 )
 
 // ChildEnv is the CORESLOT_* environment a client gives the command it starts (PROTOCOL.md
@@ -32,8 +33,8 @@ func ChildEnv(grantMiB int64, hold, unbudgeted string) []string {
 }
 
 // IsContext reports whether an environment variable is grant context (PROTOCOL.md section 17):
-// CORESLOT_GRANTED_*, CORESLOT_HOLD or CORESLOT_UNBUDGETED.
+// CORESLOT_GRANTED_*, CORESLOT_HOLD, CORESLOT_UNBUDGETED or CORESLOT_TELEMETRY.
 // CORESLOT_STATE_DIR is not.
 func IsContext(key string) bool {
-	return strings.HasPrefix(key, envGranted) || key == EnvHold || key == EnvUnbudgeted
+	return strings.HasPrefix(key, envGranted) || key == EnvHold || key == EnvUnbudgeted || key == EnvTelemetry
 }

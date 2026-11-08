@@ -40,5 +40,73 @@ A sample whose reading failed reports `level` `unknown`, zero readings and `head
 
 ## `events.jsonl`
 
+One line per event of a run, written by that run. A run's events follow the switch as it read it
+at its start, even if the switch changes while it runs. Samples follow whichever process ticks.
+Every line has:
+
 | key | meaning |
 |---|---|
+| `v` | the schema of the line, 1 |
+| `e` | the event |
+| `time_ns` | when it was written, ns since the epoch |
+| `up_ns` | the clock since boot that counts sleep; slept = delta `up_ns` less delta `awake_ns` |
+| `awake_ns` | the same clock without sleep |
+| `lost` | lines not written since the last line that was |
+| `run` | the run, the same across its attempts |
+| `attempt` | the attempt, from 1; above 1 is a restart |
+| `n` | the run's line number |
+| `label` | the run's label |
+
+### `enqueue`
+
+Written once the ticket is published; an enqueue that fails writes nothing.
+
+| key | meaning |
+|---|---|
+| `ticket` | the ticket's name in `queue/` |
+| `need_mib` | what it asks for |
+| `need_source` | where the need came from: `flag`, `pin`, `learned`, `cold`, `container`, `restart_peak` |
+| `need_before_mib` | with `restart_peak`: the need before the peak replaced it |
+| `real_memory` | a container request, judged against the real free memory |
+| `typical_s` | the label's typical run time, 0 unknown |
+| `oversized` | the need is above what the machine has above its reserve |
+| `timeout_s` | `--timeout`, 0 for none |
+| `on_timeout` | `run` or `fail` |
+| `version` | coreslot's version |
+| `mem_mib` | the machine's memory |
+| `mode` | `[watch] mode`, `enforce` or `observe`; absent when the configuration cannot be read |
+| `reserve_mib` | the reserve; absent likewise |
+| `watch_config` | the effective `[watch]` thresholds: `yellow_points`, `red_points`, `red_samples`, `gate_pages_s`, `floor_mib`, `calm_s`, `post_kill_s`, `spacing_s`; absent likewise |
+
+### `waiting`
+
+Written with each line a person reads: at the start of the wait and every 30 s after, from the
+snapshot that line reads. A failed snapshot leaves out the keys from `headroom_mib` on.
+
+| key | meaning |
+|---|---|
+| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin` |
+| `reason_s` | seconds waited on each reason since the last line |
+| `evals` | admission attempts so far |
+| `max_gap_ms` | the longest time between two steps since the last line |
+| `ahead` | the ticket examined ahead of it; absent for the head |
+| `no_pass` | why it may not pass the head: `no_typical`, `headroom_unknown`, `no_holds`, `wait_unknown`, `watch_unreadable`, `too_long`; absent otherwise |
+| `w_s` | the expected wait a pass was judged on, when computed |
+| `calm_left_s` | with `restart_calm`: seconds of calm still needed |
+| `headroom_mib`, `headroom_ok`, `reserve_mib` | as on a sample |
+| `room_mib` | the room the person's line shows: at least 0; for a container waiter the real free memory |
+| `level` | the detector's level; absent with no sample |
+| `read_age_ms` | the age of that sample; absent with no sample |
+| `holders` | up to 16 live holds, those with the most left to grow into first: `hold`, `need_mib`, `footprint_mib`, `child_exited`, `owner_exited`, `sample_age_ms` (absent when never sampled) |
+
+### `admitted`
+
+| key | meaning |
+|---|---|
+| `hold` | the hold's name |
+| `waited_s` | the attempt's wait, the run log's `waited_s` |
+| `reason_s` | seconds per reason since the last `waiting` |
+| `last_reason` | the reason of the last step before the admission; empty for a run admitted at once |
+| `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
+| `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
+| `w_s` | the expected wait, when computed |

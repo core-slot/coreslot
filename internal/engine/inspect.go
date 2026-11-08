@@ -3,6 +3,8 @@
 package engine
 
 import (
+	"time"
+
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
@@ -89,9 +91,15 @@ func (e *Engine) Snapshot() (Report, error) {
 		return Report{}, err
 	}
 	r.Ignored[store.HoldsDir], r.DeadHolds = ignored, dead
+	listed := e.clock.Realtime()
 	for _, h := range live {
-		r.Holds = append(r.Holds, h.info())
+		info := h.info()
+		info.ChildExited, info.SampleAgeMS = h.body.ChildExited, sampleAgeMS(h.body.SampledNS, listed)
+		r.Holds = append(r.Holds, info)
 		r.Mem.ReservedMiB += h.body.NeedMiB
+	}
+	if memErr == nil {
+		r.Mem.HeadroomMiB, r.Mem.HeadroomOK, r.Mem.ReserveMiB = machine.HeadroomMiB, machine.HeadroomOK, cfg.ReserveMiB
 	}
 	if memErr == nil && machine.HeadroomOK {
 		r.Mem.Known = true
@@ -142,6 +150,14 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Degraded = &DegradedInfo{Reason: rec.Reason, FirstNS: rec.FirstNS, Count: rec.Count, Malformed: rec.Malformed}
 	}
 	return r, nil
+}
+
+// sampleAgeMS is the age at nowNS of a hold's sample taken at sampledNS, -1 when there was none.
+func sampleAgeMS(sampledNS, nowNS int64) int64 {
+	if sampledNS == 0 {
+		return -1
+	}
+	return max(0, nowNS-sampledNS) / int64(time.Millisecond)
 }
 
 // sectionInfo probes admit.lock (one single-attempt flock, released at once, never creating the

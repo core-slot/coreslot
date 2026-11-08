@@ -3,17 +3,22 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/telemetry"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
@@ -24,7 +29,7 @@ var errNotAtOnce = errors.New("not admitted at once")
 // tryOnce is --no-wait's single attempt: one Step, each of whose section entries waits at most
 // RefreshEvery/4 = 0.5 s (the engine's sectionWait). The 1 s of noWaitFor bounds only enqueue.
 func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, error) {
-	res, err := ticketStepper{t}.step(ctx)
+	res, err := r.stepperOf(t).step(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -47,6 +52,63 @@ type ticketStepper struct{ t *engine.Ticket }
 func (s ticketStepper) step(ctx context.Context) (engine.StepResult, error) { return s.t.Step(ctx) }
 
 func (s ticketStepper) due() time.Duration { return s.t.Due() }
+
+// stepperOf is what steps t: the ticket itself, or with a recorder the ticket traced.
+func (r *run) stepperOf(t *engine.Ticket) stepper {
+	if r.rec == nil {
+		return ticketStepper{t}
+	}
+	r.trace = tracedStepper{stepper: ticketStepper{t}, clk: newRealClock()}
+	return &r.trace
+}
+
+// tracedStepper keeps where a wait's time went. The time between two steps is charged to the
+// first one's reason: that is what the run waited on meanwhile.
+type tracedStepper struct {
+	stepper
+	clk     waitClock
+	stepped bool
+	at      time.Duration // when the last step returned
+	reason  string        // the last step's
+	secs    map[string]float64
+	maxGap  time.Duration
+}
+
+func (s *tracedStepper) step(ctx context.Context) (engine.StepResult, error) {
+	res, err := s.stepper.step(ctx)
+	now := s.clk.Now()
+	if gap := now - s.at; s.stepped {
+		s.maxGap = max(s.maxGap, gap)
+		if s.reason != "" {
+			if s.secs == nil {
+				s.secs = map[string]float64{}
+			}
+			s.secs[s.reason] += gap.Seconds()
+		}
+	}
+	s.at, s.stepped = now, true
+	if w, ok := res.(engine.Waiting); ok {
+		s.reason = string(w.Outcome.Reason)
+	}
+	return res, err
+}
+
+// take returns the seconds per reason, to the millisecond a line is worth, and clears them.
+func (s *tracedStepper) take() map[string]float64 {
+	out := make(map[string]float64, len(s.secs))
+	for why, v := range s.secs {
+		out[why] = math.Round(v*1e3) / 1e3
+	}
+	s.secs = nil
+	return out
+}
+
+// takeGap returns the longest time between two steps and clears it.
+func (s *tracedStepper) takeGap() time.Duration {
+	g := s.maxGap
+	s.maxGap = 0
+	return g
+}
 
 // waitOneP runs wait with the Go runtime limited to one P (runtime.GOMAXPROCS(1)) and restores
 // the previous setting afterwards. A waiting process sleeps almost all the time, and with one P
@@ -120,6 +182,7 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 			why = "; " + why
 		}
 	}
+	r.recordWaiting(w)
 	if !r.advised {
 		r.advised, advice = true, "; if your tool has a time limit, run this in the background or raise the limit"
 	}
@@ -131,15 +194,113 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
 }
 
+// recordEnqueue writes the attempt's enqueue, making the run's recorder on its first.
+func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request) {
+	if !r.telemetry {
+		return
+	}
+	if r.rec == nil {
+		if r.rec = telemetry.New(r.loc.dir, fmt.Sprintf("%d-%d", r.start.UnixNano(), os.Getpid()), r.o.label); r.rec == nil {
+			return
+		}
+	}
+	r.rec.SetAttempt(r.stops + 1)
+	f := telemetry.Fields{"ticket": t.Name(), "need_mib": req.NeedMiB, "need_source": r.o.needSource, "real_memory": req.RealMemory,
+		"typical_s": req.TypicalS, "oversized": r.oversized, "timeout_s": r.o.timeout.Seconds(), "on_timeout": r.o.onTimeout,
+		"version": cliVersion(), "mem_mib": r.memMiB}
+	if r.o.needSource == "restart_peak" {
+		f["need_before_mib"] = r.needBefore
+	}
+	if c, err := e.Config(); err == nil {
+		mode := "enforce"
+		if c.Watch.Observe {
+			mode = "observe"
+		}
+		w := c.Watch
+		f["mode"], f["reserve_mib"], f["watch_config"] = mode, c.ReserveMiB, map[string]any{
+			"yellow_points": w.YellowPoints, "red_points": w.RedPoints, "red_samples": w.RedSamples, "gate_pages_s": w.GatePagesPerS,
+			"floor_mib": w.FloorMiB, "calm_s": w.CalmS, "post_kill_s": w.PostKillS, "spacing_s": w.SpacingS}
+	}
+	r.rec.Emit("enqueue", f)
+}
+
+// recordWaiting writes a waiting line beside the one a person reads, from the same snapshot.
+func (r *run) recordWaiting(w engine.Waiting) {
+	if r.rec == nil {
+		return
+	}
+	out := w.Outcome
+	f := telemetry.Fields{"reason": string(out.Reason), "reason_s": r.trace.take(), "evals": w.Evals, "max_gap_ms": r.trace.takeGap().Milliseconds()}
+	if w.Ahead != "" {
+		f["ahead"] = w.Ahead
+	}
+	if out.NoPass != "" {
+		f["no_pass"] = out.NoPass
+	}
+	if out.WKnown {
+		f["w_s"] = out.W
+	}
+	if out.Reason == engine.ReasonRestartCalm {
+		f["calm_left_s"] = out.CalmLeftS
+	}
+	if rep := r.snap; rep != nil {
+		f["headroom_mib"], f["headroom_ok"], f["reserve_mib"] = rep.Mem.HeadroomMiB, rep.Mem.HeadroomOK, rep.Mem.ReserveMiB
+		f["room_mib"], f["holders"] = waitRoom(*rep, r.o.request()), holderLines(rep.Holds)
+		if rep.Watch.SampledNS != 0 { // with no sample the zero level would read as green
+			f["level"], f["read_age_ms"] = rep.Watch.Level.String(), max(0, store.NowNS()-rep.Watch.SampledNS)/int64(time.Millisecond)
+		}
+	}
+	r.rec.Emit("waiting", f)
+}
+
+// recordAdmitted writes the attempt's admission and what the decision read.
+func (r *run) recordAdmitted(g *engine.Grant) {
+	if r.rec == nil {
+		return
+	}
+	a := g.Admission()
+	f := telemetry.Fields{"hold": g.HoldName(), "waited_s": r.waited.Seconds(), "reason_s": r.trace.take(), "last_reason": r.trace.reason,
+		"headroom_mib": a.HeadroomMiB, "headroom_ok": a.HeadroomOK, "reserve_mib": a.ReserveMiB, "room_mib": a.RoomMiB, "watch_gate": a.WatchGate}
+	if a.WKnown {
+		f["w_s"] = a.W
+	}
+	r.rec.Emit("admitted", f)
+}
+
+// maxHolderLines bounds the holders of a waiting line, so that the line fits MaxRunLine.
+const maxHolderLines = 16
+
+// holderLines describes the holds on a waiting line, those with the most left to grow into first.
+func holderLines(holds []engine.HolderInfo) []map[string]any {
+	holds = slices.Clone(holds)
+	growth := func(h engine.HolderInfo) int64 { return max(0, h.NeedMiB-h.FootprintMiB) }
+	slices.SortStableFunc(holds, func(a, b engine.HolderInfo) int { return cmp.Compare(growth(b), growth(a)) })
+	holds = holds[:min(len(holds), maxHolderLines)]
+	out := make([]map[string]any, 0, len(holds))
+	for _, h := range holds {
+		l := map[string]any{"hold": h.Name, "need_mib": h.NeedMiB, "footprint_mib": h.FootprintMiB, "child_exited": h.ChildExited, "owner_exited": h.OwnerExited}
+		if h.SampleAgeMS >= 0 {
+			l["sample_age_ms"] = h.SampleAgeMS
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// waitRoom is the room a waiting request is judged against. A container request's is not FreeMiB,
+// which subtracts the reservations it ignores.
+func waitRoom(rep engine.Report, req spec.Request) int64 {
+	if req.RealMemory {
+		return rep.Mem.RealFreeMiB
+	}
+	return rep.Mem.FreeMiB
+}
+
 // waitReason says why a waiting request is not admitted: the room it lacks, else the memory level
-// that holds admissions, else that a restarted command waits for calm. A container request's room
-// is not FreeMiB, which subtracts the reservations it ignores.
+// that holds admissions, else that a restarted command waits for calm.
 func waitReason(rep engine.Report, req spec.Request) string {
 	w := rep.Watch
-	free := rep.Mem.FreeMiB
-	if req.RealMemory {
-		free = rep.Mem.RealFreeMiB
-	}
+	free := waitRoom(rep, req)
 	switch {
 	case rep.Mem.Known && len(rep.Holds) > 0 && req.NeedMiB > free:
 		return fmt.Sprintf("needs %s, %s free", spec.FormatMiB(req.NeedMiB), spec.FormatMiB(free))

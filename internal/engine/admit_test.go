@@ -117,7 +117,7 @@ func TestNoPerGrantCap(t *testing.T) {
 			return config.Machine{MemMiB: 32768, HeadroomMiB: 20000, HeadroomOK: true}, nil
 		},
 		newFakeClock().clock())
-	if bound, over := e.Oversized(40960); bound != 31744 || !over {
+	if bound, over, _ := e.Oversized(40960); bound != 31744 || !over {
 		t.Errorf("Oversized(40960) = %d, %v; want 31744, true", bound, over)
 	}
 	tk := enqueue(t, e, spec.Request{NeedMiB: 40960})
@@ -145,7 +145,7 @@ func TestOversizedNeedsAReading(t *testing.T) {
 	e := New(st, filepath.Join(dir, store.ConfigFile),
 		func() (config.Machine, error) { return config.Machine{MemMiB: 32768}, nil },
 		newFakeClock().clock())
-	if _, over := e.Oversized(40960); over {
+	if _, over, _ := e.Oversized(40960); over {
 		t.Errorf("Oversized(40960) with no headroom = true, want false")
 	}
 }

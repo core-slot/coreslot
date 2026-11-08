@@ -16,6 +16,7 @@ import (
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/telemetry"
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
@@ -73,6 +74,14 @@ type run struct {
 	lastStop  string                               // what the watchdog saw when it stopped the last command
 	lastFloor bool                                 // the floor round stopped it
 	reasons   []string                             // lastStop of every stop so far
+
+	telemetry  bool                // the switch as the run read it at its start
+	rec        *telemetry.Recorder // nil until the first enqueue succeeded, and with telemetry off
+	trace      tracedStepper       // where the attempt's wait went; used only with rec
+	snap       *engine.Report      // the last waiting line's snapshot; kept only with rec
+	memMiB     int64               // the machine's memory, from the run's start
+	oversized  bool                // the need can never fit beside another job
+	needBefore int64               // a restart's need before its peak replaced it
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -103,7 +112,7 @@ func runCommand(args []string, io IO) int {
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned, cpuS: cpuS}
+	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned, cpuS: cpuS, memMiB: machine.MemMiB}
 	return r.decide()
 }
 
@@ -129,10 +138,12 @@ func (r *run) ordinary() int {
 		return exitUsage
 	}
 	req := r.o.request()
-	if bound, over := e.Oversized(req.NeedMiB); over {
+	bound, over, recording := e.Oversized(req.NeedMiB)
+	if over {
 		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when no other coreslot job runs",
 			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))
 	}
+	r.telemetry, r.oversized = recording, over
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if r.o.timeout > 0 { // one deadline from the run's start, restarts included
@@ -168,9 +179,15 @@ func (r *run) ordinary() int {
 		}
 		r.notice("memory stop %d of %d: %s was stopped (%s)%s; it was declared restartable (--restart=yes), so coreslot restarts it by itself; do not run it again",
 			r.stops, maxStops, cmd, r.lastStop, ask)
-		req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
-		r.start = time.Now()
+		r.requeue(&req, g)
 	}
+}
+
+// requeue makes req the request of the command g ran, coming back after a stop.
+func (r *run) requeue(req *spec.Request, g *engine.Grant) {
+	r.needBefore, r.o.needSource = req.NeedMiB, "restart_peak"
+	req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
+	r.start = time.Now()
 }
 
 // floorAsk is what the lines that report a floor stop ask of the agent; "" after a red stop.
@@ -200,7 +217,11 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 	r.why = func() (string, []engine.HolderInfo) {
 		rep, err := e.Snapshot()
 		if err != nil { // informative: a failure leaves it out
+			r.snap = nil
 			return "", nil
+		}
+		if r.rec != nil {
+			r.snap = &rep
 		}
 		return waitReason(rep, req), rep.Holds
 	}
@@ -215,11 +236,12 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 	}
 	t, err := e.EnqueueContext(enqCtx, req)
 	if err == nil {
+		r.recordEnqueue(e, t, req)
 		if r.o.noWait {
 			g, err = r.tryOnce(ctx, t)
 		} else {
 			g, err = waitOneP(func() (*engine.Grant, error) {
-				return waitLoop(ctx, ticketStepper{t}, newRealClock(), r.io.Stderr, r.waitingLine)
+				return waitLoop(ctx, r.stepperOf(t), newRealClock(), r.io.Stderr, r.waitingLine)
 			})
 		}
 		if err != nil {
@@ -240,6 +262,7 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 	if err != nil {
 		return nil, r.notAdmitted(e, err, req.Restart), false
 	}
+	r.recordAdmitted(g)
 	return g, 0, true
 }
 

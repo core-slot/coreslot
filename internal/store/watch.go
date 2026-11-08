@@ -114,7 +114,7 @@ func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop
 		}
 		jobs = append(jobs, sj)
 	}
-	l := map[string]any{"v": 1, "time_ns": now, "live_holds": len(cur.Live), "headroom_mib": cur.HeadroomMiB,
+	l := map[string]any{"v": TelemetrySchema, "time_ns": now, "live_holds": len(cur.Live), "headroom_mib": cur.HeadroomMiB,
 		"headroom_ok": cur.HeadroomOK, "reserve_mib": cur.ReserveMiB, "t_ns": h.WallNS, "awake_ns": h.AwakeNS, "level": d.Level.String(), "excess": d.Excess,
 		"bucket": d.Bucket, "gate": d.Gate, "decomp_s": d.Rates.DecompS, "swapins_s": d.Rates.SwapInsS,
 		"psi_some_us_s": psi, "swap_used_mib": h.SwapUsedMiB, "swap_free_mib": h.SwapFreeMiB,

@@ -53,7 +53,7 @@ func (r *run) runChild(c child) int {
 	argv := r.o.argv
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.io.Stdin, r.io.Stdout, r.io.Stderr
-	cmd.Env = c.env
+	cmd.Env = r.childEnv(c.env)
 	if slices.ContainsFunc(c.files, func(f *os.File) bool { return f != nil }) {
 		cmd.ExtraFiles = c.files
 	}
@@ -127,6 +127,15 @@ func (r *run) runChild(c child) int {
 		}
 	}
 	return status
+}
+
+// childEnv is the command's environment: with a recorder, env and the mark a run nested in the
+// command reads, since it cannot read the switch without a new read of its own.
+func (r *run) childEnv(env []string) []string {
+	if r.rec == nil {
+		return env
+	}
+	return append(slices.Clone(env), engine.EnvTelemetry+"=1")
 }
 
 // recordUsage copies the command's user and system seconds from its wait4 rusage into rec

@@ -17,6 +17,8 @@ type HolderInfo struct {
 	// still held, so a descendant that inherited the hold's descriptor holds the reservation. Only
 	// Snapshot sets it, and only when the process table can be read.
 	OwnerExited bool
+	ChildExited bool  // its command has exited: its run is releasing it
+	SampleAgeMS int64 // since its run last wrote a sample; -1 when it has not
 }
 
 // WatchInfo is the shared watch state in a snapshot.
@@ -51,6 +53,11 @@ type MemInfo struct {
 	ReservedMiB int64 // what the live holds reserve
 	FreeMiB     int64 // the room a new job may take, never below 0
 	RealFreeMiB int64 // the headroom less the reserve, never below 0: a container request's room
+	// What the two rooms came from; 0 and false when the configuration or the machine's memory
+	// could not be read.
+	HeadroomMiB int64
+	HeadroomOK  bool
+	ReserveMiB  int64
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.

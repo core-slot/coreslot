@@ -172,11 +172,11 @@ func TestEmitPanicRecovered(t *testing.T) {
 	dir := stateDir(t)
 	r := New(dir, "run-1", "x")
 	r.Emit("enqueue", Fields{"x": boom{}})
-	saved := clocks
-	clocks = func() (int64, int64) { panic("clocks") }
+	saved := Clocks
+	Clocks = func() (int64, int64) { panic("clocks") }
 	r.Emit("waiting", nil)
 	r.EmitMachine("memory", nil)
-	clocks = saved
+	Clocks = saved
 	r.Emit("admitted", nil)
 	got := lines(t, dir)
 	if len(got) != 1 || got[0]["e"] != "admitted" || got[0]["lost"] != float64(3) {

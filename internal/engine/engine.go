@@ -140,10 +140,11 @@ func (e *Engine) reading() (config.Config, config.Machine, error) {
 
 // Oversized reports a need of needMiB that no moment can satisfy, with the bound it exceeds: the
 // machine's memory less the reserve, at least 0. Such a need starts only when no hold is live; with
-// the headroom unreadable nothing gates it, so it is not reported.
-func (e *Engine) Oversized(needMiB int64) (boundMiB int64, ok bool) {
+// the headroom unreadable nothing gates it, so it is not reported. telemetry is the run's switch,
+// from this same reading so that a run with telemetry off reads nothing more; false when it failed.
+func (e *Engine) Oversized(needMiB int64) (boundMiB int64, over, telemetry bool) {
 	c, m, err := e.reading()
-	return max(m.MemMiB-c.ReserveMiB, 0), err == nil && m.HeadroomOK && needMiB > m.MemMiB-c.ReserveMiB
+	return max(m.MemMiB-c.ReserveMiB, 0), err == nil && m.HeadroomOK && needMiB > m.MemMiB-c.ReserveMiB, err == nil && c.TelemetryEnabled
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,

@@ -49,20 +49,20 @@ func (o *runOptions) resolveNeed(lookup needsLookup, learned func() (int64, bool
 	}
 	o.noRestart = e.NoRestart || o.containerCommand()
 	if mib := o.mem; mib > 0 {
-		o.need, o.pinned = mib, true
+		o.need, o.pinned, o.needSource = mib, true, "flag"
 		return
 	}
 	if e.MemMiB > 0 {
-		o.need, o.pinned = e.MemMiB, true
+		o.need, o.pinned, o.needSource = e.MemMiB, true, "pin"
 		return
 	}
 	if mib, ok := learned(); ok {
-		o.need = mib
+		o.need, o.needSource = mib, "learned"
 		return
 	}
 	if o.containerCommand() {
-		o.need = 1
+		o.need, o.needSource = 1, "container"
 		return
 	}
-	o.need = spec.ColdStartMiB(totalMiB)
+	o.need, o.needSource = spec.ColdStartMiB(totalMiB), "cold"
 }

@@ -18,6 +18,7 @@ type runOptions struct {
 	need        int64  // MiB, once resolveNeed ran
 	mem         int64  // MiB from --mem, 0 when not given
 	pinned      bool   // need is --mem or the needs file's pin: learning leaves it alone
+	needSource  string // where need came from: flag, pin, learned, cold, container, restart_peak
 	noRestart   bool   // no_restart in the needs file, or a container command: never stopped to free memory
 	restart     string // --restart: "yes", "no", or "" when not given
 	typicalS    int64  // the label's typical run time from the run log, 0 unknown

@@ -15,13 +15,13 @@ import (
 )
 
 // Schema is the version in the "v" key of every line.
-const Schema = 1
+const Schema = store.TelemetrySchema
 
 // Fields are the keys an event adds to the common ones of its line.
 type Fields = map[string]any
 
-// clocks is where the recorder reads the boot clocks; a test replaces it to make a read fail.
-var clocks = memsample.Clocks
+// Clocks is where the recorder reads the boot clocks; a test replaces it.
+var Clocks = memsample.Clocks
 
 // Recorder is the recorder of one run. A nil *Recorder is valid and writes nothing. It is safe
 // for concurrent use: the run's goroutines share it.
@@ -94,7 +94,7 @@ func (r *Recorder) emit(event string, f Fields, run bool) {
 	for k, v := range f {
 		m[k] = v
 	}
-	up, awake := clocks()
+	up, awake := Clocks()
 	m["v"], m["e"], m["time_ns"], m["up_ns"], m["awake_ns"], m["lost"] = Schema, event, time.Now().UnixNano(), up, awake, r.lost
 	if run {
 		r.n++
