@@ -65,14 +65,23 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 		d.Kept = watch.Prune(d.Kept, cur.Live)
 	}
 	var round []string
-	if lvl := d.Advance(prev, cur, c); lvl >= watch.Red && roundOver(d, cur, c) { // red or floor: a stop round
-		round, d.Kept = watch.StopList(cur.Jobs, lvl == watch.Floor, cur.ShortMiB, d.Kept, cur.Host.WallNS)
-		d.Stop, d.LastRoundNS, d.Observed, d.RoundFloor = round, cur.Host.WallNS, c.Observe, lvl == watch.Floor
+	var note roundNote
+	if lvl := d.Advance(prev, cur, c); lvl >= watch.Red { // red or floor: a stop round, or the reason for none
+		if ok, why := roundOver(d, cur, c); !ok {
+			note.noRound = why
+		} else {
+			round, d.Kept = watch.StopList(cur.Jobs, lvl == watch.Floor, cur.ShortMiB, d.Kept, cur.Host.WallNS)
+			d.Stop, d.LastRoundNS, d.Observed, d.RoundFloor = round, cur.Host.WallNS, c.Observe, lvl == watch.Floor
+			note.started = true
+			if len(round) == 0 {
+				note.noRound = "nobody_stoppable"
+			}
+		}
 	}
 	if c.SampleLog { // a failed rotation or write costs a line
 		_ = sec.rotateLogIfNeeded(TelemetryDir, EventsFile, EventsOld, rotateTelemetryAt)
 		if sec.rotateLogIfNeeded(TelemetryDir, SamplesFile, SamplesOld, rotateTelemetryAt) == nil {
-			_ = sec.s.appendSample(now, cur, d, round)
+			_ = sec.s.appendSample(now, cur, d, round, note)
 		}
 	}
 	if err := sec.SetWatch(d, cur, now); err != nil {
@@ -84,20 +93,30 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 // roundOver reports whether a new stop round may start: post_kill_s has passed since the last
 // one, and every hold it listed is gone from the running jobs or no victim any more: a run that
 // found a container client since ignores the stop. A round observe mode wrote, whose holds never
-// exit, holds back no round under enforce.
-func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
+// exit, holds back no round under enforce. When it may not, why is post_kill or listed_alive.
+func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) (ok bool, why string) {
 	if d.Observed && !c.Observe {
-		return true
+		return true, ""
 	}
 	if since := cur.Host.WallNS - d.LastRoundNS; since >= 0 && since < int64(c.PostKillS*1e9) {
-		return false
+		return false, "post_kill"
 	}
-	return !slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool { return j.Victim && slices.Contains(d.Stop, j.Hold) })
+	if slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool { return j.Victim && slices.Contains(d.Stop, j.Hold) }) {
+		return false, "listed_alive"
+	}
+	return true, ""
+}
+
+// roundNote is what a red or floor sample says of its stop round: that one started, or why none did
+// (post_kill, listed_alive, or nobody_stoppable for a round that listed no hold).
+type roundNote struct {
+	started bool
+	noRound string
 }
 
 // appendSample appends cur and the detector d that advanced on it to telemetry/samples.jsonl
 // (docs/telemetry.md); now is the Tick's and stop is the round written at this sample.
-func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop []string) error {
+func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop []string, note roundNote) error {
 	type sampleJob struct {
 		watch.Job
 		Share *float64 `json:"share"` // null when the job reported no time
@@ -121,6 +140,27 @@ func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop
 		"vm_free_mib": h.VMVolumeFreeMiB, "room_mib": cur.RoomMiB, "jobs": jobs}
 	if len(stop) > 0 {
 		l["stop"] = stop
+	}
+	if note.noRound != "" {
+		l["no_round"] = note.noRound
+	}
+	if note.started {
+		var victims, kept []string
+		for _, j := range cur.Jobs {
+			if j.Victim {
+				victims = append(victims, j.Hold)
+			}
+		}
+		for hold, k := range d.Kept {
+			if k.RoundNS == cur.Host.WallNS { // an older round's record is not this round's
+				kept = append(kept, hold)
+			}
+		}
+		slices.Sort(kept)
+		l["candidates"], l["short_mib"] = victims, cur.ShortMiB
+		if len(kept) > 0 {
+			l["kept"] = kept
+		}
 	}
 	line, err := json.Marshal(l)
 	if err != nil {

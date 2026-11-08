@@ -26,6 +26,7 @@ import (
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/telemetry"
+	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -595,7 +596,7 @@ func TestEventsLatchedAtStart(t *testing.T) {
 		name, start, then string
 		want              string
 	}{
-		{"on, then off", telemetryOn, off, "enqueue waiting admitted"},
+		{"on, then off", telemetryOn, off, "enqueue waiting admitted ended"},
 		{"off, then on", off, telemetryOn, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -877,10 +878,14 @@ func TestTimeoutLine(t *testing.T) {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
 			evs := events(t, dir)
-			if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, " timeout") {
+			tail := " timeout" // a run outside the budget ends too
+			if c.onTimeout == "run" {
+				tail = " timeout ended"
+			}
+			if got := eventNames(evs); !strings.HasPrefix(got, "enqueue waiting") || !strings.HasSuffix(got, tail) {
 				t.Fatalf("events %q", got)
 			}
-			m := evs[len(evs)-1]
+			m := event(t, evs, "timeout")
 			if m["on_timeout"] != c.onTimeout {
 				t.Errorf("on_timeout %v", m["on_timeout"])
 			}
@@ -1150,5 +1155,67 @@ func TestStoppedRecorderLeavesNoMark(t *testing.T) {
 	b.r.rec.Stop()
 	if env := b.r.childEnv([]string{"A=1"}); len(env) != 1 {
 		t.Errorf("env %q after Stop, want A=1 only", env)
+	}
+}
+
+// A stop names the round, the mode, the level, the hold's place in the list and the excess; in
+// observe mode it is written too and nothing is killed. Mutations: round from the level; the
+// position of another hold; a line written before the kill succeeded.
+func TestStoppedLine(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		floor, obs   bool
+		round, level string
+	}{{"red", false, false, "red", "red"}, {"floor", true, false, "floor", "floor"}, {"observe", false, true, "red", "red"}} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newEnded(t, "true")
+			b.r.hold = "b"
+			lvl := watch.Red
+			if c.floor {
+				lvl = watch.Floor
+			}
+			det := watch.Detector{Level: lvl, Excess: 12.5, RoundFloor: c.floor, Observed: c.obs, Stop: []string{"a", "b"}}
+			killed := false
+			b.r.stopFor(det, 512<<10, memsample.TreeTimes{}, false, func() bool { killed = true; return true })
+			if killed == c.obs {
+				t.Errorf("killed %v in a run with observe %v", killed, c.obs)
+			}
+			m := event(t, events(t, b.dir), "stopped")
+			for k, want := range map[string]any{"round": c.round, "observe": c.obs, "level": c.level, "list_pos": 1.0, "excess": 12.5} {
+				if m[k] != want {
+					t.Errorf("%s = %v, want %v", k, m[k], want)
+				}
+			}
+		})
+	}
+	b := newEnded(t, "true")
+	b.r.hold = "b"
+	b.r.stopFor(watch.Detector{Stop: []string{"b"}}, 0, memsample.TreeTimes{}, false, func() bool { return false })
+	if got := eventNames(events(t, b.dir)); got != "" {
+		t.Errorf("a stop that killed nothing wrote %q", got)
+	}
+}
+
+// A keep is written once for its round. Mutation: no guard on the round already said.
+func TestKeptLine(t *testing.T) {
+	b := newEnded(t, "true")
+	det := watch.Detector{Level: watch.Red, Excess: 7, LastRoundNS: 5e9, Stop: []string{"a"},
+		Kept: map[string]watch.Kept{"b": {RoundNS: 5e9, DeadlineNS: 9e9, LeftS: 4, Done: 0.8}}}
+	last := b.r.keptNotice(det, "b", 0)
+	if last != 5e9 {
+		t.Fatalf("round %d", last)
+	}
+	b.r.keptNotice(det, "b", last)
+	evs := events(t, b.dir)
+	if eventNames(evs) != "kept" {
+		t.Fatalf("events %q, want one kept", eventNames(evs))
+	}
+	for k, want := range map[string]any{"round": "red", "observe": false, "level": "red", "excess": 7.0} {
+		if evs[0][k] != want {
+			t.Errorf("%s = %v, want %v", k, evs[0][k], want)
+		}
+	}
+	if _, ok := evs[0]["list_pos"]; ok {
+		t.Errorf("a kept hold is not in the list: %v", evs[0]["list_pos"])
 	}
 }

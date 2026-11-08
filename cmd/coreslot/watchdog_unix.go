@@ -12,6 +12,7 @@ import (
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/telemetry"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
@@ -43,6 +44,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	smoothed := false
 	p.container = r.o.containerCommand()
 	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
+		r.hold = g.HoldName()
 		r.updateHold(st, g, func(h *wire.Hold) {
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
 			h.TypicalCPUS, h.Container = r.cpuS, p.container
@@ -107,6 +109,7 @@ func (r *run) keptNotice(det watch.Detector, hold string, lastNS int64) int64 {
 		return lastNS
 	}
 	r.sayKept(det.Observed, k, time.Now())
+	r.rec.Emit("kept", r.roundFields(det, "red", hold)) // a floor round keeps nothing
 	return k.RoundNS
 }
 
@@ -132,15 +135,32 @@ func (r *run) stopFor(det watch.Detector, kib int64, d memsample.TreeTimes, wasK
 	if wasKept {
 		why += "; an earlier round kept it as nearly finished, this one did not"
 	}
+	round := "red"
+	if det.RoundFloor {
+		round = "floor"
+	}
 	if det.Observed {
 		r.notice("would stop %s (%s)", text(r.o.label), why)
+		r.rec.Emit("stopped", r.roundFields(det, round, r.hold))
 		return false
 	}
 	if !kill() {
 		return false
 	}
 	r.lastStop, r.lastFloor = why, det.RoundFloor
+	r.rec.Emit("stopped", r.roundFields(det, round, r.hold))
 	return true
+}
+
+// roundFields are the keys the stopped and kept lines share: the numbers behind them are on the
+// sample line of the round. list_pos is the hold's place in the round's list, absent for a hold the
+// round spared.
+func (r *run) roundFields(det watch.Detector, round, hold string) telemetry.Fields {
+	f := telemetry.Fields{"round": round, "observe": det.Observed, "level": det.Level.String(), "excess": det.Excess}
+	if i := slices.Index(det.Stop, hold); i >= 0 {
+		f["list_pos"] = i
+	}
+	return f
 }
 
 // stopDetail is what the watchdog saw when a stop round, a floor round or a red one, listed this

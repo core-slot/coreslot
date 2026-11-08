@@ -75,6 +75,7 @@ type run struct {
 	advised   bool                                 // the waiting line said once what to do about a tool's time limit
 	lastStop  string                               // what the watchdog saw when it stopped the last command
 	lastFloor bool                                 // the floor round stopped it
+	hold      string                               // the attempt's hold, for the stopped line
 	reasons   []string                             // lastStop of every stop so far
 
 	telemetry  bool                // the switch as the run read it at its start

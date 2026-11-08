@@ -480,7 +480,7 @@ func TestRoundOverPostKillWindow(t *testing.T) {
 		wallNS int64
 		want   bool
 	}{{100e9, false}, {114e9, false}, {115e9, true}, {99e9, true}} {
-		if got := roundOver(d, sampleAt(tc.wallNS), c); got != tc.want {
+		if got, _ := roundOver(d, sampleAt(tc.wallNS), c); got != tc.want {
 			t.Errorf("sample at %d s, last round at 100 s: roundOver = %v, want %v", tc.wallNS/1e9, got, tc.want)
 		}
 	}
@@ -500,11 +500,11 @@ func TestRoundOverListedAlive(t *testing.T) {
 		{"listed, no victim any more", watch.Job{Hold: "1"}, true},
 		{"a victim, not listed", watch.Job{Hold: "2", Victim: true}, true},
 	} {
-		if got := roundOver(d, sampleAt(120e9, tc.job), c); got != tc.want {
+		if got, _ := roundOver(d, sampleAt(120e9, tc.job), c); got != tc.want {
 			t.Errorf("%s: roundOver = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	if !roundOver(d, sampleAt(120e9), c) {
+	if ok, _ := roundOver(d, sampleAt(120e9), c); !ok {
 		t.Error("the listed hold is gone: roundOver = false, want true")
 	}
 }
@@ -515,11 +515,97 @@ func TestRoundOverObservedRound(t *testing.T) {
 	d, c := roundScene()
 	d.Observed = true
 	cur := sampleAt(105e9, watch.Job{Hold: "1", Victim: true})
-	if !roundOver(d, cur, c) {
+	if ok, _ := roundOver(d, cur, c); !ok {
 		t.Error("enforce after an observed round: roundOver = false, want true")
 	}
 	c.Observe = true
-	if roundOver(d, cur, c) {
+	if ok, _ := roundOver(d, cur, c); ok {
 		t.Error("observe after an observed round: roundOver = true, want false")
+	}
+}
+
+// A red sample with no round says why: the post_kill window, a listed hold still running, or a
+// round that found nobody to stop. Mutations: the reason left empty; the two refusals swapped.
+func TestSampleSaysWhyNoRound(t *testing.T) {
+	c := watch.Defaults()
+	c.SampleLog = true
+	ticks := func(jobs ...watch.Job) (lines []map[string]any, reasons []string) {
+		dir := newDir(t)
+		sec := enter(t, open(t, dir))
+		m := &machine{jobs: jobs}
+		now := NowNS()
+		for range 30 { // a minute on the sample clock: well past post_kill_s
+			now += 2e9
+			if _, _, err := sec.Tick(now, m.read, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		lines = samplesLines(t, dir)
+		for _, l := range lines {
+			if v, ok := l["no_round"].(string); ok {
+				reasons = append(reasons, v)
+			}
+		}
+		return lines, reasons
+	}
+	_, reasons := ticks(stalled("1", 1), stalled("2", 2), stalled("3", 3))
+	if len(reasons) < 2 || reasons[0] != "post_kill" || reasons[len(reasons)-1] != "listed_alive" {
+		t.Errorf("reasons %v, want post_kill first and listed_alive last", reasons)
+	}
+	for _, r := range reasons {
+		if r != "post_kill" && r != "listed_alive" {
+			t.Errorf("reason %q with a victim running", r)
+		}
+	}
+	lines, reasons := ticks(stalled("1", 1)) // the oldest job is never stopped
+	if len(reasons) == 0 || reasons[0] != "nobody_stoppable" {
+		t.Errorf("reasons %v, want nobody_stoppable", reasons)
+	}
+	for i, l := range lines {
+		if _, stop := l["stop"]; stop && l["no_round"] != nil {
+			t.Errorf("line %d names a stop and no round: %v", i, l)
+		}
+	}
+}
+
+// A round's sample line names the candidates, the holds that round spared and the shortage; a
+// record of an older round is not this round's. Mutation: listing every d.Kept entry.
+func TestSampleKeptIsThisRounds(t *testing.T) {
+	dir := newDir(t)
+	sec := enter(t, open(t, dir))
+	c := watch.Defaults()
+	c.SampleLog = true
+	near := stalled("3", 3)
+	near.CPUNS, near.TypicalCPUS, near.TypicalS = 8e9, 10, 50
+	m := &machine{jobs: []watch.Job{stalled("1", 1), stalled("2", 2), near}}
+	now := NowNS()
+	var d watch.Detector
+	for d.LastRoundNS == 0 && m.calls < 20 {
+		now += 2e9
+		d, _, _ = sec.Tick(now, m.read, c)
+	}
+	m.jobs = []watch.Job{stalled("1", 1), near} // 2 is gone, 3 is stopped by the next round
+	round := d.LastRoundNS
+	for d.LastRoundNS == round && m.calls < 40 {
+		now += 2e9
+		d, _, _ = sec.Tick(now, m.read, c)
+	}
+	var rounds []map[string]any
+	for _, l := range samplesLines(t, dir) {
+		if _, ok := l["stop"]; ok {
+			rounds = append(rounds, l)
+		}
+	}
+	if len(rounds) != 2 {
+		t.Fatalf("%d round lines, want 2", len(rounds))
+	}
+	if k, _ := rounds[0]["kept"].([]any); len(k) != 1 || k[0] != "3" || rounds[0]["short_mib"] != 100.0 {
+		t.Errorf("first round: kept %v short_mib %v, want [3] and 100", rounds[0]["kept"], rounds[0]["short_mib"])
+	}
+	if c, _ := rounds[0]["candidates"].([]any); len(c) != 3 {
+		t.Errorf("candidates %v, want the three victims", rounds[0]["candidates"])
+	}
+	if k, ok := rounds[1]["kept"]; ok {
+		t.Errorf("second round: kept %v, but the record is the first round's", k)
 	}
 }

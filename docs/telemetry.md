@@ -35,6 +35,7 @@ One line per machine sample, written by whichever run takes the sample.
 | `reserve_mib` | the reserve admission used |
 | `jobs` | the running, freshly ticked holds: `hold`, `label`, `arrival_ns`, `need_mib`, `footprint_mib`, the time deltas `d_user_ns`, `d_sys_ns`, `d_page_wait_ns`, `share` (null when the job reported no time), `normal_share`, `learned`, `victim`, `cpu_ns`, `typical_cpu_s`, `typical_s`, `stall_ewma` |
 | `stop` | present on the sample that wrote a stop round: the holds it lists |
+| `candidates`, `short_mib`, `kept`, `no_round` | why a round stopped or kept whom, or why none was written; see `stopped` and `kept` |
 
 A sample whose reading failed reports `level` `unknown`, zero readings and `headroom_ok` false.
 
@@ -141,3 +142,23 @@ Written after the run-log line, when the command ran and was reaped.
 
 The command was never started: `reason` is `exec` when it could not be started, or the name of the
 signal that came between the admission and the start.
+
+### `stopped` and `kept`
+
+Thin markers: the numbers behind them are on the `samples.jsonl` line of the same round.
+`stopped` is written when the watchdog killed the command, or, in observe mode, when it said it
+would; `kept` once for the round that kept the command as nearly finished.
+
+| key | meaning |
+|---|---|
+| `round` | `red` or `floor`; a keep is always `red` |
+| `observe` | the round was written in observe mode, which kills nothing |
+| `level` | the detector's level when the run read the round |
+| `list_pos` | the hold's place in the round's list; absent on `kept`, which the round spared |
+| `excess` | the stall excess E, in points |
+
+A sample that wrote a stop round also has `candidates` (the running holds that were victims),
+`short_mib` (what the round had to free) and `kept` (the holds that round spared). A red or floor
+sample that wrote none has `no_round`: `post_kill` (the last round is inside `post_kill_s`),
+`listed_alive` (a hold it listed still runs as a victim) or `nobody_stoppable` (a round that had
+no one to list).
