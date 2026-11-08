@@ -8,6 +8,13 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- An optional local record, off by default: `[telemetry] enabled = true` writes to `telemetry/` in the
+  state directory why each run waited, how it ended, the machine's memory by part and by process and,
+  for container work, each container's memory, read from the local Docker socket. Nothing leaves the
+  machine and coreslot opens no network connection. Keys in `docs/telemetry.md`; up to about 1 GiB.
+
 ### Changed
 
 - A need above what the machine has less the reserve now says it `starts only when no other coreslot
@@ -15,6 +22,13 @@ All notable changes to this project are recorded here. The format follows
   headroom unreadable nothing gates it, and the notice is no longer printed.
 - A container request's waiting line no longer gives a queue position or holders while a hold is
   live, as it waits on neither.
+- Machine samples move from `log/watch.jsonl` to `telemetry/samples.jsonl`. A file left by an older
+  release stays where it is; no reader of the format needs either.
+
+### Deprecated
+
+- `[watch] sample_log`, in favour of `[telemetry] enabled`. It still works and writes the machine
+  samples alone.
 
 ## v0.5.2 (2026-11-06)
 

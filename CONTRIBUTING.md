@@ -18,10 +18,13 @@ of the repository is. No contributor agreement or sign-off line is needed.
 - **No new dependencies** beyond the standard library, `golang.org/x/sys` and
   `github.com/BurntSushi/toml` (`github.com/creack/pty` in tests only) without the maintainer's
   agreement. A dependency change regenerates [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
-- **No telemetry.** coreslot opens no network connection itself and records nothing outside the
-  user's state directory. Looking up the user's home directory goes through the system's name
-  services, which may contact a directory service such as LDAP ([SECURITY.md](SECURITY.md)). The
-  run log never records argv or the environment.
+- **Nothing leaves the machine.** coreslot sends nothing anywhere, opens no network connection
+  itself and records nothing outside the user's state directory. The optional local record is off by
+  default; while it is on, a run doing container work talks to the local Docker socket, a unix socket,
+  to read memory, by raw syscalls, so `net`, `net/http` and `crypto` stay out of the binary. Looking
+  up the user's home directory goes through the system's name services, which may contact a directory
+  service such as LDAP ([SECURITY.md](SECURITY.md)). The run log and the local record never hold argv
+  or the environment.
 - **The internal packages stay quiet.** They never print, never install signal handlers and never
   choose exit codes, and the engine never decides on its own to run unbudgeted
   (`internal/repocheck/library_purity_test.go` checks the first three); the CLI does all of it.

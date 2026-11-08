@@ -79,7 +79,9 @@ section), anything that requires write access to the user's state directory or c
 a command that uses more than its need. Reports about them are welcome as ordinary issues when coreslot could detect or report
 the situation better.
 
-coreslot sends no telemetry and opens no network connection itself. Looking up the user's home
+coreslot sends nothing anywhere and opens no network connection itself. Its optional local record
+(`[telemetry]`, off by default) stays in the state directory; while it is on, a run doing container
+work talks to the local Docker socket, a unix socket, to read memory. Looking up the user's home
 directory (`getpwuid`, or the `getent` fallback) goes through the system's name services (NSS on
 Linux, Open Directory on macOS), which may contact a directory service such as LDAP, as any
 program that looks up the user does.

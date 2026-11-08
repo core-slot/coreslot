@@ -55,6 +55,7 @@ Every shared file, field, environment variable and transition of format 2, and w
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
+| `telemetry/` (optional, not part of the format) | directory of the local record | [4.4](#44-layout), [23.6](#236-observe-mode-and-the-sample-log) |
 | `config.toml` (under the override only) | file | [5.3](#53-configuration-file) |
 | `needs.toml` (under the override only) | file | [5.4](#54-needs-file) |
 | ticket body | body | [7.3](#73-ticket) |
@@ -64,6 +65,7 @@ Every shared file, field, environment variable and transition of format 2, and w
 | `CORESLOT_GRANTED_MEM` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
+| `CORESLOT_TELEMETRY` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_STATE_DIR` | environment | [4.1](#41-location) |
 | enqueue | transition | [10.1](#101-enqueue), example [21.1](#211-enqueue) |
 | refresh | transition | [10.2](#102-refresh-and-stalled), example [21.2](#212-refresh) |
@@ -209,17 +211,25 @@ holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
 degraded         degraded-mode record (section 7.9)
 log/runs.jsonl   run log (section 7.10)
+telemetry/       the optional local record; absent is normal (below)
 config.toml      configuration (section 5.3); optional, present only under the override
 needs.toml       needs file (section 5.4); optional, present only under the override; never checked
 ```
 
-`log/` may also contain `runs.1.jsonl`, `watch.jsonl` and `watch.1.jsonl` (section 23.6). Each of
+`log/` may also contain `runs.1.jsonl` and, left by an older client, `watch.jsonl` and
+`watch.1.jsonl`. Each of
 `queue/`, `holds/`, `cancel/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
 (section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
 of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
 the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/` and `log/` are created only
 by a client that has read a `FORMAT` it understands (section 15.2).
+
+`telemetry/` is optional, and its absence is normal: it exists only once a client has recorded
+something under `[telemetry] enabled = true` or `sample_log = true` (section 5.3), and such a
+client creates it as it does `log/`. No admission reads it, it is not part of `FORMAT`, and a client
+that does not record neither creates nor checks it. A reader of the format needs nothing in it.
+[`docs/telemetry.md`](docs/telemetry.md) lists its files and their keys.
 
 Directory listings are bounded: a directory holds at most 65 536 entries. A reader MUST NOT read
 more than 65 537 entries of one directory, and a directory with more than 65 536 is a state error.
@@ -235,9 +245,10 @@ process still locks; only then does it remove the entries of `queue/`, `holds/` 
 and writes `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
 When `FORMAT` names format 2, or is missing (which the first client writes as 2, section 15.1),
-the reset is a repair and keeps `log/` too: the run log is what every label's learned need and
-normal stall share come from (sections 20 and 23). When `FORMAT` names another format or cannot be
-read, it removes the entries of `log/` as well, and the CLI says so: every label learns its need
+the reset is a repair and keeps `log/` and `telemetry/` too: the run log is what every label's
+learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
+format or cannot be read, it removes the entries of `log/` and `telemetry/` as well, and the CLI
+says so of the run log: every label learns its need
 again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
@@ -298,7 +309,7 @@ reserve = "1G"        # memory admission keeps free beyond every need (section 1
 
 [watch]
 mode = "enforce"      # or "observe": everything but the stop (section 23.6)
-sample_log = false    # true: log every machine sample (section 23.6)
+sample_log = false    # deprecated, use [telemetry]; true: log every machine sample (section 23.6)
 yellow_points = 20    # the thresholds of section 23.4
 red_points = 40
 red_samples = 10
@@ -316,7 +327,8 @@ enabled = false       # true: record the wait of every run and a sample of the m
 ```
 
 - `[memory]`: `reserve`, a size (section 5.2), 0 allowed.
-- `[watch]`: `mode`, `"enforce"` or `"observe"`; `sample_log`, a boolean; `floor`, a size above 0;
+- `[watch]`: `mode`, `"enforce"` or `"observe"`; `sample_log`, a boolean, deprecated in favour of
+  `[telemetry]`; `floor`, a size above 0;
   `yellow_points`, `red_points`, `red_samples` and `gate_pages_s`, numbers above 0; the waits
   `calm_s`, `post_kill_s` and `spacing_s`, numbers not below 0, where 0 waits not at all. A key that
   is absent takes the release's default. The defaults and
@@ -1025,6 +1037,10 @@ places them above. It sets this environment:
 | `CORESLOT_GRANTED_MEM` | the memory the run reserves, in MiB: its need, also for a run outside the budget |
 | `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor, which is always fd 3 |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
+| `CORESLOT_TELEMETRY` | `1`, for a run that is recording (section 5.3); absent otherwise, an inherited value included |
+
+`CORESLOT_TELEMETRY` is a mark, not a contract a command needs: it tells a pass-through nested in
+the command that it may record (section 18).
 
 Every descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section
 4.2). A run that starts its command again after a stop (section 24) builds the contract from the
@@ -1681,8 +1697,8 @@ the mode at the run's own later tick.
 ### 23.6 Observe mode and the sample log
 
 With `mode = "observe"` every step runs, the stop list included, except the kill: a run whose hold
-is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true` or
-`[telemetry] enabled = true` the ticker that takes a machine sample appends one JSON line to
+is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
+(deprecated) or `[telemetry] enabled = true` the ticker that takes a machine sample appends one JSON line to
 `$S/telemetry/samples.jsonl` with the readings, `E`, the level and the bucket, in either mode. The
 file informs and no admission reads it. The ticker rotates it and `events.jsonl` inside the section,
 each to one older generation at 256 MiB, and a reader skips lines it cannot parse.

@@ -1,12 +1,58 @@
 # Telemetry files
 
 With `[telemetry] enabled = true` coreslot keeps a local record of what the machine and each run
-did in `$S/telemetry/`. Nothing leaves the machine. `sample_log = true` alone writes
-`samples.jsonl` and nothing else.
+did in `$S/telemetry/`. It is off by default. coreslot sends nothing anywhere and opens no network
+connection; while the record is on, a run doing container work talks to the local Docker socket, a
+unix socket, to read memory ([`containers`](#containers)). `[watch] sample_log = true`, deprecated,
+writes `samples.jsonl` alone and nothing else.
 
-Each file is JSON lines. The tick that writes samples rotates `samples.jsonl` and `events.jsonl`,
-each to one older generation (`samples.1.jsonl`, `events.1.jsonl`), at 256 MiB. A write that fails
-costs its line. A reader skips a line it cannot parse.
+The directory is optional and its absence is normal: no admission reads it, and it is not part of
+`FORMAT` ([`PROTOCOL.md` section 4.4](../PROTOCOL.md#44-layout)).
+
+| file | what it holds |
+|---|---|
+| `samples.jsonl`, `samples.1.jsonl` | one line per machine sample |
+| `events.jsonl`, `events.1.jsonl` | one line per event of a run, and the machine-wide `memory` and `containers` lines |
+| `memory.stamp`, `containers.stamp` | when each machine-wide line was last claimed; no content that matters |
+
+Each log is JSON lines. The tick that writes samples rotates `samples.jsonl` and `events.jsonl`,
+each to one older generation at 256 MiB, so the directory may grow to about 1 GiB. A write that
+fails costs its line. A reader skips a line it cannot parse.
+
+The record holds labels (an auto-label copies up to two leading arguments of the command, as the run
+log does), process names and container image names. It holds no command line, environment or paths,
+and every reason in it is a closed code.
+
+## Clocks
+
+Every line has `time_ns`, the wall clock, which can step. A run's lines and the machine-wide ones
+also have `up_ns`, since boot and counting sleep, and `awake_ns`, the same without sleep; a sample
+has `t_ns` and `awake_ns` from the host reading. Between two lines, the sleep is the delta of `up_ns`
+less the delta of `awake_ns`, and a clock step is the delta of `time_ns` less the delta of `up_ns`.
+The boot clocks compare only within one boot.
+
+## Joining the files
+
+- A run's lines share `run`; `attempt` tells its restarts apart and `n` orders them.
+- `hold` on `admitted` and `ended` is a hold of the sample lines' `jobs` and `stop`.
+- `ended.record.time_ns` is the `time_ns` of the run's line in `log/runs.jsonl`.
+- `memory` and `containers` name no run, and a sample names only holds: join them by time, on
+  `up_ns` and `t_ns`.
+
+## What a reader may conclude
+
+- A budgeted line in the run log with no `enqueue` was not recorded.
+- An `enqueue` with no terminal line (`ended`, `refused`, `cancelled`, `interrupted`, `not_started`
+  or `timeout` without a run after it) was killed or lost.
+- `lost` is carried by the next line of the same process, and dies with it.
+- A gap in `memory` lines with no coreslot process alive is "nothing recorded", not "nothing happened".
+
+There is no daemon: only a live coreslot process records, so with none alive nothing does.
+
+## Switching it during a run
+
+A run's events follow the switch as it read it at its start, even if the switch changes while it
+runs. Samples follow whichever process ticks, so they can start or stop in the middle of a run.
 
 ## `samples.jsonl`
 
@@ -45,9 +91,7 @@ A sample whose reading failed reports `level` `unknown`, zero readings and `head
 
 ## `events.jsonl`
 
-One line per event of a run, written by that run. A run's events follow the switch as it read it
-at its start, even if the switch changes while it runs. Samples follow whichever process ticks.
-Every line has:
+One line per event of a run, written by that run. Every line has:
 
 | key | meaning |
 |---|---|

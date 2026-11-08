@@ -56,6 +56,10 @@ listed here; after it, an incompatible change to either needs a new major versio
 `coreslot version` prints the formats a binary implements, for example
 `coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 2.
 
+`telemetry/`, and the `log/watch.jsonl` an older client may have left, need no new format number:
+they are optional files that no reader of the format needs, and no admission reads them
+([`PROTOCOL.md` section 4.4](../PROTOCOL.md#44-layout)).
+
 A format number versions the metadata: the names, bodies and layout of the state directory other
 than `admit.lock`. A release that changes the metadata bumps the number it writes to `FORMAT`
 (`coreslot-protocol <n>`). One change is not a metadata change in this sense: a new optional key in
@@ -91,8 +95,8 @@ change in any release; parse `status --json` instead.
 | `stats` | `--label LABEL`, `--json` |
 | `report` | `--days N`, `--json` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
-| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `sample_log` and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`; `needs.toml` beside it: `[needs."<label>"]` with `mem` and `no_restart` |
-| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED` (given to the command, read by nested runs) |
+| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem` and `no_restart` |
+| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED`, `CORESLOT_TELEMETRY` (given to the command, read by nested runs) |
 | descriptors | the hold at fd 3 |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
 
@@ -113,7 +117,8 @@ While at `v0`:
 
 - A flag, command, configuration key or environment variable is first marked **Deprecated** in
   `CHANGELOG.md` (and, for the CLI, warns on stderr when used), and keeps working for at least one
-  further minor release before it is removed.
+  further minor release before it is removed. `[watch] sample_log` is deprecated in this way: it
+  is a configuration key, not the CLI, so it warns on no stderr.
 - The deprecation window does not apply to the on-disk format, because an older client is never
   cut off: a release that changes the metadata bumps the `FORMAT` number (above), is announced in
   `CHANGELOG.md` and `PROTOCOL.md`, and from then on older clients on the same machine run

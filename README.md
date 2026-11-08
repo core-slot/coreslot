@@ -321,12 +321,25 @@ reserve = "1G"        # memory kept free beyond every need
 
 [watch]
 mode = "enforce"      # "observe": everything but the kill
-sample_log = false    # true: log every machine sample to log/watch.jsonl
+sample_log = false    # deprecated, use [telemetry]; true: machine samples only
+
+[telemetry]
+enabled = false       # true: keep a local record of what each run waited for
 ```
 
 `[watch]` also takes the thresholds and waits
 ([`PROTOCOL.md` section 5.3](PROTOCOL.md#53-configuration-file)); [the calibration
 notes](calibration/README.md#what-the-defaults-rest-on) say which defaults the records support.
+
+`[telemetry] enabled = true` keeps a record, on this machine only, of what each run waited for and
+of where the machine's memory was, in `telemetry/` under the state directory. It is off by default.
+coreslot sends nothing anywhere and opens no network connection. The record holds labels (an
+auto-label copies up to two leading arguments of the command), the names of the largest processes
+and, for container work, container image names; it holds no command line, environment or paths.
+While it is on, a run doing container work talks to the local Docker socket, a unix socket, at most
+every 30 s, to read each container's memory. Each of its two logs is rotated at 256 MiB with one
+older generation, so the directory may grow to about 1 GiB. [The keys](docs/telemetry.md) say what
+each line means. `sample_log` is deprecated: alone, it writes the machine samples and nothing else.
 
 `needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
 space or an `@` is not a bare TOML key, so quote it:
@@ -369,4 +382,5 @@ whose work happens in a container or on another host looks small to it.
 - [Contributing](CONTRIBUTING.md), [security](SECURITY.md), [code of conduct](CODE_OF_CONDUCT.md)
 - [Third-party licenses](THIRD_PARTY_LICENSES.md)
 
-coreslot sends no telemetry. MIT licensed ([LICENSE](LICENSE)).
+coreslot sends nothing anywhere and opens no network connection; its optional local record is off
+by default ([Configuration](#configuration)). MIT licensed ([LICENSE](LICENSE)).
