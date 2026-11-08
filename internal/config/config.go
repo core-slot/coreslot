@@ -24,6 +24,9 @@ type Config struct {
 	ReserveMiB     int64        // [memory] reserve
 	WindowsWarning bool         // [platform] windows_warning, default true
 	Watch          watch.Config // [watch]
+	// TelemetryEnabled is [telemetry] enabled. It also turns Watch.SampleLog on, which then means
+	// "sample", not only the key of that name.
+	TelemetryEnabled bool
 }
 
 // Error reports a configuration that cannot be read or is invalid: a state error. Err is the
@@ -152,6 +155,12 @@ func parse(data string) (Config, string) {
 			return Config{}, "[watch] " + msg
 		}
 	}
+	// A telemetry that is no table, or an enabled that is no boolean, reads as off: the switch
+	// of an opt-in recorder must not make an admission fail.
+	if tbl, ok := raw["telemetry"].(map[string]any); ok {
+		c.TelemetryEnabled, _ = tbl["enabled"].(bool)
+	}
+	c.Watch.SampleLog = c.Watch.SampleLog || c.TelemetryEnabled
 	return c, ""
 }
 

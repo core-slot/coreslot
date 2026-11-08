@@ -310,6 +310,9 @@ spacing_s = 3
 
 [platform]
 windows_warning = false   # default true (section 16)
+
+[telemetry]
+enabled = false       # true: record the wait of every run and a sample of the machine
 ```
 
 - `[memory]`: `reserve`, a size (section 5.2), 0 allowed.
@@ -320,6 +323,10 @@ windows_warning = false   # default true (section 16)
   the values of the examples are not part of the format: a minor release may change them
   (introduction).
 - `[platform]`: `windows_warning`, a boolean.
+- `[telemetry]`: `enabled`, a boolean, default `false`. With `true` the machine samples of
+  `sample_log` are taken too, while `sample_log = true` alone takes samples and records nothing
+  else. A `telemetry` that is not a table, or an `enabled` that is not a boolean, reads as
+  disabled and is not an error.
 - `memory`, `watch` and `platform`, when present, MUST be tables; any other value of one of them is
   invalid. Other tables and keys are ignored.
 

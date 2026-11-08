@@ -217,3 +217,55 @@ future = "ignored"
 		}
 	}
 }
+
+// [telemetry] enabled switches the recorder and, with it, the machine samples. Anything that is
+// not a table, or an enabled that is not a boolean, reads as off and is no error. Mutation:
+// returning a message for a wrong type turns the last two bodies into errors.
+func TestTelemetryTable(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{"[telemetry]\nenabled = true\n", true},
+		{"", false},
+		{"[telemetry]\nenabled = false\n", false},
+		{"[telemetry]\n", false},
+		{"[telemetry]\nenabled = \"yes\"\n", false},
+		{"telemetry = 1\n", false},
+	} {
+		c, err := Load(writeConfig(t, tc.body))
+		if err != nil {
+			t.Errorf("Load(%q): %v; want no error", tc.body, err)
+			continue
+		}
+		if c.TelemetryEnabled != tc.want || c.Watch.SampleLog != tc.want {
+			t.Errorf("Load(%q): TelemetryEnabled %v, SampleLog %v; want both %v", tc.body, c.TelemetryEnabled, c.Watch.SampleLog, tc.want)
+		}
+	}
+}
+
+// sample_log asks for samples only and enabled asks for both. Mutations: sample_log setting
+// TelemetryEnabled too turns the first two rows red; enabled ignored by SampleLog turns the last
+// red.
+func TestSampleLogSamplesOnly(t *testing.T) {
+	for _, tc := range []struct {
+		body              string
+		enabled, sampling bool
+	}{
+		{"[watch]\nsample_log = true\n", false, true},
+		{"[watch]\nsample_log = true\n[telemetry]\nenabled = false\n", false, true},
+		{"[watch]\nsample_log = false\n[telemetry]\nenabled = true\n", true, true},
+		{"[watch]\nsample_log = true\n[telemetry]\nenabled = true\n", true, true},
+	} {
+		c, err := Load(writeConfig(t, tc.body))
+		if err != nil {
+			t.Fatalf("Load(%q): %v", tc.body, err)
+		}
+		if c.TelemetryEnabled != tc.enabled || c.Watch.SampleLog != tc.sampling {
+			t.Errorf("Load(%q): TelemetryEnabled %v, SampleLog %v; want %v, %v", tc.body, c.TelemetryEnabled, c.Watch.SampleLog, tc.enabled, tc.sampling)
+		}
+	}
+	if _, err := Load(writeConfig(t, "[watch]\nsample_log = 1\n[telemetry]\nenabled = true\n")); err == nil {
+		t.Error("a non-boolean sample_log loaded: want today's error")
+	}
+}
