@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -139,6 +141,7 @@ func newBed(t *testing.T, roomMiB int64) *bed {
 	r := &run{o: runOptions{need: 128, needSource: "flag", label: "go test", onTimeout: "fail", refusalCode: exitRefusal,
 		argv: []string{"true"}}, io: IO{Stderr: stderr}, loc: location{dir: dir, cfgPath: cfg}, start: time.Now(),
 		telemetry: true, memMiB: 32768}
+	trackRecorder(t, func() *telemetry.Recorder { return r.rec }) // made by the run's first enqueue
 	return &bed{dir: dir, e: e, r: r}
 }
 
@@ -209,12 +212,52 @@ func holdUntil(t *testing.T, dir string, needMiB int64) (release func()) {
 	return func() { f.Close() }
 }
 
+// recorders are the in-process runs' recorders that may have a memory or containers goroutine in
+// flight. Production never waits for those; a test does before it puts a seam back, so a late one
+// reads neither the next test's seam nor a seam being written.
+var recorders struct {
+	sync.Mutex
+	get []func() *telemetry.Recorder
+}
+
+// trackRecorder has the recorder get returns settled at the test's end and before any seam is restored.
+func trackRecorder(t *testing.T, get func() *telemetry.Recorder) {
+	t.Helper()
+	recorders.Lock()
+	recorders.get = append(recorders.get, get)
+	recorders.Unlock()
+	t.Cleanup(settleRecorders)
+}
+
+// settleRecorders waits for every tracked recorder's goroutines. Its memWG is unexported and has no
+// production Wait, so the test reaches it by reflection.
+func settleRecorders() {
+	recorders.Lock()
+	gets := recorders.get
+	recorders.get = nil
+	recorders.Unlock()
+	for _, get := range gets {
+		if rec := get(); rec != nil {
+			wg := reflect.ValueOf(rec).Elem().FieldByName("memWG")
+			(*sync.WaitGroup)(unsafe.Pointer(wg.UnsafeAddr())).Wait()
+		}
+	}
+}
+
+// trackedRecorder is telemetry.New for a test that drives a run in process.
+func trackedRecorder(t *testing.T, dir, runID, label string) *telemetry.Recorder {
+	t.Helper()
+	rec := telemetry.New(dir, runID, label)
+	trackRecorder(t, func() *telemetry.Recorder { return rec })
+	return rec
+}
+
 // replaceClocks makes the recorder read fn; the test's end restores it.
 func replaceClocks(t *testing.T, fn func() (int64, int64)) {
 	t.Helper()
 	saved := telemetry.Clocks
 	telemetry.Clocks = fn
-	t.Cleanup(func() { telemetry.Clocks = saved })
+	t.Cleanup(func() { settleRecorders(); telemetry.Clocks = saved })
 }
 
 // Each way a need is resolved names itself, and a run's enqueue says which. Mutation: a source
@@ -473,7 +516,7 @@ func TestReasonSecondsAddUp(t *testing.T) {
 func TestWaitEndChargesItsLastStretch(t *testing.T) {
 	clk := &fakeClock{}
 	dir := stateDir(t, "")
-	r := &run{rec: telemetry.New(dir, "1-1", "x"), queued: true, trace: tracedStepper{clk: clk, stepper: &scriptedStepper{clk: clk, steps: []scriptedStep{
+	r := &run{rec: trackedRecorder(t, dir, "1-1", "x"), queued: true, trace: tracedStepper{clk: clk, stepper: &scriptedStepper{clk: clk, steps: []scriptedStep{
 		{0, engine.ReasonRoomShort}, {2 * time.Second, engine.ReasonRoomShort}}}}}
 	for range 2 {
 		if _, err := r.trace.step(context.Background()); err != nil {
@@ -547,7 +590,7 @@ func TestTwentyHoldersLineFits(t *testing.T) {
 	for _, why := range []string{"behind_ticket", "section_busy", "room_short", "behind_head", "watch_level", "watch_spacing", "restart_stale", "restart_level", "restart_calm", "restart_margin"} {
 		secs[why] = 29.999
 	}
-	r := &run{o: runOptions{need: 1, label: label}, rec: telemetry.New(dir, "1762600000000000000-2147483647", label), trace: tracedStepper{secs: secs, maxGap: time.Hour}}
+	r := &run{o: runOptions{need: 1, label: label}, rec: trackedRecorder(t, dir, "1762600000000000000-2147483647", label), trace: tracedStepper{secs: secs, maxGap: time.Hour}}
 	r.why = func() (string, []engine.HolderInfo) { r.snap = rep; return "", rep.Holds }
 	r.waitingLine(engine.Waiting{Position: 9, Ahead: name, Evals: 1 << 30, Outcome: engine.Outcome{Reason: engine.ReasonRestartCalm,
 		NoPass: "watch_unreadable", W: 1 << 30, WKnown: true, CalmLeftS: 123456.789}}, time.Hour)
@@ -680,6 +723,7 @@ func TestOffCallsNothing(t *testing.T) {
 	telemetry.Connect = func(string) (int, string) { calls.Add(1); panic("the recorder connected") }
 	listTree = func(pid int) (int64, map[int]memsample.TreeTimes, bool) { listings.Add(1); return savedList(pid) }
 	t.Cleanup(func() {
+		settleRecorders()
 		store.Parts, telemetry.Sweep, telemetry.Connect, listTree = savedParts, savedSweep, savedConnect, savedList
 	})
 	b := newBed(t, 128)
@@ -825,7 +869,7 @@ func TestRefusedStrictAfterEnqueue(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer null.Close()
-			r := &run{o: runOptions{strict: true, refusalCode: exitRefusal}, io: IO{Stderr: null}, rec: telemetry.New(dir, "run-1", "x"), queued: true,
+			r := &run{o: runOptions{strict: true, refusalCode: exitRefusal}, io: IO{Stderr: null}, rec: trackedRecorder(t, dir, "run-1", "x"), queued: true,
 				waited: 3 * time.Second, trace: tracedStepper{reason: "room_short", secs: map[string]float64{"room_short": 2}}}
 			if code := r.failOpen(nil, c.err); code != exitRefusal {
 				t.Fatalf("exit %d", code)
@@ -928,7 +972,7 @@ func newEnded(t *testing.T, argv ...string) *ended {
 	r := &run{o: runOptions{need: 1, restart: "no", noRestart: true, label: "go test", onTimeout: "fail", refusalCode: exitRefusal, argv: argv},
 		io: IO{Stdin: null, Stdout: null, Stderr: null}, loc: location{dir: dir, cfgPath: filepath.Join(dir, "config.toml")},
 		start: time.Now(), telemetry: true}
-	r.rec = telemetry.New(dir, "1-1", "go test")
+	r.rec = trackedRecorder(t, dir, "1-1", "go test")
 	return &ended{dir: dir, st: st, r: r}
 }
 
@@ -1488,7 +1532,7 @@ func fakeSweep(t *testing.T) *atomic.Int64 {
 		calls.Add(1)
 		return []memsample.ProcMem{{Name: "Safari", FootprintMiB: 900}}, nil, true
 	}
-	t.Cleanup(func() { telemetry.Sweep = saved })
+	t.Cleanup(func() { settleRecorders(); telemetry.Sweep = saved })
 	return &calls
 }
 
@@ -1583,7 +1627,7 @@ func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
 	}()
 	saved := telemetry.Connect
 	telemetry.Connect = func(p string) (int, string) { dials.Add(1); return saved(p) }
-	t.Cleanup(func() { telemetry.Connect = saved })
+	t.Cleanup(func() { settleRecorders(); telemetry.Connect = saved })
 	t.Setenv("DOCKER_HOST", "unix://"+path)
 	return conns, dials
 }
@@ -1686,34 +1730,27 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 	}
 }
 
-// A process inside another run's command never connects, even --independent with container work
-// of its own: its socket would read as the outer command's. Mutations: the inherited test left out
-// of watchChild reddens both rows; either half of it left out of decide reddens its row.
+// A process whose own environment carries a parent's context never connects, even --independent
+// with container work of its own: its socket would read as the outer command's. Each row gives the
+// run its variable directly, so no outer run's tree holds the program. Mutations: the inherited test
+// left out of watchChild reddens both rows; either half of it left out of decide reddens its row.
 func TestNestedIndependentNeverConnects(t *testing.T) {
-	conns, _ := fakeEngine(t)
-	bin := t.TempDir()
-	docker := filepath.Join(bin, "docker")
+	docker := filepath.Join(t.TempDir(), "docker")
 	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	dir := recordedDir(t, 1024)
-	for _, c := range []struct {
-		name string
-		run  func() result
-	}{
-		{"inherited hold", func() result {
-			return outer(t, dir, "256M", `"$BIN" run --independent --label inner --mem 128M -- "$DOCKER"`, ticksEnv+"=1", "DOCKER="+docker)
-		}},
-		{"inherited unbudgeted", func() result {
-			return cli(t, append(baseEnv(dir), ticksEnv+"=1", engine.EnvUnbudgeted+"=parent"), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
-		}},
+	for _, c := range []struct{ name, mark string }{
+		{"inherited hold", engine.EnvHold},
+		{"inherited unbudgeted", engine.EnvUnbudgeted},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			before := len(labelled(events(t, dir), "inner"))
-			if r := c.run(); r.code != 0 {
+			conns, _ := fakeEngine(t)
+			dir := recordedDir(t, 1024)
+			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"=parent"), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
+			if r.code != 0 {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
-			if got := labelled(events(t, dir), "inner"); len(got) == before || got[len(got)-1]["e"] != "ended" {
+			if got := labelled(events(t, dir), "inner"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
 				t.Fatalf("the nested run did not record: %q", eventNames(got))
 			}
 			if conns.Load() != 0 || len(containerLines(t, dir)) != 0 {
