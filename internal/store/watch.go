@@ -15,6 +15,9 @@ import (
 // maxWatchBytes bounds watch.json, which grows with the live holds.
 const maxWatchBytes = 1 << 20
 
+// rotateTelemetryAt is RotateTelemetryAt; tests lower it.
+var rotateTelemetryAt int64 = RotateTelemetryAt
+
 // watchState is the body of watch.json.
 type watchState struct {
 	SampledNS int64          `json:"sampled_ns"`
@@ -66,9 +69,10 @@ func (sec *Section) Tick(now int64, read func() (watch.Sample, error), c watch.C
 		round, d.Kept = watch.StopList(cur.Jobs, lvl == watch.Floor, cur.ShortMiB, d.Kept, cur.Host.WallNS)
 		d.Stop, d.LastRoundNS, d.Observed, d.RoundFloor = round, cur.Host.WallNS, c.Observe, lvl == watch.Floor
 	}
-	if c.SampleLog { // a calibration aid: a failed rotation or write costs a line
-		if sec.rotateLogIfNeeded(WatchLog, WatchLogOld) == nil {
-			_ = sec.s.appendSample(cur, d, round)
+	if c.SampleLog { // a failed rotation or write costs a line
+		_ = sec.rotateLogIfNeeded(TelemetryDir, EventsFile, EventsOld, rotateTelemetryAt)
+		if sec.rotateLogIfNeeded(TelemetryDir, SamplesFile, SamplesOld, rotateTelemetryAt) == nil {
+			_ = sec.s.appendSample(now, cur, d, round)
 		}
 	}
 	if err := sec.SetWatch(d, cur, now); err != nil {
@@ -91,9 +95,9 @@ func roundOver(d watch.Detector, cur watch.Sample, c watch.Config) bool {
 	return !slices.ContainsFunc(cur.Jobs, func(j watch.Job) bool { return j.Victim && slices.Contains(d.Stop, j.Hold) })
 }
 
-// appendSample appends cur and the detector d that advanced on it to log/watch.jsonl, as the
-// calibration reads it; stop is the round written at this sample.
-func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) error {
+// appendSample appends cur and the detector d that advanced on it to telemetry/samples.jsonl
+// (docs/telemetry.md); now is the Tick's and stop is the round written at this sample.
+func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop []string) error {
 	type sampleJob struct {
 		watch.Job
 		Share *float64 `json:"share"` // null when the job reported no time
@@ -110,7 +114,8 @@ func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) 
 		}
 		jobs = append(jobs, sj)
 	}
-	l := map[string]any{"t_ns": h.WallNS, "awake_ns": h.AwakeNS, "level": d.Level.String(), "excess": d.Excess,
+	l := map[string]any{"v": 1, "time_ns": now, "live_holds": len(cur.Live), "headroom_mib": cur.HeadroomMiB,
+		"headroom_ok": cur.HeadroomOK, "reserve_mib": cur.ReserveMiB, "t_ns": h.WallNS, "awake_ns": h.AwakeNS, "level": d.Level.String(), "excess": d.Excess,
 		"bucket": d.Bucket, "gate": d.Gate, "decomp_s": d.Rates.DecompS, "swapins_s": d.Rates.SwapInsS,
 		"psi_some_us_s": psi, "swap_used_mib": h.SwapUsedMiB, "swap_free_mib": h.SwapFreeMiB,
 		"vm_free_mib": h.VMVolumeFreeMiB, "room_mib": cur.RoomMiB, "jobs": jobs}
@@ -121,5 +126,5 @@ func (s *Store) appendSample(cur watch.Sample, d watch.Detector, stop []string) 
 	if err != nil {
 		return err
 	}
-	return s.appendLine(WatchLog, append(line, '\n'))
+	return AppendFile(s.path(TelemetryDir), SamplesFile, append(line, '\n'))
 }

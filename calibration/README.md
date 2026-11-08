@@ -15,7 +15,7 @@ Needs macOS, Python 3 and Go. It reads nothing that needs privileges.
 |---|---|
 | `hog.py` | Grows hot memory in steps (`--step-mib` every `--hold-s`), rewrites a byte in a random page of all it holds from `--threads` worker processes (not threads, which would contend on the interpreter lock), and logs the summed touches per second every second; the workers are its children, so the measured tree is the hog and its workers, and they die with it. Stops itself when its speed stays under 30 % of its first step's for 5 s, at `--max-gib`, or after `--seconds`. |
 | `cpu_control.py` | The control: busy loops (default twice the number of cores) for `--seconds` and no memory pressure. The watchdog must stay calm here. |
-| `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `sample_log = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. Every pass is preceded by a 30 s warm-up of its workload, and a ramp is accompanied by an observer job (below). |
+| `run.sh` | One pass: builds `coreslot` from this checkout into a temporary directory, gives it a temporary state directory (`CORESLOT_STATE_DIR`) whose `config.toml` sets `[watch] mode = "observe"` and `[telemetry] enabled = true`, runs the hog or the control under it, stops the workload when swap used grows 6 GiB from the start, and writes the record. Every pass is preceded by a 30 s warm-up of its workload, and a ramp is accompanied by an observer job (below). |
 | `analyse.py` | Joins the watchdog's `watch.jsonl` with the workload's `work.jsonl`, puts each sample into a speed band, and prints the per-band excess, the samples where its replay of the levels at the chosen values differs from the level the watchdog logged, and a scoring table per candidate value. |
 | `cost.py` | The watchdog's own CPU cost: N concurrent `coreslot run --restart=yes -- sleep S`, each run's own CPU time over the window, as a share of one core ([below](#the-watchdogs-own-cost)). |
 | `testdata/` | A tiny record for the tests. |
@@ -52,7 +52,8 @@ relative) or after two hours. Every process a pass starts is stopped by the pid 
 end and on INT, TERM or HUP, and the busy loops leave on their own when their parent dies. If
 anything is left, `run.sh` prints the pids; stop them by pid.
 
-A record directory holds `watch.jsonl` (one JSON line per machine sample), `work.jsonl`, and
+A record directory holds `watch.jsonl` (one JSON line per machine sample, a copy of the state
+directory's `telemetry/samples.jsonl`), `work.jsonl`, and
 `meta.json` (machine model, OS version, core count, memory, worker count as `threads`, the warm-up's
 share, `after_s`, swap at the start, the `coreslot` build). Commit the records you take with the analysis you draw from them.
 

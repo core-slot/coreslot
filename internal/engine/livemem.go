@@ -114,7 +114,8 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Samp
 		if err != nil {
 			return watch.Sample{}, err
 		}
-		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime())}
+		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime()),
+			HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, HeadroomOK: m.HeadroomOK}
 		for _, h := range holds {
 			s.Live = append(s.Live, h.name)
 		}

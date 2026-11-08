@@ -120,7 +120,7 @@ run_cmd=("${coreslot_run[@]}" --label "calibration-$kind" --mem "$need" -- "$py"
 warm_cmd=("${coreslot_run[@]}" --label "calibration-$kind" --mem "$warm_mem" -- "$py" -I "$here/$work" "${warm_args[@]}")
 observer_cmd=("${coreslot_run[@]}" --label calibration-observer --mem 64M -- sleep $((max_s + after_s + 60)))
 
-echo "state dir: $tmp/state, config.toml: [watch] mode = \"observe\", sample_log = true"
+echo "state dir: $tmp/state, config.toml: [watch] mode = \"observe\", [telemetry] enabled = true"
 echo "build:     (cd $repo && $(printf "%q " "${build_cmd[@]}" | sed "s/ $//"))"
 echo "warm-up:   $(printf "%q " "${warm_cmd[@]}" | sed "s/ $//")"
 if [ "$kind" = ramp ]; then
@@ -128,7 +128,7 @@ if [ "$kind" = ramp ]; then
 fi
 echo "run:       $(printf "%q " "${run_cmd[@]}" | sed "s/ $//")"
 echo "guard:     stop the workload by the pid in $tmp/work.pid after $max_s s or when swap used grows by $swap_stop_mib MiB; also at exit and on INT, TERM, HUP"
-echo "record:    $out (watch.jsonl from $tmp/state/log/watch.jsonl, work.jsonl, meta.json)"
+echo "record:    $out (watch.jsonl from $tmp/state/telemetry/samples.jsonl, work.jsonl, meta.json)"
 [ "$dry" = 1 ] && exit 0
 
 cpid="" opid="" status="" reason="" warm_share=null
@@ -143,7 +143,7 @@ cleanup() {
 	kill_pid "$cpid" coreslot
 	kill_pid "$opid" coreslot
 	if [ -d "$out" ]; then
-		[ ! -f "$tmp/state/log/watch.jsonl" ] || cp "$tmp/state/log/watch.jsonl" "$out/watch.jsonl"
+		[ ! -f "$tmp/state/telemetry/samples.jsonl" ] || cp "$tmp/state/telemetry/samples.jsonl" "$out/watch.jsonl"
 		printf '{"kind":"%s","machine":"%s","os":"%s","ncpu":%s,"mem_bytes":%s,"threads":%s,"warmup_share":%s,"slow_s":%s,"slow_pct":%s,"after_s":%s,"swap_used_mib_at_start":%s,"coreslot":"%s","started":"%s","exit":"%s","stopped_by":"%s"}\n' \
 			"$kind" "$(sysctl -n hw.model 2>/dev/null || uname -m)" "$(sw_vers -productVersion 2>/dev/null || uname -sr)" \
 			"$(sysctl -n hw.ncpu 2>/dev/null || echo 0)" "$(sysctl -n hw.memsize 2>/dev/null || echo 0)" \
@@ -164,7 +164,7 @@ trap 'exit 129' HUP
 
 mkdir -p "$out" "$tmp/state" || exit 1
 chmod 700 "$tmp/state"
-printf '[watch]\nmode = "observe"\nsample_log = true\n' >"$tmp/state/config.toml"
+printf '[watch]\nmode = "observe"\n\n[telemetry]\nenabled = true\n' >"$tmp/state/config.toml"
 (cd "$repo" && "${build_cmd[@]}") || exit 1
 
 echo "warm-up: $warm_s s"
@@ -186,15 +186,15 @@ if [ "$warm_share" = null ]; then
 	exit 1
 fi
 echo "warm-up share: $warm_share"
-rm -f "$tmp/state/log/watch.jsonl" # the record starts with the scored pass
+rm -f "$tmp/state/telemetry/samples.jsonl" # the record starts with the scored pass
 if [ "$kind" = ramp ]; then
 	"${observer_cmd[@]}" &
 	opid=$!
 	for _ in $(seq 30); do
-		[ ! -f "$tmp/state/log/watch.jsonl" ] || break
+		[ ! -f "$tmp/state/telemetry/samples.jsonl" ] || break
 		sleep 0.5
 	done
-	[ -f "$tmp/state/log/watch.jsonl" ] || { echo "the observer took no sample" >&2; exit 1; }
+	[ -f "$tmp/state/telemetry/samples.jsonl" ] || { echo "the observer took no sample" >&2; exit 1; }
 fi
 
 "${run_cmd[@]}" &

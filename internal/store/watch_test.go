@@ -4,6 +4,7 @@ package store
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -220,32 +221,166 @@ func TestObserveRoundDoesNotBlockEnforce(t *testing.T) {
 	}
 }
 
-// The sample log rotates under the run log's rule: at 10 MiB the ticker renames it to watch.1.jsonl
-// before it appends. Mutation: appending without the size check grows watch.jsonl past 10 MiB.
-func TestSampleLogRotates(t *testing.T) {
+// samplesLines reads telemetry/samples.jsonl, one decoded map per line.
+func samplesLines(t *testing.T, dir string) []map[string]any {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(dir, TelemetryDir, SamplesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(l), &v); err != nil {
+			t.Fatalf("line %q: %v", l, err)
+		}
+		lines = append(lines, v)
+	}
+	return lines
+}
+
+// A sample line lives in telemetry/, carries what admission read and when, by the epoch clock, and
+// leaves log/ and the body of watch.json as they were. Mutations: drop a `json:"-"` on Sample and
+// watch.json gains a key; append to LogDir and log/ gains the file.
+func TestSampleLogPathAndFields(t *testing.T) {
+	dir := newDir(t)
+	sec := enter(t, open(t, dir))
+	c := watch.Defaults()
+	c.SampleLog = true
+	m := &machine{jobs: []watch.Job{stalled("1", 1), stalled("2", 2)}, live: []string{"3"}}
+	read := func() (watch.Sample, error) {
+		s, err := m.read()
+		s.HeadroomMiB, s.ReserveMiB, s.HeadroomOK = 5000, 1024, true
+		return s, err
+	}
+	now := NowNS()
+	if _, _, err := sec.Tick(now, read, c); err != nil {
+		t.Fatal(err)
+	}
+	lines := samplesLines(t, dir)
+	if len(lines) != 1 {
+		t.Fatalf("%d lines, want 1", len(lines))
+	}
+	want := map[string]any{"v": float64(1), "time_ns": float64(now), "live_holds": float64(3),
+		"headroom_mib": float64(5000), "headroom_ok": true, "reserve_mib": float64(1024), "t_ns": float64(int64(1e12) + 2e9)}
+	for k, v := range want {
+		if lines[0][k] != v {
+			t.Errorf("%s = %v, want %v", k, lines[0][k], v)
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, LogDir)); err == nil && len(entries) != 0 {
+		t.Errorf("log/ holds %v, want nothing", entries)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, WatchFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Sample map[string]any `json:"sample"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		t.Fatal(err)
+	}
+	keys := slices.Sorted(maps.Keys(state.Sample))
+	if !slices.Equal(keys, []string{"host", "jobs", "live", "room_mib", "short_mib"}) {
+		t.Errorf("watch.json's sample has keys %v", keys)
+	}
+}
+
+// headroom_ok says whether the number is a reading: a measured 0 and an unread one write the same
+// number. Mutations: "headroom_ok" always true, or inferred from a non-zero headroom.
+func TestHeadroomUnknownSaysSo(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ok   bool
+	}{{"unread", false}, {"measured zero", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newDir(t)
+			sec := enter(t, open(t, dir))
+			c := watch.Defaults()
+			c.SampleLog = true
+			m := &machine{}
+			read := func() (watch.Sample, error) {
+				s, err := m.read()
+				s.HeadroomMiB, s.HeadroomOK = 0, tc.ok
+				return s, err
+			}
+			if _, _, err := sec.Tick(NowNS(), read, c); err != nil {
+				t.Fatal(err)
+			}
+			l := samplesLines(t, dir)[0]
+			if l["headroom_ok"] != tc.ok || l["headroom_mib"] != float64(0) {
+				t.Errorf("headroom_ok %v, headroom_mib %v; want %v, 0", l["headroom_ok"], l["headroom_mib"], tc.ok)
+			}
+		})
+	}
+}
+
+// Each tick rotates both files at the bound, each to one older generation; one under it stays.
+// Mutations: rotate only samples.jsonl; compare with > and the file at the bound stays; a second
+// generation kept, or a bound other than 256 MiB.
+func TestTelemetryFilesRotateAtTheBound(t *testing.T) {
+	if RotateTelemetryAt != 256<<20 || rotateTelemetryAt != RotateTelemetryAt {
+		t.Fatalf("bound %d, in use %d; want 256 MiB", RotateTelemetryAt, rotateTelemetryAt)
+	}
+	const bound = 64
+	rotateTelemetryAt = bound
+	t.Cleanup(func() { rotateTelemetryAt = RotateTelemetryAt })
 	dir := newDir(t)
 	sec := enter(t, open(t, dir))
 	c := watch.Defaults()
 	c.SampleLog = true
 	m := &machine{}
-	if _, _, err := sec.Tick(NowNS(), m.read, c); err != nil {
-		t.Fatal(err)
+	now := NowNS()
+	read := func(name string) string {
+		t.Helper()
+		body, err := os.ReadFile(filepath.Join(dir, TelemetryDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
 	}
-	log := filepath.Join(dir, LogDir, WatchLog)
-	if err := os.Truncate(log, RotateRunLogAt); err != nil {
-		t.Fatal(err)
+	tick := func() {
+		t.Helper()
+		now += 21e8
+		if _, _, err := sec.Tick(now, m.read, c); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, _, err := sec.Tick(NowNS()+21e8, m.read, c); err != nil {
-		t.Fatal(err)
+	events := func(size int) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, TelemetryDir, EventsFile), []byte(strings.Repeat("e", size)), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	old, err := os.Stat(filepath.Join(dir, LogDir, "watch.1.jsonl"))
-	cur, err2 := os.Stat(log)
-	if err != nil || err2 != nil || old.Size() != RotateRunLogAt || cur.Size() >= RotateRunLogAt {
-		t.Errorf("after the rotation: watch.1.jsonl %v (%v), watch.jsonl %v (%v)", old, err, cur, err2)
+	tick()
+	first := read(SamplesFile) // a sample line is longer than the bound
+	events(bound - 1)
+	tick()
+	second := read(SamplesFile)
+	if read(SamplesOld) != first || second == first {
+		t.Errorf("after the rotation: old %q, current %q; want the first line moved", read(SamplesOld), second)
+	}
+	if got := read(EventsFile); len(got) != bound-1 {
+		t.Errorf("events.jsonl under the bound is %d bytes, want it untouched", len(got))
+	}
+	if exists(filepath.Join(dir, TelemetryDir, EventsOld)) {
+		t.Error("events.jsonl under the bound was rotated")
+	}
+	events(bound)
+	tick()
+	if got := read(EventsOld); len(got) != bound {
+		t.Errorf("events.1.jsonl is %d bytes, want the file at the bound", len(got))
+	}
+	if exists(filepath.Join(dir, TelemetryDir, EventsFile)) {
+		t.Error("events.jsonl stayed at the bound")
+	}
+	if read(SamplesOld) != second {
+		t.Errorf("samples.1.jsonl = %q, want only the newest older generation %q", read(SamplesOld), second)
 	}
 }
 
-// With sample_log on, each machine sample is one line of log/watch.jsonl carrying every key of
+// With sample_log on, each machine sample is one line of telemetry/samples.jsonl carrying every key of
 // the calibration's schema, and the sample that wrote a stop round names it; with it off nothing
 // is written. Mutation: logging at every Tick writes two lines for the first period.
 func TestSampleLog(t *testing.T) {
@@ -269,7 +404,7 @@ func TestSampleLog(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		body, err := os.ReadFile(filepath.Join(dir, LogDir, WatchLog))
+		body, err := os.ReadFile(filepath.Join(dir, TelemetryDir, SamplesFile))
 		if err != nil {
 			return nil, dir
 		}

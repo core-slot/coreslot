@@ -276,3 +276,18 @@ func TestStopRoundFreesTheShortageNotTheReservations(t *testing.T) {
 		}
 	}
 }
+
+// A sample carries the reading admission used, the headroom's validity included. Mutation: leave
+// HeadroomMiB, ReserveMiB or HeadroomOK out of sampler and the matching field stays zero.
+func TestSamplerCarriesTheReading(t *testing.T) {
+	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	for _, ok := range []bool{true, false} {
+		s, err := e.sampler(config.Config{ReserveMiB: 1024}, config.Machine{MemMiB: 65536, HeadroomMiB: 3000, HeadroomOK: ok})()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.HeadroomMiB != 3000 || s.ReserveMiB != 1024 || s.HeadroomOK != ok {
+			t.Errorf("sample %d/%d/%v; want 3000/1024/%v", s.HeadroomMiB, s.ReserveMiB, s.HeadroomOK, ok)
+		}
+	}
+}

@@ -188,17 +188,17 @@ func (s *Store) RunLogNeedsRotation() bool {
 // FORMAT that is not understood, malformed or unreadable a *FormatError; it rotates nothing
 // then. It must not be called while this process holds the section: entering again would fail.
 func (s *Store) RotateLog() error {
-	return s.inSideSection(func(sec *Section) error { return sec.rotateLogIfNeeded(RunLog, RunLogOld) })
+	return s.inSideSection(func(sec *Section) error { return sec.rotateLogIfNeeded(LogDir, RunLog, RunLogOld, RotateRunLogAt) })
 }
 
-// rotateLogIfNeeded rotates the log name of log/ inside the section: when it is still at or above
-// 10 MiB it renames it to old, replacing the previous generation.
-func (sec *Section) rotateLogIfNeeded(name, old string) error {
+// rotateLogIfNeeded rotates the file name of dir inside the section: when it is at or above bound
+// bytes it renames it to old, replacing the previous generation.
+func (sec *Section) rotateLogIfNeeded(dir, name, old string, bound int64) error {
 	if err := sec.live(); err != nil {
 		return err
 	}
-	p := sec.s.path(LogDir, name)
-	if err := CheckEntry(sec.s.path(LogDir), true); err != nil {
+	p := sec.s.path(dir, name)
+	if err := CheckEntry(sec.s.path(dir), true); err != nil {
 		return err
 	}
 	fi, err := os.Lstat(p)
@@ -211,11 +211,11 @@ func (sec *Section) rotateLogIfNeeded(name, old string) error {
 	if err := checkInfo(p, fi, false); err != nil {
 		return err
 	}
-	if fi.Size() < RotateRunLogAt {
+	if fi.Size() < bound {
 		return nil
 	}
-	if err := CheckEntry(sec.s.path(LogDir, old), false); err != nil {
+	if err := CheckEntry(sec.s.path(dir, old), false); err != nil {
 		return err
 	}
-	return os.Rename(p, sec.s.path(LogDir, old))
+	return os.Rename(p, sec.s.path(dir, old))
 }

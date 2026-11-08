@@ -112,7 +112,7 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	if e, ignored, err := s.List(QueueDir); len(e) != 0 || ignored != 0 || err != nil {
 		t.Errorf("List of an absent queue/ = %v, %d, %v", e, ignored, err)
 	}
-	if err := sec.rotateLogIfNeeded(RunLog, RunLogOld); err != nil {
+	if err := sec.rotateLogIfNeeded(LogDir, RunLog, RunLogOld, RotateRunLogAt); err != nil {
 		t.Errorf("rotateLogIfNeeded with no log/: %v", err)
 	}
 	if d, err := s.Degraded(); d != nil || err != nil {

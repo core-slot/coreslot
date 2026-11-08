@@ -1677,11 +1677,12 @@ the mode at the run's own later tick.
 ### 23.6 Observe mode and the sample log
 
 With `mode = "observe"` every step runs, the stop list included, except the kill: a run whose hold
-is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
-the ticker that takes a machine sample appends one JSON line to `$S/log/watch.jsonl` with the
-readings, `E`, the level and the bucket, in either mode. The file informs and nothing reads it but
-the calibration harness; a writer appends under the rules of the run log, rotating it inside the
-section to `watch.1.jsonl` at 10 MiB, and a reader skips lines it cannot parse.
+is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true` or
+`[telemetry] enabled = true` the ticker that takes a machine sample appends one JSON line to
+`$S/telemetry/samples.jsonl` with the readings, `E`, the level and the bucket, in either mode. The
+file informs and no admission reads it. The ticker rotates it and `events.jsonl` inside the section,
+each to one older generation at 256 MiB, and a reader skips lines it cannot parse.
+[`docs/telemetry.md`](docs/telemetry.md) lists the keys.
 
 ## 24. Restart of a stopped run
 

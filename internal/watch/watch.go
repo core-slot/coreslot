@@ -80,13 +80,17 @@ type Job struct {
 }
 
 // Sample is one machine sample: the host readings, the live jobs, the admission room in MiB and
-// the shortage, how far the headroom is under the reserve (0 when it is not).
+// the shortage, how far the headroom is under the reserve (0 when it is not). The headroom and the
+// reserve are for the sample line only: no reader of watch.json uses them.
 type Sample struct {
-	Host     memsample.HostReading `json:"host"`
-	Jobs     []Job                 `json:"jobs"`
-	Live     []string              `json:"live,omitempty"` // every live hold, running or not
-	RoomMiB  int64                 `json:"room_mib"`
-	ShortMiB int64                 `json:"short_mib"`
+	Host        memsample.HostReading `json:"host"`
+	Jobs        []Job                 `json:"jobs"`
+	Live        []string              `json:"live,omitempty"` // every live hold, running or not
+	RoomMiB     int64                 `json:"room_mib"`
+	ShortMiB    int64                 `json:"short_mib"`
+	HeadroomMiB int64                 `json:"-"`
+	ReserveMiB  int64                 `json:"-"`
+	HeadroomOK  bool                  `json:"-"`
 }
 
 // Level is the machine's memory level. Admission waits at Yellow and above; Unknown is no
