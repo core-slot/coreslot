@@ -70,8 +70,11 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if !p.container && st != nil {
 			p.container = listClient(sup.pid)
 		}
-		if g == nil && st != nil && ok && n%telemetryTicks == 0 { // a pass-through's memory is its parent's
-			r.rec.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
+		if st != nil && n%telemetryTicks == 0 { // a pass-through's memory is its parent's, and it has no log
+			if g == nil && ok {
+				r.rec.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
+			}
+			r.rec.MemoryAsync()
 		}
 		if g == nil || n%listingsPerTick != 0 {
 			continue

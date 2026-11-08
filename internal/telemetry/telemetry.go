@@ -33,6 +33,8 @@ type Recorder struct {
 	lost    int  // lines not written, or panics recovered, since the last line written
 	attempt int  // the run's attempt, from 1
 	stopped bool // nothing is written any more
+
+	memWG sync.WaitGroup // the memory line goroutines in flight; tests wait on it
 }
 
 // New returns the recorder of a run; nil when stateDir is not absolute. It creates nothing: the

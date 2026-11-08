@@ -161,6 +161,19 @@ pass-through killed with its parent's group by a stop round.
 `live` is written every 30 s by a run outside the budget (not by a pass-through, whose memory is
 its parent's), which no sample sees: `footprint_mib` is its tree's footprint at that listing.
 
+### `memory`
+
+A machine-wide line that names no run (no `run`, `attempt`, `n` or `label`), written on macOS at most
+every 30 s by whichever process is due: `memory.stamp` is touched through its descriptor, with no
+lock, so two processes may write one each in the same window. A waiting run writes it with its 30 s
+waiting line, and a run holding a reservation or running outside the budget every 30 s of its
+command; a pass-through never does. Nothing is written where processes cannot be swept.
+
+| key | meaning |
+|---|---|
+| `vm` | the largest footprint among the Docker VM's processes (names starting `com.docker.krun`, `com.docker.virtualization` or `com.apple.Virtualization`): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart; absent when none runs |
+| `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
+
 ### When nothing more is written
 
 A recorder is made only once FORMAT was read and understood: in the section of a successful

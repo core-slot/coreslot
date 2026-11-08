@@ -42,6 +42,7 @@ const (
 	SamplesOld   = "samples.1.jsonl"
 	EventsFile   = "events.jsonl"
 	EventsOld    = "events.1.jsonl"
+	MemoryStamp  = "memory.stamp"
 )
 
 // TelemetrySchema is the version in the "v" key of every line of a telemetry file.

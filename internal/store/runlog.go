@@ -149,6 +149,15 @@ func AppendFile(dir, name string, line []byte) error {
 	return err
 }
 
+// OpenStamp opens the stamp file name in dir, creating the directory and the file as AppendFile
+// does; the caller touches it through the descriptor.
+func OpenStamp(dir, name string) (*os.File, error) {
+	if err := ensureDir(dir); err != nil {
+		return nil, err
+	}
+	return OpenFile(filepath.Join(dir, name), os.O_RDWR|os.O_CREATE)
+}
+
 // writeOnce issues exactly one write(2) of b on f (repeated only when it was interrupted before
 // writing anything), so an O_APPEND line is never split across two writes. os.File.Write would
 // loop on a short write and append the rest separately.

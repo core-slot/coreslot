@@ -263,6 +263,7 @@ func (r *run) recordWaiting(w engine.Waiting) {
 		}
 	}
 	r.rec.Emit("waiting", f)
+	r.rec.MemoryAsync()
 }
 
 // recordAdmitted writes the attempt's admission and what the decision read.

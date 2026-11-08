@@ -60,6 +60,18 @@ func hasTelemetryDir(dir string) bool {
 // events decodes the state directory's events.jsonl.
 func events(t *testing.T, dir string) []map[string]any {
 	t.Helper()
+	var out []map[string]any
+	for _, m := range allLines(t, dir) {
+		if m["e"] != "memory" && m["e"] != "containers" { // the machine's lines are not part of a run's order
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// allLines is every line of events.jsonl, the machine's too.
+func allLines(t *testing.T, dir string) []map[string]any {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, store.TelemetryDir, store.EventsFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -639,13 +651,16 @@ func TestOffAddsNoEnv(t *testing.T) {
 
 // With telemetry off a whole run calls none of the recorder's readers and makes no directory.
 // A panic there would be recovered, so the seam counts. Mutation: a recorder made regardless of
-// the switch calls Clocks; a sample line built with the log off calls Parts.
+// the switch calls Clocks; a sample line built with the log off calls Parts; a call site of
+// MemoryAsync that skips the nil test calls Sweep.
 func TestOffCallsNothing(t *testing.T) {
 	var calls atomic.Int64
 	replaceClocks(t, func() (int64, int64) { calls.Add(1); panic("the recorder read the clocks") })
 	savedParts := store.Parts
 	store.Parts = func() (map[string]int64, int, bool) { calls.Add(1); panic("the sample read the parts") }
-	t.Cleanup(func() { store.Parts = savedParts })
+	savedSweep := telemetry.Sweep
+	telemetry.Sweep = func(int) ([]memsample.ProcMem, *memsample.ProcMem, bool) { calls.Add(1); panic("the recorder swept") }
+	t.Cleanup(func() { store.Parts, telemetry.Sweep = savedParts, savedSweep })
 	dir := stateDir(t, "")
 	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -1537,10 +1552,65 @@ func TestTimeoutRunForeignFormatRecordsNothing(t *testing.T) {
 	wantSilent(t, b, b.r.timeoutRun(b.e), 0)
 }
 
-// The memory of a pass-through is its parent's: no live lines. Mutation: live for any run with
-// no grant.
+// fakeSweep makes the process sweep a fixed one that counts its calls; the test's end restores it.
+func fakeSweep(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	var calls atomic.Int64
+	saved := telemetry.Sweep
+	telemetry.Sweep = func(int) ([]memsample.ProcMem, *memsample.ProcMem, bool) {
+		calls.Add(1)
+		return []memsample.ProcMem{{Name: "Safari", FootprintMiB: 900}}, nil, true
+	}
+	t.Cleanup(func() { telemetry.Sweep = saved })
+	return &calls
+}
+
+// memoryLines is the memory lines written so far.
+func memoryLines(t *testing.T, dir string) (out []map[string]any) {
+	for _, m := range allLines(t, dir) {
+		if m["e"] == "memory" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// A waiting run and a run outside the budget each write a memory line, which names no run, and
+// within one 30 s window only one. Mutations: the call left out of recordWaiting or of watchChild
+// turns its row red; the window not claimed writes one per tick.
+func TestMemoryLineFromWaitingAndRunning(t *testing.T) {
+	t.Run("waiting", func(t *testing.T) {
+		calls := fakeSweep(t)
+		b := newBed(t, 128)
+		holdUntil(t, b.dir, 128)
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		b.wait(t, ctx)
+		waitFor(t, 5*time.Second, "the memory line", func() bool { return len(memoryLines(t, b.dir)) == 1 })
+		if l := memoryLines(t, b.dir)[0]; l["run"] != nil || calls.Load() != 1 {
+			t.Errorf("line %v after %d sweeps", l, calls.Load())
+		}
+	})
+	t.Run("running outside the budget", func(t *testing.T) {
+		replaceTicks(t, 1)
+		calls := fakeSweep(t)
+		b := newEnded(t, "sleep", "2.5")
+		if code := b.r.runChild(b.child("", "")); code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		waitFor(t, 5*time.Second, "the memory line", func() bool { return len(memoryLines(t, b.dir)) >= 1 })
+		time.Sleep(200 * time.Millisecond)
+		if n := len(memoryLines(t, b.dir)); n != 1 || calls.Load() != 1 {
+			t.Errorf("%d memory lines and %d sweeps in one window, want 1 and 1", n, calls.Load())
+		}
+	})
+}
+
+// The memory of a pass-through is its parent's: no live lines, and no memory lines from it.
+// Mutations: live for any run with no grant; the memory call outside the log test.
 func TestNoLiveForPassThrough(t *testing.T) {
 	replaceTicks(t, 1)
+	calls := fakeSweep(t)
 	b := newEnded(t, "sleep", "1.5")
 	b.r.rec = nil
 	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
@@ -1548,6 +1618,10 @@ func TestNoLiveForPassThrough(t *testing.T) {
 	}
 	if got := eventNames(events(t, b.dir)); got != "outside ended" {
 		t.Errorf("events %q", got)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if calls.Load() != 0 || len(memoryLines(t, b.dir)) != 0 {
+		t.Errorf("a pass-through swept %d times and wrote %d memory lines", calls.Load(), len(memoryLines(t, b.dir)))
 	}
 }
 
