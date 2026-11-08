@@ -20,7 +20,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -229,8 +228,7 @@ func trackRecorder(t *testing.T, get func() *telemetry.Recorder) {
 	t.Cleanup(settleRecorders)
 }
 
-// settleRecorders waits for every tracked recorder's goroutines. Its memWG is unexported and has no
-// production Wait, so the test reaches it by reflection.
+// settleRecorders waits for every tracked recorder's goroutines; production has no caller of WaitAsync.
 func settleRecorders() {
 	recorders.Lock()
 	gets := recorders.get
@@ -238,8 +236,7 @@ func settleRecorders() {
 	recorders.Unlock()
 	for _, get := range gets {
 		if rec := get(); rec != nil {
-			wg := reflect.ValueOf(rec).Elem().FieldByName("memWG")
-			(*sync.WaitGroup)(unsafe.Pointer(wg.UnsafeAddr())).Wait()
+			rec.WaitAsync()
 		}
 	}
 }
@@ -680,6 +677,9 @@ func TestEventsLatchedAtStart(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitFor(t, 30*time.Second, "the ticket", func() bool { return len(entries(t, dir, "queue")) == 1 })
+			if c.want != "" { // a run that records must have written its waiting line before the switch is turned
+				waitFor(t, 30*time.Second, "the waiting line", func() bool { return strings.Contains(eventNames(allLines(t, dir)), "waiting") })
+			}
 			writeConfig(t, dir, c.then)
 			release()
 			_ = cmd.Wait()

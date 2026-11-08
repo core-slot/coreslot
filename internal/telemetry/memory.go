@@ -42,6 +42,10 @@ func (r *Recorder) MemoryAsync() {
 	}()
 }
 
+// WaitAsync waits for the goroutines MemoryAsync and ContainersAsync started. It exists for tests;
+// production never calls it.
+func (r *Recorder) WaitAsync() { r.memWG.Wait() }
+
 func topLines(top []memsample.ProcMem) []Fields {
 	out := make([]Fields, 0, len(top))
 	for _, p := range top {
