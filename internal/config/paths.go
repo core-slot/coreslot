@@ -183,6 +183,17 @@ func Locate() (dir, cfgPath string, err error) {
 	return dir, cfgPath, err
 }
 
+// LocateWithHome is Locate and the home directory it looked up, "" under the override, which looks
+// up none.
+func LocateWithHome() (dir, cfgPath, home string, err error) {
+	dir, _, cfgPath, err = locate(os.Getenv, func() (string, error) {
+		h, err := Home()
+		home = h
+		return h, err
+	})
+	return dir, cfgPath, home, err
+}
+
 // locate is the rule of PROTOCOL.md section 4.1 behind StateDirFrom and Locate: the state
 // directory, whether it is the override, and its configuration file. It calls home at most once,
 // since a lookup can start getent (Home) and the default state directory and configuration file

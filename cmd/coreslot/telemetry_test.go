@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -652,7 +654,8 @@ func TestOffAddsNoEnv(t *testing.T) {
 // With telemetry off a whole run calls none of the recorder's readers and makes no directory.
 // A panic there would be recovered, so the seam counts. Mutation: a recorder made regardless of
 // the switch calls Clocks; a sample line built with the log off calls Parts; a call site of
-// MemoryAsync that skips the nil test calls Sweep.
+// MemoryAsync that skips the nil test calls Sweep. The socket's off row, whose run ticks, is in
+// TestNoContainerRunNeverConnects.
 func TestOffCallsNothing(t *testing.T) {
 	var calls atomic.Int64
 	replaceClocks(t, func() (int64, int64) { calls.Add(1); panic("the recorder read the clocks") })
@@ -660,7 +663,9 @@ func TestOffCallsNothing(t *testing.T) {
 	store.Parts = func() (map[string]int64, int, bool) { calls.Add(1); panic("the sample read the parts") }
 	savedSweep := telemetry.Sweep
 	telemetry.Sweep = func(int) ([]memsample.ProcMem, *memsample.ProcMem, bool) { calls.Add(1); panic("the recorder swept") }
-	t.Cleanup(func() { store.Parts, telemetry.Sweep = savedParts, savedSweep })
+	savedConnect := telemetry.Connect
+	telemetry.Connect = func(string, time.Time) (int, string) { calls.Add(1); panic("the recorder connected") }
+	t.Cleanup(func() { store.Parts, telemetry.Sweep, telemetry.Connect = savedParts, savedSweep, savedConnect })
 	dir := stateDir(t, "")
 	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -1622,6 +1627,178 @@ func TestNoLiveForPassThrough(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if calls.Load() != 0 || len(memoryLines(t, b.dir)) != 0 {
 		t.Errorf("a pass-through swept %d times and wrote %d memory lines", calls.Load(), len(memoryLines(t, b.dir)))
+	}
+}
+
+// fakeEngine is a local Docker socket named by DOCKER_HOST with no containers, and the count of
+// connections it took; every connection through the seam is counted too, so one that a bug sends
+// elsewhere still shows.
+func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "cs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "docker.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	conns, dials = new(atomic.Int64), new(atomic.Int64)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns.Add(1)
+			io.ReadAtLeast(c, make([]byte, 16), 16)
+			io.WriteString(c, "HTTP/1.0 200 OK\r\n\r\n[]")
+			c.Close()
+		}
+	}()
+	saved := telemetry.Connect
+	telemetry.Connect = func(p string, d time.Time) (int, string) { dials.Add(1); return saved(p, d) }
+	t.Cleanup(func() { telemetry.Connect = saved })
+	t.Setenv("DOCKER_HOST", "unix://"+path)
+	return conns, dials
+}
+
+// containerLines is the containers lines written so far.
+func containerLines(t *testing.T, dir string) (out []map[string]any) {
+	for _, m := range allLines(t, dir) {
+		if m["e"] == "containers" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// A waiter never connects, not even a nested one whose own command is container work while another
+// hold is: only supervision does. Mutation: ContainersAsync called from recordWaiting.
+func TestWaiterNeverConnects(t *testing.T) {
+	conns, dials := fakeEngine(t)
+	fakeSweep(t)
+	b := newBed(t, 128)
+	holdUntil(t, b.dir, 128)
+	hold := filepath.Join(b.dir, "holds", entries(t, b.dir, "holds")[0])
+	body, err := os.ReadFile(hold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hold, bytes.Replace(body, []byte("{"), []byte(`{"container":true,`), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.r.parentHold, b.r.o.argv, b.r.o.pinned = filepath.Base(hold), []string{"docker", "build", "."}, true
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	b.wait(t, ctx)
+	waitFor(t, 5*time.Second, "the waiter's memory line", func() bool { return len(memoryLines(t, b.dir)) == 1 })
+	time.Sleep(100 * time.Millisecond)
+	if conns.Load() != 0 || dials.Load() != 0 || len(containerLines(t, b.dir)) != 0 {
+		t.Errorf("%d connections, %d dials, %d lines from a waiter", conns.Load(), dials.Load(), len(containerLines(t, b.dir)))
+	}
+}
+
+// Only a supervised run that is container work, with telemetry on, reads the socket: not one that
+// is not, not one with telemetry off, not a pass-through. Mutations: the call without the p.container
+// test reddens the first row; the call outside the log test reddens the pass-through; a read that
+// does not go through the recorder reddens the off row; leaving the call out reddens the last.
+func TestNoContainerRunNeverConnects(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		client, off, inner bool
+		want               int64
+	}{
+		{name: "no container work"},
+		{name: "container work, telemetry off", client: true, off: true},
+		{name: "container work in a pass-through", client: true, inner: true},
+		{name: "container work", client: true, want: 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			replaceTicks(t, 1)
+			fakeSweep(t)
+			conns, dials := fakeEngine(t)
+			saved := listClient
+			listClient = func(int) bool { return c.client }
+			t.Cleanup(func() { listClient = saved })
+			argv := []string{"sleep", "1.5"}
+			if c.inner { // listClient is not asked without a log: the command itself must be a client
+				docker := filepath.Join(t.TempDir(), "docker")
+				if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				argv = []string{docker}
+			}
+			b := newEnded(t, argv...)
+			if c.off {
+				b.r.rec = nil
+			}
+			var code int
+			if c.inner {
+				b.r.rec = nil
+				code = b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent")
+			} else {
+				code = b.r.runChild(b.child("", ""))
+			}
+			if code != 0 {
+				t.Fatalf("exit %d", code)
+			}
+			if c.want > 0 {
+				waitFor(t, 5*time.Second, "the containers line", func() bool { return len(containerLines(t, b.dir)) == 1 })
+				if l := containerLines(t, b.dir)[0]; l["run"] != nil || l["containers_total"] != 0.0 {
+					t.Errorf("line %v", l)
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+			if conns.Load() != c.want || dials.Load() != c.want {
+				t.Errorf("%d connections, %d dials, want %d", conns.Load(), dials.Load(), c.want)
+			}
+		})
+	}
+}
+
+// DOCKER_HOST with a unix socket is the only candidate; one that is not a unix socket is a code; with
+// neither, the home's two sockets come before the system's, and with no home located only the
+// system's is tried. Mutations: a unix host still searching the defaults; a tcp host falling through
+// to them; the home's sockets after the system's.
+func TestDockerSockets(t *testing.T) {
+	sys := "/var/run/docker.sock"
+	run, desktop := "/Users/ana/.docker/run/docker.sock", "/Users/ana/.docker/desktop/docker.sock"
+	for _, c := range []struct {
+		name, host, home string
+		want             []string
+	}{
+		{"unix host", "unix:///tmp/x/docker.sock", "/Users/ana", []string{"/tmp/x/docker.sock"}},
+		{"tcp host", "tcp://10.0.0.1:2375", "/Users/ana", []string{telemetry.TCPHost}},
+		{"ssh host", "ssh://ana@server", "/Users/ana", []string{telemetry.TCPHost}},
+		{"defaults", "", "/Users/ana", []string{run, desktop, sys}},
+		{"no home located", "", "", []string{sys}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := dockerSockets(c.host, c.home); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// The location carries the home it looked up, and under the state-directory override it looks up
+// none. Mutations: home left unset reddens the first check; a lookup under the override the second.
+func TestLocationKnowsTheHome(t *testing.T) {
+	t.Setenv(config.StateDirEnv, "")
+	want, err := config.Home()
+	if err != nil {
+		t.Skip("no home in the password database")
+	}
+	if got := locate().home; got != want {
+		t.Errorf("home %q, want %q", got, want)
+	}
+	t.Setenv(config.StateDirEnv, t.TempDir())
+	if got := locate().home; got != "" {
+		t.Errorf("home %q under the override, want none", got)
 	}
 }
 

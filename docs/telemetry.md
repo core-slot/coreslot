@@ -174,6 +174,24 @@ command; a pass-through never does. Nothing is written where processes cannot be
 | `vm` | the largest footprint among the Docker VM's processes (names starting `com.docker.krun`, `com.docker.virtualization` or `com.apple.Virtualization`): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart; absent when none runs |
 | `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
 
+### `containers`
+
+A machine-wide line that names no run, written at most every 30 s (`containers.stamp`, as for
+`memory`) from the supervision of a run whose own command is container work, and from nothing else:
+no waiter and no pass-through ever opens the socket. It reads the Docker socket: the unix socket
+`DOCKER_HOST` names, or else `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and
+`/var/run/docker.sock`, in that order (the system's alone when `CORESLOT_STATE_DIR` is set, which
+looks up no home). Two requests, read-only, with one 2 s deadline for all of it; the line is written
+at the deadline with what was read.
+
+| key | meaning |
+|---|---|
+| `containers` | up to 16 running containers: `id` (12 characters), `image` (up to 64 bytes), `usage_mib` as `docker stats` computes it, `limit_mib` |
+| `containers_total` | how many are running, read or not |
+| `containers_err` | absent when all was read, else a closed code: `no_socket`, `connect`, `deadline`, `http` (a status other than 200, or a response over 1 MiB), `parse`, `tcp_host` (`DOCKER_HOST` is not a unix socket; nothing is read) |
+
+A container cannot be tied to a run by these lines: join them by time.
+
 ### When nothing more is written
 
 A recorder is made only once FORMAT was read and understood: in the section of a successful

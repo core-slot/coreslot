@@ -8,18 +8,18 @@ import (
 	"github.com/core-slot/coreslot/internal/store"
 )
 
-// location is what config.Locate returned. A command locates once: each lookup of the home
-// directory may start getent.
+// location is what config.LocateWithHome returned. A command locates once: each lookup of the
+// home directory may start getent.
 type location struct {
-	dir, cfgPath string
-	err          error
+	dir, cfgPath, home string
+	err                error
 }
 
 // locate finds the state directory as the engine's callers do: CORESLOT_STATE_DIR (with its
 // configuration at <statedir>/config.toml) or the default of PROTOCOL.md section 4.1.
 func locate() location {
 	var loc location
-	loc.dir, loc.cfgPath, loc.err = config.Locate()
+	loc.dir, loc.cfgPath, loc.home, loc.err = config.LocateWithHome()
 	return loc
 }
 

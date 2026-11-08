@@ -12,8 +12,8 @@ import (
 // Sweep is the process sweep the memory line reads; a test replaces it.
 var Sweep = memsample.Sweep
 
-// memoryEvery is how long a memory line holds the machine's stamp.
-const memoryEvery = 30 * time.Second
+// lineEvery is how long a memory or containers line holds its stamp.
+const lineEvery = 30 * time.Second
 
 // topN is how many of the largest processes a memory line names.
 const topN = 5
@@ -23,7 +23,7 @@ const topN = 5
 // for the sweep. Two processes may both claim in one window and write two lines. The line names
 // no run and is written only where Sweep reads, which is macOS; it never reads the Docker socket.
 func (r *Recorder) MemoryAsync() {
-	if r == nil || r.Stopped() || !r.claimMemory() {
+	if r == nil || r.Stopped() || !r.claim(store.MemoryStamp) {
 		return
 	}
 	r.memWG.Add(1)
@@ -50,12 +50,12 @@ func topLines(top []memsample.ProcMem) []Fields {
 	return out
 }
 
-// claimMemory reports whether the stamp is due and touches it through its descriptor, with no
+// claim reports whether the named stamp is due and touches it through its descriptor, with no
 // lock: the race of two claimants is accepted. It is due when never claimed (empty), 30 s old or in
 // the future (the clock went back). A stamp it cannot open or touch is not claimed.
-func (r *Recorder) claimMemory() (won bool) {
+func (r *Recorder) claim(stamp string) (won bool) {
 	defer r.recoverLost()
-	f, err := store.OpenStamp(r.dir, store.MemoryStamp)
+	f, err := store.OpenStamp(r.dir, stamp)
 	if err != nil {
 		return false
 	}
@@ -65,7 +65,7 @@ func (r *Recorder) claimMemory() (won bool) {
 		return false
 	}
 	age := time.Since(fi.ModTime())
-	if fi.Size() > 0 && age >= 0 && age < memoryEvery {
+	if fi.Size() > 0 && age >= 0 && age < lineEvery {
 		return false
 	}
 	_, err = f.WriteAt([]byte{'\n'}, 0) // a write through the descriptor is the touch

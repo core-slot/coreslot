@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
@@ -30,6 +33,22 @@ var listTree = memsample.Tree
 // listClient scans the command's tree for a container client; tests replace it.
 var listClient = memsample.ContainerClient
 
+// dockerSockets is where a containers line looks for the engine: the socket DOCKER_HOST names, the
+// marker of a host that is not a unix socket, or the usual places. A location under the state
+// directory override looked up no home, so only the system's socket is tried.
+func dockerSockets(host, home string) []string {
+	if path, ok := strings.CutPrefix(host, "unix://"); ok {
+		return []string{path}
+	}
+	if host != "" {
+		return []string{telemetry.TCPHost}
+	}
+	if home == "" {
+		return []string{"/var/run/docker.sock"}
+	}
+	return []string{filepath.Join(home, ".docker/run/docker.sock"), filepath.Join(home, ".docker/desktop/docker.sock"), "/var/run/docker.sock"}
+}
+
 // watchChild lists the command's tree every second for its memory peak until ctx ends. Every
 // second listing, when the run holds g, it writes the tree's footprint, time deltas, CPU time so
 // far and smoothed stall share into the hold and takes its part in the shared watch tick; when a
@@ -45,6 +64,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	prev := map[int]memsample.TreeTimes{}
 	var round, keptRound, cpuNS int64
 	var stall float64
+	var sockets []string // of the containers line, looked up once
 	smoothed := false
 	p.container = r.o.containerCommand()
 	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
@@ -75,6 +95,12 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 				r.rec.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
 			}
 			r.rec.MemoryAsync()
+			if p.container && r.rec != nil {
+				if sockets == nil {
+					sockets = dockerSockets(os.Getenv("DOCKER_HOST"), r.loc.home)
+				}
+				r.rec.ContainersAsync(sockets)
+			}
 		}
 		if g == nil || n%listingsPerTick != 0 {
 			continue

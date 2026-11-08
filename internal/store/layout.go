@@ -37,12 +37,13 @@ const (
 
 // The telemetry directory and its files (an opt-in recorder; no admission reads them).
 const (
-	TelemetryDir = "telemetry"
-	SamplesFile  = "samples.jsonl"
-	SamplesOld   = "samples.1.jsonl"
-	EventsFile   = "events.jsonl"
-	EventsOld    = "events.1.jsonl"
-	MemoryStamp  = "memory.stamp"
+	TelemetryDir    = "telemetry"
+	SamplesFile     = "samples.jsonl"
+	SamplesOld      = "samples.1.jsonl"
+	EventsFile      = "events.jsonl"
+	EventsOld       = "events.1.jsonl"
+	MemoryStamp     = "memory.stamp"
+	ContainersStamp = "containers.stamp"
 )
 
 // TelemetrySchema is the version in the "v" key of every line of a telemetry file.
