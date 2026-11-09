@@ -18,6 +18,8 @@ All notable changes to this project are recorded here. The format follows
   live client gets none, nor does a command that keeps starting processes, a wait loop such as
   `until nc -z db 5432; do sleep 1; done` included, since a process that lives between two samples
   leaves no CPU time they see.
+- `coreslot doctor` says whether the local record is on. An `enabled` that is not the boolean `true`
+  reads as off, and until now nothing said so.
 
 ## v0.6.0 (2026-11-09)
 

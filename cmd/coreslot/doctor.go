@@ -274,6 +274,15 @@ func doctorReport(loc location, io IO) int {
 		if m := rep.Mem; m.Known {
 			line("mem: reserved %s, free %s", spec.FormatMiB(m.ReservedMiB), spec.FormatMiB(m.FreeMiB))
 		}
+		switch c, cerr := e.Config(); {
+		case cerr != nil:
+		case c.TelemetryEnabled:
+			line("local record: on, for runs started from now on")
+		case c.Watch.SampleLog:
+			line("local record: machine samples only (sample_log); `enabled = true` in [telemetry] records the rest")
+		default:
+			line("local record: off (`enabled = true` in [telemetry] turns it on; anything else is off)")
+		}
 	}
 
 	if err == nil {

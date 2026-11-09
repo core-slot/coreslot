@@ -766,10 +766,16 @@ func TestDoctorReports(t *testing.T) {
 		"filesystem: host-local",
 		"permissions: every entry of the layout is the user's",
 		"mem: reserved 0 MiB, free 512 MiB",
+		"local record: off",
 		"degraded: no",
 		"no problems found",
 	} {
 		if !strings.Contains(r.stdout, want) {
+			t.Errorf("doctor lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	for cfg, want := range map[string]string{telemetryOn: "local record: on", "[watch]\nsample_log = true\n": "local record: machine samples only"} {
+		if r := cli(t, baseEnv(stateDir(t, cfg)), "doctor"); !strings.Contains(r.stdout, want) { // mutation: two lines swapped
 			t.Errorf("doctor lacks %q:\n%s", want, r.stdout)
 		}
 	}
