@@ -19,9 +19,8 @@ const maxWatchBytes = 1 << 20
 // when the sample log is on.
 var Parts = memsample.Parts
 
-// rotateTelemetryAt is the size at which a telemetry file is rotated to its one older generation;
-// tests lower it.
-var rotateTelemetryAt int64 = 256 << 20
+// rotateTelemetryAt is the size at which a telemetry file is rotated to its one older generation.
+const rotateTelemetryAt int64 = 256 << 20
 
 // watchState is the body of watch.json.
 type watchState struct {

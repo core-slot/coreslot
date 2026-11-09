@@ -123,12 +123,7 @@ func (s *Store) AppendRun(r RunRecord) error {
 	if err != nil {
 		return err
 	}
-	return s.appendLine(RunLog, line)
-}
-
-// appendLine appends line to log/name with one write, recreating log/ when a reset removed it.
-func (s *Store) appendLine(name string, line []byte) error {
-	return AppendFile(s.path(LogDir), name, line)
+	return AppendFile(s.path(LogDir), RunLog, line) // recreates log/ when a reset removed it
 }
 
 // AppendFile makes dir with ensureDir (mode 0700, checked as section 4.2 requires) and appends

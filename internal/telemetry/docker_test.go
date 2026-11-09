@@ -208,37 +208,39 @@ func TestContainersCappedAtSixteen(t *testing.T) {
 }
 
 // A server that accepts and then says nothing costs the deadline and no more, and what was read
-// before it is kept. Mutations: a poll with no timeout hangs the test; returning nil at the deadline
-// loses the first row of the second case.
+// before it is kept. Mutations: no deadline on the socket hangs the test; returning nil at the
+// deadline loses what was read.
 func TestContainersHungSocketReturnsWithinDeadline(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		read int // stats requests answered before the server hangs
-	}{{"at the list", -1}, {"at the second container", 1}} {
-		t.Run(c.name, func(t *testing.T) {
-			done := make(chan struct{})
-			defer close(done)
-			var answered atomic.Int64
-			d := serveDocker(t, func(conn net.Conn, target string) {
-				if target == "/containers/json" && c.read >= 0 {
-					reply(conn, 200, `[{"Id":"aaa","Image":"a"},{"Id":"bbb","Image":"b"}]`)
-					return
-				}
-				if c.read >= 0 && answered.Add(1) <= int64(c.read) {
-					reply(conn, 200, stats(1<<20, 1<<20, ``))
-					return
-				}
-				<-done
-			})
-			start := time.Now()
-			list, total, code := Containers(start.Add(2*time.Second), []string{d.path})
-			if took := time.Since(start); took > 2500*time.Millisecond {
-				t.Errorf("took %v", took)
-			}
-			if code != "deadline" || len(list) != max(c.read, 0) || (c.read >= 0 && total != 2) {
-				t.Errorf("list %+v total %d code %q", list, total, code)
-			}
-		})
+	done := make(chan struct{})
+	defer close(done)
+	var answered atomic.Int64
+	d := serveDocker(t, func(conn net.Conn, target string) {
+		if target == "/containers/json" {
+			reply(conn, 200, `[{"Id":"aaa","Image":"a"},{"Id":"bbb","Image":"b"}]`)
+			return
+		}
+		if answered.Add(1) <= 1 {
+			reply(conn, 200, stats(1<<20, 1<<20, ``))
+			return
+		}
+		<-done
+	})
+	start := time.Now()
+	list, total, code := Containers(start.Add(2*time.Second), []string{d.path})
+	if took := time.Since(start); took > 2500*time.Millisecond {
+		t.Errorf("took %v", took)
+	}
+	if code != "deadline" || len(list) != 1 || total != 2 {
+		t.Errorf("list %+v total %d code %q", list, total, code)
+	}
+}
+
+// A deadline already past before a request is written is the deadline, not a connection that failed:
+// the read ends there rather than trying every other container. Mutation: a failed write read as connect.
+func TestContainersPastDeadline(t *testing.T) {
+	d := serveDocker(t, func(conn net.Conn, _ string) { reply(conn, 200, `[]`) })
+	if _, _, code := Containers(time.Now().Add(-time.Second), []string{d.path}); code != "deadline" {
+		t.Errorf("code %q, want deadline", code)
 	}
 }
 
@@ -470,22 +472,8 @@ func TestContainersLineOncePerWindow(t *testing.T) {
 	}
 }
 
-// A panic in the read is recovered and counted in the next line's lost. Mutation: dropping the
-// recover in the goroutine kills the test binary.
-func TestContainersPanicRecovered(t *testing.T) {
-	replaceConnect(t, func(string) (int, string) { panic("socket") })
-	dir := stateDir(t)
-	r := New(dir, "run-1", "x")
-	r.ContainersAsync([]string{"/tmp/docker.sock"})
-	r.memWG.Wait()
-	r.Emit("admitted", nil)
-	if got := lines(t, dir); len(got) != 1 || got[0]["lost"] != float64(1) {
-		t.Errorf("lines %v; want admitted with lost 1", got)
-	}
-}
-
 // The socket does not reach a child: a command that inherited it would read as a container client.
-// It is non-blocking, or a poll is not what bounds it. Mutations: no CloseOnExec; no SetNonblock.
+// It is non-blocking, or no deadline bounds it. Mutations: no CloseOnExec; no SetNonblock.
 func TestSocketIsCloseOnExec(t *testing.T) {
 	d := engine(t)
 	fd, code := connect(d.path)

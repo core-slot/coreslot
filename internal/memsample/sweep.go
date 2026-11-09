@@ -24,25 +24,12 @@ func isVM(name string) bool {
 	return slices.ContainsFunc(vmNames, func(p string) bool { return strings.HasPrefix(name, p) })
 }
 
-// pickVM returns the VM process with the largest footprint among procs, or nil: the small helper
-// of the VM runs beside it and must not be taken for it.
-func pickVM(procs []ProcMem) *ProcMem {
-	var vm *ProcMem
-	for i := range procs {
-		if isVM(procs[i].Name) && (vm == nil || procs[i].FootprintMiB > vm.FootprintMiB) {
-			vm = &procs[i]
-		}
-	}
-	if vm == nil {
-		return nil
-	}
-	c := *vm
-	return &c
-}
-
-// rank returns the n largest of procs by footprint and the VM among all of them.
+// rank returns the n largest of procs by footprint and the largest VM among all of them: the small
+// helper of the VM runs beside it and must not be taken for it.
 func rank(procs []ProcMem, n int) (top []ProcMem, vm *ProcMem) {
-	vm = pickVM(procs)
 	slices.SortStableFunc(procs, func(a, b ProcMem) int { return cmp.Compare(b.FootprintMiB, a.FootprintMiB) })
+	if i := slices.IndexFunc(procs, func(p ProcMem) bool { return isVM(p.Name) }); i >= 0 {
+		vm = &procs[i]
+	}
 	return procs[:min(max(n, 0), len(procs))], vm
 }

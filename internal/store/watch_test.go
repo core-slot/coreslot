@@ -320,26 +320,13 @@ func TestHeadroomUnknownSaysSo(t *testing.T) {
 // Mutations: rotate only samples.jsonl; compare with > and the file at the bound stays; a second
 // generation kept, or a bound other than 256 MiB.
 func TestTelemetryFilesRotateAtTheBound(t *testing.T) {
-	if rotateTelemetryAt != 256<<20 {
-		t.Fatalf("bound %d, want 256 MiB", rotateTelemetryAt)
-	}
-	const bound = 64
-	rotateTelemetryAt = bound
-	t.Cleanup(func() { rotateTelemetryAt = 256 << 20 })
+	const bound = 256 << 20
 	dir := newDir(t)
 	sec := enter(t, open(t, dir))
 	c := watch.Defaults()
 	c.SampleLog = true
 	m := &machine{}
 	now := NowNS()
-	read := func(name string) string {
-		t.Helper()
-		body, err := os.ReadFile(filepath.Join(dir, TelemetryDir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(body)
-	}
 	tick := func() {
 		t.Helper()
 		now += 21e8
@@ -347,36 +334,42 @@ func TestTelemetryFilesRotateAtTheBound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	events := func(size int) {
+	path := func(name string) string { return filepath.Join(dir, TelemetryDir, name) }
+	size := func(name string) int64 { // -1 for a file that is not there
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, TelemetryDir, EventsFile), []byte(strings.Repeat("e", size)), 0o600); err != nil {
+		fi, err := os.Stat(path(name))
+		if err != nil {
+			return -1
+		}
+		return fi.Size()
+	}
+	grow := func(name string, n int64) { // sparse: the bound costs no disk
+		t.Helper()
+		if err := os.WriteFile(path(name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(path(name), n); err != nil {
 			t.Fatal(err)
 		}
 	}
 	tick()
-	first := read(SamplesFile) // a sample line is longer than the bound
-	events(bound - 1)
+	grow(SamplesFile, bound)
+	grow(EventsFile, bound-1)
 	tick()
-	second := read(SamplesFile)
-	if read(SamplesOld) != first || second == first {
-		t.Errorf("after the rotation: old %q, current %q; want the first line moved", read(SamplesOld), second)
+	if size(SamplesOld) != bound {
+		t.Errorf("samples.1.jsonl is %d bytes, want the file at the bound", size(SamplesOld))
 	}
-	if got := read(EventsFile); len(got) != bound-1 {
-		t.Errorf("events.jsonl under the bound is %d bytes, want it untouched", len(got))
+	if size(EventsFile) != bound-1 || size(EventsOld) != -1 {
+		t.Errorf("events.jsonl under the bound: %d bytes, older generation %d; want it untouched", size(EventsFile), size(EventsOld))
 	}
-	if exists(filepath.Join(dir, TelemetryDir, EventsOld)) {
-		t.Error("events.jsonl under the bound was rotated")
-	}
-	events(bound)
+	grow(SamplesFile, bound+1)
+	grow(EventsFile, bound)
 	tick()
-	if got := read(EventsOld); len(got) != bound {
-		t.Errorf("events.1.jsonl is %d bytes, want the file at the bound", len(got))
+	if size(EventsOld) != bound || size(EventsFile) != -1 {
+		t.Errorf("events.jsonl at the bound: older generation %d, current %d; want it moved", size(EventsOld), size(EventsFile))
 	}
-	if exists(filepath.Join(dir, TelemetryDir, EventsFile)) {
-		t.Error("events.jsonl stayed at the bound")
-	}
-	if read(SamplesOld) != second {
-		t.Errorf("samples.1.jsonl = %q, want only the newest older generation %q", read(SamplesOld), second)
+	if size(SamplesOld) != bound+1 {
+		t.Errorf("samples.1.jsonl is %d bytes, want only the newest older generation", size(SamplesOld))
 	}
 }
 

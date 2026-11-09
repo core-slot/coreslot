@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
 	"syscall"
 	"time"
 
@@ -43,16 +45,9 @@ type Container struct {
 // Connect opens the unix socket at path; a test replaces it.
 var Connect = connect
 
-// ContainersAsync writes a containers line when none was written within lineEvery by any process,
-// in a goroutine, so the caller never waits for the socket. The line names no run.
+// ContainersAsync writes a containers line.
 func (r *Recorder) ContainersAsync(sockets []string) {
-	if r == nil || r.Stopped() || !r.claim(store.ContainersStamp) {
-		return
-	}
-	r.memWG.Add(1)
-	go func() {
-		defer r.memWG.Done()
-		defer r.recoverLost()
+	r.machineLine(store.ContainersStamp, "containers", func() Fields {
 		start := time.Now()
 		list, total, code := Containers(start.Add(containersBudget), sockets)
 		readMS := time.Since(start).Milliseconds()
@@ -64,8 +59,8 @@ func (r *Recorder) ContainersAsync(sockets []string) {
 		if code != "" {
 			f["containers_err"] = code
 		}
-		r.EmitMachine("containers", f)
-	}()
+		return f
+	})
 }
 
 // Containers reads up to containersMax running containers from the first of sockets that answers,
@@ -150,13 +145,23 @@ func get(sock, target string, deadline time.Time) ([]byte, string) {
 	if code != "" {
 		return nil, code
 	}
-	defer unix.Close(fd)
-	if code := send(fd, []byte("GET "+target+" HTTP/1.0\r\nHost: docker\r\n\r\n")); code != "" {
-		return nil, code
+	f := os.NewFile(uintptr(fd), "docker socket") // non-blocking, so the runtime's poller takes it and a deadline holds
+	defer f.Close()
+	if f.SetDeadline(deadline) != nil {
+		return nil, errConnect
 	}
-	resp, code := receive(fd, deadline)
-	if code != "" {
-		return nil, code
+	var resp []byte
+	_, err := f.WriteString("GET " + target + " HTTP/1.0\r\nHost: docker\r\n\r\n")
+	if err == nil {
+		resp, err = io.ReadAll(io.LimitReader(f, responseMax+1))
+	}
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return nil, errDeadline
+	case err != nil:
+		return nil, errConnect
+	case len(resp) > responseMax:
+		return nil, errHTTP
 	}
 	head, body, ok := bytes.Cut(resp, []byte("\r\n\r\n"))
 	if status := bytes.Fields(head); !ok || len(status) < 2 || string(status[1]) != "200" {
@@ -197,53 +202,4 @@ func dial(fd int, path string) string {
 		return errNoSocket
 	}
 	return errConnect
-}
-
-// send writes the request in one write: it is far smaller than a fresh connection's empty buffer.
-func send(fd int, b []byte) string {
-	if n, err := unix.Write(fd, b); err != nil || n != len(b) {
-		return errConnect
-	}
-	return ""
-}
-
-// receive reads to EOF, at most responseMax bytes.
-func receive(fd int, deadline time.Time) ([]byte, string) {
-	var resp []byte
-	buf := make([]byte, 32<<10)
-	for {
-		if !ready(fd, unix.POLLIN, deadline) {
-			return nil, errDeadline
-		}
-		n, err := unix.Read(fd, buf)
-		switch {
-		case errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR):
-		case err != nil:
-			return nil, errConnect
-		case n == 0:
-			return resp, ""
-		case len(resp)+n > responseMax:
-			return nil, errHTTP
-		default:
-			resp = append(resp, buf[:n]...)
-		}
-	}
-}
-
-// ready waits until fd is ready for events; false means the deadline passed.
-func ready(fd int, events int16, deadline time.Time) bool {
-	pfd := []unix.PollFd{{Fd: int32(fd), Events: events}}
-	for {
-		left := time.Until(deadline)
-		if left <= 0 {
-			return false
-		}
-		n, err := unix.Poll(pfd, int(left.Milliseconds())+1)
-		if n > 0 {
-			return true
-		}
-		if err != nil && !errors.Is(err, unix.EINTR) {
-			return false
-		}
-	}
 }

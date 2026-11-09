@@ -22,28 +22,38 @@ const lineEvery = Cadence - 5*time.Second
 // topN is how many of the largest processes a memory line names.
 const topN = 5
 
-// MemoryAsync writes a memory line when none was written within lineEvery by any process: it
-// claims memory.stamp, and the claimant sweeps and writes in a goroutine, so the caller never waits
-// for the sweep. Two processes may both claim in one window and write two lines. The line names
-// no run and is written only where Sweep reads, which is macOS; it never reads the Docker socket.
-func (r *Recorder) MemoryAsync() {
-	if r == nil || r.Stopped() || !r.claim(store.MemoryStamp) {
+// machineLine writes the event read returns, a line that names no run, when none was written
+// within lineEvery by any process: it claims stamp, and the claimant reads and writes in a
+// goroutine, so the caller never waits for the reading. Two processes may both claim in one window
+// and write two lines. A nil from read writes nothing.
+func (r *Recorder) machineLine(stamp, event string, read func() Fields) {
+	if r == nil || r.Stopped() || !r.claim(stamp) {
 		return
 	}
 	r.memWG.Add(1)
 	go func() {
 		defer r.memWG.Done()
 		defer r.recoverLost()
+		if f := read(); f != nil {
+			r.EmitMachine(event, f)
+		}
+	}()
+}
+
+// MemoryAsync writes a memory line, only where Sweep reads, which is macOS; it never reads the
+// Docker socket.
+func (r *Recorder) MemoryAsync() {
+	r.machineLine(store.MemoryStamp, "memory", func() Fields {
 		top, vm, ok := Sweep(topN)
 		if !ok {
-			return
+			return nil
 		}
 		f := Fields{"top": topLines(top)}
 		if vm != nil {
 			f["vm"] = Fields{"name": vm.Name, "footprint_mib": vm.FootprintMiB, "resident_mib": vm.ResidentMiB, "cpu_s": vm.CPUS, "start_ns": vm.StartNS}
 		}
-		r.EmitMachine("memory", f)
-	}()
+		return f
+	})
 }
 
 // WaitAsync waits for the goroutines MemoryAsync and ContainersAsync started. It exists for tests;

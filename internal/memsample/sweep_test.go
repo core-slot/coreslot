@@ -10,14 +10,14 @@ import (
 func TestVMPicksLargest(t *testing.T) {
 	procs := []ProcMem{{Name: "Safari", FootprintMiB: 9000}, {Name: "com.docker.krun", FootprintMiB: 40},
 		{Name: "com.docker.virtualization", FootprintMiB: 6000, StartNS: 7}, {Name: "com.docker.virtualization", FootprintMiB: 5}}
-	if vm := pickVM(procs); vm == nil || vm.FootprintMiB != 6000 || vm.StartNS != 7 {
-		t.Errorf("pickVM = %+v, want the 6000 MiB virtualization", vm)
+	if _, vm := rank(procs, 0); vm == nil || vm.FootprintMiB != 6000 || vm.StartNS != 7 {
+		t.Errorf("vm = %+v, want the 6000 MiB virtualization", vm)
 	}
-	if pickVM([]ProcMem{{Name: "Safari", FootprintMiB: 9000}}) != nil {
-		t.Error("pickVM found a VM among unrelated processes")
+	if _, vm := rank([]ProcMem{{Name: "Safari", FootprintMiB: 9000}}, 0); vm != nil {
+		t.Error("found a VM among unrelated processes")
 	}
-	if pickVM(nil) != nil {
-		t.Error("pickVM found a VM in nothing")
+	if _, vm := rank(nil, 0); vm != nil {
+		t.Error("found a VM in nothing")
 	}
 }
 
