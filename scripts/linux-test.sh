@@ -7,6 +7,9 @@
 # Usage: scripts/linux-test.sh [go test arguments]     e.g. scripts/linux-test.sh -race ./...
 #
 # CGO_ENABLED, when set by the caller, is passed through (release builds are cgo-free).
+#
+# --init gives the container a PID 1 that reaps orphans, as a host's init does: without it a nested
+# command whose parent was killed stays a zombie, and a test waiting for it to die never sees it.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -18,7 +21,7 @@ if [ -z "$version" ]; then
 fi
 
 # shellcheck disable=SC2086 # the optional -e pair splits on purpose
-exec docker run --rm -v "$PWD:/src:ro" -v coreslot-gomodcache:/gomodcache -w /src \
+exec docker run --init --rm -v "$PWD:/src:ro" -v coreslot-gomodcache:/gomodcache -w /src \
 	-e GOFLAGS=-buildvcs=false \
 	${CGO_ENABLED:+-e CGO_ENABLED=$CGO_ENABLED} "golang:$version" sh -c '
 	set -e
