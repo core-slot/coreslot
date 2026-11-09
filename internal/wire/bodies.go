@@ -48,7 +48,7 @@ type Hold struct {
 	TypicalCPUS                  float64 // optional: the label's typical user and system seconds, 0 unknown
 	StallEWMA                    float64 // optional: the run's smoothed stall share, 0..1
 	Container                    bool    // optional: container work, so never a stop round's victim
-	IdleS                        int64   // optional: how long the tree has done next to nothing, in s
+	NoCPUS                       int64   // optional: how long the tree has done next to nothing, in s
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -87,7 +87,7 @@ type holdJSON struct {
 	TypicalCPUS  float64 `json:"typical_cpu_s,omitempty"`
 	StallEWMA    float64 `json:"stall_ewma,omitempty"`
 	Container    bool    `json:"container,omitempty"`
-	IdleS        int64   `json:"idle_s,omitempty"`
+	NoCPUS       int64   `json:"no_cpu_s,omitempty"`
 }
 
 type cancelJSON struct {
@@ -173,7 +173,7 @@ func (h Hold) validate() error {
 		return malformed("%v", err)
 	}
 	if h.PID < 0 || h.Stops < 0 ||
-		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS, h.CPUNS, h.IdleS) < 0 {
+		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS, h.CPUNS, h.NoCPUS) < 0 {
 		return malformed("pid, stops and every time are at least 0")
 	}
 	if h.NeedMiB < 0 || h.NeedMiB > spec.MaxNeedMiB || h.FootprintMiB < 0 || h.FootprintMiB > spec.MaxNeedMiB {
@@ -252,7 +252,7 @@ func DecodeHold(body []byte) (Hold, error) {
 	if h.CPUNS, err = optional(o, "cpu_ns", o.int64); err != nil {
 		return Hold{}, err
 	}
-	if h.IdleS, err = optional(o, "idle_s", o.int64); err != nil {
+	if h.NoCPUS, err = optional(o, "no_cpu_s", o.int64); err != nil {
 		return Hold{}, err
 	}
 	if h.Container, err = optional(o, "container", o.boolean); err != nil {

@@ -183,6 +183,15 @@ func holderAlive(pid int) bool {
 	return err == nil || errors.Is(err, unix.EPERM)
 }
 
+// holdNoCPUS is the hold's no-CPU mark, 0 once its command or its run has ended: the body then keeps
+// its last value, which says nothing of now.
+func holdNoCPUS(h engine.HolderInfo) int64 {
+	if h.OwnerExited || h.ChildExited {
+		return 0
+	}
+	return h.NoCPUS
+}
+
 func sectionHeldFor(s engine.SectionInfo, nowNS int64) time.Duration {
 	if !s.Held || s.EnteredNS == 0 {
 		return 0
@@ -277,8 +286,8 @@ func (v statusView) human() string {
 		if h.ArrivalNS > 0 {
 			line += "  arrived " + duration(time.Duration(max(v.nowNS-h.ArrivalNS, 0))) + " ago"
 		}
-		if h.IdleS > 0 {
-			line += "  idle " + duration(time.Duration(h.IdleS)*time.Second)
+		if s := holdNoCPUS(h); s > 0 {
+			line += "  no CPU for " + strings.TrimSuffix(duration(time.Duration(s)*time.Second), "00s") // whole windows
 		}
 		if h.Stops > 0 {
 			line += fmt.Sprintf("  stops %d", h.Stops)
@@ -457,7 +466,7 @@ type jsonHold struct {
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
 	Container    bool    `json:"container,omitempty"`
-	IdleS        int64   `json:"idle_s,omitempty"` // absent until its tree has done next to nothing for 30 min
+	NoCPUS       int64   `json:"no_cpu_s,omitempty"` // absent until its tree has done next to nothing for 30 min
 }
 
 type jsonTicket struct {
@@ -507,7 +516,7 @@ func (v statusView) document() jsonStatus {
 		d.Holds = append(d.Holds, jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
-			Container: h.Container, IdleS: h.IdleS})
+			Container: h.Container, NoCPUS: holdNoCPUS(h)})
 	}
 	for _, t := range v.tickets {
 		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,

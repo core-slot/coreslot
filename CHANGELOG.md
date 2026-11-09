@@ -10,10 +10,11 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
-- `coreslot status` marks a running command whose process tree has used next to no CPU for 30 minutes
-  or more and holds no container client: `idle 2h10m00s` on its line, `idle_s` in `--json`. It only
-  informs. A command that waits without being stuck, a slow download say, is marked too, and no mark
-  does not say a command is working: a container hung behind a live client gets none.
+- `coreslot status` marks a running command whose process tree has for 30 minutes or more used next
+  to no CPU, started no process and held no container client: `no CPU for 2h10m` on its line, `no_cpu_s`
+  in `--json`. It only informs. A command that waits without being stuck, a slow download say, is
+  marked too, as is work outside its tree: containers whose client has closed, a build daemon. No
+  mark does not say a command is working: a container hung behind a live client gets none.
 
 ## v0.6.0 (2026-11-09)
 

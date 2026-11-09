@@ -361,7 +361,7 @@ func quiet(ns int64) memsample.TreeTimes { return memsample.TreeTimes{UserNS: ns
 // feed gives the meter n ticks of d with the client answer, and returns the last result.
 func feed(m *idleMeter, n int, d memsample.TreeTimes, client bool) (idleS int64) {
 	for range n {
-		idleS = m.add(d, func() bool { return client })
+		idleS = m.add(d, false, func() bool { return client })
 	}
 	return idleS
 }
@@ -404,6 +404,108 @@ func TestIdleMeter(t *testing.T) {
 	if got := feed(&m, window, quiet(1e7), false); got != 2400 {
 		t.Errorf("1.5 s of CPU in a window: %d; want 2400, still idle", got)
 	}
+	if got := feed(&m, window, quiet(1e7), false); got != 2700 {
+		t.Errorf("1.5 s more in the next window: %d; want 2700, each window counts alone", got)
+	}
+}
+
+// One active tick anywhere in a window keeps it from being idle, and the next window starts clean.
+// Mutations: ignore active → the window counts, red; do not clear it with the window → the next
+// stays busy, red.
+func TestIdleMeterActiveTick(t *testing.T) {
+	m := idleMeter{windows: 7}
+	m.add(quiet(0), true, func() bool { return false })
+	if got := feed(&m, 149, quiet(0), false); got != 0 || m.windows != 0 {
+		t.Errorf("a window with an active tick: %d, %d windows; want the mark gone", got, m.windows)
+	}
+	feed(&m, 150, quiet(0), false)
+	if m.windows != 1 {
+		t.Errorf("the window after: %d windows; want 1", m.windows)
+	}
+}
+
+// The client is asked once a window, at its end, and not at all when the window was busy.
+// Mutation: test the client before the tick count → asked at every tick, red.
+func TestIdleMeterAsksClientAtWindowEnd(t *testing.T) {
+	var m idleMeter
+	asked := 0
+	client := func() bool { asked++; return false }
+	for range 149 {
+		m.add(quiet(0), false, client)
+	}
+	if asked != 0 {
+		t.Errorf("asked %d times before the window's end; want 0", asked)
+	}
+	m.add(quiet(0), false, client)
+	if asked != 1 {
+		t.Errorf("asked %d times by the window's end; want 1", asked)
+	}
+}
+
+// watchTree runs r's watchChild for the given number of 1 s listings of what tree answers.
+func watchTree(t *testing.T, r *run, g *engine.Grant, st *store.Store, listings int,
+	tree func(n int) (map[int]memsample.TreeTimes, bool)) {
+	t.Helper()
+	savedTree, savedClient := listTree, listClient
+	t.Cleanup(func() { listTree, listClient = savedTree, savedClient })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := 0
+	listTree = func(int) (int64, map[int]memsample.TreeTimes, bool) {
+		n++
+		if n == listings {
+			cancel()
+		}
+		times, ok := tree(n)
+		return 1 << 10, times, ok
+	}
+	listClient = func(int) bool { return false }
+	r.watchChild(ctx, &supervisor{pid: 42, group: true}, g, st)
+}
+
+// A real tree goes quiet, is marked, works again and loses the mark. Its first sighting is a new
+// process, so the first window is not idle. Mutations: write NoCPUS only when above 0 → 4 at the
+// end, red; drop the time deltas from the meter → still 4 at the end, red.
+func TestIdleMarkClearsWhenTheTreeWorks(t *testing.T) {
+	shortIdle(t)
+	g, st := watchedHold(t)
+	var marked int64
+	watchTree(t, restartable("make", "test"), g, st, 8, func(n int) (map[int]memsample.TreeTimes, bool) {
+		if n == 7 {
+			marked = body(t, st, g).NoCPUS
+		}
+		if n > 6 {
+			return map[int]memsample.TreeTimes{7: {UserNS: 10e9}}, true
+		}
+		return map[int]memsample.TreeTimes{7: {}}, true
+	})
+	if h := body(t, st, g); marked != 4 || h.NoCPUS != 0 {
+		t.Errorf("NoCPUS %d while quiet and %d after working; want 4 and 0", marked, h.NoCPUS)
+	}
+}
+
+// What cannot be read, and a tree that starts processes, are not idle: a root-owned tree reads as
+// no time at all, and a process born and gone between two listings leaves none. Mutations: leave
+// !ok out of active → 4 in the first row, red; leave spawned out → 4 in the second, red.
+func TestIdleNeedsEvidence(t *testing.T) {
+	shortIdle(t)
+	for _, c := range []struct {
+		name string
+		tree func(n int) (map[int]memsample.TreeTimes, bool)
+	}{
+		{"unreadable", func(int) (map[int]memsample.TreeTimes, bool) { return nil, false }},
+		{"new processes", func(n int) (map[int]memsample.TreeTimes, bool) {
+			return map[int]memsample.TreeTimes{7: {}, 1000 + n: {}}, true
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g, st := watchedHold(t)
+			watchTree(t, restartable("make", "test"), g, st, 4, c.tree)
+			if h := body(t, st, g); h.NoCPUS != 0 {
+				t.Errorf("hold NoCPUS %d; want 0", h.NoCPUS)
+			}
+		})
+	}
 }
 
 // shortIdle makes the mark appear after two windows of one tick (2 s).
@@ -432,8 +534,8 @@ func TestRunWritesIdleMark(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			g, st := watchedHold(t)
 			watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, c.client, nil)
-			if h := body(t, st, g); h.IdleS != c.want || !h.Container || h.Victim {
-				t.Errorf("hold IdleS %d Container %v Victim %v; want %d, true, false", h.IdleS, h.Container, h.Victim, c.want)
+			if h := body(t, st, g); h.NoCPUS != c.want || !h.Container || h.Victim {
+				t.Errorf("hold NoCPUS %d Container %v Victim %v; want %d, true, false", h.NoCPUS, h.Container, h.Victim, c.want)
 			}
 		})
 	}
@@ -444,7 +546,7 @@ func TestIdleKeepsVictim(t *testing.T) {
 	shortIdle(t)
 	g, st := watchedHold(t)
 	watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, func(int) bool { return false }, nil)
-	if h := body(t, st, g); h.IdleS != 4 || !h.Victim {
-		t.Errorf("hold IdleS %d Victim %v; want 4, true", h.IdleS, h.Victim)
+	if h := body(t, st, g); h.NoCPUS != 4 || !h.Victim {
+		t.Errorf("hold NoCPUS %d Victim %v; want 4, true", h.NoCPUS, h.Victim)
 	}
 }

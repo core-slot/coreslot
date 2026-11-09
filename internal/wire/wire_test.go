@@ -739,25 +739,25 @@ func TestNameDisplay(t *testing.T) {
 // wrote it, a value round-trips and a negative one is no body. Mutations: drop the key's
 // omitempty → the plain body gains it, red; read it nowhere → 2100 does not come back, red; drop
 // the range check → -1 is accepted, red.
-func TestHoldIdleKey(t *testing.T) {
+func TestHoldNoCPUKey(t *testing.T) {
 	old := `{"label":"x","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":1,"stops":0,"footprint_mib":0,` +
 		`"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"normal_share":0,"sampled_ns":0,"victim":true,"learned":false,"child_exited":false}`
 	h, err := DecodeHold([]byte(old))
-	if err != nil || h.IdleS != 0 {
-		t.Fatalf("a hold without the key: %+v, %v; want IdleS 0", h, err)
+	if err != nil || h.NoCPUS != 0 {
+		t.Fatalf("a hold without the key: %+v, %v; want NoCPUS 0", h, err)
 	}
 	if b, err := Encode(h); err != nil || string(b) != old {
 		t.Errorf("a hold not idle encodes to %s, %v; want the same bytes as %s", b, err, old)
 	}
-	h.IdleS = 2100
+	h.NoCPUS = 2100
 	b, err := Encode(h)
-	if err != nil || !bytes.HasSuffix(b, []byte(`"child_exited":false,"idle_s":2100}`)) {
+	if err != nil || !bytes.HasSuffix(b, []byte(`"child_exited":false,"no_cpu_s":2100}`)) {
 		t.Fatalf("an idle hold encodes to %s, %v", b, err)
 	}
 	if back, err := DecodeHold(b); err != nil || back != h {
 		t.Errorf("an idle hold reads back as %+v, %v; want %+v", back, err, h)
 	}
 	if _, err := DecodeHold([]byte(strings.Replace(string(b), "2100", "-1", 1))); err == nil {
-		t.Error("idle_s -1 was accepted")
+		t.Error("no_cpu_s -1 was accepted")
 	}
 }

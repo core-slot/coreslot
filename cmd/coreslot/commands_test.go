@@ -1556,13 +1556,13 @@ func TestDoctorResetRefusalNamesLabels(t *testing.T) {
 	}
 }
 
-// An idle hold says so in both forms, and another says nothing. Mutation: drop the key from
+// A hold with no CPU says so in both forms, and another says nothing. Mutation: drop the key from
 // info() → no line and no key, red.
-func TestStatusShowsIdle(t *testing.T) {
+func TestStatusShowsNoCPU(t *testing.T) {
 	dir := budgetDir(t, 4096)
 	c := openLib(t, dir)
 	marked := hold(t, c, "a", 1)
-	if err := marked.UpdateHold(func(h *wire.Hold) { h.IdleS = 7800 }); err != nil {
+	if err := marked.UpdateHold(func(h *wire.Hold) { h.NoCPUS = 7800 }); err != nil {
 		t.Fatal(err)
 	}
 	hold(t, c, "b", 1)
@@ -1570,13 +1570,36 @@ func TestStatusShowsIdle(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
 	}
-	if strings.Count(r.stdout, "  idle ") != 1 || !strings.Contains(r.stdout, "  idle 2h10m00s") {
-		t.Errorf("status does not say idle 2h10m00s once:\n%s", r.stdout)
+	if strings.Count(r.stdout, "  no CPU for ") != 1 || !strings.Contains(r.stdout, "  no CPU for 2h10m\n") {
+		t.Errorf("status does not say no CPU for 2h10m once:\n%s", r.stdout)
 	}
 	for _, h := range statusDoc(t, dir, 0)["holds"].([]any) {
 		h := h.(map[string]any)
-		if v, ok := h["idle_s"]; (h["label"] == "a") != ok || ok && v != float64(7800) {
-			t.Errorf("hold %v: idle_s %v, %v; want 7800 on a alone", h["label"], v, ok)
+		if v, ok := h["no_cpu_s"]; (h["label"] == "a") != ok || ok && v != float64(7800) {
+			t.Errorf("hold %v: no_cpu_s %v, %v; want 7800 on a alone", h["label"], v, ok)
+		}
+	}
+}
+
+// A hold's body stops changing when its command exits or its run dies, so the last mark in it says
+// nothing of now. Mutations: leave OwnerExited or ChildExited out of the test → that row is marked,
+// red; apply it to the human form alone → the JSON is, red.
+func TestIdleOnlyOnARunningHold(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		h    engine.HolderInfo
+		want int64
+	}{
+		{"running", engine.HolderInfo{NoCPUS: 1800}, 1800},
+		{"command exited", engine.HolderInfo{NoCPUS: 1800, ChildExited: true}, 0},
+		{"owner exited", engine.HolderInfo{NoCPUS: 1800, OwnerExited: true}, 0},
+	} {
+		v := statusView{rep: engine.Report{Holds: []engine.HolderInfo{c.h}}, nowNS: 1}
+		if got := v.document().Holds[0].NoCPUS; got != c.want {
+			t.Errorf("%s: no_cpu_s %d; want %d", c.name, got, c.want)
+		}
+		if got := strings.Contains(v.human(), "  no CPU for "); got != (c.want > 0) {
+			t.Errorf("%s: the line says no CPU: %v; want %v", c.name, got, c.want > 0)
 		}
 	}
 }

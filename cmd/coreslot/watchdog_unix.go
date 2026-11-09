@@ -27,8 +27,8 @@ const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
 // telemetryTicks is how many of the tree's listings make one telemetry.Cadence.
 var telemetryTicks = int(telemetry.Cadence / memSampleEvery)
 
-// The idle mark (PROTOCOL.md section 7.4): idleWindowTicks ticks of 2 s make a window of 5 min, and
-// idleMarkWindows of them in a row the 30 min from which a hold says it is idle.
+// The no-CPU mark (no_cpu_s, PROTOCOL.md section 7.4): idleWindowTicks ticks of 2 s make a window
+// of 5 min, and idleMarkWindows of them in a row the 30 min from which a hold says so.
 var idleWindowTicks, idleMarkWindows = int(5 * time.Minute / time.Duration(memsample.PeriodNS)), int64(6)
 
 // idleMeter counts a tree's idle windows in a row. It counts ticks, not a clock's time, so that a
@@ -36,24 +36,26 @@ var idleWindowTicks, idleMarkWindows = int(5 * time.Minute / time.Duration(memsa
 type idleMeter struct {
 	ticks   int   // of the window under way
 	busyNS  int64 // the tree's time in that window
+	active  bool  // that window showed activity that its time may not
 	windows int64 // idle windows in a row
 }
 
-// add takes a tick's times and returns the seconds to write to the hold, 0 under the mark. A window
-// is idle when the tree spent under 1 % of a core in it and client finds no container client in
-// the tree at its end: a client's CPU says nothing of its containers' work. Page wait is work, as a
-// thrashing tree is not idle.
-func (m *idleMeter) add(d memsample.TreeTimes, client func() bool) int64 {
+// add takes a tick's times and whether the tick showed activity they may not, and returns the
+// seconds to write to the hold, 0 under the mark. A window is idle when the tree spent under 1 % of
+// a core in it, no tick was active and client finds no container client in the tree at its end: a
+// client's CPU says nothing of its containers' work. Page wait counts where the kernel reports it.
+func (m *idleMeter) add(d memsample.TreeTimes, active bool, client func() bool) int64 {
 	m.ticks++
 	m.busyNS += d.UserNS + d.SysNS + d.PageWaitNS
+	m.active = m.active || active
 	windowNS := int64(idleWindowTicks) * memsample.PeriodNS
 	if m.ticks == idleWindowTicks {
-		if m.busyNS < windowNS/100 && !client() {
+		if m.busyNS < windowNS/100 && !m.active && !client() {
 			m.windows++
 		} else {
 			m.windows = 0
 		}
-		m.ticks, m.busyNS = 0, 0
+		m.ticks, m.busyNS, m.active = 0, 0, false
 	}
 	if m.windows < idleMarkWindows {
 		return 0
@@ -136,6 +138,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if g == nil || n%listingsPerTick != 0 {
 			continue
 		}
+		active := !ok || spawned(prev, times) // a process too short to be listed leaves no time at all
 		var d memsample.TreeTimes
 		d, prev = treeDeltas(prev, times), times
 		// The CPU time so far is the sum of the tick deltas: a process that ended between two
@@ -144,10 +147,10 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if s, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
-		idleS := idle.add(d, func() bool { return listClient(sup.pid) })
+		idleS := idle.add(d, active, func() bool { return listClient(sup.pid) })
 		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
-			h.CPUNS, h.StallEWMA, h.IdleS = cpuNS, stall, idleS
+			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, idleS
 			h.SampledNS = store.NowNS()
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
@@ -290,6 +293,16 @@ func treeDeltas(prev, cur map[int]memsample.TreeTimes) memsample.TreeTimes {
 		d.PageWaitNS += cur.PageWaitNS - was.PageWaitNS
 	}
 	return d
+}
+
+// spawned reports whether cur lists a process prev did not.
+func spawned(prev, cur map[int]memsample.TreeTimes) bool {
+	for pid := range cur {
+		if _, ok := prev[pid]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // countClosed adds the tick's time d to the attempt's gate-closed time when det holds a sample the
