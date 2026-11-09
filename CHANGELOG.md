@@ -8,6 +8,13 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `coreslot status` marks a running command whose process tree has used next to no CPU for 30 minutes
+  or more and holds no container client: `idle 2h10m00s` on its line, `idle_s` in `--json`. It only
+  informs. A command that waits without being stuck, a slow download say, is marked too, and no mark
+  does not say a command is working: a container hung behind a live client gets none.
+
 ## v0.6.0 (2026-11-09)
 
 ### Added

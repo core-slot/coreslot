@@ -354,3 +354,97 @@ func TestNoHitLeavesVictim(t *testing.T) {
 		t.Errorf("hold %s, peak %+v; want a victim with no key, no mark", raw, p)
 	}
 }
+
+// quiet is a tick's times for ns of CPU.
+func quiet(ns int64) memsample.TreeTimes { return memsample.TreeTimes{UserNS: ns} }
+
+// feed gives the meter n ticks of d with the client answer, and returns the last result.
+func feed(m *idleMeter, n int, d memsample.TreeTimes, client bool) (idleS int64) {
+	for range n {
+		idleS = m.add(d, func() bool { return client })
+	}
+	return idleS
+}
+
+// The mark appears after six idle windows, counts in whole windows, and a busy window or a live
+// client takes it back. Page wait is work: a thrashing tree is not idle. Mutations: mark at 5
+// windows → 1500, red; leave the client out → the client row stays marked, red; count only user
+// time → the page-wait and system rows are marked, red; do not reset → the busy row stays, red.
+func TestIdleMeter(t *testing.T) {
+	const window = 150
+	var m idleMeter
+	if got := feed(&m, 5*window, quiet(0), false); got != 0 {
+		t.Errorf("after 5 idle windows: %d; want 0, under the mark", got)
+	}
+	if got := feed(&m, window-1, quiet(0), false); got != 0 {
+		t.Errorf("a tick short of the sixth window: %d; want 0", got)
+	}
+	if got := feed(&m, 1, quiet(0), false); got != 1800 {
+		t.Errorf("after 6 idle windows: %d; want 1800", got)
+	}
+	if got := feed(&m, window, quiet(0), false); got != 2100 {
+		t.Errorf("after 7 idle windows: %d; want 2100", got)
+	}
+	for _, c := range []struct {
+		name   string
+		d      memsample.TreeTimes
+		client bool
+	}{
+		{"user time", memsample.TreeTimes{UserNS: 3e9 / window}, false},
+		{"system time", memsample.TreeTimes{SysNS: 3e9 / window}, false},
+		{"page wait", memsample.TreeTimes{PageWaitNS: 3e9 / window}, false},
+		{"a live client", quiet(0), true},
+	} {
+		m = idleMeter{windows: 7}
+		if got := feed(&m, window, c.d, c.client); got != 0 || m.windows != 0 {
+			t.Errorf("%s: %d, %d windows; want the mark gone and the count reset", c.name, got, m.windows)
+		}
+	}
+	m = idleMeter{windows: 7}
+	if got := feed(&m, window, quiet(1e7), false); got != 2400 {
+		t.Errorf("1.5 s of CPU in a window: %d; want 2400, still idle", got)
+	}
+}
+
+// shortIdle makes the mark appear after two windows of one tick (2 s).
+func shortIdle(t *testing.T) {
+	t.Helper()
+	ticks, marks := idleWindowTicks, idleMarkWindows
+	idleWindowTicks, idleMarkWindows = 1, 2
+	t.Cleanup(func() { idleWindowTicks, idleMarkWindows = ticks, marks })
+}
+
+// The run writes the mark to its hold. A hold marked container work earlier still goes idle once
+// its client is gone, as an orchestrator between tasks does; a client alive at each window's end
+// keeps it off, and neither the mark nor its absence touches Victim. Mutations: leave the write out
+// of watchChild → 0 in the first row, red; skip the meter while p.container → 0 in the first row,
+// red; pass a client that always says no → the second row is marked, red.
+func TestRunWritesIdleMark(t *testing.T) {
+	shortIdle(t)
+	for _, c := range []struct {
+		name   string
+		client func(n int) bool
+		want   int64
+	}{
+		{"client gone", func(n int) bool { return n == 1 }, 4},
+		{"client alive", func(int) bool { return true }, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g, st := watchedHold(t)
+			watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, c.client, nil)
+			if h := body(t, st, g); h.IdleS != c.want || !h.Container || h.Victim {
+				t.Errorf("hold IdleS %d Container %v Victim %v; want %d, true, false", h.IdleS, h.Container, h.Victim, c.want)
+			}
+		})
+	}
+}
+
+// An idle hold stays a stop candidate exactly as before. Mutation: clear Victim while idle → false, red.
+func TestIdleKeepsVictim(t *testing.T) {
+	shortIdle(t)
+	g, st := watchedHold(t)
+	watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, func(int) bool { return false }, nil)
+	if h := body(t, st, g); h.IdleS != 4 || !h.Victim {
+		t.Errorf("hold IdleS %d Victim %v; want 4, true", h.IdleS, h.Victim)
+	}
+}

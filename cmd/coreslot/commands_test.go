@@ -1555,3 +1555,28 @@ func TestDoctorResetRefusalNamesLabels(t *testing.T) {
 		}
 	}
 }
+
+// An idle hold says so in both forms, and another says nothing. Mutation: drop the key from
+// info() → no line and no key, red.
+func TestStatusShowsIdle(t *testing.T) {
+	dir := budgetDir(t, 4096)
+	c := openLib(t, dir)
+	marked := hold(t, c, "a", 1)
+	if err := marked.UpdateHold(func(h *wire.Hold) { h.IdleS = 7800 }); err != nil {
+		t.Fatal(err)
+	}
+	hold(t, c, "b", 1)
+	r := cli(t, baseEnv(dir), "status")
+	if r.code != 0 {
+		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
+	}
+	if strings.Count(r.stdout, "  idle ") != 1 || !strings.Contains(r.stdout, "  idle 2h10m00s") {
+		t.Errorf("status does not say idle 2h10m00s once:\n%s", r.stdout)
+	}
+	for _, h := range statusDoc(t, dir, 0)["holds"].([]any) {
+		h := h.(map[string]any)
+		if v, ok := h["idle_s"]; (h["label"] == "a") != ok || ok && v != float64(7800) {
+			t.Errorf("hold %v: idle_s %v, %v; want 7800 on a alone", h["label"], v, ok)
+		}
+	}
+}

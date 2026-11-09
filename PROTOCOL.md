@@ -496,6 +496,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `typical_cpu_s` | number | optional; `≥ 0`; the label's typical CPU seconds: the median of `user_s + sys_s` (section 20) over its last 20 counted runs that report both, when at least 10 do, as the run read it when it started; `0` otherwise |
 | `stall_ewma` | number | optional; `0..1`; its share `S` (section 23.3) smoothed over its ticks with a time constant of 10 s: the first tick's `S`, then `S̃ ← S̃ + (1 − e^(−p / 10 s)) (S − S̃)` for a tick period `p` |
 | `container` | boolean | optional; `true` once the run is container work (section 23.5); absent means `false`, and a writer omits it then |
+| `idle_s` | integer | optional; `≥ 0`; how long its process tree has done next to nothing, in seconds of the machine's awake time: 300 for each whole 5-minute window in a row in which the tree's `d_user_ns`, `d_sys_ns` and `d_page_wait_ns` together came to under 1 % of the window and no container client (section 23.5) was in the tree at the window's end; a writer omits it below 1800. It informs `status` alone: a wait that is not stuck, such as a slow network read, looks the same, so nothing else reads it and it never makes a hold dead or a victim |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -1501,8 +1502,8 @@ start until it exits, in both modes of section 23.6. Each tick:
    spent waiting for pages (`ri_page_wait_time_mach` of `proc_pid_rusage`; `/proc/<pid>/stat`
    `utime` and `stime` on Linux). It rewrites its own hold's body in place (section 7.4):
    `footprint_mib` (the tree's footprint, as section 20 measures it), `d_user_ns`, `d_sys_ns` and
-   `d_page_wait_ns` (the tree's times since the run's previous tick), `cpu_ns` and `stall_ewma`
-   (section 7.4) and `sampled_ns`. It sets `child_exited` once, when the command has exited.
+   `d_page_wait_ns` (the tree's times since the run's previous tick), `cpu_ns`, `stall_ewma` and
+   `idle_s` (section 7.4) and `sampled_ns`. It sets `child_exited` once, when the command has exited.
    `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s` hold for the attempt: the run
    writes them once, when its command starts, before its first tick.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short

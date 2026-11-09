@@ -27,6 +27,40 @@ const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
 // telemetryTicks is how many of the tree's listings make one telemetry.Cadence.
 var telemetryTicks = int(telemetry.Cadence / memSampleEvery)
 
+// The idle mark (PROTOCOL.md section 7.4): idleWindowTicks ticks of 2 s make a window of 5 min, and
+// idleMarkWindows of them in a row the 30 min from which a hold says it is idle.
+var idleWindowTicks, idleMarkWindows = int(5 * time.Minute / time.Duration(memsample.PeriodNS)), int64(6)
+
+// idleMeter counts a tree's idle windows in a row. It counts ticks, not a clock's time, so that a
+// machine asleep adds nothing. It only informs: nothing but status reads what it gives.
+type idleMeter struct {
+	ticks   int   // of the window under way
+	busyNS  int64 // the tree's time in that window
+	windows int64 // idle windows in a row
+}
+
+// add takes a tick's times and returns the seconds to write to the hold, 0 under the mark. A window
+// is idle when the tree spent under 1 % of a core in it and client finds no container client in
+// the tree at its end: a client's CPU says nothing of its containers' work. Page wait is work, as a
+// thrashing tree is not idle.
+func (m *idleMeter) add(d memsample.TreeTimes, client func() bool) int64 {
+	m.ticks++
+	m.busyNS += d.UserNS + d.SysNS + d.PageWaitNS
+	windowNS := int64(idleWindowTicks) * memsample.PeriodNS
+	if m.ticks == idleWindowTicks {
+		if m.busyNS < windowNS/100 && !client() {
+			m.windows++
+		} else {
+			m.windows = 0
+		}
+		m.ticks, m.busyNS = 0, 0
+	}
+	if m.windows < idleMarkWindows {
+		return 0
+	}
+	return m.windows * windowNS / int64(time.Second)
+}
+
 // listTree is the listing of the command's tree; tests replace it.
 var listTree = memsample.Tree
 
@@ -64,6 +98,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	prev := map[int]memsample.TreeTimes{}
 	var round, keptRound, cpuNS int64
 	var stall float64
+	var idle idleMeter
 	smoothed := false
 	p.container = r.o.containerCommand()
 	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
@@ -109,9 +144,10 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if s, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
+		idleS := idle.add(d, func() bool { return listClient(sup.pid) })
 		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
-			h.CPUNS, h.StallEWMA = cpuNS, stall
+			h.CPUNS, h.StallEWMA, h.IdleS = cpuNS, stall, idleS
 			h.SampledNS = store.NowNS()
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
