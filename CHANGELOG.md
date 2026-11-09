@@ -27,8 +27,8 @@ All notable changes to this project are recorded here. The format follows
 - Machine samples move from `log/watch.jsonl` to `telemetry/samples.jsonl`. A file left by an older
   release stays where it is; no reader of the format needs either, but the harness under
   `evidence/air-v04` reads the old file. A run of an older release still alive takes the sample too
-  and writes it to the old file, so `samples.jsonl` can stay empty while one lives: upgrade with none
-  running.
+  and writes it to the old file or nowhere, so `samples.jsonl` can stay empty while one lives: upgrade
+  with none running.
 
 ### Deprecated
 

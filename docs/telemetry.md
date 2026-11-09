@@ -61,8 +61,8 @@ There is no daemon: only a live coreslot process records, so with none alive not
 
 A run's events follow the switch as it read it at its start, even if the switch changes while it
 runs. Samples follow whichever process ticks, so they can start or stop in the middle of a run. A
-run of a release before 0.6.0 takes the tick too and writes its sample to `log/watch.jsonl`: while
-one lives `samples.jsonl` can stay empty, so upgrade with none running.
+run of a release before 0.6.0 takes the tick too and writes its sample to `log/watch.jsonl`, or
+nowhere with `sample_log` off: while one lives `samples.jsonl` can stay empty, so upgrade with none running.
 
 ## `samples.jsonl`
 
@@ -147,7 +147,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | key | meaning |
 |---|---|
 | `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin` |
-| `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time up to the end of its first step: publishing the ticket, which waits for the admission section while that is held, and that step |
+| `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time from its start to the end of its first step: reading the configuration, publishing the ticket, which waits for the admission section while that is held, and that step |
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
 | `ahead` | the ticket examined ahead of it; absent for the head |
@@ -234,9 +234,11 @@ Nothing is written where processes cannot be swept.
 A machine-wide line that names no run, written at most about every 30 s (`containers.stamp`, as for
 `memory`, so two processes may each write one close together) from the supervision of a run whose own
 command is container work and which is not inside another coreslot run's command, and from nothing
-else: no waiter, no pass-through and no process that inherited a non-empty `CORESLOT_HOLD` or
-`CORESLOT_UNBUDGETED` ever opens the socket, so a nested `--independent` container run writes no
-`containers` line. Its connection would otherwise read as its parent command's container work.
+else: no waiter, no pass-through and no process inside another run's command (a non-empty
+`CORESLOT_UNBUDGETED`, or a `CORESLOT_HOLD` naming a hold of an ancestor, live or dead) ever opens
+the socket, so a nested `--independent` container run writes no `containers` line. Its connection
+would otherwise read as its parent command's container work. A stale `CORESLOT_HOLD` that names no
+ancestor, which `nested_miss` reports, does not stop it.
 
 It reads the Docker socket: the unix socket `DOCKER_HOST` names, or else
 `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and `/var/run/docker.sock`, in that
