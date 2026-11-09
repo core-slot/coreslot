@@ -51,8 +51,8 @@ The boot clocks compare only within one boot.
 - An `enqueue` with no terminal line (`ended`, `refused`, `cancelled`, `interrupted`, `not_started`
   or `timeout` without a run after it) was killed or lost.
 - `lost` is carried by the next line of the same process, and dies with it.
-- A run writes nothing more once it has seen a FORMAT it cannot read or a failed release, and a
-  fail-open run with no published hold writes nothing.
+- A run reads FORMAT before each line and writes nothing more once it has found one it cannot read,
+  or after a failed release, and a fail-open run with no published hold writes nothing.
 - A gap in `memory` lines with no coreslot process alive is "nothing recorded", not "nothing happened".
 
 There is no daemon: only a live coreslot process records, so with none alive nothing does.

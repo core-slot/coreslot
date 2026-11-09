@@ -407,6 +407,13 @@ func (s *Store) ReadFormat() (n int, present bool, err error) {
 	return n, true, nil
 }
 
+// MayWrite reports whether a client may write into dir: its FORMAT is there and names a format this
+// client implements. Unlike a report's FormatUnderstood, an absent FORMAT is no.
+func MayWrite(dir string) bool {
+	n, present, err := (&Store{dir: dir}).ReadFormat()
+	return err == nil && present && Understood(n)
+}
+
 func parseFormat(body []byte) (int, error) {
 	line := bytes.TrimSuffix(body, []byte("\n"))
 	digits, ok := bytes.CutPrefix(line, []byte(formatPrefix))

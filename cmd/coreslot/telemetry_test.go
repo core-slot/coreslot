@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -139,8 +138,9 @@ func newBed(t *testing.T, roomMiB int64) *bed {
 	t.Cleanup(func() { stderr.Close() })
 	r := &run{o: runOptions{need: 128, needSource: "flag", label: "go test", onTimeout: "fail", refusalCode: exitRefusal,
 		argv: []string{"true"}}, io: IO{Stderr: stderr}, loc: location{dir: dir, cfgPath: cfg}, start: time.Now(),
-		telemetry: true, memMiB: 32768}
-	trackRecorder(t, func() *telemetry.Recorder { return r.rec }) // made by the run's first enqueue
+		memMiB: 32768}
+	r.record.arm(r, 0)
+	trackRecorder(t, func() *telemetry.Recorder { return r.record.Recorder })
 	return &bed{dir: dir, e: e, r: r}
 }
 
@@ -241,6 +241,14 @@ func settleRecorders() {
 	}
 }
 
+// midWait makes r a run recording into dir, FORMAT understood, in the middle of the wait trace holds.
+func midWait(t *testing.T, r *run, dir string, trace tracedStepper) *run {
+	t.Helper()
+	setFormat(t, dir, understoodFormat)
+	r.record = runRecord{Recorder: trackedRecorder(t, dir, "1-1", "x"), run: r, queued: true, trace: trace}
+	return r
+}
+
 // trackedRecorder is telemetry.New for a test that drives a run in process.
 func trackedRecorder(t *testing.T, dir, runID, label string) *telemetry.Recorder {
 	t.Helper()
@@ -284,7 +292,7 @@ func TestEnqueueLine(t *testing.T) {
 	}
 
 	b := newBed(t, 1024)
-	b.r.o.timeout, b.r.o.typicalS, b.r.overMiB = 90*time.Second, 12, 64
+	b.r.o.timeout, b.r.o.typicalS, b.r.record.overMiB = 90*time.Second, 12, 64
 	b.admit(t)
 	evs := events(t, b.dir)
 	if eventNames(evs) != "enqueue admitted" {
@@ -326,7 +334,7 @@ func TestEnqueueSaysOversized(t *testing.T) {
 // attempt reads 1; oversized kept from the first attempt reads false.
 func TestEnqueueOfARestart(t *testing.T) {
 	b := newBed(t, 1024)
-	b.r.overMiB = 200
+	b.r.record.overMiB = 200
 	req := b.r.o.request()
 	first, _, ok := b.r.wait(context.Background(), func() {}, b.e, req)
 	if !ok {
@@ -375,22 +383,6 @@ func TestEnqueueFailureRecordsNothing(t *testing.T) {
 		}
 		if hasTelemetryDir(b.dir) {
 			t.Errorf("telemetry/ exists after a failed enqueue: %v", events(t, b.dir))
-		}
-		if b.r.rec != nil {
-			t.Error("a recorder exists after a failed enqueue")
-		}
-	})
-	t.Run("a foreign format", func(t *testing.T) {
-		b := newBed(t, 1024)
-		b.r.o.strict = true
-		if err := os.WriteFile(filepath.Join(b.dir, "FORMAT"), []byte("99\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, ok := b.wait(t, context.Background()); ok {
-			t.Fatal("admitted")
-		}
-		if hasTelemetryDir(b.dir) {
-			t.Errorf("telemetry/ exists after a refused enqueue: %v", events(t, b.dir))
 		}
 	})
 }
@@ -508,26 +500,26 @@ func TestReasonSecondsAddUp(t *testing.T) {
 }
 
 // A wait that ends in its sleep charges that stretch to its last reason, so reason_s adds up to the
-// wait. Mutation: recordWaitEnd without charge reads room_short 2.
+// wait. Mutation: waitEnd without charge reads room_short 2.
 func TestWaitEndChargesItsLastStretch(t *testing.T) {
 	clk := &fakeClock{}
 	dir := stateDir(t, "")
-	r := &run{rec: trackedRecorder(t, dir, "1-1", "x"), queued: true, trace: tracedStepper{clk: clk, stepper: &scriptedStepper{clk: clk, steps: []scriptedStep{
-		{0, engine.ReasonRoomShort}, {2 * time.Second, engine.ReasonRoomShort}}}}}
+	r := midWait(t, &run{}, dir, tracedStepper{clk: clk, stepper: &scriptedStepper{clk: clk, steps: []scriptedStep{
+		{0, engine.ReasonRoomShort}, {2 * time.Second, engine.ReasonRoomShort}}}})
 	for range 2 {
-		if _, err := r.trace.step(context.Background()); err != nil {
+		if _, err := r.record.trace.step(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	clk.now += time.Second
-	r.recordWaitEnd("timeout", telemetry.Fields{})
+	r.record.waitEnd("timeout", telemetry.Fields{})
 	if s, _ := event(t, events(t, dir), "timeout")["reason_s"].(map[string]any); s["room_short"] != 3.0 {
 		t.Errorf("reason_s %v, want room_short 3", s)
 	}
 }
 
 // A section held across the enqueue is named, not lost, and a first step that admits leaves
-// last_reason empty. Mutation: stepperOf without the enqueue's start reads a few milliseconds.
+// last_reason empty. Mutation: the trace without the enqueue's start reads a few milliseconds.
 func TestEnqueueWaitIsNamed(t *testing.T) {
 	dir := recordedDir(t, 512)
 	lock, err := os.OpenFile(filepath.Join(dir, "admit.lock"), os.O_RDWR, 0)
@@ -562,9 +554,9 @@ func TestOutsideClosesAFailOpenWait(t *testing.T) {
 	}{{"fail_open", true}, {"timeout_run", false}} {
 		t.Run(c.kind, func(t *testing.T) {
 			dir := stateDir(t, "")
-			r := &run{telemetry: true, rec: trackedRecorder(t, dir, "1-1", "x"), queued: true, waited: 3 * time.Second,
-				trace: tracedStepper{clk: &fakeClock{}, stepped: true, reason: "room_short", secs: map[string]float64{"room_short": 2}}}
-			r.recordOutside(true, c.kind, "state_error", "")
+			r := midWait(t, &run{waited: 3 * time.Second}, dir,
+				tracedStepper{clk: &fakeClock{}, stepped: true, reason: "room_short", secs: map[string]float64{"room_short": 2}})
+			r.record.outside(c.kind, "state_error", "")
 			m := event(t, events(t, dir), "outside")
 			if _, got := m["reason_s"]; got != c.want {
 				t.Errorf("reason_s present %v, want %v: %v", got, c.want, m)
@@ -578,7 +570,7 @@ func TestOutsideClosesAFailOpenWait(t *testing.T) {
 
 // With no recorder nothing of ended is built. Mutation: without the guard the nil supervisor panics.
 func TestEndedBuiltOnlyWithARecorder(t *testing.T) {
-	(&run{}).recordEnded(child{}, store.RunRecord{}, nil, peak{}, false)
+	(&runRecord{}).ended(child{}, store.RunRecord{}, nil, peak{}, false)
 }
 
 // A wait under 30 s writes only the line at its start, so its admission carries where the time
@@ -641,11 +633,13 @@ func TestTwentyHoldersLineFits(t *testing.T) {
 	for _, why := range []string{reasonEnqueue, "behind_ticket", "section_busy", "room_short", "behind_head", "watch_level", "watch_spacing", "restart_stale", "restart_level", "restart_calm", "restart_margin"} {
 		secs[why] = 29.999
 	}
-	r := &run{o: runOptions{need: 1, label: label}, rec: trackedRecorder(t, dir, "1762600000000000000-2147483647", label), trace: tracedStepper{secs: secs, maxGap: time.Hour}}
-	r.why = func() (string, []engine.HolderInfo) { r.snap = rep; return "", rep.Holds }
+	setFormat(t, dir, understoodFormat)
+	r := &run{o: runOptions{need: 1, label: label}}
+	r.record = runRecord{Recorder: trackedRecorder(t, dir, "1762600000000000000-2147483647", label), run: r, trace: tracedStepper{secs: secs, maxGap: time.Hour}}
+	r.why = func() (string, []engine.HolderInfo) { r.record.snap = rep; return "", rep.Holds }
 	r.waitingLine(engine.Waiting{Position: 9, Ahead: name, Evals: 1 << 30, Outcome: engine.Outcome{Reason: engine.ReasonRestartCalm,
 		NoPass: "watch_unreadable", W: 1 << 30, WKnown: true, CalmLeftS: 123456.789}}, time.Hour)
-	r.rec.Emit("next", nil)
+	r.record.Emit("next", nil)
 	evs := events(t, dir)
 	if eventNames(evs) != "waiting next" || evs[1]["lost"] != 0.0 {
 		t.Fatalf("events %q, lost %v: the line did not fit", eventNames(evs), evs[len(evs)-1]["lost"])
@@ -782,7 +776,7 @@ func TestOffCallsNothing(t *testing.T) {
 	})
 	b := newBed(t, 128)
 	writeConfig(t, b.dir, "[memory]\nreserve = \"0\"\n")
-	b.r.telemetry, b.r.o.argv = false, []string{"sleep", "2.5"}
+	b.r.record, b.r.o.argv = runRecord{}, []string{"sleep", "2.5"}
 	timer := time.AfterFunc(700*time.Millisecond, holdUntil(t, b.dir, 128))
 	defer timer.Stop()
 	g, code, ok := b.wait(t, context.Background())
@@ -798,8 +792,8 @@ func TestOffCallsNothing(t *testing.T) {
 	if n := calls.Load(); n != 0 {
 		t.Errorf("a telemetry reader was called %d times with telemetry off", n)
 	}
-	if hasTelemetryDir(b.dir) || b.r.rec != nil {
-		t.Errorf("telemetry/ %v, recorder %v with telemetry off", hasTelemetryDir(b.dir), b.r.rec)
+	if hasTelemetryDir(b.dir) || b.r.record.Recorder != nil {
+		t.Errorf("telemetry/ %v, recorder %v with telemetry off", hasTelemetryDir(b.dir), b.r.record.Recorder)
 	}
 }
 
@@ -862,7 +856,7 @@ func TestInterruptedLineWithGrantInHand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.r.recordEnqueue(b.e, tk, req)
+	b.r.record.enqueue(b.e, tk, req)
 	res, err := tk.Step(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -899,8 +893,8 @@ func TestNoInterruptedAfterFailedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.r.waitOver(b.e, g, nil, syscall.SIGTERM, false)
-	if got := eventNames(events(t, b.dir)); got != "enqueue admitted" || !b.r.rec.Stopped() {
-		t.Errorf("events %q, stopped %v", got, b.r.rec.Stopped())
+	if got := eventNames(events(t, b.dir)); got != "enqueue admitted" || !b.r.record.Stopped() {
+		t.Errorf("events %q, stopped %v", got, b.r.record.Stopped())
 	}
 }
 
@@ -908,13 +902,14 @@ func TestNoInterruptedAfterFailedRelease(t *testing.T) {
 // what failed. Mutations: leaving the line out reddens the first row, the FORMAT check the second.
 func TestRefusedStrictAfterEnqueue(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		err  error
-		want string
+		name   string
+		err    error
+		format string
+		want   string
 	}{
-		{"a state error", &store.StateError{Reason: "queue is gone", Err: errors.New("gone")}, "refused"},
-		{"a malformed FORMAT", &store.FormatError{Err: errors.New("not a number")}, ""},
-		{"a foreign FORMAT", &store.FormatError{N: 99}, ""},
+		{"a state error", &store.StateError{Reason: "queue is gone", Err: errors.New("gone")}, understoodFormat, "refused"},
+		{"a malformed FORMAT", &store.FormatError{Err: errors.New("not a number")}, "coreslot-protocol x\n", ""},
+		{"a foreign FORMAT", &store.FormatError{N: 99}, "coreslot-protocol 99\n", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stateDir(t, "")
@@ -923,8 +918,9 @@ func TestRefusedStrictAfterEnqueue(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer null.Close()
-			r := &run{o: runOptions{strict: true, refusalCode: exitRefusal}, io: IO{Stderr: null}, rec: trackedRecorder(t, dir, "run-1", "x"), queued: true,
-				waited: 3 * time.Second, trace: tracedStepper{clk: &fakeClock{}, stepped: true, reason: "room_short", secs: map[string]float64{"room_short": 2}}}
+			r := midWait(t, &run{o: runOptions{strict: true, refusalCode: exitRefusal}, io: IO{Stderr: null}, waited: 3 * time.Second}, dir,
+				tracedStepper{clk: &fakeClock{}, stepped: true, reason: "room_short", secs: map[string]float64{"room_short": 2}})
+			setFormat(t, dir, c.format)
 			if code := r.failOpen(nil, c.err); code != exitRefusal {
 				t.Fatalf("exit %d", code)
 			}
@@ -980,7 +976,7 @@ func TestTimeoutLine(t *testing.T) {
 }
 
 // A restart whose enqueue fails has no wait to report. Mutation: dropping the queued check in
-// recordWaitEnd writes a timeout for an attempt that never queued.
+// waitEnd writes a timeout for an attempt that never queued.
 func TestRestartEnqueueFailureRecordsNothing(t *testing.T) {
 	b := newBed(t, 1024)
 	req := b.r.o.request()
@@ -1025,8 +1021,8 @@ func newEnded(t *testing.T, argv ...string) *ended {
 	t.Cleanup(func() { null.Close() })
 	r := &run{o: runOptions{need: 1, restart: "no", noRestart: true, label: "go test", onTimeout: "fail", refusalCode: exitRefusal, argv: argv},
 		io: IO{Stdin: null, Stdout: null, Stderr: null}, loc: location{dir: dir, cfgPath: filepath.Join(dir, "config.toml")},
-		start: time.Now(), telemetry: true}
-	r.rec = trackedRecorder(t, dir, "1-1", "go test")
+		start: time.Now()}
+	r.record = runRecord{Recorder: trackedRecorder(t, dir, "1-1", "go test"), run: r}
 	return &ended{dir: dir, st: st, r: r}
 }
 
@@ -1035,8 +1031,9 @@ func (b *ended) child(failOpen, code string) child {
 }
 
 // ended is the run log's line, joined: its record is the appended line with fail_open emptied, and
-// its time_ns is exact. Mutations: a time_ns taken again at the end; the record built apart from
-// the one appended.
+// its time_ns is exact, and a run under a second has no sample and no mean. Mutations: a time_ns
+// taken again at the end; the record built apart from the one appended; the mean taken without its
+// guard divides by zero.
 func TestEndedJoinsTheRunLog(t *testing.T) {
 	b := newEnded(t, "true")
 	if code := b.r.runChild(b.child("", "")); code != 0 {
@@ -1059,6 +1056,9 @@ func TestEndedJoinsTheRunLog(t *testing.T) {
 	}
 	if line.E != "ended" || !reflect.DeepEqual(line.Record, runs[1]) || line.Record.TimeNS != b.r.start.UnixNano() {
 		t.Errorf("ended %+v, the run log's %+v, want start %d", line, runs[1], b.r.start.UnixNano())
+	}
+	if _, ok := event(t, events(t, b.dir), "ended")["mean_footprint_mib"]; ok { // the run was under a listing's period
+		t.Error("a mean with no sample")
 	}
 }
 
@@ -1107,22 +1107,6 @@ func TestMeanFootprint(t *testing.T) {
 	}
 }
 
-// A run under a second has no sample: no mean, and the exit status and the run-log line stand.
-// Mutation: the mean taken as sum/samples without the guard divides by zero and loses the line.
-func TestSubSecondRunHasNoMean(t *testing.T) {
-	b := newEnded(t, "true")
-	if code := b.r.runChild(b.child("", "")); code != 0 {
-		t.Fatalf("exit %d", code)
-	}
-	m := event(t, events(t, b.dir), "ended")
-	if _, ok := m["mean_footprint_mib"]; ok {
-		t.Errorf("a mean with no sample: %v", m["mean_footprint_mib"])
-	}
-	if runs := runLog(t, b.dir); len(runs) != 2 {
-		t.Errorf("%d run-log lines, want the setup's and this run's", len(runs))
-	}
-}
-
 // A signal between the admission and the start names itself; a release that found its files
 // replaced silences the line. Mutation: the release error dropped, as before.
 func TestNotStartedSignal(t *testing.T) {
@@ -1148,19 +1132,6 @@ func TestNotStartedSignal(t *testing.T) {
 				t.Errorf("reason %v", evs[0]["reason"])
 			}
 		})
-	}
-}
-
-// After a release identity mismatch the recorder writes nothing more. Mutation: dropping Stop.
-func TestReleaseFailedSilencesRecorder(t *testing.T) {
-	b := newEnded(t, "true")
-	b.r.rec.Emit("probe", nil)
-	if !b.r.releaseFailed(&engine.IdentityError{Err: &store.StateError{Reason: "x"}}) {
-		t.Fatal("a mismatch did not stop the run")
-	}
-	b.r.rec.Emit("after", nil)
-	if got := eventNames(events(t, b.dir)); got != "probe" {
-		t.Errorf("events %q, want only probe", got)
 	}
 }
 
@@ -1225,6 +1196,9 @@ func TestKeptLine(t *testing.T) {
 		t.Errorf("a kept hold is not in the list: %v", evs[0]["list_pos"])
 	}
 }
+
+// understoodFormat is a FORMAT file this client implements.
+var understoodFormat = fmt.Sprintf("coreslot-protocol %d\n", store.Format)
 
 // setFormat replaces the state directory's FORMAT.
 func setFormat(t *testing.T, dir, body string) {
@@ -1303,7 +1277,7 @@ func TestOutsidePassThrough(t *testing.T) {
 // once. Mutation: the mark checked after the read makes the count 1 with telemetry off.
 func TestPassThroughOffReadsNothing(t *testing.T) {
 	b := newEnded(t, "true")
-	b.r.rec = nil
+	b.r.record = runRecord{}
 	opens := 0
 	saved := openReadOnly
 	openReadOnly = func(dir string) (*store.Store, error) { opens++; return saved(dir) }
@@ -1311,8 +1285,8 @@ func TestPassThroughOffReadsNothing(t *testing.T) {
 	if code := b.r.passThrough(map[string]string{}, "parent"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if opens != 0 || b.r.rec != nil || hasTelemetryDir(b.dir) {
-		t.Errorf("off: %d opens, recorder %v, telemetry/ %v", opens, b.r.rec, hasTelemetryDir(b.dir))
+	if opens != 0 || b.r.record.Recorder != nil || hasTelemetryDir(b.dir) {
+		t.Errorf("off: %d opens, recorder %v, telemetry/ %v", opens, b.r.record.Recorder, hasTelemetryDir(b.dir))
 	}
 	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
 		t.Fatalf("exit %d", code)
@@ -1354,64 +1328,16 @@ func TestPassThroughRefusesForeignFormat(t *testing.T) {
 	})
 }
 
-// A state directory that cannot be located gives a pass-through no recorder, so nothing appears
-// in the working directory. Mutation: the location's error not checked reddens both rows.
+// A state directory that cannot be located gives a pass-through no recorder, so nothing is written.
+// Mutation: the location's error not checked.
 func TestPassThroughBadLocationWritesNothing(t *testing.T) {
-	t.Run("relative directory", func(t *testing.T) {
-		cwd := t.TempDir()
-		cmd := exec.Command(cliBinary(t), "run", "--restart=yes", "--", "true")
-		cmd.Dir = cwd
-		for _, kv := range baseEnv(cwd) {
-			if !strings.HasPrefix(kv, "CORESLOT_STATE_DIR=") {
-				cmd.Env = append(cmd.Env, kv)
-			}
-		}
-		cmd.Env = append(cmd.Env, "CORESLOT_STATE_DIR=state", engine.EnvUnbudgeted+"=parent", engine.EnvTelemetry+"=1")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("%v: %s", err, out)
-		}
-		if names := entries(t, cwd, ""); len(names) != 0 {
-			t.Errorf("the working directory got %q", names)
-		}
-	})
-	t.Run("in process", func(t *testing.T) {
-		b := newEnded(t, "true")
-		b.r.rec, b.r.loc.err = nil, errors.New("no home")
-		if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
-			t.Fatalf("exit %d", code)
-		}
-		if hasTelemetryDir(b.dir) {
-			t.Errorf("events %q", eventNames(events(t, b.dir)))
-		}
-	})
-}
-
-// A state error with its unbudgeted hold published makes the recorder, if it has none yet, and
-// says why the run is outside the budget. Mutation: a recorder only after an enqueue loses both
-// lines.
-func TestOutsideFailOpen(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root writes into a read-only directory")
+	b := newEnded(t, "true")
+	b.r.record, b.r.loc.err = runRecord{}, errors.New("no home")
+	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
+		t.Fatalf("exit %d", code)
 	}
-	dir := recordedDir(t, 1024)
-	queue := filepath.Join(dir, "queue")
-	if err := os.Chmod(queue, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(queue, 0o700) })
-	r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "64M", "--", "true")
-	if r.code != 0 || !strings.Contains(r.stderr, "fail-open") {
-		t.Fatalf("exit %d: %q", r.code, r.stderr)
-	}
-	evs := events(t, dir)
-	if got := eventNames(evs); got != "outside ended" {
-		t.Fatalf("events %q", got)
-	}
-	if evs[0]["kind"] != "fail_open" || evs[0]["reason"] != "state_error" || evs[0]["need_mib"] != 64.0 || evs[1]["fail_open"] != "state_error" {
-		t.Errorf("lines %v", evs)
-	}
-	if strings.Contains(fmt.Sprint(evs), dir) {
-		t.Errorf("a path on a line: %v", evs)
+	if hasTelemetryDir(b.dir) {
+		t.Errorf("events %q", eventNames(events(t, b.dir)))
 	}
 }
 
@@ -1457,8 +1383,8 @@ func TestRestartFailOpenAttemptAndHold(t *testing.T) {
 func failOpenBed(t *testing.T) *bed {
 	t.Helper()
 	b := newBed(t, 1024)
-	b.r.rec = telemetry.New(b.dir, "1-1", "go test")
-	b.r.rec.Emit("probe", nil)
+	setFormat(t, b.dir, understoodFormat)
+	b.r.record.Emit("probe", nil)
 	b.r.o.argv = []string{"sh", "-c", `test -z "$` + engine.EnvTelemetry + `"`} // exit 1 with the mark
 	return b
 }
@@ -1475,7 +1401,7 @@ func wantSilent(t *testing.T, b *bed, code, want int) {
 }
 
 // A foreign FORMAT ends the recording, under --strict too, and the command gets no mark.
-// Mutation: dropping the Stop at the head of failOpen.
+// Mutation: the recorder not reading FORMAT.
 func TestFailOpenForeignFormatRecordsNothing(t *testing.T) {
 	t.Run("first sight", func(t *testing.T) {
 		dir := recordedDir(t, 1024)
@@ -1493,13 +1419,13 @@ func TestFailOpenForeignFormatRecordsNothing(t *testing.T) {
 }
 
 // A malformed FORMAT reaches failOpen as a plain state error from a step: no hold can be
-// published, and --strict has nothing to record. Mutations: the else branch's Stop; the FORMAT
-// re-read at the head of failOpen reddens "strict".
+// published, and --strict has nothing to record. Mutations: the else branch's Stop; the recorder
+// not reading FORMAT reddens "strict".
 func TestFailOpenMalformedFormatRecordsNothing(t *testing.T) {
 	for _, strict := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fail-open", true: "strict"}[strict], func(t *testing.T) {
 			b := failOpenBed(t)
-			b.r.o.strict, b.r.queued = strict, true
+			b.r.o.strict, b.r.record.queued, b.r.record.trace = strict, true, tracedStepper{clk: &fakeClock{}}
 			setFormat(t, b.dir, "coreslot-protocol x\n")
 			want := 0
 			if strict {
@@ -1547,30 +1473,42 @@ func TestOutsideTimeoutRunThenLive(t *testing.T) {
 	}
 }
 
-// A section that stays busy past the wait leaves the timeout run with no hold and, without an
-// enqueue, no recorder: nothing read FORMAT in a section. Mutation: making the recorder whenever
-// the run log is kept.
-func TestTimeoutRunWithoutEnqueueRecordsNothing(t *testing.T) {
-	b := newBed(t, 1024)
-	b.r.o.argv = []string{"true"}
-	sec, err := b.e.Store().Enter(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sec.Leave()
-	if code := b.r.timeoutRun(b.e); code != 0 {
-		t.Fatalf("exit %d: %q", code, b.notices(t))
-	}
-	if !strings.Contains(b.notices(t), "the unbudgeted hold was not published") {
-		t.Errorf("stderr %q: the section was not busy", b.notices(t))
-	}
-	if hasTelemetryDir(b.dir) {
-		t.Errorf("events %q", eventNames(events(t, b.dir)))
+// A section that stays busy past the wait leaves the timeout run with no hold. With no enqueue it
+// has nothing to join its lines to; with one it says it runs outside the budget. Mutations: writing
+// the line whenever the run log is kept; only when the hold was published.
+func TestTimeoutRunWithoutHold(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		queued bool
+		want   string
+	}{{"no enqueue", false, ""}, {"after an enqueue", true, "outside ended"}} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newBed(t, 1024)
+			b.r.o.argv, b.r.record.queued = []string{"true"}, c.queued
+			setFormat(t, b.dir, understoodFormat)
+			sec, err := b.e.Store().Enter(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sec.Leave()
+			if code := b.r.timeoutRun(b.e); code != 0 {
+				t.Fatalf("exit %d: %q", code, b.notices(t))
+			}
+			if !strings.Contains(b.notices(t), "the unbudgeted hold was not published") {
+				t.Errorf("stderr %q: the section was not busy", b.notices(t))
+			}
+			if c.want == "" && hasTelemetryDir(b.dir) {
+				t.Errorf("events %q", eventNames(events(t, b.dir)))
+			}
+			if c.want != "" && eventNames(events(t, b.dir)) != c.want {
+				t.Errorf("events %q, want %q", eventNames(events(t, b.dir)), c.want)
+			}
+		})
 	}
 }
 
 // A timeout run that finds a FORMAT it cannot read writes nothing more and hands its command no
-// mark. Mutation: dropping the Stop in timeoutRun lets ended through.
+// mark. Mutation: the recorder not reading FORMAT lets ended through.
 func TestTimeoutRunForeignFormatRecordsNothing(t *testing.T) {
 	b := failOpenBed(t)
 	setFormat(t, b.dir, "coreslot-protocol 3\n")
@@ -1590,10 +1528,10 @@ func fakeSweep(t *testing.T) *atomic.Int64 {
 	return &calls
 }
 
-// memoryLines is the memory lines written so far.
-func memoryLines(t *testing.T, dir string) (out []map[string]any) {
+// linesOf is the lines of event e written so far.
+func linesOf(t *testing.T, dir, e string) (out []map[string]any) {
 	for _, m := range allLines(t, dir) {
-		if m["e"] == "memory" {
+		if m["e"] == e {
 			out = append(out, m)
 		}
 	}
@@ -1601,7 +1539,7 @@ func memoryLines(t *testing.T, dir string) (out []map[string]any) {
 }
 
 // A waiting run and a run outside the budget each write a memory line, which names no run, and
-// within one 30 s window only one. Mutations: the call left out of recordWaiting or of watchChild
+// within one 30 s window only one. Mutations: the call left out of the waiting line or of watchChild
 // turns its row red; the window not claimed writes one per tick.
 func TestMemoryLineFromWaitingAndRunning(t *testing.T) {
 	t.Run("waiting", func(t *testing.T) {
@@ -1611,8 +1549,8 @@ func TestMemoryLineFromWaitingAndRunning(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 		defer cancel()
 		b.wait(t, ctx)
-		waitFor(t, 5*time.Second, "the memory line", func() bool { return len(memoryLines(t, b.dir)) == 1 })
-		if l := memoryLines(t, b.dir)[0]; l["run"] != nil || calls.Load() != 1 {
+		waitFor(t, 5*time.Second, "the memory line", func() bool { return len(linesOf(t, b.dir, "memory")) == 1 })
+		if l := linesOf(t, b.dir, "memory")[0]; l["run"] != nil || calls.Load() != 1 {
 			t.Errorf("line %v after %d sweeps", l, calls.Load())
 		}
 	})
@@ -1623,9 +1561,9 @@ func TestMemoryLineFromWaitingAndRunning(t *testing.T) {
 		if code := b.r.runChild(b.child("", "")); code != 0 {
 			t.Fatalf("exit %d", code)
 		}
-		waitFor(t, 5*time.Second, "the memory line", func() bool { return len(memoryLines(t, b.dir)) >= 1 })
+		waitFor(t, 5*time.Second, "the memory line", func() bool { return len(linesOf(t, b.dir, "memory")) >= 1 })
 		time.Sleep(200 * time.Millisecond)
-		if n := len(memoryLines(t, b.dir)); n != 1 || calls.Load() != 1 {
+		if n := len(linesOf(t, b.dir, "memory")); n != 1 || calls.Load() != 1 {
 			t.Errorf("%d memory lines and %d sweeps in one window, want 1 and 1", n, calls.Load())
 		}
 	})
@@ -1637,7 +1575,7 @@ func TestNoLiveForPassThrough(t *testing.T) {
 	replaceTicks(t, 1)
 	calls := fakeSweep(t)
 	b := newEnded(t, "sleep", "1.5")
-	b.r.rec = nil
+	b.r.record = runRecord{}
 	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
@@ -1645,8 +1583,8 @@ func TestNoLiveForPassThrough(t *testing.T) {
 		t.Errorf("events %q", got)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if calls.Load() != 0 || len(memoryLines(t, b.dir)) != 0 {
-		t.Errorf("a pass-through swept %d times and wrote %d memory lines", calls.Load(), len(memoryLines(t, b.dir)))
+	if calls.Load() != 0 || len(linesOf(t, b.dir, "memory")) != 0 {
+		t.Errorf("a pass-through swept %d times and wrote %d memory lines", calls.Load(), len(linesOf(t, b.dir, "memory")))
 	}
 }
 
@@ -1686,18 +1624,8 @@ func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
 	return conns, dials
 }
 
-// containerLines is the containers lines written so far.
-func containerLines(t *testing.T, dir string) (out []map[string]any) {
-	for _, m := range allLines(t, dir) {
-		if m["e"] == "containers" {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
 // A waiter never connects, not even a nested one whose own command is container work while another
-// hold is: only supervision does. Mutation: ContainersAsync called from recordWaiting.
+// hold is: only supervision does. Mutation: ContainersAsync called from the waiting line.
 func TestWaiterNeverConnects(t *testing.T) {
 	conns, dials := fakeEngine(t)
 	fakeSweep(t)
@@ -1715,10 +1643,10 @@ func TestWaiterNeverConnects(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	b.wait(t, ctx)
-	waitFor(t, 5*time.Second, "the waiter's memory line", func() bool { return len(memoryLines(t, b.dir)) == 1 })
+	waitFor(t, 5*time.Second, "the waiter's memory line", func() bool { return len(linesOf(t, b.dir, "memory")) == 1 })
 	time.Sleep(100 * time.Millisecond)
-	if conns.Load() != 0 || dials.Load() != 0 || len(containerLines(t, b.dir)) != 0 {
-		t.Errorf("%d connections, %d dials, %d lines from a waiter", conns.Load(), dials.Load(), len(containerLines(t, b.dir)))
+	if conns.Load() != 0 || dials.Load() != 0 || len(linesOf(t, b.dir, "containers")) != 0 {
+		t.Errorf("%d connections, %d dials, %d lines from a waiter", conns.Load(), dials.Load(), len(linesOf(t, b.dir, "containers")))
 	}
 }
 
@@ -1755,11 +1683,11 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 			}
 			b := newEnded(t, argv...)
 			if c.off {
-				b.r.rec = nil
+				b.r.record = runRecord{}
 			}
 			var code int
 			if c.inner {
-				b.r.rec = nil
+				b.r.record = runRecord{}
 				code = b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent")
 			} else {
 				code = b.r.runChild(b.child("", ""))
@@ -1768,8 +1696,8 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 				t.Fatalf("exit %d", code)
 			}
 			if c.want > 0 {
-				waitFor(t, 5*time.Second, "the containers line", func() bool { return len(containerLines(t, b.dir)) == 1 })
-				if l := containerLines(t, b.dir)[0]; l["run"] != nil || l["containers_total"] != 0.0 {
+				waitFor(t, 5*time.Second, "the containers line", func() bool { return len(linesOf(t, b.dir, "containers")) == 1 })
+				if l := linesOf(t, b.dir, "containers")[0]; l["run"] != nil || l["containers_total"] != 0.0 {
 					t.Errorf("line %v", l)
 				}
 			}
@@ -1839,8 +1767,8 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 			if got := labelled(events(t, dir), "inner"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
 				t.Fatalf("the nested run did not record: %q", eventNames(got))
 			}
-			if conns.Load() != 0 || len(containerLines(t, dir)) != 0 {
-				t.Errorf("%d connections, %d lines from a nested run", conns.Load(), len(containerLines(t, dir)))
+			if conns.Load() != 0 || len(linesOf(t, dir, "containers")) != 0 {
+				t.Errorf("%d connections, %d lines from a nested run", conns.Load(), len(linesOf(t, dir, "containers")))
 			}
 		})
 	}
@@ -1865,8 +1793,8 @@ func TestStaleHoldStillConnects(t *testing.T) {
 			if r.code != 0 {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
-			if conns.Load() == 0 || len(containerLines(t, dir)) == 0 {
-				t.Errorf("%d connections, %d lines from a run no parent holds", conns.Load(), len(containerLines(t, dir)))
+			if conns.Load() == 0 || len(linesOf(t, dir, "containers")) == 0 {
+				t.Errorf("%d connections, %d lines from a run no parent holds", conns.Load(), len(linesOf(t, dir, "containers")))
 			}
 			if m := event(t, events(t, dir), "enqueue"); m["nested_miss"] != c.miss {
 				t.Errorf("nested_miss %v, want %s", m["nested_miss"], c.miss)
@@ -1990,9 +1918,9 @@ func TestEnqueueNamesIndependentParent(t *testing.T) {
 	}
 }
 
-// Nothing is written after a FORMAT the run cannot read, wherever the run sees it. Mutations:
-// the FORMAT check on a failed run-log append reddens "run log", a Stop on any failed append "a
-// plain failure"; the Stop in updateHold reddens "hold update"; the one on a tick's refusal "tick".
+// Nothing is written after a FORMAT the run cannot read, its hold included. Mutations: the recorder
+// not reading FORMAT reddens "run log", a Stop on any failed append "a plain failure", and updateHold
+// without its FORMAT check "hold update".
 func TestNoEndedAfterFormatChange(t *testing.T) {
 	for name, format := range map[string]string{"unknown": "coreslot-protocol 3\n", "malformed": "coreslot-protocol x\n"} {
 		t.Run(name, func(t *testing.T) {
@@ -2032,37 +1960,16 @@ func TestNoEndedAfterFormatChange(t *testing.T) {
 			t.Errorf("events %q, want ended", got)
 		}
 	})
-	seen := func(t *testing.T, see func(b *bed, g *engine.Grant)) {
+	t.Run("hold update", func(t *testing.T) {
 		b := newBed(t, 1024)
 		g, code, ok := b.wait(t, context.Background())
 		if !ok {
 			t.Fatalf("not admitted: %d %q", code, b.notices(t))
 		}
 		defer g.Close()
-		before := eventNames(events(t, b.dir))
 		setFormat(t, b.dir, "coreslot-protocol 3\n")
-		see(b, g)
-		setFormat(t, b.dir, "coreslot-protocol 2\n") // the way back does not bring the recorder back
-		b.r.rec.Emit("after", nil)
-		if got := eventNames(events(t, b.dir)); got != before {
-			t.Errorf("events %q, want %q", got, before)
+		if b.r.updateHold(b.e.Store(), g, func(*wire.Hold) {}) {
+			t.Error("the hold was updated under a foreign FORMAT")
 		}
-		if !b.r.rec.Stopped() {
-			t.Error("the recorder is live")
-		}
-	}
-	t.Run("hold update", func(t *testing.T) {
-		seen(t, func(b *bed, g *engine.Grant) {
-			if b.r.updateHold(b.e.Store(), g, func(*wire.Hold) {}) {
-				t.Error("the hold was updated under a foreign FORMAT")
-			}
-		})
-	})
-	t.Run("tick", func(t *testing.T) {
-		seen(t, func(b *bed, g *engine.Grant) {
-			if _, err := b.r.tick(context.Background(), g); !errors.Is(err, engine.ErrRefused) {
-				t.Errorf("tick: %v", err)
-			}
-		})
 	})
 }

@@ -23,7 +23,7 @@ var Clocks = memsample.Clocks
 // Recorder is the recorder of one run. A nil *Recorder is valid and writes nothing. It is safe
 // for concurrent use: the run's goroutines share it.
 type Recorder struct {
-	dir, runID, label string
+	state, runID, label string
 
 	mu      sync.Mutex
 	n       int  // lines of the run so far
@@ -31,13 +31,13 @@ type Recorder struct {
 	attempt int  // the run's attempt, from 1
 	stopped bool // nothing is written any more
 
-	memWG sync.WaitGroup // the memory line goroutines in flight; tests wait on it
+	memWG sync.WaitGroup // the machine-wide lines' goroutines in flight; tests wait on it
 }
 
 // New returns the recorder of a run. It creates nothing: the directory and the file are made by
 // the first line.
 func New(stateDir, runID, label string) *Recorder {
-	return &Recorder{dir: filepath.Join(stateDir, store.TelemetryDir), runID: runID, label: label, attempt: 1}
+	return &Recorder{state: stateDir, runID: runID, label: label, attempt: 1}
 }
 
 // SetAttempt sets the attempt the next lines name.
@@ -65,7 +65,7 @@ func (r *Recorder) EmitMachine(event string, f Fields) {
 	}
 }
 
-// Stop ends the recorder: no line is written after it returns.
+// Stop ends the recorder for a reason FORMAT cannot show: no line is written after it returns.
 func (r *Recorder) Stop() {
 	if r == nil {
 		return
@@ -82,20 +82,28 @@ func (r *Recorder) Stopped() bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.stopped
+	return !r.live()
+}
+
+// live reports whether a line may be written, with r.mu held. It reads FORMAT each time, so that
+// no caller has to: a client never writes into a directory whose format it does not understand, and
+// one that finds such a FORMAT, or none, stays silent even if a good one comes back.
+func (r *Recorder) live() bool {
+	r.stopped = r.stopped || !store.MayWrite(r.state)
+	return !r.stopped
 }
 
 func (r *Recorder) emit(event string, f Fields, run bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.stopped {
-		return
-	}
 	defer func() {
 		if recover() != nil {
 			r.lost++
 		}
 	}()
+	if !r.live() {
+		return
+	}
 	m := make(map[string]any, len(f)+10)
 	for k, v := range f {
 		m[k] = v
@@ -111,7 +119,7 @@ func (r *Recorder) emit(event string, f Fields, run bool) {
 		r.lost++
 		return
 	}
-	if store.AppendFile(r.dir, store.EventsFile, append(b, '\n')) != nil {
+	if store.AppendFile(filepath.Join(r.state, store.TelemetryDir), store.EventsFile, append(b, '\n')) != nil {
 		r.lost++
 		return
 	}

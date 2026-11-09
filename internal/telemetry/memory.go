@@ -3,6 +3,7 @@
 package telemetry
 
 import (
+	"path/filepath"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/memsample"
@@ -73,7 +74,7 @@ func topLines(top []memsample.ProcMem) []Fields {
 // in the future (the clock went back). A stamp it cannot open or touch is not claimed.
 func (r *Recorder) claim(stamp string) (won bool) {
 	defer r.recoverLost()
-	f, err := store.OpenStamp(r.dir, stamp)
+	f, err := store.OpenStamp(filepath.Join(r.state, store.TelemetryDir), stamp)
 	if err != nil {
 		return false
 	}

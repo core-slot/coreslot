@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -131,11 +130,11 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}
 		if st != nil && n%telemetryTicks == 0 { // a pass-through's memory is its parent's, and it has no log
 			if g == nil && ok {
-				r.rec.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
+				r.record.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
 			}
-			r.rec.MemoryAsync()
-			if p.container && r.rec != nil && !r.inherited { // a descendant's socket would mark its parent's command
-				r.rec.ContainersAsync(dockerSockets(os.Getenv("DOCKER_HOST"), r.loc.home))
+			r.record.MemoryAsync()
+			if p.container && !r.inherited { // a descendant's socket would mark its parent's command
+				r.record.ContainersAsync(dockerSockets(os.Getenv("DOCKER_HOST"), r.loc.home))
 			}
 		}
 		if g == nil || n%listingsPerTick != 0 {
@@ -163,7 +162,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}) {
 			continue
 		}
-		det, err := r.tick(ctx, g)
+		det, err := g.Tick(ctx)
 		r.countClosed(d, det, err)
 		keptRound = r.keptNotice(det, g.HoldName(), keptRound)
 		if err != nil || p.container || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
@@ -176,16 +175,6 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	}
 }
 
-// tick takes the run's part in the shared watch tick; a FORMAT the section refused ends its
-// recording.
-func (r *run) tick(ctx context.Context, g *engine.Grant) (watch.Detector, error) {
-	det, err := g.Tick(ctx)
-	if errors.Is(err, engine.ErrRefused) {
-		r.rec.Stop()
-	}
-	return det, err
-}
-
 // keptNotice says so when det's last round kept the hold, unless the round at lastNS, the last
 // one it said so for, was that round; it returns the round it last said so for. A tick that
 // failed returned the zero detector, which kept nothing.
@@ -195,7 +184,7 @@ func (r *run) keptNotice(det watch.Detector, hold string, lastNS int64) int64 {
 		return lastNS
 	}
 	r.sayKept(det.Observed, k, time.Now())
-	r.rec.Emit("kept", r.roundFields(det, "red", hold)) // a floor round keeps nothing
+	r.record.Emit("kept", r.roundFields(det, "red", hold)) // a floor round keeps nothing
 	return k.RoundNS
 }
 
@@ -227,14 +216,14 @@ func (r *run) stopFor(det watch.Detector, kib int64, d memsample.TreeTimes, wasK
 	}
 	if det.Observed {
 		r.notice("would stop %s (%s)", text(r.o.label), why)
-		r.rec.Emit("stopped", r.roundFields(det, round, r.hold))
+		r.record.Emit("stopped", r.roundFields(det, round, r.hold))
 		return false
 	}
 	if !kill() {
 		return false
 	}
 	r.lastStop, r.lastFloor = why, det.RoundFloor
-	r.rec.Emit("stopped", r.roundFields(det, round, r.hold))
+	r.record.Emit("stopped", r.roundFields(det, round, r.hold))
 	return true
 }
 
@@ -277,11 +266,7 @@ func percent(share float64) string {
 // updateHold rewrites g's hold with fn, outside the section, only while the state directory's
 // FORMAT is one this client implements (PROTOCOL.md section 14); it reports whether it wrote.
 func (r *run) updateHold(st *store.Store, g *engine.Grant, fn func(*wire.Hold)) bool {
-	if err := formatStillUnderstood(st); err != nil {
-		r.rec.Stop()
-		return false
-	}
-	return g.UpdateHold(fn) == nil
+	return formatStillUnderstood(st) == nil && g.UpdateHold(fn) == nil
 }
 
 // treeDeltas returns the time the processes of cur spent since prev, and whether cur holds a

@@ -278,7 +278,11 @@ var lifeRows = []lifeRow{
 		check: func(t *testing.T, o *lifeOutcome) {
 			o.wantField(t, "R", "outside", "kind", "fail_open")
 			o.wantField(t, "R", "outside", "reason", "state_error")
+			o.wantField(t, "R", "outside", "need_mib", 100.0)
 			o.wantField(t, "R", "ended", "fail_open", "state_error")
+			if lines := fmt.Sprint(o.ofLabel("R")); strings.Contains(lines, "/") {
+				t.Errorf("a path on a line: %s", lines)
+			}
 		}},
 	{name: "pass_through", config: roomConfig(1000), want: map[string]string{"outer": `^enqueue admitted ended$`, "inner": `^outside ended$`},
 		trace: func(t *testing.T, e Env, o *lifeOutcome) {

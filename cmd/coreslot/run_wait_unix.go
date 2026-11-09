@@ -17,8 +17,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
-	"github.com/core-slot/coreslot/internal/store"
-	"github.com/core-slot/coreslot/internal/telemetry"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
 )
@@ -29,7 +27,7 @@ var errNotAtOnce = errors.New("not admitted at once")
 // tryOnce is --no-wait's single attempt: one Step, each of whose section entries waits at most
 // RefreshEvery/4 = 0.5 s (the engine's sectionWait). The 1 s of noWaitFor bounds only enqueue.
 func (r *run) tryOnce(ctx context.Context, t *engine.Ticket) (*engine.Grant, error) {
-	res, err := r.stepperOf(t).step(ctx)
+	res, err := r.record.stepper(t).step(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -52,15 +50,6 @@ type ticketStepper struct{ t *engine.Ticket }
 func (s ticketStepper) step(ctx context.Context) (engine.StepResult, error) { return s.t.Step(ctx) }
 
 func (s ticketStepper) due() time.Duration { return s.t.Due() }
-
-// stepperOf is what steps t: the ticket itself, or with a recorder the ticket traced.
-func (r *run) stepperOf(t *engine.Ticket) stepper {
-	if r.rec == nil {
-		return ticketStepper{t}
-	}
-	r.trace.stepper = ticketStepper{t}
-	return &r.trace
-}
 
 // reasonEnqueue is the reason_s key of an attempt's time up to the end of its first step: publishing
 // the ticket, which waits for the admission section for as long as that is held, and that step.
@@ -187,7 +176,7 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 			why = "; " + why
 		}
 	}
-	r.recordWaiting(w)
+	r.record.waiting(w)
 	if !r.advised {
 		r.advised, advice = true, "; if your tool has a time limit, run this in the background or raise the limit"
 	}
@@ -197,104 +186,6 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 	}
 	return fmt.Sprintf("coreslot: waiting for %s%s (%s)%s%s%s%s", r.o.needText(), place,
 		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
-}
-
-// newRecorder is the run's recorder.
-func (r *run) newRecorder() *telemetry.Recorder {
-	return telemetry.New(r.loc.dir, fmt.Sprintf("%d-%d", r.start.UnixNano(), os.Getpid()), r.o.label)
-}
-
-// recordEnqueue writes the attempt's enqueue, making the run's recorder on its first.
-func (r *run) recordEnqueue(e *engine.Engine, t *engine.Ticket, req spec.Request) {
-	if !r.telemetry {
-		return
-	}
-	if r.rec == nil {
-		r.rec = r.newRecorder()
-	}
-	r.trace = tracedStepper{clk: newRealClock(), at: -r.enqueued} // from here a wait can end, and be charged
-	r.rec.SetAttempt(r.stops + 1)
-	f := telemetry.Fields{"ticket": t.Name(), "need_mib": req.NeedMiB, "need_source": r.o.needSource, "real_memory": req.RealMemory,
-		"typical_s": req.TypicalS, "oversized": req.NeedMiB > r.overMiB, "timeout_s": r.o.timeout.Seconds(), "on_timeout": r.o.onTimeout,
-		"version": cliVersion(), "mem_mib": r.memMiB}
-	if r.nestedMiss != "" {
-		f["nested_miss"] = r.nestedMiss
-	}
-	if r.parentHold != "" {
-		f["parent_hold"] = r.parentHold
-	}
-	if c, err := e.Config(); err == nil {
-		mode := "enforce"
-		if c.Watch.Observe {
-			mode = "observe"
-		}
-		w := c.Watch
-		f["mode"], f["reserve_mib"], f["watch_config"] = mode, c.ReserveMiB, map[string]any{
-			"yellow_points": w.YellowPoints, "red_points": w.RedPoints, "red_samples": w.RedSamples, "gate_pages_s": w.GatePagesPerS,
-			"floor_mib": w.FloorMiB, "calm_s": w.CalmS, "post_kill_s": w.PostKillS, "spacing_s": w.SpacingS}
-	}
-	r.rec.Emit("enqueue", f)
-	r.queued = true
-}
-
-// recordWaiting writes a waiting line beside the one a person reads, from the same snapshot.
-func (r *run) recordWaiting(w engine.Waiting) {
-	if r.rec == nil {
-		return
-	}
-	out := w.Outcome
-	gap := r.trace.maxGap
-	f := telemetry.Fields{"reason": string(out.Reason), "reason_s": r.trace.take(), "evals": w.Evals, "max_gap_ms": gap.Milliseconds()}
-	if w.Ahead != "" {
-		f["ahead"] = w.Ahead
-	}
-	if out.NoPass != "" {
-		f["no_pass"] = out.NoPass
-	}
-	if out.WKnown {
-		f["w_s"] = out.W
-	}
-	if out.Reason == engine.ReasonRestartCalm {
-		f["calm_left_s"] = out.CalmLeftS
-	}
-	if rep := r.snap; rep != nil {
-		f["headroom_mib"], f["headroom_ok"], f["reserve_mib"] = rep.Mem.HeadroomMiB, rep.Mem.HeadroomOK, rep.Mem.ReserveMiB
-		f["room_mib"], f["holders"] = waitRoom(*rep, r.o.request()), holderLines(rep.Holds)
-		if rep.Watch.SampledNS != 0 { // with no sample the zero level would read as green
-			f["level"], f["read_age_ms"] = rep.Watch.Level.String(), max(0, store.NowNS()-rep.Watch.SampledNS)/int64(time.Millisecond)
-		}
-	}
-	r.rec.Emit("waiting", f)
-	r.rec.MemoryAsync()
-}
-
-// recordAdmitted writes the attempt's admission and what the decision read.
-func (r *run) recordAdmitted(g *engine.Grant) {
-	if r.rec == nil {
-		return
-	}
-	a := g.Admission()
-	f := telemetry.Fields{"hold": g.HoldName(), "waited_s": r.waited.Seconds(), "reason_s": r.trace.take(), "last_reason": r.trace.reason,
-		"headroom_mib": a.HeadroomMiB, "headroom_ok": a.HeadroomOK, "reserve_mib": a.ReserveMiB, "room_mib": a.RoomMiB, "watch_gate": a.WatchGate}
-	if a.WKnown {
-		f["w_s"] = a.W
-	}
-	r.rec.Emit("admitted", f)
-}
-
-// recordWaitEnd writes event, the end of a wait that gave no start, with where the wait went.
-func (r *run) recordWaitEnd(event string, f telemetry.Fields) {
-	if r.rec.Stopped() || !r.queued {
-		return
-	}
-	r.closeWait(f)
-	r.rec.Emit(event, f)
-}
-
-// closeWait adds to f where a wait that gave no start went.
-func (r *run) closeWait(f telemetry.Fields) {
-	r.trace.charge() // such a wait ends in its sleep, after the last step
-	f["waited_s"], f["reason_s"], f["last_reason"] = r.waited.Seconds(), r.trace.take(), r.trace.reason
 }
 
 // maxHolderLines bounds the holders of a waiting line, so that the line fits MaxRunLine.

@@ -49,7 +49,6 @@ type child struct {
 	log      *store.Store  // the run log to append to; nil writes none
 	grant    *engine.Grant // the admitted grant the watchdog ticks for; nil outside the budget
 	hold     string        // the published hold of the run, admitted or unbudgeted; "" with none
-	recheck  *store.Store  // a pass-through's directory: its FORMAT is read again before the last line
 }
 
 // runChild starts the command with c, waits for it, releases the grant and appends the run
@@ -68,9 +67,8 @@ func (r *run) runChild(c child) int {
 	if sig := pendingSignal(); sig != 0 {
 		// Interrupted between the admission and the start: the command never runs.
 		code, _ := classify(&interruptError{Sig: sig})
-		r.confirmFormat(c.recheck)
 		if r.identityMismatch(c.release()) == nil {
-			r.rec.Emit("not_started", telemetry.Fields{"reason": unix.SignalName(sig)})
+			r.record.Emit("not_started", telemetry.Fields{"reason": unix.SignalName(sig)})
 		}
 		return code
 	}
@@ -136,55 +134,15 @@ func (r *run) runChild(c child) int {
 	rec.TickShare = r.tickShare()
 	if c.log != nil {
 		if err := appendRunLog(c.log, rec, r.notice); err != nil {
-			r.confirmFormat(c.log) // a plain write failure keeps ended: its record is the attempt's only copy
 			r.notice("the run log was not written: %s", text(err.Error()))
 		}
 	}
-	r.confirmFormat(c.recheck)
 	if notStarted != "" {
-		r.rec.Emit("not_started", telemetry.Fields{"reason": notStarted})
+		r.record.Emit("not_started", telemetry.Fields{"reason": notStarted})
 		return status
 	}
-	r.recordEnded(c, rec, sup, p, killed)
+	r.record.ended(c, rec, sup, p, killed)
 	return status
-}
-
-// recordEnded writes the attempt's outcome: the run-log line and what that line cannot say.
-func (r *run) recordEnded(c child, rec store.RunRecord, sup *supervisor, p peak, killed bool) {
-	if r.rec.Stopped() {
-		return
-	}
-	rec.FailOpen = ""
-	f := telemetry.Fields{"record": rec}
-	if c.hold != "" {
-		f["hold"] = c.hold
-	}
-	if c.failCode != "" {
-		f["fail_open"] = c.failCode
-	}
-	if sup.ws.Signaled() {
-		f["signal"] = unix.SignalName(sup.ws.Signal())
-	}
-	switch {
-	case r.stopped && r.lastFloor:
-		f["stopped_by"] = "watchdog_floor"
-	case r.stopped:
-		f["stopped_by"] = "watchdog_red"
-	case killed:
-		f["stopped_by"] = "outside"
-	}
-	if p.samples > 0 {
-		f["mean_footprint_mib"] = p.sumKiB / p.samples / 1024
-	}
-	r.rec.Emit("ended", f)
-}
-
-// confirmFormat silences the recorder of a run whose FORMAT changed under it: st is the directory
-// it read FORMAT in, nil when a pass-through records nothing. With no live recorder it reads nothing.
-func (r *run) confirmFormat(st *store.Store) {
-	if st != nil && !r.rec.Stopped() && formatStillUnderstood(st) != nil {
-		r.rec.Stop()
-	}
 }
 
 // childEnv is the command's environment: env without an inherited mark and, with a live recorder,
@@ -192,7 +150,7 @@ func (r *run) confirmFormat(st *store.Store) {
 // read of its own.
 func (r *run) childEnv(env []string) []string {
 	env = slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, engine.EnvTelemetry+"=") })
-	if r.rec.Stopped() {
+	if r.record.Stopped() {
 		return env
 	}
 	return append(env, engine.EnvTelemetry+"=1")
@@ -243,7 +201,7 @@ func (r *run) identityMismatch(err error) *engine.IdentityError {
 	if !errors.As(err, &mismatch) {
 		return nil
 	}
-	r.rec.Stop()
+	r.record.Stop()
 	return mismatch
 }
 

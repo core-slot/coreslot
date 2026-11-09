@@ -78,17 +78,11 @@ type run struct {
 	hold      string                               // the attempt's hold, for the stopped line
 	reasons   []string                             // lastStop of every stop so far
 
-	telemetry  bool                // the switch as the run read it at its start
-	rec        *telemetry.Recorder // nil until the first enqueue succeeded, and with telemetry off
-	trace      tracedStepper       // where the attempt's wait went; used only with rec
-	snap       *engine.Report      // the last waiting line's snapshot; kept only with rec
-	memMiB     int64               // the machine's memory, from the run's start
-	overMiB    int64               // above this need a run can never fit beside another job
-	enqueued   time.Duration       // from the attempt's start to its ticket being published
-	queued     bool                // this attempt's enqueue succeeded and was recorded: its wait has an end to report
-	nestedMiss string              // why an inherited CORESLOT_HOLD did not count; "" with none
-	parentHold string              // the live parent hold of an --independent run
-	inherited  bool                // it runs inside another run's command, so it never connects to the socket
+	record     runRecord // the local record, as the switch stood at the run's start
+	memMiB     int64     // the machine's memory, from the run's start
+	nestedMiss string    // why an inherited CORESLOT_HOLD did not count; "" with none
+	parentHold string    // the live parent hold of an --independent run
+	inherited  bool      // it runs inside another run's command, so it never connects to the socket
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -150,7 +144,9 @@ func (r *run) ordinary() int {
 		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when no other coreslot job runs",
 			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))
 	}
-	r.telemetry, r.overMiB = recording, bound
+	if recording {
+		r.record.arm(r, bound)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if r.o.timeout > 0 { // one deadline from the run's start, restarts included
@@ -221,15 +217,15 @@ func restartNeed(peakKiB, needMiB int64) int64 { return max((peakKiB+1023)/1024,
 // wait queues req and waits for its grant. ok is false when the run ends without one, with code
 // its exit status.
 func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Engine, req spec.Request) (g *engine.Grant, code int, ok bool) {
-	r.queued = false
+	r.record.queued = false
 	r.why = func() (string, []engine.HolderInfo) {
 		rep, err := e.Snapshot()
 		if err != nil { // informative: a failure leaves it out
-			r.snap = nil
+			r.record.snap = nil
 			return "", nil
 		}
-		if r.rec != nil {
-			r.snap = &rep
+		if r.record.Recorder != nil {
+			r.record.snap = &rep
 		}
 		return waitReason(rep, req), rep.Holds
 	}
@@ -243,14 +239,13 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 		defer c()
 	}
 	t, err := e.EnqueueContext(enqCtx, req)
-	r.enqueued = time.Since(r.start)
 	if err == nil {
-		r.recordEnqueue(e, t, req)
+		r.record.enqueue(e, t, req)
 		if r.o.noWait {
 			g, err = r.tryOnce(ctx, t)
 		} else {
 			g, err = waitOneP(func() (*engine.Grant, error) {
-				return waitLoop(ctx, r.stepperOf(t), newRealClock(), r.io.Stderr, r.waitingLine)
+				return waitLoop(ctx, r.record.stepper(t), newRealClock(), r.io.Stderr, r.waitingLine)
 			})
 		}
 		if err != nil {
@@ -270,14 +265,14 @@ func (r *run) waitOver(e *engine.Engine, g *engine.Grant, err error, sig os.Sign
 		if sig == syscall.SIGINT {
 			r.notice("interrupted while waiting")
 		}
-		r.recordWaitEnd("interrupted", telemetry.Fields{"signal": unix.SignalName(sig.(syscall.Signal))})
+		r.record.waitEnd("interrupted", telemetry.Fields{"signal": unix.SignalName(sig.(syscall.Signal))})
 		code, _ := classify(&interruptError{Sig: sig.(syscall.Signal)})
 		return nil, code, false
 	}
 	if err != nil {
 		return nil, r.notAdmitted(e, err, restart), false
 	}
-	r.recordAdmitted(g)
+	r.record.admitted(g)
 	return g, 0, true
 }
 
@@ -285,14 +280,14 @@ func (r *run) waitOver(e *engine.Engine, g *engine.Grant, err error, sig os.Sign
 func (r *run) notAdmitted(e *engine.Engine, err error, restart bool) int {
 	switch {
 	case errors.Is(err, engine.ErrCanceled):
-		r.recordWaitEnd("cancelled", telemetry.Fields{})
+		r.record.waitEnd("cancelled", telemetry.Fields{})
 		return r.refuse("the request was cancelled")
 	case r.o.noWait && (errors.Is(err, errNotAtOnce) || errors.Is(err, context.DeadlineExceeded)):
-		r.recordWaitEnd("refused", telemetry.Fields{"reason": "no_wait"})
+		r.record.waitEnd("refused", telemetry.Fields{"reason": "no_wait"})
 		r.notice("not admitted at once (--no-wait)%s", r.holdersText(e))
 		return r.o.refusalCode
 	case errors.Is(err, context.DeadlineExceeded):
-		r.recordWaitEnd("timeout", telemetry.Fields{"on_timeout": r.o.onTimeout})
+		r.record.waitEnd("timeout", telemetry.Fields{"on_timeout": r.o.onTimeout})
 		if restart {
 			return r.refuse("%s was stopped for memory (%s) and not restarted: the run's --timeout of %v ran out%s",
 				commandText(r.o.argv), r.lastStop, r.o.timeout, r.floorAsk())

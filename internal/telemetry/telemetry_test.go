@@ -5,6 +5,7 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -24,7 +25,15 @@ func stateDir(t *testing.T) string {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	setFormat(t, dir, fmt.Sprintf("coreslot-protocol %d\n", store.Format))
 	return dir
+}
+
+func setFormat(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func eventsPath(dir string) string { return filepath.Join(dir, store.TelemetryDir, store.EventsFile) }
@@ -104,6 +113,43 @@ func TestEmitMachineNamesNoRun(t *testing.T) {
 	}
 	if got[1]["n"] != float64(1) {
 		t.Errorf("the run's first line has n %v after a machine line, want 1", got[1]["n"])
+	}
+}
+
+// Nothing is written into a directory whose FORMAT this client does not understand, and a good one
+// coming back does not bring the recorder back; the stamps of the machine-wide lines stay unmade.
+// Mutations: live not reading FORMAT; a read that does not latch.
+func TestFormatSilences(t *testing.T) {
+	for name, body := range map[string]string{"foreign": "coreslot-protocol 99\n", "malformed": "coreslot-protocol x\n", "missing": ""} {
+		t.Run(name, func(t *testing.T) {
+			dir := stateDir(t)
+			good, err := os.ReadFile(filepath.Join(dir, store.FormatFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := New(dir, "run-1", "x")
+			r.Emit("before", nil)
+			if body == "" {
+				err = os.Remove(filepath.Join(dir, store.FormatFile))
+			} else {
+				setFormat(t, dir, body)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.MemoryAsync()
+			if !r.Stopped() {
+				t.Error("the recorder is live")
+			}
+			setFormat(t, dir, string(good))
+			r.Emit("after", nil)
+			if got := lines(t, dir); len(got) != 1 || got[0]["e"] != "before" || !r.Stopped() {
+				t.Errorf("lines %v, stopped %v; want the first line alone", got, r.Stopped())
+			}
+			if _, err := os.Stat(filepath.Join(dir, store.TelemetryDir, store.MemoryStamp)); err == nil {
+				t.Error("a stamp was made")
+			}
+		})
 	}
 }
 

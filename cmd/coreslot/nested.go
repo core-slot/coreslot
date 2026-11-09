@@ -71,7 +71,7 @@ func isAncestor(pid int) bool {
 	return false
 }
 
-// openReadOnly opens the state directory for a pass-through's reading of FORMAT; tests replace it.
+// openReadOnly checks that a pass-through's state directory opens before it records; tests replace it.
 var openReadOnly = store.OpenReadOnly
 
 // shielded is the inherited hold's descriptor that shieldInherited made close-on-exec, with its
@@ -200,30 +200,27 @@ func (r *run) passThrough(env map[string]string, parentHold string) int {
 		}
 		grant = parent
 	}
-	st := r.recordPassThrough(env, "parent_hold", parentHold)
-	return r.runChild(child{env: withGrant(grant), grantMiB: grant, recheck: st, release: func() error { return nil }})
+	r.recordPassThrough(env, "parent_hold", parentHold)
+	return r.runChild(child{env: withGrant(grant), grantMiB: grant, release: func() error { return nil }})
 }
 
-// recordPassThrough makes a pass-through's recorder and writes its outside line. It takes the mark
-// in its environment and a FORMAT it understands, read once; with no mark it reads nothing. It
-// returns the directory whose FORMAT to re-read before the run's last line, nil with no recorder.
-func (r *run) recordPassThrough(env map[string]string, reason, parent string) *store.Store {
+// recordPassThrough starts a pass-through's record and writes its outside line. It takes the mark
+// in its environment and a state directory it can read; with no mark it reads nothing.
+func (r *run) recordPassThrough(env map[string]string, reason, parent string) {
 	if env[engine.EnvTelemetry] != "1" || r.loc.err != nil {
-		return nil
+		return
 	}
-	st, err := openReadOnly(r.loc.dir)
-	if err != nil || formatStillUnderstood(st) != nil {
-		return nil
+	if _, err := openReadOnly(r.loc.dir); err != nil {
+		return
 	}
-	r.telemetry = true
-	r.recordOutside(true, "pass_through", reason, parent)
-	return st
+	r.record.arm(r, 0)
+	r.record.outside("pass_through", reason, parent)
 }
 
 // passThroughUnbudgeted runs under a parent that runs unbudgeted (PROTOCOL.md section 18 rule
 // 1): with its need, passing CORESLOT_UNBUDGETED on, writing no degraded record.
 func (r *run) passThroughUnbudgeted(env map[string]string, reason string) int {
 	r.notice("the parent run is unbudgeted (%s); running unbudgeted with mem=%s", text(reason), spec.FormatMiB(r.o.need))
-	st := r.recordPassThrough(env, "parent_unbudgeted", "")
-	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, failCode: "parent_unbudgeted", recheck: st, release: func() error { return nil }})
+	r.recordPassThrough(env, "parent_unbudgeted", "")
+	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, failCode: "parent_unbudgeted", release: func() error { return nil }})
 }
