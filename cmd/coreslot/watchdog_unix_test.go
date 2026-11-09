@@ -424,7 +424,7 @@ func TestIdleMeterActiveTick(t *testing.T) {
 	}
 }
 
-// The client is asked once a window, at its end, and not at all when the window was busy.
+// The client is asked once a window, at its end.
 // Mutation: test the client before the tick count → asked at every tick, red.
 func TestIdleMeterAsksClientAtWindowEnd(t *testing.T) {
 	var m idleMeter
