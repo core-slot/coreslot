@@ -191,16 +191,21 @@ func TestContainerClientName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Each name is written once and the shell cases run the same files again: on Linux a
+	// race-built helper's binary stays busy for some milliseconds after Wait has reaped it, and
+	// writing it again then fails with "text file busy".
 	dir := t.TempDir()
+	for _, name := range []string{"docker", "dockerd"} {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, c := range []struct {
 		name  string
 		shell bool
 		want  bool
 	}{{"docker", false, true}, {"dockerd", false, false}, {"docker", true, true}, {"dockerd", true, false}} {
 		bin := filepath.Join(dir, c.name)
-		if err := os.WriteFile(bin, data, 0o755); err != nil {
-			t.Fatal(err)
-		}
 		cmd := exec.Command(bin)
 		if c.shell {
 			cmd = exec.Command("/bin/sh", "-c", `"$0" & wait`, bin)
