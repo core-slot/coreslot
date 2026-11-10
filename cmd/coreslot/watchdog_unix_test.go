@@ -210,7 +210,12 @@ func watchFor(t *testing.T, r *run, sup *supervisor, g *engine.Grant, st *store.
 		}
 		return int64(n) << 10, nil, true
 	}
-	listClient = func(int) bool { return client(n) }
+	listClient = func(pid int) bool {
+		if pid != sup.pid {
+			t.Errorf("client scan of pid %d; want the command's, %d", pid, sup.pid)
+		}
+		return client(n)
+	}
 	return r.watchChild(ctx, sup, g, st)
 }
 
@@ -352,5 +357,194 @@ func TestNoHitLeavesVictim(t *testing.T) {
 	}
 	if h := body(t, st, g); !h.Victim || h.Container || p.container || strings.Contains(string(raw), "container") {
 		t.Errorf("hold %s, peak %+v; want a victim with no key, no mark", raw, p)
+	}
+}
+
+// quiet is a tick's times for ns of CPU.
+func quiet(ns int64) memsample.TreeTimes { return memsample.TreeTimes{UserNS: ns} }
+
+// feed gives the meter n ticks of d with no client, and returns the last result.
+func feed(m *noCPUMeter, n int, d memsample.TreeTimes) (noCPUS int64) {
+	for range n {
+		noCPUS = m.add(d, false, func() bool { return false })
+	}
+	return noCPUS
+}
+
+// The mark appears after six quiet windows, counts in whole windows, and a busy window takes it
+// back. Page wait counts. Mutations: mark at 5 windows → 1500, red; count only user time → the
+// page-wait and system rows are marked, red; do not reset → the busy rows stay, red.
+func TestNoCPUMeter(t *testing.T) {
+	const window = 150
+	var m noCPUMeter
+	if got := feed(&m, 5*window, quiet(0)); got != 0 {
+		t.Errorf("after 5 quiet windows: %d; want 0, under the mark", got)
+	}
+	if got := feed(&m, window-1, quiet(0)); got != 0 {
+		t.Errorf("a tick short of the sixth window: %d; want 0", got)
+	}
+	if got := feed(&m, 1, quiet(0)); got != 1800 {
+		t.Errorf("after 6 quiet windows: %d; want 1800", got)
+	}
+	if got := feed(&m, window, quiet(0)); got != 2100 {
+		t.Errorf("after 7 quiet windows: %d; want 2100", got)
+	}
+	for _, c := range []struct {
+		name string
+		d    memsample.TreeTimes
+	}{
+		{"user time", memsample.TreeTimes{UserNS: 3e9 / window}},
+		{"system time", memsample.TreeTimes{SysNS: 3e9 / window}},
+		{"page wait", memsample.TreeTimes{PageWaitNS: 3e9 / window}},
+	} {
+		m = noCPUMeter{windows: 7}
+		if got := feed(&m, window, c.d); got != 0 || m.windows != 0 {
+			t.Errorf("%s: %d, %d windows; want the mark gone and the count reset", c.name, got, m.windows)
+		}
+	}
+	m = noCPUMeter{windows: 7}
+	if got := feed(&m, window, quiet(1e7)); got != 2400 {
+		t.Errorf("1.5 s of CPU in a window: %d; want 2400, still quiet", got)
+	}
+	if got := feed(&m, window, quiet(1e7)); got != 2700 {
+		t.Errorf("1.5 s more in the next window: %d; want 2700, each window counts alone", got)
+	}
+}
+
+// A window already busy takes the mark back on the tick that made it so, not at the window's end,
+// and still counts as busy when it ends. Mutation: judge the window at its end alone → 2100 in
+// both rows, red.
+func TestNoCPUMarkGoesAtOnce(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		d      memsample.TreeTimes
+		active bool
+	}{{"CPU", quiet(3e9), false}, {"an active tick", quiet(0), true}} {
+		m := noCPUMeter{windows: 7}
+		if got := m.add(c.d, c.active, func() bool { return false }); got != 0 {
+			t.Errorf("%s on the window's first tick: %d; want 0 at once", c.name, got)
+		}
+		if got := feed(&m, 149, quiet(0)); got != 0 || m.windows != 0 {
+			t.Errorf("%s, at the window's end: %d, %d windows; want 0, 0", c.name, got, m.windows)
+		}
+	}
+}
+
+// One active tick anywhere in a window keeps it from being quiet, and the next window starts clean.
+// Mutations: ignore active → the window counts, red; do not clear it with the window → the next
+// stays busy, red.
+func TestNoCPUMeterActiveTick(t *testing.T) {
+	m := noCPUMeter{windows: 7}
+	m.add(quiet(0), true, func() bool { return false })
+	if got := feed(&m, 149, quiet(0)); got != 0 || m.windows != 0 {
+		t.Errorf("a window with an active tick: %d, %d windows; want the mark gone", got, m.windows)
+	}
+	feed(&m, 150, quiet(0))
+	if m.windows != 1 {
+		t.Errorf("the window after: %d windows; want 1", m.windows)
+	}
+}
+
+// watchTree runs r's watchChild for the given number of 1 s listings of what tree answers.
+func watchTree(t *testing.T, r *run, g *engine.Grant, st *store.Store, listings int,
+	tree func(n int) (map[int]memsample.TreeTimes, bool)) {
+	t.Helper()
+	savedTree, savedClient := listTree, listClient
+	t.Cleanup(func() { listTree, listClient = savedTree, savedClient })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := 0
+	listTree = func(int) (int64, map[int]memsample.TreeTimes, bool) {
+		n++
+		if n == listings {
+			cancel()
+		}
+		times, ok := tree(n)
+		return 1 << 10, times, ok
+	}
+	listClient = func(int) bool { return false }
+	r.watchChild(ctx, &supervisor{pid: 42, group: true}, g, st)
+}
+
+// A real tree goes quiet, is marked, works again and loses the mark. Its first sighting is a new
+// process, so the first window is not quiet. Mutations: write NoCPUS only when above 0 → 4 at the
+// end, red; drop the time deltas from the meter → still 4 at the end, red.
+func TestNoCPUMarkClearsWhenTheTreeWorks(t *testing.T) {
+	shortNoCPU(t)
+	g, st := watchedHold(t)
+	var marked int64
+	watchTree(t, restartable("make", "test"), g, st, 8, func(n int) (map[int]memsample.TreeTimes, bool) {
+		if n == 7 {
+			marked = body(t, st, g).NoCPUS
+		}
+		if n > 6 {
+			return map[int]memsample.TreeTimes{7: {UserNS: 10e9}}, true
+		}
+		return map[int]memsample.TreeTimes{7: {}}, true
+	})
+	if h := body(t, st, g); marked != 4 || h.NoCPUS != 0 {
+		t.Errorf("NoCPUS %d while quiet and %d after working; want 4 and 0", marked, h.NoCPUS)
+	}
+}
+
+// What cannot be read, and a tree that keeps making processes, are not quiet: a root-owned tree
+// reads as no time at all, and a child born and reaped between two ticks leaves no time a tick
+// sees. Mutations: leave !ok out of active → 4 in the first row, red; leave fresh out → 4 in the
+// second, red.
+func TestNoCPUNeedsEvidence(t *testing.T) {
+	shortNoCPU(t)
+	for _, c := range []struct {
+		name string
+		tree func(n int) (map[int]memsample.TreeTimes, bool)
+	}{
+		{"unreadable", func(int) (map[int]memsample.TreeTimes, bool) { return nil, false }},
+		{"new processes", func(n int) (map[int]memsample.TreeTimes, bool) {
+			return map[int]memsample.TreeTimes{7: {}, 1000 + n: {}}, true
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g, st := watchedHold(t)
+			watchTree(t, restartable("make", "test"), g, st, 4, c.tree)
+			if h := body(t, st, g); h.NoCPUS != 0 {
+				t.Errorf("hold NoCPUS %d; want 0", h.NoCPUS)
+			}
+		})
+	}
+}
+
+// shortNoCPU makes the mark appear after two windows of one tick (2 s).
+func shortNoCPU(t *testing.T) {
+	t.Helper()
+	ticks, marks := noCPUWindowTicks, noCPUMarkWindows
+	noCPUWindowTicks, noCPUMarkWindows = 1, 2
+	t.Cleanup(func() { noCPUWindowTicks, noCPUMarkWindows = ticks, marks })
+}
+
+// The run writes the mark to its hold. A hold marked container work earlier still goes quiet once
+// its client is gone, as an orchestrator between tasks does; a client alive at each window's end
+// keeps it off, and neither the mark nor its absence touches Victim. Mutations: leave the write out
+// of watchChild → 0 in the first row, red; skip the meter while p.container → 0 in the first row,
+// red; pass a client that always says no → the second row is marked, red; set Victim from the
+// mark → the third row loses it, red.
+func TestRunWritesNoCPUMark(t *testing.T) {
+	shortNoCPU(t)
+	for _, c := range []struct {
+		name   string
+		client func(n int) bool
+		want   int64
+		victim bool // with no client ever, the run stays a stop candidate
+	}{
+		{"client gone", func(n int) bool { return n == 1 }, 4, false},
+		{"client alive", func(int) bool { return true }, 0, false},
+		{"no client", func(int) bool { return false }, 4, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g, st := watchedHold(t)
+			watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, c.client, nil)
+			if h := body(t, st, g); h.NoCPUS != c.want || h.Container == c.victim || h.Victim != c.victim {
+				t.Errorf("hold NoCPUS %d Container %v Victim %v; want %d, %v, %v", h.NoCPUS, h.Container, h.Victim,
+					c.want, !c.victim, c.victim)
+			}
+		})
 	}
 }

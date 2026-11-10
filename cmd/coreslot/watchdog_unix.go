@@ -27,6 +27,45 @@ const listingsPerTick = int(memsample.PeriodNS / int64(memSampleEvery))
 // telemetryTicks is how many of the tree's listings make one telemetry.Cadence.
 var telemetryTicks = int(telemetry.Cadence / memSampleEvery)
 
+// The no-CPU mark (no_cpu_s, PROTOCOL.md section 7.4): noCPUWindowTicks ticks of 2 s make a window
+// of 5 min, and noCPUMarkWindows of them in a row the 30 min from which a hold says so.
+var noCPUWindowTicks, noCPUMarkWindows = int(5 * time.Minute / time.Duration(memsample.PeriodNS)), int64(6)
+
+// noCPUMeter counts a tree's quiet windows in a row. It counts ticks, not a clock's time, so that a
+// machine asleep adds nothing. It only informs: nothing but status reads what it gives.
+type noCPUMeter struct {
+	ticks   int   // of the window under way
+	busyNS  int64 // the tree's time in that window
+	active  bool  // that window showed activity that its time may not
+	windows int64 // quiet windows in a row
+}
+
+// add takes a tick's times and whether the tick showed activity they may not, and returns the
+// seconds to write to the hold, 0 under the mark. A window is quiet when the tree spent under 1 % of
+// a core in it, no tick was active and client finds no container client in the tree at its end, as
+// a client's CPU says nothing of its containers' work. The mark goes once the window under way is
+// not.
+func (m *noCPUMeter) add(d memsample.TreeTimes, active bool, client func() bool) int64 {
+	m.ticks++
+	m.busyNS += d.UserNS + d.SysNS + d.PageWaitNS
+	m.active = m.active || active
+	windowNS := int64(noCPUWindowTicks) * memsample.PeriodNS
+	quiet := m.busyNS < windowNS/100 && !m.active
+	if m.ticks == noCPUWindowTicks {
+		if quiet = quiet && !client(); quiet {
+			m.windows++
+		}
+		m.ticks, m.busyNS, m.active = 0, 0, false
+	}
+	if !quiet {
+		m.windows = 0
+	}
+	if m.windows < noCPUMarkWindows {
+		return 0
+	}
+	return m.windows * windowNS / int64(time.Second)
+}
+
 // listTree is the listing of the command's tree; tests replace it.
 var listTree = memsample.Tree
 
@@ -64,6 +103,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	prev := map[int]memsample.TreeTimes{}
 	var round, keptRound, cpuNS int64
 	var stall float64
+	var noCPU noCPUMeter
 	smoothed := false
 	p.container = r.o.containerCommand()
 	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
@@ -101,17 +141,21 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if g == nil || n%listingsPerTick != 0 {
 			continue
 		}
-		var d memsample.TreeTimes
-		d, prev = treeDeltas(prev, times), times
+		d, fresh := treeDeltas(prev, times)
+		prev = times
+		// A child born and reaped between two ticks leaves no time a tick sees, so a tree that keeps
+		// making processes never counts as quiet: a wait loop that forks stays unmarked.
+		active := !ok || fresh
 		// The CPU time so far is the sum of the tick deltas: a process that ended between two
 		// listings loses its time since the earlier one, so the progress it gives is low, never high.
 		cpuNS += d.UserNS + d.SysNS
 		if s, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
+		noCPUS := noCPU.add(d, active, func() bool { return p.container && listClient(sup.pid) }) // a run not yet container work scanned this listing
 		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
-			h.CPUNS, h.StallEWMA = cpuNS, stall
+			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, noCPUS
 			h.SampledNS = store.NowNS()
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
@@ -240,20 +284,19 @@ func (r *run) updateHold(st *store.Store, g *engine.Grant, fn func(*wire.Hold)) 
 	return g.UpdateHold(fn) == nil
 }
 
-// treeDeltas returns the time the processes of cur spent since prev. A process new to the tree,
-// or whose pid was reused, counts its whole time.
-func treeDeltas(prev, cur map[int]memsample.TreeTimes) memsample.TreeTimes {
-	var d memsample.TreeTimes
+// treeDeltas returns the time the processes of cur spent since prev, and whether cur holds a
+// process new to the tree. A new process, or one whose pid was reused, counts its whole time.
+func treeDeltas(prev, cur map[int]memsample.TreeTimes) (d memsample.TreeTimes, fresh bool) {
 	for pid, cur := range cur {
-		was := prev[pid]
-		if cur.UserNS < was.UserNS || cur.SysNS < was.SysNS || cur.PageWaitNS < was.PageWaitNS {
-			was = memsample.TreeTimes{}
+		was, seen := prev[pid]
+		if !seen || cur.UserNS < was.UserNS || cur.SysNS < was.SysNS || cur.PageWaitNS < was.PageWaitNS {
+			was, fresh = memsample.TreeTimes{}, true
 		}
 		d.UserNS += cur.UserNS - was.UserNS
 		d.SysNS += cur.SysNS - was.SysNS
 		d.PageWaitNS += cur.PageWaitNS - was.PageWaitNS
 	}
-	return d
+	return d, fresh
 }
 
 // countClosed adds the tick's time d to the attempt's gate-closed time when det holds a sample the

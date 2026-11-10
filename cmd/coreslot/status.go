@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
@@ -183,6 +184,14 @@ func holderAlive(pid int) bool {
 	return err == nil || errors.Is(err, unix.EPERM)
 }
 
+// holdNoCPUS is the mark of a running hold (PROTOCOL.md section 23.3); any other's body is stale.
+func holdNoCPUS(h engine.HolderInfo) int64 {
+	if h.ChildExited || h.SampleAgeMS < 0 || h.SampleAgeMS > memsample.StaleNS/int64(time.Millisecond) {
+		return 0
+	}
+	return h.NoCPUS
+}
+
 func sectionHeldFor(s engine.SectionInfo, nowNS int64) time.Duration {
 	if !s.Held || s.EnteredNS == 0 {
 		return 0
@@ -276,6 +285,9 @@ func (v statusView) human() string {
 			duration(time.Duration(max(v.nowNS-h.StartNS, 0))), spec.FormatMiB(h.FootprintMiB))
 		if h.ArrivalNS > 0 {
 			line += "  arrived " + duration(time.Duration(max(v.nowNS-h.ArrivalNS, 0))) + " ago"
+		}
+		if s := holdNoCPUS(h); s > 0 {
+			line += "  no CPU for " + strings.TrimSuffix(duration(time.Duration(s)*time.Second), "00s") // whole windows
 		}
 		if h.Stops > 0 {
 			line += fmt.Sprintf("  stops %d", h.Stops)
@@ -454,6 +466,7 @@ type jsonHold struct {
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
 	Container    bool    `json:"container,omitempty"`
+	NoCPUS       int64   `json:"no_cpu_s,omitempty"` // absent until its tree has used next to no CPU for 30 min
 }
 
 type jsonTicket struct {
@@ -503,7 +516,7 @@ func (v statusView) document() jsonStatus {
 		d.Holds = append(d.Holds, jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
-			Container: h.Container})
+			Container: h.Container, NoCPUS: holdNoCPUS(h)})
 	}
 	for _, t := range v.tickets {
 		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,

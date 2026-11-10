@@ -66,7 +66,7 @@ func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []s
 func (h liveHold) info() HolderInfo {
 	b := h.body
 	return HolderInfo{Name: h.name, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
-		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container}
+		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS}
 }
 
 // reservations are the room's input: each live hold that reserves memory, with the footprint its
