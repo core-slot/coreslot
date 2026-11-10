@@ -210,7 +210,12 @@ func watchFor(t *testing.T, r *run, sup *supervisor, g *engine.Grant, st *store.
 		}
 		return int64(n) << 10, nil, true
 	}
-	listClient = func(int) bool { return client(n) }
+	listClient = func(pid int) bool {
+		if pid != sup.pid {
+			t.Errorf("client scan of pid %d; want the command's, %d", pid, sup.pid)
+		}
+		return client(n)
+	}
 	return r.watchChild(ctx, sup, g, st)
 }
 
@@ -358,87 +363,85 @@ func TestNoHitLeavesVictim(t *testing.T) {
 // quiet is a tick's times for ns of CPU.
 func quiet(ns int64) memsample.TreeTimes { return memsample.TreeTimes{UserNS: ns} }
 
-// feed gives the meter n ticks of d with the client answer, and returns the last result.
-func feed(m *idleMeter, n int, d memsample.TreeTimes, client bool) (idleS int64) {
+// feed gives the meter n ticks of d with no client, and returns the last result.
+func feed(m *noCPUMeter, n int, d memsample.TreeTimes) (noCPUS int64) {
 	for range n {
-		idleS = m.add(d, false, func() bool { return client })
+		noCPUS = m.add(d, false, func() bool { return false })
 	}
-	return idleS
+	return noCPUS
 }
 
-// The mark appears after six idle windows, counts in whole windows, and a busy window or a live
-// client takes it back. Page wait is work: a thrashing tree is not idle. Mutations: mark at 5
-// windows → 1500, red; leave the client out → the client row stays marked, red; count only user
-// time → the page-wait and system rows are marked, red; do not reset → the busy row stays, red.
-func TestIdleMeter(t *testing.T) {
+// The mark appears after six quiet windows, counts in whole windows, and a busy window takes it
+// back. Page wait counts. Mutations: mark at 5 windows → 1500, red; count only user time → the
+// page-wait and system rows are marked, red; do not reset → the busy rows stay, red.
+func TestNoCPUMeter(t *testing.T) {
 	const window = 150
-	var m idleMeter
-	if got := feed(&m, 5*window, quiet(0), false); got != 0 {
-		t.Errorf("after 5 idle windows: %d; want 0, under the mark", got)
+	var m noCPUMeter
+	if got := feed(&m, 5*window, quiet(0)); got != 0 {
+		t.Errorf("after 5 quiet windows: %d; want 0, under the mark", got)
 	}
-	if got := feed(&m, window-1, quiet(0), false); got != 0 {
+	if got := feed(&m, window-1, quiet(0)); got != 0 {
 		t.Errorf("a tick short of the sixth window: %d; want 0", got)
 	}
-	if got := feed(&m, 1, quiet(0), false); got != 1800 {
-		t.Errorf("after 6 idle windows: %d; want 1800", got)
+	if got := feed(&m, 1, quiet(0)); got != 1800 {
+		t.Errorf("after 6 quiet windows: %d; want 1800", got)
 	}
-	if got := feed(&m, window, quiet(0), false); got != 2100 {
-		t.Errorf("after 7 idle windows: %d; want 2100", got)
+	if got := feed(&m, window, quiet(0)); got != 2100 {
+		t.Errorf("after 7 quiet windows: %d; want 2100", got)
 	}
 	for _, c := range []struct {
-		name   string
-		d      memsample.TreeTimes
-		client bool
+		name string
+		d    memsample.TreeTimes
 	}{
-		{"user time", memsample.TreeTimes{UserNS: 3e9 / window}, false},
-		{"system time", memsample.TreeTimes{SysNS: 3e9 / window}, false},
-		{"page wait", memsample.TreeTimes{PageWaitNS: 3e9 / window}, false},
-		{"a live client", quiet(0), true},
+		{"user time", memsample.TreeTimes{UserNS: 3e9 / window}},
+		{"system time", memsample.TreeTimes{SysNS: 3e9 / window}},
+		{"page wait", memsample.TreeTimes{PageWaitNS: 3e9 / window}},
 	} {
-		m = idleMeter{windows: 7}
-		if got := feed(&m, window, c.d, c.client); got != 0 || m.windows != 0 {
+		m = noCPUMeter{windows: 7}
+		if got := feed(&m, window, c.d); got != 0 || m.windows != 0 {
 			t.Errorf("%s: %d, %d windows; want the mark gone and the count reset", c.name, got, m.windows)
 		}
 	}
-	m = idleMeter{windows: 7}
-	if got := feed(&m, window, quiet(1e7), false); got != 2400 {
-		t.Errorf("1.5 s of CPU in a window: %d; want 2400, still idle", got)
+	m = noCPUMeter{windows: 7}
+	if got := feed(&m, window, quiet(1e7)); got != 2400 {
+		t.Errorf("1.5 s of CPU in a window: %d; want 2400, still quiet", got)
 	}
-	if got := feed(&m, window, quiet(1e7), false); got != 2700 {
+	if got := feed(&m, window, quiet(1e7)); got != 2700 {
 		t.Errorf("1.5 s more in the next window: %d; want 2700, each window counts alone", got)
 	}
 }
 
-// One active tick anywhere in a window keeps it from being idle, and the next window starts clean.
-// Mutations: ignore active → the window counts, red; do not clear it with the window → the next
-// stays busy, red.
-func TestIdleMeterActiveTick(t *testing.T) {
-	m := idleMeter{windows: 7}
-	m.add(quiet(0), true, func() bool { return false })
-	if got := feed(&m, 149, quiet(0), false); got != 0 || m.windows != 0 {
-		t.Errorf("a window with an active tick: %d, %d windows; want the mark gone", got, m.windows)
-	}
-	feed(&m, 150, quiet(0), false)
-	if m.windows != 1 {
-		t.Errorf("the window after: %d windows; want 1", m.windows)
+// A window already busy takes the mark back on the tick that made it so, not at the window's end,
+// and still counts as busy when it ends. Mutation: judge the window at its end alone → 2100 in
+// both rows, red.
+func TestNoCPUMarkGoesAtOnce(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		d      memsample.TreeTimes
+		active bool
+	}{{"CPU", quiet(3e9), false}, {"an active tick", quiet(0), true}} {
+		m := noCPUMeter{windows: 7}
+		if got := m.add(c.d, c.active, func() bool { return false }); got != 0 {
+			t.Errorf("%s on the window's first tick: %d; want 0 at once", c.name, got)
+		}
+		if got := feed(&m, 149, quiet(0)); got != 0 || m.windows != 0 {
+			t.Errorf("%s, at the window's end: %d, %d windows; want 0, 0", c.name, got, m.windows)
+		}
 	}
 }
 
-// The client is asked once a window, at its end.
-// Mutation: test the client before the tick count → asked at every tick, red.
-func TestIdleMeterAsksClientAtWindowEnd(t *testing.T) {
-	var m idleMeter
-	asked := 0
-	client := func() bool { asked++; return false }
-	for range 149 {
-		m.add(quiet(0), false, client)
+// One active tick anywhere in a window keeps it from being quiet, and the next window starts clean.
+// Mutations: ignore active → the window counts, red; do not clear it with the window → the next
+// stays busy, red.
+func TestNoCPUMeterActiveTick(t *testing.T) {
+	m := noCPUMeter{windows: 7}
+	m.add(quiet(0), true, func() bool { return false })
+	if got := feed(&m, 149, quiet(0)); got != 0 || m.windows != 0 {
+		t.Errorf("a window with an active tick: %d, %d windows; want the mark gone", got, m.windows)
 	}
-	if asked != 0 {
-		t.Errorf("asked %d times before the window's end; want 0", asked)
-	}
-	m.add(quiet(0), false, client)
-	if asked != 1 {
-		t.Errorf("asked %d times by the window's end; want 1", asked)
+	feed(&m, 150, quiet(0))
+	if m.windows != 1 {
+		t.Errorf("the window after: %d windows; want 1", m.windows)
 	}
 }
 
@@ -464,10 +467,10 @@ func watchTree(t *testing.T, r *run, g *engine.Grant, st *store.Store, listings 
 }
 
 // A real tree goes quiet, is marked, works again and loses the mark. Its first sighting is a new
-// process, so the first window is not idle. Mutations: write NoCPUS only when above 0 → 4 at the
+// process, so the first window is not quiet. Mutations: write NoCPUS only when above 0 → 4 at the
 // end, red; drop the time deltas from the meter → still 4 at the end, red.
-func TestIdleMarkClearsWhenTheTreeWorks(t *testing.T) {
-	shortIdle(t)
+func TestNoCPUMarkClearsWhenTheTreeWorks(t *testing.T) {
+	shortNoCPU(t)
 	g, st := watchedHold(t)
 	var marked int64
 	watchTree(t, restartable("make", "test"), g, st, 8, func(n int) (map[int]memsample.TreeTimes, bool) {
@@ -484,11 +487,12 @@ func TestIdleMarkClearsWhenTheTreeWorks(t *testing.T) {
 	}
 }
 
-// What cannot be read, and a tree that starts processes, are not idle: a root-owned tree reads as
-// no time at all, and a process born and gone between two listings leaves none. Mutations: leave
-// !ok out of active → 4 in the first row, red; leave spawned out → 4 in the second, red.
-func TestIdleNeedsEvidence(t *testing.T) {
-	shortIdle(t)
+// What cannot be read, and a tree that keeps making processes, are not quiet: a root-owned tree
+// reads as no time at all, and a child born and reaped between two ticks leaves no time a tick
+// sees. Mutations: leave !ok out of active → 4 in the first row, red; leave fresh out → 4 in the
+// second, red.
+func TestNoCPUNeedsEvidence(t *testing.T) {
+	shortNoCPU(t)
 	for _, c := range []struct {
 		name string
 		tree func(n int) (map[int]memsample.TreeTimes, bool)
@@ -508,45 +512,39 @@ func TestIdleNeedsEvidence(t *testing.T) {
 	}
 }
 
-// shortIdle makes the mark appear after two windows of one tick (2 s).
-func shortIdle(t *testing.T) {
+// shortNoCPU makes the mark appear after two windows of one tick (2 s).
+func shortNoCPU(t *testing.T) {
 	t.Helper()
-	ticks, marks := idleWindowTicks, idleMarkWindows
-	idleWindowTicks, idleMarkWindows = 1, 2
-	t.Cleanup(func() { idleWindowTicks, idleMarkWindows = ticks, marks })
+	ticks, marks := noCPUWindowTicks, noCPUMarkWindows
+	noCPUWindowTicks, noCPUMarkWindows = 1, 2
+	t.Cleanup(func() { noCPUWindowTicks, noCPUMarkWindows = ticks, marks })
 }
 
-// The run writes the mark to its hold. A hold marked container work earlier still goes idle once
+// The run writes the mark to its hold. A hold marked container work earlier still goes quiet once
 // its client is gone, as an orchestrator between tasks does; a client alive at each window's end
 // keeps it off, and neither the mark nor its absence touches Victim. Mutations: leave the write out
 // of watchChild → 0 in the first row, red; skip the meter while p.container → 0 in the first row,
-// red; pass a client that always says no → the second row is marked, red.
-func TestRunWritesIdleMark(t *testing.T) {
-	shortIdle(t)
+// red; pass a client that always says no → the second row is marked, red; set Victim from the
+// mark → the third row loses it, red.
+func TestRunWritesNoCPUMark(t *testing.T) {
+	shortNoCPU(t)
 	for _, c := range []struct {
 		name   string
 		client func(n int) bool
 		want   int64
+		victim bool // with no client ever, the run stays a stop candidate
 	}{
-		{"client gone", func(n int) bool { return n == 1 }, 4},
-		{"client alive", func(int) bool { return true }, 0},
+		{"client gone", func(n int) bool { return n == 1 }, 4, false},
+		{"client alive", func(int) bool { return true }, 0, false},
+		{"no client", func(int) bool { return false }, 4, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			g, st := watchedHold(t)
 			watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, c.client, nil)
-			if h := body(t, st, g); h.NoCPUS != c.want || !h.Container || h.Victim {
-				t.Errorf("hold NoCPUS %d Container %v Victim %v; want %d, true, false", h.NoCPUS, h.Container, h.Victim, c.want)
+			if h := body(t, st, g); h.NoCPUS != c.want || h.Container == c.victim || h.Victim != c.victim {
+				t.Errorf("hold NoCPUS %d Container %v Victim %v; want %d, %v, %v", h.NoCPUS, h.Container, h.Victim,
+					c.want, !c.victim, c.victim)
 			}
 		})
-	}
-}
-
-// An idle hold stays a stop candidate exactly as before. Mutation: clear Victim while idle → false, red.
-func TestIdleKeepsVictim(t *testing.T) {
-	shortIdle(t)
-	g, st := watchedHold(t)
-	watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 4, func(int) bool { return false }, nil)
-	if h := body(t, st, g); h.NoCPUS != 4 || !h.Victim {
-		t.Errorf("hold NoCPUS %d Victim %v; want 4, true", h.NoCPUS, h.Victim)
 	}
 }

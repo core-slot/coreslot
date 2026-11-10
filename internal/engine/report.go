@@ -13,7 +13,7 @@ type HolderInfo struct {
 	FootprintMiB int64  // what its run last measured
 	Stops        int
 	Container    bool  // container work: its containers' memory is not measured
-	NoCPUS       int64 // how long its tree has done next to nothing, in s; 0 under the mark
+	NoCPUS       int64 // how long its tree has used next to no CPU, in s; 0 under the mark
 	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
 	// still held, so a descendant that inherited the hold's descriptor holds the reservation. Only
 	// Snapshot sets it, and only when the process table can be read.

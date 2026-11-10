@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
@@ -183,10 +184,9 @@ func holderAlive(pid int) bool {
 	return err == nil || errors.Is(err, unix.EPERM)
 }
 
-// holdNoCPUS is the hold's no-CPU mark, 0 once its command or its run has ended: the body then keeps
-// its last value, which says nothing of now.
+// holdNoCPUS is the mark of a running hold (PROTOCOL.md section 23.3); any other's body is stale.
 func holdNoCPUS(h engine.HolderInfo) int64 {
-	if h.OwnerExited || h.ChildExited {
+	if h.ChildExited || h.SampleAgeMS < 0 || h.SampleAgeMS > memsample.StaleNS/int64(time.Millisecond) {
 		return 0
 	}
 	return h.NoCPUS
@@ -466,7 +466,7 @@ type jsonHold struct {
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
 	Container    bool    `json:"container,omitempty"`
-	NoCPUS       int64   `json:"no_cpu_s,omitempty"` // absent until its tree has done next to nothing for 30 min
+	NoCPUS       int64   `json:"no_cpu_s,omitempty"` // absent until its tree has used next to no CPU for 30 min
 }
 
 type jsonTicket struct {

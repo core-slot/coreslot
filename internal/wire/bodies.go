@@ -48,7 +48,7 @@ type Hold struct {
 	TypicalCPUS                  float64 // optional: the label's typical user and system seconds, 0 unknown
 	StallEWMA                    float64 // optional: the run's smoothed stall share, 0..1
 	Container                    bool    // optional: container work, so never a stop round's victim
-	NoCPUS                       int64   // optional: how long the tree has done next to nothing, in s
+	NoCPUS                       int64   // optional: how long the tree has used next to no CPU, in s
 }
 
 // Cancel is the body of a cancel request (section 7.5).

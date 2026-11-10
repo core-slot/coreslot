@@ -1562,7 +1562,7 @@ func TestStatusShowsNoCPU(t *testing.T) {
 	dir := budgetDir(t, 4096)
 	c := openLib(t, dir)
 	marked := hold(t, c, "a", 1)
-	if err := marked.UpdateHold(func(h *wire.Hold) { h.NoCPUS = 7800 }); err != nil {
+	if err := marked.UpdateHold(func(h *wire.Hold) { h.NoCPUS, h.SampledNS = 7800, store.NowNS() }); err != nil {
 		t.Fatal(err)
 	}
 	hold(t, c, "b", 1)
@@ -1581,18 +1581,20 @@ func TestStatusShowsNoCPU(t *testing.T) {
 	}
 }
 
-// A hold's body stops changing when its command exits or its run dies, so the last mark in it says
-// nothing of now. Mutations: leave OwnerExited or ChildExited out of the test → that row is marked,
-// red; apply it to the human form alone → the JSON is, red.
-func TestIdleOnlyOnARunningHold(t *testing.T) {
+// Only a running hold (PROTOCOL.md section 23.3) shows the mark: a body its run no longer writes keeps
+// the last one, which says nothing of now. Mutations: leave ChildExited out → its row is marked,
+// red; leave the sample's age out → the two rows after it are, red; apply it to the human form
+// alone → the JSON is, red.
+func TestNoCPUOnlyOnARunningHold(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		h    engine.HolderInfo
 		want int64
 	}{
-		{"running", engine.HolderInfo{NoCPUS: 1800}, 1800},
-		{"command exited", engine.HolderInfo{NoCPUS: 1800, ChildExited: true}, 0},
-		{"owner exited", engine.HolderInfo{NoCPUS: 1800, OwnerExited: true}, 0},
+		{"running", engine.HolderInfo{NoCPUS: 1800, SampleAgeMS: 2000}, 1800},
+		{"command exited", engine.HolderInfo{NoCPUS: 1800, SampleAgeMS: 2000, ChildExited: true}, 0},
+		{"run no longer writing", engine.HolderInfo{NoCPUS: 1800, SampleAgeMS: 6001}, 0},
+		{"never sampled", engine.HolderInfo{NoCPUS: 1800, SampleAgeMS: -1}, 0},
 	} {
 		v := statusView{rep: engine.Report{Holds: []engine.HolderInfo{c.h}}, nowNS: 1}
 		if got := v.document().Holds[0].NoCPUS; got != c.want {
