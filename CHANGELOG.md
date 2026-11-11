@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.7.0 (2026-11-11)
+
 ### Added
 
 - `coreslot status` marks a running command whose process tree has for 30 minutes or more used next
