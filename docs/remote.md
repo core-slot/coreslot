@@ -64,7 +64,8 @@ again.
 ## Choosing a host
 
 `coreslot status --json` over `ssh` reports a host's memory level, its running commands and its
-queue (the document carries a `"schema"` number):
+queue (the document carries a `"schema"` number; [status-json.md](status-json.md) describes
+every key):
 
 ```sh
 ssh build-host 'export PATH="$PATH:/opt/homebrew/bin:$HOME/.local/bin"; coreslot status --json'

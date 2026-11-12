@@ -53,6 +53,9 @@ func (e *Engine) Snapshot() (Report, error) {
 		return Report{}, err
 	}
 	r.Ignored[store.QueueDir] = ignored
+	// The first live ticket in queue order is the head the passing rule judges others by: only its
+	// index, need and restart are kept for its expected wait.
+	head, headNeed, headRestart := -1, int64(0), false
 	for _, en := range tickets {
 		body, err := e.readBody(store.QueueDir, en.Name)
 		if gone(err) {
@@ -81,6 +84,9 @@ func (e *Engine) Snapshot() (Report, error) {
 		if err != nil {
 			return Report{}, err
 		}
+		if !dead && head < 0 {
+			head, headNeed, headRestart = len(r.Tickets), tk.NeedMiB, tk.Restart
+		}
 		r.Tickets = append(r.Tickets, TicketInfo{Name: en.Name, ID: en.ID.String(), Label: tk.Label,
 			PID: en.ID.PID, NeedMiB: tk.NeedMiB, CreatedNS: tk.CreatedNS,
 			MtimeNS: en.MtimeNS, Dead: dead})
@@ -95,15 +101,18 @@ func (e *Engine) Snapshot() (Report, error) {
 	for _, h := range live {
 		info := h.info()
 		info.ChildExited, info.SampleAgeMS = h.body.ChildExited, sampleAgeMS(h.body.SampledNS, listed)
+		info.LeftS = holdLeftS(h.body, listed)
 		r.Holds = append(r.Holds, info)
 		r.Mem.ReservedMiB += h.body.NeedMiB
 	}
 	if memErr == nil {
 		r.Mem.HeadroomMiB, r.Mem.HeadroomOK, r.Mem.ReserveMiB = machine.HeadroomMiB, machine.HeadroomOK, cfg.ReserveMiB
 	}
+	var room int64 // 0 while the headroom is unread
 	if memErr == nil && machine.HeadroomOK {
 		r.Mem.Known = true
-		r.Mem.FreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live)))
+		room = state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live))
+		r.Mem.RoomMiB, r.Mem.FreeMiB, r.Mem.MachineMiB = room, max(0, room), machine.MemMiB
 		r.Mem.RealFreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, nil))
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
@@ -111,10 +120,16 @@ func (e *Engine) Snapshot() (Report, error) {
 	if procs, ok := listProcs(); ok {
 		for i, h := range r.Holds {
 			r.Holds[i].OwnerExited = !memsample.Alive(procs, h.PID, h.StartNS)
+			r.Holds[i].Stoppable = live[i].body.Victim && !r.Holds[i].OwnerExited && !h.ChildExited
 		}
 	}
 
-	d, smp, at, _ := e.st.ReadWatch() // no readable watch.json is no sample
+	d, smp, at, watchErr := e.st.ReadWatch() // no readable watch.json is no sample
+	if head >= 0 && memErr == nil {
+		readWatch := func() (watch.Detector, watch.Sample, int64, error) { return d, smp, at, watchErr }
+		w, noPass := headWait(headNeed, headRestart, live, room, listed, machine.HeadroomOK, readWatch, cfg.Watch)
+		r.Tickets[head].WaitS, r.Tickets[head].WaitKnown = w, noPass == ""
+	}
 	now := e.clock.Realtime()
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
 		Fresh: fresh(at, now)}

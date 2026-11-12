@@ -20,6 +20,14 @@ type HolderInfo struct {
 	OwnerExited bool
 	ChildExited bool  // its command has exited: its run is releasing it
 	SampleAgeMS int64 // since its run last wrote a sample; -1 when it has not
+	TypicalS    int64 // its label's typical run time in s; 0 unknown
+	// LeftS is what remains of TypicalS at the snapshot's clock, never below 0; meaningful when
+	// TypicalS > 0. Only Snapshot sets it.
+	LeftS int64
+	// Stoppable: the hold's body says victim, its command has not exited
+	// and the process table, read by Snapshot, shows its owner alive. False whenever that cannot be
+	// told, including an unreadable process table. A convenience for a reader, not a control.
+	Stoppable bool
 }
 
 // WatchInfo is the shared watch state in a snapshot.
@@ -45,6 +53,10 @@ type TicketInfo struct {
 	// Dead: the ticket's lock probe succeeded, so nobody holds its descriptor: its owner exited,
 	// withdrew. Dead says nothing about the owner process.
 	Dead bool
+	// WaitS is the expected wait of PROTOCOL.md section 10.3 in s, valid when WaitKnown. Only
+	// Snapshot sets them, and only on the first live ticket in queue order.
+	WaitS     int64
+	WaitKnown bool
 }
 
 // MemInfo is the memory in a snapshot, in MiB. Known is false when the headroom could not be read
@@ -59,6 +71,8 @@ type MemInfo struct {
 	HeadroomMiB int64
 	HeadroomOK  bool
 	ReserveMiB  int64
+	MachineMiB  int64 // the machine's memory; 0 unless Known
+	RoomMiB     int64 // the room a new job may take before FreeMiB clamps it at 0: negative when over-reserved
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.

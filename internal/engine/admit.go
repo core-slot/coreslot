@@ -3,12 +3,10 @@
 package engine
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 
 	"github.com/core-slot/coreslot/internal/config"
@@ -228,29 +226,12 @@ func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg conf
 		t.out.NoPass = "no_holds"
 		return false
 	}
-	// W: the running jobs with a typical run time end soonest first, each freeing the larger of its
-	// need and its footprint, until the room covers head's need; when they never do, W is unknown.
-	now, w := t.e.clock.Realtime(), int64(0)
-	left := func(h liveHold) int64 { return max(0, h.body.TypicalS-(now-h.body.StartNS)/1e9) }
-	known := slices.DeleteFunc(slices.Clone(holds), func(h liveHold) bool { return h.body.TypicalS == 0 })
-	slices.SortFunc(known, func(a, b liveHold) int { return cmp.Compare(left(a), left(b)) })
-	for _, h := range known {
-		if room >= head.NeedMiB {
-			break
-		}
-		room, w = room+max(h.body.NeedMiB, h.body.FootprintMiB), left(h)
-	}
-	if room < head.NeedMiB {
-		t.out.NoPass = "wait_unknown"
+	// W, the head's expected wait for the room it needs (headWait).
+	w, noPass := headWait(head.NeedMiB, head.Restart, holds, room, t.e.clock.Realtime(), m.HeadroomOK,
+		t.e.st.ReadWatch, cfg.Watch)
+	if noPass != "" {
+		t.out.NoPass = noPass
 		return false
-	}
-	if head.Restart {
-		d, s, at, err := t.e.st.ReadWatch()
-		if err != nil {
-			t.out.NoPass = "watch_unreadable"
-			return false
-		}
-		w = max(w, calmLeft(d, s, at, now, cfg.Watch)/1e9)
 	}
 	t.out.W, t.out.WKnown = w, true
 	if t.req.TypicalS <= w {

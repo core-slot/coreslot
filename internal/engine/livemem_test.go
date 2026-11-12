@@ -291,3 +291,23 @@ func TestSamplerCarriesTheReading(t *testing.T) {
 		}
 	}
 }
+
+// A hold's time left is its typical run time less what it has run, never below 0 and not capped at
+// the typical time: a start in the future (a clock that stepped back) leaves more than it. Mutation:
+// capping at TypicalS reddens "start ahead of now".
+func TestHoldLeftS(t *testing.T) {
+	const now = int64(10_000) * 1e9
+	for _, c := range []struct {
+		name    string
+		startNS int64
+		want    int64
+	}{
+		{"mid run", now - 100e9, 500},
+		{"outlived", now - 900e9, 0},
+		{"start ahead of now", now + 50e9, 650},
+	} {
+		if got := holdLeftS(wire.Hold{TypicalS: 600, StartNS: c.startNS}, now); got != c.want {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
+		}
+	}
+}

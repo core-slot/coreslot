@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -611,6 +612,174 @@ func TestSnapshotOwnerExited(t *testing.T) {
 			t.Errorf("%s: holds %+v, %v; want OwnerExited %v", c.name, r.Holds, err, c.want)
 		}
 	}
+}
+
+// A hold is stoppable only when its body says victim, its command has not exited and the process
+// table, which Snapshot read, shows its owner alive. Mutations: setting Stoppable outside the
+// branch that read the process table reddens "listing unread"; dropping the victim term reddens
+// "not a victim"; dropping the child term reddens "child exited".
+func TestSnapshotStoppable(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, nil)
+	g := admitted(t, step(t, enqueue(t, e, need(256))))
+	r, err := e.Snapshot()
+	if err != nil || len(r.Holds) != 1 {
+		t.Fatalf("holds %+v, %v; want one", r.Holds, err)
+	}
+	h := r.Holds[0]
+	saved := listProcs
+	t.Cleanup(func() { listProcs = saved })
+	alive := map[int]memsample.Proc{h.PID: {StartNS: h.StartNS - int64(time.Hour)}}
+	for _, c := range []struct {
+		name          string
+		victim, child bool
+		procs         map[int]memsample.Proc
+		ok            bool
+		want          bool
+	}{
+		{"victim, owner alive, child running", true, false, alive, true, true},
+		{"not a victim", false, false, alive, true, false},
+		{"owner gone", true, false, map[int]memsample.Proc{}, true, false},
+		{"child exited", true, true, alive, true, false},
+		{"listing unread", true, false, nil, false, false},
+	} {
+		if err := g.UpdateHold(func(b *wire.Hold) { b.Victim, b.ChildExited = c.victim, c.child }); err != nil {
+			t.Fatal(err)
+		}
+		listProcs = func() (map[int]memsample.Proc, bool) { return c.procs, c.ok }
+		r, err := e.Snapshot()
+		if err != nil || len(r.Holds) != 1 || r.Holds[0].Stoppable != c.want {
+			t.Errorf("%s: holds %+v, %v; want Stoppable %v", c.name, r.Holds, err, c.want)
+		}
+	}
+}
+
+// With the room negative (8000 MiB reserved of 6024 of headroom, 1024 of it the reserve) the
+// snapshot reports the room as it is, the free memory clamped at 0 and the machine's memory as the
+// reader gave it; the hold's typical run time and the time left of it come with the snapshot.
+// Mutations: clamping RoomMiB, dropping TypicalS from the hold's info, or dropping the LeftS
+// assignment in Snapshot reddens it.
+func TestSnapshotMemFigures(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	setLiveMem(t, 6024)
+	hold(t, e, spec.Request{NeedMiB: 8000, TypicalS: 600}) // an idle head starts whatever the numbers say
+	clk.advance(100 * time.Second)
+	r, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Holds) != 1 || r.Holds[0].TypicalS != 600 || r.Holds[0].LeftS != 500 {
+		t.Errorf("holds %+v; want typical 600 and 500 s left", r.Holds)
+	}
+	m := r.Mem
+	if !m.Known || m.RoomMiB != -3000 || m.FreeMiB != 0 || m.MachineMiB != 1707 ||
+		m.HeadroomMiB != 6024 || m.ReserveMiB != config.DefaultReserveMiB || m.ReservedMiB != 8000 {
+		t.Errorf("mem %+v; want room -3000, free 0, machine 1707, headroom 6024, reserve %d, reserved 8000",
+			m, config.DefaultReserveMiB)
+	}
+}
+
+// waits reads each ticket's expected wait out of a snapshot, as "known:seconds" or "unknown", in
+// queue order.
+func waits(t *testing.T, e *Engine) []string {
+	t.Helper()
+	r, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := []string{}
+	for _, tk := range r.Tickets {
+		switch {
+		case tk.Dead:
+			out = append(out, fmt.Sprintf("dead:%v", tk.WaitKnown))
+		case tk.WaitKnown:
+			out = append(out, fmt.Sprintf("%d", tk.WaitS))
+		default:
+			out = append(out, "unknown")
+		}
+	}
+	return out
+}
+
+// Only the first live ticket has an expected wait, and it is the passing rule's W judged on the
+// room as it is, negative included. A hold of 8000 MiB with a typical run time of 600 s, started
+// 480 s ago, ends in 120 s. Mutations: passing FreeMiB (the clamped room) instead of the real one
+// reddens "room negative"; skipping headWait while the headroom is unread reddens "idle, headroom
+// unread"; a closure that returns a nil error reddens "restart, watch unreadable"; taking the last
+// live ticket instead of the first reddens "first ticket and the one behind it".
+func TestSnapshotHeadWait(t *testing.T) {
+	scene := func(t *testing.T, headroom, typical int64) (*Engine, string) {
+		dir := newStateDir(t, "")
+		clk := newFakeClock()
+		e := newEngine(t, dir, clk)
+		setLiveMem(t, headroom)
+		hold(t, e, spec.Request{Label: "a", NeedMiB: 8000, TypicalS: typical})
+		clk.advance(480 * time.Second)
+		return e, dir
+	}
+	check := func(t *testing.T, e *Engine, want ...string) {
+		t.Helper()
+		if got := waits(t, e); !slices.Equal(got, want) {
+			t.Errorf("expected waits %v, want %v", got, want)
+		}
+	}
+	t.Run("first ticket and the one behind it", func(t *testing.T) {
+		e, _ := scene(t, 10024, 600)
+		enqueue(t, e, need(4000))
+		enqueue(t, e, need(100))
+		check(t, e, "120", "unknown")
+	})
+	t.Run("the covering hold has no typical time", func(t *testing.T) {
+		e, _ := scene(t, 10024, 0)
+		enqueue(t, e, need(4000))
+		check(t, e, "unknown")
+	})
+	t.Run("room negative", func(t *testing.T) {
+		e, _ := scene(t, 6024, 600)
+		enqueue(t, e, need(5500)) // -3000 + 8000 is short of 5500
+		check(t, e, "unknown")
+		enqueue(t, e, need(100))
+		check(t, e, "unknown", "unknown")
+	})
+	t.Run("room negative, covered", func(t *testing.T) {
+		e, _ := scene(t, 6024, 600)
+		enqueue(t, e, need(4000)) // -3000 + 8000 covers 4000
+		check(t, e, "120")
+	})
+	t.Run("idle, headroom unread", func(t *testing.T) {
+		e := newEngine(t, newStateDir(t, ""), newFakeClock())
+		setLiveMem(t, 0)
+		testHeadroom.ok = false
+		enqueue(t, e, need(4000))
+		check(t, e, "0")
+	})
+	t.Run("no ticket", func(t *testing.T) {
+		e, _ := scene(t, 10024, 600)
+		check(t, e)
+	})
+	t.Run("only dead tickets", func(t *testing.T) {
+		dir := newStateDir(t, "")
+		e := newEngine(t, dir, newFakeClock())
+		startHelper(t, "enqueue", dir, "128").kill(t)
+		startHelper(t, "enqueue", dir, "128").kill(t)
+		check(t, e, "dead:false", "dead:false")
+	})
+	t.Run("a live ticket behind a dead one", func(t *testing.T) {
+		dir := newStateDir(t, "")
+		e := newEngine(t, dir, newFakeClock())
+		// An enqueue reaps the dead tickets ahead of it, so the helper comes second; its wall clock is
+		// earlier, so its ticket sorts first.
+		enqueue(t, e, need(128))
+		startHelper(t, "enqueue", dir, "128").kill(t)
+		check(t, e, "dead:false", "0")
+	})
+	t.Run("restart, watch unreadable", func(t *testing.T) {
+		e, dir := scene(t, 10024, 600)
+		unreadableWatch(t, dir)
+		enqueue(t, e, spec.Request{NeedMiB: 4000, Restart: true})
+		check(t, e, "unknown")
+	})
 }
 
 // A ticket published ahead of the head between its election and its admitting section wins:
