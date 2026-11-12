@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.8.0 (2026-11-12)
+
 ### Added
 
 - `coreslot status --json` carries more, under the same `schema` 1: per hold `typical_s`, `left_s`
