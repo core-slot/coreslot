@@ -656,14 +656,21 @@ func TestSnapshotStoppable(t *testing.T) {
 
 // With the room negative (8000 MiB reserved of 6024 of headroom, 1024 of it the reserve) the
 // snapshot reports the room as it is, the free memory clamped at 0 and the machine's memory as the
-// reader gave it. Mutation: clamping RoomMiB reddens it.
+// reader gave it; the hold's typical run time and the time left of it come with the snapshot.
+// Mutations: clamping RoomMiB, dropping TypicalS from the hold's info, or dropping the LeftS
+// assignment in Snapshot reddens it.
 func TestSnapshotMemFigures(t *testing.T) {
-	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
 	setLiveMem(t, 6024)
-	hold(t, e, need(8000)) // an idle head starts whatever the numbers say
+	hold(t, e, spec.Request{NeedMiB: 8000, TypicalS: 600}) // an idle head starts whatever the numbers say
+	clk.advance(100 * time.Second)
 	r, err := e.Snapshot()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(r.Holds) != 1 || r.Holds[0].TypicalS != 600 || r.Holds[0].LeftS != 500 {
+		t.Errorf("holds %+v; want typical 600 and 500 s left", r.Holds)
 	}
 	m := r.Mem
 	if !m.Known || m.RoomMiB != -3000 || m.FreeMiB != 0 || m.MachineMiB != 1707 ||

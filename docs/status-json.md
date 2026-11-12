@@ -111,7 +111,7 @@ The watchdog, from the newest shared sample.
 
 `left_s` of 0 on a hold that is still live means it has outlived its typical run time.
 
-`stoppable` is a convenience, not a control: it tells a reader where a stop round may list the hold
+`stoppable` is a convenience, not a control: it is true where the hold's body marks it a victim
 (its run is restartable, its command has a process group of its own and is not container work), its
 command has not exited and `status` read the process table and saw the owner alive. It refuses
 nobody anything, and when `status` cannot be sure it is false: an unreadable process table makes
@@ -138,7 +138,9 @@ every `stoppable` false.
 live ticket in queue order only; every later ticket and every dead ticket has null. It is null as
 well when the rule leaves the wait unknown: the headroom is unread while a hold is live, the live
 holds with a typical run time cannot cover the need, or the ticket is a restart whose watch state
-cannot be read. It is 0 when the ticket fits now and when no hold is live, where the idle rule
+cannot be read. It is null for every ticket while `mem` is null because the configuration or the
+machine's memory could not be read (`config_error` is set), even with no hold live. Otherwise it is
+0 when the ticket fits now and when no hold is live, where the idle rule
 starts the head whatever the numbers say. A restart's number is at least the calm it still needs.
 
 A number, or a 0, is not a start time. A hold may overrun its usual time; a memory gate may hold the

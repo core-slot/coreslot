@@ -384,6 +384,38 @@ func TestStatusJSONMemMiB(t *testing.T) {
 	}
 }
 
+// With the room negative, room_mib keeps the sign while free_mib is 0, and a hold's typical_s and
+// stoppable and a ticket's name come through with their values. Mutations: printing room_mib from
+// FreeMiB, dropping Stoppable, dropping TypicalS or dropping the ticket's Name each redden it.
+func TestStatusJSONNewValues(t *testing.T) {
+	rep := memReport()
+	rep.Mem.RoomMiB, rep.Mem.FreeMiB = -3000, 0
+	rep.Holds[0].TypicalS, rep.Holds[0].LeftS, rep.Holds[0].Stoppable = 600, 120, true
+	rep.Tickets = []engine.TicketInfo{{Name: "tk-name", ID: "i", NeedMiB: 1}}
+	var buf bytes.Buffer
+	if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Mem   map[string]int64 `json:"mem"`
+		Holds []struct {
+			TypicalS  int64 `json:"typical_s"`
+			Stoppable bool  `json:"stoppable"`
+		} `json:"holds"`
+		Tickets []struct {
+			Name string `json:"name"`
+		} `json:"tickets"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Mem["room_mib"] != -3000 || doc.Mem["free_mib"] != 0 || len(doc.Holds) != 1 || doc.Holds[0].TypicalS != 600 ||
+		!doc.Holds[0].Stoppable || len(doc.Tickets) != 1 || doc.Tickets[0].Name != "tk-name" {
+		t.Errorf("mem %v, holds %+v, tickets %+v; want room -3000, free 0, typical 600, stoppable, name tk-name",
+			doc.Mem, doc.Holds, doc.Tickets)
+	}
+}
+
 // mem is null exactly when the snapshot's memory is not Known, whatever else it carries. Mutation:
 // printing mem whenever MachineMiB > 0 reddens it.
 func TestStatusJSONMemNull(t *testing.T) {
