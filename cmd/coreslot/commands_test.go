@@ -237,7 +237,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("tickets = %v", tickets)
 	}
 	tk := tickets[0].(map[string]any)
-	const ticketKeys = "created_ns id label name need_mib pid position stalled state waited_s"
+	const ticketKeys = "created_ns expected_wait_s id label name need_mib pid position stalled state waited_s"
 	if got := keysOf(tk); got != ticketKeys {
 		t.Errorf("ticket keys\n got %s\nwant %s", got, ticketKeys)
 	}
@@ -412,6 +412,25 @@ func TestStatusJSONLeftS(t *testing.T) {
 		}
 		if !strings.Contains(buf.String(), c.want) {
 			t.Errorf("typical %d, left %d: %s; want %s", c.typical, c.left, buf.String(), c.want)
+		}
+	}
+}
+
+// expected_wait_s is the number when the wait is known and null, never 0, when it is not.
+// Mutation: ignoring WaitKnown when printing reddens the null case.
+func TestStatusJSONExpectedWait(t *testing.T) {
+	for _, c := range []struct {
+		known bool
+		want  string
+	}{{true, `"expected_wait_s": 120`}, {false, `"expected_wait_s": null`}} {
+		rep := memReport()
+		rep.Tickets = []engine.TicketInfo{{Name: "t", ID: "i", Label: "w", PID: 9, NeedMiB: 100, WaitS: 120, WaitKnown: c.known}}
+		var buf bytes.Buffer
+		if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), c.want) {
+			t.Errorf("WaitKnown %v: %s; want %s", c.known, buf.String(), c.want)
 		}
 	}
 }

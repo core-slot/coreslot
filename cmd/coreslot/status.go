@@ -487,6 +487,9 @@ type jsonTicket struct {
 	Position  int     `json:"position"` // 1 is the head; 0 for a dead ticket
 	State     string  `json:"state"`    // waiting, stalled or dead
 	Stalled   *bool   `json:"stalled"`  // null unless --observe ran
+	// ExpectedWaitS is the passing rule's expected wait for the first live ticket, null for every
+	// other ticket and where the rule leaves it unknown.
+	ExpectedWaitS *int64 `json:"expected_wait_s"`
 }
 
 func (v statusView) document() jsonStatus {
@@ -535,6 +538,9 @@ func (v statusView) document() jsonStatus {
 		jt := jsonTicket{Name: t.info.Name, ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
 			NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
 			Position: t.position, State: t.state}
+		if t.info.WaitKnown {
+			jt.ExpectedWaitS = &t.info.WaitS
+		}
 		if v.observed > 0 {
 			stalled := t.state == "stalled"
 			jt.Stalled = &stalled

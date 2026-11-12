@@ -53,6 +53,10 @@ type TicketInfo struct {
 	// Dead: the ticket's lock probe succeeded, so nobody holds its descriptor: its owner exited,
 	// withdrew. Dead says nothing about the owner process.
 	Dead bool
+	// WaitS is the expected wait of PROTOCOL.md section 10.3 in s, valid when WaitKnown. Only
+	// Snapshot sets them, and only on the first live ticket in queue order.
+	WaitS     int64
+	WaitKnown bool
 }
 
 // MemInfo is the memory in a snapshot, in MiB. Known is false when the headroom could not be read
