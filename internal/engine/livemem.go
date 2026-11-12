@@ -66,7 +66,13 @@ func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []s
 func (h liveHold) info() HolderInfo {
 	b := h.body
 	return HolderInfo{Name: h.name, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
-		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS}
+		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS, TypicalS: b.TypicalS}
+}
+
+// holdLeftS is what remains of the hold's typical run time at nowNS, never below 0 and not capped
+// above: the value the passing rule orders live holds by (PROTOCOL.md section 10.3).
+func holdLeftS(h wire.Hold, nowNS int64) int64 {
+	return max(0, h.TypicalS-(nowNS-h.StartNS)/1e9)
 }
 
 // reservations are the room's input: each live hold that reserves memory, with the footprint its

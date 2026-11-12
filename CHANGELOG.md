@@ -8,6 +8,12 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `coreslot status --json` carries more, under the same `schema` 1: per hold `typical_s`, `left_s`
+  (null without a typical run time) and `stoppable`; per ticket `name`; in `mem` `machine_mib`,
+  `reserve_mib`, `headroom_mib` and `room_mib`, the room before it is clamped at 0.
+
 ## v0.7.0 (2026-11-11)
 
 ### Added

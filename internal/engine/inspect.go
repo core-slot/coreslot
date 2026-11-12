@@ -95,6 +95,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	for _, h := range live {
 		info := h.info()
 		info.ChildExited, info.SampleAgeMS = h.body.ChildExited, sampleAgeMS(h.body.SampledNS, listed)
+		info.LeftS = holdLeftS(h.body, listed)
 		r.Holds = append(r.Holds, info)
 		r.Mem.ReservedMiB += h.body.NeedMiB
 	}
@@ -103,7 +104,8 @@ func (e *Engine) Snapshot() (Report, error) {
 	}
 	if memErr == nil && machine.HeadroomOK {
 		r.Mem.Known = true
-		r.Mem.FreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live)))
+		room := state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live))
+		r.Mem.RoomMiB, r.Mem.FreeMiB, r.Mem.MachineMiB = room, max(0, room), machine.MemMiB
 		r.Mem.RealFreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, nil))
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
@@ -111,6 +113,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	if procs, ok := listProcs(); ok {
 		for i, h := range r.Holds {
 			r.Holds[i].OwnerExited = !memsample.Alive(procs, h.PID, h.StartNS)
+			r.Holds[i].Stoppable = live[i].body.Victim && !r.Holds[i].OwnerExited && !h.ChildExited
 		}
 	}
 

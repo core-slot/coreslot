@@ -212,7 +212,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	}
 
 	mem := doc["mem"].(map[string]any)
-	if got := keysOf(mem); got != "free_mib reserved_mib" {
+	if got := keysOf(mem); got != "free_mib headroom_mib machine_mib reserve_mib reserved_mib room_mib" {
 		t.Errorf("mem keys %s", got)
 	}
 	if mem["reserved_mib"] != float64(384) || mem["free_mib"] != float64(128) {
@@ -224,7 +224,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("holds = %v", holds)
 	}
 	h := holds[0].(map[string]any)
-	const holdKeys = "arrival_ns footprint_mib held_for_s label name need_mib owner_exited pid start_ns stops"
+	const holdKeys = "arrival_ns footprint_mib held_for_s label left_s name need_mib owner_exited pid start_ns stoppable stops typical_s"
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}
@@ -237,7 +237,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("tickets = %v", tickets)
 	}
 	tk := tickets[0].(map[string]any)
-	const ticketKeys = "created_ns id label need_mib pid position stalled state waited_s"
+	const ticketKeys = "created_ns id label name need_mib pid position stalled state waited_s"
 	if got := keysOf(tk); got != ticketKeys {
 		t.Errorf("ticket keys\n got %s\nwant %s", got, ticketKeys)
 	}
@@ -339,9 +339,11 @@ func TestStatusTicketLineShowsTheNeed(t *testing.T) {
 	}
 }
 
-// memReport is a snapshot with 3 GiB reserved by one hold and 6.5 GiB of room.
+// memReport is one coherent snapshot: a machine of 48 GiB with 9000 MiB of headroom, a reserve of
+// 1024 MiB and one hold reserving 3 GiB, which leaves 4904 MiB of room.
 func memReport() engine.Report {
-	return engine.Report{Mem: engine.MemInfo{Known: true, ReservedMiB: 3072, FreeMiB: 6656},
+	return engine.Report{Mem: engine.MemInfo{Known: true, MachineMiB: 49152, HeadroomMiB: 9000, HeadroomOK: true,
+		ReserveMiB: 1024, ReservedMiB: 3072, RoomMiB: 4904, FreeMiB: 4904},
 		Holds: []engine.HolderInfo{{Name: "h", Label: "gate", PID: 7, NeedMiB: 3072}}}
 }
 
@@ -350,7 +352,7 @@ func TestStatusHumanMem(t *testing.T) {
 	rep := memReport()
 	rep.Holds = append(rep.Holds, engine.HolderInfo{Name: "u", Label: "open", PID: 8})
 	h := buildStatus(rep, 0, nil, 0).human()
-	for _, line := range []string{"\nmem: reserved 3 GiB  free 6.5 GiB\n",
+	for _, line := range []string{"\nmem: reserved 3 GiB  free 4.8 GiB\n",
 		"  gate  pid 7  mem 3 GiB  held ", "  open  pid 8  unbudgeted  held "} {
 		if !strings.Contains(h, line) {
 			t.Errorf("status lacks the line %q:\n%s", strings.TrimSpace(line), h)
@@ -374,9 +376,43 @@ func TestStatusJSONMemMiB(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	wantMem := map[string]int64{"reserved_mib": 3072, "free_mib": 6656}
+	wantMem := map[string]int64{"reserved_mib": 3072, "free_mib": 4904, "machine_mib": 49152,
+		"reserve_mib": 1024, "headroom_mib": 9000, "room_mib": 4904}
 	if doc.Schema != 1 || !maps.Equal(doc.Mem, wantMem) || len(doc.Holds) != 1 || doc.Holds[0].NeedMiB != 3072 {
 		t.Errorf("schema %d, mem %v, holds %+v; want schema 1, mem %v and one hold of 3072", doc.Schema, doc.Mem, doc.Holds, wantMem)
+	}
+}
+
+// mem is null exactly when the snapshot's memory is not Known, whatever else it carries. Mutation:
+// printing mem whenever MachineMiB > 0 reddens it.
+func TestStatusJSONMemNull(t *testing.T) {
+	rep := memReport()
+	rep.Mem.Known = false
+	var buf bytes.Buffer
+	if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"mem": null`) {
+		t.Errorf("a memory that is not Known: %s; want \"mem\": null", buf.String())
+	}
+}
+
+// left_s is the time left of a hold that has a typical run time and null for one that has none.
+// Mutation: ignoring TypicalS when printing reddens the second.
+func TestStatusJSONLeftS(t *testing.T) {
+	for _, c := range []struct {
+		typical, left int64
+		want          string
+	}{{600, 120, `"left_s": 120`}, {0, 120, `"left_s": null`}} {
+		rep := memReport()
+		rep.Holds[0].TypicalS, rep.Holds[0].LeftS = c.typical, c.left
+		var buf bytes.Buffer
+		if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), c.want) {
+			t.Errorf("typical %d, left %d: %s; want %s", c.typical, c.left, buf.String(), c.want)
+		}
 	}
 }
 

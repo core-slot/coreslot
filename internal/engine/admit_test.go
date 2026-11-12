@@ -613,6 +613,65 @@ func TestSnapshotOwnerExited(t *testing.T) {
 	}
 }
 
+// A hold is stoppable only when its body says victim, its command has not exited and the process
+// table, which Snapshot read, shows its owner alive. Mutations: setting Stoppable outside the
+// branch that read the process table reddens "listing unread"; dropping the victim term reddens
+// "not a victim"; dropping the child term reddens "child exited".
+func TestSnapshotStoppable(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, nil)
+	g := admitted(t, step(t, enqueue(t, e, need(256))))
+	r, err := e.Snapshot()
+	if err != nil || len(r.Holds) != 1 {
+		t.Fatalf("holds %+v, %v; want one", r.Holds, err)
+	}
+	h := r.Holds[0]
+	saved := listProcs
+	t.Cleanup(func() { listProcs = saved })
+	alive := map[int]memsample.Proc{h.PID: {StartNS: h.StartNS - int64(time.Hour)}}
+	for _, c := range []struct {
+		name          string
+		victim, child bool
+		procs         map[int]memsample.Proc
+		ok            bool
+		want          bool
+	}{
+		{"victim, owner alive, child running", true, false, alive, true, true},
+		{"not a victim", false, false, alive, true, false},
+		{"owner gone", true, false, map[int]memsample.Proc{}, true, false},
+		{"child exited", true, true, alive, true, false},
+		{"listing unread", true, false, nil, false, false},
+	} {
+		if err := g.UpdateHold(func(b *wire.Hold) { b.Victim, b.ChildExited = c.victim, c.child }); err != nil {
+			t.Fatal(err)
+		}
+		listProcs = func() (map[int]memsample.Proc, bool) { return c.procs, c.ok }
+		r, err := e.Snapshot()
+		if err != nil || len(r.Holds) != 1 || r.Holds[0].Stoppable != c.want {
+			t.Errorf("%s: holds %+v, %v; want Stoppable %v", c.name, r.Holds, err, c.want)
+		}
+	}
+}
+
+// With the room negative (8000 MiB reserved of 6024 of headroom, 1024 of it the reserve) the
+// snapshot reports the room as it is, the free memory clamped at 0 and the machine's memory as the
+// reader gave it. Mutation: clamping RoomMiB reddens it.
+func TestSnapshotMemFigures(t *testing.T) {
+	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	setLiveMem(t, 6024)
+	hold(t, e, need(8000)) // an idle head starts whatever the numbers say
+	r, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := r.Mem
+	if !m.Known || m.RoomMiB != -3000 || m.FreeMiB != 0 || m.MachineMiB != 1707 ||
+		m.HeadroomMiB != 6024 || m.ReserveMiB != config.DefaultReserveMiB || m.ReservedMiB != 8000 {
+		t.Errorf("mem %+v; want room -3000, free 0, machine 1707, headroom 6024, reserve %d, reserved 8000",
+			m, config.DefaultReserveMiB)
+	}
+}
+
 // A ticket published ahead of the head between its election and its admitting section wins:
 // the section repeats the election over a fresh listing, where a ticket the head has never
 // watched counts as live (PROTOCOL.md section 12.1 step 5).

@@ -20,6 +20,14 @@ type HolderInfo struct {
 	OwnerExited bool
 	ChildExited bool  // its command has exited: its run is releasing it
 	SampleAgeMS int64 // since its run last wrote a sample; -1 when it has not
+	TypicalS    int64 // its label's typical run time in s; 0 unknown
+	// LeftS is what remains of TypicalS at the snapshot's clock, never below 0; meaningful when
+	// TypicalS > 0. Only Snapshot sets it.
+	LeftS int64
+	// Stoppable: a stop round may list the hold (its body says victim), its command has not exited
+	// and the process table, read by Snapshot, shows its owner alive. False whenever that cannot be
+	// told, including an unreadable process table. A convenience for a reader, not a control.
+	Stoppable bool
 }
 
 // WatchInfo is the shared watch state in a snapshot.
@@ -59,6 +67,8 @@ type MemInfo struct {
 	HeadroomMiB int64
 	HeadroomOK  bool
 	ReserveMiB  int64
+	MachineMiB  int64 // the machine's memory; 0 unless Known
+	RoomMiB     int64 // the room a new job may take before FreeMiB clamps it at 0: negative when over-reserved
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.

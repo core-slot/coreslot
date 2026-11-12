@@ -452,6 +452,10 @@ type jsonWatch struct {
 type jsonMem struct {
 	ReservedMiB int64 `json:"reserved_mib"`
 	FreeMiB     int64 `json:"free_mib"`
+	MachineMiB  int64 `json:"machine_mib"`
+	ReserveMiB  int64 `json:"reserve_mib"`
+	HeadroomMiB int64 `json:"headroom_mib"`
+	RoomMiB     int64 `json:"room_mib"` // free_mib before it is clamped at 0
 }
 
 type jsonHold struct {
@@ -467,9 +471,13 @@ type jsonHold struct {
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
 	Container    bool    `json:"container,omitempty"`
 	NoCPUS       int64   `json:"no_cpu_s,omitempty"` // absent until its tree has used next to no CPU for 30 min
+	TypicalS     int64   `json:"typical_s"`          // 0 when unknown
+	LeftS        *int64  `json:"left_s"`             // null when typical_s is 0
+	Stoppable    bool    `json:"stoppable"`
 }
 
 type jsonTicket struct {
+	Name      string  `json:"name"`
 	ID        string  `json:"id"`
 	Label     string  `json:"label"`
 	PID       int     `json:"pid"`
@@ -491,7 +499,8 @@ func (v statusView) document() jsonStatus {
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
 	}
 	if r.Mem.Known {
-		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB}
+		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB, MachineMiB: r.Mem.MachineMiB,
+			ReserveMiB: r.Mem.ReserveMiB, HeadroomMiB: r.Mem.HeadroomMiB, RoomMiB: r.Mem.RoomMiB}
 	}
 	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim, Learning: r.Watch.Learning}
 	d.Watch.Protecting, d.Watch.Reason = v.protection()
@@ -513,13 +522,17 @@ func (v statusView) document() jsonStatus {
 		d.Ignored[dir] = r.Ignored[dir]
 	}
 	for _, h := range r.Holds {
-		d.Holds = append(d.Holds, jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
+		jh := jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
-			Container: h.Container, NoCPUS: holdNoCPUS(h)})
+			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable}
+		if h.TypicalS > 0 {
+			jh.LeftS = &h.LeftS
+		}
+		d.Holds = append(d.Holds, jh)
 	}
 	for _, t := range v.tickets {
-		jt := jsonTicket{ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
+		jt := jsonTicket{Name: t.info.Name, ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
 			NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
 			Position: t.position, State: t.state}
 		if v.observed > 0 {
