@@ -110,6 +110,7 @@ The document carries a `"schema"` number. Within one schema number, fields may b
 never removed, renamed or given another meaning; a consumer MUST ignore fields it does not know.
 Removing or changing a field raises the number, and that release prints the new one. Labels are
 carried exactly, JSON-encoded.
+[status-json.md](status-json.md) describes every key of the document.
 
 ## Deprecation window
 

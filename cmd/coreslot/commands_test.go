@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -431,6 +432,93 @@ func TestStatusJSONExpectedWait(t *testing.T) {
 		}
 		if !strings.Contains(buf.String(), c.want) {
 			t.Errorf("WaitKnown %v: %s; want %s", c.known, buf.String(), c.want)
+		}
+	}
+}
+
+// jsonObjects maps each object of the document, by its path (the top level is "", a nested one is
+// its key, joined by dots, with [] after an array's), to the json keys of its struct, omitempty
+// ones included.
+func jsonObjects(t reflect.Type, path string, out map[string][]string) {
+	var keys []string
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		keys = append(keys, name)
+		ft := t.Field(i).Type
+		for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice {
+			ft = ft.Elem()
+		}
+		if ft.Kind() != reflect.Struct {
+			continue
+		}
+		child := strings.TrimPrefix(path+"."+name, ".")
+		if t.Field(i).Type.Kind() == reflect.Slice {
+			child += "[]"
+		}
+		jsonObjects(ft, child, out)
+	}
+	out[path] = keys
+}
+
+// docObjects reads docs/status-json.md: under each `## ` heading, the backticked first cell of
+// every table row. The heading "Top level" is the document's top, any other is the object's path in
+// backticks.
+func docObjects(t *testing.T) map[string][]string {
+	t.Helper()
+	b, err := os.ReadFile("../../docs/status-json.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	heading := regexp.MustCompile("^## `([^`]+)`$")
+	row := regexp.MustCompile("^\\| `([^`]+)` \\|")
+	out := map[string][]string{}
+	cur, in := "", false
+	for _, line := range strings.Split(string(b), "\n") {
+		switch m := heading.FindStringSubmatch(line); {
+		case line == "## Top level":
+			cur, in = "", true
+		case m != nil:
+			cur, in = m[1], true
+		case strings.HasPrefix(line, "## "):
+			in = false
+		case in:
+			if m := row.FindStringSubmatch(line); m != nil {
+				out[cur] = append(out[cur], m[1])
+			}
+		}
+	}
+	return out
+}
+
+// Every key of the document, in every object, has a row in docs/status-json.md and every row names
+// a key. Mutations: deleting one row of the reference reddens it, and so does adding a tag to
+// jsonTicket without a row.
+func TestStatusJSONReference(t *testing.T) {
+	code := map[string][]string{}
+	jsonObjects(reflect.TypeOf(jsonStatus{}), "", code)
+	doc := docObjects(t)
+	for path, keys := range code {
+		got := doc[path]
+		slices.Sort(keys)
+		slices.Sort(got)
+		var missing, extra []string
+		for _, k := range keys {
+			if !slices.Contains(got, k) {
+				missing = append(missing, k)
+			}
+		}
+		for _, k := range got {
+			if !slices.Contains(keys, k) {
+				extra = append(extra, k)
+			}
+		}
+		if len(missing) > 0 || len(extra) > 0 {
+			t.Errorf("object %q: the reference lacks %v and lists %v that the document does not carry", path, missing, extra)
+		}
+	}
+	for path := range doc {
+		if _, ok := code[path]; !ok {
+			t.Errorf("the reference describes the object %q, which the document does not carry", path)
 		}
 	}
 }

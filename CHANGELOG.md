@@ -15,6 +15,7 @@ All notable changes to this project are recorded here. The format follows
   `reserve_mib`, `headroom_mib` and `room_mib`, the room before it is clamped at 0.
 - `coreslot status --json` gives the first waiting ticket an `expected_wait_s`: the expected wait the
   passing rule judges other requests by, null where the rule leaves it unknown.
+- `docs/status-json.md` describes every key of `status --json`, and a test keeps it complete.
 
 ## v0.7.0 (2026-11-11)
 
