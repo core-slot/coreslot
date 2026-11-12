@@ -24,7 +24,7 @@ type HolderInfo struct {
 	// LeftS is what remains of TypicalS at the snapshot's clock, never below 0; meaningful when
 	// TypicalS > 0. Only Snapshot sets it.
 	LeftS int64
-	// Stoppable: a stop round may list the hold (its body says victim), its command has not exited
+	// Stoppable: the hold's body says victim, its command has not exited
 	// and the process table, read by Snapshot, shows its owner alive. False whenever that cannot be
 	// told, including an unreadable process table. A convenience for a reader, not a control.
 	Stoppable bool

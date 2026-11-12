@@ -138,10 +138,11 @@ every `stoppable` false.
 live ticket in queue order only; every later ticket and every dead ticket has null. It is null as
 well when the rule leaves the wait unknown: the headroom is unread while a hold is live, the live
 holds with a typical run time cannot cover the need, or the ticket is a restart whose watch state
-cannot be read. It is null for every ticket while `mem` is null because the configuration or the
-machine's memory could not be read (`config_error` is set), even with no hold live. Otherwise it is
-0 when the ticket fits now and when no hold is live, where the idle rule
-starts the head whatever the numbers say. A restart's number is at least the calm it still needs.
+cannot be read. It is null for every ticket while `config_error` is set, even with no hold live. A
+`mem` of null with `config_error` empty only means the headroom is unread: the first live ticket's
+wait is then 0 when no hold is live and null when one is. Otherwise it is 0 when the ticket fits now
+and when no hold is live, where the idle rule starts the head whatever the numbers say. A
+restart's number is at least the calm it still needs.
 
 A number, or a 0, is not a start time. A hold may overrun its usual time; a memory gate may hold the
 head; a container request is judged against real free memory rather than `room_mib`; and under
