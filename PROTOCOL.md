@@ -716,8 +716,9 @@ ticket of the re-election (section 12.1 step 5). A waiter is admitted ahead of t
 1. its own request fits and the level gate lets it in, as for a head (section 12.1 steps 4 and 6),
    and the headroom is known;
 2. it has a typical run time `d`;
-3. `d ≤ W`, the head's **expected wait**: the smallest `t` at which the room plus the `need_mib` of
-   the live holds expected to end within `t` seconds covers the head's need, where a live hold is
+3. `d ≤ W`, the head's **expected wait**: the smallest `t` at which the room plus, for each live
+   hold expected to end within `t` seconds, the larger of its `need_mib` and its `footprint_mib`
+   covers the head's need, where a live hold is
    expected to end `max(0, typical_s − (now − start_ns) / 10^9)` seconds from now. A hold with
    `typical_s` 0 is never expected to end: when the others do not cover the head's need, `W` is
    unknown and nobody passes. When the head's ticket has `restart`, `W` is at least the calm it
