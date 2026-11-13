@@ -12,8 +12,9 @@ All notable changes to this project are recorded here. The format follows
 
 - `PROTOCOL.md` section 10.3 says a hold expected to end frees the larger of its `need_mib` and its
   `footprint_mib`, as the CLI has always counted it; the text said `need_mib`.
-- `docs/status-json.md` says what `stoppable` and `pid` establish and what they do not, and how a
-  reader stops a run: by `name`, with `SIGTERM` only.
+- `docs/status-json.md` says what `stoppable` and `pid` establish and what they do not, how a reader
+  stops a `stoppable` run (match the hold by `name`, send `SIGTERM` to `pid`), and the cases it left
+  out; the v0.8.0 entry below now says `expected_wait_s` is on every ticket.
 
 ## v0.8.0 (2026-11-12)
 

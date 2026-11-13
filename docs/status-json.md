@@ -4,8 +4,8 @@ The document `coreslot status --json` prints. Its `"schema"` rule, what a consum
 what raises the number are in [compatibility.md](compatibility.md#status---json). Every key is
 listed below, one table per object. Times named `_ns` are Unix nanoseconds by the wall clock; `_s`
 is seconds; `_mib` is MiB. Integers may be large: a reader tolerates any non-negative value (a
-signed `room_mib` excepted, see `mem`), and `_ns` values exceed 2^53, so a reader that parses
-numbers as doubles loses their last digits. Labels are carried exactly as stored, JSON-encoded, so
+signed `room_mib` excepted, see `mem`), and a nonzero `_ns` value exceeds 2^53, so a reader that
+parses numbers as doubles loses their last digits. Labels are carried exactly as stored, JSON-encoded, so
 escape one before printing it to a terminal.
 
 ## Top level
@@ -118,23 +118,24 @@ The watchdog, from the newest shared sample.
 
 A live hold whose body cannot be parsed, or names another pid or start than its file name, is shown
 from its name: `pid` and `start_ns` from the name, `need_mib` the cold start need
-([`PROTOCOL.md` section 5.1](../PROTOCOL.md#51-the-machines-memory)), an empty `label` and
-`stoppable` false. It is not counted in `ignored`.
+([`PROTOCOL.md` section 5.1](../PROTOCOL.md#51-the-machines-memory); 1 while `config_error` is set),
+and every other key empty, 0, false or null. It is not counted in `ignored`.
 
 `stoppable` is a convenience, not a control: it prevents nothing. It is true where the hold's body
 marks it a victim (its run is restartable, its command has a process group of its own and is not
 container work), its command has not exited, and `status` read the process table and found a
-process `pid` that started no later than `start_ns`, with a second's slack. It does not show that this process is a
-`coreslot run`, that it holds the hold's lock, or that it is still the same process when a signal
-goes out. A `pid` means something only on the host that printed it, so a `status --json` read
+process `pid` that started no later than `start_ns`, with a second's slack. It does not show that
+this process is a `coreslot run`, that it holds the hold's lock, or that it is still the same
+process when a signal goes out. A `pid` means something only on the host that printed it, so a `status --json` read
 over `ssh` ([remote.md](remote.md)) names processes on that host. When `status` cannot be sure,
 `stoppable` is false: an unreadable process table makes every `stoppable` false.
 
-A reader that stops a run reads `status --json` again just before and matches the hold by `name`,
-then sends `SIGTERM` to `pid` and nothing else: `coreslot run` relays it to its command's process
-group. A `SIGKILL` ends `coreslot run` alone; its command keeps running and keeps the reservation
-until it exits. A run stopped this way ends and is not restarted, though `stoppable` asks for a
-restartable run: only the watchdog's own stops restart it.
+A reader that stops a run whose hold is `stoppable` reads `status --json` again just before and
+matches the hold by `name`, then sends `SIGTERM` to `pid` and nothing else: `coreslot run` relays it
+to its command's own process group, which a `stoppable` run always has. A `SIGKILL` ends
+`coreslot run` alone; its command keeps running and keeps the reservation (`owner_exited` then
+shows it). A run stopped this way is not restarted, though `stoppable` asks for a restartable run:
+only the watchdog's own stops restart it.
 
 ## `tickets[]`
 
