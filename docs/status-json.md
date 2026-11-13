@@ -119,7 +119,8 @@ The watchdog, from the newest shared sample.
 A live hold whose body cannot be parsed, or names another pid or start than its file name, is shown
 from its name: `pid` and `start_ns` from the name, `need_mib` the cold start need
 ([`PROTOCOL.md` section 5.1](../PROTOCOL.md#51-the-machines-memory); 1 while `config_error` is set),
-and every other key empty, 0, false or null. It is not counted in `ignored`.
+and what its body would supply at its zero value: `label` empty, `arrival_ns`, `footprint_mib` and
+`typical_s` 0, so `left_s` null and `stoppable` false. It is not counted in `ignored`.
 
 `stoppable` is a convenience, not a control: it prevents nothing. It is true where the hold's body
 marks it a victim (its run is restartable, its command has a process group of its own and is not
