@@ -4,7 +4,8 @@ The document `coreslot status --json` prints. Its `"schema"` rule, what a consum
 what raises the number are in [compatibility.md](compatibility.md#status---json). Every key is
 listed below, one table per object. Times named `_ns` are Unix nanoseconds by the wall clock; `_s`
 is seconds; `_mib` is MiB. Integers may be large: a reader tolerates any non-negative value (a
-signed `room_mib` excepted, see `mem`). Labels are carried exactly as stored, JSON-encoded, so
+signed `room_mib` excepted, see `mem`), and a nonzero `_ns` value exceeds 2^53, so a reader that
+parses numbers as doubles loses their last digits. Labels are carried exactly as stored, JSON-encoded, so
 escape one before printing it to a terminal.
 
 ## Top level
@@ -61,10 +62,14 @@ From the section's informational body. `pid` and `entered_ns` are 0 when the bod
 
 ## `mem`
 
-The memory budget. `free_mib` and `room_mib` are the room a new job may take: the headroom, less
-`reserve_mib` (what admission keeps free), less the live holds' unrealised needs. `reserved_mib` is a
-different number, the sum of the live holds' needs. `room_mib` is unclamped and negative when the
-holds reserve more than the machine offers; `free_mib` is the same room clamped at 0. A reader of
+The memory budget. `free_mib` and `room_mib` are the room a new job may take: the headroom (the
+memory the kernel can hand out now without paging,
+[`PROTOCOL.md` section 5.1](../PROTOCOL.md#51-the-machines-memory)), less `reserve_mib` (what
+admission keeps free), less what each live hold reserves and its run has not used yet
+(`need_mib − footprint_mib`, never below 0). `reserved_mib` is a different number, the sum of the
+live holds' needs. `room_mib` is unclamped: it is negative when the reserve and the holds take more
+than the headroom, with no hold live too when the headroom is below the reserve. `free_mib` is the
+same room clamped at 0. A reader of
 telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
 
 | key | type | meaning |
@@ -74,7 +79,7 @@ telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
 | `machine_mib` | int | the machine's memory |
 | `reserve_mib` | int | what admission keeps free |
 | `headroom_mib` | int | the headroom admission read |
-| `room_mib` | int | `headroom_mib` less `reserve_mib` less the holds' unrealised needs, below 0 when over-reserved |
+| `room_mib` | int | `headroom_mib` less `reserve_mib` less the holds' unused needs; may be below 0 |
 
 ## `watch`
 
@@ -82,8 +87,8 @@ The watchdog, from the newest shared sample.
 
 | key | type | meaning |
 |---|---|---|
-| `level` | string | the memory level of the newest sample; empty without a sample taken in the last 6 s |
-| `excess_points` | number | E, in points, at the newest sample |
+| `level` | string | the memory level of the newest sample: `green`, `yellow`, `red`, `floor` or `unknown` ([`PROTOCOL.md` section 23.4](../PROTOCOL.md#234-levels)); empty without a sample taken in the last 6 s |
+| `excess_points` | number | the machine's excess `E`, in percentage points, at the newest sample ([`PROTOCOL.md` section 23.3](../PROTOCOL.md#233-the-stall-measure)) |
 | `protecting` | bool | whether the watchdog is protecting the machine now |
 | `reason` | string | why it is not, empty when it is |
 | `next_victim` | string | the hold the next stop round lists first; empty when none |
@@ -95,14 +100,14 @@ The watchdog, from the newest shared sample.
 |---|---|---|
 | `name` | string | the hold's file name in `holds/` |
 | `label` | string | the holder's label |
-| `pid` | int | the owner's pid (the `coreslot run` process) |
+| `pid` | int | the owner's pid as the hold names it: the `coreslot run` process that published it |
 | `start_ns` | int | when the hold was admitted |
 | `held_for_s` | number | how long it has been held |
 | `arrival_ns` | int | when its run first arrived in the queue |
 | `need_mib` | int | what the hold reserves; 0 for a run outside the budget |
 | `footprint_mib` | int | what its run last measured |
 | `stops` | int | how many times it was stopped |
-| `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation |
+| `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read |
 | `container` | bool | present and true for container work, whose containers' memory is not measured |
 | `no_cpu_s` | int | present once its tree has used next to no CPU for 30 minutes: for how long, in s |
 | `typical_s` | int | the label's typical run time; 0 when unknown |
@@ -111,11 +116,27 @@ The watchdog, from the newest shared sample.
 
 `left_s` of 0 on a hold that is still live means it has outlived its typical run time.
 
-`stoppable` is a convenience, not a control: it is true where the hold's body marks it a victim
-(its run is restartable, its command has a process group of its own and is not container work), its
-command has not exited and `status` read the process table and saw the owner alive. It refuses
-nobody anything, and when `status` cannot be sure it is false: an unreadable process table makes
-every `stoppable` false.
+A live hold whose body cannot be parsed, or names another pid or start than its file name, is shown
+from its name: `pid` and `start_ns` from the name, `need_mib` the cold start need
+([`PROTOCOL.md` section 5.1](../PROTOCOL.md#51-the-machines-memory); 1 while `config_error` is set),
+and what its body would supply at its zero value: `label` empty, `arrival_ns`, `footprint_mib` and
+`typical_s` 0, so `left_s` null and `stoppable` false. It is not counted in `ignored`.
+
+`stoppable` is a convenience, not a control: it prevents nothing. It is true where the hold's body
+marks it a victim (its run is restartable, its command has a process group of its own and is not
+container work), its command has not exited, and `status` read the process table and found a
+process `pid` that started no later than `start_ns`, with a second's slack. It does not show that
+this process is a `coreslot run`, that it holds the hold's lock, or that it is still the same
+process when a signal goes out. A `pid` means something only on the host that printed it, so a `status --json` read
+over `ssh` ([remote.md](remote.md)) names processes on that host. When `status` cannot be sure,
+`stoppable` is false: an unreadable process table makes every `stoppable` false.
+
+A reader that stops a run whose hold is `stoppable` reads `status --json` again just before and
+matches the hold by `name`, then sends `SIGTERM` to `pid` and nothing else: `coreslot run` relays it
+to its command's own process group, which a `stoppable` run always has. A `SIGKILL` ends
+`coreslot run` alone; its command keeps running and keeps the reservation (`owner_exited` then
+shows it). A run stopped this way is not restarted, though `stoppable` asks for a restartable run:
+only the watchdog's own stops restart it.
 
 ## `tickets[]`
 
@@ -133,16 +154,19 @@ every `stoppable` false.
 | `stalled` | bool or null | null unless `--observe` ran |
 | `expected_wait_s` | int or null | the first live ticket's expected wait, see below |
 
-`expected_wait_s` is the expected wait the passing rule judges others by
+`expected_wait_s` is the head's expected wait `W` of the passing rule, the rule by which a waiter
+with a typical run time may start ahead of the head when it is expected to end within `W`
 ([`PROTOCOL.md` section 10.3](../PROTOCOL.md#103-waiting-and-election)). It is given on the first
 live ticket in queue order only; every later ticket and every dead ticket has null. It is null as
 well when the rule leaves the wait unknown: the headroom is unread while a hold is live, the live
 holds with a typical run time cannot cover the need, or the ticket is a restart whose watch state
 cannot be read. It is null for every ticket while `config_error` is set, even with no hold live. A
 `mem` of null with `config_error` empty only means the headroom is unread: the first live ticket's
-wait is then 0 when no hold is live and null when one is. Otherwise it is 0 when the ticket fits now
-and when no hold is live, where the idle rule starts the head whatever the numbers say. A
-restart's number is at least the calm it still needs.
+wait is then 0 when no hold is live and null when one is. Otherwise it is 0 when the ticket fits
+now, when the holds that would cover it have outlived their typical run time, and when no hold is
+live, where the idle rule starts the head whatever the numbers say
+([`PROTOCOL.md` section 12.1](../PROTOCOL.md#121-steps)). While a hold is live, a restart's number
+is at least the calm it still needs.
 
 A number, or a 0, is not a start time. A hold may overrun its usual time; a memory gate may hold the
 head; a container request is judged against real free memory rather than `room_mib`; and under

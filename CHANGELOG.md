@@ -8,6 +8,14 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- `PROTOCOL.md` section 10.3 says a hold expected to end frees the larger of its `need_mib` and its
+  `footprint_mib`, as the CLI has always counted it; the text said `need_mib`.
+- `docs/status-json.md` says what `stoppable` and `pid` establish and what they do not, how a reader
+  stops a `stoppable` run (match the hold by `name`, send `SIGTERM` to `pid`), and the cases it left
+  out; the v0.8.0 entry below now says `expected_wait_s` is on every ticket.
+
 ## v0.8.0 (2026-11-12)
 
 ### Added
@@ -15,8 +23,9 @@ All notable changes to this project are recorded here. The format follows
 - `coreslot status --json` carries more, under the same `schema` 1: per hold `typical_s`, `left_s`
   (null without a typical run time) and `stoppable`; per ticket `name`; in `mem` `machine_mib`,
   `reserve_mib`, `headroom_mib` and `room_mib`, the room before it is clamped at 0.
-- `coreslot status --json` gives the first live ticket an `expected_wait_s`: the expected wait the
-  passing rule judges other requests by, null where the rule leaves it unknown.
+- `coreslot status --json` gives every ticket an `expected_wait_s`: on the first live ticket the
+  expected wait the passing rule judges other requests by, null on every other ticket and where the
+  rule leaves it unknown.
 - `docs/status-json.md` describes every key of `status --json`, and a test keeps it complete.
 
 ## v0.7.0 (2026-11-11)
