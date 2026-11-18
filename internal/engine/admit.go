@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/memsample"
@@ -80,11 +81,11 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
 	// hold live a container request needs no pass; with none the idle start is the head's.
 	if !t.req.RealMemory || len(holds) == 0 {
-		head, err := t.reelect()
+		head, headKey, err := t.reelect()
 		if err != nil {
 			return nil, err
 		}
-		if head != nil && !t.passes(*head, holds, room, cfg, m) {
+		if head != nil && !t.passes(*head, headKey, holds, room, cfg, m) {
 			t.out.Reason = ReasonBehindHead
 			return nil, nil
 		}
@@ -161,15 +162,15 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
 // lists the names in queue/ again and returns the body of the first live ticket ahead of this
-// one, the head, nil when there is none: well-formed and neither gone, dead nor STALLED for this
+// one, the head, and its key, nil when there is none: well-formed and neither gone, dead nor STALLED for this
 // observer, reading the mtime (lstat) of only well-formed tickets. A ticket this observer has
 // never watched, such as one published after the election, counts as live; the next election
 // then rescans whatever gen says, so a ticket published without a gen bump is watched from then
 // on and cannot keep the head out for longer than a stall.
-func (t *Ticket) reelect() (*wire.Ticket, error) {
+func (t *Ticket) reelect() (*wire.Ticket, state.Key, error) {
 	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
-		return nil, err
+		return nil, state.Key{}, err
 	}
 	now := t.e.clock.Monotonic()
 	for _, en := range entries {
@@ -179,7 +180,7 @@ func (t *Ticket) reelect() (*wire.Ticket, error) {
 		}
 		tk, err := t.ticketBody(en.Name)
 		if err != nil {
-			return nil, err
+			return nil, state.Key{}, err
 		}
 		if tk == nil {
 			continue
@@ -189,14 +190,14 @@ func (t *Ticket) reelect() (*wire.Ticket, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, state.Key{}, err
 		}
 		dead, err := probe(t.e.st, store.QueueDir, en.Name)
 		if gone(err) || stray(err) || err == nil && dead {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, state.Key{}, err
 		}
 		if _, seen := t.obs.Seen(k); !seen {
 			t.haveGen = false // rescan at the next election, so that it is watched from then on
@@ -206,39 +207,98 @@ func (t *Ticket) reelect() (*wire.Ticket, error) {
 				continue
 			}
 		}
-		return tk, nil
+		return tk, k, nil
 	}
-	return nil, nil
+	return nil, state.Key{}, nil
 }
 
-// passes reports whether this ticket may start ahead of head, the first live ticket in the queue
-// (PROTOCOL.md section 10.3): its typical run time is known and ends within W, head's expected
-// wait for the room it needs, at least the calm a restart still needs.
-func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg config.Config, m config.Machine) bool {
+// passes reports whether this ticket may start ahead of head, the first live ticket in the queue,
+// whose key is headKey (PROTOCOL.md section 10.3), and records how in t.out: by duration, when its
+// typical run time is known and ends within W, head's expected wait for the room it needs, at least
+// the calm a restart still needs; or out of turn, whatever W is (outOfTurn).
+func (t *Ticket) passes(head wire.Ticket, headKey state.Key, holds []liveHold, room int64, cfg config.Config, m config.Machine) bool {
 	switch { // with no hold live the head starts at once
 	case t.req.TypicalS == 0:
 		t.out.NoPass = "no_typical"
-		return false
-	case !m.HeadroomOK:
-		t.out.NoPass = "headroom_unknown"
 		return false
 	case len(holds) == 0:
 		t.out.NoPass = "no_holds"
 		return false
 	}
 	// W, the head's expected wait for the room it needs (headWait).
-	w, noPass := headWait(head.NeedMiB, head.Restart, holds, room, t.e.clock.Realtime(), m.HeadroomOK,
-		t.e.st.ReadWatch, cfg.Watch)
-	if noPass != "" {
+	now := t.e.clock.Realtime()
+	w, noPass := headWait(head.NeedMiB, head.Restart, holds, room, now, m.HeadroomOK, t.e.st.ReadWatch, cfg.Watch)
+	switch noPass {
+	case "":
+		t.out.W, t.out.WKnown = w, true
+		if t.req.TypicalS <= w {
+			t.out.Pass = "duration"
+			return true
+		}
+		noPass = "too_long"
+	case "wait_unknown":
+	default: // headroom_unknown, watch_unreadable: nobody passes
 		t.out.NoPass = noPass
 		return false
 	}
-	t.out.W, t.out.WKnown = w, true
-	if t.req.TypicalS <= w {
+	why := t.outOfTurn(head, headKey, holds, room, now, noPass == "wait_unknown", cfg)
+	switch why {
+	case "":
+		t.out.Pass = "turn"
 		return true
+	case "too_long": // too long for both: say what W said, too_long or wait_unknown
+		why = noPass
 	}
-	t.out.NoPass = "too_long"
+	t.out.NoPass = why
 	return false
+}
+
+// pressureNormal is the kernel's normal memory pressure level, as memsample.Parts reports it.
+const pressureNormal = 1
+
+// kernelPressure is the kernel's memory pressure level and whether it could be read; a system that
+// has none (Linux) reports it as not read. Tests replace it.
+var kernelPressure = func() (int, bool) {
+	_, level, ok := memsample.Parts()
+	return level, ok && level != 0
+}
+
+// outOfTurn is the first condition that keeps this ticket from going out of turn ahead of head, ""
+// when none does (PROTOCOL.md section 10.3): head does not fit the room now; the kernel's memory
+// pressure level is normal (one that cannot be read is not); every live hold's body
+// parses and none arrived after head (or in the same nanosecond), so no other run is out of turn; and the ticket's typical run
+// time is at most the time it has watched head, its own absences excluded, or, when head's W is
+// unknown and head is a restart, the calm head still needs.
+func (t *Ticket) outOfTurn(head wire.Ticket, headKey state.Key, holds []liveHold, room, nowNS int64, wUnknown bool,
+	cfg config.Config) string {
+	if head.NeedMiB <= room {
+		return "head_fits"
+	}
+	if level, ok := kernelPressure(); !ok || level != pressureNormal {
+		return "pressure_not_normal"
+	}
+	for _, h := range holds {
+		if h.unparsed {
+			return "hold_unreadable"
+		}
+	}
+	for _, h := range holds {
+		if uint64(h.body.ArrivalNS) >= headKey.OrderKey { // the same nanosecond counts as after
+			return "out_of_turn_live"
+		}
+	}
+	var calm int64 // with W known, W already holds the calm and a longer run passes on watched time alone
+	if wUnknown {
+		var noPass string
+		if calm, noPass = restartFloor(head.Restart, nowNS, t.e.st.ReadWatch, cfg.Watch); noPass != "" {
+			return noPass
+		}
+	}
+	watched := int64(t.obs.WatchedFor(headKey, t.e.clock.Monotonic()) / time.Second)
+	if t.req.TypicalS > max(watched, calm) {
+		return "too_long"
+	}
+	return ""
 }
 
 // calmLeft is how much of calm_s, in ns, a restart still needs at now: what the sample's green

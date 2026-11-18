@@ -143,11 +143,17 @@ func TestReasonBehindHeadTooLong(t *testing.T) {
 	}
 }
 
-// With no hold live as well, an unknown headroom is still the first answer. Mutation: exchange
-// the headroom and no-holds cases of the switch in passes.
+// With a hold live, an unknown headroom leaves the head's W unknown; with none live, the head
+// starts at once whatever the headroom, as headWait judges it too. Mutations: dropping headWait's
+// headroom case reddens the first; putting a headroom case ahead of the no-holds one in passes
+// reddens the second.
 func TestNoPassHeadroomUnknown(t *testing.T) {
 	unknownHeadroom(t)
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	enqueue(t, e, need(2048))
+	wantReason(t, waitOutcome(t, enqueue(t, e, typical(1, 10))), ReasonBehindHead, "no_holds")
+	e = newEngine(t, newStateDir(t, ""), newFakeClock())
+	hold(t, e, need(128))
 	enqueue(t, e, need(2048))
 	wantReason(t, waitOutcome(t, enqueue(t, e, typical(1, 10))), ReasonBehindHead, "headroom_unknown")
 }
@@ -159,12 +165,15 @@ func TestNoPassNoHolds(t *testing.T) {
 	wantReason(t, waitOutcome(t, enqueue(t, e, typical(1, 10))), ReasonBehindHead, "no_holds")
 }
 
-// The running job has no typical run time, so nothing says when the head's room comes. Mutation:
-// the room-short exit of passes sets too_long, or marks W known.
+// The running job has no typical run time, so nothing says when the head's room comes; the waiter
+// has not yet watched the head for its typical run time either. Mutation: the room-short exit of
+// passes sets too_long, or marks W known.
 func TestNoPassWaitUnknown(t *testing.T) {
 	dir := capped(t, 2048)
-	e := newEngine(t, dir, newFakeClock())
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
 	hold(t, e, need(1024))
+	clk.advance(time.Second) // the hold arrived before the head: it is no run out of turn
 	enqueue(t, e, need(2048))
 	w := waitOutcome(t, enqueue(t, e, typical(256, 10)))
 	wantReason(t, w, ReasonBehindHead, "wait_unknown")

@@ -19,7 +19,8 @@ const (
 // Outcome is what the ticket's last admission attempt decided and the numbers it used. Comparable, carried by value.
 type Outcome struct {
 	Reason                           WaitReason // "" when admitted
-	NoPass                           string     // no_typical, headroom_unknown, no_holds, wait_unknown, watch_unreadable, too_long
+	NoPass                           string     // no_typical, headroom_unknown, no_holds, wait_unknown, watch_unreadable, too_long, head_fits, out_of_turn_live, hold_unreadable
+	Pass                             string     // how an admission ahead of the head was allowed: duration or turn; "" for the head
 	W                                int64      // seconds, valid when WKnown
 	WKnown                           bool
 	CalmLeftS                        float64

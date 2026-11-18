@@ -34,7 +34,7 @@ func TestHeadWait(t *testing.T) {
 	}{
 		{"no hold, room short", 2000, nil, 0, true, 0, ""},
 		{"headroom unread, a hold live", 2000, []liveHold{mk(100, 0, 1000)}, 0, false, 0, "headroom_unknown"},
-		// A is the sooner to end (20 s left against 50 s) though B has the shorter typical time.
+		// B is the sooner to end (20 s left against 50 s) though A has the shorter typical time.
 		{"out of order", 1500, []liveHold{mk(50, 0, 1000), mk(100, 80, 1000)}, 500, true, 20, ""},
 		{"in order", 1500, []liveHold{mk(100, 80, 1000), mk(50, 0, 1000)}, 500, true, 20, ""},
 		{"outlived hold covers", 1000, []liveHold{mk(60, 600, 1000)}, 0, true, 0, ""},

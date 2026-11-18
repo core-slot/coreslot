@@ -349,6 +349,16 @@ func memReport() engine.Report {
 		Holds: []engine.HolderInfo{{Name: "h", Label: "gate", PID: 7, NeedMiB: 3072}}}
 }
 
+// statusJSON is the status document of rep as status --json prints it.
+func statusJSON(t *testing.T, rep engine.Report) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
 // status prints mem in bytes and each hold's need, `unbudgeted` for one that reserves nothing.
 func TestStatusHumanMem(t *testing.T) {
 	rep := memReport()
@@ -364,10 +374,7 @@ func TestStatusHumanMem(t *testing.T) {
 
 // status --json carries the budget and each hold's need in MiB.
 func TestStatusJSONMemMiB(t *testing.T) {
-	var buf bytes.Buffer
-	if err := buildStatus(memReport(), 0, nil, 0).writeJSON(&buf); err != nil {
-		t.Fatal(err)
-	}
+	out := statusJSON(t, memReport())
 	var doc struct {
 		Schema int              `json:"schema"`
 		Mem    map[string]int64 `json:"mem"`
@@ -375,7 +382,7 @@ func TestStatusJSONMemMiB(t *testing.T) {
 			NeedMiB int64 `json:"need_mib"`
 		} `json:"holds"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatal(err)
 	}
 	wantMem := map[string]int64{"reserved_mib": 3072, "free_mib": 4904, "machine_mib": 49152,
@@ -393,10 +400,7 @@ func TestStatusJSONNewValues(t *testing.T) {
 	rep.Mem.RoomMiB, rep.Mem.FreeMiB = -3000, 0
 	rep.Holds[0].TypicalS, rep.Holds[0].LeftS, rep.Holds[0].Stoppable = 600, 120, true
 	rep.Tickets = []engine.TicketInfo{{Name: "tk-name", ID: "i", NeedMiB: 1}}
-	var buf bytes.Buffer
-	if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
-		t.Fatal(err)
-	}
+	out := statusJSON(t, rep)
 	var doc struct {
 		Mem   map[string]int64 `json:"mem"`
 		Holds []struct {
@@ -407,7 +411,7 @@ func TestStatusJSONNewValues(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"tickets"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatal(err)
 	}
 	if doc.Mem["room_mib"] != -3000 || doc.Mem["free_mib"] != 0 || len(doc.Holds) != 1 || doc.Holds[0].TypicalS != 600 ||
@@ -422,12 +426,9 @@ func TestStatusJSONNewValues(t *testing.T) {
 func TestStatusJSONMemNull(t *testing.T) {
 	rep := memReport()
 	rep.Mem.Known = false
-	var buf bytes.Buffer
-	if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(buf.String(), `"mem": null`) {
-		t.Errorf("a memory that is not Known: %s; want \"mem\": null", buf.String())
+	out := statusJSON(t, rep)
+	if !strings.Contains(out, `"mem": null`) {
+		t.Errorf("a memory that is not Known: %s; want \"mem\": null", out)
 	}
 }
 
@@ -440,12 +441,9 @@ func TestStatusJSONLeftS(t *testing.T) {
 	}{{600, 120, `"left_s": 120`}, {0, 120, `"left_s": null`}} {
 		rep := memReport()
 		rep.Holds[0].TypicalS, rep.Holds[0].LeftS = c.typical, c.left
-		var buf bytes.Buffer
-		if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(buf.String(), c.want) {
-			t.Errorf("typical %d, left %d: %s; want %s", c.typical, c.left, buf.String(), c.want)
+		out := statusJSON(t, rep)
+		if !strings.Contains(out, c.want) {
+			t.Errorf("typical %d, left %d: %s; want %s", c.typical, c.left, out, c.want)
 		}
 	}
 }
@@ -459,25 +457,22 @@ func TestStatusJSONExpectedWait(t *testing.T) {
 	}{{true, `"expected_wait_s": 120`}, {false, `"expected_wait_s": null`}} {
 		rep := memReport()
 		rep.Tickets = []engine.TicketInfo{{Name: "t", ID: "i", Label: "w", PID: 9, NeedMiB: 100, WaitS: 120, WaitKnown: c.known}}
-		var buf bytes.Buffer
-		if err := buildStatus(rep, 0, nil, 0).writeJSON(&buf); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(buf.String(), c.want) {
-			t.Errorf("WaitKnown %v: %s; want %s", c.known, buf.String(), c.want)
+		out := statusJSON(t, rep)
+		if !strings.Contains(out, c.want) {
+			t.Errorf("WaitKnown %v: %s; want %s", c.known, out, c.want)
 		}
 	}
 }
 
 // jsonObjects maps each object of the document, by its path (the top level is "", a nested one is
 // its key, joined by dots, with [] after an array's), to the json keys of its struct, omitempty
-// ones included.
+// ones included, each followed by its type as the reference words it.
 func jsonObjects(t reflect.Type, path string, out map[string][]string) {
 	var keys []string
 	for i := 0; i < t.NumField(); i++ {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
-		keys = append(keys, name)
+		name, opt, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
 		ft := t.Field(i).Type
+		keys = append(keys, name+" "+jsonType(ft, opt == "omitempty"))
 		for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice {
 			ft = ft.Elem()
 		}
@@ -493,8 +488,29 @@ func jsonObjects(t reflect.Type, path string, out map[string][]string) {
 	out[path] = keys
 }
 
+// jsonType is how the reference words the JSON type of a field of type t: a pointer is null when
+// unset unless it is omitted then.
+func jsonType(t reflect.Type, omitempty bool) string {
+	switch t.Kind() {
+	case reflect.Pointer:
+		if omitempty {
+			return jsonType(t.Elem(), false)
+		}
+		return jsonType(t.Elem(), false) + " or null"
+	case reflect.Slice:
+		return strings.TrimSuffix("array of "+jsonType(t.Elem(), false), " of object")
+	case reflect.Struct, reflect.Map:
+		return "object"
+	case reflect.Bool, reflect.String:
+		return t.Kind().String()
+	case reflect.Float32, reflect.Float64:
+		return "number"
+	}
+	return "int"
+}
+
 // docObjects reads docs/status-json.md: under each `## ` heading, the backticked first cell of
-// every table row. The heading "Top level" is the document's top, any other is the object's path in
+// every table row and, after it, its second, the type. The heading "Top level" is the document's top, any other is the object's path in
 // backticks.
 func docObjects(t *testing.T) map[string][]string {
 	t.Helper()
@@ -503,7 +519,7 @@ func docObjects(t *testing.T) map[string][]string {
 		t.Fatal(err)
 	}
 	heading := regexp.MustCompile("^## `([^`]+)`$")
-	row := regexp.MustCompile("^\\| `([^`]+)` \\|")
+	row := regexp.MustCompile("^\\| `([^`]+)` \\| ([^|]+) \\|")
 	out := map[string][]string{}
 	cur, in := "", false
 	for _, line := range strings.Split(string(b), "\n") {
@@ -516,16 +532,17 @@ func docObjects(t *testing.T) map[string][]string {
 			in = false
 		case in:
 			if m := row.FindStringSubmatch(line); m != nil {
-				out[cur] = append(out[cur], m[1])
+				out[cur] = append(out[cur], m[1]+" "+strings.TrimSpace(m[2]))
 			}
 		}
 	}
 	return out
 }
 
-// Every key of the document, in every object, has a row in docs/status-json.md and every row names
-// a key. Mutations: deleting one row of the reference reddens it, and so does adding a tag to
-// jsonTicket without a row.
+// Every key of the document, in every object, has one row in docs/status-json.md with its type,
+// "or null" where it can be null, and every row names a key. Mutations: deleting one row of the
+// reference, duplicating one, changing a row's type, dropping an "or null", or adding a tag to
+// jsonTicket without a row reddens it.
 func TestStatusJSONReference(t *testing.T) {
 	code := map[string][]string{}
 	jsonObjects(reflect.TypeOf(jsonStatus{}), "", code)
@@ -534,19 +551,8 @@ func TestStatusJSONReference(t *testing.T) {
 		got := doc[path]
 		slices.Sort(keys)
 		slices.Sort(got)
-		var missing, extra []string
-		for _, k := range keys {
-			if !slices.Contains(got, k) {
-				missing = append(missing, k)
-			}
-		}
-		for _, k := range got {
-			if !slices.Contains(keys, k) {
-				extra = append(extra, k)
-			}
-		}
-		if len(missing) > 0 || len(extra) > 0 {
-			t.Errorf("object %q: the reference lacks %v and lists %v that the document does not carry", path, missing, extra)
+		if !slices.Equal(keys, got) {
+			t.Errorf("object %q: the document carries %q; the reference lists %q", path, keys, got)
 		}
 	}
 	for path := range doc {

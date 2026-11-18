@@ -116,6 +116,9 @@ func (x *runRecord) admitted(g *engine.Grant) {
 	if a.WKnown {
 		f["w_s"] = a.W
 	}
+	if a.Pass != "" {
+		f["pass"] = a.Pass
+	}
 	x.Emit("admitted", f)
 }
 

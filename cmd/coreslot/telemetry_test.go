@@ -649,8 +649,9 @@ func TestTwentyHoldersLineFits(t *testing.T) {
 	}
 }
 
-// admitted says what admission read, and its waited_s is the run log's value for the attempt.
-// Mutation: waited_s from another clock reading differs from the run log's.
+// admitted says what admission read, and its waited_s is the run log's value for the attempt; a
+// head writes no pass. Mutations: waited_s from another clock reading differs from the run log's;
+// writing pass whatever the admission was reddens the last check.
 func TestAdmittedLine(t *testing.T) {
 	dir := recordedDir(t, 512)
 	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "128M", "--", "true"); r.code != 0 {
@@ -675,6 +676,9 @@ func TestAdmittedLine(t *testing.T) {
 	}
 	if _, ok := m["w_s"]; ok {
 		t.Errorf("w_s on a run that computed none: %v", m)
+	}
+	if _, ok := m["pass"]; ok {
+		t.Errorf("pass on a run that passed nobody: %v", m)
 	}
 }
 

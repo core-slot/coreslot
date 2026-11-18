@@ -36,12 +36,24 @@ func headWait(needMiB int64, restart bool, holds []liveHold, room, nowNS int64, 
 	if room < needMiB {
 		return 0, "wait_unknown"
 	}
-	if restart {
-		d, s, at, err := readWatch()
-		if err != nil {
-			return 0, "watch_unreadable"
-		}
-		w = max(w, calmLeft(d, s, at, nowNS, c)/1e9)
+	calm, noPass := restartFloor(restart, nowNS, readWatch, c)
+	if noPass != "" {
+		return 0, noPass
 	}
-	return w, ""
+	return max(w, calm), ""
+}
+
+// restartFloor is the calm a restart head still needs, in whole seconds, below which no wait of
+// its can fall (PROTOCOL.md section 12.4); 0 for any other head. noPass is "watch_unreadable" when
+// the watch state cannot be read.
+func restartFloor(restart bool, nowNS int64, readWatch func() (watch.Detector, watch.Sample, int64, error),
+	c watch.Config) (calmS int64, noPass string) {
+	if !restart {
+		return 0, ""
+	}
+	d, s, at, err := readWatch()
+	if err != nil {
+		return 0, "watch_unreadable"
+	}
+	return calmLeft(d, s, at, nowNS, c) / 1e9, ""
 }
