@@ -33,8 +33,8 @@ type ResetDone struct {
 
 // Reset recreates the state directory (`coreslot doctor --reset`) inside the section the caller
 // entered, whatever format its FORMAT names, malformed or absent included: it removes every entry
-// of queue/, holds/ and cancel/, degraded, gen and another format's res/ with its files, then
-// writes FORMAT of the format written. Under FORMAT 2, or none yet (which the first client writes
+// of queue/, holds/ and cancel/, degraded, gen, watch.json, trim.json and another format's res/
+// with its files, then writes FORMAT of the format written. Under FORMAT 2, or none yet (which the first client writes
 // as 2), it is a repair and keeps the entries of log/ and telemetry/; otherwise it removes them
 // too, those of telemetry/ counted in Removed only. It keeps admit.lock and config.toml (the
 // format-stable file whose inode live clients may hold open, and the configuration) and the
@@ -129,7 +129,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 			}
 		}
 	}
-	for _, name := range []string{DegradedFile, GenFile, WatchFile} {
+	for _, name := range []string{DegradedFile, GenFile, WatchFile, TrimFile} {
 		remove(s.path(name))
 	}
 	if _, err := os.Lstat(s.path(otherRes)); err == nil {

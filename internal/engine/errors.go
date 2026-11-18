@@ -20,6 +20,15 @@ var (
 	// ErrNoTicket is returned when no ticket with the given id is in the queue (it was admitted,
 	// withdrawn or never existed); a cancel request is not published.
 	ErrNoTicket = errors.New("coreslot: no such ticket in the queue")
+	// ErrNoHold is returned when no live hold has the given id: a request to trim it is not
+	// written.
+	ErrNoHold = errors.New("coreslot: no such live hold")
+	// ErrNothingReserved is returned for a trim of a hold that reserves nothing (a run outside the
+	// budget).
+	ErrNothingReserved = errors.New("coreslot: the hold reserves nothing")
+	// ErrCommandExited is returned for a trim of a hold whose command has exited: its run is
+	// releasing it.
+	ErrCommandExited = errors.New("coreslot: the hold's command has exited")
 )
 
 // SectionBusyError is the end of a caller's context while another client held the admission
