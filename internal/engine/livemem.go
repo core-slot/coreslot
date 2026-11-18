@@ -18,8 +18,9 @@ import (
 
 // liveHold is one live hold as admission and the watch tick read it.
 type liveHold struct {
-	name string
-	body wire.Hold
+	name     string
+	body     wire.Hold
+	unparsed bool // the body did not parse: body is the cold start stand-in
 }
 
 // holdListing lists holds/ for admission, the watch tick and Snapshot alike: the live holds, a
@@ -54,10 +55,11 @@ func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []s
 			return nil, nil, 0, err
 		}
 		h, err := wire.DecodeHold(body)
-		if err != nil || uint64(h.StartNS) != en.ID.OrderKey || h.PID != en.ID.PID {
+		unparsed := err != nil || uint64(h.StartNS) != en.ID.OrderKey || h.PID != en.ID.PID
+		if unparsed {
 			h = wire.Hold{PID: en.ID.PID, StartNS: int64(en.ID.OrderKey), NeedMiB: coldStartMiB}
 		}
-		live = append(live, liveHold{name: en.Name, body: h})
+		live = append(live, liveHold{name: en.Name, body: h, unparsed: unparsed})
 	}
 	return live, dead, ignored, nil
 }

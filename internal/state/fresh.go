@@ -18,6 +18,7 @@ const MaxPassGap = 3 * time.Second
 // in which pass it was last examined.
 type sighting struct {
 	mtime int64
+	first time.Duration // watched time of the first sighting; a changed mtime keeps it
 	since time.Duration // watched-since is the unchanged time this observer has watched
 	at    time.Duration // watched time of the last examination
 	pass  uint64        // the pass of the last examination
@@ -73,7 +74,11 @@ func (o *Observer) Observe(k Key, mtime int64, now time.Duration) {
 	w := o.watched(now)
 	s, ok := o.seen[k]
 	if !ok || s.mtime != mtime {
-		o.seen[k] = sighting{mtime: mtime, since: w, at: w, pass: o.pass}
+		first := w
+		if ok {
+			first = s.first
+		}
+		o.seen[k] = sighting{mtime: mtime, first: first, since: w, at: w, pass: o.pass}
 		return
 	}
 	if o.pass > s.pass+1 {
@@ -88,6 +93,18 @@ func (o *Observer) Observe(k Key, mtime int64, now time.Duration) {
 func (o *Observer) Stalled(k Key, now time.Duration) bool {
 	s, ok := o.seen[k]
 	return ok && o.watched(now)-s.since >= StallAfter
+}
+
+// WatchedFor is how long, in watched time at observer time now, this observer has watched k since
+// it first saw it (the passing rule's bound for going out of turn, PROTOCOL.md section 10.3): its
+// own absences do not count, so neither a stopped observer nor a clock step lengthens it. 0 for a
+// ticket never observed.
+func (o *Observer) WatchedFor(k Key, now time.Duration) time.Duration {
+	s, ok := o.seen[k]
+	if !ok {
+		return 0
+	}
+	return max(0, o.watched(now)-s.first)
 }
 
 // Seen reports whether k has been observed (and not forgotten since), and the last mtime read.

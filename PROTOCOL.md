@@ -115,7 +115,7 @@ Every conforming client MUST preserve these invariants:
   (section 12.1), whose room leaves out the hold bodies.
 - **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
-  it except one that passes it by duration (section 10.3) and, while a hold is live, a container
+  it except one that passes it, by duration or out of turn (section 10.3), and, while a hold is live, a container
   request (section 12.1), and a waiter is passed over only while it is STALLED, dead or canceled.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
@@ -723,22 +723,39 @@ ticket of the re-election (section 12.1 step 5). A waiter is admitted ahead of t
 1. its own request fits and the level gate lets it in, as for a head (section 12.1 steps 4 and 6),
    and the headroom is known;
 2. it has a typical run time `d`;
-3. `d ≤ W`, the head's **expected wait**: the smallest `t` at which the room plus, for each live
-   hold expected to end within `t` seconds, the larger of its `need_mib` and its `footprint_mib`
-   covers the head's need, where a live hold is
-   expected to end `max(0, typical_s − (now − start_ns) / 10^9)` seconds from now. A hold with
-   `typical_s` 0 is never expected to end: when the others do not cover the head's need, `W` is
-   unknown and nobody passes. When the head's ticket has `restart`, `W` is at least the calm it
-   still needs (section 12.4): `calm_s`, less `host_now − calm_since_ns` while the stored sample is
-   fresh and green. With no live hold the head starts by the idle rule (section 12.4), so its
-   expected wait is 0 and nobody passes, a container request included (section 12.1).
+3. either it **ends in time**: `d ≤ W`, the head's **expected wait**: the smallest `t` at which the
+   room plus, for each live hold expected to end within `t` seconds, the larger of its `need_mib` and
+   its `footprint_mib` covers the head's need, where a live hold is expected to end
+   `max(0, typical_s − (now − start_ns) / 10^9)` seconds from now. A hold with `typical_s` 0 is never
+   expected to end: when the others do not cover the head's need, `W` is unknown. When the head's
+   ticket has `restart`, `W` is at least the calm it still needs (section 12.4): `calm_s`, less
+   `host_now − calm_since_ns` while the stored sample is fresh and green. With no live hold the head
+   starts by the idle rule (section 12.4), so its expected wait is 0 and nobody passes, a container
+   request included (section 12.1);
+   or it **goes out of turn**, whatever `W` is (known or unknown): the head's need does not fit the
+   room; the kernel reports its memory pressure level as normal (on macOS
+   `kern.memorystatus_vm_pressure_level` 1), a level that is unknown, cannot be read or does not
+   exist (Linux has none) counting as not normal, since the room can be file cache that the kernel is
+   already short of; no live hold's body is malformed and no live hold's `arrival_ns` is at or after the head's
+   order key (a hold that arrived after the head started ahead of it out of turn: a passer, a
+   container request, or a run that passed an earlier head); and `d` is at most the time this waiter
+   has **watched** the head's ticket, from its first observation of it, on its own monotonic clock and
+   without its own absences (section 10.2), or, when `W` is unknown and the head has `restart`, at
+   most the calm the head still needs, if that is longer. A waiter that has never observed the head
+   has watched it for 0 s.
 
 Each waiter between the head and a passer is judged by the same rule on its own, so one that may not
-pass keeps nobody behind it from passing. A passer only starts when it is expected to end before the
-head could start, so the head, a restart included (section 24), keeps its place. A passer that runs
-longer than `d` is never stopped for it. A waiter without a typical run time never enters the section
-to be admitted while a live ticket is ahead of it, unless it is a container request, which while a
-hold is live needs no pass (section 12.1) and leaves the head its place.
+pass keeps nobody behind it from passing. A passer that ends in time only starts when it is expected
+to end before the head could start, so the head, a restart included (section 24), keeps its place.
+Going out of turn bounds the head's delay instead: at most one run is out of turn at a time, and it
+started no longer than the head had then been watched, so if the head could have started at a given
+moment, the run out of turn then is expected to end within the head's wait up to that moment; going
+out of turn at most doubles the head's wait, by expectation, and never takes room the head could start
+in now. Since runs out of turn never overlap, they cannot keep a hold live for ever and take away the
+idle start that a head larger than the room needs (section 12.4). A passer that runs longer than `d`
+is never stopped for it. A waiter without a typical run time never enters the section to be admitted
+while a live ticket is ahead of it, unless it is a container request, which while a hold is live needs
+no pass (section 12.1) and leaves the head its place.
 
 > **Implementation note.** The Go CLI's typical run time is the 90th percentile of the `ran_s` of
 > the window its need is learned from (section 5.4), rounded up to a whole second and at least 1.

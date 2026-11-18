@@ -274,3 +274,27 @@ func TestObserverPassGapBoundary(t *testing.T) {
 		}
 	}
 }
+
+// WatchedFor counts from the first sighting, across refreshes, and leaves the observer's own
+// absences out; a ticket never seen has been watched for 0. Mutations: restarting it at a changed
+// mtime reddens the refresh check; counting from the observer's raw clock reddens the absence check.
+func TestObserverWatchedFor(t *testing.T) {
+	sec := func(s int) time.Duration { return time.Duration(s) * time.Second }
+	obs := &Observer{}
+	head := k(1, 1, 1)
+	if got := obs.WatchedFor(head, sec(0)); got != 0 {
+		t.Fatalf("never seen: watched %v, want 0", got)
+	}
+	for s := 0; s <= 6; s++ { // the head refreshes every 2 s
+		obs.Pass(sec(s))
+		obs.Observe(head, int64(s/2), sec(s))
+	}
+	if got := obs.WatchedFor(head, sec(6)); got != sec(6) {
+		t.Errorf("after 6 s and three refreshes: watched %v, want 6s", got)
+	}
+	obs.Pass(sec(100)) // away for 94 s
+	obs.Observe(head, 50, sec(100))
+	if got := obs.WatchedFor(head, sec(101)); got != sec(7) {
+		t.Errorf("after an absence of 94 s: watched %v, want 7s", got)
+	}
+}
