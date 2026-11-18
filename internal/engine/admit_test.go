@@ -446,7 +446,7 @@ func TestUnknownFormatRefuses(t *testing.T) {
 	refused := func(t *testing.T, err error) {
 		t.Helper()
 		var fe *store.FormatError
-		if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != 3 {
+		if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != 4 {
 			t.Fatalf("%v, want a refusal naming format 4", err)
 		}
 	}
@@ -527,7 +527,7 @@ func TestSnapshotTellsFormatZeroFromAbsent(t *testing.T) {
 		{"format 0", "coreslot-protocol 0\n", 0, true, false, false},
 		{"format 00", "coreslot-protocol 00", 0, true, false, false},
 		{"format 1", "coreslot-protocol 1\n", 1, true, false, false},
-		{"format 3", "coreslot-protocol 3\n", 2, true, true, false},
+		{"format 3", "coreslot-protocol 3\n", 3, true, true, false},
 		{"malformed", "coreslot-protocol x\n", 0, true, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -574,7 +574,7 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	if m := r.Mem; m.ReservedMiB != 384 || m.FreeMiB != 640 || m.RealFreeMiB != 1024 {
 		t.Errorf("mem %+v, want reserved 384, free 640, real free 1024", m)
 	}
-	if r.Format != 2 || !r.FormatUnderstood {
+	if r.Format != 3 || !r.FormatUnderstood {
 		t.Errorf("format %d understood %v", r.Format, r.FormatUnderstood)
 	}
 }
