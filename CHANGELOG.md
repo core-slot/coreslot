@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.9.0 (2026-11-18)
+
 ### Added
 
 - `coreslot status --docker` shows Docker Desktop's VM (its memory, footprint and a free estimate) and every
