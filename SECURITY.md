@@ -85,7 +85,10 @@ the situation better.
 coreslot sends nothing anywhere and opens no network connection itself. Its optional local record
 (`[telemetry]`, off by default) stays in the state directory and holds labels, the names of the
 user's largest processes, whether or not coreslot runs them, and container image names; while it is on, a run doing container
-work talks to the local Docker socket, a unix socket, to read memory. Looking up the user's home
+work talks to the local Docker socket, a unix socket, to read memory, and so does `coreslot status --docker`
+when the user runs it with that flag: it shows the name, image and Compose project of every running container to
+whoever runs it as that user, as any process of the user could read them from the socket itself.
+`[docker] enabled = false` in the configuration stops both. Looking up the user's home
 directory (`getpwuid`, or the `getent` fallback) goes through the system's name services (NSS on
 Linux, Open Directory on macOS), which may contact a directory service such as LDAP, as any
 program that looks up the user does.

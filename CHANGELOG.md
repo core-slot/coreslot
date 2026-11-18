@@ -8,11 +8,22 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `coreslot status --docker` shows Docker Desktop's VM (its memory, footprint and a free estimate) and every
+  running container's name, image, Compose project and memory, read once from the local Docker socket. It shows
+  them to any caller of the user. `status --json` carries them under `docker`, present only with the flag, and a
+  top-level `config_warnings`, under the same `schema` 1.
+- `[docker] enabled = false` in the configuration reads no Docker socket at all, for `status --docker` and for the
+  `containers` telemetry line. A value that is not a boolean switches the features off, and `status` and `doctor`
+  print a configuration warning that never changes their exit status.
+
 ### Changed
 
 - The `vm` of the `memory` telemetry line is Docker Desktop's VM process: the Virtualization VM in the resource
   coalition of `com.docker.backend`, matched by executable path. A VM of another tool no longer counts, and the
-  `com.docker.krun`, `sailor` and `virtualization` names are no longer looked for.
+  `com.docker.krun`, `sailor` and `virtualization` names are no longer looked for. A setup whose VM is not a
+  Virtualization VM, such as Docker's VMM backend, no longer has a `vm`.
 
 ### Fixed
 

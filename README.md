@@ -240,6 +240,7 @@ coreslot run --restart=yes --mem 3G -- make test          # say what it needs wh
 coreslot run --restart=yes --label gate:unit -- npm test  # a label of your own
 coreslot run --restart=no -- ./migrate.sh                 # never killed and run twice
 coreslot status            # the watchdog's level, running commands, the queue; --json for scripts
+coreslot status --docker   # also Docker Desktop's VM and each running container, read from the Docker socket
 coreslot stats             # per label, what the need is learned from
 coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
 coreslot doctor            # state directory, filesystem, permissions, format, readings
@@ -325,6 +326,9 @@ sample_log = false    # deprecated, use [telemetry]; true: machine samples only
 
 [telemetry]
 enabled = false       # true: keep a local record of what each run waited for
+
+[docker]
+enabled = true        # false: never read the Docker socket, for `status --docker` or the record
 ```
 
 `[watch]` also takes the thresholds and waits
@@ -339,6 +343,13 @@ record is on, a run doing container work talks to the local Docker socket, a uni
 every 30 s, to read each container's memory. [The keys](docs/telemetry.md) say what each line
 means, what the record holds and how large it grows. `sample_log` is deprecated: alone, it writes
 the machine samples and nothing else.
+
+`coreslot status --docker` is the one other thing that reads the Docker socket, and only when you
+ask: once per call, read-only, within 2 s. It shows Docker Desktop's VM and, for every running
+container, its name, image, Compose project and memory, to whoever runs it as you, so a process of
+yours can learn what your containers are called. `[docker] enabled = false` makes it print `off` and
+open no socket, and keeps the record from reading the engine too. A value that is not a boolean
+switches it off as well, and `status` and `doctor` say so.
 
 `needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
 space or an `@` is not a bare TOML key, so quote it:
