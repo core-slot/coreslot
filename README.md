@@ -124,15 +124,22 @@ up to two leading word-like arguments: `go test`, `npm run test`) and the name o
 it runs in, such as `go test@proj`. The worktrees of one repository share it, so a label's history
 and its `needs.toml` entry follow the project, not the directory.
 
+A command behind a launcher (`caffeinate`, `env`, `nice`, `nohup`, `stdbuf`, `time`, `timeout`) takes
+the shape of the command it runs, found past the launcher's arguments that start with a digit or
+contain `=` and taken again when it is a launcher too: `timeout 10m npx jest` is `npx jest@proj`,
+`env A=1 timeout 10m npm run check` is `npm run check@proj` and `timeout 10m ./scripts/x.sh` is
+`x.sh@proj`. Those skipped arguments never reach the label. A launcher followed by an option
+(`nice -n 10 make`, `time -p make`), an empty argument or no command keeps its own name; give such
+commands a `--label`.
+
 The label is only that shape and name, so commands that share them share one learned need. Two cases
 to know. First, the shape ends at the first argument that starts with `-` or a digit, or contains
-`/`, `=` or `.`, so a command behind a launcher often collapses to the launcher's label:
+`/`, `=` or `.`, so a command run by an interpreter or a shell collapses to its label:
 `python -m pytest` and `python -m mypy` both become `python@proj` (`python3` gives `python3@proj`),
-`sh -c '…'` becomes `sh@proj`, `env NAME=x cmd` `env@proj` and `timeout 5 cmd` `timeout@proj`. Bare
-words after a launcher stay in the shape (`env pytest tests`). Give such commands a `--label` of
-their own. Second, the repository part is the directory name only, not its path, so two repositories
-with the same directory name share their automatic labels. A `--label` separates them; a
-`needs.toml` key on the shared label pins one need for both.
+and `sh -c '…'` becomes `sh@proj`. Give such commands a `--label` of their own. Second, the
+repository part is the directory name only, not its path, so two repositories with the same
+directory name share their automatic labels. A `--label` separates them; a `needs.toml` key on the
+shared label pins one need for both.
 
 ### When it kills
 

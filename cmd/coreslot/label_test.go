@@ -28,6 +28,58 @@ func TestCommandShape(t *testing.T) {
 	}
 }
 
+// A launcher's shape is its command's, past the launcher's numbers and assignments; an option or
+// an empty argument before the command keeps the launcher's name. Each case names the mutation that
+// turns it red.
+func TestCommandShapeSkipsLaunchers(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want string
+	}{
+		// Removing a name from launchers gives that name.
+		{[]string{"caffeinate", "make"}, "make"},
+		{[]string{"env", "A=1", "make"}, "make"},
+		{[]string{"nice", "make"}, "make"},
+		{[]string{"nohup", "make"}, "make"},
+		{[]string{"stdbuf", "make"}, "make"},
+		{[]string{"time", "make"}, "make"},
+		{[]string{"timeout", "10m", "npx", "jest", "--ci"}, "npx jest"}, // or not skipping a digit: "10m npx jest"
+		// Not skipping an assignment gives "A=1"; an assignment only before a "/" gives "b=hunter2".
+		{[]string{"env", "A=1", "B=2", "go", "test", "./..."}, "go test"},
+		{[]string{"env", "a/b=hunter2", "deploy"}, "deploy"},
+		// Not taking the command's base name gives "./scripts/x.sh".
+		{[]string{"timeout", "10m", "./scripts/x.sh"}, "x.sh"},
+		// Stopping after one launcher (a break after argv = argv[i:]) gives "timeout".
+		{[]string{"env", "A=1", "timeout", "10m", "npm", "run", "check"}, "npm run check"},
+		// Matching argv[0] rather than its base name gives "time make all".
+		{[]string{"/usr/bin/time", "make", "all"}, "make all"},
+		// Not stopping at an option takes it, or its value, for the command: "-n", "-k", "-i", "-S",
+		// "-p".
+		{[]string{"nice", "-n", "10", "make"}, "nice"},
+		{[]string{"timeout", "-k", "5", "10m", "make"}, "timeout"},
+		{[]string{"env", "-i", "PATH=/bin", "make"}, "env"},
+		{[]string{"env", "-S", "deploy --token hunter2", "x"}, "env"},
+		{[]string{"time", "-p", "make"}, "time"},
+		// Skipping an option that holds "=" gives "make".
+		{[]string{"timeout", "--signal=KILL", "10m", "make"}, "timeout"},
+		// An argument with "=" anywhere is skipped, so no command follows here.
+		{[]string{"timeout", "5", "/opt/a=b/run"}, "timeout"},
+		// Not stopping at an empty argument panics.
+		{[]string{"nohup", "", "make"}, "nohup"},
+		// A launcher that runs no command keeps its name; not stopping there panics.
+		{[]string{"env"}, "env"},
+		{[]string{"env", "A=1", "timeout", "10m"}, "timeout"},
+		// Unchanged, no shell string or other tool's flags read: dropping the shape's own stop at
+		// "-" gives "sh -c" and "python -m pytest".
+		{[]string{"sh", "-c", "go test ./..."}, "sh"},
+		{[]string{"python", "-m", "pytest"}, "python"},
+	} {
+		if got := commandShape(c.argv); got != c.want {
+			t.Errorf("commandShape(%q) = %q, want %q", c.argv, got, c.want)
+		}
+	}
+}
+
 // Every worktree of a repository names it by the parent of the common git directory. Mutation:
 // naming the checkout's own directory reddens the worktree.
 func TestRepoNameWorktreesShare(t *testing.T) {

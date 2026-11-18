@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.9.0 (2026-11-18)
+
 ### Added
 
 - `coreslot status --docker` shows Docker Desktop's VM (its memory, footprint and a free estimate) and every
@@ -20,6 +22,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Changed
 
+- An automatic label of a command behind a launcher is the shape of the command it runs (README, "Labels are
+  automatic"): `timeout 10m npx jest` is `npx jest@proj`, not `timeout@proj`, so it no longer shares one learned
+  need with every other command behind the same launcher. History and `needs.toml` keys under a launcher's label
+  no longer apply to such commands; move a key to the new label.
 - The `vm` of the `memory` telemetry line is Docker Desktop's VM process: the Virtualization VM in the resource
   coalition of `com.docker.backend`, matched by executable path. A VM of another tool no longer counts, and the
   `com.docker.krun`, `sailor` and `virtualization` names are no longer looked for. A setup whose VM is not a
