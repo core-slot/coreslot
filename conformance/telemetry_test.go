@@ -141,7 +141,7 @@ func runScript(e Env, label, script string, flags ...string) *Proc {
 	return e.Start(append(args, "--", "sh", "-c", script)...)
 }
 
-const foreignFormat = `printf 'coreslot-protocol 3\n' > "$CORESLOT_STATE_DIR/FORMAT"; `
+const foreignFormat = `printf 'coreslot-protocol 4\n' > "$CORESLOT_STATE_DIR/FORMAT"; `
 
 // lifeRows is the lifecycle, row by row. Live lines come every 30 s, so most runs here have none.
 var lifeRows = []lifeRow{

@@ -163,7 +163,7 @@ func writeRunLog(t *testing.T, dir string) {
 }
 
 // With nothing alive a reset empties the state and leaves a directory a client can use again; it
-// returns what the store did, the run log of format 2 kept.
+// returns what the store did, the run log of format 3 kept.
 func TestResetThenUse(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
@@ -171,13 +171,13 @@ func TestResetThenUse(t *testing.T) {
 	writeRunLog(t, dir)
 	done, err := e.Reset(context.Background())
 	if err != nil || done.Removed == 0 || done.LogKept != 1 || done.LogRemoved != 0 {
-		t.Fatalf("Reset = %+v, %v; want entries removed and the run log of format 2 kept", done, err)
+		t.Fatalf("Reset = %+v, %v; want entries removed and the run log of format 3 kept", done, err)
 	}
 	if exists(filepath.Join(dir, store.GenFile)) {
 		t.Error("gen survived")
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 2\n" {
-		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 2", b)
+	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 3\n" {
+		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 3", b)
 	}
 	tk := enqueue(t, e, need(128))
 	if !isAdmitted(step(t, tk)) {
@@ -186,13 +186,13 @@ func TestResetThenUse(t *testing.T) {
 }
 
 // A reset under a well-formed FORMAT this client does not implement recreates the directory as
-// format 2, an entry of that format's queue and its run log included.
+// format 3, an entry of that format's queue and its run log included.
 func TestResetRecreatesAForeignFormat(t *testing.T) {
 	dir := capped(t, 512)
 	e := newEngine(t, dir, nil)
 	hold(t, e, need(128)).Close()
 	writeRunLog(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 3\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte("coreslot-protocol 4\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, store.QueueDir), 0o700); err != nil {
@@ -204,8 +204,8 @@ func TestResetRecreatesAForeignFormat(t *testing.T) {
 	if done, err := e.Reset(context.Background()); err != nil || done.LogRemoved != 1 || done.LogKept != 0 {
 		t.Fatalf("Reset = %+v, %v; want the directory recreated, its run log removed", done, err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 2\n" || exists(filepath.Join(dir, store.QueueDir, "v3-ticket")) {
-		t.Errorf("after the reset FORMAT %q, v3-ticket present %v; want format 2 and an empty queue", b, exists(filepath.Join(dir, store.QueueDir, "v3-ticket")))
+	if b, _ := os.ReadFile(filepath.Join(dir, store.FormatFile)); string(b) != "coreslot-protocol 3\n" || exists(filepath.Join(dir, store.QueueDir, "v3-ticket")) {
+		t.Errorf("after the reset FORMAT %q, v3-ticket present %v; want format 3 and an empty queue", b, exists(filepath.Join(dir, store.QueueDir, "v3-ticket")))
 	}
 }
 

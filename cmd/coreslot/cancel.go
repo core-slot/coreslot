@@ -60,27 +60,9 @@ func cancelCommand(args []string, io IO) int {
 		return exitRefusal
 	}
 	if byLabel {
-		rep, err := e.Snapshot()
-		if err != nil {
-			return cancelFailed(err, io)
-		}
-		var ids []string
-		for _, t := range rep.Tickets {
-			if t.Label == *label && !t.Dead {
-				ids = append(ids, t.ID)
-			}
-		}
-		slices.Sort(ids)
-		switch len(ids) {
-		case 0:
-			fmt.Fprintf(io.Stderr, "coreslot: cancel: no waiting ticket has the label %s\n", text(*label))
-			return exitRefusal
-		case 1:
-			id, _ = wire.ParseID(ids[0])
-		default:
-			fmt.Fprintf(io.Stderr, "coreslot: cancel: %d waiting tickets have the label %s; cancel one by id: %s\n",
-				len(ids), text(*label), strings.Join(ids, ", "))
-			return exitRefusal
+		var code int
+		if id, code = soleWaiting(e, "cancel", *label, io); code >= 0 {
+			return code
 		}
 	}
 
@@ -104,6 +86,34 @@ func cancelCommand(args []string, io IO) int {
 	}
 }
 
+// soleWaiting is the id of the one waiting ticket labelled label, for verb (cancel, move), and -1;
+// or, when none or several are, the exit status after it says so. A snapshot that fails is
+// reported as verb's failure.
+func soleWaiting(e *engine.Engine, verb, label string, io IO) (wire.ID, int) {
+	rep, err := e.Snapshot()
+	if err != nil {
+		return wire.ID{}, commandFailed(verb, err, io)
+	}
+	var ids []string
+	for _, t := range rep.Tickets {
+		if t.Label == label && !t.Dead {
+			ids = append(ids, t.ID)
+		}
+	}
+	slices.Sort(ids)
+	switch len(ids) {
+	case 0:
+		fmt.Fprintf(io.Stderr, "coreslot: %s: no waiting ticket has the label %s\n", verb, text(label))
+		return wire.ID{}, exitRefusal
+	case 1:
+		id, _ := wire.ParseID(ids[0])
+		return id, -1
+	}
+	fmt.Fprintf(io.Stderr, "coreslot: %s: %d waiting tickets have the label %s; %s one by id: %s\n",
+		verb, len(ids), text(label), verb, strings.Join(ids, ", "))
+	return wire.ID{}, exitRefusal
+}
+
 // sectionBusyText says that the admission section stayed held for waited and, from admit.lock's
 // informational body, who holds it now.
 func sectionBusyText(e *engine.Engine, waited time.Duration) string {
@@ -114,15 +124,18 @@ func sectionBusyText(e *engine.Engine, waited time.Duration) string {
 	return s
 }
 
-// cancelFailed reports an error that kept cancel from publishing its request. A refusal of the
-// engine and a state error (PROTOCOL.md section 14: the directory or its configuration cannot be
-// used) are refusals, exit 75; anything else is an internal error, exit 70.
-func cancelFailed(err error, io IO) int {
+// cancelFailed reports an error that kept cancel from publishing its request (commandFailed).
+func cancelFailed(err error, io IO) int { return commandFailed("cancel", err, io) }
+
+// commandFailed reports an error that kept verb (cancel, move) from publishing its file. A refusal
+// of the engine and a state error (PROTOCOL.md section 14: the directory or its configuration
+// cannot be used) are refusals, exit 75; anything else is an internal error, exit 70.
+func commandFailed(verb string, err error, io IO) int {
 	if code, stateErr := classify(err); stateErr || code == exitRefusal {
-		fmt.Fprintf(io.Stderr, "coreslot: cancel refused: %s\n", text(refusalText(err)))
+		fmt.Fprintf(io.Stderr, "coreslot: %s refused: %s\n", verb, text(refusalText(err)))
 		return exitRefusal
 	}
-	fmt.Fprintf(io.Stderr, "coreslot: cancel: %s\n", text(err.Error()))
+	fmt.Fprintf(io.Stderr, "coreslot: %s: %s\n", verb, text(err.Error()))
 	return exitInternal
 }
 

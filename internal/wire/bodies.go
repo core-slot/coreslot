@@ -57,6 +57,12 @@ type Cancel struct {
 	RequesterPID int
 }
 
+// Order is the body of an order override, order/<ticket-id> (section 7.12): the ticket's effective
+// order key, which replaces its name's in every ordering of the queue.
+type Order struct {
+	OrderNS int64
+}
+
 // ---------------------------------------------------------------- encoding
 
 type ticketJSON struct {
@@ -95,7 +101,11 @@ type cancelJSON struct {
 	RequesterPID int   `json:"requester_pid"`
 }
 
-// Encode returns the body of a Ticket, Hold or Cancel (or a pointer to one): compact JSON with
+type orderJSON struct {
+	OrderNS int64 `json:"order_ns"`
+}
+
+// Encode returns the body of a Ticket, Hold, Cancel or Order (or a pointer to one): compact JSON with
 // every key of its table, in the table's order. It refuses, with ErrMalformed, a value no reader
 // would accept.
 func Encode(v any) ([]byte, error) {
@@ -118,6 +128,12 @@ func Encode(v any) ([]byte, error) {
 	case *Cancel:
 		if t != nil {
 			out = cancelJSON(*t)
+		}
+	case Order:
+		out = orderJSON(t)
+	case *Order:
+		if t != nil {
+			out = orderJSON(*t)
 		}
 	default:
 		return nil, malformed("cannot encode a %T", v)
@@ -145,6 +161,10 @@ func validate(v any) error {
 		return t.validate()
 	case *Cancel:
 		return t.validate()
+	case Order:
+		return t.validate()
+	case *Order:
+		return t.validate()
 	}
 	return nil
 }
@@ -164,6 +184,13 @@ func (t Ticket) validate() error {
 func (c Cancel) validate() error {
 	if c.RequestedNS < 0 || c.RequesterPID < 0 {
 		return malformed("requested_ns and requester_pid are at least 0")
+	}
+	return nil
+}
+
+func (o Order) validate() error {
+	if o.OrderNS < 0 {
+		return malformed("order_ns is negative")
 	}
 	return nil
 }
@@ -278,6 +305,22 @@ func DecodeHold(body []byte) (Hold, error) {
 		return Hold{}, err
 	}
 	return h, nil
+}
+
+// DecodeOrder parses and validates an order override body.
+func DecodeOrder(body []byte) (Order, error) {
+	o, err := parseObject(body)
+	if err != nil {
+		return Order{}, err
+	}
+	var r Order
+	if r.OrderNS, err = o.int64("order_ns"); err != nil {
+		return Order{}, err
+	}
+	if err := r.validate(); err != nil {
+		return Order{}, err
+	}
+	return r, nil
 }
 
 // DecodeCancel parses and validates a cancel request body.

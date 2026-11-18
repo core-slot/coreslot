@@ -252,6 +252,7 @@ coreslot stats             # per label, what the need is learned from
 coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
 coreslot doctor            # state directory, filesystem, permissions, format, readings
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
+coreslot move <ticket-id> --first   # or --last, --before <id>, --after <id>; changes its place, keeps its run
 ```
 
 **`--restart=yes|no` is required** wherever coreslot could stop the command: when memory runs
@@ -394,7 +395,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 2
+- [Protocol](PROTOCOL.md), the normative definition of format 3
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)

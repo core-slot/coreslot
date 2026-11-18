@@ -447,13 +447,13 @@ func TestUnknownFormatRefuses(t *testing.T) {
 		t.Helper()
 		var fe *store.FormatError
 		if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != 3 {
-			t.Fatalf("%v, want a refusal naming format 3", err)
+			t.Fatalf("%v, want a refusal naming format 4", err)
 		}
 	}
 	t.Run("enqueue", func(t *testing.T) {
 		dir := newStateDir(t, "")
 		e := newEngine(t, dir, newFakeClock())
-		writeFormat(t, dir, "coreslot-protocol 3\n")
+		writeFormat(t, dir, "coreslot-protocol 4\n")
 		before := listing(t, dir)
 		_, err := e.EnqueueContext(context.Background(), need(128))
 		refused(t, err)
@@ -468,7 +468,7 @@ func TestUnknownFormatRefuses(t *testing.T) {
 		startHelper(t, "lock", dir, holdPath(t, dir, 1024))
 		tk := enqueue(t, e, need(128))
 		step(t, tk)
-		writeFormat(t, dir, "coreslot-protocol 3\n")
+		writeFormat(t, dir, "coreslot-protocol 4\n")
 		clk.advance(time.Second)
 		_, err := tk.Step(context.Background())
 		refused(t, err)
@@ -500,7 +500,7 @@ func TestFailOpenHold(t *testing.T) {
 		t.Errorf("after Close: holds %v, gen %d -> %d; want removed with one bump", entries, before, readGen(t, e))
 	}
 
-	for _, format := range []string{"coreslot-protocol 3\n", "coreslot-protocol x\n"} {
+	for _, format := range []string{"coreslot-protocol 4\n", "coreslot-protocol x\n"} {
 		writeFormat(t, dir, format)
 		before := listing(t, dir)
 		g, err := e.FailOpen(need(256), "state error")
@@ -527,7 +527,7 @@ func TestSnapshotTellsFormatZeroFromAbsent(t *testing.T) {
 		{"format 0", "coreslot-protocol 0\n", 0, true, false, false},
 		{"format 00", "coreslot-protocol 00", 0, true, false, false},
 		{"format 1", "coreslot-protocol 1\n", 1, true, false, false},
-		{"format 2", "coreslot-protocol 2\n", 2, true, true, false},
+		{"format 3", "coreslot-protocol 3\n", 2, true, true, false},
 		{"malformed", "coreslot-protocol x\n", 0, true, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {

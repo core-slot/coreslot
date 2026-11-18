@@ -28,7 +28,7 @@ type Entry struct {
 	MtimeNS int64 // the entry's mtime, as a value to compare with earlier sightings, never a clock
 }
 
-// List lists QueueDir, HoldsDir or CancelDir: the entries whose names match the directory's
+// List lists QueueDir, HoldsDir, CancelDir or OrderDir: the entries whose names match the directory's
 // grammar, in name order (which is (order key or start, pid, seq) order), and the number of other
 // entries, which are ignored. Temporary files are neither listed nor counted, unless one fails the
 // section 4.2 checks. An entry whose name matches but whose type, owner or mode fails those checks
@@ -72,8 +72,8 @@ func (s *Store) List(dir string) ([]Entry, int, error) {
 // readDir is what List and ListNames share: the checked directory's path, its names (nil when
 // it does not exist) and the name grammar of dir. op names the caller in errors.
 func (s *Store) readDir(op, dir string) (path string, names []string, parse func(string) (wire.ID, bool), err error) {
-	if !slices.Contains(noReplaceDirs, dir) {
-		return "", nil, nil, fmt.Errorf("store: %s of %q: not a directory of tickets, holds or cancel requests", op, dir)
+	if !slices.Contains(listedDirs, dir) {
+		return "", nil, nil, fmt.Errorf("store: %s of %q: not a directory of tickets, holds, cancel requests or overrides", op, dir)
 	}
 	path = s.path(dir)
 	if err := CheckEntry(path, true); err != nil {
@@ -90,13 +90,13 @@ func (s *Store) readDir(op, dir string) (path string, names []string, parse func
 		names = []string{}
 	}
 	parse = wire.ParseName
-	if dir == CancelDir {
+	if dir == CancelDir || dir == OrderDir {
 		parse = wire.ParseID
 	}
 	return path, names, parse, nil
 }
 
-// ListNames lists the names of dir (QueueDir, HoldsDir or CancelDir) that match its grammar, in
+// ListNames lists the names of dir (QueueDir, HoldsDir, CancelDir or OrderDir) that match its grammar, in
 // name order, from the directory listing alone: unlike List it reads no entry's metadata, so an
 // entry that fails the section 4.2 checks is listed too and is found out when it is opened or
 // probed (an error for which a caller's stray check holds). MtimeNS is 0. The directory itself
@@ -218,24 +218,26 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 		}
 	}
 
-	// 2. Cancel requests whose ticket is gone. tickets holds only the entries of step 1 that are
-	// live and not stray: a stray never protects a cancel request (PROTOCOL.md section 10.4).
-	cancels, _, err := sec.s.List(CancelDir)
-	if err != nil {
-		return removed, err
-	}
-	for _, e := range cancels {
-		if tickets[e.Name] {
-			continue
-		}
-		if err := os.Remove(sec.s.path(CancelDir, e.Name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	// 2. Cancel requests and order overrides whose ticket is gone. tickets holds only the entries
+	// of step 1 that are live and not stray: a stray never protects either (PROTOCOL.md section 10.4).
+	for _, dir := range []string{CancelDir, OrderDir} {
+		named, _, err := sec.s.List(dir)
+		if err != nil {
 			return removed, err
 		}
-		removed++
+		for _, e := range named {
+			if tickets[e.Name] {
+				continue
+			}
+			if err := os.Remove(sec.s.path(dir, e.Name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return removed, err
+			}
+			removed++
+		}
 	}
 
 	// 3. Temporary files older than 30 s.
-	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir} {
+	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, OrderDir} {
 		d := sec.s.path(dir)
 		names, err := readNames(d)
 		if errors.Is(err, fs.ErrNotExist) {
