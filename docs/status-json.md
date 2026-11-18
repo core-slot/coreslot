@@ -65,7 +65,7 @@ says `not_running` while the engine runs. `other_engine` is an engine that is no
 ## `docker.containers[]`
 
 An engine's strings are carried like labels: JSON-encoded, so escape one before printing it to a
-terminal. `id`, `name`, `image` and `project` are cut to 128 bytes on a character boundary. A
+terminal. `name`, `image` and `project` are cut to 128 bytes on a character boundary. A
 container whose id is not 64 hexadecimal characters makes the reading `no_reading`, with `parse`.
 
 | key | type | meaning |

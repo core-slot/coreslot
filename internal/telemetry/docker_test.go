@@ -29,33 +29,26 @@ func engine(t *testing.T, cs ...dockertest.Container) *dockertest.Fake {
 	return dockertest.Engine(t, opts...)
 }
 
-// cid is an id as an engine makes it: 64 hexadecimal characters, here of one digit.
-func cid(c byte) string { return strings.Repeat(string(c), 64) }
-
 // statsPath is the request target of a container's stats.
 func statsPath(id string) string {
 	path, _ := docker.StatsPath(id)
 	return path
 }
 
-func soon() time.Time { return time.Now().Add(2 * time.Second) }
-
-var longID = strings.Repeat("0123456789abcdef", 4)
-
 // The list, then one stats request per container and nothing else, each over HTTP/1.0 with the
 // id cut to 12. Mutations: an id left whole reddens the list; a stats path without one-shot=true
 // reddens the requests; limit taken from usage reddens the list.
 func TestContainersParsesStats(t *testing.T) {
 	d := engine(t,
-		dockertest.Container{ID: longID, Image: "postgres:16", UsageBytes: 300 << 20, InactiveFileBytes: 100, LimitBytes: 2048 << 20},
-		dockertest.Container{ID: cid('c'), Image: "alpine", UsageBytes: 5 << 20, LimitBytes: 1024 << 20})
-	list, total, code := Containers(soon(), []string{d.Sock})
-	want := []docker.Container{{ID: longID[:12], Image: "postgres:16", UsageMiB: 299, LimitMiB: 2048}, {ID: cid('c')[:12], Image: "alpine", UsageMiB: 5, LimitMiB: 1024}}
+		dockertest.Container{ID: dockertest.LongID, Image: "postgres:16", UsageBytes: 300 << 20, InactiveFileBytes: 100, LimitBytes: 2048 << 20},
+		dockertest.Container{ID: dockertest.ID('c'), Image: "alpine", UsageBytes: 5 << 20, LimitBytes: 1024 << 20})
+	list, total, code := Containers(dockertest.Soon(), []string{d.Sock})
+	want := []docker.Container{{ID: dockertest.LongID[:12], Image: "postgres:16", UsageMiB: 299, LimitMiB: 2048}, {ID: dockertest.ID('c')[:12], Image: "alpine", UsageMiB: 5, LimitMiB: 1024}}
 	if !reflect.DeepEqual(list, want) || total != 2 || code != "" {
 		t.Errorf("list %+v total %d code %q, want %+v 2 and none", list, total, code, want)
 	}
 	reqs := d.Requests()
-	wantReqs := []string{"GET /containers/json HTTP/1.0", "GET " + statsPath(longID) + " HTTP/1.0", "GET " + statsPath(cid('c')) + " HTTP/1.0"}
+	wantReqs := []string{"GET /containers/json HTTP/1.0", "GET " + statsPath(dockertest.LongID) + " HTTP/1.0", "GET " + statsPath(dockertest.ID('c')) + " HTTP/1.0"}
 	if !reflect.DeepEqual(reqs, wantReqs) {
 		t.Errorf("requests %q, want %q", reqs, wantReqs)
 	}
@@ -66,11 +59,11 @@ func TestContainersParsesStats(t *testing.T) {
 // error. Mutations: without the limit test the stopped one is listed at 0; a 404 read as any other
 // status puts http on the line.
 func TestGoneContainerLeftOut(t *testing.T) {
-	d := dockertest.Engine(t, dockertest.StoppedAtStats(cid('1')), dockertest.StatsStatus(cid('2'), 404),
-		dockertest.WithContainer(dockertest.Container{ID: cid('1'), Image: "alpine"}), dockertest.WithContainer(dockertest.Container{ID: cid('2'), Image: "alpine"}),
-		dockertest.WithContainer(dockertest.Container{ID: cid('c'), Image: "alpine", UsageBytes: 5 << 20, LimitBytes: 1024 << 20}))
-	list, total, code := Containers(soon(), []string{d.Sock})
-	if code != "" || total != 3 || len(list) != 1 || list[0].ID != cid('c')[:12] {
+	d := dockertest.Engine(t, dockertest.StoppedAtStats(dockertest.ID('1')), dockertest.StatsStatus(dockertest.ID('2'), 404),
+		dockertest.WithContainer(dockertest.Container{ID: dockertest.ID('1'), Image: "alpine"}), dockertest.WithContainer(dockertest.Container{ID: dockertest.ID('2'), Image: "alpine"}),
+		dockertest.WithContainer(dockertest.Container{ID: dockertest.ID('c'), Image: "alpine", UsageBytes: 5 << 20, LimitBytes: 1024 << 20}))
+	list, total, code := Containers(dockertest.Soon(), []string{d.Sock})
+	if code != "" || total != 3 || len(list) != 1 || list[0].ID != dockertest.ID('c')[:12] {
 		t.Errorf("list %v, total %d, code %q; want only the third of 3, no code", list, total, code)
 	}
 }
@@ -79,9 +72,9 @@ func TestGoneContainerLeftOut(t *testing.T) {
 // with the parse code. Mutation: building the path from any id sends the first container's request.
 func TestOddIDCostsOnlyItself(t *testing.T) {
 	d := engine(t, dockertest.Container{ID: "abc d", Image: "a", UsageBytes: 1 << 20, LimitBytes: 1 << 20},
-		dockertest.Container{ID: cid('c'), Image: "b", UsageBytes: 1 << 20, LimitBytes: 1 << 20})
-	list, total, code := Containers(soon(), []string{d.Sock})
-	if code != "parse" || total != 2 || len(list) != 1 || list[0].ID != cid('c')[:12] || len(d.Requests()) != 2 {
+		dockertest.Container{ID: dockertest.ID('c'), Image: "b", UsageBytes: 1 << 20, LimitBytes: 1 << 20})
+	list, total, code := Containers(dockertest.Soon(), []string{d.Sock})
+	if code != "parse" || total != 2 || len(list) != 1 || list[0].ID != dockertest.ID('c')[:12] || len(d.Requests()) != 2 {
 		t.Errorf("list %+v total %d code %q after %q, want the second only, 2, parse and one stats request", list, total, code, d.Requests())
 	}
 }
@@ -96,7 +89,7 @@ func TestContainersCappedAtSixteen(t *testing.T) {
 		cs = append(cs, dockertest.Container{ID: fmt.Sprintf("%064d", i), Image: image, UsageBytes: 1 << 40, LimitBytes: 1 << 40})
 	}
 	d := engine(t, cs...)
-	list, total, code := Containers(soon(), []string{d.Sock})
+	list, total, code := Containers(dockertest.Soon(), []string{d.Sock})
 	if len(list) != 16 || total != 20 || code != "" {
 		t.Fatalf("%d read of %d, code %q; want 16 of 20", len(list), total, code)
 	}
@@ -125,7 +118,7 @@ func TestContainersHungSocketReturnsWithinDeadline(t *testing.T) {
 	var answered atomic.Int64
 	d := dockertest.Serve(t, func(conn net.Conn, target string) {
 		if target == "/containers/json" {
-			dockertest.Reply(conn, 200, `[{"Id":"`+cid('a')+`","Image":"a"},{"Id":"`+cid('b')+`","Image":"b"}]`)
+			dockertest.Reply(conn, 200, `[{"Id":"`+dockertest.ID('a')+`","Image":"a"},{"Id":"`+dockertest.ID('b')+`","Image":"b"}]`)
 			return
 		}
 		if answered.Add(1) <= 1 {
@@ -189,14 +182,14 @@ func TestJunkStatsCostOnlyTheContainer(t *testing.T) {
 			d := dockertest.Serve(t, func(conn net.Conn, target string) {
 				switch target {
 				case "/containers/json":
-					dockertest.Reply(conn, 200, `[{"Id":"`+cid('b')+`","Image":"b"},{"Id":"`+cid('e')+`","Image":"good"}]`)
-				case statsPath(cid('b')):
+					dockertest.Reply(conn, 200, `[{"Id":"`+dockertest.ID('b')+`","Image":"b"},{"Id":"`+dockertest.ID('e')+`","Image":"good"}]`)
+				case statsPath(dockertest.ID('b')):
 					dockertest.Reply(conn, 200, c.stats)
 				default:
 					dockertest.Reply(conn, 200, good)
 				}
 			})
-			list, _, code := Containers(soon(), []string{d.Sock})
+			list, _, code := Containers(dockertest.Soon(), []string{d.Sock})
 			if code != "parse" || len(list) != 1 {
 				t.Errorf("list %+v code %q, want one and parse", list, code)
 			}
@@ -273,7 +266,7 @@ func TestHungSocketLineStillWritten(t *testing.T) {
 // reads twice; writing with Emit gives the line a run.
 func TestContainersLineOncePerWindow(t *testing.T) {
 	fakeSweep(t, goodSweep)
-	d := engine(t, dockertest.Container{ID: longID, Image: "postgres:16", UsageBytes: 300 << 20, LimitBytes: 2048 << 20})
+	d := engine(t, dockertest.Container{ID: dockertest.LongID, Image: "postgres:16", UsageBytes: 300 << 20, LimitBytes: 2048 << 20})
 	dir := stateDir(t)
 	r := New(dir, "run-1", "x")
 	r.MemoryAsync()
@@ -297,7 +290,7 @@ func TestContainersLineOncePerWindow(t *testing.T) {
 		t.Errorf("no read_ms: %v", l)
 	}
 	c := l["containers"].([]any)[0].(map[string]any)
-	if c["id"] != longID[:12] || c["image"] != "postgres:16" || c["usage_mib"] != float64(300) || c["limit_mib"] != float64(2048) {
+	if c["id"] != dockertest.LongID[:12] || c["image"] != "postgres:16" || c["usage_mib"] != float64(300) || c["limit_mib"] != float64(2048) {
 		t.Errorf("container %v", c)
 	}
 	var nilRec *Recorder

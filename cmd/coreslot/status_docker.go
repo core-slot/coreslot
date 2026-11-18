@@ -68,7 +68,7 @@ func readDocker(enabled bool, loc location) *dockerView {
 	v := &dockerView{state: dockerOK, vm: vm, vmMiB: r.VMMiB, freeEst: r.VMMiB, containers: []jsonContainer{}}
 	for _, c := range r.Containers {
 		v.freeEst -= c.UsageMiB
-		v.containers = append(v.containers, jsonContainer{ID: cutBytes(c.ID, spec.MaxLabelBytes), Name: cutBytes(c.Name, spec.MaxLabelBytes),
+		v.containers = append(v.containers, jsonContainer{ID: c.ID, Name: cutBytes(c.Name, spec.MaxLabelBytes),
 			Image: cutBytes(c.Image, spec.MaxLabelBytes), Project: cutBytes(c.Project, spec.MaxLabelBytes), UsageMiB: c.UsageMiB, LimitMiB: c.LimitMiB})
 	}
 	return v
@@ -117,7 +117,7 @@ func (d *dockerView) human(p func(format string, args ...any)) {
 			if c.Project != "" {
 				project = text(c.Project)
 			}
-			p("  %s  %s  %s  project %s  usage %s of %s", text(docker.ShortID(c.ID)), text(c.Name), text(c.Image), project,
+			p("  %s  %s  %s  project %s  usage %s of %s", docker.ShortID(c.ID), text(c.Name), text(c.Image), project,
 				spec.FormatMiB(c.UsageMiB), spec.FormatMiB(c.LimitMiB))
 		}
 	}

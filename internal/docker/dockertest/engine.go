@@ -21,6 +21,15 @@ import (
 	"github.com/core-slot/coreslot/internal/docker"
 )
 
+// LongID is a container id as an engine makes it: 64 hexadecimal characters.
+var LongID = strings.Repeat("0123456789abcdef", 4)
+
+// ID is such an id of one digit repeated.
+func ID(c byte) string { return strings.Repeat(string(c), 64) }
+
+// Soon is a deadline 2 s from now.
+func Soon() time.Time { return time.Now().Add(2 * time.Second) }
+
 // Fake is a unix-socket server that answers each connection's one request with its handler.
 type Fake struct {
 	Sock  string // the socket's path

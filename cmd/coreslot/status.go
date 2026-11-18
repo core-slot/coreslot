@@ -65,7 +65,6 @@ func statusCommand(args []string, io IO) int {
 		return statusFailed(err, io)
 	}
 	v := buildStatus(rep, store.NowNS(), w, *observe)
-	v.warnings = rep.Config.Warnings
 	if *withDocker { // the snapshot's configuration is zero when it could not be read: Docker is off
 		v.docker = readDocker(rep.Config.DockerEnabled, loc)
 	}
@@ -160,7 +159,6 @@ type statusView struct {
 	nowNS    int64
 	observed time.Duration
 	tickets  []ticketView
-	warnings []string    // what the configuration's lenient keys made of values they could not use
 	docker   *dockerView // nil without --docker
 }
 
@@ -265,7 +263,7 @@ func (v statusView) human() string {
 		p("CONFIGURATION ERROR: %s", text(strings.TrimPrefix(r.ConfigError, "configuration ")))
 	}
 
-	for _, w := range v.warnings {
+	for _, w := range v.rep.Config.Warnings {
 		p("configuration warning: %s", text(w))
 	}
 
@@ -517,7 +515,7 @@ func (v statusView) document() jsonStatus {
 	r := v.rep
 	d := jsonStatus{
 		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatPresent: r.FormatPresent,
-		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError, ConfigWarnings: nonNil(v.warnings),
+		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError, ConfigWarnings: nonNil(r.Config.Warnings),
 		Section: jsonSection{Held: r.Section.Held}, Holds: []jsonHold{}, Tickets: []jsonTicket{},
 		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),

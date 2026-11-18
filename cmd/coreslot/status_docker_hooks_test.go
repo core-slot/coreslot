@@ -16,8 +16,6 @@ import (
 
 const mibBytes = 1 << 20
 
-var fullID = strings.Repeat("0123456789abcdef", 4)
-
 // dockerEnv is the environment of a status run against the fake engine (nil for no hook), with the
 // VM the readings file names: state 0 none, 1 identified, 2 not identified.
 func dockerEnv(t *testing.T, dir string, f *dockertest.Fake, vmState, footprintMiB int, extra ...string) []string {
@@ -37,50 +35,9 @@ func dockerEnv(t *testing.T, dir string, f *dockertest.Fake, vmState, footprintM
 func dockerFake(t *testing.T, opts ...dockertest.Option) *dockertest.Fake {
 	t.Helper()
 	return dockertest.Engine(t, append([]dockertest.Option{
-		dockertest.WithContainer(dockertest.Container{ID: fullID, Name: "db", Image: "postgres:16", Project: "shop",
+		dockertest.WithContainer(dockertest.Container{ID: dockertest.LongID, Name: "db", Image: "postgres:16", Project: "shop",
 			UsageBytes: 300 * mibBytes, LimitBytes: 2048 * mibBytes}),
 	}, opts...)...)
-}
-
-// dockerObject runs status --docker --json and returns its docker object.
-func dockerObject(t *testing.T, env []string) map[string]any {
-	t.Helper()
-	r := cli(t, env, "status", "--docker", "--json")
-	if r.code != 0 {
-		t.Fatalf("status --docker --json exited %d (stderr %q)", r.code, r.stderr)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil {
-		t.Fatalf("status --docker --json: %v\n%s", err, r.stdout)
-	}
-	d, ok := doc["docker"].(map[string]any)
-	if !ok {
-		t.Fatalf("no docker object in %s", r.stdout)
-	}
-	return d
-}
-
-// Every key of the docker object and of its vm, always, whatever the state.
-const (
-	dockerKeys = "containers free_est_mib reason state vm"
-	vmKeys     = "footprint_mib identified mem_mib"
-)
-
-// checkEmpty: the state, the reason and the null or empty cells of every state but ok.
-func checkEmpty(t *testing.T, d map[string]any, state, reason string) {
-	t.Helper()
-	if got := keysOf(d); got != dockerKeys {
-		t.Errorf("docker keys %s, want %s", got, dockerKeys)
-	}
-	vm, _ := d["vm"].(map[string]any)
-	if got := keysOf(vm); got != vmKeys {
-		t.Errorf("vm keys %s, want %s", got, vmKeys)
-	}
-	cs, isArray := d["containers"].([]any)
-	if d["state"] != state || d["reason"] != reason || d["free_est_mib"] != nil || vm["mem_mib"] != nil ||
-		vm["identified"] != false || vm["footprint_mib"] != nil || !isArray || len(cs) != 0 {
-		t.Errorf("docker = %v, want state %q, reason %q and empty cells", d, state, reason)
-	}
 }
 
 // Plain status opens no socket and says how to ask; --docker does, which proves the count sees
@@ -94,14 +51,7 @@ func TestStatusWithoutDockerOpensNoSocket(t *testing.T) {
 	if text.code != 0 || !strings.Contains(text.stdout, "--docker") {
 		t.Errorf("status (exit %d) lacks the line naming --docker:\n%s", text.code, text.stdout)
 	}
-	js := cli(t, env, "status", "--json")
-	var doc map[string]any
-	if err := json.Unmarshal([]byte(js.stdout), &doc); err != nil {
-		t.Fatal(err)
-	}
-	if _, has := doc["docker"]; has {
-		t.Errorf("status --json carries a docker key without --docker")
-	}
+	cli(t, env, "status", "--json") // its docker key's absence is TestStatusDockerOffWithoutHook's
 	if n := f.Conns(); n != 0 {
 		t.Fatalf("plain status opened %d connections to the engine, want 0", n)
 	}
@@ -111,6 +61,9 @@ func TestStatusWithoutDockerOpensNoSocket(t *testing.T) {
 	}
 }
 
+// The text and the JSON of the ok state: the VM's size and footprint, free_est as V less the usage, and
+// every container with its keys. Mutations: free_est without the usage subtracted; the footprint
+// shown as V.
 func TestStatusDockerShowsVMAndContainers(t *testing.T) {
 	dir := budgetDir(t, 512)
 	env := dockerEnv(t, dir, dockerFake(t), 1, 4096)
@@ -120,7 +73,7 @@ func TestStatusDockerShowsVMAndContainers(t *testing.T) {
 		t.Fatalf("exit %d: %s", r.code, r.stderr)
 	}
 	for _, want := range []string{"docker:", "V 8 GiB", "footprint 4 GiB", "free_est 7.7 GiB", "estimate",
-		"db", "postgres:16", "shop", "300 MiB", "2 GiB", fullID[:12]} {
+		"db", "postgres:16", "shop", "300 MiB", "2 GiB", dockertest.LongID[:12]} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("text lacks %q:\n%s", want, r.stdout)
 		}
@@ -143,7 +96,7 @@ func TestStatusDockerShowsVMAndContainers(t *testing.T) {
 	if got := keysOf(c); got != "id image limit_mib name project usage_mib" {
 		t.Errorf("container keys %s", got)
 	}
-	if c["id"] != fullID || c["name"] != "db" || c["image"] != "postgres:16" || c["project"] != "shop" ||
+	if c["id"] != dockertest.LongID || c["name"] != "db" || c["image"] != "postgres:16" || c["project"] != "shop" ||
 		c["usage_mib"] != float64(300) || c["limit_mib"] != float64(2048) {
 		t.Errorf("container = %v", c)
 	}
@@ -165,6 +118,8 @@ func TestStatusDockerNoVMOpensNoSocket(t *testing.T) {
 	}
 }
 
+// A VM that cannot be identified still lists the containers, with no footprint. Mutation: taking
+// "not identified" for "no VM" answers not_running.
 func TestStatusDockerVMNotIdentifiedStillLists(t *testing.T) {
 	dir := budgetDir(t, 512)
 	env := dockerEnv(t, dir, dockerFake(t), 2, 0)
@@ -179,18 +134,23 @@ func TestStatusDockerVMNotIdentifiedStillLists(t *testing.T) {
 	}
 }
 
+// Another engine is its own state with no figures. Mutation: dropping the other-engine case reads
+// its containers as Docker Desktop's and answers ok.
 func TestStatusDockerOtherEngine(t *testing.T) {
 	dir := budgetDir(t, 512)
 	f := dockerFake(t, dockertest.WithInfo("Ubuntu 24.04", 8<<30))
 	checkEmpty(t, dockerObject(t, dockerEnv(t, dir, f, 1, 4096)), "other_engine", "")
 }
 
+// Each failed call is no reading with its code, in the text and the JSON. Mutations: dropping the
+// code from the view leaves the deadline row with an empty reason; printing the state with no code
+// leaves the text without the exact line.
 func TestStatusDockerNoReading(t *testing.T) {
 	dir := budgetDir(t, 512)
 	checkEmpty(t, dockerObject(t, dockerEnv(t, dir, dockerFake(t, dockertest.Hang()), 1, 4096)), "no_reading", "deadline")
-	env := dockerEnv(t, dir, dockerFake(t, dockertest.StatsStatus(fullID, 500)), 1, 4096)
-	if r := cli(t, env, "status", "--docker"); !strings.Contains(r.stdout, "no reading") || !strings.Contains(r.stdout, "http") {
-		t.Errorf("text does not say no reading and why:\n%s", r.stdout)
+	env := dockerEnv(t, dir, dockerFake(t, dockertest.StatsStatus(dockertest.LongID, 500)), 1, 4096)
+	if r := cli(t, env, "status", "--docker"); !strings.Contains(r.stdout, "\ndocker: no reading (http)\n") {
+		t.Errorf("text lacks the line \"docker: no reading (http)\":\n%s", r.stdout)
 	}
 }
 
@@ -278,14 +238,14 @@ func TestStatusDockerEscapesEngineStrings(t *testing.T) {
 	dir := budgetDir(t, 512)
 	image := strings.Repeat("a", 127) + "é" + strings.Repeat("b", 170) // the rune spans bytes 127 and 128
 	name := "x\x1b[31mred\u202e\xff" + strings.Repeat("n", 300)        // the invalid byte reaches the status as U+FFFD
-	f := dockertest.Engine(t, dockertest.WithContainer(dockertest.Container{ID: fullID, Name: name, Image: image,
+	f := dockertest.Engine(t, dockertest.WithContainer(dockertest.Container{ID: dockertest.LongID, Name: name, Image: image,
 		Project: "p\x1b[0m", UsageBytes: 10 * mibBytes, LimitBytes: 100 * mibBytes}))
 	env := dockerEnv(t, dir, f, 1, 4096)
 
 	wantImage := strings.Repeat("a", 127)
 	wantName := ("x\x1b[31mred\u202e\ufffd" + strings.Repeat("n", 300))[:128]
 	r := cli(t, env, "status", "--docker")
-	line := fmt.Sprintf("  %s  %s  %s  project %s  usage 10 MiB of 100 MiB\n", fullID[:12], wire.EscapeHuman(wantName), wire.EscapeHuman(wantImage), wire.EscapeHuman("p\x1b[0m"))
+	line := fmt.Sprintf("  %s  %s  %s  project %s  usage 10 MiB of 100 MiB\n", dockertest.LongID[:12], wire.EscapeHuman(wantName), wire.EscapeHuman(wantImage), wire.EscapeHuman("p\x1b[0m"))
 	if !strings.Contains(r.stdout, line) {
 		t.Errorf("text lacks the line %q:\n%s", line, r.stdout)
 	}
@@ -305,7 +265,7 @@ func TestStatusDockerEscapesEngineStrings(t *testing.T) {
 	if err := json.Unmarshal([]byte(js.stdout), &doc); err != nil || len(doc.Docker.Containers) != 1 {
 		t.Fatalf("%v\n%s", err, js.stdout)
 	}
-	if c := doc.Docker.Containers[0]; c.Image != wantImage || c.Name != wantName || c.Project != "p\x1b[0m" || c.ID != fullID {
+	if c := doc.Docker.Containers[0]; c.Image != wantImage || c.Name != wantName || c.Project != "p\x1b[0m" || c.ID != dockertest.LongID {
 		t.Errorf("JSON container = %+v, want image %q and name %q", c, wantImage, wantName)
 	}
 }

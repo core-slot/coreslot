@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,6 +22,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/docker"
+	"github.com/core-slot/coreslot/internal/docker/dockertest"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -1589,40 +1588,17 @@ func TestNoLiveForPassThrough(t *testing.T) {
 	}
 }
 
-// fakeEngine is a local Docker socket named by DOCKER_HOST with no containers, and the count of
-// connections it took; every connection through the seam is counted too, so one that a bug sends
-// elsewhere still shows.
-func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
+// fakeEngine is a local Docker engine with no containers, named by DOCKER_HOST; its Conns count the
+// connections it took, and dials counts every connection through the seam too, so one that a bug
+// sends elsewhere still shows.
+func fakeEngine(t *testing.T) (eng *dockertest.Fake, dials *atomic.Int64) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "cs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	path := filepath.Join(dir, "docker.sock")
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	conns, dials = new(atomic.Int64), new(atomic.Int64)
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			conns.Add(1)
-			io.ReadAtLeast(c, make([]byte, 16), 16)
-			io.WriteString(c, "HTTP/1.0 200 OK\r\n\r\n[]")
-			c.Close()
-		}
-	}()
+	eng, dials = dockertest.Engine(t), new(atomic.Int64)
 	saved := docker.Connect
 	docker.Connect = func(p string) (int, string) { dials.Add(1); return saved(p) }
 	t.Cleanup(func() { settleRecorders(); docker.Connect = saved })
-	t.Setenv("DOCKER_HOST", "unix://"+path)
-	return conns, dials
+	t.Setenv("DOCKER_HOST", "unix://"+eng.Sock)
+	return eng, dials
 }
 
 // hookSocket is the test hook naming the fake engine's socket, which a state directory override
@@ -1679,7 +1655,7 @@ func sleepingDocker(t *testing.T) string {
 // A waiter never connects, not even a nested one whose own command is container work while another
 // hold is: only supervision does. Mutation: ContainersAsync called from the waiting line.
 func TestWaiterNeverConnects(t *testing.T) {
-	conns, dials := fakeEngine(t)
+	eng, dials := fakeEngine(t)
 	fakeSweep(t)
 	b := newBed(t, 128)
 	holdUntil(t, b.dir, 128)
@@ -1698,8 +1674,8 @@ func TestWaiterNeverConnects(t *testing.T) {
 	b.wait(t, ctx)
 	waitFor(t, 5*time.Second, "the waiter's memory line", func() bool { return len(linesOf(t, b.dir, "memory")) == 1 })
 	time.Sleep(100 * time.Millisecond)
-	if conns.Load() != 0 || dials.Load() != 0 || len(linesOf(t, b.dir, "containers")) != 0 {
-		t.Errorf("%d connections, %d dials, %d lines from a waiter", conns.Load(), dials.Load(), len(linesOf(t, b.dir, "containers")))
+	if eng.Conns() != 0 || dials.Load() != 0 || len(linesOf(t, b.dir, "containers")) != 0 {
+		t.Errorf("%d connections, %d dials, %d lines from a waiter", eng.Conns(), dials.Load(), len(linesOf(t, b.dir, "containers")))
 	}
 }
 
@@ -1722,7 +1698,7 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			replaceTicks(t, 1)
 			sweeps := fakeSweep(t)
-			conns, dials := fakeEngine(t)
+			eng, dials := fakeEngine(t)
 			saved := listClient
 			listClient = func(int) bool { return c.client }
 			t.Cleanup(func() { listClient = saved })
@@ -1752,8 +1728,8 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 				}
 			}
 			time.Sleep(100 * time.Millisecond)
-			if conns.Load() != c.want || dials.Load() != c.want {
-				t.Errorf("%d connections, %d dials, want %d", conns.Load(), dials.Load(), c.want)
+			if eng.Conns() != c.want || dials.Load() != c.want {
+				t.Errorf("%d connections, %d dials, want %d", eng.Conns(), dials.Load(), c.want)
 			}
 			if c.off && sweeps.Load() != 0 {
 				t.Errorf("%d sweeps with telemetry off", sweeps.Load())
@@ -1779,7 +1755,7 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 		{"inherited unbudgeted", engine.EnvUnbudgeted, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			conns, _ := fakeEngine(t)
+			eng, _ := fakeEngine(t)
 			dir := recordedDir(t, 1024)
 			value := "parent"
 			if c.mark == engine.EnvHold {
@@ -1792,8 +1768,8 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 			if got := labelled(events(t, dir), "inner"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
 				t.Fatalf("the nested run did not record: %q", eventNames(got))
 			}
-			if conns.Load() != 0 || len(linesOf(t, dir, "containers")) != 0 {
-				t.Errorf("%d connections, %d lines from a nested run", conns.Load(), len(linesOf(t, dir, "containers")))
+			if eng.Conns() != 0 || len(linesOf(t, dir, "containers")) != 0 {
+				t.Errorf("%d connections, %d lines from a nested run", eng.Conns(), len(linesOf(t, dir, "containers")))
 			}
 		})
 	}
@@ -1804,7 +1780,7 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 // connects and writes a containers line.
 func TestDisabledDockerRunNeverConnects(t *testing.T) {
 	docker := sleepingDocker(t)
-	conns, _ := fakeEngine(t)
+	eng, _ := fakeEngine(t)
 	dir := recordedDir(t, 1024)
 	writeConfig(t, dir, telemetryOn+"[docker]\nenabled = false\n")
 	if r := cli(t, append(baseEnv(dir), ticksEnv+"=1", hookSocket()), "run", "--restart=yes", "--label", "off", "--mem", "128M", "--", docker); r.code != 0 {
@@ -1813,8 +1789,8 @@ func TestDisabledDockerRunNeverConnects(t *testing.T) {
 	if got := labelled(events(t, dir), "off"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
 		t.Fatalf("the run did not record: %q", eventNames(got))
 	}
-	if conns.Load() != 0 || len(linesOf(t, dir, "containers")) != 0 {
-		t.Errorf("%d connections, %d lines with [docker] disabled", conns.Load(), len(linesOf(t, dir, "containers")))
+	if eng.Conns() != 0 || len(linesOf(t, dir, "containers")) != 0 {
+		t.Errorf("%d connections, %d lines with [docker] disabled", eng.Conns(), len(linesOf(t, dir, "containers")))
 	}
 }
 

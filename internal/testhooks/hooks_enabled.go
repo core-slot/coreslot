@@ -164,11 +164,8 @@ func Getent() string { return os.Getenv("CORESLOT_TESTHOOK_GETENT") }
 // PasswdMiss reports whether CORESLOT_TESTHOOK_PASSWD_MISS is set.
 func PasswdMiss() bool { return os.Getenv("CORESLOT_TESTHOOK_PASSWD_MISS") != "" }
 
-// DockerSocket returns CORESLOT_TESTHOOK_DOCKER_SOCKET; set is false when it is unset.
-func DockerSocket() (path string, set bool) {
-	v := os.Getenv("CORESLOT_TESTHOOK_DOCKER_SOCKET")
-	return v, v != ""
-}
+// DockerSocket returns CORESLOT_TESTHOOK_DOCKER_SOCKET, "" when it is unset.
+func DockerSocket() string { return os.Getenv("CORESLOT_TESTHOOK_DOCKER_SOCKET") }
 
 // Headroom returns CORESLOT_TESTHOOK_HEADROOM_MIB; set is false when it is unset.
 func Headroom() (mib int64, set bool) {

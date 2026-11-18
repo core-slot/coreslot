@@ -31,7 +31,7 @@ const (
 func Features(goos string, enabled bool, env map[string]string, home string, inherited bool) (sockets []string, off Off) {
 	host := env["DOCKER_HOST"]
 	override := env[config.StateDirEnv] != ""
-	hook, hooked := testhooks.DockerSocket()
+	hook := testhooks.DockerSocket()
 	path, unixHost := strings.CutPrefix(host, "unix://")
 	switch {
 	case goos != "darwin":
@@ -40,7 +40,7 @@ func Features(goos string, enabled bool, env map[string]string, home string, inh
 		return nil, OffConfig
 	case inherited:
 		return nil, OffNested
-	case override && !hooked:
+	case override && hook == "":
 		return nil, OffStateDir
 	case host != "" && !unixHost:
 		return nil, OffRemoteHost

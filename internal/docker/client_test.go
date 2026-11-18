@@ -48,7 +48,7 @@ func TestResponseCap(t *testing.T) {
 			f := dockertest.Serve(t, func(conn net.Conn, _ string) {
 				conn.Write([]byte(head + "[" + strings.Repeat(" ", c.size-2) + "]"))
 			})
-			if _, _, code := docker.Get(f.Sock, "/x", soon(), 1<<20); code != c.want {
+			if _, _, code := docker.Get(f.Sock, "/x", dockertest.Soon(), 1<<20); code != c.want {
 				t.Errorf("code %q, want %q", code, c.want)
 			}
 		})
@@ -81,12 +81,12 @@ func TestJunkBodyIsParseCode(t *testing.T) {
 				case target == "/containers/json" && c.list != "":
 					dockertest.Reply(conn, c.code, c.list)
 				case target == "/containers/json":
-					dockertest.Reply(conn, 200, `[{"Id":"`+cid('b')+`","Image":"b"}]`)
+					dockertest.Reply(conn, 200, `[{"Id":"`+dockertest.ID('b')+`","Image":"b"}]`)
 				default:
 					dockertest.Reply(conn, 200, c.stats)
 				}
 			})
-			r := docker.Read([]string{f.Sock}, soon())
+			r := docker.Read([]string{f.Sock}, dockertest.Soon())
 			if r.Code != c.want || r.Containers != nil {
 				t.Errorf("reading %+v, want none with %q", r, c.want)
 			}
@@ -98,10 +98,10 @@ func TestJunkBodyIsParseCode(t *testing.T) {
 // like every other error says connect.
 func TestNoSocketIsACode(t *testing.T) {
 	dir := dockertest.SocketDir(t)
-	if r := docker.Read([]string{dir + "/a.sock", dir + "/b.sock"}, soon()); r.Code != "no_socket" {
+	if r := docker.Read([]string{dir + "/a.sock", dir + "/b.sock"}, dockertest.Soon()); r.Code != "no_socket" {
 		t.Errorf("reading %+v, want no_socket", r)
 	}
-	if r := docker.Read(nil, soon()); r.Code != "no_socket" {
+	if r := docker.Read(nil, dockertest.Soon()); r.Code != "no_socket" {
 		t.Errorf("no candidates: %+v", r)
 	}
 }
@@ -118,12 +118,12 @@ func TestConnectErrorHasNoPath(t *testing.T) {
 	}
 	ln.(*net.UnixListener).SetUnlinkOnClose(false)
 	ln.Close()
-	r := docker.Read([]string{refused, dir + "/absent.sock"}, soon())
+	r := docker.Read([]string{refused, dir + "/absent.sock"}, dockertest.Soon())
 	if r.Code != "connect" || strings.Contains(r.Code, dir) {
 		t.Errorf("reading %+v, want connect", r)
 	}
 	f := dockertest.Engine(t)
-	if r := docker.Read([]string{refused, f.Sock}, soon()); r.Code != "" {
+	if r := docker.Read([]string{refused, f.Sock}, dockertest.Soon()); r.Code != "" {
 		t.Errorf("a live candidate after a refused one: %+v", r)
 	}
 }

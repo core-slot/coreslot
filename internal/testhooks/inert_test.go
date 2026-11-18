@@ -54,8 +54,8 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	if mib, set := Headroom(); mib != 0 || set {
 		t.Errorf("Headroom() = %d, %v, want 0, false", mib, set)
 	}
-	if got, set := DockerSocket(); got != "" || set {
-		t.Errorf("DockerSocket() = %q, %v, want \"\", false", got, set)
+	if got := DockerSocket(); got != "" {
+		t.Errorf("DockerSocket() = %q, want \"\"", got)
 	}
 	if got, set := Readings(); got != nil || set {
 		t.Errorf("Readings() = %v, %v, want nil, false", got, set)

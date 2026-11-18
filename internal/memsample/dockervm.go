@@ -2,6 +2,7 @@ package memsample
 
 import (
 	"encoding/binary"
+	"path"
 	"strings"
 
 	"github.com/core-slot/coreslot/internal/testhooks"
@@ -61,10 +62,8 @@ func mayBeOfInterest(comm string) bool {
 	return len(comm) >= 15 && (strings.HasPrefix(dockerBackendExe, comm) || strings.HasPrefix(dockerVMExe, comm))
 }
 
-// exeIs reports whether the last element of path is name.
-func exeIs(path, name string) bool {
-	return path == name || strings.HasSuffix(path, "/"+name)
-}
+// exeIs reports whether the last element of p is name.
+func exeIs(p, name string) bool { return path.Base(p) == name }
 
 // dockerVM lists the processes once and finds the VM among them: Docker's coalitions are those of the
 // processes running com.docker.backend, and the candidates are the processes running the

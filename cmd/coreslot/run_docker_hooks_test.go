@@ -19,14 +19,14 @@ func TestStaleHoldStillConnects(t *testing.T) {
 		{"malformed", "parent", "malformed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			conns, _ := fakeEngine(t)
+			eng, _ := fakeEngine(t)
 			dir := recordedDir(t, 1024)
 			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", engine.EnvHold+"="+c.hold, hookSocket()), "run", "--restart=yes", "--label", "stale", "--mem", "128M", "--", docker)
 			if r.code != 0 {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
-			if conns.Load() == 0 || len(linesOf(t, dir, "containers")) == 0 {
-				t.Errorf("%d connections, %d lines from a run no parent holds", conns.Load(), len(linesOf(t, dir, "containers")))
+			if eng.Conns() == 0 || len(linesOf(t, dir, "containers")) == 0 {
+				t.Errorf("%d connections, %d lines from a run no parent holds", eng.Conns(), len(linesOf(t, dir, "containers")))
 			}
 			if m := event(t, events(t, dir), "enqueue"); m["nested_miss"] != c.miss {
 				t.Errorf("nested_miss %v, want %s", m["nested_miss"], c.miss)

@@ -169,17 +169,17 @@ func parse(data string) (Config, string) {
 	// Likewise for [docker]: a wrong value switches the display off and says so, and admission goes on.
 	if v, ok := raw["docker"]; ok {
 		tbl, isTbl := v.(map[string]any)
-		switch e, has := tbl["enabled"]; {
+		e, has := tbl["enabled"]
+		b, isBool := e.(bool)
+		switch {
 		case !isTbl:
 			c.DockerEnabled = false
 			c.Warnings = append(c.Warnings, "[docker] is not a table: the Docker features are off")
+		case isBool:
+			c.DockerEnabled = b
 		case has:
-			if b, isBool := e.(bool); isBool {
-				c.DockerEnabled = b
-			} else {
-				c.DockerEnabled = false
-				c.Warnings = append(c.Warnings, "[docker] enabled: want a boolean: the Docker features are off")
-			}
+			c.DockerEnabled = false
+			c.Warnings = append(c.Warnings, "[docker] enabled: want a boolean: the Docker features are off")
 		}
 	}
 	return c, ""
