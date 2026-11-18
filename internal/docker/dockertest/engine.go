@@ -34,6 +34,7 @@ func Soon() time.Time { return time.Now().Add(2 * time.Second) }
 type Fake struct {
 	Sock  string // the socket's path
 	conns atomic.Int64
+	h     *httpEngine // the engine HTTP serves; nil for Serve's
 
 	mu      sync.Mutex
 	targets []string // the first line of every request, in order
@@ -133,6 +134,9 @@ type engine struct {
 	delay      time.Duration
 	pad        int
 	done       chan struct{}
+	cont       bool          // HTTP: a 100 Continue before every answer
+	missing    bool          // HTTP: every create finds no image
+	slowWait   time.Duration // HTTP: a wait answers after this
 }
 
 // Option shapes the engine Engine serves.
@@ -165,13 +169,19 @@ func Slow(d time.Duration) Option { return func(e *engine) { e.delay = d } }
 // PadList makes the container list n bytes larger, in a field a reader ignores.
 func PadList(n int) Option { return func(e *engine) { e.pad = n } }
 
-// Engine serves an engine, which a test closes with its cleanup.
-func Engine(t testing.TB, opts ...Option) *Fake {
-	t.Helper()
+// newEngine is the engine of the options, Docker Desktop with 8 GiB by default.
+func newEngine(opts []Option) *engine {
 	e := &engine{os: docker.DesktopOS, memTotal: 8 << 30, statsCode: map[string]int{}, stopped: map[string]bool{}, done: make(chan struct{})}
 	for _, o := range opts {
 		o(e)
 	}
+	return e
+}
+
+// Engine serves an engine, which a test closes with its cleanup.
+func Engine(t testing.TB, opts ...Option) *Fake {
+	t.Helper()
+	e := newEngine(opts)
 	t.Cleanup(func() { close(e.done) })
 	return Serve(t, func(c net.Conn, target string) {
 		if e.hang {
