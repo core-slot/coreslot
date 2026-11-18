@@ -37,15 +37,6 @@ func (d *Fake) Requests() []string {
 	return slices.Clone(d.targets)
 }
 
-// Methods are the method of every request received, in order.
-func (d *Fake) Methods() []string {
-	var ms []string
-	for _, line := range d.Requests() {
-		ms = append(ms, strings.Fields(line)[0])
-	}
-	return ms
-}
-
 // Conns is the number of connections the listener accepted, whoever made them: a test counts the
 // connections of a child process with it.
 func (d *Fake) Conns() int64 { return d.conns.Load() }
@@ -162,9 +153,6 @@ func Hang() Option { return func(e *engine) { e.hang = true } }
 // Slow makes every response wait d: each call is within a deadline, all of them are not.
 func Slow(d time.Duration) Option { return func(e *engine) { e.delay = d } }
 
-// HugeList makes the container list larger than any reading takes.
-func HugeList() Option { return PadList(4 << 20) }
-
 // PadList makes the container list n bytes larger, in a field a reader ignores.
 func PadList(n int) Option { return func(e *engine) { e.pad = n } }
 
@@ -195,9 +183,6 @@ func Engine(t testing.TB, opts ...Option) *Fake {
 					item += `,"Pad":"` + pad + `"`
 				}
 				items = append(items, item+"}")
-			}
-			if len(items) == 0 && e.pad > 0 {
-				items = append(items, `{"Id":"pad","Names":[],"Image":"","Pad":"`+pad+`"}`)
 			}
 			Reply(c, 200, "["+strings.Join(items, ",")+"]")
 		default:

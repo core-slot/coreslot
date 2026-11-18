@@ -4,7 +4,6 @@ package docker_test
 
 import (
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,11 +38,8 @@ func TestBudgetReadingComplete(t *testing.T) {
 	want := []docker.Container{
 		{ID: longID, Name: "db", Image: "postgres:16", Project: "shop", UsageMiB: 300, LimitMiB: 2048},
 		{ID: cid('c'), Name: "cache", Image: "alpine", UsageMiB: 5, LimitMiB: 1024}}
-	if !r.OK || r.Code != "" || r.OtherEngine || r.VMMiB != 26005 || !reflect.DeepEqual(r.Containers, want) {
+	if r.Code != "" || r.OtherEngine || r.VMMiB != 26005 || !reflect.DeepEqual(r.Containers, want) {
 		t.Errorf("reading %+v, want OK, VM 26005 and %+v", r, want)
-	}
-	if got := r.FreeEstMiB(); got != 26005-305 {
-		t.Errorf("FreeEstMiB %d, want %d", got, 26005-305)
 	}
 }
 
@@ -56,7 +52,7 @@ func TestBudgetReadingHungEngineIsNothing(t *testing.T) {
 	if took := time.Since(start); took > 2500*time.Millisecond {
 		t.Errorf("took %v", took)
 	}
-	if r.OK || r.Code != "deadline" || r.Containers != nil {
+	if r.Code != "deadline" || r.Containers != nil {
 		t.Errorf("reading %+v, want none with deadline", r)
 	}
 }
@@ -70,7 +66,7 @@ func TestBudgetReadingSlowEngineIsOneDeadline(t *testing.T) {
 	if took := time.Since(start); took > 2500*time.Millisecond {
 		t.Errorf("took %v", took)
 	}
-	if r.OK || r.Code != "deadline" || r.Containers != nil {
+	if r.Code != "deadline" || r.Containers != nil {
 		t.Errorf("reading %+v, want none with deadline", r)
 	}
 }
@@ -81,7 +77,7 @@ func TestBudgetReadingOddIDIsNothing(t *testing.T) {
 	for _, id := range []string{"abc", cid('a')[:63], cid('a') + "0", cid('g'), cid('a')[:63] + " ", cid('a')[:62] + "\r\n", "../" + cid('a')[3:]} {
 		f := dockertest.Engine(t, dockertest.WithContainer(container(id)))
 		r := docker.Read([]string{f.Sock}, soon())
-		if r.OK || r.Code != "parse" || r.Containers != nil || len(f.Requests()) != 2 {
+		if r.Code != "parse" || r.Containers != nil || len(f.Requests()) != 2 {
 			t.Errorf("id %q: reading %+v after %q, want none with parse and no stats request", id, r, f.Requests())
 		}
 	}
@@ -93,7 +89,7 @@ func TestBudgetReadingOneStatsFailsIsNothing(t *testing.T) {
 	f := dockertest.Engine(t, dockertest.StatsStatus(cid('b'), 500),
 		dockertest.WithContainer(container(cid('a'))), dockertest.WithContainer(container(cid('b'))))
 	r := docker.Read([]string{f.Sock}, soon())
-	if r.OK || r.Code != "http" || r.Containers != nil {
+	if r.Code != "http" || r.Containers != nil {
 		t.Errorf("reading %+v, want none with http", r)
 	}
 }
@@ -105,31 +101,28 @@ func TestBudgetReadingStoppedContainerSkipped(t *testing.T) {
 	f := dockertest.Engine(t, dockertest.StoppedAtStats(cid('1')), dockertest.StatsStatus(cid('2'), 404),
 		dockertest.WithContainer(container(cid('1'))), dockertest.WithContainer(container(cid('2'))), dockertest.WithContainer(container(cid('3'))))
 	r := docker.Read([]string{f.Sock}, soon())
-	if !r.OK || len(r.Containers) != 1 || r.Containers[0].ID != cid('3') {
+	if r.Code != "" || len(r.Containers) != 1 || r.Containers[0].ID != cid('3') {
 		t.Errorf("reading %+v, want only kept", r)
 	}
 }
 
-// A list over 4 MiB is no reading. Mutation: a list limit of 16 MiB reads the padded list and
-// goes on to the stats of its one entry, the third request.
-func TestBudgetReadingListOver4MiBIsNothing(t *testing.T) {
-	f := dockertest.Engine(t, dockertest.HugeList())
-	r := docker.Read([]string{f.Sock}, soon())
-	if r.OK || r.Code != "http" || r.Containers != nil {
-		t.Errorf("reading %+v, want none with http", r)
-	}
-	if n := len(f.Requests()); n != 2 {
-		t.Errorf("%d requests, want /info and the list only", n)
-	}
-}
-
-// A list of 2 MiB is read: the list has its own limit, above the 1 MiB of the others. Mutation:
-// reading the list with the 1 MiB limit turns this red.
-func TestBudgetReadingListOf2MiBIsRead(t *testing.T) {
-	f := dockertest.Engine(t, dockertest.PadList(2<<20), dockertest.WithContainer(container(cid('a'))))
-	r := docker.Read([]string{f.Sock}, soon())
-	if !r.OK || len(r.Containers) != 1 {
-		t.Errorf("reading %+v, want the one container", r)
+// The list has its own limit, 4 MiB, above the 1 MiB of the others: one of 2 MiB is read, one over
+// 4 MiB is no reading and goes no further. Mutations: a limit of 1 MiB reddens the first row; a limit
+// of 16 MiB reads the padded list and goes on to the stats of its one entry, the third request.
+func TestBudgetReadingListLimit(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		pad      int
+		code     string
+		requests int
+	}{{"2 MiB", 2 << 20, "", 3}, {"over 4 MiB", 4 << 20, "http", 2}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := dockertest.Engine(t, dockertest.PadList(c.pad), dockertest.WithContainer(container(cid('a'))))
+			r := docker.Read([]string{f.Sock}, soon())
+			if r.Code != c.code || (c.code == "" && len(r.Containers) != 1) || (c.code != "" && r.Containers != nil) || len(f.Requests()) != c.requests {
+				t.Errorf("reading %+v after %q, want code %q after %d requests", r, f.Requests(), c.code, c.requests)
+			}
+		})
 	}
 }
 
@@ -137,7 +130,7 @@ func TestBudgetReadingListOf2MiBIsRead(t *testing.T) {
 func TestBudgetReadingOtherEngine(t *testing.T) {
 	f := dockertest.Engine(t, dockertest.WithInfo("Ubuntu 24.04", 8<<30), dockertest.WithContainer(container(cid('a'))))
 	r := docker.Read([]string{f.Sock}, soon())
-	if !r.OK || !r.OtherEngine || r.VMMiB != 0 || r.Containers != nil {
+	if r.Code != "" || !r.OtherEngine || r.VMMiB != 0 || r.Containers != nil {
 		t.Errorf("reading %+v, want OK, other engine and no figures", r)
 	}
 }
@@ -145,13 +138,11 @@ func TestBudgetReadingOtherEngine(t *testing.T) {
 // The client asks and never changes anything. Mutation: a POST or a DELETE of any request turns it red.
 func TestBudgetReadingSendsOnlyGet(t *testing.T) {
 	f := dockertest.Engine(t, dockertest.WithContainer(container(cid('a'))))
-	if r := docker.Read([]string{f.Sock}, soon()); !r.OK {
+	if r := docker.Read([]string{f.Sock}, soon()); r.Code != "" {
 		t.Fatalf("reading %+v", r)
 	}
-	if got := f.Methods(); !reflect.DeepEqual(got, []string{"GET", "GET", "GET"}) {
-		t.Errorf("methods %q, want three GETs: /info, the list, one stats", got)
-	}
-	if slices.Contains(f.Methods(), "POST") {
-		t.Error("a POST")
+	stats, _ := docker.StatsPath(cid('a'))
+	if want := []string{"GET /info HTTP/1.0", "GET /containers/json HTTP/1.0", "GET " + stats + " HTTP/1.0"}; !reflect.DeepEqual(f.Requests(), want) {
+		t.Errorf("requests %q, want %q", f.Requests(), want)
 	}
 }

@@ -3,73 +3,45 @@
 package docker_test
 
 import (
-	"net"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/docker"
-	"github.com/core-slot/coreslot/internal/docker/dockertest"
 )
 
-// socketAt listens on a unix socket in a short directory and returns its path.
-func socketAt(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(dockertest.SocketDir(t), "docker.sock")
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	return path
-}
-
-func hostFor(sock string) map[string]string {
-	return map[string]string{"DOCKER_HOST": "unix://" + sock}
-}
-
-// Only a candidate that is a socket counts: a regular file or an absent path is no engine, and one
-// that is a socket is returned. Mutation: dropping the mode check lists the regular file.
-func TestFeaturesNoSocketOnList(t *testing.T) {
-	dir := dockertest.SocketDir(t)
-	file := filepath.Join(dir, "plain")
-	if err := os.WriteFile(file, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{file, filepath.Join(dir, "absent.sock")} {
-		if got, off := docker.Features("darwin", true, hostFor(path), "/Users/ana", false); got != nil || off != docker.OffNoSocket {
-			t.Errorf("%s: got %q, %q, want none, no-socket", path, got, off)
-		}
-	}
-	sock := socketAt(t)
-	if got, off := docker.Features("darwin", true, hostFor(sock), "/Users/ana", false); !reflect.DeepEqual(got, []string{sock}) || off != docker.On {
-		t.Errorf("got %q, %q, want the socket, on", got, off)
-	}
-}
-
-// /var/run/docker.sock is a symbolic link to the home's socket, and counts. Mutation: os.Lstat in
-// place of os.Stat sees a link, not a socket.
-func TestFeaturesSymlinkedSocketCounts(t *testing.T) {
-	sock := socketAt(t)
-	link := filepath.Join(dockertest.SocketDir(t), "link.sock")
-	if err := os.Symlink(sock, link); err != nil {
-		t.Fatal(err)
-	}
-	if got, off := docker.Features("darwin", true, hostFor(link), "/Users/ana", false); !reflect.DeepEqual(got, []string{link}) || off != docker.On {
-		t.Errorf("got %q, %q, want the link, on", got, off)
+// DOCKER_HOST with a unix socket is the only candidate; with none, the home's two sockets come
+// before the system's; with no home located there is none: the system's socket alone would reach an
+// engine no location of ours belongs to. No candidate is looked at: whether one exists is for the
+// reading. Mutations: a unix host still searching the defaults; the home's sockets after the
+// system's; restoring the home == "" branch (the system's socket) reddens the last row.
+func TestFeaturesCandidates(t *testing.T) {
+	t.Setenv("CORESLOT_TESTHOOK_DOCKER_SOCKET", "")
+	sys := "/var/run/docker.sock"
+	run, desktop := "/Users/ana/.docker/run/docker.sock", "/Users/ana/.docker/desktop/docker.sock"
+	for _, c := range []struct {
+		name, host, home string
+		want             []string
+	}{
+		{"unix host", "unix:///tmp/x/docker.sock", "/Users/ana", []string{"/tmp/x/docker.sock"}},
+		{"defaults", "", "/Users/ana", []string{run, desktop, sys}},
+		{"no home located", "", "", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, off := docker.Features("darwin", true, map[string]string{"DOCKER_HOST": c.host}, c.home, false)
+			if !reflect.DeepEqual(got, c.want) || off != docker.On {
+				t.Errorf("got %q, %q, want %q, on", got, off, c.want)
+			}
+		})
 	}
 }
 
 // Under a state directory override nothing outside it is read: with no hook the answer is
-// state-dir and no candidate, whether DOCKER_HOST names a live socket or not. Mutation: letting the
-// override fall through to Sockets answers the live socket for the second env and no-socket for the
-// first.
+// state-dir and no candidate, whatever DOCKER_HOST names. Mutation: letting the override fall
+// through to the candidates answers the DOCKER_HOST socket for the second env.
 func TestFeaturesStateDirOverrideWithoutHook(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_DOCKER_SOCKET", "")
-	sock := socketAt(t)
-	for _, env := range []map[string]string{{config.StateDirEnv: "/tmp/state"}, {config.StateDirEnv: "/tmp/state", "DOCKER_HOST": "unix://" + sock}} {
+	for _, env := range []map[string]string{{config.StateDirEnv: "/tmp/state"}, {config.StateDirEnv: "/tmp/state", "DOCKER_HOST": "unix:///tmp/x/docker.sock"}} {
 		if got, off := docker.Features("darwin", true, env, "", false); off != docker.OffStateDir || got != nil {
 			t.Errorf("env %v: got %q, %q, want none, state-dir", env, got, off)
 		}
@@ -77,8 +49,8 @@ func TestFeaturesStateDirOverrideWithoutHook(t *testing.T) {
 }
 
 // Each reason is off with no socket, and when several apply the first in the order wins: platform,
-// config, nested, state-dir, remote-host, no-socket. Mutations: any two checks swapped reddens the
-// pair that names them; dropping one check reddens its own row.
+// config, nested, state-dir, remote-host. Mutations: any two checks swapped reddens the pair that
+// names them; dropping one check reddens its own row.
 func TestFeaturesReasonOrder(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_DOCKER_SOCKET", "")
 	all := map[string]string{"DOCKER_HOST": "tcp://10.0.0.1:2375", config.StateDirEnv: "/tmp/state"}
@@ -94,7 +66,7 @@ func TestFeaturesReasonOrder(t *testing.T) {
 		{"darwin", true, all, true, docker.OffNested},
 		{"darwin", true, all, false, docker.OffStateDir},
 		{"darwin", true, map[string]string{"DOCKER_HOST": "tcp://h"}, false, docker.OffRemoteHost},
-		{"darwin", true, map[string]string{"DOCKER_HOST": "unix:///nonexistent/x.sock"}, false, docker.OffNoSocket},
+		{"darwin", true, map[string]string{"DOCKER_HOST": "ssh://ana@server"}, false, docker.OffRemoteHost},
 	} {
 		if got, off := docker.Features(c.goos, c.enabled, c.env, "", c.nested); off != c.want || got != nil {
 			t.Errorf("%s enabled %v env %v nested %v: %q, %q, want no socket and %q", c.goos, c.enabled, c.env, c.nested, got, off, c.want)

@@ -194,41 +194,76 @@ func TestStatusDockerNoReading(t *testing.T) {
 	}
 }
 
-// Each way the features are off, and the no-socket rule, with no connection made. Every row but
-// remote-host names the fake in DOCKER_HOST, so a reading made first connects to it. Mutations:
-// reading first, from the sockets DOCKER_HOST names, reddens those rows; mapping no-socket to off
-// turns its row red.
+// Each way the features are off, with no connection made. Every row but remote-host names the fake
+// in DOCKER_HOST, so a reading made first connects to it. Mutations: reading first, from the sockets
+// DOCKER_HOST names, reddens those rows; passing Features no inherited context reddens both nested
+// rows (a live ancestor's hold is the one a run inside `coreslot run` carries).
 func TestStatusDockerOffReasons(t *testing.T) {
 	cases := []struct {
 		name, state, reason string
 		cfg                 string
-		hook                bool
+		hook, hold          bool
 		extra               []string
 	}{
-		{"config", "off", "config", "[docker]\nenabled = false\n", true, nil},
-		{"nested", "off", "nested", "", true, []string{"CORESLOT_UNBUDGETED=parent"}},
-		{"state-dir", "off", "state-dir", "", false, nil},
-		{"remote-host", "off", "remote-host", "", true, []string{"DOCKER_HOST=tcp://127.0.0.1:1"}},
-		{"no-socket", "not_running", "", "", true, nil},
+		{"config", "off", "config", "[docker]\nenabled = false\n", true, false, nil},
+		{"nested unbudgeted", "off", "nested", "", true, false, []string{"CORESLOT_UNBUDGETED=parent"}},
+		{"nested hold", "off", "nested", "", true, true, nil},
+		{"state-dir", "off", "state-dir", "", false, false, nil},
+		{"remote-host", "off", "remote-host", "", true, false, []string{"DOCKER_HOST=tcp://127.0.0.1:1"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stateDir(t, "[memory]\nreserve = \"0\"\n"+c.cfg)
 			budgetRoom.Store(dir, int64(512))
 			f := dockerFake(t)
-			host := "DOCKER_HOST=unix://" + f.Sock
-			var env []string
-			switch {
-			case c.name == "no-socket": // the hook names a path that is no socket
-				env = dockerEnv(t, dir, nil, 1, 4096, "CORESLOT_TESTHOOK_DOCKER_SOCKET="+filepath.Join(t.TempDir(), "absent.sock"), host)
-			case c.hook:
-				env = dockerEnv(t, dir, f, 1, 4096, append([]string{host}, c.extra...)...)
-			default:
-				env = dockerEnv(t, dir, nil, 1, 4096, append([]string{host}, c.extra...)...)
+			extra := append([]string{"DOCKER_HOST=unix://" + f.Sock}, c.extra...)
+			if c.hold {
+				extra = append(extra, "CORESLOT_HOLD="+liveHold(t, dir, true))
 			}
-			checkEmpty(t, dockerObject(t, env), c.state, c.reason)
+			var fake *dockertest.Fake
+			if c.hook {
+				fake = f
+			}
+			checkEmpty(t, dockerObject(t, dockerEnv(t, dir, fake, 1, 4096, extra...)), c.state, c.reason)
 			if f.Conns() != 0 {
 				t.Errorf("opened %d connections, want 0", f.Conns())
+			}
+		})
+	}
+}
+
+// A VM that no socket answers for is no reading with no_socket, identified or not, and the text says
+// the VM runs and where no socket was found: DOCKER_HOST when it is set, else the candidate paths.
+// With no VM it is not_running, whatever the sockets. Mutations: no_socket mapped to not_running
+// reddens the first three rows and the text; reading before looking for the VM reddens the last.
+func TestStatusDockerNoSocket(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "absent.sock")
+	for _, c := range []struct {
+		name         string
+		vm           int
+		host         string
+		state, where string
+	}{
+		{"identified VM, candidate path", 1, "", "no_reading", absent},
+		{"VM not identified, candidate path", 2, "", "no_reading", absent},
+		{"identified VM, DOCKER_HOST", 1, "unix://" + absent, "no_reading", "DOCKER_HOST"},
+		{"no VM", 0, "", "not_running", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := budgetDir(t, 512)
+			extra := []string{"CORESLOT_TESTHOOK_DOCKER_SOCKET=" + absent}
+			if c.host != "" {
+				extra = append(extra, "DOCKER_HOST="+c.host)
+			}
+			env := dockerEnv(t, dir, nil, c.vm, 4096, extra...)
+			reason := "no_socket"
+			if c.state == "not_running" {
+				reason = ""
+			}
+			checkEmpty(t, dockerObject(t, env), c.state, reason)
+			text := cli(t, env, "status", "--docker").stdout
+			if c.where != "" && (!strings.Contains(text, "Docker's VM runs but no Docker socket was found at "+c.where) || strings.Contains(text, "no Docker Desktop VM")) {
+				t.Errorf("text does not say the VM runs and where no socket was found:\n%s", text)
 			}
 		})
 	}

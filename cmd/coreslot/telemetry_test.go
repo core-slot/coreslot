@@ -1625,6 +1625,47 @@ func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
 	return conns, dials
 }
 
+// hookSocket is the test hook naming the fake engine's socket, which a state directory override
+// would otherwise keep out of reach: the same socket DOCKER_HOST names.
+func hookSocket() string {
+	return "CORESLOT_TESTHOOK_DOCKER_SOCKET=" + strings.TrimPrefix(os.Getenv("DOCKER_HOST"), "unix://")
+}
+
+// useEngine points the run at the fake engine, as the run's start would on macOS.
+func useEngine(r *run) {
+	r.sockets, r.dockerOff = docker.Features("darwin", true, environ(), "", false)
+}
+
+// liveHold writes a hold of this process, an ancestor of every run a test starts, into dir and
+// returns its name; its lock is held when live, and a hold whose lock is free is dead.
+func liveHold(t *testing.T, dir string, live bool) string {
+	t.Helper()
+	h := wire.Hold{Label: "parent", PID: os.Getpid(), StartNS: 1, NeedMiB: 128}
+	body, err := wire.Encode(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := wire.HoldName(h.StartNS, h.PID, 1, h.Label)
+	if err := os.MkdirAll(filepath.Join(dir, "holds"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "holds", name)
+	if err := os.WriteFile(p, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if live {
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { f.Close() })
+		if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return name
+}
+
 // sleepingDocker is a command named docker that sleeps: container work by its name.
 func sleepingDocker(t *testing.T) string {
 	t.Helper()
@@ -1650,6 +1691,7 @@ func TestWaiterNeverConnects(t *testing.T) {
 	if err := os.WriteFile(hold, bytes.Replace(body, []byte("{"), []byte(`{"container":true,`), 1), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	useEngine(b.r)
 	b.r.parentHold, b.r.o.argv, b.r.o.pinned = filepath.Base(hold), []string{"docker", "build", "."}, true
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
@@ -1689,6 +1731,7 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 				argv = []string{sleepingDocker(t)}
 			}
 			b := newEnded(t, argv...)
+			useEngine(b.r)
 			if c.off {
 				b.r.record = runRecord{}
 			}
@@ -1721,34 +1764,12 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 
 // A process whose own environment carries a parent's context never connects, even --independent
 // with container work of its own: its socket would read as the outer command's. Each row gives the
-// run its variable directly, so no outer run's tree holds the program. Mutations: the inherited test
-// left out of watchChild reddens both rows; either half of it left out of decide reddens its row.
+// run its variable directly, so no outer run's tree holds the program, and the hook names the engine,
+// so that only the inherited context stands in the way (in a darwin build with the hooks; elsewhere
+// the run reads no Docker at all). Mutations: nested left out of the run's Features call reddens both
+// rows; either half of it left out of decide reddens its row.
 func TestNestedIndependentNeverConnects(t *testing.T) {
 	docker := sleepingDocker(t)
-	// hold is the name of a hold of this process, an ancestor of the run, whose lock makes it live.
-	hold := func(t *testing.T, dir string, live bool) string {
-		h := wire.Hold{Label: "parent", PID: os.Getpid(), StartNS: 1, NeedMiB: 128}
-		body, err := wire.Encode(h)
-		if err != nil {
-			t.Fatal(err)
-		}
-		name := wire.HoldName(h.StartNS, h.PID, 1, h.Label)
-		p := filepath.Join(dir, "holds", name)
-		if err := os.WriteFile(p, body, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if live {
-			f, err := os.Open(p)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { f.Close() })
-			if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return name
-	}
 	for _, c := range []struct {
 		name, mark string
 		live       bool
@@ -1762,9 +1783,9 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 			dir := recordedDir(t, 1024)
 			value := "parent"
 			if c.mark == engine.EnvHold {
-				value = hold(t, dir, c.live)
+				value = liveHold(t, dir, c.live)
 			}
-			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"="+value), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
+			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"="+value, hookSocket()), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
 			if r.code != 0 {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
@@ -1786,7 +1807,7 @@ func TestDisabledDockerRunNeverConnects(t *testing.T) {
 	conns, _ := fakeEngine(t)
 	dir := recordedDir(t, 1024)
 	writeConfig(t, dir, telemetryOn+"[docker]\nenabled = false\n")
-	if r := cli(t, append(baseEnv(dir), ticksEnv+"=1"), "run", "--restart=yes", "--label", "off", "--mem", "128M", "--", docker); r.code != 0 {
+	if r := cli(t, append(baseEnv(dir), ticksEnv+"=1", hookSocket()), "run", "--restart=yes", "--label", "off", "--mem", "128M", "--", docker); r.code != 0 {
 		t.Fatalf("exit %d: %q", r.code, r.stderr)
 	}
 	if got := labelled(events(t, dir), "off"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
@@ -1794,58 +1815,6 @@ func TestDisabledDockerRunNeverConnects(t *testing.T) {
 	}
 	if conns.Load() != 0 || len(linesOf(t, dir, "containers")) != 0 {
 		t.Errorf("%d connections, %d lines with [docker] disabled", conns.Load(), len(linesOf(t, dir, "containers")))
-	}
-}
-
-// A stale exported CORESLOT_HOLD names no parent of this run, so it costs nothing: the run still
-// reads the socket and says why the hold did not count. Mutation: any non-empty hold counting as
-// inherited leaves both rows with no connection.
-func TestStaleHoldStillConnects(t *testing.T) {
-	docker := sleepingDocker(t)
-	for _, c := range []struct{ name, hold, miss string }{
-		{"names no ancestor", wire.HoldName(1, 999999, 1, "stale"), "not_ancestor"},
-		{"malformed", "parent", "malformed"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			conns, _ := fakeEngine(t)
-			dir := recordedDir(t, 1024)
-			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", engine.EnvHold+"="+c.hold), "run", "--restart=yes", "--label", "stale", "--mem", "128M", "--", docker)
-			if r.code != 0 {
-				t.Fatalf("exit %d: %q", r.code, r.stderr)
-			}
-			if conns.Load() == 0 || len(linesOf(t, dir, "containers")) == 0 {
-				t.Errorf("%d connections, %d lines from a run no parent holds", conns.Load(), len(linesOf(t, dir, "containers")))
-			}
-			if m := event(t, events(t, dir), "enqueue"); m["nested_miss"] != c.miss {
-				t.Errorf("nested_miss %v, want %s", m["nested_miss"], c.miss)
-			}
-		})
-	}
-}
-
-// DOCKER_HOST with a unix socket is the only candidate; one that is not a unix socket is a code; with
-// neither, the home's two sockets come before the system's, and with no home located there is none:
-// the system's socket alone would reach an engine no location of ours belongs to. Mutations: a unix
-// host still searching the defaults; a tcp host falling through to them; the home's sockets after
-// the system's; restoring the home == "" branch (the system's socket) reddens the last row.
-func TestDockerSockets(t *testing.T) {
-	sys := "/var/run/docker.sock"
-	run, desktop := "/Users/ana/.docker/run/docker.sock", "/Users/ana/.docker/desktop/docker.sock"
-	for _, c := range []struct {
-		name, host, home string
-		want             []string
-	}{
-		{"unix host", "unix:///tmp/x/docker.sock", "/Users/ana", []string{"/tmp/x/docker.sock"}},
-		{"tcp host", "tcp://10.0.0.1:2375", "/Users/ana", []string{docker.TCPHost}},
-		{"ssh host", "ssh://ana@server", "/Users/ana", []string{docker.TCPHost}},
-		{"defaults", "", "/Users/ana", []string{run, desktop, sys}},
-		{"no home located", "", "", nil},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := docker.Sockets(c.host, c.home); !reflect.DeepEqual(got, c.want) {
-				t.Errorf("got %q, want %q", got, c.want)
-			}
-		})
 	}
 }
 

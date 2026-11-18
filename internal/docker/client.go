@@ -29,15 +29,9 @@ const (
 var Connect = connect
 
 // Get makes one HTTP/1.0 GET on a connection of its own and returns the body of a 200. A response
-// larger than max bytes is no response: code "http".
-func Get(sock, target string, deadline time.Time, max int64) ([]byte, string) {
-	body, _, code := do(sock, target, deadline, max)
-	return body, code
-}
-
-// do is Get, with the status line's code (0 when there is none) for the caller that treats one
-// status apart; a status other than 200 comes with code HTTP.
-func do(sock, target string, deadline time.Time, max int64) (body []byte, status int, code string) {
+// larger than max bytes is no response: code "http". status is the status line's (0 when there is
+// none), for a caller that treats one status apart; any other than 200 comes with code "http".
+func Get(sock, target string, deadline time.Time, max int64) (body []byte, status int, code string) {
 	fd, code := Connect(sock)
 	if code != "" {
 		return nil, 0, code

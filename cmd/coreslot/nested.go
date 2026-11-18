@@ -41,7 +41,7 @@ func (r *run) decide() int {
 	}
 	inside, hold, miss := engine.DecideNested(os.Environ(), isAncestor)
 	r.nestedMiss = miss
-	r.inherited = inherited(env, hold, miss) // a stale exported variable names no parent
+	nested := inherited(env, hold, miss) // a stale exported variable names no parent
 	if inside {
 		r.o.sameGroup = true
 		if !r.o.independent {
@@ -50,7 +50,7 @@ func (r *run) decide() int {
 		r.parentHold = hold
 	}
 	r.env = dropInherited(env)
-	return r.ordinary()
+	return r.ordinary(nested)
 }
 
 // inherited reports whether the run inherits a parent's context, from the one decision

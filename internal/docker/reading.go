@@ -50,14 +50,11 @@ func StatsPath(id string) (string, bool) {
 
 // Walk makes the request target on the first of sockets that connects, against one deadline: no_socket
 // and connect move on to the next candidate. It returns that socket with the body and the code of the
-// answer, or the code of the last failure. DOCKER_HOST over TCP is a code, with no connection.
+// answer, or the code of the last failure.
 func Walk(sockets []string, target string, deadline time.Time, max int64) (sock string, body []byte, code string) {
-	if len(sockets) == 1 && sockets[0] == TCPHost {
-		return "", nil, TCPHost
-	}
 	code = NoSocket
 	for _, s := range sockets {
-		b, c := Get(s, target, deadline, max)
+		b, _, c := Get(s, target, deadline, max)
 		if c == NoSocket {
 			continue
 		}
@@ -69,11 +66,59 @@ func Walk(sockets []string, target string, deadline time.Time, max int64) (sock 
 	return "", nil, code
 }
 
+// Listed is a running container as the engine's list gives it.
+type Listed struct {
+	ID     string            `json:"Id"`
+	Names  []string          `json:"Names"`
+	Image  string            `json:"Image"`
+	Labels map[string]string `json:"Labels"`
+}
+
+// List reads the running containers from the first of sockets that answers (Walk), and returns that
+// socket.
+func List(sockets []string, deadline time.Time) (sock string, running []Listed, code string) {
+	sock, body, code := Walk(sockets, "/containers/json", deadline, listMax)
+	if code == "" && json.Unmarshal(body, &running) != nil {
+		code = Parse
+	}
+	return sock, running, code
+}
+
+// Stat reads one listed container's stats. The id goes into a request only when StatsPath accepts
+// it, else the code is Parse. gone is a container that stopped between the list and its stats,
+// removed (404) or stopped (a limit of 0, whose zeros are no reading): it is no container and no
+// code. Any other failure is its code.
+func Stat(sock string, l Listed, deadline time.Time) (c Container, gone bool, code string) {
+	path, ok := StatsPath(l.ID)
+	if !ok {
+		return c, false, Parse
+	}
+	b, status, code := Get(sock, path, deadline, ResponseMax)
+	if status == 404 {
+		return c, true, ""
+	}
+	var s Stats
+	if code == "" && json.Unmarshal(b, &s) != nil {
+		code = Parse
+	}
+	if code != "" {
+		return c, false, code
+	}
+	if s.MemoryStats.Limit == 0 {
+		return c, true, ""
+	}
+	if len(l.Names) > 0 {
+		c.Name = strings.TrimPrefix(l.Names[0], "/")
+	}
+	c.ID, c.Image, c.Project = l.ID, l.Image, l.Labels[composeKey]
+	c.UsageMiB, c.LimitMiB = int64(UsedBytes(s)>>20), int64(s.MemoryStats.Limit>>20)
+	return c, false, ""
+}
+
 // Read reads the engine's memory and every running container's usage from the first of sockets
 // that connects (Walk), all against one deadline and with no retry. Any failed call is no reading,
-// and so is a container whose id is not one the engine makes. A container that stopped between the
-// list and its stats is left out: one removed (404) or stopped (a limit of 0). Any other status is
-// no reading.
+// and so is a container whose id is not one the engine makes. A container that is gone (Stat) is
+// left out.
 func Read(sockets []string, deadline time.Time) Reading {
 	var r Reading
 	sock, info, code := Walk(sockets, "/info", deadline, ResponseMax)
@@ -90,53 +135,25 @@ func Read(sockets []string, deadline time.Time) Reading {
 		return r
 	}
 	if in.OperatingSystem != DesktopOS {
-		r.OK, r.OtherEngine = true, true
+		r.OtherEngine = true
 		return r
 	}
-	body, code := Get(sock, "/containers/json", deadline, listMax)
+	_, running, code := List([]string{sock}, deadline)
 	if code != "" {
 		r.Code = code
 		return r
 	}
-	var running []struct {
-		ID     string            `json:"Id"`
-		Names  []string          `json:"Names"`
-		Image  string            `json:"Image"`
-		Labels map[string]string `json:"Labels"`
-	}
-	if json.Unmarshal(body, &running) != nil {
-		r.Code = Parse
-		return r
-	}
 	var list []Container
-	for _, c := range running {
-		path, ok := StatsPath(c.ID)
-		if !ok {
-			r.Code = Parse
-			return r
-		}
-		b, status, code := do(sock, path, deadline, ResponseMax)
-		if status == 404 { // removed after the list, as `docker run --rm` does
-			continue
-		}
-		var s Stats
-		if code == "" && json.Unmarshal(b, &s) != nil {
-			code = Parse
-		}
+	for _, l := range running {
+		c, gone, code := Stat(sock, l, deadline)
 		if code != "" {
 			r.Code = code
 			return r
 		}
-		if s.MemoryStats.Limit == 0 { // it stopped after the list; its zeros are no reading
-			continue
+		if !gone {
+			list = append(list, c)
 		}
-		var name string
-		if len(c.Names) > 0 {
-			name = strings.TrimPrefix(c.Names[0], "/")
-		}
-		list = append(list, Container{ID: c.ID, Name: name, Image: c.Image, Project: c.Labels[composeKey],
-			UsageMiB: int64(UsedBytes(s) >> 20), LimitMiB: int64(s.MemoryStats.Limit >> 20)})
 	}
-	r.OK, r.VMMiB, r.Containers = true, int64(in.MemTotal>>20), list
+	r.VMMiB, r.Containers = int64(in.MemTotal>>20), list
 	return r
 }

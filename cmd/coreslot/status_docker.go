@@ -3,8 +3,10 @@
 package main
 
 import (
+	"cmp"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -29,39 +31,46 @@ const (
 // in the ok state the VM and the running containers. Every other state carries none of them.
 type dockerView struct {
 	state, reason string
+	where         string // no_socket: what was looked at, DOCKER_HOST or the candidate paths
 	vm            memsample.VM
 	vmMiB         int64
 	freeEst       int64
-	containers    []docker.Container // each string already cut
+	containers    []jsonContainer // each string already cut
 }
 
 // readDocker takes the one reading of this call, in the order that opens no socket for nothing: the
-// features, then the VM process, then the engine. Docker off for any reason but no-socket is off;
-// no socket, or no VM process, is not running.
+// features, then the VM process, then the engine. Docker off for any reason is off; no VM process
+// is not running; a VM that no candidate socket answers for is no reading, no_socket.
 func readDocker(enabled bool, loc location) *dockerView {
 	env := environ()
 	_, hold, miss := engine.DecideNested(os.Environ(), isAncestor)
 	sockets, off := docker.Features(runtime.GOOS, enabled, env, loc.home, inherited(env, hold, miss))
-	if off != docker.On && off != docker.OffNoSocket {
+	if off != docker.On {
 		return &dockerView{state: dockerOff, reason: string(off)}
 	}
 	vm := memsample.DockerVM()
-	if off == docker.OffNoSocket || vm.State == memsample.VMNotRunning {
+	if vm.State == memsample.VMNotRunning {
 		return &dockerView{state: dockerNotRunning}
 	}
 	r := docker.Read(sockets, time.Now().Add(dockerReadBudget))
 	switch {
-	case !r.OK:
+	case r.Code == docker.NoSocket:
+		where := "DOCKER_HOST"
+		if env["DOCKER_HOST"] == "" {
+			where = strings.Join(sockets, ", ")
+		}
+		return &dockerView{state: dockerNoReading, reason: r.Code, where: where}
+	case r.Code != "":
 		return &dockerView{state: dockerNoReading, reason: r.Code}
 	case r.OtherEngine:
 		return &dockerView{state: dockerOtherEngine}
 	}
-	v := &dockerView{state: dockerOK, vm: vm, vmMiB: r.VMMiB}
+	v := &dockerView{state: dockerOK, vm: vm, vmMiB: r.VMMiB, freeEst: r.VMMiB, containers: []jsonContainer{}}
 	for _, c := range r.Containers {
-		c.ID, c.Name, c.Image, c.Project = cutBytes(c.ID, spec.MaxLabelBytes), cutBytes(c.Name, spec.MaxLabelBytes), cutBytes(c.Image, spec.MaxLabelBytes), cutBytes(c.Project, spec.MaxLabelBytes)
-		v.containers = append(v.containers, c)
+		v.freeEst -= c.UsageMiB
+		v.containers = append(v.containers, jsonContainer{ID: cutBytes(c.ID, spec.MaxLabelBytes), Name: cutBytes(c.Name, spec.MaxLabelBytes),
+			Image: cutBytes(c.Image, spec.MaxLabelBytes), Project: cutBytes(c.Project, spec.MaxLabelBytes), UsageMiB: c.UsageMiB, LimitMiB: c.LimitMiB})
 	}
-	v.freeEst = r.FreeEstMiB()
 	return v
 }
 
@@ -87,7 +96,11 @@ func (d *dockerView) human(p func(format string, args ...any)) {
 	case dockerOtherEngine:
 		p("docker: the engine is not Docker Desktop; no figures")
 	case dockerNoReading:
-		p("docker: no reading (%s)", d.reason)
+		if d.reason == docker.NoSocket {
+			p("docker: no reading (no_socket: Docker's VM runs but no Docker socket was found at %s)", cmp.Or(text(d.where), "any usual place: no home directory was located"))
+		} else {
+			p("docker: no reading (%s)", d.reason)
+		}
 	default:
 		foot := "VM not identified"
 		if d.vm.State == memsample.VMIdentified {
@@ -144,9 +157,6 @@ func (d *dockerView) document() *jsonDocker {
 	if d.vm.State == memsample.VMIdentified {
 		j.VM.Identified, j.VM.FootprintMiB = true, &d.vm.FootprintMiB
 	}
-	for _, c := range d.containers {
-		j.Containers = append(j.Containers, jsonContainer{ID: c.ID, Name: c.Name, Image: c.Image, Project: c.Project,
-			UsageMiB: c.UsageMiB, LimitMiB: c.LimitMiB})
-	}
+	j.Containers = d.containers
 	return j
 }

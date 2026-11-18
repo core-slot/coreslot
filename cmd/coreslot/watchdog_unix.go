@@ -5,11 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"time"
 
-	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -116,8 +114,8 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 				r.record.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
 			}
 			r.record.MemoryAsync()
-			if p.container && !r.inherited && !r.dockerOff { // a descendant's socket would mark its parent's command
-				r.record.ContainersAsync(docker.Sockets(os.Getenv("DOCKER_HOST"), r.loc.home))
+			if p.container {
+				r.record.ContainersAsync(r.sockets, r.dockerOff)
 			}
 		}
 		if g == nil || n%listingsPerTick != 0 {

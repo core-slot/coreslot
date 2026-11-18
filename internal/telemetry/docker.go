@@ -3,7 +3,6 @@
 package telemetry
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/docker"
@@ -13,14 +12,24 @@ import (
 const (
 	containersBudget = 2 * time.Second // the whole read, but for a connect resolving its path, which nothing interrupts
 	containersMax    = 16
-	imageMax         = 64 // an image reference is cut to this on a line
+	imageMax         = 64         // an image reference is cut to this on a line
+	tcpHost          = "tcp_host" // containers_err of a DOCKER_HOST that is not a unix socket
 )
 
-// ContainersAsync writes a containers line.
-func (r *Recorder) ContainersAsync(sockets []string) {
+// ContainersAsync writes a containers line. off is the run's Docker gate (docker.Features): a
+// remote DOCKER_HOST is a line carrying its code with nothing read, and any other reason is no line.
+func (r *Recorder) ContainersAsync(sockets []string, off docker.Off) {
+	if off != docker.On && off != docker.OffRemoteHost {
+		return
+	}
 	r.machineLine(store.ContainersStamp, "containers", func() Fields {
 		start := time.Now()
-		list, total, code := Containers(start.Add(containersBudget), sockets)
+		var list []docker.Container
+		var total int
+		code := tcpHost
+		if off == docker.On {
+			list, total, code = Containers(start.Add(containersBudget), sockets)
+		}
 		readMS := time.Since(start).Milliseconds()
 		items := make([]Fields, 0, len(list))
 		for _, c := range list {
@@ -39,29 +48,13 @@ func (r *Recorder) ContainersAsync(sockets []string) {
 // and a closed code, "" for none. A container that cannot be read costs only itself; at the
 // deadline the read ends with what it has.
 func Containers(deadline time.Time, sockets []string) (list []docker.Container, total int, errCode string) {
-	sock, body, errCode := docker.Walk(sockets, "/containers/json", deadline, docker.ResponseMax)
+	sock, running, errCode := docker.List(sockets, deadline)
 	if errCode != "" {
 		return nil, 0, errCode
 	}
-	var running []struct {
-		ID    string `json:"Id"`
-		Image string `json:"Image"`
-	}
-	if json.Unmarshal(body, &running) != nil {
-		return nil, 0, docker.Parse
-	}
 	total = len(running)
-	for _, c := range running[:min(total, containersMax)] {
-		var b []byte
-		path, ok := docker.StatsPath(c.ID)
-		code := docker.Parse // an id the engine does not make is read no further
-		if ok {
-			b, code = docker.Get(sock, path, deadline, docker.ResponseMax)
-		}
-		var s docker.Stats
-		if code == "" && json.Unmarshal(b, &s) != nil {
-			code = docker.Parse
-		}
+	for _, l := range running[:min(total, containersMax)] {
+		c, gone, code := docker.Stat(sock, l, deadline)
 		if code != "" {
 			errCode = code
 			if code == docker.Deadline {
@@ -69,11 +62,10 @@ func Containers(deadline time.Time, sockets []string) (list []docker.Container, 
 			}
 			continue
 		}
-		if s.MemoryStats.Limit == 0 { // it stopped after the list; its zeros are no reading
-			continue
+		if !gone {
+			list = append(list, docker.Container{ID: docker.ShortID(c.ID), Image: c.Image[:min(imageMax, len(c.Image))],
+				UsageMiB: c.UsageMiB, LimitMiB: c.LimitMiB})
 		}
-		list = append(list, docker.Container{ID: docker.ShortID(c.ID), Image: c.Image[:min(imageMax, len(c.Image))],
-			UsageMiB: int64(docker.UsedBytes(s) >> 20), LimitMiB: int64(s.MemoryStats.Limit >> 20)})
 	}
 	return list, total, errCode
 }

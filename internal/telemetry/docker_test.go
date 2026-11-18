@@ -5,6 +5,7 @@ package telemetry
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -60,14 +61,17 @@ func TestContainersParsesStats(t *testing.T) {
 	}
 }
 
-// A container that stopped between the list and its stats answers with zeros: it is counted in the
-// total, left out of the list and is no error. Mutation: without the limit test it is listed at 0.
-func TestStoppedContainerLeftOut(t *testing.T) {
-	d := dockertest.Engine(t, dockertest.StoppedAtStats(cid('1')), dockertest.WithContainer(dockertest.Container{ID: cid('1'), Image: "alpine"}),
+// A container that went between the list and its stats, answering with zeros (stopped) or 404
+// (removed, as `docker run --rm` does), is counted in the total, left out of the list and is no
+// error. Mutations: without the limit test the stopped one is listed at 0; a 404 read as any other
+// status puts http on the line.
+func TestGoneContainerLeftOut(t *testing.T) {
+	d := dockertest.Engine(t, dockertest.StoppedAtStats(cid('1')), dockertest.StatsStatus(cid('2'), 404),
+		dockertest.WithContainer(dockertest.Container{ID: cid('1'), Image: "alpine"}), dockertest.WithContainer(dockertest.Container{ID: cid('2'), Image: "alpine"}),
 		dockertest.WithContainer(dockertest.Container{ID: cid('c'), Image: "alpine", UsageBytes: 5 << 20, LimitBytes: 1024 << 20}))
 	list, total, code := Containers(soon(), []string{d.Sock})
-	if code != "" || total != 2 || len(list) != 1 || list[0].ID != cid('c')[:12] {
-		t.Errorf("list %v, total %d, code %q; want only the second of 2, no code", list, total, code)
+	if code != "" || total != 3 || len(list) != 1 || list[0].ID != cid('c')[:12] {
+		t.Errorf("list %v, total %d, code %q; want only the third of 3, no code", list, total, code)
 	}
 }
 
@@ -104,7 +108,7 @@ func TestContainersCappedAtSixteen(t *testing.T) {
 	}
 	dir := stateDir(t)
 	r := New(dir, "run-1", "x")
-	r.ContainersAsync([]string{d.Sock})
+	r.ContainersAsync([]string{d.Sock}, docker.On)
 	r.memWG.Wait()
 	got := lines(t, dir)
 	if len(got) != 1 || got[0]["containers_total"] != float64(20) || len(got[0]["containers"].([]any)) != 16 {
@@ -173,44 +177,28 @@ func TestContainersTricklingServerMissesNoDeadline(t *testing.T) {
 	}
 }
 
-// Junk is a closed code. A container that fails costs itself, not the ones after it; a status
-// other than 200 is its own code. Mutations: a failed stats ending the loop loses the row's good
-// container; ignoring the status parses the 500's body.
-func TestJunkBodyIsParseCode(t *testing.T) {
+// A container whose stats are junk costs itself, not the ones after it. (The list's junk is the
+// docker package's.) Mutation: a failed stats ending the loop loses the row's good container.
+func TestJunkStatsCostOnlyTheContainer(t *testing.T) {
 	good := dockertest.Stats(2<<20, 4<<20, ``)
-	for _, c := range []struct {
-		name  string
-		list  string
-		code  int
-		stats string
-		want  string
-		kept  int
-	}{
-		{"list is junk", "not json", 200, "", "parse", 0},
-		{"list is the wrong shape", `{"Id":"x"}`, 200, "", "parse", 0},
-		{"list refused", `[]`, 500, "", "http", 0},
-		{"no status line", "", 0, "", "http", 0},
-		{"stats is junk", "", 200, "{", "parse", 1},
-		{"stats is the wrong type", "", 200, `{"memory_stats":{"usage":"lots"}}`, "parse", 1},
+	for _, c := range []struct{ name, stats string }{
+		{"stats is junk", "{"},
+		{"stats is the wrong type", `{"memory_stats":{"usage":"lots"}}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := dockertest.Serve(t, func(conn net.Conn, target string) {
-				switch {
-				case c.code == 0:
-					conn.Write([]byte("garbage"))
-				case target == "/containers/json" && c.list != "":
-					dockertest.Reply(conn, c.code, c.list)
-				case target == "/containers/json":
+				switch target {
+				case "/containers/json":
 					dockertest.Reply(conn, 200, `[{"Id":"`+cid('b')+`","Image":"b"},{"Id":"`+cid('e')+`","Image":"good"}]`)
-				case target == statsPath(cid('b')):
+				case statsPath(cid('b')):
 					dockertest.Reply(conn, 200, c.stats)
 				default:
 					dockertest.Reply(conn, 200, good)
 				}
 			})
 			list, _, code := Containers(soon(), []string{d.Sock})
-			if code != c.want || len(list) != c.kept {
-				t.Errorf("list %+v code %q, want %d and %q", list, code, c.kept, c.want)
+			if code != "parse" || len(list) != 1 {
+				t.Errorf("list %+v code %q, want one and parse", list, code)
 			}
 		})
 	}
@@ -224,13 +212,27 @@ func replaceConnect(t *testing.T, fn func(string) (int, string)) {
 	t.Cleanup(func() { docker.Connect = saved })
 }
 
-// A DOCKER_HOST over TCP is a code, with no connection of any kind. Mutation: leaving the test out
-// connects to the marker as a path.
-func TestTCPDockerHost(t *testing.T) {
+// A DOCKER_HOST over TCP is the code tcp_host on a line, with no connection of any kind; any other
+// reason the features are off is no line. Mutations: reading the sockets whatever the gate says
+// connects; dropping the remote-host row's code leaves no containers_err.
+func TestContainersLineByGate(t *testing.T) {
 	var calls atomic.Int64
 	replaceConnect(t, func(string) (int, string) { calls.Add(1); return -1, "connect" })
-	if list, total, code := Containers(soon(), []string{docker.TCPHost}); code != "tcp_host" || total != 0 || list != nil {
-		t.Errorf("list %v total %d code %q", list, total, code)
+	for _, c := range []struct {
+		off  docker.Off
+		want int
+	}{{docker.OffRemoteHost, 1}, {docker.OffNested, 0}, {docker.OffConfig, 0}} {
+		dir := stateDir(t)
+		r := New(dir, "run-1", "x")
+		r.ContainersAsync([]string{"/nonexistent"}, c.off)
+		r.memWG.Wait()
+		if _, err := os.Stat(eventsPath(dir)); c.want == 0 {
+			if err == nil {
+				t.Errorf("off %q: a line was written", c.off)
+			}
+		} else if got := lines(t, dir); len(got) != 1 || got[0]["containers_err"] != "tcp_host" || got[0]["containers_total"] != float64(0) {
+			t.Errorf("off %q: lines %v, want one with tcp_host", c.off, got)
+		}
 	}
 	if calls.Load() != 0 {
 		t.Errorf("%d connections", calls.Load())
@@ -246,7 +248,7 @@ func TestHungSocketLineStillWritten(t *testing.T) {
 	dir := stateDir(t)
 	r := New(dir, "run-1", "x")
 	start := time.Now()
-	r.ContainersAsync([]string{d.Sock})
+	r.ContainersAsync([]string{d.Sock}, docker.On)
 	if took := time.Since(start); took > 500*time.Millisecond {
 		t.Errorf("ContainersAsync took %v", took)
 	}
@@ -276,9 +278,9 @@ func TestContainersLineOncePerWindow(t *testing.T) {
 	r := New(dir, "run-1", "x")
 	r.MemoryAsync()
 	r.memWG.Wait()
-	r.ContainersAsync([]string{d.Sock})
+	r.ContainersAsync([]string{d.Sock}, docker.On)
 	r.memWG.Wait()
-	r.ContainersAsync([]string{d.Sock})
+	r.ContainersAsync([]string{d.Sock}, docker.On)
 	r.memWG.Wait()
 	got := lines(t, dir)
 	if len(got) != 2 || d.Conns() != 2 {
@@ -299,10 +301,10 @@ func TestContainersLineOncePerWindow(t *testing.T) {
 		t.Errorf("container %v", c)
 	}
 	var nilRec *Recorder
-	nilRec.ContainersAsync([]string{d.Sock})
+	nilRec.ContainersAsync([]string{d.Sock}, docker.On)
 	stopped := New(stateDir(t), "run-2", "x")
 	stopped.Stop()
-	stopped.ContainersAsync([]string{d.Sock})
+	stopped.ContainersAsync([]string{d.Sock}, docker.On)
 	stopped.memWG.Wait()
 	if n := d.Conns(); n != 2 {
 		t.Errorf("%d connections, want none from a nil or stopped recorder", n-2)

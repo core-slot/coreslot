@@ -48,7 +48,7 @@ func TestResponseCap(t *testing.T) {
 			f := dockertest.Serve(t, func(conn net.Conn, _ string) {
 				conn.Write([]byte(head + "[" + strings.Repeat(" ", c.size-2) + "]"))
 			})
-			if _, code := docker.Get(f.Sock, "/x", soon(), 1<<20); code != c.want {
+			if _, _, code := docker.Get(f.Sock, "/x", soon(), 1<<20); code != c.want {
 				t.Errorf("code %q, want %q", code, c.want)
 			}
 		})
@@ -87,7 +87,7 @@ func TestJunkBodyIsParseCode(t *testing.T) {
 				}
 			})
 			r := docker.Read([]string{f.Sock}, soon())
-			if r.OK || r.Code != c.want || r.Containers != nil {
+			if r.Code != c.want || r.Containers != nil {
 				t.Errorf("reading %+v, want none with %q", r, c.want)
 			}
 		})
@@ -98,7 +98,7 @@ func TestJunkBodyIsParseCode(t *testing.T) {
 // like every other error says connect.
 func TestNoSocketIsACode(t *testing.T) {
 	dir := dockertest.SocketDir(t)
-	if r := docker.Read([]string{dir + "/a.sock", dir + "/b.sock"}, soon()); r.OK || r.Code != "no_socket" {
+	if r := docker.Read([]string{dir + "/a.sock", dir + "/b.sock"}, soon()); r.Code != "no_socket" {
 		t.Errorf("reading %+v, want no_socket", r)
 	}
 	if r := docker.Read(nil, soon()); r.Code != "no_socket" {
@@ -119,11 +119,11 @@ func TestConnectErrorHasNoPath(t *testing.T) {
 	ln.(*net.UnixListener).SetUnlinkOnClose(false)
 	ln.Close()
 	r := docker.Read([]string{refused, dir + "/absent.sock"}, soon())
-	if r.OK || r.Code != "connect" || strings.Contains(r.Code, dir) {
+	if r.Code != "connect" || strings.Contains(r.Code, dir) {
 		t.Errorf("reading %+v, want connect", r)
 	}
 	f := dockertest.Engine(t)
-	if r := docker.Read([]string{refused, f.Sock}, soon()); !r.OK {
+	if r := docker.Read([]string{refused, f.Sock}, soon()); r.Code != "" {
 		t.Errorf("a live candidate after a refused one: %+v", r)
 	}
 }
