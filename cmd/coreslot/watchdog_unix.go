@@ -76,7 +76,8 @@ var listClient = memsample.ContainerClient
 // named as a container client is container work from the start; any other is from the first
 // listing that finds a client in its tree: it takes no stop from then on, and the next tick's hold
 // update clears its Victim. The scan needs a log, the one reader that outlives the hold: a
-// pass-through has none.
+// pass-through has none. An engaged run starts a sample of its containers every third tick, and
+// every hold write carries the last sample done.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
@@ -90,7 +91,8 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		r.hold = g.HoldName()
 		r.updateHold(st, g, func(h *wire.Hold) {
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
-			h.TypicalCPUS, h.Container, h.DockerNote = r.cpuS, p.container, r.dockerNote()
+			h.TypicalCPUS, h.Container = r.cpuS, p.container
+			h.DockerNote, h.DockerFootprintMiB = r.dockerNote(), r.dockerFootprint()
 		})
 	}
 	for n := 1; ; n++ {
@@ -135,10 +137,15 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
 		noCPUS := noCPU.add(d, active, func() bool { return p.container && listClient(sup.pid) }) // a run not yet container work scanned this listing
+		if r.fwd != nil && (n/listingsPerTick)%sampleTicks == 0 {
+			// Off the tick path: a hung engine never delays a tick, and the hold takes the last
+			// sample done.
+			go r.fwd.part.sample(ctx, r.fwd.upstream)
+		}
 		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, noCPUS
-			h.SampledNS, h.DockerNote = store.NowNS(), r.dockerNote()
+			h.SampledNS, h.DockerNote, h.DockerFootprintMiB = store.NowNS(), r.dockerNote(), r.dockerFootprint()
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
 			}

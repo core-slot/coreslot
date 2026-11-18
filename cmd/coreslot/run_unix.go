@@ -101,7 +101,6 @@ type run struct {
 	marked   bool        // a counted run of the label's window was container work
 	fw       engagement  // whether the run gets a forwarder: docker.Engage, once before it queues
 	fwd      *forwarder  // the engaged run's forwarder, from its first admission
-	blind    bool        // the forwarder died or its tap lost track: the run's Docker figures are not to be trusted
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).

@@ -35,14 +35,15 @@ type engagement struct{ upstream, note string }
 
 // forwarder is a run's forwarder process, alive from its ready event: addr is the address the
 // command's DOCKER_HOST names, entry its directory, end the run's end of the pipe whose end ends it,
-// events what its tap reports after ready (a line that does not parse is blind), and exited is
-// closed once it has exited and been reaped.
+// events what its tap reports after ready (a line that does not parse is blind), exited is closed
+// once it has exited and been reaped, and part is what the events attribute to the run.
 type forwarder struct {
 	addr, upstream, entry string
 	cmd                   *exec.Cmd
 	end                   *os.File
 	events                <-chan relay.Event
 	exited                <-chan struct{}
+	part                  dockerPart
 }
 
 var errNotReady = errors.New("the forwarder did not say ready")
@@ -206,25 +207,32 @@ func (r *run) endForwarder() {
 }
 
 // forwarderEvents takes the events the forwarder reported since the last listing: a first
-// connection makes the run container work, and a blind event or the forwarder's death makes the
-// run blind.
+// connection makes the run container work, the others go to its Docker part, and the forwarder's
+// death makes the part blind. The run says once that it went blind.
 func (r *run) forwarderEvents(p *peak) {
+	part := &r.fwd.part
+	if !part.blind() {
+		defer func() {
+			if part.blind() {
+				r.notice("%s: the command's Docker work is no longer attributed to this run", docker.NoteBlind)
+			}
+		}()
+	}
 	for {
 		select {
 		case e, ok := <-r.fwd.events:
 			if !ok {
-				r.blind = true
+				part.setBlind()
 				return
 			}
-			switch e.Kind {
-			case relay.KindConnected:
+			if e.Kind == relay.KindConnected {
 				p.container = true
-			case relay.KindBlind:
-				r.blind = true
+			} else {
+				part.event(e, r.fwd.upstream)
 			}
 			continue
 		case <-r.fwd.exited:
-			r.blind = true
+			part.setBlind()
 		default:
 		}
 		return
@@ -234,10 +242,20 @@ func (r *run) forwarderEvents(p *peak) {
 // dockerNote is the note the run's hold carries: ungated: blind once the run lost sight of its
 // containers, else its engagement's note.
 func (r *run) dockerNote() string {
-	if r.blind {
+	if r.fwd != nil && r.fwd.part.blind() {
 		return docker.NoteBlind
 	}
 	return r.fw.note
+}
+
+// dockerFootprint is the footprint the run's hold carries: its Docker part's while it is engaged
+// and not blind, 0 included, else none.
+func (r *run) dockerFootprint() *int64 {
+	if r.fwd == nil || r.fwd.part.blind() {
+		return nil
+	}
+	f := r.fwd.part.footprintMiB()
+	return &f
 }
 
 // withDockerHost is env with DOCKER_HOST naming addr, whatever it named before.
