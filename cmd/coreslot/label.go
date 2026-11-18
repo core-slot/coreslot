@@ -16,21 +16,19 @@ var launchers = map[string]bool{
 	"caffeinate": true, "env": true, "nice": true, "nohup": true, "stdbuf": true, "time": true, "timeout": true,
 }
 
-// wrapped is the command a launcher in argv[0] runs: argv from the first argument after it that is
-// not empty, does not start with "-" or a digit, and is not an assignment (an "=" before any "/"),
-// taken again while that command is itself a launcher. It is argv when argv[0] is no launcher or a
-// launcher runs no command. It reads no launcher's options: an option's bare-word value is taken
-// for the command.
+// wrapped is the command a launcher in argv[0] runs: argv from the first argument after it that
+// neither starts with a digit nor contains "=", taken again while that command is itself a
+// launcher. It is argv, the launcher's own name kept, when an empty argument or one that starts
+// with "-" comes first, since an option's value cannot be told from a command, or when no command
+// follows.
 func wrapped(argv []string) []string {
 	for launchers[filepath.Base(argv[0])] {
 		i := 1
-		for ; i < len(argv); i++ {
-			a, eq := argv[i], strings.IndexByte(argv[i], '=')
-			if a != "" && a[0] != '-' && (a[0] < '0' || a[0] > '9') && (eq < 0 || strings.Contains(a[:eq], "/")) {
-				break
-			}
+		for i < len(argv) && argv[i] != "" && argv[i][0] != '-' &&
+			(argv[i][0] >= '0' && argv[i][0] <= '9' || strings.Contains(argv[i], "=")) {
+			i++
 		}
-		if i == len(argv) {
+		if i == len(argv) || argv[i] == "" || argv[i][0] == '-' {
 			break
 		}
 		argv = argv[i:]

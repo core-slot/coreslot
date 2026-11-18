@@ -125,11 +125,12 @@ it runs in, such as `go test@proj`. The worktrees of one repository share it, so
 and its `needs.toml` entry follow the project, not the directory.
 
 A command behind a launcher (`caffeinate`, `env`, `nice`, `nohup`, `stdbuf`, `time`, `timeout`) takes
-the shape of the command it runs: the launcher and its own arguments that start with `-` or a digit
-or are assignments `NAME=value` are skipped, so `timeout 10m npx jest` is `npx jest@proj`,
+the shape of the command it runs, found past the launcher's arguments that start with a digit or
+contain `=` and taken again when it is a launcher too: `timeout 10m npx jest` is `npx jest@proj`,
 `env A=1 timeout 10m npm run check` is `npm run check@proj` and `timeout 10m ./scripts/x.sh` is
-`x.sh@proj`. A launcher with no command keeps its own name. No launcher's options are read, so an
-option's bare-word value is taken for the command: `timeout -s KILL 10m make` is `KILL@proj`.
+`x.sh@proj`. Those skipped arguments never reach the label. A launcher followed by an option
+(`nice -n 10 make`, `time -p make`), an empty argument or no command keeps its own name; give such
+commands a `--label`.
 
 The label is only that shape and name, so commands that share them share one learned need. Two cases
 to know. First, the shape ends at the first argument that starts with `-` or a digit, or contains

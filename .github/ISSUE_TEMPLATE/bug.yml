@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for the report. Do not paste secrets: `coreslot` never logs the environment, but its
-        automatic label copies up to two leading words of the command (unless you pass `--label`),
+        automatic label copies the command's name and up to two words after it (unless you pass `--label`),
         and the output of your own command may contain them too.
   - type: input
     id: version

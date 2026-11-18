@@ -22,8 +22,8 @@ that fails costs its line. A reader skips a line it cannot parse. A line's `v` r
 removed, renamed or given another meaning; a new key does not raise it, so a reader ignores the keys
 it does not know.
 
-The record holds labels (an auto-label copies a command's name, up to two arguments after it and the
-repository's directory name, as the run log does), process names, which are executable file names,
+The record holds labels (an auto-label copies the command's shape, as README's "Labels are automatic" defines it, and
+the repository's directory name, as the run log does), process names, which are executable file names,
 and container image names. A `waiting` line's `holders` carry hold names, which embed up to 32 bytes
 of a label. It holds no command line, environment or whole path, and every reason in it is a closed
 code.
