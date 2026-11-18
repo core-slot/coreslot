@@ -242,10 +242,10 @@ ancestor, which `nested_miss` reports, does not stop it.
 
 It reads the Docker socket: the unix socket `DOCKER_HOST` names, or else
 `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and `/var/run/docker.sock`, in that
-order (none when no home is located: the system's socket alone would reach an engine no
-location of ours belongs to). `[docker] enabled = false` in the configuration, or a configuration
-that cannot be read, or a state directory override (`CORESLOT_STATE_DIR`), or a platform other than
-macOS, opens no socket at all and writes no `containers` line; `status --docker` then prints `off` and opens none either. The Docker
+order (none when no home is located, which is the case under `CORESLOT_STATE_DIR`: the system's
+socket alone would reach an engine no location of ours belongs to). `[docker] enabled = false` in
+the configuration, or a configuration that cannot be read, opens no socket at all and writes no
+`containers` line; `status --docker` then prints `off` and opens none either. The Docker
 context is not read, so another engine has to be named by `DOCKER_HOST`. One request for
 the list and one per container, up to 17, read-only, under one 2 s deadline, which cannot interrupt
 a connect while it resolves the socket's path; the line is written at the deadline with what was

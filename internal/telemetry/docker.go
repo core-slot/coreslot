@@ -16,10 +16,11 @@ const (
 	tcpHost          = "tcp_host" // containers_err of a DOCKER_HOST that is not a unix socket
 )
 
-// ContainersAsync writes a containers line. off is the run's Docker gate (docker.Features): a
-// remote DOCKER_HOST is a line carrying its code with nothing read, and any other reason is no line.
+// ContainersAsync writes a containers line. off is the run's Docker gate (docker.Features): config
+// and nested stop the line, a remote DOCKER_HOST is a line carrying its code with nothing read, and
+// any other reason, platform and state-dir included, reads the sockets as the line always did.
 func (r *Recorder) ContainersAsync(sockets []string, off docker.Off) {
-	if off != docker.On && off != docker.OffRemoteHost {
+	if off == docker.OffConfig || off == docker.OffNested {
 		return
 	}
 	r.machineLine(store.ContainersStamp, "containers", func() Fields {
@@ -27,7 +28,7 @@ func (r *Recorder) ContainersAsync(sockets []string, off docker.Off) {
 		var list []docker.Container
 		var total int
 		code := tcpHost
-		if off == docker.On {
+		if off != docker.OffRemoteHost {
 			list, total, code = Containers(start.Add(containersBudget), sockets)
 		}
 		readMS := time.Since(start).Milliseconds()

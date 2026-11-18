@@ -1601,13 +1601,7 @@ func fakeEngine(t *testing.T) (eng *dockertest.Fake, dials *atomic.Int64) {
 	return eng, dials
 }
 
-// hookSocket is the test hook naming the fake engine's socket, which a state directory override
-// would otherwise keep out of reach: the same socket DOCKER_HOST names.
-func hookSocket() string {
-	return "CORESLOT_TESTHOOK_DOCKER_SOCKET=" + strings.TrimPrefix(os.Getenv("DOCKER_HOST"), "unix://")
-}
-
-// useEngine points the run at the fake engine, as the run's start would on macOS.
+// useEngine points the run at the fake engine, as the run's start does.
 func useEngine(r *run) {
 	r.sockets, r.dockerOff = docker.Features("darwin", true, environ(), "", false)
 }
@@ -1740,10 +1734,8 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 
 // A process whose own environment carries a parent's context never connects, even --independent
 // with container work of its own: its socket would read as the outer command's. Each row gives the
-// run its variable directly, so no outer run's tree holds the program, and the hook names the engine,
-// so that only the inherited context stands in the way (in a darwin build with the hooks; elsewhere
-// the run reads no Docker at all). Mutations: nested left out of the run's Features call reddens both
-// rows; either half of it left out of decide reddens its row.
+// run its variable directly, so no outer run's tree holds the program. Mutations: nested left out of
+// the run's Features call reddens all rows; either half of it left out of decide reddens its row.
 func TestNestedIndependentNeverConnects(t *testing.T) {
 	docker := sleepingDocker(t)
 	for _, c := range []struct {
@@ -1761,7 +1753,7 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 			if c.mark == engine.EnvHold {
 				value = liveHold(t, dir, c.live)
 			}
-			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"="+value, hookSocket()), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
+			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"="+value), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
 			if r.code != 0 {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
@@ -1783,7 +1775,7 @@ func TestDisabledDockerRunNeverConnects(t *testing.T) {
 	eng, _ := fakeEngine(t)
 	dir := recordedDir(t, 1024)
 	writeConfig(t, dir, telemetryOn+"[docker]\nenabled = false\n")
-	if r := cli(t, append(baseEnv(dir), ticksEnv+"=1", hookSocket()), "run", "--restart=yes", "--label", "off", "--mem", "128M", "--", docker); r.code != 0 {
+	if r := cli(t, append(baseEnv(dir), ticksEnv+"=1"), "run", "--restart=yes", "--label", "off", "--mem", "128M", "--", docker); r.code != 0 {
 		t.Fatalf("exit %d: %q", r.code, r.stderr)
 	}
 	if got := labelled(events(t, dir), "off"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
@@ -1791,6 +1783,32 @@ func TestDisabledDockerRunNeverConnects(t *testing.T) {
 	}
 	if eng.Conns() != 0 || len(linesOf(t, dir, "containers")) != 0 {
 		t.Errorf("%d connections, %d lines with [docker] disabled", eng.Conns(), len(linesOf(t, dir, "containers")))
+	}
+}
+
+// A stale exported CORESLOT_HOLD names no parent of this run, so it costs nothing: the run still
+// reads the socket and says why the hold did not count. Mutation: any non-empty hold counting as
+// inherited leaves both rows with no connection.
+func TestStaleHoldStillConnects(t *testing.T) {
+	docker := sleepingDocker(t)
+	for _, c := range []struct{ name, hold, miss string }{
+		{"names no ancestor", wire.HoldName(1, 999999, 1, "stale"), "not_ancestor"},
+		{"malformed", "parent", "malformed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			eng, _ := fakeEngine(t)
+			dir := recordedDir(t, 1024)
+			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", engine.EnvHold+"="+c.hold), "run", "--restart=yes", "--label", "stale", "--mem", "128M", "--", docker)
+			if r.code != 0 {
+				t.Fatalf("exit %d: %q", r.code, r.stderr)
+			}
+			if eng.Conns() == 0 || len(linesOf(t, dir, "containers")) == 0 {
+				t.Errorf("%d connections, %d lines from a run no parent holds", eng.Conns(), len(linesOf(t, dir, "containers")))
+			}
+			if m := event(t, events(t, dir), "enqueue"); m["nested_miss"] != c.miss {
+				t.Errorf("nested_miss %v, want %s", m["nested_miss"], c.miss)
+			}
+		})
 	}
 }
 

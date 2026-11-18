@@ -197,38 +197,36 @@ func TestJunkStatsCostOnlyTheContainer(t *testing.T) {
 	}
 }
 
-// replaceConnect makes the recorder connect with fn; the test's end restores it.
-func replaceConnect(t *testing.T, fn func(string) (int, string)) {
-	t.Helper()
-	saved := docker.Connect
-	docker.Connect = fn
-	t.Cleanup(func() { docker.Connect = saved })
-}
-
-// A DOCKER_HOST over TCP is the code tcp_host on a line, with no connection of any kind; any other
-// reason the features are off is no line. Mutations: reading the sockets whatever the gate says
-// connects; dropping the remote-host row's code leaves no containers_err.
+// The gate decides the line: config and nested write none and connect to nothing; a DOCKER_HOST over
+// TCP is a line with the code tcp_host and no connection; platform and state-dir read the sockets as
+// the line always did. Mutations: reading whatever the gate says connects in the first three rows;
+// stopping platform or state-dir too leaves their rows with no line; dropping the remote-host code
+// leaves no containers_err.
 func TestContainersLineByGate(t *testing.T) {
-	var calls atomic.Int64
-	replaceConnect(t, func(string) (int, string) { calls.Add(1); return -1, "connect" })
 	for _, c := range []struct {
-		off  docker.Off
-		want int
-	}{{docker.OffRemoteHost, 1}, {docker.OffNested, 0}, {docker.OffConfig, 0}} {
+		off   docker.Off
+		line  bool
+		conns int64
+		err   any
+	}{
+		{docker.OffConfig, false, 0, nil}, {docker.OffNested, false, 0, nil}, {docker.OffRemoteHost, true, 0, "tcp_host"},
+		{docker.OffPlatform, true, 1, nil}, {docker.OffStateDir, true, 1, nil}, {docker.On, true, 1, nil},
+	} {
+		d := engine(t)
 		dir := stateDir(t)
 		r := New(dir, "run-1", "x")
-		r.ContainersAsync([]string{"/nonexistent"}, c.off)
+		r.ContainersAsync([]string{d.Sock}, c.off)
 		r.memWG.Wait()
-		if _, err := os.Stat(eventsPath(dir)); c.want == 0 {
+		if _, err := os.Stat(eventsPath(dir)); !c.line {
 			if err == nil {
 				t.Errorf("off %q: a line was written", c.off)
 			}
-		} else if got := lines(t, dir); len(got) != 1 || got[0]["containers_err"] != "tcp_host" || got[0]["containers_total"] != float64(0) {
-			t.Errorf("off %q: lines %v, want one with tcp_host", c.off, got)
+		} else if got := lines(t, dir); len(got) != 1 || got[0]["containers_err"] != c.err || got[0]["containers_total"] != float64(0) {
+			t.Errorf("off %q: lines %v, want one with containers_err %v", c.off, got, c.err)
 		}
-	}
-	if calls.Load() != 0 {
-		t.Errorf("%d connections", calls.Load())
+		if d.Conns() != c.conns {
+			t.Errorf("off %q: %d connections, want %d", c.off, d.Conns(), c.conns)
+		}
 	}
 }
 
