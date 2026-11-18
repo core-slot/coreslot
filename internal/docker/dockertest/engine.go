@@ -1,7 +1,7 @@
 //go:build unix
 
-// Package dockertest is a fake Docker engine on a unix socket. It is for tests only and may use
-// net, which no binary of coreslot may link: never import it from non-test code.
+// Package dockertest is a fake Docker engine on a unix socket. It is for tests only: never import
+// it from non-test code.
 package dockertest
 
 import (
