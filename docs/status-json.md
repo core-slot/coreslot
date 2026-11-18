@@ -200,7 +200,9 @@ only the watchdog's own stops restart it.
 
 `expected_wait_s` is the head's expected wait `W` of the passing rule, the rule by which a waiter
 with a typical run time may start ahead of the head when it is expected to end within `W`
-([`PROTOCOL.md` section 10.3](../PROTOCOL.md#103-waiting-and-election)). It is given on the first
+([`PROTOCOL.md` section 10.3](../PROTOCOL.md#103-waiting-and-election)). The same rule also lets
+one waiter at a time go out of turn while the head does not fit, whatever `W` is: that bound is the
+waiter's own watched time of the head, not an estimate, and never shows here. It is given on the first
 live ticket in queue order only; every later ticket and every dead ticket has null. It is null as
 well when the rule leaves the wait unknown: the headroom is unread while a hold is live, the live
 holds with a typical run time cannot cover the need, or the ticket is a restart whose watch state

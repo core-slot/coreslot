@@ -21,6 +21,11 @@ All notable changes to this project are recorded here. The format follows
   read, so a client of format 2 steps out of the budget with its existing notice. Run `coreslot doctor --reset` once
   nothing is live: on a format-2 directory it is an upgrade that keeps the run log and the telemetry, so no label
   learns its need again.
+
+## v0.9.1 (2026-11-19)
+
+### Changed
+
 - A job that fits no longer waits behind a head that cannot start. When the head does not fit, one waiter at a
   time may go ahead of it out of turn, for no longer than it has itself watched the head wait, whether or not
   the head's wait is known: a small job no longer waits behind a large one that waits for memory held outside
