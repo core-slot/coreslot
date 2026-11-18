@@ -122,6 +122,16 @@ func (x *runRecord) admitted(g *engine.Grant) {
 	x.Emit("admitted", f)
 }
 
+// trimmed writes the attempt's trim: the run acted on req, a request to trim its hold, which now
+// reserves needMiB of the askedMiB it was admitted with, at a footprint of footprintMiB.
+func (x *runRecord) trimmed(hold string, askedMiB, needMiB, footprintMiB int64, req store.TrimRequest) {
+	if x.Recorder == nil {
+		return
+	}
+	x.Emit("trim", telemetry.Fields{"hold": hold, "asked_mib": askedMiB, "need_mib": needMiB, "footprint_mib": footprintMiB,
+		"requested_ns": req.RequestedNS, "requester_pid": req.RequesterPID})
+}
+
 // waitEnd writes event, the end of a wait that gave no start, with where the wait went.
 func (x *runRecord) waitEnd(event string, f telemetry.Fields) {
 	if x.Recorder == nil || !x.queued {
