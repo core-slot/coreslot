@@ -22,8 +22,9 @@ func PathFor(cfgPath string) string {
 
 // Entry is what the needs file says about one label. MemMiB is 0 when the entry leaves it out.
 type Entry struct {
-	MemMiB    int64
-	NoRestart bool // the run is never stopped to free memory
+	MemMiB        int64
+	NoRestart     bool  // the run is never stopped to free memory
+	DockerForward *bool // docker_forward: a forwarder always (true) or never (false); nil when absent
 }
 
 // File is a loaded needs file.
@@ -94,6 +95,13 @@ func (f File) Lookup(label string) (Entry, bool, error) {
 			return bad("no_restart", errors.New("want a boolean"))
 		}
 		e.NoRestart = b
+	}
+	if v, ok := tbl["docker_forward"]; ok {
+		b, ok := v.(bool)
+		if !ok {
+			return bad("docker_forward", errors.New("want a boolean"))
+		}
+		e.DockerForward = &b
 	}
 	return e, true, nil
 }
