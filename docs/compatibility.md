@@ -89,13 +89,13 @@ change in any release; parse `status --json` instead.
 | Surface | Supported |
 |---|---|
 | `run` | `--mem SIZE` (such as `3G` or `768M`), `--label`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--same-group`, `--refusal-code` |
-| `status` | `--json`, `--observe DURATION` |
+| `status` | `--json`, `--docker`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
 | `doctor` | `--clear`, `--reset` |
 | `stats` | `--label LABEL`, `--json` |
 | `report` | `--days N`, `--json` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
-| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem` and `no_restart` |
+| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`, `[docker] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem` and `no_restart` |
 | environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED`, `CORESLOT_TELEMETRY` (given to the command, read by nested runs) |
 | descriptors | the hold at fd 3 |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
@@ -109,7 +109,8 @@ can tell it from a command's own failure.
 The document carries a `"schema"` number. Within one schema number, fields may be added but are
 never removed, renamed or given another meaning; a consumer MUST ignore fields it does not know.
 Removing or changing a field raises the number, and that release prints the new one. Labels are
-carried exactly, JSON-encoded.
+carried exactly, JSON-encoded. Under schema 1, `config_warnings` (an array, always present) and
+`docker` (an object, present only with `status --docker`) are keys added after the first release.
 [status-json.md](status-json.md) describes every key of the document.
 
 ## Deprecation window

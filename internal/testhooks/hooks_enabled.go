@@ -19,6 +19,8 @@
 //     answer (darwin's always does, and so does any account with a passwd entry).
 //   - CORESLOT_TESTHOOK_HEADROOM_MIB: a decimal integer of MiB that replaces the kernel's memory
 //     headroom, so that a test's admission never depends on the machine's memory.
+//   - CORESLOT_TESTHOOK_DOCKER_SOCKET: the one Docker socket that a run under a state directory
+//     override may read, whose engine would otherwise be none.
 //   - <CORESLOT_TESTHOOK_DIR>/readings: when this file exists, its named numbers replace the
 //     machine readings of those names, re-read whenever the file changes.
 package testhooks
@@ -161,6 +163,9 @@ func Getent() string { return os.Getenv("CORESLOT_TESTHOOK_GETENT") }
 
 // PasswdMiss reports whether CORESLOT_TESTHOOK_PASSWD_MISS is set.
 func PasswdMiss() bool { return os.Getenv("CORESLOT_TESTHOOK_PASSWD_MISS") != "" }
+
+// DockerSocket returns CORESLOT_TESTHOOK_DOCKER_SOCKET, "" when it is unset.
+func DockerSocket() string { return os.Getenv("CORESLOT_TESTHOOK_DOCKER_SOCKET") }
 
 // Headroom returns CORESLOT_TESTHOOK_HEADROOM_MIB; set is false when it is unset.
 func Headroom() (mib int64, set bool) {

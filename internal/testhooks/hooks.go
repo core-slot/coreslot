@@ -28,6 +28,10 @@ func PasswdMiss() bool { return false }
 // coreslot_testhooks tag.
 func Headroom() (mib int64, set bool) { return 0, false }
 
+// DockerSocket names the one Docker socket a run under a state directory override may read; always
+// "" without the coreslot_testhooks tag.
+func DockerSocket() string { return "" }
+
 // Readings replaces machine readings by name; always nil, false without the coreslot_testhooks
 // tag.
 func Readings() (nums map[string]int64, set bool) { return nil, false }

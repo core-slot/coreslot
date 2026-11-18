@@ -226,7 +226,7 @@ Nothing is written where processes cannot be swept.
 
 | key | meaning |
 |---|---|
-| `vm` | the largest footprint among the Docker VM's processes (names starting `com.docker.krun`, `com.docker.sailor`, `com.docker.virtualization` or `com.apple.Virtualization`): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when none runs, or when an engine goes by another name |
+| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
 | `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
 
 ### `containers`
@@ -242,7 +242,10 @@ ancestor, which `nested_miss` reports, does not stop it.
 
 It reads the Docker socket: the unix socket `DOCKER_HOST` names, or else
 `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and `/var/run/docker.sock`, in that
-order (the system's alone when `CORESLOT_STATE_DIR` is set, which looks up no home). The Docker
+order (none when no home is located, which is the case under `CORESLOT_STATE_DIR`: the system's
+socket alone would reach an engine no location of ours belongs to). `[docker] enabled = false` in
+the configuration, or a configuration that cannot be read, opens no socket at all and writes no
+`containers` line; `status --docker` then prints `off` and opens none either. The Docker
 context is not read, so another engine has to be named by `DOCKER_HOST`. One request for
 the list and one per container, up to 17, read-only, under one 2 s deadline, which cannot interrupt
 a connect while it resolves the socket's path; the line is written at the deadline with what was
@@ -253,7 +256,7 @@ read.
 | `containers` | up to 16 running containers: `id` (12 characters), `image` (up to 64 bytes), `usage_mib` as `docker stats` computes it, `limit_mib` |
 | `containers_total` | how many are running, read or not; one that stopped between the list and its read is counted here and not listed |
 | `read_ms` | how long the read took: against the 2 s deadline, the margin the machine had |
-| `containers_err` | absent when all was read, else a closed code: `no_socket`, `connect`, `deadline` (also when Resource Saver is bringing an idle VM back), `http` (a status other than 200, or a response over 1 MiB), `parse`, `tcp_host` (`DOCKER_HOST` is not a unix socket; nothing is read) |
+| `containers_err` | absent when all was read, else a closed code: `no_socket`, `connect`, `deadline` (also when Resource Saver is bringing an idle VM back), `http` (a status other than 200, or a response over 1 MiB, the list's over 4 MiB), `parse`, `tcp_host` (`DOCKER_HOST` is not a unix socket; nothing is read) |
 
 ### `not_started`
 

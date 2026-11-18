@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -23,6 +21,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/docker"
+	"github.com/core-slot/coreslot/internal/docker/dockertest"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -765,14 +765,14 @@ func TestOffCallsNothing(t *testing.T) {
 	var calls, listings atomic.Int64
 	replaceTicks(t, 1)
 	replaceClocks(t, func() (int64, int64) { calls.Add(1); panic("the recorder read the clocks") })
-	savedParts, savedSweep, savedConnect, savedList := store.Parts, telemetry.Sweep, telemetry.Connect, listTree
+	savedParts, savedSweep, savedConnect, savedList := store.Parts, telemetry.Sweep, docker.Connect, listTree
 	store.Parts = func() (map[string]int64, int, bool) { calls.Add(1); panic("the sample read the parts") }
 	telemetry.Sweep = func(int) ([]memsample.ProcMem, *memsample.ProcMem, bool) { calls.Add(1); panic("the recorder swept") }
-	telemetry.Connect = func(string) (int, string) { calls.Add(1); panic("the recorder connected") }
+	docker.Connect = func(string) (int, string) { calls.Add(1); panic("the recorder connected") }
 	listTree = func(pid int) (int64, map[int]memsample.TreeTimes, bool) { listings.Add(1); return savedList(pid) }
 	t.Cleanup(func() {
 		settleRecorders()
-		store.Parts, telemetry.Sweep, telemetry.Connect, listTree = savedParts, savedSweep, savedConnect, savedList
+		store.Parts, telemetry.Sweep, docker.Connect, listTree = savedParts, savedSweep, savedConnect, savedList
 	})
 	b := newBed(t, 128)
 	writeConfig(t, b.dir, "[memory]\nreserve = \"0\"\n")
@@ -823,7 +823,7 @@ func TestOversizedReadsOnce(t *testing.T) {
 				}
 				return config.Machine{MemMiB: 1024, HeadroomMiB: 512, HeadroomOK: true}, nil
 			}, engine.Clock{})
-			if _, _, got := e.Oversized(1); got != c.want {
+			if _, _, got, _ := e.Oversized(1); got != c.want {
 				t.Errorf("telemetry %v, want %v", got, c.want)
 			}
 			if reads != 1 {
@@ -1588,46 +1588,68 @@ func TestNoLiveForPassThrough(t *testing.T) {
 	}
 }
 
-// fakeEngine is a local Docker socket named by DOCKER_HOST with no containers, and the count of
-// connections it took; every connection through the seam is counted too, so one that a bug sends
-// elsewhere still shows.
-func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
+// fakeEngine is a local Docker engine with no containers, named by DOCKER_HOST; its Conns count the
+// connections it took, and dials counts every connection through the seam too, so one that a bug
+// sends elsewhere still shows.
+func fakeEngine(t *testing.T) (eng *dockertest.Fake, dials *atomic.Int64) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "cs")
+	eng, dials = dockertest.Engine(t), new(atomic.Int64)
+	saved := docker.Connect
+	docker.Connect = func(p string) (int, string) { dials.Add(1); return saved(p) }
+	t.Cleanup(func() { settleRecorders(); docker.Connect = saved })
+	t.Setenv("DOCKER_HOST", "unix://"+eng.Sock)
+	return eng, dials
+}
+
+// useEngine points the run at the fake engine, as the run's start does.
+func useEngine(r *run) {
+	r.sockets, r.dockerOff = docker.Features("darwin", true, environ(), "", false)
+}
+
+// liveHold writes a hold of this process, an ancestor of every run a test starts, into dir and
+// returns its name; its lock is held when live, and a hold whose lock is free is dead.
+func liveHold(t *testing.T, dir string, live bool) string {
+	t.Helper()
+	h := wire.Hold{Label: "parent", PID: os.Getpid(), StartNS: 1, NeedMiB: 128}
+	body, err := wire.Encode(h)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	path := filepath.Join(dir, "docker.sock")
-	ln, err := net.Listen("unix", path)
-	if err != nil {
+	name := wire.HoldName(h.StartNS, h.PID, 1, h.Label)
+	if err := os.MkdirAll(filepath.Join(dir, "holds"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
-	conns, dials = new(atomic.Int64), new(atomic.Int64)
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			conns.Add(1)
-			io.ReadAtLeast(c, make([]byte, 16), 16)
-			io.WriteString(c, "HTTP/1.0 200 OK\r\n\r\n[]")
-			c.Close()
+	p := filepath.Join(dir, "holds", name)
+	if err := os.WriteFile(p, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if live {
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}()
-	saved := telemetry.Connect
-	telemetry.Connect = func(p string) (int, string) { dials.Add(1); return saved(p) }
-	t.Cleanup(func() { settleRecorders(); telemetry.Connect = saved })
-	t.Setenv("DOCKER_HOST", "unix://"+path)
-	return conns, dials
+		t.Cleanup(func() { f.Close() })
+		if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return name
+}
+
+// sleepingDocker is a command named docker that sleeps: container work by its name.
+func sleepingDocker(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // A waiter never connects, not even a nested one whose own command is container work while another
 // hold is: only supervision does. Mutation: ContainersAsync called from the waiting line.
 func TestWaiterNeverConnects(t *testing.T) {
-	conns, dials := fakeEngine(t)
+	eng, dials := fakeEngine(t)
 	fakeSweep(t)
 	b := newBed(t, 128)
 	holdUntil(t, b.dir, 128)
@@ -1639,14 +1661,15 @@ func TestWaiterNeverConnects(t *testing.T) {
 	if err := os.WriteFile(hold, bytes.Replace(body, []byte("{"), []byte(`{"container":true,`), 1), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	useEngine(b.r)
 	b.r.parentHold, b.r.o.argv, b.r.o.pinned = filepath.Base(hold), []string{"docker", "build", "."}, true
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	b.wait(t, ctx)
 	waitFor(t, 5*time.Second, "the waiter's memory line", func() bool { return len(linesOf(t, b.dir, "memory")) == 1 })
 	time.Sleep(100 * time.Millisecond)
-	if conns.Load() != 0 || dials.Load() != 0 || len(linesOf(t, b.dir, "containers")) != 0 {
-		t.Errorf("%d connections, %d dials, %d lines from a waiter", conns.Load(), dials.Load(), len(linesOf(t, b.dir, "containers")))
+	if eng.Conns() != 0 || dials.Load() != 0 || len(linesOf(t, b.dir, "containers")) != 0 {
+		t.Errorf("%d connections, %d dials, %d lines from a waiter", eng.Conns(), dials.Load(), len(linesOf(t, b.dir, "containers")))
 	}
 }
 
@@ -1654,7 +1677,7 @@ func TestWaiterNeverConnects(t *testing.T) {
 // is not, not one with telemetry off, not a pass-through. Mutations: the call without the p.container
 // test reddens the first row; the call outside the log test reddens the pass-through; a read that
 // does not go through the recorder, or MemoryAsync on a nil recorder calling Sweep, reddens the off
-// row; leaving the call out reddens the last.
+// row; leaving the call out reddens the last. ([docker] enabled = false is TestDisabledDockerRunNeverConnects.)
 func TestNoContainerRunNeverConnects(t *testing.T) {
 	for _, c := range []struct {
 		name               string
@@ -1669,19 +1692,16 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			replaceTicks(t, 1)
 			sweeps := fakeSweep(t)
-			conns, dials := fakeEngine(t)
+			eng, dials := fakeEngine(t)
 			saved := listClient
 			listClient = func(int) bool { return c.client }
 			t.Cleanup(func() { listClient = saved })
 			argv := []string{"sleep", "1.5"}
 			if c.inner { // listClient is not asked without a log: the command itself must be a client
-				docker := filepath.Join(t.TempDir(), "docker")
-				if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				argv = []string{docker}
+				argv = []string{sleepingDocker(t)}
 			}
 			b := newEnded(t, argv...)
+			useEngine(b.r)
 			if c.off {
 				b.r.record = runRecord{}
 			}
@@ -1702,8 +1722,8 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 				}
 			}
 			time.Sleep(100 * time.Millisecond)
-			if conns.Load() != c.want || dials.Load() != c.want {
-				t.Errorf("%d connections, %d dials, want %d", conns.Load(), dials.Load(), c.want)
+			if eng.Conns() != c.want || dials.Load() != c.want {
+				t.Errorf("%d connections, %d dials, want %d", eng.Conns(), dials.Load(), c.want)
 			}
 			if c.off && sweeps.Load() != 0 {
 				t.Errorf("%d sweeps with telemetry off", sweeps.Load())
@@ -1714,37 +1734,10 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 
 // A process whose own environment carries a parent's context never connects, even --independent
 // with container work of its own: its socket would read as the outer command's. Each row gives the
-// run its variable directly, so no outer run's tree holds the program. Mutations: the inherited test
-// left out of watchChild reddens both rows; either half of it left out of decide reddens its row.
+// run its variable directly, so no outer run's tree holds the program. Mutations: nested left out of
+// the run's Features call reddens all rows; either half of it left out of decide reddens its row.
 func TestNestedIndependentNeverConnects(t *testing.T) {
-	docker := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// hold is the name of a hold of this process, an ancestor of the run, whose lock makes it live.
-	hold := func(t *testing.T, dir string, live bool) string {
-		h := wire.Hold{Label: "parent", PID: os.Getpid(), StartNS: 1, NeedMiB: 128}
-		body, err := wire.Encode(h)
-		if err != nil {
-			t.Fatal(err)
-		}
-		name := wire.HoldName(h.StartNS, h.PID, 1, h.Label)
-		p := filepath.Join(dir, "holds", name)
-		if err := os.WriteFile(p, body, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if live {
-			f, err := os.Open(p)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { f.Close() })
-			if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return name
-	}
+	docker := sleepingDocker(t)
 	for _, c := range []struct {
 		name, mark string
 		live       bool
@@ -1754,11 +1747,11 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 		{"inherited unbudgeted", engine.EnvUnbudgeted, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			conns, _ := fakeEngine(t)
+			eng, _ := fakeEngine(t)
 			dir := recordedDir(t, 1024)
 			value := "parent"
 			if c.mark == engine.EnvHold {
-				value = hold(t, dir, c.live)
+				value = liveHold(t, dir, c.live)
 			}
 			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", c.mark+"="+value), "run", "--restart=yes", "--independent", "--label", "inner", "--mem", "128M", "--", docker)
 			if r.code != 0 {
@@ -1767,10 +1760,29 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 			if got := labelled(events(t, dir), "inner"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
 				t.Fatalf("the nested run did not record: %q", eventNames(got))
 			}
-			if conns.Load() != 0 || len(linesOf(t, dir, "containers")) != 0 {
-				t.Errorf("%d connections, %d lines from a nested run", conns.Load(), len(linesOf(t, dir, "containers")))
+			if eng.Conns() != 0 || len(linesOf(t, dir, "containers")) != 0 {
+				t.Errorf("%d connections, %d lines from a nested run", eng.Conns(), len(linesOf(t, dir, "containers")))
 			}
 		})
+	}
+}
+
+// [docker] enabled = false, read once at the run's start, keeps a container run with telemetry on
+// from opening the socket at all. Mutation: Oversized not reporting it, or the run not keeping it,
+// connects and writes a containers line.
+func TestDisabledDockerRunNeverConnects(t *testing.T) {
+	docker := sleepingDocker(t)
+	eng, _ := fakeEngine(t)
+	dir := recordedDir(t, 1024)
+	writeConfig(t, dir, telemetryOn+"[docker]\nenabled = false\n")
+	if r := cli(t, append(baseEnv(dir), ticksEnv+"=1"), "run", "--restart=yes", "--label", "off", "--mem", "128M", "--", docker); r.code != 0 {
+		t.Fatalf("exit %d: %q", r.code, r.stderr)
+	}
+	if got := labelled(events(t, dir), "off"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
+		t.Fatalf("the run did not record: %q", eventNames(got))
+	}
+	if eng.Conns() != 0 || len(linesOf(t, dir, "containers")) != 0 {
+		t.Errorf("%d connections, %d lines with [docker] disabled", eng.Conns(), len(linesOf(t, dir, "containers")))
 	}
 }
 
@@ -1778,51 +1790,23 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 // reads the socket and says why the hold did not count. Mutation: any non-empty hold counting as
 // inherited leaves both rows with no connection.
 func TestStaleHoldStillConnects(t *testing.T) {
-	docker := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	docker := sleepingDocker(t)
 	for _, c := range []struct{ name, hold, miss string }{
 		{"names no ancestor", wire.HoldName(1, 999999, 1, "stale"), "not_ancestor"},
 		{"malformed", "parent", "malformed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			conns, _ := fakeEngine(t)
+			eng, _ := fakeEngine(t)
 			dir := recordedDir(t, 1024)
 			r := cli(t, append(baseEnv(dir), ticksEnv+"=1", engine.EnvHold+"="+c.hold), "run", "--restart=yes", "--label", "stale", "--mem", "128M", "--", docker)
 			if r.code != 0 {
 				t.Fatalf("exit %d: %q", r.code, r.stderr)
 			}
-			if conns.Load() == 0 || len(linesOf(t, dir, "containers")) == 0 {
-				t.Errorf("%d connections, %d lines from a run no parent holds", conns.Load(), len(linesOf(t, dir, "containers")))
+			if eng.Conns() == 0 || len(linesOf(t, dir, "containers")) == 0 {
+				t.Errorf("%d connections, %d lines from a run no parent holds", eng.Conns(), len(linesOf(t, dir, "containers")))
 			}
 			if m := event(t, events(t, dir), "enqueue"); m["nested_miss"] != c.miss {
 				t.Errorf("nested_miss %v, want %s", m["nested_miss"], c.miss)
-			}
-		})
-	}
-}
-
-// DOCKER_HOST with a unix socket is the only candidate; one that is not a unix socket is a code; with
-// neither, the home's two sockets come before the system's, and with no home located only the
-// system's is tried. Mutations: a unix host still searching the defaults; a tcp host falling through
-// to them; the home's sockets after the system's.
-func TestDockerSockets(t *testing.T) {
-	sys := "/var/run/docker.sock"
-	run, desktop := "/Users/ana/.docker/run/docker.sock", "/Users/ana/.docker/desktop/docker.sock"
-	for _, c := range []struct {
-		name, host, home string
-		want             []string
-	}{
-		{"unix host", "unix:///tmp/x/docker.sock", "/Users/ana", []string{"/tmp/x/docker.sock"}},
-		{"tcp host", "tcp://10.0.0.1:2375", "/Users/ana", []string{telemetry.TCPHost}},
-		{"ssh host", "ssh://ana@server", "/Users/ana", []string{telemetry.TCPHost}},
-		{"defaults", "", "/Users/ana", []string{run, desktop, sys}},
-		{"no home located", "", "", []string{sys}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := dockerSockets(c.host, c.home); !reflect.DeepEqual(got, c.want) {
-				t.Errorf("got %q, want %q", got, c.want)
 			}
 		})
 	}

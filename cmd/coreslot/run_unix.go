@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -82,7 +84,8 @@ type run struct {
 	memMiB     int64     // the machine's memory, from the run's start
 	nestedMiss string    // why an inherited CORESLOT_HOLD did not count; "" with none
 	parentHold string    // the live parent hold of an --independent run
-	inherited  bool      // it runs inside another run's command, so it never connects to the socket
+	sockets    []string  // where the run looks for Docker's engine, and dockerOff why it does not: docker.Features, once at its start
+	dockerOff  docker.Off
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -129,7 +132,7 @@ func (r *run) refuse(format string, args ...any) int {
 
 // ordinary is a run that queues (PROTOCOL.md section 18 rule 3). A command a stop round killed
 // queues again with its first arrival, until its third stop; --timeout bounds all the waits together.
-func (r *run) ordinary() int {
+func (r *run) ordinary(nested bool) int {
 	e, err := openEngine(r.loc, false)
 	if err != nil {
 		return r.failOpen(nil, err)
@@ -139,7 +142,8 @@ func (r *run) ordinary() int {
 		return exitUsage
 	}
 	req := r.o.request()
-	bound, over, recording := e.Oversized(req.NeedMiB)
+	bound, over, recording, dockerOn := e.Oversized(req.NeedMiB)
+	r.sockets, r.dockerOff = docker.Features(runtime.GOOS, dockerOn, environ(), r.loc.home, nested)
 	if over {
 		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when no other coreslot job runs",
 			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))

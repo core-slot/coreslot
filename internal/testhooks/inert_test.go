@@ -18,6 +18,7 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_GETENT", "/tmp/fake-getent")
 	t.Setenv("CORESLOT_TESTHOOK_PASSWD_MISS", "1")
 	t.Setenv("CORESLOT_TESTHOOK_HEADROOM_MIB", "4096")
+	t.Setenv("CORESLOT_TESTHOOK_DOCKER_SOCKET", "/tmp/fake-docker.sock")
 	for name, v := range map[string]string{"realtime-offset": "1h", "readings": "decomp 1\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(v), 0o600); err != nil {
 			t.Fatal(err)
@@ -52,6 +53,9 @@ func TestHooksInertWithoutTag(t *testing.T) {
 	}
 	if mib, set := Headroom(); mib != 0 || set {
 		t.Errorf("Headroom() = %d, %v, want 0, false", mib, set)
+	}
+	if got := DockerSocket(); got != "" {
+		t.Errorf("DockerSocket() = %q, want \"\"", got)
 	}
 	if got, set := Readings(); got != nil || set {
 		t.Errorf("Readings() = %v, %v, want nil, false", got, set)

@@ -274,8 +274,11 @@ func doctorReport(loc location, io IO) int {
 		if m := rep.Mem; m.Known {
 			line("mem: reserved %s, free %s", spec.FormatMiB(m.ReservedMiB), spec.FormatMiB(m.FreeMiB))
 		}
-		switch c, cerr := e.Config(); {
-		case cerr != nil:
+		c := rep.Config
+		for _, w := range c.Warnings { // a line, not a problem: it never raises doctor's exit
+			line("configuration warning: %s", text(w))
+		}
+		switch {
 		case c.TelemetryEnabled:
 			line("local record: on, for runs started from now on")
 		case c.Watch.SampleLog:

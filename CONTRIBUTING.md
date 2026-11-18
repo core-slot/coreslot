@@ -21,7 +21,7 @@ of the repository is. No contributor agreement or sign-off line is needed.
 - **Nothing leaves the machine.** coreslot sends nothing anywhere, opens no network connection
   itself and records nothing outside the user's state directory. The optional local record is off by
   default; while it is on, a run doing container work talks to the local Docker socket, a unix socket,
-  to read memory, by raw syscalls, so `net`, `net/http` and `crypto` stay out of the binary. Looking
+  to read memory, and `status --docker` does when asked, by raw syscalls, so `net`, `net/http` and `crypto` stay out of the binary. Looking
   up the user's home directory goes through the system's name services, which may contact a directory
   service such as LDAP ([SECURITY.md](SECURITY.md)). The run log and the local record never hold the
   environment, nor the command line beyond a label, which an auto-label takes from up to two leading

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -33,7 +34,7 @@ const observeEvery = time.Second
 // writing. It exits 3 while runs fail open (PROTOCOL.md sections 14 and 19): degraded mode is
 // recorded, or the state directory, FORMAT or the configuration cannot be used.
 func statusCommand(args []string, io IO) int {
-	fs, asJSON, observe := statusFlags()
+	fs, asJSON, withDocker, observe := statusFlags()
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(io.Stdout, statusUsage)
@@ -54,7 +55,8 @@ func statusCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: status: --observe %s is shorter than %s, so no ticket can be found STALLED; use %s or more\n",
 			*observe, state.StallAfter, state.StallAfter)
 	}
-	e, err := openEngine(locate(), true)
+	loc := locate()
+	e, err := openEngine(loc, true)
 	if err != nil {
 		return statusFailed(err, io)
 	}
@@ -63,6 +65,9 @@ func statusCommand(args []string, io IO) int {
 		return statusFailed(err, io)
 	}
 	v := buildStatus(rep, store.NowNS(), w, *observe)
+	if *withDocker { // the snapshot's configuration is zero when it could not be read: Docker is off
+		v.docker = readDocker(rep.Config.DockerEnabled, loc)
+	}
 	if *asJSON {
 		if err := v.writeJSON(io.Stdout); err != nil {
 			fmt.Fprintf(io.Stderr, "coreslot: status: %s\n", text(err.Error()))
@@ -154,6 +159,7 @@ type statusView struct {
 	nowNS    int64
 	observed time.Duration
 	tickets  []ticketView
+	docker   *dockerView // nil without --docker
 }
 
 func buildStatus(rep engine.Report, nowNS int64, w *stallWatcher, observed time.Duration) statusView {
@@ -257,6 +263,10 @@ func (v statusView) human() string {
 		p("CONFIGURATION ERROR: %s", text(strings.TrimPrefix(r.ConfigError, "configuration ")))
 	}
 
+	for _, w := range v.rep.Config.Warnings {
+		p("configuration warning: %s", text(w))
+	}
+
 	switch {
 	case r.ConfigError != "":
 		p("mem: not known, the configuration cannot be read (runs fail open until it is fixed)")
@@ -326,6 +336,13 @@ func (v statusView) human() string {
 		p("queue observed for %s", duration(v.observed))
 	case len(v.tickets) > 0:
 		p("STALLED: not observed (use --observe %s or more)", state.StallAfter)
+	}
+
+	switch {
+	case v.docker != nil:
+		v.docker.human(p)
+	case runtime.GOOS == "darwin": // Docker is off everywhere else
+		p("docker: not read; `coreslot status --docker` reads Docker Desktop's VM and its containers")
 	}
 
 	if n := len(r.DeadHolds); n > 0 {
@@ -403,6 +420,7 @@ type jsonStatus struct {
 	Gen              int64          `json:"gen"`
 	ReconciledNS     int64          `json:"reconciled_ns"`
 	ConfigError      string         `json:"config_error"`
+	ConfigWarnings   []string       `json:"config_warnings"`
 	Degraded         *jsonDegraded  `json:"degraded"`
 	Section          jsonSection    `json:"section"`
 	Mem              *jsonMem       `json:"mem"`
@@ -413,6 +431,7 @@ type jsonStatus struct {
 	CancelRequests   []string       `json:"cancel_requests"`
 	Ignored          map[string]int `json:"ignored"`
 	ObservedS        float64        `json:"observed_s"`
+	Docker           *jsonDocker    `json:"docker,omitempty"` // only with --docker
 }
 
 type jsonDegraded struct {
@@ -496,10 +515,13 @@ func (v statusView) document() jsonStatus {
 	r := v.rep
 	d := jsonStatus{
 		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatPresent: r.FormatPresent,
-		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError,
+		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError, ConfigWarnings: nonNil(r.Config.Warnings),
 		Section: jsonSection{Held: r.Section.Held}, Holds: []jsonHold{}, Tickets: []jsonTicket{},
 		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
+	}
+	if v.docker != nil {
+		d.Docker = v.docker.document()
 	}
 	if r.Mem.Known {
 		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB, MachineMiB: r.Mem.MachineMiB,

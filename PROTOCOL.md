@@ -325,6 +325,9 @@ windows_warning = false   # default true (section 16)
 
 [telemetry]
 enabled = false       # true: record the wait of every run and a sample of the machine
+
+[docker]
+enabled = true        # false: read no Docker socket (a client's display of Docker, not admission)
 ```
 
 - `[memory]`: `reserve`, a size (section 5.2), 0 allowed.
@@ -340,6 +343,10 @@ enabled = false       # true: record the wait of every run and a sample of the m
   `sample_log` are taken too, while `sample_log = true` alone takes samples and records nothing
   else. A `telemetry` that is not a table, or an `enabled` that is not a boolean, reads as
   disabled and is not an error.
+- `[docker]`: `enabled`, a boolean, default `true`. It decides only whether a client reads the Docker
+  socket to show Docker's VM and containers; admission never depends on it. A `docker` that is not a
+  table, or an `enabled` that is not a boolean, reads as disabled and is not an error; a client
+  that shows the configuration says so as a warning.
 - `memory`, `watch` and `platform`, when present, MUST be tables; any other value of one of them is
   invalid. Other tables and keys are ignored.
 

@@ -44,6 +44,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.Gen, r.ReconciledNS = g.N, g.ReconciledNS
 
 	cfg, machine, memErr := e.reading()
+	r.Config = cfg
 	if memErr != nil {
 		r.ConfigError, r.ConfigErr = reasonOf(memErr), memErr
 	}
