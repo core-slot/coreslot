@@ -26,8 +26,9 @@ All notable changes to this project are recorded here. The format follows
   the head's wait is known: a small job no longer waits behind a large one that waits for memory held outside
   coreslot (other programs, Docker Desktop's VM), nor behind one whose expected wait is a little shorter than
   the job. Since runs out of turn never overlap, the head still gets its idle start, and going out of turn at most
-  doubles its wait. The telemetry `admitted` line says how a run passed the head (`pass`), and `no_pass` gains
-  `head_fits`, `hold_unreadable` and `out_of_turn_live`.
+  doubles its wait. A run goes out of turn only while the kernel's memory pressure level is normal (macOS); where
+  the level is unknown, as on Linux, nobody does. The telemetry `admitted` line says how a run passed the head
+  (`pass`), and `no_pass` gains `head_fits`, `pressure_not_normal`, `hold_unreadable` and `out_of_turn_live`.
 
 - The telemetry `no_pass` of a waiter behind the head while no hold is live and the headroom is unread is
   `no_holds`, the head starting at once, rather than `headroom_unknown`.

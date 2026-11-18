@@ -13,6 +13,20 @@ import (
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
+// The engine's tests run at a normal kernel memory pressure level whatever the machine's, so that
+// whether a waiter may go out of turn never depends on the machine; a test that needs another level
+// sets it with setPressure.
+func init() { kernelPressure = func() (int, bool) { return pressureNormal, true } }
+
+// setPressure makes the kernel report the memory pressure level level for the rest of the test (ok
+// false: a level that cannot be read). Going out of turn requires pressureNormal.
+func setPressure(t *testing.T, level int, ok bool) {
+	t.Helper()
+	saved := kernelPressure
+	kernelPressure = func() (int, bool) { return level, ok }
+	t.Cleanup(func() { kernelPressure = saved })
+}
+
 // unknownHeadScene is a head that waits for memory outside coreslot: A (1024 MiB, no typical run
 // time) holds, and the head B needs the whole 2048 MiB room, so nothing says when B can start: its
 // W is unknown.
@@ -197,5 +211,29 @@ func TestOutOfTurnRestartHeadUnreadableWatch(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		wantReason(t, waitOutcome(t, c), ReasonBehindHead, "watch_unreadable")
 		clk.advance(time.Second)
+	}
+}
+
+// Going out of turn needs the kernel's memory pressure level to be normal: at warning or critical,
+// or when the level cannot be read (as on Linux, which has none), nobody goes out of turn, though
+// in-turn admission is unchanged. Mutation: dropping the pressure check admits C at warning.
+func TestOutOfTurnOnlyAtNormalPressure(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		level int
+		ok    bool
+		turn  bool
+	}{{"normal", pressureNormal, true, true}, {"warning", 2, true, false}, {"critical", 4, true, false}, {"unreadable", 0, false, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			e, clk, _, _ := unknownHeadScene(t)
+			setPressure(t, c.level, c.ok)
+			cc := enqueue(t, e, spec.Request{Label: "c", NeedMiB: 256, TypicalS: 2})
+			if got := watchSteps(t, clk, cc, 6) != 0; got != c.turn {
+				t.Fatalf("C went out of turn %v at pressure %d (read %v), want %v", got, c.level, c.ok, c.turn)
+			}
+			if !c.turn {
+				wantReason(t, waitOutcome(t, cc), ReasonBehindHead, "pressure_not_normal")
+			}
+		})
 	}
 }
