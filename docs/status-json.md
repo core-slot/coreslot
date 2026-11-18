@@ -37,7 +37,7 @@ escape one before printing it to a terminal.
 
 ## `docker`
 
-Present only with `status --docker`, which reads the Docker socket once per call; with
+Present only with `status --docker`, which reads Docker's socket once per call; with
 `[docker] enabled = false` it reads nothing and says `off`. Every key is always present. In every
 `state` but `ok`, `vm` carries nulls and `identified` false, `free_est_mib` is null and `containers`
 is `[]`.
