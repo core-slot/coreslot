@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -79,7 +80,7 @@ func dockerSockets(host, home string) []string {
 		return []string{path}
 	}
 	if host != "" {
-		return []string{telemetry.TCPHost}
+		return []string{docker.TCPHost}
 	}
 	if home == "" {
 		return []string{"/var/run/docker.sock"}

@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
@@ -765,14 +766,14 @@ func TestOffCallsNothing(t *testing.T) {
 	var calls, listings atomic.Int64
 	replaceTicks(t, 1)
 	replaceClocks(t, func() (int64, int64) { calls.Add(1); panic("the recorder read the clocks") })
-	savedParts, savedSweep, savedConnect, savedList := store.Parts, telemetry.Sweep, telemetry.Connect, listTree
+	savedParts, savedSweep, savedConnect, savedList := store.Parts, telemetry.Sweep, docker.Connect, listTree
 	store.Parts = func() (map[string]int64, int, bool) { calls.Add(1); panic("the sample read the parts") }
 	telemetry.Sweep = func(int) ([]memsample.ProcMem, *memsample.ProcMem, bool) { calls.Add(1); panic("the recorder swept") }
-	telemetry.Connect = func(string) (int, string) { calls.Add(1); panic("the recorder connected") }
+	docker.Connect = func(string) (int, string) { calls.Add(1); panic("the recorder connected") }
 	listTree = func(pid int) (int64, map[int]memsample.TreeTimes, bool) { listings.Add(1); return savedList(pid) }
 	t.Cleanup(func() {
 		settleRecorders()
-		store.Parts, telemetry.Sweep, telemetry.Connect, listTree = savedParts, savedSweep, savedConnect, savedList
+		store.Parts, telemetry.Sweep, docker.Connect, listTree = savedParts, savedSweep, savedConnect, savedList
 	})
 	b := newBed(t, 128)
 	writeConfig(t, b.dir, "[memory]\nreserve = \"0\"\n")
@@ -1617,9 +1618,9 @@ func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
 			c.Close()
 		}
 	}()
-	saved := telemetry.Connect
-	telemetry.Connect = func(p string) (int, string) { dials.Add(1); return saved(p) }
-	t.Cleanup(func() { settleRecorders(); telemetry.Connect = saved })
+	saved := docker.Connect
+	docker.Connect = func(p string) (int, string) { dials.Add(1); return saved(p) }
+	t.Cleanup(func() { settleRecorders(); docker.Connect = saved })
 	t.Setenv("DOCKER_HOST", "unix://"+path)
 	return conns, dials
 }
@@ -1815,8 +1816,8 @@ func TestDockerSockets(t *testing.T) {
 		want             []string
 	}{
 		{"unix host", "unix:///tmp/x/docker.sock", "/Users/ana", []string{"/tmp/x/docker.sock"}},
-		{"tcp host", "tcp://10.0.0.1:2375", "/Users/ana", []string{telemetry.TCPHost}},
-		{"ssh host", "ssh://ana@server", "/Users/ana", []string{telemetry.TCPHost}},
+		{"tcp host", "tcp://10.0.0.1:2375", "/Users/ana", []string{docker.TCPHost}},
+		{"ssh host", "ssh://ana@server", "/Users/ana", []string{docker.TCPHost}},
 		{"defaults", "", "/Users/ana", []string{run, desktop, sys}},
 		{"no home located", "", "", []string{sys}},
 	} {
