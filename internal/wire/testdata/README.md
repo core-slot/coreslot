@@ -53,13 +53,14 @@ Verdict reminders, all from `PROTOCOL.md`:
   keep it as a lone code unit before you can see it, so scan the raw bytes. `bad-*surrogate*` and
   `ok-escaped-backslash-then-u-is-not-an-escape` exercise this.
 - Every key of the table is required, except the ticket's `restart` and the hold's `typical_s`,
-  `cpu_ns`, `typical_cpu_s`, `stall_ewma`, `container` and `no_cpu_s`, which are optional and read as
-  `false` and `0` when absent (`ok-restart`, `ok-typical-s`, `ok-keep-estimate`, `ok-container`,
-  `ok-no-cpu`). A missing
+  `cpu_ns`, `typical_cpu_s`, `stall_ewma`, `container`, `no_cpu_s`, `asked_mib` and `trimmed`, which
+  are optional and read as `false` and `0` when absent (`ok-restart`, `ok-typical-s`,
+  `ok-keep-estimate`, `ok-container`, `ok-no-cpu`, `ok-trimmed`). A missing
   required key, a `null`, a value of another JSON type, or a value outside the key's rule is
   malformed (`bad-restart-not-a-boolean`, `bad-typical-s-negative`, `bad-cpu-ns-negative`,
   `bad-typical-cpu-s-negative`, `bad-stall-ewma-above-one`, `bad-container-not-a-boolean`,
-  `bad-no-cpu-s-negative`).
+  `bad-no-cpu-s-negative`, `bad-asked-mib-negative`, `bad-asked-mib-above-maximum`,
+  `bad-trimmed-not-a-boolean`).
 - An integer has no fraction and no exponent and fits a signed 64-bit integer: `1.0`, `5e0`
   and `9223372036854775808` are not integers where an integer is required.
 - A duplicate key at any depth is malformed, including inside objects and arrays of unknown keys.
@@ -67,7 +68,7 @@ Verdict reminders, all from `PROTOCOL.md`:
 - Unknown keys, at any depth, are ignored (their values may be any JSON).
 - Ticket: `need_mib` is an integer in 1..1073741824 and `created_ns` is at least 0
   (`bad-need-mib-*`, `ok-need-mib-maximum`, `bad-created-ns-negative`).
-- Hold: `need_mib` and `footprint_mib` are integers in 0..1073741824, every other integer is at
+- Hold: `need_mib`, `footprint_mib` and `asked_mib` are integers in 0..1073741824, every other integer is at
   least 0, `normal_share` is a number from 0 to 1 (a fraction or an exponent is fine there, and a
   string is not) and `learned` is a boolean, and every key is required (`bad-missing-*`,
   `bad-normal-share-*`, `ok-unbudgeted-run`, `ok-need-and-footprint-maximum`).
