@@ -3,6 +3,7 @@ package wire
 import (
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/core-slot/coreslot/internal/spec"
 )
@@ -49,6 +50,7 @@ type Hold struct {
 	StallEWMA                    float64 // optional: the run's smoothed stall share, 0..1
 	Container                    bool    // optional: container work, so never a stop round's victim
 	NoCPUS                       int64   // optional: how long the tree has used next to no CPU, in s
+	DockerNote                   string  // optional: why the run's Docker work has no forwarder or is not counted
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -88,6 +90,7 @@ type holdJSON struct {
 	StallEWMA    float64 `json:"stall_ewma,omitempty"`
 	Container    bool    `json:"container,omitempty"`
 	NoCPUS       int64   `json:"no_cpu_s,omitempty"`
+	DockerNote   string  `json:"docker_note,omitempty"`
 }
 
 type cancelJSON struct {
@@ -185,8 +188,14 @@ func (h Hold) validate() error {
 	if !(h.TypicalCPUS >= 0) {
 		return malformed("typical_cpu_s is at least 0")
 	}
+	if !dockerNote.MatchString(h.DockerNote) {
+		return malformed("docker_note is at most 64 bytes of [a-z0-9:. -]")
+	}
 	return nil
 }
+
+// dockerNote is the rule of a hold's docker_note.
+var dockerNote = regexp.MustCompile(`^[a-z0-9:. -]{0,64}$`)
 
 // ---------------------------------------------------------------- decoding
 
@@ -256,6 +265,9 @@ func DecodeHold(body []byte) (Hold, error) {
 		return Hold{}, err
 	}
 	if h.Container, err = optional(o, "container", o.boolean); err != nil {
+		return Hold{}, err
+	}
+	if h.DockerNote, err = optional(o, "docker_note", o.str); err != nil {
 		return Hold{}, err
 	}
 	for _, f := range []struct {

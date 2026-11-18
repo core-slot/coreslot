@@ -90,7 +90,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		r.hold = g.HoldName()
 		r.updateHold(st, g, func(h *wire.Hold) {
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
-			h.TypicalCPUS, h.Container = r.cpuS, p.container
+			h.TypicalCPUS, h.Container, h.DockerNote = r.cpuS, p.container, r.dockerNote()
 		})
 	}
 	for n := 1; ; n++ {
@@ -106,7 +106,9 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 				p.kib, p.ok = kib, true
 			}
 		}
-		if !p.container && st != nil {
+		if r.fwd != nil {
+			r.forwarderEvents(&p)
+		} else if !p.container && st != nil { // a forwarder's first connection replaces the scan
 			p.container = listClient(sup.pid)
 		}
 		if st != nil && n%telemetryTicks == 0 { // a pass-through's memory is its parent's, and it has no log
@@ -136,7 +138,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if !r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, noCPUS
-			h.SampledNS = store.NowNS()
+			h.SampledNS, h.DockerNote = store.NowNS(), r.dockerNote()
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
 			}
