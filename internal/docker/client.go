@@ -9,15 +9,12 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
-
-// TCPHost stands for the one candidate socket when DOCKER_HOST is not a unix socket. It is also
-// the code a reading then carries: nothing is connected to.
-const TCPHost = "tcp_host"
 
 // The other closed codes of a failed read; a state error's text would embed a path.
 const (
@@ -34,14 +31,21 @@ var Connect = connect
 // Get makes one HTTP/1.0 GET on a connection of its own and returns the body of a 200. A response
 // larger than max bytes is no response: code HTTP.
 func Get(sock, target string, deadline time.Time, max int64) ([]byte, string) {
+	body, _, code := do(sock, target, deadline, max)
+	return body, code
+}
+
+// do is Get, with the status line's code (0 when there is none) for the caller that treats one
+// status apart; a status other than 200 comes with code HTTP.
+func do(sock, target string, deadline time.Time, max int64) (body []byte, status int, code string) {
 	fd, code := Connect(sock)
 	if code != "" {
-		return nil, code
+		return nil, 0, code
 	}
 	f := os.NewFile(uintptr(fd), "docker socket") // non-blocking, so the runtime's poller takes it and a deadline holds
 	defer f.Close()
 	if f.SetDeadline(deadline) != nil {
-		return nil, ConnectErr
+		return nil, 0, ConnectErr
 	}
 	var resp []byte
 	_, err := f.WriteString("GET " + target + " HTTP/1.0\r\nHost: docker\r\n\r\n")
@@ -50,17 +54,22 @@ func Get(sock, target string, deadline time.Time, max int64) ([]byte, string) {
 	}
 	switch {
 	case errors.Is(err, os.ErrDeadlineExceeded):
-		return nil, Deadline
+		return nil, 0, Deadline
 	case err != nil:
-		return nil, ConnectErr
+		return nil, 0, ConnectErr
 	case int64(len(resp)) > max:
-		return nil, HTTP
+		return nil, 0, HTTP
 	}
 	head, body, ok := bytes.Cut(resp, []byte("\r\n\r\n"))
-	if status := bytes.Fields(head); !ok || len(status) < 2 || string(status[1]) != "200" {
-		return nil, HTTP
+	fields := bytes.Fields(head)
+	if !ok || len(fields) < 2 {
+		return nil, 0, HTTP
 	}
-	return body, ""
+	status, _ = strconv.Atoi(string(fields[1]))
+	if status != 200 {
+		return nil, status, HTTP
+	}
+	return body, status, ""
 }
 
 // connect opens a non-blocking stream socket to path. The socket is made and marked under the

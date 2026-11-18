@@ -6,45 +6,14 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
-
-	"github.com/core-slot/coreslot/internal/store"
 )
 
 const (
-	// DesktopOS is the one engine whose VM size is the budget's: any other is another engine.
-	DesktopOS = "Docker Desktop"
-
 	ResponseMax = 1 << 20 // /info and a container's stats
 	listMax     = 4 << 20 // the container list: a name and labels each
 	imageMax    = 64
 	composeKey  = "com.docker.compose.project"
 )
-
-// Container is one running container as `docker stats` shows it.
-type Container struct {
-	ID, Name, Image, Project string
-	UsageMiB, LimitMiB       int64
-}
-
-// Reading is a budget reading of the engine: all of it or nothing. OK is false, with Code, when
-// any call failed. OtherEngine is an engine that is not Docker Desktop: no figures.
-type Reading struct {
-	OK          bool
-	Code        string
-	OtherEngine bool
-	VMMiB       int64 // /info's MemTotal
-	Containers  []Container
-	StartedNS   int64 // the instant the first request was sent
-}
-
-// FreeEstMiB is what the VM has left by the containers' usage.
-func (r Reading) FreeEstMiB() int64 {
-	free := r.VMMiB
-	for _, c := range r.Containers {
-		free -= c.UsageMiB
-	}
-	return free
-}
 
 // Stats is the part of a container's stats the readings use.
 type Stats struct {
@@ -80,9 +49,9 @@ func StatsPath(id string) string { return "/containers/" + id + "/stats?stream=f
 // Read reads the engine's memory and every running container's usage from the first of sockets
 // that connects, all against one deadline and with no retry; no_socket and connect move on to the
 // next. Any failed call is no reading. A container that stopped between the list and its stats
-// is left out.
+// is left out: one removed (404) or stopped (a limit of 0). Any other status is no reading.
 func Read(sockets []string, deadline time.Time) Reading {
-	r := Reading{StartedNS: store.NowNS()}
+	var r Reading
 	if len(sockets) == 1 && sockets[0] == TCPHost {
 		r.Code = TCPHost
 		return r
@@ -133,7 +102,10 @@ func Read(sockets []string, deadline time.Time) Reading {
 	}
 	var list []Container
 	for _, c := range running {
-		b, code := Get(sock, StatsPath(c.ID), deadline, ResponseMax)
+		b, status, code := do(sock, StatsPath(c.ID), deadline, ResponseMax)
+		if status == 404 { // removed after the list, as `docker run --rm` does
+			continue
+		}
 		var s Stats
 		if code == "" && json.Unmarshal(b, &s) != nil {
 			code = Parse

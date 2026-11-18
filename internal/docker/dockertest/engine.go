@@ -21,8 +21,8 @@ import (
 
 // Fake is a unix-socket server that answers each connection's one request with its handler.
 type Fake struct {
-	Path  string
-	Conns atomic.Int64
+	Sock  string // the socket's path
+	conns atomic.Int64
 
 	mu      sync.Mutex
 	targets []string // the first line of every request, in order
@@ -35,8 +35,21 @@ func (d *Fake) Requests() []string {
 	return slices.Clone(d.targets)
 }
 
+// Methods are the method of every request received, in order.
+func (d *Fake) Methods() []string {
+	var ms []string
+	for _, line := range d.Requests() {
+		ms = append(ms, strings.Fields(line)[0])
+	}
+	return ms
+}
+
+// Conns is the number of connections the listener accepted, whoever made them: a test counts the
+// connections of a child process with it.
+func (d *Fake) Conns() int64 { return d.conns.Load() }
+
 // SocketDir is a directory short enough for sun_path, which t.TempDir exceeds.
-func SocketDir(t *testing.T) string {
+func SocketDir(t testing.TB) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "cs")
 	if err != nil {
@@ -47,10 +60,10 @@ func SocketDir(t *testing.T) string {
 }
 
 // Serve answers each connection's one request with handle, which gets the request target.
-func Serve(t *testing.T, handle func(c net.Conn, target string)) *Fake {
+func Serve(t testing.TB, handle func(c net.Conn, target string)) *Fake {
 	t.Helper()
-	d := &Fake{Path: filepath.Join(SocketDir(t), "docker.sock")}
-	ln, err := net.Listen("unix", d.Path)
+	d := &Fake{Sock: filepath.Join(SocketDir(t), "docker.sock")}
+	ln, err := net.Listen("unix", d.Sock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +74,7 @@ func Serve(t *testing.T, handle func(c net.Conn, target string)) *Fake {
 			if err != nil {
 				return
 			}
-			d.Conns.Add(1)
+			d.conns.Add(1)
 			go func() {
 				defer c.Close()
 				br := bufio.NewReader(c)
@@ -95,36 +108,43 @@ func Stats(usage, limit int64, extra string) string {
 	return fmt.Sprintf(`{"read":"x","memory_stats":{"usage":%d,"limit":%d,"stats":{%s}}}`, usage, limit, extra)
 }
 
+// Container is a running container of the fake engine, its memory in bytes as the engine reports it.
+type Container struct {
+	ID, Name, Image, Project                  string
+	UsageBytes, InactiveFileBytes, LimitBytes uint64
+}
+
 type engine struct {
-	os            string
-	memTotal      int64
-	containers    []docker.Container
-	inactive      map[string]int64 // id to MiB of inactive file in the usage
-	hang          bool
-	pad           int
-	stopped       string
-	failStatsCall int64
-	statsCalls    atomic.Int64
-	done          chan struct{}
+	os         string
+	memTotal   int64
+	containers []Container
+	statsCode  map[string]int
+	stopped    map[string]bool
+	hang       bool
+	pad        int
+	done       chan struct{}
 }
 
 // Option shapes the engine Engine serves.
 type Option func(*engine)
 
 // WithInfo sets /info's OperatingSystem and MemTotal; the default is Docker Desktop with 8 GiB.
-func WithInfo(os string, memTotalBytes int64) Option {
-	return func(e *engine) { e.os, e.memTotal = os, memTotalBytes }
+func WithInfo(operatingSystem string, memTotalBytes int64) Option {
+	return func(e *engine) { e.os, e.memTotal = operatingSystem, memTotalBytes }
 }
 
-// WithContainer adds a running container; UsageMiB is its raw usage, before inactive file pages.
-func WithContainer(c docker.Container) Option {
+// WithContainer adds a running container; its stats carry memory_stats.usage, .stats.inactive_file
+// and .limit.
+func WithContainer(c Container) Option {
 	return func(e *engine) { e.containers = append(e.containers, c) }
 }
 
-// WithInactiveFile puts mib of the container's usage in inactive file pages.
-func WithInactiveFile(id string, mib int64) Option {
-	return func(e *engine) { e.inactive[id] = mib }
-}
+// StatsStatus makes the container's stats call answer code.
+func StatsStatus(id string, code int) Option { return func(e *engine) { e.statsCode[id] = code } }
+
+// StoppedAtStats lists the container and answers its stats 200 with a limit of 0, as an engine does
+// for a container that stopped after the list.
+func StoppedAtStats(id string) Option { return func(e *engine) { e.stopped[id] = true } }
 
 // Hang makes every request wait for the test's end.
 func Hang() Option { return func(e *engine) { e.hang = true } }
@@ -135,20 +155,10 @@ func HugeList() Option { return PadList(4 << 20) }
 // PadList makes the container list n bytes larger, in a field a reader ignores.
 func PadList(n int) Option { return func(e *engine) { e.pad = n } }
 
-// StopBetweenListAndStats lists the container and answers its stats with zeros, as an engine does
-// for a container that stopped after the list.
-func StopBetweenListAndStats(id string) Option { return func(e *engine) { e.stopped = id } }
-
-// FailStatsOnCall answers the nth stats request (from 1) with a 500.
-func FailStatsOnCall(n int64) Option { return func(e *engine) { e.failStatsCall = n } }
-
-// Engine serves an engine and returns its socket.
-func Engine(t *testing.T, opts ...Option) (sock string) { return EngineFake(t, opts...).Path }
-
-// EngineFake is Engine, returning the server for its request log.
-func EngineFake(t *testing.T, opts ...Option) *Fake {
+// Engine serves an engine, which a test closes with its cleanup.
+func Engine(t testing.TB, opts ...Option) *Fake {
 	t.Helper()
-	e := &engine{os: docker.DesktopOS, memTotal: 8 << 30, inactive: map[string]int64{}, done: make(chan struct{})}
+	e := &engine{os: docker.DesktopOS, memTotal: 8 << 30, statsCode: map[string]int{}, stopped: map[string]bool{}, done: make(chan struct{})}
 	for _, o := range opts {
 		o(e)
 	}
@@ -181,12 +191,14 @@ func EngineFake(t *testing.T, opts ...Option) *Fake {
 				if target != docker.StatsPath(x.ID) {
 					continue
 				}
-				if n := e.statsCalls.Add(1); n == e.failStatsCall {
-					Reply(c, 500, `{"message":"boom"}`)
-				} else if x.ID == e.stopped {
+				switch {
+				case e.statsCode[x.ID] != 0:
+					Reply(c, e.statsCode[x.ID], `{"message":"status set by the test"}`)
+				case e.stopped[x.ID]:
 					Reply(c, 200, Stats(0, 0, ``))
-				} else {
-					Reply(c, 200, Stats(x.UsageMiB<<20, x.LimitMiB<<20, fmt.Sprintf(`"inactive_file":%d`, e.inactive[x.ID]<<20)))
+				default:
+					Reply(c, 200, fmt.Sprintf(`{"memory_stats":{"usage":%d,"limit":%d,"stats":{"inactive_file":%d}}}`,
+						x.UsageBytes, x.LimitBytes, x.InactiveFileBytes))
 				}
 				return
 			}
