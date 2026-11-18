@@ -8,6 +8,12 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- The `vm` of the `memory` telemetry line is Docker Desktop's VM process: the Virtualization VM in the resource
+  coalition of `com.docker.backend`, matched by executable path. A VM of another tool no longer counts, and the
+  `com.docker.krun`, `sailor` and `virtualization` names are no longer looked for.
+
 ### Fixed
 
 - `PROTOCOL.md` section 10.3 says a hold expected to end frees the larger of its `need_mib` and its

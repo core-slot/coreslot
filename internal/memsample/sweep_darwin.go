@@ -37,9 +37,9 @@ func procName(pid int) (string, bool) {
 }
 
 // Sweep reads the footprint, resident size, CPU time and name of every process of this user, and
-// returns the n with the largest footprint and the Docker VM's process (the largest of the names
-// vmNames matches). A process that is gone or that cannot be read is skipped; ok is false when the
-// table cannot be listed or no process could be read.
+// returns the n with the largest footprint and Docker's VM process (DockerVM's, nil unless it is
+// identified). A process that is gone or that cannot be read is skipped; ok is false when the table
+// cannot be listed or no process could be read.
 func Sweep(n int) (top []ProcMem, vm *ProcMem, ok bool) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
@@ -52,7 +52,16 @@ func Sweep(n int) (top []ProcMem, vm *ProcMem, ok bool) {
 			pids = append(pids, procRef{int(p.Proc.P_pid), p.Proc.P_starttime.Nano()})
 		}
 	}
-	return sweepPIDs(pids, n)
+	top, ok = sweepPIDs(pids, n)
+	if !ok {
+		return nil, nil, false
+	}
+	if v := DockerVM(); v.State == VMIdentified {
+		if tb, err := timebase(); err == nil {
+			vm = readProc(procRef{v.PID, v.StartNS}, tb)
+		}
+	}
+	return top, vm, true
 }
 
 // procRef is a process of the table: its pid and start time.
@@ -61,26 +70,33 @@ type procRef struct {
 	startNS int64
 }
 
-// sweepPIDs is Sweep over the processes in refs.
-func sweepPIDs(refs []procRef, n int) (top []ProcMem, vm *ProcMem, ok bool) {
+// readProc reads ref's name, footprint, resident size and CPU time; nil when it is gone or another
+// user's (EPERM).
+func readProc(ref procRef, tb [2]uint32) *ProcMem {
+	ri, rok := rusage(ref.pid, rusageV4)
+	name, nok := procName(ref.pid)
+	if !rok || !nok {
+		return nil
+	}
+	cpu := (ri[userAt] + ri[sysAt]) * uint64(tb[0]) / uint64(tb[1])
+	return &ProcMem{Name: name, FootprintMiB: int64(ri[footprintAt] >> 20), ResidentMiB: int64(ri[residentAt] >> 20),
+		CPUS: float64(cpu) / 1e9, StartNS: ref.startNS}
+}
+
+// sweepPIDs is Sweep's reading of the processes in refs: the n largest.
+func sweepPIDs(refs []procRef, n int) (top []ProcMem, ok bool) {
 	tb, err := timebase()
 	if err != nil {
-		return nil, nil, false
+		return nil, false
 	}
 	all := make([]ProcMem, 0, len(refs))
 	for _, ref := range refs {
-		ri, rok := rusage(ref.pid, rusageV4)
-		name, nok := procName(ref.pid)
-		if !rok || !nok {
-			continue // gone, or another user's (EPERM)
+		if p := readProc(ref, tb); p != nil {
+			all = append(all, *p)
 		}
-		cpu := (ri[userAt] + ri[sysAt]) * uint64(tb[0]) / uint64(tb[1])
-		all = append(all, ProcMem{Name: name, FootprintMiB: int64(ri[footprintAt] >> 20), ResidentMiB: int64(ri[residentAt] >> 20),
-			CPUS: float64(cpu) / 1e9, StartNS: ref.startNS})
 	}
 	if len(all) == 0 {
-		return nil, nil, false
+		return nil, false
 	}
-	top, vm = rank(all, n)
-	return top, vm, true
+	return rank(all, n), true
 }

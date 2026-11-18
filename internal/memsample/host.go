@@ -39,6 +39,9 @@ func ReadHost() (HostReading, error) {
 func overlay(r HostReading, nums map[string]int64) HostReading {
 	v := reflect.ValueOf(&r).Elem()
 	for name, n := range nums {
+		if strings.HasPrefix(name, "DockerVM") {
+			continue // DockerVM reads these, not the host reading
+		}
 		switch f := v.FieldByName(name); f.Kind() {
 		case reflect.Uint64:
 			f.SetUint(uint64(n))

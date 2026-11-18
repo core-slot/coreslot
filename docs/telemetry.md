@@ -226,7 +226,7 @@ Nothing is written where processes cannot be swept.
 
 | key | meaning |
 |---|---|
-| `vm` | the largest footprint among the Docker VM's processes (names starting `com.docker.krun`, `com.docker.sailor`, `com.docker.virtualization` or `com.apple.Virtualization`): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when none runs, or when an engine goes by another name |
+| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
 | `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
 
 ### `containers`

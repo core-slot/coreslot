@@ -37,16 +37,16 @@ func TestSweepFindsThisProcess(t *testing.T) {
 	}
 }
 
-// A process whose name is longer than the 15 characters of the short flavor is found as the VM by
-// the long name: a copy of the test binary named like the VM's helper, run as the helper. Mutation:
-// reading the short info flavor (PROC_PIDT_SHORTBSDINFO) names it "com.apple.Virtual", not a VM.
-func TestSweepReadsLongName(t *testing.T) {
+// A process whose executable is named like the VM's is found by the last element of its path, in the
+// full 39 bytes, where its names (kept to 16 in p_comm and 32 in pbi_name) match nothing: a copy of
+// the test binary named like the VM's helper, run as the helper. Mutations: reading the path flavor
+// into a buffer that is too short, or listVMProcs taking the name from procName, loses the match.
+func TestListVMProcsReadsPathNotName(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	const name = "com.apple.Virtualization.VirtualMachine"
-	copyPath := filepath.Join(t.TempDir(), name)
+	copyPath := filepath.Join(t.TempDir(), dockerVMExe)
 	src, err := os.ReadFile(self)
 	if err != nil {
 		t.Fatal(err)
@@ -67,9 +67,36 @@ func TestSweepReadsLongName(t *testing.T) {
 	if line, _ := bufio.NewReader(io.LimitReader(out, 64)).ReadString('\n'); line != "ready\n" {
 		t.Fatalf("helper said %q", line)
 	}
-	procs, _ := Listing()
-	_, vm, ok := sweepPIDs([]procRef{{cmd.Process.Pid, procs[cmd.Process.Pid].StartNS}}, 5)
-	if !ok || vm == nil || vm.Name != name[:31] || vm.FootprintMiB <= 0 {
-		t.Errorf("vm = %+v (ok %v), want %q with a footprint", vm, ok, name[:31])
+	procs, ok := listVMProcs()
+	if !ok {
+		t.Fatal("no listing")
+	}
+	var found *vmProc
+	for i := range procs {
+		if procs[i].PID == cmd.Process.Pid {
+			found = &procs[i]
+		}
+	}
+	if found == nil || !exeIs(found.Exec, dockerVMExe) {
+		t.Fatalf("the helper is %+v, want an executable named %s", found, dockerVMExe)
+	}
+	if name, _ := procName(found.PID); name == dockerVMExe {
+		t.Errorf("procName kept all %d bytes of the name; the test no longer shows the truncation", len(name))
+	}
+}
+
+// A process has a resource coalition of its own, read in the full 40 bytes; the same read into 32
+// returns 0 and no id. Mutation: a coalition buffer of 32 bytes reports no coalition here.
+func TestCoalitionReadOfThisProcess(t *testing.T) {
+	b := make([]byte, coalitionInfoSize)
+	n, err := info(callPidInfo, os.Getpid(), pidCoalitionInfo, 0, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := parseCoalition(b, n); !ok || id == 0 {
+		t.Errorf("coalition of this process = %d, %v (read %d bytes), want an id", id, ok, n)
+	}
+	if n, _ := info(callPidInfo, os.Getpid(), pidCoalitionInfo, 0, b[:32]); n == coalitionInfoSize {
+		t.Errorf("a 32-byte buffer read %d bytes", n)
 	}
 }
