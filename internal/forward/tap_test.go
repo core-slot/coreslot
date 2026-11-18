@@ -231,13 +231,14 @@ func putWithHead(t *testing.T, addr string, size int, body []byte) int {
 }
 
 // A head of MaxHead bytes is read; one byte more makes the tap blind, and the bytes still reach the
-// engine intact. Mutation: a limit of MaxHead+1 reports no blind.
+// engine intact. Each request, body included, fits in TapBuffer, so that no tap can fall behind and
+// the head alone decides. Mutation: a limit of MaxHead+1 reports no blind.
 func TestTapBlindOnOversizedHead(t *testing.T) {
 	d := dockertest.HTTP(t)
 	s := serve(t, d.Sock)
 	c := client(t, s.addr)
 	id := createdID(t, c, "/containers/create?name=a")
-	body := make([]byte, 1<<20)
+	body := make([]byte, TapBuffer-2*MaxHead)
 	rand.Read(body)
 	for _, size := range []int{MaxHead, MaxHead + 1} {
 		if code := putWithHead(t, s.addr, size, body); code != 200 {
