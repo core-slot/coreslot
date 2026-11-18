@@ -7,7 +7,8 @@ const DesktopOS = "Docker Desktop"
 // the code a reading then carries: nothing is connected to.
 const TCPHost = "tcp_host"
 
-// Container is one running container as `docker stats` shows it.
+// Container is one running container as `docker stats` shows it. Its strings are the engine's, whole:
+// the id is the full 64 characters, and whoever shows one cuts it (ShortID, ShortImage).
 type Container struct {
 	ID, Name, Image, Project string
 	UsageMiB, LimitMiB       int64

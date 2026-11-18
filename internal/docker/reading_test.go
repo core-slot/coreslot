@@ -34,7 +34,7 @@ func TestBudgetReadingComplete(t *testing.T) {
 		dockertest.WithContainer(dockertest.Container{ID: "abc", Name: "cache", Image: "alpine", UsageBytes: 5 * mib, LimitBytes: 1024 * mib}))
 	r := docker.Read([]string{f.Sock}, soon())
 	want := []docker.Container{
-		{ID: longID[:12], Name: "db", Image: "postgres:16", Project: "shop", UsageMiB: 300, LimitMiB: 2048},
+		{ID: longID, Name: "db", Image: "postgres:16", Project: "shop", UsageMiB: 300, LimitMiB: 2048},
 		{ID: "abc", Name: "cache", Image: "alpine", UsageMiB: 5, LimitMiB: 1024}}
 	if !r.OK || r.Code != "" || r.OtherEngine || r.VMMiB != 26005 || !reflect.DeepEqual(r.Containers, want) {
 		t.Errorf("reading %+v, want OK, VM 26005 and %+v", r, want)

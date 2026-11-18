@@ -21,8 +21,9 @@ func text(s string) string { return wire.EscapeHuman(s) }
 // whether an invocation asks for help, which prints on stdout and exits 0 for every command
 // (section 19).
 
-const statusUsage = `usage: coreslot status [--json] [--observe DURATION]
+const statusUsage = `usage: coreslot status [--json] [--docker] [--observe DURATION]
 
+--docker reads Docker Desktop's VM and its running containers from the Docker socket.
 --observe watches the queue for DURATION to find STALLED tickets; a ticket is
 STALLED after 10s without a refresh, so use 10s or more.`
 
@@ -55,9 +56,10 @@ func reportFlags() (fs *flag.FlagSet, days *int, asJSON *bool) {
 	return fs, fs.Int("days", 7, "the window: the last N days"), fs.Bool("json", false, "print the JSON document (schema 1)")
 }
 
-func statusFlags() (fs *flag.FlagSet, asJSON *bool, observe *time.Duration) {
+func statusFlags() (fs *flag.FlagSet, asJSON, docker *bool, observe *time.Duration) {
 	fs = newFlagSet("coreslot status")
 	return fs, fs.Bool("json", false, "print the JSON document (schema 1)"),
+		fs.Bool("docker", false, "read Docker Desktop's VM and its running containers"),
 		fs.Duration("observe", 0, "watch the queue this long, to find STALLED tickets")
 }
 

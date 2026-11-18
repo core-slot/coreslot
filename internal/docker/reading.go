@@ -121,7 +121,7 @@ func Read(sockets []string, deadline time.Time) Reading {
 		if len(c.Names) > 0 {
 			name = strings.TrimPrefix(c.Names[0], "/")
 		}
-		list = append(list, Container{ID: ShortID(c.ID), Name: name, Image: ShortImage(c.Image), Project: c.Labels[composeKey],
+		list = append(list, Container{ID: c.ID, Name: name, Image: c.Image, Project: c.Labels[composeKey],
 			UsageMiB: int64(UsedBytes(s) >> 20), LimitMiB: int64(s.MemoryStats.Limit >> 20)})
 	}
 	r.OK, r.VMMiB, r.Containers = true, int64(in.MemTotal>>20), list

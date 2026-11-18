@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -192,7 +193,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	queue(t, c, "waiting", 256)
 
 	doc := statusDoc(t, dir, 0)
-	const top = "cancel_requests config_error dead_holds degraded format format_error format_present format_understood gen holds ignored mem observed_s reconciled_ns schema section state_dir state_dir_exists tickets watch"
+	const top = "cancel_requests config_error config_warnings dead_holds degraded format format_error format_present format_understood gen holds ignored mem observed_s reconciled_ns schema section state_dir state_dir_exists tickets watch"
 	if got := keysOf(doc); got != top {
 		t.Errorf("top-level keys\n got %s\nwant %s", got, top)
 	}
@@ -1784,5 +1785,86 @@ func TestNoCPUOnlyOnARunningHold(t *testing.T) {
 		if got := strings.Contains(v.human(), "  no CPU for "); got != (c.want > 0) {
 			t.Errorf("%s: the line says no CPU: %v; want %v", c.name, got, c.want > 0)
 		}
+	}
+}
+
+// ---------------------------------------------------------------- status --docker, untagged
+
+// A state directory override with no test hook is no place for an engine: status --docker says off
+// with every key in place (platform on Linux, where Docker is off first), and plain status carries no
+// docker key. Mutation: leaving the docker object out of an off state drops its keys.
+func TestStatusDockerOffWithoutHook(t *testing.T) {
+	dir := budgetDir(t, 512)
+	r := cli(t, baseEnv(dir), "status", "--docker", "--json")
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil || r.code != 0 {
+		t.Fatalf("exit %d: %v\n%s %s", r.code, err, r.stdout, r.stderr)
+	}
+	d, ok := doc["docker"].(map[string]any)
+	if !ok {
+		t.Fatalf("no docker object:\n%s", r.stdout)
+	}
+	reason := "state-dir"
+	if runtime.GOOS != "darwin" {
+		reason = "platform"
+	}
+	vm, _ := d["vm"].(map[string]any)
+	if keysOf(d) != "containers free_est_mib reason state vm" || keysOf(vm) != "footprint_mib identified mem_mib" ||
+		d["state"] != "off" || d["reason"] != reason || d["free_est_mib"] != nil || vm["identified"] != false {
+		t.Errorf("docker = %v, want state off, reason %s and every key", d, reason)
+	}
+	if h := cli(t, baseEnv(dir), "status", "--docker"); !strings.Contains(h.stdout, "docker: off ("+reason+")") {
+		t.Errorf("text lacks the off line:\n%s", h.stdout)
+	}
+	if _, has := statusDoc(t, dir, 0)["docker"]; has {
+		t.Errorf("status --json carries a docker key without --docker")
+	}
+}
+
+// On Linux the features are off by platform, before anything else is asked.
+func TestStatusDockerOnLinuxIsOff(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux only")
+	}
+	dir := stateDir(t, "[memory]\nreserve = \"0\"\n[docker]\nenabled = false\n")
+	budgetRoom.Store(dir, int64(512))
+	r := cli(t, baseEnv(dir), "status", "--docker", "--json")
+	var doc struct {
+		Docker struct{ State, Reason string }
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil || doc.Docker.State != "off" || doc.Docker.Reason != "platform" {
+		t.Errorf("docker = %+v (%v), want off, platform:\n%s", doc.Docker, err, r.stdout)
+	}
+}
+
+const dockerWarningCfg = "[memory]\nreserve = \"0\"\n[docker]\nenabled = \"yes\"\n"
+
+// A lenient key's warning is shown by status (text and config_warnings) and by doctor as a line, and
+// neither exits other than 0 for it. Mutations: a doctor `problem` instead of a `line` exits 1; an
+// empty config_warnings written as null breaks the array check.
+func TestStatusConfigWarningShown(t *testing.T) {
+	dir := stateDir(t, dockerWarningCfg)
+	budgetRoom.Store(dir, int64(512))
+	const warning = "[docker] enabled: want a boolean: the Docker features are off"
+	if r := cli(t, baseEnv(dir), "status"); r.code != 0 || !strings.Contains(r.stdout, warning) {
+		t.Errorf("status (exit %d) lacks the warning:\n%s", r.code, r.stdout)
+	}
+	doc := statusDoc(t, dir, 0)
+	if w, _ := doc["config_warnings"].([]any); len(w) != 1 || w[0] != warning {
+		t.Errorf("config_warnings = %v", doc["config_warnings"])
+	}
+	if w, ok := statusDoc(t, budgetDir(t, 512), 0)["config_warnings"].([]any); !ok || len(w) != 0 {
+		t.Errorf("config_warnings without a warning = %v, want []", w)
+	}
+	r := cli(t, baseEnv(dir), "doctor")
+	if r.code != 0 || !strings.Contains(r.stdout, "\nconfiguration warning: "+warning+"\n") || strings.Contains(r.stdout, "PROBLEM") {
+		t.Errorf("doctor (exit %d) lacks the warning line, or calls it a problem:\n%s", r.code, r.stdout)
+	}
+}
+
+// status --docker is a documented flag.
+func TestStatusUsageNamesDocker(t *testing.T) {
+	if !strings.Contains(statusUsage, "usage: coreslot status [--json] [--docker] [--observe DURATION]") {
+		t.Errorf("statusUsage = %q", statusUsage)
 	}
 }

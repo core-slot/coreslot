@@ -6,6 +6,7 @@ package dockertest
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -98,6 +99,12 @@ func Serve(t testing.TB, handle func(c net.Conn, target string)) *Fake {
 	return d
 }
 
+// jsonString is s as a JSON string; %q would write Go escapes (\x1b) that JSON does not have.
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 // Reply writes a response of the status with a JSON body.
 func Reply(c net.Conn, status int, body string) {
 	fmt.Fprintf(c, "HTTP/1.0 %d Any\r\nContent-Type: application/json\r\n\r\n%s", status, body)
@@ -175,8 +182,8 @@ func Engine(t testing.TB, opts ...Option) *Fake {
 			pad := strings.Repeat("x", e.pad) // in the first item, a field a reader ignores
 			var items []string
 			for i, x := range e.containers {
-				item := fmt.Sprintf(`{"Id":%q,"Names":["/%s"],"Image":%q,"Labels":{"com.docker.compose.project":%q},"State":"running"`,
-					x.ID, x.Name, x.Image, x.Project)
+				item := fmt.Sprintf(`{"Id":%s,"Names":[%s],"Image":%s,"Labels":{"com.docker.compose.project":%s},"State":"running"`,
+					jsonString(x.ID), jsonString("/"+x.Name), jsonString(x.Image), jsonString(x.Project))
 				if i == 0 && e.pad > 0 {
 					item += `,"Pad":"` + pad + `"`
 				}

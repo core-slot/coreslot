@@ -6,7 +6,7 @@ package main
 // and no run log to learn from, so these commands only answer a request for help (noBudget).
 
 func statusCommand(args []string, io IO) int {
-	fs, _, _ := statusFlags()
+	fs, _, _, _ := statusFlags()
 	return noBudget("status", statusUsage, fs, args, io)
 }
 

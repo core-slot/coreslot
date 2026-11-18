@@ -16,7 +16,7 @@ func TestNoBudgetAnswersOnlyHelp(t *testing.T) {
 		name, usage string
 		flags       func() *flag.FlagSet
 	}{
-		{"status", statusUsage, func() *flag.FlagSet { fs, _, _ := statusFlags(); return fs }},
+		{"status", statusUsage, func() *flag.FlagSet { fs, _, _, _ := statusFlags(); return fs }},
 		{"cancel", cancelUsage, func() *flag.FlagSet { fs, _ := cancelFlags(); return fs }},
 		{"doctor", doctorUsage, func() *flag.FlagSet { fs, _, _ := doctorFlags(); return fs }},
 	}
@@ -60,7 +60,7 @@ func TestNoBudgetAnswersOnlyHelp(t *testing.T) {
 		args []string
 		want int
 	}{
-		{"status", func() *flag.FlagSet { fs, _, _ := statusFlags(); return fs }(), []string{"--json", "--help"}, 0},
+		{"status", func() *flag.FlagSet { fs, _, _, _ := statusFlags(); return fs }(), []string{"--json", "--help"}, 0},
 		{"doctor", func() *flag.FlagSet { fs, _, _ := doctorFlags(); return fs }(), []string{"--reset", "-h"}, 0},
 		{"cancel", func() *flag.FlagSet { fs, _ := cancelFlags(); return fs }(), []string{"--label", "--help"}, exitInternal},
 	} {
