@@ -36,11 +36,12 @@ type partContainer struct {
 // a blind part makes no Docker call and gives no figure again. Its calls go to the upstream socket,
 // never through the forwarder.
 type dockerPart struct {
-	sampling atomic.Bool // a sample is under way
+	reading atomic.Bool // a reader is under way: readTouches or sample
 
 	mu         sync.Mutex
 	containers map[string]*partContainer // by id
-	resolved   map[string]bool           // the names and short ids already inspected
+	seen       map[string]bool           // the references touched so far
+	touches    []string                  // the ones readTouches has not read yet, in order
 	lost       bool
 	footprint  uint64 // the last completed sample's, in bytes
 	peak       uint64 // the largest footprint so far, in bytes
@@ -60,77 +61,82 @@ func (p *dockerPart) blind() bool {
 	return p.lost
 }
 
-// event takes one of the tap's events. A created container's baseline is 0, with no call. A touched
-// id's baseline is its usage now, one stats call; a touched name or short id is resolved by one
-// inspect, the first time only, and its baseline is the first usage read after that. A container
-// already counted is not touched again.
-func (p *dockerPart) event(e relay.Event, sock string) {
-	if p.blind() {
-		return
-	}
-	switch e.Kind {
-	case relay.KindBlind:
-		p.setBlind()
-	case relay.KindCreated:
-		if !docker.IsID(e.Ref) {
-			p.setBlind()
-			return
+// event takes one of the tap's events, with no Docker call: the watchdog's loop takes them. A
+// created container's baseline is 0. A reference touched for the first time waits for readTouches.
+func (p *dockerPart) event(e relay.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case p.lost:
+	case e.Kind == relay.KindBlind:
+		p.lost = true
+	case e.Kind == relay.KindCreated && !docker.IsID(e.Ref), e.Kind == relay.KindTouched && !validRef.MatchString(e.Ref):
+		p.lost = true
+	case e.Kind == relay.KindCreated:
+		p.addLocked(e.Ref, partContainer{based: true})
+	case e.Kind == relay.KindTouched && !p.seen[e.Ref]:
+		if p.seen == nil {
+			p.seen = map[string]bool{}
 		}
-		p.add(e.Ref, func(c *partContainer) { c.based = true })
-	case relay.KindTouched:
-		p.touched(e.Ref, sock)
+		p.seen[e.Ref] = true
+		p.touches = append(p.touches, e.Ref)
 	}
 }
 
-// touched counts a touched reference's container from now on.
-func (p *dockerPart) touched(ref, sock string) {
-	if !validRef.MatchString(ref) {
-		p.setBlind()
+// touching says whether references wait for readTouches.
+func (p *dockerPart) touching() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.lost && len(p.touches) > 0
+}
+
+// readTouches makes the first-touch call of each reference waiting, unless its container is
+// counted already: a 64-hex id's stats, whose usage is its baseline (after a failed read, the next
+// read is), or a name's or short id's inspect, whose baseline is the next sample's read. A
+// reference the engine does not resolve makes the part blind. It runs in a goroutine of its own,
+// and one reader at a time, this or a sample: one that finds another under way returns at once.
+func (p *dockerPart) readTouches(sock string) {
+	if !p.reading.CompareAndSwap(false, true) {
 		return
 	}
-	if docker.IsID(ref) {
-		if p.known(ref) {
+	defer p.reading.Store(false)
+	for {
+		p.mu.Lock()
+		if p.lost || len(p.touches) == 0 {
+			p.mu.Unlock()
 			return
 		}
-		c, gone, code := docker.Stat(sock, docker.Listed{ID: ref}, time.Now().Add(partDeadline))
-		p.add(ref, func(pc *partContainer) {
-			if code == "" && !gone { // else the baseline is the next usage read
-				pc.baseline, pc.usage, pc.based = c.UsageBytes, c.UsageBytes, true
+		id := p.touches[0]
+		p.touches = p.touches[1:]
+		known := p.containers[id] != nil
+		p.mu.Unlock()
+		var c partContainer
+		switch code := ""; {
+		case known:
+			continue
+		case docker.IsID(id):
+			s, gone, code := docker.Stat(sock, docker.Listed{ID: id}, time.Now().Add(partDeadline))
+			if code == "" && !gone {
+				c = partContainer{baseline: s.UsageBytes, usage: s.UsageBytes, based: true}
 			}
-		})
-		return
+		default:
+			if id, code = docker.Inspect(sock, id, time.Now().Add(partDeadline)); code != "" {
+				p.setBlind()
+				return
+			}
+		}
+		p.mu.Lock()
+		if !p.lost {
+			p.addLocked(id, c)
+		}
+		p.mu.Unlock()
 	}
-	p.mu.Lock()
-	done := p.resolved[ref]
-	if p.resolved == nil {
-		p.resolved = map[string]bool{}
-	}
-	p.resolved[ref] = true
-	p.mu.Unlock()
-	if done {
-		return
-	}
-	id, code := docker.Inspect(sock, ref, time.Now().Add(partDeadline))
-	if code != "" {
-		p.setBlind()
-		return
-	}
-	p.add(id, func(*partContainer) {})
 }
 
-// known says whether the part counts the container id.
-func (p *dockerPart) known(id string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.containers[id] != nil
-}
-
-// add counts the container id, set up by first, unless the part counts it already; a 257th makes
-// the part blind.
-func (p *dockerPart) add(id string, first func(*partContainer)) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.lost || p.containers[id] != nil {
+// addLocked counts the container id from c, unless the part counts it already; a 257th makes the
+// part blind. The caller holds the lock.
+func (p *dockerPart) addLocked(id string, c partContainer) {
+	if p.containers[id] != nil {
 		return
 	}
 	if len(p.containers) == partMax {
@@ -140,20 +146,18 @@ func (p *dockerPart) add(id string, first func(*partContainer)) {
 	if p.containers == nil {
 		p.containers = map[string]*partContainer{}
 	}
-	c := &partContainer{}
-	first(c)
-	p.containers[id] = c
+	p.containers[id] = &c
 }
 
 // sample reads the usage of each of the part's containers, all under one deadline, and makes the
-// result the part's footprint. It runs in a goroutine of its own, one at a time: a sample that finds
-// another under way returns at once. A container whose read fails keeps its last usage; one that is
+// result the part's footprint. It runs in a goroutine of its own, one reader at a time, as
+// readTouches does. A container whose read fails keeps its last usage; one that is
 // gone uses nothing; one not read since its first touch takes this read as its baseline.
 func (p *dockerPart) sample(ctx context.Context, sock string) {
-	if !p.sampling.CompareAndSwap(false, true) {
+	if !p.reading.CompareAndSwap(false, true) {
 		return
 	}
-	defer p.sampling.Store(false)
+	defer p.reading.Store(false)
 	p.mu.Lock()
 	ids := make([]string, 0, len(p.containers))
 	for id := range p.containers {

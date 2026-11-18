@@ -40,13 +40,19 @@ func statsCalls(f *dockertest.Fake) (out []string) {
 func created(id string) relay.Event   { return relay.Event{Kind: relay.KindCreated, Ref: id} }
 func touchedRef(r string) relay.Event { return relay.Event{Kind: relay.KindTouched, Ref: r} }
 
+// touchNow is a touch of ref and its first-touch read, as the watchdog's loop starts it.
+func touchNow(p *dockerPart, ref, sock string) {
+	p.event(touchedRef(ref))
+	p.readTouches(sock)
+}
+
 // A container the run created counts from 0, and its creation makes no call. Mutation: a created
 // container's baseline left to its first read gives 0, red.
 func TestCreatedBaselineZero(t *testing.T) {
 	id := dockertest.ID('a')
 	f := partEngine(t, id, "db", 300*partMiB)
 	var p dockerPart
-	p.event(created(id), f.Sock)
+	p.event(created(id))
 	if r := f.Requests(); len(r) != 0 {
 		t.Errorf("a creation made calls %q", r)
 	}
@@ -63,11 +69,11 @@ func TestTouchedIDBaselineAtFirstTouch(t *testing.T) {
 	id := dockertest.ID('b')
 	f := partEngine(t, id, "db", 500*partMiB)
 	var p dockerPart
-	p.event(touchedRef(id), f.Sock)
+	touchNow(&p, id, f.Sock)
 	if r := f.Requests(); len(r) != 1 || len(statsCalls(f)) != 1 {
 		t.Errorf("calls at the touch %q, want one stats call", r)
 	}
-	p.event(touchedRef(id), f.Sock) // touched again: counted already
+	touchNow(&p, id, f.Sock) // touched again: counted already
 	f.SetUsage(id, 800*partMiB)
 	p.sample(context.Background(), f.Sock)
 	if got := p.footprintMiB(); got != 300 {
@@ -85,11 +91,11 @@ func TestTouchedNameResolvedOnce(t *testing.T) {
 	id := dockertest.ID('c')
 	f := partEngine(t, id, "db", 100*partMiB)
 	var p dockerPart
-	p.event(touchedRef("db"), f.Sock)
+	touchNow(&p, "db", f.Sock)
 	if r := f.Requests(); len(r) != 1 || r[0] != "GET /containers/db/json" {
 		t.Errorf("calls at the touch %q, want one inspect", r)
 	}
-	p.event(touchedRef("db"), f.Sock)
+	touchNow(&p, "db", f.Sock)
 	p.sample(context.Background(), f.Sock)
 	if got := p.footprintMiB(); got != 0 {
 		t.Errorf("footprint %d MiB at the first sample, want 0: it is the baseline", got)
@@ -122,7 +128,7 @@ func TestFirstTouchReadFailsBaselineIsNextRead(t *testing.T) {
 		}
 	})
 	var p dockerPart
-	p.event(touchedRef(id), f.Sock)
+	touchNow(&p, id, f.Sock)
 	p.sample(context.Background(), f.Sock)
 	if got := p.footprintMiB(); got != 0 {
 		t.Errorf("footprint %d MiB at the first read, want 0", got)
@@ -145,7 +151,7 @@ func TestRefValidation(t *testing.T) {
 	}{{"../x", true}, {"n" + long, true}, {"-x", true}, {"", true}, {long, false}} {
 		before := len(f.Requests())
 		var p dockerPart
-		p.event(touchedRef(c.ref), f.Sock)
+		touchNow(&p, c.ref, f.Sock)
 		calls := len(f.Requests()) - before
 		if p.blind() != c.blind || c.blind && calls != 0 {
 			t.Errorf("ref %q: blind %v after %d calls, want blind %v, with no call when blind", c.ref, p.blind(), calls, c.blind)
@@ -158,8 +164,8 @@ func TestRefValidation(t *testing.T) {
 func TestUnresolvedRefIsBlind(t *testing.T) {
 	f := partEngine(t, dockertest.ID('f'), "db", partMiB)
 	var p dockerPart
-	p.event(created(dockertest.ID('f')), f.Sock)
-	p.event(touchedRef("nosuch"), f.Sock)
+	p.event(created(dockertest.ID('f')))
+	touchNow(&p, "nosuch", f.Sock)
 	p.sample(context.Background(), f.Sock)
 	if !p.blind() || len(f.Requests()) != 1 {
 		t.Errorf("blind %v after calls %q, want blind after the inspect alone", p.blind(), f.Requests())
@@ -172,13 +178,13 @@ func TestUnresolvedRefIsBlind(t *testing.T) {
 func TestTwoHundredFiftySeventhIsBlind(t *testing.T) {
 	var p dockerPart
 	for i := range partMax {
-		p.event(created(fmt.Sprintf("%064x", i)), "")
+		p.event(created(fmt.Sprintf("%064x", i)))
 	}
-	p.event(created(fmt.Sprintf("%064x", 0)), "")
+	p.event(created(fmt.Sprintf("%064x", 0)))
 	if p.blind() {
 		t.Fatal("blind at 256 containers")
 	}
-	p.event(created(fmt.Sprintf("%064x", partMax)), "")
+	p.event(created(fmt.Sprintf("%064x", partMax)))
 	if !p.blind() {
 		t.Error("a 257th container left the part sighted")
 	}
@@ -189,8 +195,8 @@ func TestTwoHundredFiftySeventhIsBlind(t *testing.T) {
 func TestBlindEventIsBlind(t *testing.T) {
 	f := partEngine(t, dockertest.ID('a'), "db", partMiB)
 	var p dockerPart
-	p.event(relay.Event{Kind: relay.KindBlind}, f.Sock)
-	p.event(touchedRef(dockertest.ID('a')), f.Sock)
+	p.event(relay.Event{Kind: relay.KindBlind})
+	touchNow(&p, dockertest.ID('a'), f.Sock)
 	p.sample(context.Background(), f.Sock)
 	if !p.blind() || len(f.Requests()) != 0 {
 		t.Errorf("blind %v after calls %q, want blind with none", p.blind(), f.Requests())
@@ -203,7 +209,7 @@ func TestPeakRoundsUpAtLeastOne(t *testing.T) {
 	id := dockertest.ID('a')
 	f := partEngine(t, id, "db", partMiB/5)
 	var p dockerPart
-	p.event(created(id), f.Sock)
+	p.event(created(id))
 	p.sample(context.Background(), f.Sock)
 	f.SetUsage(id, 0)
 	p.sample(context.Background(), f.Sock)
@@ -298,10 +304,11 @@ func TestBlindWritesNoteAndStops(t *testing.T) {
 	}
 }
 
-// A hung engine never stalls the watch: the listings keep their 1 s period, every tick writes the
-// hold, and a sample finds the one under way and returns. Mutations: the sample on the tick
-// goroutine stalls the listing of tick 3 for its 2 s deadline, red; drop the one-at-a-time guard,
-// and the second sample waits and calls too, red.
+// A hung engine never stalls the watch: while touches' first reads and samples hang, the listings
+// keep their 1 s period, every tick writes the hold, and a reader finds the one under way and
+// returns. Mutations: the first-touch reads on the watchdog's loop stall listing 2 for 2 s, red;
+// the sample on the tick goroutine stalls a listing likewise, red; drop the one-at-a-time guard, and
+// the second sample waits and calls too, red.
 func TestHungEngineNeverStallsTick(t *testing.T) {
 	id := dockertest.ID('a')
 	f := partEngine(t, id, "db", partMiB, dockertest.Hang())
@@ -316,6 +323,9 @@ func TestHungEngineNeverStallsTick(t *testing.T) {
 				t.Errorf("listing %d came %v after the one before", n, gap)
 			}
 			last = now
+			if n >= 2 && n <= 4 { // touches whose first-touch reads hang
+				events <- touchedRef(dockertest.ID(byte('a' + n - 1)))
+			}
 			if h := body(t, st, g); n > 2 && n%2 == 1 && (h.FootprintMiB != int64(n-1) || h.DockerFootprintMiB == nil) {
 				t.Errorf("listing %d: hold footprint_mib %d, docker_footprint_mib %v; want tick %d's write", n, h.FootprintMiB, h.DockerFootprintMiB, (n-1)/2)
 			}
@@ -324,7 +334,7 @@ func TestHungEngineNeverStallsTick(t *testing.T) {
 	t.Run("one at a time", func(t *testing.T) {
 		before := len(statsCalls(f))
 		var p dockerPart
-		p.event(created(id), f.Sock)
+		p.event(created(id))
 		go p.sample(context.Background(), f.Sock)
 		waitFor(t, 2*time.Second, "the first sample's call", func() bool { return len(statsCalls(f)) == before+1 })
 		start := time.Now()

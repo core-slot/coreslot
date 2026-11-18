@@ -110,6 +110,9 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}
 		if r.fwd != nil {
 			r.forwarderEvents(&p)
+			if r.fwd.part.touching() { // off the watchdog's loop, as the sample is
+				go r.fwd.part.readTouches(r.fwd.upstream)
+			}
 		} else if !p.container && st != nil { // a forwarder's first connection replaces the scan
 			p.container = listClient(sup.pid)
 		}

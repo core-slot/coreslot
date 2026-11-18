@@ -228,7 +228,7 @@ func (r *run) forwarderEvents(p *peak) {
 			if e.Kind == relay.KindConnected {
 				p.container = true
 			} else {
-				part.event(e, r.fwd.upstream)
+				part.event(e)
 			}
 			continue
 		case <-r.fwd.exited:
