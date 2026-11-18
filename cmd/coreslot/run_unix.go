@@ -83,6 +83,7 @@ type run struct {
 	nestedMiss string    // why an inherited CORESLOT_HOLD did not count; "" with none
 	parentHold string    // the live parent hold of an --independent run
 	inherited  bool      // it runs inside another run's command, so it never connects to the socket
+	dockerOff  bool      // [docker] enabled was false, or unreadable, at the run's start: no socket is read
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -139,7 +140,8 @@ func (r *run) ordinary() int {
 		return exitUsage
 	}
 	req := r.o.request()
-	bound, over, recording := e.Oversized(req.NeedMiB)
+	bound, over, recording, dockerOn := e.Oversized(req.NeedMiB)
+	r.dockerOff = !dockerOn
 	if over {
 		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when no other coreslot job runs",
 			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))

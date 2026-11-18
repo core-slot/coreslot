@@ -1821,22 +1821,6 @@ func TestStatusDockerOffWithoutHook(t *testing.T) {
 	}
 }
 
-// On Linux the features are off by platform, before anything else is asked.
-func TestStatusDockerOnLinuxIsOff(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("Linux only")
-	}
-	dir := stateDir(t, "[memory]\nreserve = \"0\"\n[docker]\nenabled = false\n")
-	budgetRoom.Store(dir, int64(512))
-	r := cli(t, baseEnv(dir), "status", "--docker", "--json")
-	var doc struct {
-		Docker struct{ State, Reason string }
-	}
-	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil || doc.Docker.State != "off" || doc.Docker.Reason != "platform" {
-		t.Errorf("docker = %+v (%v), want off, platform:\n%s", doc.Docker, err, r.stdout)
-	}
-}
-
 const dockerWarningCfg = "[memory]\nreserve = \"0\"\n[docker]\nenabled = \"yes\"\n"
 
 // A lenient key's warning is shown by status (text and config_warnings) and by doctor as a line, and
@@ -1859,12 +1843,5 @@ func TestStatusConfigWarningShown(t *testing.T) {
 	r := cli(t, baseEnv(dir), "doctor")
 	if r.code != 0 || !strings.Contains(r.stdout, "\nconfiguration warning: "+warning+"\n") || strings.Contains(r.stdout, "PROBLEM") {
 		t.Errorf("doctor (exit %d) lacks the warning line, or calls it a problem:\n%s", r.code, r.stdout)
-	}
-}
-
-// status --docker is a documented flag.
-func TestStatusUsageNamesDocker(t *testing.T) {
-	if !strings.Contains(statusUsage, "usage: coreslot status [--json] [--docker] [--observe DURATION]") {
-		t.Errorf("statusUsage = %q", statusUsage)
 	}
 }

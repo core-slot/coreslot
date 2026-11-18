@@ -824,7 +824,7 @@ func TestOversizedReadsOnce(t *testing.T) {
 				}
 				return config.Machine{MemMiB: 1024, HeadroomMiB: 512, HeadroomOK: true}, nil
 			}, engine.Clock{})
-			if _, _, got := e.Oversized(1); got != c.want {
+			if _, _, got, _ := e.Oversized(1); got != c.want {
 				t.Errorf("telemetry %v, want %v", got, c.want)
 			}
 			if reads != 1 {
@@ -1625,6 +1625,16 @@ func fakeEngine(t *testing.T) (conns, dials *atomic.Int64) {
 	return conns, dials
 }
 
+// sleepingDocker is a command named docker that sleeps: container work by its name.
+func sleepingDocker(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // A waiter never connects, not even a nested one whose own command is container work while another
 // hold is: only supervision does. Mutation: ContainersAsync called from the waiting line.
 func TestWaiterNeverConnects(t *testing.T) {
@@ -1655,16 +1665,14 @@ func TestWaiterNeverConnects(t *testing.T) {
 // is not, not one with telemetry off, not a pass-through. Mutations: the call without the p.container
 // test reddens the first row; the call outside the log test reddens the pass-through; a read that
 // does not go through the recorder, or MemoryAsync on a nil recorder calling Sweep, reddens the off
-// row; leaving the call out reddens the last; a call that ignores [docker] enabled reddens the disabled row.
+// row; leaving the call out reddens the last. ([docker] enabled = false is TestDisabledDockerRunNeverConnects.)
 func TestNoContainerRunNeverConnects(t *testing.T) {
 	for _, c := range []struct {
 		name               string
 		client, off, inner bool
-		noDocker           bool // [docker] enabled = false
 		want               int64
 	}{
 		{name: "no container work"},
-		{name: "container work, [docker] disabled", client: true, noDocker: true},
 		{name: "container work, telemetry off", client: true, off: true},
 		{name: "container work in a pass-through", client: true, inner: true},
 		{name: "container work", client: true, want: 1},
@@ -1678,21 +1686,9 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 			t.Cleanup(func() { listClient = saved })
 			argv := []string{"sleep", "1.5"}
 			if c.inner { // listClient is not asked without a log: the command itself must be a client
-				docker := filepath.Join(t.TempDir(), "docker")
-				if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				argv = []string{docker}
+				argv = []string{sleepingDocker(t)}
 			}
 			b := newEnded(t, argv...)
-			if c.noDocker {
-				f, err := os.OpenFile(b.r.loc.cfgPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
-				if err != nil {
-					t.Fatal(err)
-				}
-				fmt.Fprint(f, "\n[docker]\nenabled = false\n")
-				f.Close()
-			}
 			if c.off {
 				b.r.record = runRecord{}
 			}
@@ -1728,10 +1724,7 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 // run its variable directly, so no outer run's tree holds the program. Mutations: the inherited test
 // left out of watchChild reddens both rows; either half of it left out of decide reddens its row.
 func TestNestedIndependentNeverConnects(t *testing.T) {
-	docker := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	docker := sleepingDocker(t)
 	// hold is the name of a hold of this process, an ancestor of the run, whose lock makes it live.
 	hold := func(t *testing.T, dir string, live bool) string {
 		h := wire.Hold{Label: "parent", PID: os.Getpid(), StartNS: 1, NeedMiB: 128}
@@ -1785,14 +1778,30 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 	}
 }
 
+// [docker] enabled = false, read once at the run's start, keeps a container run with telemetry on
+// from opening the socket at all. Mutation: Oversized not reporting it, or the run not keeping it,
+// connects and writes a containers line.
+func TestDisabledDockerRunNeverConnects(t *testing.T) {
+	docker := sleepingDocker(t)
+	conns, _ := fakeEngine(t)
+	dir := recordedDir(t, 1024)
+	writeConfig(t, dir, telemetryOn+"[docker]\nenabled = false\n")
+	if r := cli(t, append(baseEnv(dir), ticksEnv+"=1"), "run", "--restart=yes", "--label", "off", "--mem", "128M", "--", docker); r.code != 0 {
+		t.Fatalf("exit %d: %q", r.code, r.stderr)
+	}
+	if got := labelled(events(t, dir), "off"); len(got) == 0 || got[len(got)-1]["e"] != "ended" {
+		t.Fatalf("the run did not record: %q", eventNames(got))
+	}
+	if conns.Load() != 0 || len(linesOf(t, dir, "containers")) != 0 {
+		t.Errorf("%d connections, %d lines with [docker] disabled", conns.Load(), len(linesOf(t, dir, "containers")))
+	}
+}
+
 // A stale exported CORESLOT_HOLD names no parent of this run, so it costs nothing: the run still
 // reads the socket and says why the hold did not count. Mutation: any non-empty hold counting as
 // inherited leaves both rows with no connection.
 func TestStaleHoldStillConnects(t *testing.T) {
-	docker := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(docker, []byte("#!/bin/sh\nsleep 1.5\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	docker := sleepingDocker(t)
 	for _, c := range []struct{ name, hold, miss string }{
 		{"names no ancestor", wire.HoldName(1, 999999, 1, "stale"), "not_ancestor"},
 		{"malformed", "parent", "malformed"},

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -64,12 +65,9 @@ func statusCommand(args []string, io IO) int {
 		return statusFailed(err, io)
 	}
 	v := buildStatus(rep, store.NowNS(), w, *observe)
-	cfg, cfgErr := e.Config() // an unreadable configuration turns the Docker features off
-	if cfgErr == nil {
-		v.warnings = cfg.Warnings
-	}
-	if *withDocker {
-		v.docker = readDocker(cfgErr == nil && cfg.DockerEnabled, loc)
+	v.warnings = rep.Config.Warnings
+	if *withDocker { // the snapshot's configuration is zero when it could not be read: Docker is off
+		v.docker = readDocker(rep.Config.DockerEnabled, loc)
 	}
 	if *asJSON {
 		if err := v.writeJSON(io.Stdout); err != nil {
@@ -342,10 +340,11 @@ func (v statusView) human() string {
 		p("STALLED: not observed (use --observe %s or more)", state.StallAfter)
 	}
 
-	if v.docker == nil {
-		p("docker: not read; `coreslot status --docker` reads Docker Desktop's VM and its containers")
-	} else {
+	switch {
+	case v.docker != nil:
 		v.docker.human(p)
+	case runtime.GOOS == "darwin": // Docker is off everywhere else
+		p("docker: not read; `coreslot status --docker` reads Docker Desktop's VM and its containers")
 	}
 
 	if n := len(r.DeadHolds); n > 0 {

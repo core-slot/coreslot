@@ -126,7 +126,8 @@ func (e *Engine) Config() (config.Config, error) {
 }
 
 // reading reads the configuration and the machine's memory afresh, as every admission does
-// (PROTOCOL.md sections 5.1 and 5.3). An invalid configuration or an unknown memory is a *store.StateError.
+// (PROTOCOL.md sections 5.1 and 5.3). An invalid configuration or an unknown memory is a *store.StateError;
+// the configuration is returned with the second.
 func (e *Engine) reading() (config.Config, config.Machine, error) {
 	c, err := e.Config()
 	if err != nil {
@@ -134,7 +135,7 @@ func (e *Engine) reading() (config.Config, config.Machine, error) {
 	}
 	m, err := e.machine()
 	if err != nil {
-		return config.Config{}, config.Machine{}, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
+		return c, config.Machine{}, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
 	}
 	return c, m, nil
 }
@@ -143,14 +144,15 @@ func (e *Engine) reading() (config.Config, config.Machine, error) {
 // machine's memory less the reserve, at least 0. Such a need starts only when no hold is live; with
 // the headroom unreadable nothing gates it, so bound is MaxInt64 and no need is over. telemetry is
 // the run's switch, from this same reading so that a run with telemetry off reads nothing more;
-// false when it failed.
-func (e *Engine) Oversized(needMiB int64) (boundMiB int64, over, telemetry bool) {
+// dockerOn is [docker] enabled from it, which the run keeps for its whole life. Both are false when
+// the reading failed.
+func (e *Engine) Oversized(needMiB int64) (boundMiB int64, over, telemetry, dockerOn bool) {
 	c, m, err := e.reading()
 	boundMiB = math.MaxInt64
 	if err == nil && m.HeadroomOK {
 		boundMiB = max(m.MemMiB-c.ReserveMiB, 0)
 	}
-	return boundMiB, needMiB > boundMiB, err == nil && c.TelemetryEnabled
+	return boundMiB, needMiB > boundMiB, err == nil && c.TelemetryEnabled, err == nil && c.DockerEnabled
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,

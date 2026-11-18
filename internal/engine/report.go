@@ -1,6 +1,9 @@
 package engine
 
-import "github.com/core-slot/coreslot/internal/watch"
+import (
+	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/watch"
+)
 
 // HolderInfo describes one live hold as a waiter or a snapshot sees it.
 type HolderInfo struct {
@@ -108,6 +111,7 @@ type Report struct {
 	Mem              MemInfo
 	ConfigError      string         // set when the memory could not be read
 	ConfigErr        error          // the error ConfigError is the reason of
+	Config           config.Config  // the configuration this snapshot read; zero when it could not be read
 	Tickets          []TicketInfo   // in queue order
 	Holds            []HolderInfo   // live holds, in name order
 	DeadHolds        []string       // names of holds whose probe succeeded, awaiting reconciliation

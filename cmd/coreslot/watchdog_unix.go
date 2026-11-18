@@ -9,7 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
@@ -71,13 +70,6 @@ var listTree = memsample.Tree
 // listClient scans the command's tree for a container client; tests replace it.
 var listClient = memsample.ContainerClient
 
-// dockerEnabled reads [docker] enabled, afresh: off when it says so, and when the configuration
-// cannot be read, for which no socket is opened.
-func dockerEnabled(cfgPath string) bool {
-	c, err := config.Load(cfgPath)
-	return err == nil && c.DockerEnabled
-}
-
 // watchChild lists the command's tree every second for its memory peak until ctx ends. Every
 // second listing, when the run holds g, it writes the tree's footprint, time deltas, CPU time so
 // far and smoothed stall share into the hold and takes its part in the shared watch tick; when a
@@ -124,7 +116,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 				r.record.Emit("live", telemetry.Fields{"footprint_mib": kib >> 10})
 			}
 			r.record.MemoryAsync()
-			if p.container && !r.inherited && dockerEnabled(r.loc.cfgPath) { // a descendant's socket would mark its parent's command
+			if p.container && !r.inherited && !r.dockerOff { // a descendant's socket would mark its parent's command
 				r.record.ContainersAsync(docker.Sockets(os.Getenv("DOCKER_HOST"), r.loc.home))
 			}
 		}
