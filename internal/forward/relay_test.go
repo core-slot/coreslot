@@ -205,6 +205,7 @@ func upgraded(t *testing.T, d *dockertest.Fake, addr string) (net.Conn, *bufio.R
 	must(t, c, "POST", "/containers/u/start", nil)
 	_, b := must(t, c, "POST", "/containers/u/exec", []byte(`{"Cmd":["cat"]}`))
 	id := string(b[7:71]) // {"Id":"<64 hex>"}
+	c.CloseIdleConnections()
 	conn, err := net.Dial("unix", addr)
 	if err != nil {
 		t.Fatal(err)
@@ -296,7 +297,7 @@ func TestAcceptErrorNeverEnds(t *testing.T) {
 	}
 	f := &flaky{Listener: ln}
 	f.fails.Store(3)
-	r := newRelay(f, d.Sock)
+	r := newRelay(f, d.Sock, NewTap(io.Discard))
 	go r.accept()
 	t.Cleanup(r.stop) // after the client's idle connections close
 	c := client(t, sock)
