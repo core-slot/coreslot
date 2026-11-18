@@ -143,11 +143,17 @@ func TestReasonBehindHeadTooLong(t *testing.T) {
 	}
 }
 
-// With no hold live as well, an unknown headroom is still the first answer. Mutation: exchange
-// the headroom and no-holds cases of the switch in passes.
+// With a hold live, an unknown headroom leaves the head's W unknown; with none live, the head
+// starts at once whatever the headroom, as headWait judges it too. Mutations: dropping headWait's
+// headroom case reddens the first; putting a headroom case ahead of the no-holds one in passes
+// reddens the second.
 func TestNoPassHeadroomUnknown(t *testing.T) {
 	unknownHeadroom(t)
 	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	enqueue(t, e, need(2048))
+	wantReason(t, waitOutcome(t, enqueue(t, e, typical(1, 10))), ReasonBehindHead, "no_holds")
+	e = newEngine(t, newStateDir(t, ""), newFakeClock())
+	hold(t, e, need(128))
 	enqueue(t, e, need(2048))
 	wantReason(t, waitOutcome(t, enqueue(t, e, typical(1, 10))), ReasonBehindHead, "headroom_unknown")
 }

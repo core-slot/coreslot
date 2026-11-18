@@ -151,7 +151,7 @@ The watchdog, from the newest shared sample.
 | `need_mib` | int | what the hold reserves; 0 for a run outside the budget |
 | `footprint_mib` | int | what its run last measured |
 | `stops` | int | how many times it was stopped |
-| `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read |
+| `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read; true for a `pid` of 0 or 1, never a run's |
 | `container` | bool | present and true for container work, whose containers' memory is not measured |
 | `no_cpu_s` | int | present once its tree has used next to no CPU for 30 minutes: for how long, in s |
 | `typical_s` | int | the label's typical run time; 0 when unknown |
@@ -169,7 +169,7 @@ and what its body would supply at its zero value: `label` empty, `arrival_ns`, `
 `stoppable` is a convenience, not a control: it prevents nothing. It is true where the hold's body
 marks it a victim (its run is restartable, its command has a process group of its own and is not
 container work), its command has not exited, and `status` read the process table and found a
-process `pid` that started no later than `start_ns`, with a second's slack. It does not show that
+process `pid`, never 0 or 1, that started no later than `start_ns`, with a second's slack. It does not show that
 this process is a `coreslot run`, that it holds the hold's lock, or that it is still the same
 process when a signal goes out. A `pid` means something only on the host that printed it, so a `status --json` read
 over `ssh` ([remote.md](remote.md)) names processes on that host. When `status` cannot be sure,
@@ -210,7 +210,7 @@ wait is then 0 when no hold is live and null when one is. Otherwise it is 0 when
 now, when the holds that would cover it have outlived their typical run time, and when no hold is
 live, where the idle rule starts the head whatever the numbers say
 ([`PROTOCOL.md` section 12.1](../PROTOCOL.md#121-steps)). While a hold is live, a restart's number
-is at least the calm it still needs.
+is at least the calm it still needs, so the first two cases give it that calm rather than 0.
 
 A number, or a 0, is not a start time. A hold may overrun its usual time; a memory gate may hold the
 head; a container request is judged against real free memory rather than `room_mib`; and under

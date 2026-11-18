@@ -54,9 +54,9 @@ func (e *Engine) Snapshot() (Report, error) {
 		return Report{}, err
 	}
 	r.Ignored[store.QueueDir] = ignored
-	// The first live ticket in queue order is the head the passing rule judges others by: only its
-	// index, need and restart are kept for its expected wait.
-	head, headNeed, headRestart := -1, int64(0), false
+	// The first live ticket in queue order is the head the passing rule judges others by: its index
+	// and restart are kept for its expected wait.
+	head, headRestart := -1, false
 	for _, en := range tickets {
 		body, err := e.readBody(store.QueueDir, en.Name)
 		if gone(err) {
@@ -86,7 +86,7 @@ func (e *Engine) Snapshot() (Report, error) {
 			return Report{}, err
 		}
 		if !dead && head < 0 {
-			head, headNeed, headRestart = len(r.Tickets), tk.NeedMiB, tk.Restart
+			head, headRestart = len(r.Tickets), tk.Restart
 		}
 		r.Tickets = append(r.Tickets, TicketInfo{Name: en.Name, ID: en.ID.String(), Label: tk.Label,
 			PID: en.ID.PID, NeedMiB: tk.NeedMiB, CreatedNS: tk.CreatedNS,
@@ -98,11 +98,12 @@ func (e *Engine) Snapshot() (Report, error) {
 		return Report{}, err
 	}
 	r.Ignored[store.HoldsDir], r.DeadHolds = ignored, dead
-	listed := e.clock.Realtime()
+	d, smp, at, watchErr := e.st.ReadWatch() // no readable watch.json is no sample
+	now := e.clock.Realtime()                // one clock for the snapshot, after the reads it judges
 	for _, h := range live {
 		info := h.info()
-		info.ChildExited, info.SampleAgeMS = h.body.ChildExited, sampleAgeMS(h.body.SampledNS, listed)
-		info.LeftS = holdLeftS(h.body, listed)
+		info.ChildExited, info.SampleAgeMS = h.body.ChildExited, sampleAgeMS(h.body.SampledNS, now)
+		info.LeftS = holdLeftS(h.body, now)
 		r.Holds = append(r.Holds, info)
 		r.Mem.ReservedMiB += h.body.NeedMiB
 	}
@@ -117,21 +118,20 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Mem.RealFreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, nil))
 	}
 	// A live hold's lock outlives its owner only in a descendant that inherited the hold's
-	// descriptor. An unreadable process table reports nothing: unknown is not exited.
+	// descriptor. An unreadable process table reports nothing: unknown is not exited. Pids 0 and 1,
+	// the kernel's and init's, are never a run's.
 	if procs, ok := listProcs(); ok {
 		for i, h := range r.Holds {
-			r.Holds[i].OwnerExited = !memsample.Alive(procs, h.PID, h.StartNS)
+			r.Holds[i].OwnerExited = h.PID < 2 || !memsample.Alive(procs, h.PID, h.StartNS)
 			r.Holds[i].Stoppable = live[i].body.Victim && !r.Holds[i].OwnerExited && !h.ChildExited
 		}
 	}
 
-	d, smp, at, watchErr := e.st.ReadWatch() // no readable watch.json is no sample
 	if head >= 0 && memErr == nil {
 		readWatch := func() (watch.Detector, watch.Sample, int64, error) { return d, smp, at, watchErr }
-		w, noPass := headWait(headNeed, headRestart, live, room, listed, machine.HeadroomOK, readWatch, cfg.Watch)
+		w, noPass := headWait(r.Tickets[head].NeedMiB, headRestart, live, room, now, machine.HeadroomOK, readWatch, cfg.Watch)
 		r.Tickets[head].WaitS, r.Tickets[head].WaitKnown = w, noPass == ""
 	}
-	now := e.clock.Realtime()
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
 		Fresh: fresh(at, now)}
 	if r.Watch.Fresh { // the newest sample knows which jobs have a learned normal S; this client does not
