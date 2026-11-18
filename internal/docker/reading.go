@@ -11,7 +11,6 @@ import (
 const (
 	ResponseMax = 1 << 20 // /info and a container's stats
 	listMax     = 4 << 20 // the container list: a name and labels each
-	imageMax    = 64
 	composeKey  = "com.docker.compose.project"
 )
 
@@ -40,37 +39,46 @@ func UsedBytes(s Stats) uint64 {
 // ShortID cuts an id to the 12 characters the CLI shows.
 func ShortID(id string) string { return id[:min(12, len(id))] }
 
-// ShortImage cuts an image reference to the length a line keeps.
-func ShortImage(image string) string { return image[:min(imageMax, len(image))] }
-
-// StatsPath is the request for one container's stats, once.
-func StatsPath(id string) string { return "/containers/" + id + "/stats?stream=false&one-shot=true" }
-
-// Read reads the engine's memory and every running container's usage from the first of sockets
-// that connects, all against one deadline and with no retry; no_socket and connect move on to the
-// next. Any failed call is no reading. A container that stopped between the list and its stats
-// is left out: one removed (404) or stopped (a limit of 0). Any other status is no reading.
-func Read(sockets []string, deadline time.Time) Reading {
-	var r Reading
-	if len(sockets) == 1 && sockets[0] == TCPHost {
-		r.Code = TCPHost
-		return r
+// StatsPath is the request for one container's stats, once. An id is the engine's own text, so it
+// is put in a request only when it is 64 hexadecimal characters.
+func StatsPath(id string) (string, bool) {
+	if len(id) != 64 || strings.Trim(id, "0123456789abcdefABCDEF") != "" {
+		return "", false
 	}
-	var sock string
-	var info []byte
-	r.Code = NoSocket
+	return "/containers/" + id + "/stats?stream=false&one-shot=true", true
+}
+
+// Walk makes the request target on the first of sockets that connects, against one deadline: no_socket
+// and connect move on to the next candidate. It returns that socket with the body and the code of the
+// answer, or the code of the last failure. DOCKER_HOST over TCP is a code, with no connection.
+func Walk(sockets []string, target string, deadline time.Time, max int64) (sock string, body []byte, code string) {
+	if len(sockets) == 1 && sockets[0] == TCPHost {
+		return "", nil, TCPHost
+	}
+	code = NoSocket
 	for _, s := range sockets {
-		b, code := Get(s, "/info", deadline, ResponseMax)
-		if code == NoSocket {
+		b, c := Get(s, target, deadline, max)
+		if c == NoSocket {
 			continue
 		}
-		r.Code = code
-		if code != ConnectErr {
-			sock, info = s, b
-			break
+		code = c
+		if c != ConnectErr {
+			return s, b, c
 		}
 	}
-	if sock == "" || r.Code != "" {
+	return "", nil, code
+}
+
+// Read reads the engine's memory and every running container's usage from the first of sockets
+// that connects (Walk), all against one deadline and with no retry. Any failed call is no reading,
+// and so is a container whose id is not one the engine makes. A container that stopped between the
+// list and its stats is left out: one removed (404) or stopped (a limit of 0). Any other status is
+// no reading.
+func Read(sockets []string, deadline time.Time) Reading {
+	var r Reading
+	sock, info, code := Walk(sockets, "/info", deadline, ResponseMax)
+	if code != "" {
+		r.Code = code
 		return r
 	}
 	var in struct {
@@ -102,7 +110,12 @@ func Read(sockets []string, deadline time.Time) Reading {
 	}
 	var list []Container
 	for _, c := range running {
-		b, status, code := do(sock, StatsPath(c.ID), deadline, ResponseMax)
+		path, ok := StatsPath(c.ID)
+		if !ok {
+			r.Code = Parse
+			return r
+		}
+		b, status, code := do(sock, path, deadline, ResponseMax)
 		if status == 404 { // removed after the list, as `docker run --rm` does
 			continue
 		}

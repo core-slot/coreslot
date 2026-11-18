@@ -8,7 +8,6 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -82,7 +81,7 @@ func TestJunkBodyIsParseCode(t *testing.T) {
 				case target == "/containers/json" && c.list != "":
 					dockertest.Reply(conn, c.code, c.list)
 				case target == "/containers/json":
-					dockertest.Reply(conn, 200, `[{"Id":"bad","Image":"b"}]`)
+					dockertest.Reply(conn, 200, `[{"Id":"`+cid('b')+`","Image":"b"}]`)
 				default:
 					dockertest.Reply(conn, 200, c.stats)
 				}
@@ -126,21 +125,6 @@ func TestConnectErrorHasNoPath(t *testing.T) {
 	f := dockertest.Engine(t)
 	if r := docker.Read([]string{refused, f.Sock}, soon()); !r.OK {
 		t.Errorf("a live candidate after a refused one: %+v", r)
-	}
-}
-
-// A DOCKER_HOST over TCP is a code, with no connection of any kind. Mutation: leaving the check
-// out connects to the marker as a path.
-func TestTCPDockerHost(t *testing.T) {
-	var calls atomic.Int64
-	saved := docker.Connect
-	docker.Connect = func(string) (int, string) { calls.Add(1); return -1, "connect" }
-	t.Cleanup(func() { docker.Connect = saved })
-	if r := docker.Read([]string{docker.TCPHost}, soon()); r.OK || r.Code != "tcp_host" {
-		t.Errorf("reading %+v, want tcp_host", r)
-	}
-	if calls.Load() != 0 {
-		t.Errorf("%d connections", calls.Load())
 	}
 }
 

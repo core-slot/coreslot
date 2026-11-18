@@ -30,33 +30,6 @@ func hostFor(sock string) map[string]string {
 	return map[string]string{"DOCKER_HOST": "unix://" + sock}
 }
 
-// Anything but macOS is off, whatever else is true. Mutation: dropping the goos check turns the
-// engine on for Linux, whose Docker is not a desktop VM.
-func TestFeaturesOffOnLinux(t *testing.T) {
-	sock := socketAt(t)
-	if got, off := docker.Features("linux", true, hostFor(sock), "/home/ana", false); got != nil || off != docker.OffPlatform {
-		t.Errorf("got %q, %q, want none, platform", got, off)
-	}
-}
-
-// [docker] enabled = false is off. Mutation: ignoring enabled.
-func TestFeaturesOffByConfig(t *testing.T) {
-	sock := socketAt(t)
-	if got, off := docker.Features("darwin", false, hostFor(sock), "/Users/ana", false); got != nil || off != docker.OffConfig {
-		t.Errorf("got %q, %q, want none, config", got, off)
-	}
-}
-
-// A DOCKER_HOST that is not a unix socket is a remote engine: off, and the marker is never a candidate.
-// Mutation: letting the tcp marker through as a socket path.
-func TestFeaturesTCPHostIsRemote(t *testing.T) {
-	for _, host := range []string{"tcp://10.0.0.1:2375", "ssh://ana@server"} {
-		if got, off := docker.Features("darwin", true, map[string]string{"DOCKER_HOST": host}, "/Users/ana", false); got != nil || off != docker.OffRemoteHost {
-			t.Errorf("%s: got %q, %q, want none, remote-host", host, got, off)
-		}
-	}
-}
-
 // Only a candidate that is a socket counts: a regular file or an absent path is no engine, and one
 // that is a socket is returned. Mutation: dropping the mode check lists the regular file.
 func TestFeaturesNoSocketOnList(t *testing.T) {
@@ -103,16 +76,9 @@ func TestFeaturesStateDirOverrideWithoutHook(t *testing.T) {
 	}
 }
 
-// A run inside a parent's context never connects. Mutation: ignoring inherited.
-func TestFeaturesNested(t *testing.T) {
-	sock := socketAt(t)
-	if got, off := docker.Features("darwin", true, hostFor(sock), "/Users/ana", true); got != nil || off != docker.OffNested {
-		t.Errorf("got %q, %q, want none, nested", got, off)
-	}
-}
-
-// When several reasons apply the first in the order wins: platform, config, nested, state-dir,
-// remote-host, no-socket. Mutation: any two checks swapped reddens the pair that names them.
+// Each reason is off with no socket, and when several apply the first in the order wins: platform,
+// config, nested, state-dir, remote-host, no-socket. Mutations: any two checks swapped reddens the
+// pair that names them; dropping one check reddens its own row.
 func TestFeaturesReasonOrder(t *testing.T) {
 	t.Setenv("CORESLOT_TESTHOOK_DOCKER_SOCKET", "")
 	all := map[string]string{"DOCKER_HOST": "tcp://10.0.0.1:2375", config.StateDirEnv: "/tmp/state"}
@@ -130,8 +96,8 @@ func TestFeaturesReasonOrder(t *testing.T) {
 		{"darwin", true, map[string]string{"DOCKER_HOST": "tcp://h"}, false, docker.OffRemoteHost},
 		{"darwin", true, map[string]string{"DOCKER_HOST": "unix:///nonexistent/x.sock"}, false, docker.OffNoSocket},
 	} {
-		if _, off := docker.Features(c.goos, c.enabled, c.env, "", c.nested); off != c.want {
-			t.Errorf("%s enabled %v env %v nested %v: off %q, want %q", c.goos, c.enabled, c.env, c.nested, off, c.want)
+		if got, off := docker.Features(c.goos, c.enabled, c.env, "", c.nested); off != c.want || got != nil {
+			t.Errorf("%s enabled %v env %v nested %v: %q, %q, want no socket and %q", c.goos, c.enabled, c.env, c.nested, got, off, c.want)
 		}
 	}
 }

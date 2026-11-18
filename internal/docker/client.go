@@ -21,7 +21,7 @@ const (
 	NoSocket   = "no_socket"
 	ConnectErr = "connect"
 	Deadline   = "deadline"
-	HTTP       = "http"
+	httpErr    = "http"
 	Parse      = "parse"
 )
 
@@ -29,7 +29,7 @@ const (
 var Connect = connect
 
 // Get makes one HTTP/1.0 GET on a connection of its own and returns the body of a 200. A response
-// larger than max bytes is no response: code HTTP.
+// larger than max bytes is no response: code "http".
 func Get(sock, target string, deadline time.Time, max int64) ([]byte, string) {
 	body, _, code := do(sock, target, deadline, max)
 	return body, code
@@ -58,16 +58,16 @@ func do(sock, target string, deadline time.Time, max int64) (body []byte, status
 	case err != nil:
 		return nil, 0, ConnectErr
 	case int64(len(resp)) > max:
-		return nil, 0, HTTP
+		return nil, 0, httpErr
 	}
 	head, body, ok := bytes.Cut(resp, []byte("\r\n\r\n"))
 	fields := bytes.Fields(head)
 	if !ok || len(fields) < 2 {
-		return nil, 0, HTTP
+		return nil, 0, httpErr
 	}
 	status, _ = strconv.Atoi(string(fields[1]))
 	if status != 200 {
-		return nil, status, HTTP
+		return nil, status, httpErr
 	}
 	return body, status, ""
 }

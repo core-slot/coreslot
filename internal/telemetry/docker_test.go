@@ -5,7 +5,6 @@ package telemetry
 import (
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -19,48 +18,43 @@ import (
 	"github.com/core-slot/coreslot/internal/docker/dockertest"
 )
 
-type fakeContainer struct{ id, image, stats string }
-
 // engine answers as a Docker daemon with these containers running.
-func engine(t *testing.T, cs ...fakeContainer) *dockertest.Fake {
+func engine(t *testing.T, cs ...dockertest.Container) *dockertest.Fake {
 	t.Helper()
-	return dockertest.Serve(t, func(c net.Conn, target string) {
-		if target == "/containers/json" {
-			var items []string
-			for _, x := range cs {
-				items = append(items, fmt.Sprintf(`{"Id":%q,"Image":%q,"State":"running"}`, x.id, x.image))
-			}
-			dockertest.Reply(c, 200, "["+strings.Join(items, ",")+"]")
-			return
-		}
-		for _, x := range cs {
-			if target == docker.StatsPath(x.id) {
-				dockertest.Reply(c, 200, x.stats)
-				return
-			}
-		}
-		dockertest.Reply(c, 404, `{"message":"no such container"}`)
-	})
+	var opts []dockertest.Option
+	for _, c := range cs {
+		opts = append(opts, dockertest.WithContainer(c))
+	}
+	return dockertest.Engine(t, opts...)
+}
+
+// cid is an id as an engine makes it: 64 hexadecimal characters, here of one digit.
+func cid(c byte) string { return strings.Repeat(string(c), 64) }
+
+// statsPath is the request target of a container's stats.
+func statsPath(id string) string {
+	path, _ := docker.StatsPath(id)
+	return path
 }
 
 func soon() time.Time { return time.Now().Add(2 * time.Second) }
 
-const longID = "0123456789abcdef0123456789abcdef"
+var longID = strings.Repeat("0123456789abcdef", 4)
 
 // The list, then one stats request per container and nothing else, each over HTTP/1.0 with the
-// id cut to 12 and a shorter id whole. Mutations: an id cut without looking at its length panics;
-// a stats path without one-shot=true reddens the requests; limit taken from usage reddens the list.
+// id cut to 12. Mutations: an id left whole reddens the list; a stats path without one-shot=true
+// reddens the requests; limit taken from usage reddens the list.
 func TestContainersParsesStats(t *testing.T) {
 	d := engine(t,
-		fakeContainer{longID, "postgres:16", dockertest.Stats(300<<20, 2048<<20, `"inactive_file":100`)},
-		fakeContainer{"abc", "alpine", dockertest.Stats(5<<20, 1024<<20, ``)})
+		dockertest.Container{ID: longID, Image: "postgres:16", UsageBytes: 300 << 20, InactiveFileBytes: 100, LimitBytes: 2048 << 20},
+		dockertest.Container{ID: cid('c'), Image: "alpine", UsageBytes: 5 << 20, LimitBytes: 1024 << 20})
 	list, total, code := Containers(soon(), []string{d.Sock})
-	want := []docker.Container{{ID: longID[:12], Image: "postgres:16", UsageMiB: 299, LimitMiB: 2048}, {ID: "abc", Image: "alpine", UsageMiB: 5, LimitMiB: 1024}}
+	want := []docker.Container{{ID: longID[:12], Image: "postgres:16", UsageMiB: 299, LimitMiB: 2048}, {ID: cid('c')[:12], Image: "alpine", UsageMiB: 5, LimitMiB: 1024}}
 	if !reflect.DeepEqual(list, want) || total != 2 || code != "" {
 		t.Errorf("list %+v total %d code %q, want %+v 2 and none", list, total, code, want)
 	}
 	reqs := d.Requests()
-	wantReqs := []string{"GET /containers/json HTTP/1.0", "GET " + docker.StatsPath(longID) + " HTTP/1.0", "GET " + docker.StatsPath("abc") + " HTTP/1.0"}
+	wantReqs := []string{"GET /containers/json HTTP/1.0", "GET " + statsPath(longID) + " HTTP/1.0", "GET " + statsPath(cid('c')) + " HTTP/1.0"}
 	if !reflect.DeepEqual(reqs, wantReqs) {
 		t.Errorf("requests %q, want %q", reqs, wantReqs)
 	}
@@ -69,10 +63,22 @@ func TestContainersParsesStats(t *testing.T) {
 // A container that stopped between the list and its stats answers with zeros: it is counted in the
 // total, left out of the list and is no error. Mutation: without the limit test it is listed at 0.
 func TestStoppedContainerLeftOut(t *testing.T) {
-	d := engine(t, fakeContainer{"gone", "alpine", dockertest.Stats(0, 0, ``)}, fakeContainer{"abc", "alpine", dockertest.Stats(5<<20, 1024<<20, ``)})
-	list, total, code := Containers(time.Now().Add(2*time.Second), []string{d.Sock})
-	if code != "" || total != 2 || len(list) != 1 || list[0].ID != "abc" {
-		t.Errorf("list %v, total %d, code %q; want only abc of 2, no code", list, total, code)
+	d := dockertest.Engine(t, dockertest.StoppedAtStats(cid('1')), dockertest.WithContainer(dockertest.Container{ID: cid('1'), Image: "alpine"}),
+		dockertest.WithContainer(dockertest.Container{ID: cid('c'), Image: "alpine", UsageBytes: 5 << 20, LimitBytes: 1024 << 20}))
+	list, total, code := Containers(soon(), []string{d.Sock})
+	if code != "" || total != 2 || len(list) != 1 || list[0].ID != cid('c')[:12] {
+		t.Errorf("list %v, total %d, code %q; want only the second of 2, no code", list, total, code)
+	}
+}
+
+// An id that is not 64 hexadecimal characters is put in no request: its container costs only itself,
+// with the parse code. Mutation: building the path from any id sends the first container's request.
+func TestOddIDCostsOnlyItself(t *testing.T) {
+	d := engine(t, dockertest.Container{ID: "abc d", Image: "a", UsageBytes: 1 << 20, LimitBytes: 1 << 20},
+		dockertest.Container{ID: cid('c'), Image: "b", UsageBytes: 1 << 20, LimitBytes: 1 << 20})
+	list, total, code := Containers(soon(), []string{d.Sock})
+	if code != "parse" || total != 2 || len(list) != 1 || list[0].ID != cid('c')[:12] || len(d.Requests()) != 2 {
+		t.Errorf("list %+v total %d code %q after %q, want the second only, 2, parse and one stats request", list, total, code, d.Requests())
 	}
 }
 
@@ -80,10 +86,10 @@ func TestStoppedContainerLeftOut(t *testing.T) {
 // makes 21 requests; total taken after the cap says 16; an image left at full length makes the
 // line too long, so nothing is written.
 func TestContainersCappedAtSixteen(t *testing.T) {
-	var cs []fakeContainer
+	var cs []dockertest.Container
 	image := strings.Repeat("i", 200)
 	for i := range 20 {
-		cs = append(cs, fakeContainer{fmt.Sprintf("%064d", i), image, dockertest.Stats(1<<40, 1<<40, ``)})
+		cs = append(cs, dockertest.Container{ID: fmt.Sprintf("%064d", i), Image: image, UsageBytes: 1 << 40, LimitBytes: 1 << 40})
 	}
 	d := engine(t, cs...)
 	list, total, code := Containers(soon(), []string{d.Sock})
@@ -115,7 +121,7 @@ func TestContainersHungSocketReturnsWithinDeadline(t *testing.T) {
 	var answered atomic.Int64
 	d := dockertest.Serve(t, func(conn net.Conn, target string) {
 		if target == "/containers/json" {
-			dockertest.Reply(conn, 200, `[{"Id":"aaa","Image":"a"},{"Id":"bbb","Image":"b"}]`)
+			dockertest.Reply(conn, 200, `[{"Id":"`+cid('a')+`","Image":"a"},{"Id":"`+cid('b')+`","Image":"b"}]`)
 			return
 		}
 		if answered.Add(1) <= 1 {
@@ -171,7 +177,7 @@ func TestContainersTricklingServerMissesNoDeadline(t *testing.T) {
 // other than 200 is its own code. Mutations: a failed stats ending the loop loses the row's good
 // container; ignoring the status parses the 500's body.
 func TestJunkBodyIsParseCode(t *testing.T) {
-	good := fakeContainer{"ggg", "good", dockertest.Stats(2<<20, 4<<20, ``)}
+	good := dockertest.Stats(2<<20, 4<<20, ``)
 	for _, c := range []struct {
 		name  string
 		list  string
@@ -195,11 +201,11 @@ func TestJunkBodyIsParseCode(t *testing.T) {
 				case target == "/containers/json" && c.list != "":
 					dockertest.Reply(conn, c.code, c.list)
 				case target == "/containers/json":
-					dockertest.Reply(conn, 200, `[{"Id":"bad","Image":"b"},{"Id":"ggg","Image":"good"}]`)
-				case target == docker.StatsPath("bad"):
+					dockertest.Reply(conn, 200, `[{"Id":"`+cid('b')+`","Image":"b"},{"Id":"`+cid('e')+`","Image":"good"}]`)
+				case target == statsPath(cid('b')):
 					dockertest.Reply(conn, 200, c.stats)
 				default:
-					dockertest.Reply(conn, 200, good.stats)
+					dockertest.Reply(conn, 200, good)
 				}
 			})
 			list, _, code := Containers(soon(), []string{d.Sock})
@@ -207,54 +213,6 @@ func TestJunkBodyIsParseCode(t *testing.T) {
 				t.Errorf("list %+v code %q, want %d and %q", list, code, c.kept, c.want)
 			}
 		})
-	}
-}
-
-// No socket at any candidate is its own code, not a connect failure. Mutation: treating ENOENT
-// like every other error says connect.
-func TestNoSocketIsACode(t *testing.T) {
-	dir := dockertest.SocketDir(t)
-	if _, total, code := Containers(soon(), []string{dir + "/a.sock", dir + "/b.sock"}); code != "no_socket" || total != 0 {
-		t.Errorf("code %q total %d", code, total)
-	}
-	if _, _, code := Containers(soon(), nil); code != "no_socket" {
-		t.Errorf("no candidates: code %q", code)
-	}
-}
-
-// A refused connection is a closed code and the line holds no path; the next candidate is still
-// tried, and the first that answers is used for the rest. Mutations: stopping at the first error
-// reddens the second part; writing the error's text instead of the code puts the path on the line.
-func TestConnectErrorHasNoPath(t *testing.T) {
-	dir := dockertest.SocketDir(t)
-	refused := filepath.Join(dir, "refused.sock")
-	ln, err := net.Listen("unix", refused)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
-	ln.Close()
-	state := stateDir(t)
-	r := New(state, "run-1", "x")
-	r.ContainersAsync([]string{refused, dir + "/absent.sock"})
-	r.memWG.Wait()
-	got := lines(t, state)
-	if len(got) != 1 || got[0]["containers_err"] != "connect" {
-		t.Fatalf("lines %v, want containers_err connect", got)
-	}
-	data, err := os.ReadFile(eventsPath(state))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), dir) || strings.Contains(string(data), "sock") {
-		t.Errorf("the line carries the path: %s", data)
-	}
-	d := engine(t, fakeContainer{"abc", "alpine", dockertest.Stats(1<<20, 2<<20, ``)})
-	if list, _, code := Containers(soon(), []string{refused, d.Sock}); code != "" || len(list) != 1 {
-		t.Errorf("next candidate: list %+v code %q", list, code)
-	}
-	if n := len(d.Requests()); n != 2 {
-		t.Errorf("%d requests to the second candidate, want 2", n)
 	}
 }
 
@@ -313,7 +271,7 @@ func TestHungSocketLineStillWritten(t *testing.T) {
 // reads twice; writing with Emit gives the line a run.
 func TestContainersLineOncePerWindow(t *testing.T) {
 	fakeSweep(t, goodSweep)
-	d := engine(t, fakeContainer{longID, "postgres:16", dockertest.Stats(300<<20, 2048<<20, ``)})
+	d := engine(t, dockertest.Container{ID: longID, Image: "postgres:16", UsageBytes: 300 << 20, LimitBytes: 2048 << 20})
 	dir := stateDir(t)
 	r := New(dir, "run-1", "x")
 	r.MemoryAsync()

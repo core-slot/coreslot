@@ -12,7 +12,6 @@ import (
 // Off is why the Docker features are off; "" is on.
 type Off string
 
-// The closed reasons.
 const (
 	On            Off = ""
 	OffPlatform   Off = "platform"    // not macOS

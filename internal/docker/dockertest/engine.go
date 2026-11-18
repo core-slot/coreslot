@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/docker"
 )
@@ -99,10 +100,11 @@ func Serve(t testing.TB, handle func(c net.Conn, target string)) *Fake {
 	return d
 }
 
-// jsonString is s as a JSON string; %q would write Go escapes (\x1b) that JSON does not have.
+// jsonString is s as a JSON string; %q would write Go escapes (\x1b) that JSON does not have. The
+// replacement character stands for an invalid byte, which goes out raw, as a careless engine's would.
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
-	return string(b)
+	return strings.ReplaceAll(string(b), "\ufffd", "\xff")
 }
 
 // Reply writes a response of the status with a JSON body.
@@ -128,6 +130,7 @@ type engine struct {
 	statsCode  map[string]int
 	stopped    map[string]bool
 	hang       bool
+	delay      time.Duration
 	pad        int
 	done       chan struct{}
 }
@@ -156,6 +159,9 @@ func StoppedAtStats(id string) Option { return func(e *engine) { e.stopped[id] =
 // Hang makes every request wait for the test's end.
 func Hang() Option { return func(e *engine) { e.hang = true } }
 
+// Slow makes every response wait d: each call is within a deadline, all of them are not.
+func Slow(d time.Duration) Option { return func(e *engine) { e.delay = d } }
+
 // HugeList makes the container list larger than any reading takes.
 func HugeList() Option { return PadList(4 << 20) }
 
@@ -175,6 +181,7 @@ func Engine(t testing.TB, opts ...Option) *Fake {
 			<-e.done
 			return
 		}
+		time.Sleep(e.delay)
 		switch {
 		case target == "/info":
 			Reply(c, 200, fmt.Sprintf(`{"OperatingSystem":%q,"MemTotal":%d}`, e.os, e.memTotal))
@@ -195,7 +202,7 @@ func Engine(t testing.TB, opts ...Option) *Fake {
 			Reply(c, 200, "["+strings.Join(items, ",")+"]")
 		default:
 			for _, x := range e.containers {
-				if target != docker.StatsPath(x.ID) {
+				if path, _ := docker.StatsPath(x.ID); target != path {
 					continue
 				}
 				switch {
@@ -204,8 +211,7 @@ func Engine(t testing.TB, opts ...Option) *Fake {
 				case e.stopped[x.ID]:
 					Reply(c, 200, Stats(0, 0, ``))
 				default:
-					Reply(c, 200, fmt.Sprintf(`{"memory_stats":{"usage":%d,"limit":%d,"stats":{"inactive_file":%d}}}`,
-						x.UsageBytes, x.LimitBytes, x.InactiveFileBytes))
+					Reply(c, 200, Stats(int64(x.UsageBytes), int64(x.LimitBytes), fmt.Sprintf(`"inactive_file":%d`, x.InactiveFileBytes)))
 				}
 				return
 			}
