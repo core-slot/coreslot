@@ -164,15 +164,28 @@ func (r *run) setEngagement(fw engagement) {
 	}
 }
 
+// forwardBase is where the forwarder's directory lives: the home directory, or the state directory
+// under its override.
+func forwardBase(loc location) string {
+	if os.Getenv(config.StateDirEnv) != "" {
+		return loc.dir
+	}
+	return loc.home
+}
+
+// forwarderDir is the forwarder's directory as doctor reads it, never made; "" without a home.
+func forwarderDir(loc location) string {
+	if base := forwardBase(loc); base != "" {
+		return filepath.Join(base, relay.DirName)
+	}
+	return ""
+}
+
 // startForwarding starts the engaged run's forwarder at its first admission, in the forwarder's
 // directory of the home directory (of the state directory under its override), and then walks
 // that directory for entries nothing serves. A run that cannot have one carries the reason.
 func (r *run) startForwarding() {
-	base := r.loc.home
-	if environ()[config.StateDirEnv] != "" {
-		base = r.loc.dir
-	}
-	dir, err := relay.Dir(base)
+	dir, err := relay.Dir(forwardBase(r.loc))
 	if err != nil {
 		r.setEngagement(engagement{note: docker.NoteAddress})
 		return

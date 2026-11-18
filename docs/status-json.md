@@ -152,11 +152,13 @@ The watchdog, from the newest shared sample.
 | `footprint_mib` | int | what its run last measured |
 | `stops` | int | how many times it was stopped |
 | `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read; true for a `pid` of 0 or 1, never a run's |
-| `container` | bool | present and true for container work, whose containers' memory is not measured |
+| `container` | bool | present and true for container work, whose containers' memory is not measured unless `docker_footprint_mib` is present |
 | `no_cpu_s` | int | present once its tree has used next to no CPU for 30 minutes: for how long, in s |
 | `typical_s` | int | the label's typical run time; 0 when unknown |
 | `left_s` | int or null | what remains of `typical_s`, never below 0; null when `typical_s` is 0 |
 | `stoppable` | bool | where a reader may offer to stop the run |
+| `docker_footprint_mib` | int | present, 0 included, while its run counts its own containers through a forwarder (macOS): what they have grown by since the run first touched each |
+| `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address` or `ungated: blind` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
 
 `left_s` of 0 on a hold that is still live means it has outlived its typical run time.
 
