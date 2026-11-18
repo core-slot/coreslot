@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -300,4 +301,28 @@ func TestNestedUnderUnbudgetedParent(t *testing.T) {
 		}
 	})
 
+}
+
+// A run inherits a parent's context when CORESLOT_UNBUDGETED is exported, or CORESLOT_HOLD names a
+// hold that is no stale variable: a malformed name or a pid that is no ancestor is one, a dead
+// hold of an ancestor is not. Mutations: dropping the miss test makes the stale rows true; dropping
+// the unbudgeted test the first row false.
+func TestInherited(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		env        map[string]string
+		hold, miss string
+		want       bool
+	}{
+		{"unbudgeted", map[string]string{engine.EnvUnbudgeted: "reason"}, "", "", true},
+		{"live ancestor's hold", nil, "h", "", true},
+		{"dead hold of an ancestor", nil, "h", "dead", true},
+		{"hold of a pid that is no ancestor", nil, "h", "not_ancestor", false},
+		{"malformed hold", nil, "h", "malformed", false},
+		{"nothing", nil, "", "", false},
+	} {
+		if got := inherited(tc.env, tc.hold, tc.miss); got != tc.want {
+			t.Errorf("%s: inherited = %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }

@@ -41,8 +41,7 @@ func (r *run) decide() int {
 	}
 	inside, hold, miss := engine.DecideNested(os.Environ(), isAncestor)
 	r.nestedMiss = miss
-	// A stale exported variable names no parent; a dead hold of an ancestor may still have one.
-	r.inherited = env[engine.EnvUnbudgeted] != "" || hold != "" && miss != "not_ancestor" && miss != "malformed"
+	r.inherited = inherited(env, hold, miss) // a stale exported variable names no parent
 	if inside {
 		r.o.sameGroup = true
 		if !r.o.independent {
@@ -52,6 +51,13 @@ func (r *run) decide() int {
 	}
 	r.env = dropInherited(env)
 	return r.ordinary()
+}
+
+// inherited reports whether the run inherits a parent's context, from the one decision
+// engine.DecideNested made: an exported CORESLOT_UNBUDGETED, or a CORESLOT_HOLD that is not a stale
+// variable naming no parent (a dead hold of an ancestor may still have one).
+func inherited(env map[string]string, hold, miss string) bool {
+	return env[engine.EnvUnbudgeted] != "" || hold != "" && miss != "not_ancestor" && miss != "malformed"
 }
 
 // isAncestor reports whether pid is an ancestor of this process. An unreadable process table

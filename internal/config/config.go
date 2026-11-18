@@ -27,6 +27,11 @@ type Config struct {
 	// TelemetryEnabled is [telemetry] enabled. It also turns Watch.SampleLog on, which then means
 	// "sample", not only the key of that name.
 	TelemetryEnabled bool
+	// DockerEnabled is [docker] enabled, default true: the read-only Docker display and its
+	// readings. A value that is no boolean reads as off, with a warning.
+	DockerEnabled bool
+	// Warnings are what a lenient key made of a value it could not use; Load never fails for them.
+	Warnings []string
 }
 
 // Error reports a configuration that cannot be read or is invalid: a state error. Err is the
@@ -86,7 +91,7 @@ func parseSize(key string, v any) (int64, error) {
 }
 
 func defaults() Config {
-	return Config{ReserveMiB: DefaultReserveMiB, WindowsWarning: true, Watch: watch.Defaults()}
+	return Config{ReserveMiB: DefaultReserveMiB, WindowsWarning: true, Watch: watch.Defaults(), DockerEnabled: true}
 }
 
 // notRegularError is the reason of a configuration path that resolves to something but a regular
@@ -161,6 +166,22 @@ func parse(data string) (Config, string) {
 		c.TelemetryEnabled, _ = tbl["enabled"].(bool)
 	}
 	c.Watch.SampleLog = c.Watch.SampleLog || c.TelemetryEnabled
+	// Likewise for [docker]: a wrong value switches the display off and says so, and admission goes on.
+	if v, ok := raw["docker"]; ok {
+		tbl, isTbl := v.(map[string]any)
+		switch e, has := tbl["enabled"]; {
+		case !isTbl:
+			c.DockerEnabled = false
+			c.Warnings = append(c.Warnings, "[docker] is not a table: the Docker features are off")
+		case has:
+			if b, isBool := e.(bool); isBool {
+				c.DockerEnabled = b
+			} else {
+				c.DockerEnabled = false
+				c.Warnings = append(c.Warnings, "[docker] enabled: want a boolean: the Docker features are off")
+			}
+		}
+	}
 	return c, ""
 }
 

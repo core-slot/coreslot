@@ -1655,14 +1655,16 @@ func TestWaiterNeverConnects(t *testing.T) {
 // is not, not one with telemetry off, not a pass-through. Mutations: the call without the p.container
 // test reddens the first row; the call outside the log test reddens the pass-through; a read that
 // does not go through the recorder, or MemoryAsync on a nil recorder calling Sweep, reddens the off
-// row; leaving the call out reddens the last.
+// row; leaving the call out reddens the last; a call that ignores [docker] enabled reddens the disabled row.
 func TestNoContainerRunNeverConnects(t *testing.T) {
 	for _, c := range []struct {
 		name               string
 		client, off, inner bool
+		noDocker           bool // [docker] enabled = false
 		want               int64
 	}{
 		{name: "no container work"},
+		{name: "container work, [docker] disabled", client: true, noDocker: true},
 		{name: "container work, telemetry off", client: true, off: true},
 		{name: "container work in a pass-through", client: true, inner: true},
 		{name: "container work", client: true, want: 1},
@@ -1683,6 +1685,14 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 				argv = []string{docker}
 			}
 			b := newEnded(t, argv...)
+			if c.noDocker {
+				f, err := os.OpenFile(b.r.loc.cfgPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fmt.Fprint(f, "\n[docker]\nenabled = false\n")
+				f.Close()
+			}
 			if c.off {
 				b.r.record = runRecord{}
 			}
@@ -1805,9 +1815,10 @@ func TestStaleHoldStillConnects(t *testing.T) {
 }
 
 // DOCKER_HOST with a unix socket is the only candidate; one that is not a unix socket is a code; with
-// neither, the home's two sockets come before the system's, and with no home located only the
-// system's is tried. Mutations: a unix host still searching the defaults; a tcp host falling through
-// to them; the home's sockets after the system's.
+// neither, the home's two sockets come before the system's, and with no home located there is none:
+// the system's socket alone would reach an engine no location of ours belongs to. Mutations: a unix
+// host still searching the defaults; a tcp host falling through to them; the home's sockets after
+// the system's; restoring the home == "" branch (the system's socket) reddens the last row.
 func TestDockerSockets(t *testing.T) {
 	sys := "/var/run/docker.sock"
 	run, desktop := "/Users/ana/.docker/run/docker.sock", "/Users/ana/.docker/desktop/docker.sock"
@@ -1819,10 +1830,10 @@ func TestDockerSockets(t *testing.T) {
 		{"tcp host", "tcp://10.0.0.1:2375", "/Users/ana", []string{docker.TCPHost}},
 		{"ssh host", "ssh://ana@server", "/Users/ana", []string{docker.TCPHost}},
 		{"defaults", "", "/Users/ana", []string{run, desktop, sys}},
-		{"no home located", "", "", []string{sys}},
+		{"no home located", "", "", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := dockerSockets(c.host, c.home); !reflect.DeepEqual(got, c.want) {
+			if got := docker.Sockets(c.host, c.home); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("got %q, want %q", got, c.want)
 			}
 		})

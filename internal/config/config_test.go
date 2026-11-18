@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -264,5 +265,43 @@ func TestSampleLogSamplesOnly(t *testing.T) {
 	}
 	if _, err := Load(writeConfig(t, "[watch]\nsample_log = 1\n[telemetry]\nenabled = true\n")); err == nil {
 		t.Error("a non-boolean sample_log loaded: want today's error")
+	}
+}
+
+// [docker] enabled: absent is on; a boolean is itself. Mutation: a default of false turns the
+// first three bodies red.
+func TestDockerEnabledAbsentIsOn(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{"", true},
+		{"[docker]\n", true},
+		{"[docker]\nenabled = true\n", true},
+		{"[docker]\nenabled = false\n", false},
+	} {
+		c, err := Load(writeConfig(t, tc.body))
+		if err != nil || c.DockerEnabled != tc.want || len(c.Warnings) != 0 {
+			t.Errorf("Load(%q) = %v, %v, %q; want %v and no warning", tc.body, c.DockerEnabled, err, c.Warnings, tc.want)
+		}
+	}
+}
+
+// An enabled that is no boolean, or a [docker] that is no table, switches the features off with one
+// warning and is no error: the switch of a display must not make an admission fail. Mutations:
+// returning a message for the wrong type is an error; leaving the default on is DockerEnabled true.
+func TestDockerEnabledNonBooleanIsOffWithWarning(t *testing.T) {
+	for _, body := range []string{"[docker]\nenabled = \"yes\"\n", "[docker]\nenabled = 1\n", "docker = 1\n"} {
+		c, err := Load(writeConfig(t, body))
+		if err != nil {
+			t.Errorf("Load(%q): %v; want no error", body, err)
+			continue
+		}
+		if c.DockerEnabled || len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "[docker]") {
+			t.Errorf("Load(%q): DockerEnabled %v, warnings %q; want off and one warning naming [docker]", body, c.DockerEnabled, c.Warnings)
+		}
+	}
+	if c, _ := Load(writeConfig(t, "[docker]\nenabled = \"yes\"\n")); len(c.Warnings) == 1 && !strings.Contains(c.Warnings[0], "[docker] enabled") {
+		t.Errorf("the warning %q does not name [docker] enabled", c.Warnings[0])
 	}
 }
