@@ -165,12 +165,15 @@ func TestNoPassNoHolds(t *testing.T) {
 	wantReason(t, waitOutcome(t, enqueue(t, e, typical(1, 10))), ReasonBehindHead, "no_holds")
 }
 
-// The running job has no typical run time, so nothing says when the head's room comes. Mutation:
-// the room-short exit of passes sets too_long, or marks W known.
+// The running job has no typical run time, so nothing says when the head's room comes; the waiter
+// has not yet watched the head for its typical run time either. Mutation: the room-short exit of
+// passes sets too_long, or marks W known.
 func TestNoPassWaitUnknown(t *testing.T) {
 	dir := capped(t, 2048)
-	e := newEngine(t, dir, newFakeClock())
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
 	hold(t, e, need(1024))
+	clk.advance(time.Second) // the hold arrived before the head: it is no run out of turn
 	enqueue(t, e, need(2048))
 	w := waitOutcome(t, enqueue(t, e, typical(256, 10)))
 	wantReason(t, w, ReasonBehindHead, "wait_unknown")

@@ -13,8 +13,9 @@ import (
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
-// unknownHeadScene is a head that waits for memory outside coreslot: A (1024 MiB, no typical run time) holds, and the head B needs
-// the whole 2048 MiB room, so nothing says when B can start: its W is unknown.
+// unknownHeadScene is a head that waits for memory outside coreslot: A (1024 MiB, no typical run
+// time) holds, and the head B needs the whole 2048 MiB room, so nothing says when B can start: its
+// W is unknown.
 func unknownHeadScene(t *testing.T) (*Engine, *fakeClock, *Grant, *Ticket) {
 	t.Helper()
 	clk := newFakeClock()
