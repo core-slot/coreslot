@@ -24,8 +24,8 @@ of the repository is. No contributor agreement or sign-off line is needed.
   to read memory, and `status --docker` does when asked, by raw syscalls, so `net`, `net/http` and `crypto` stay out of the binary. Looking
   up the user's home directory goes through the system's name services, which may contact a directory
   service such as LDAP ([SECURITY.md](SECURITY.md)). The run log and the local record never hold the
-  environment, nor the command line beyond a label, which an auto-label takes from up to two leading
-  arguments.
+  environment, nor the command line beyond a label, which an auto-label takes from the program's name, or
+  that of the command a launcher runs, and up to two arguments after it.
 - **The internal packages stay quiet.** They never print, never install signal handlers and never
   choose exit codes, and the engine never decides on its own to run unbudgeted
   (`internal/repocheck/library_purity_test.go` checks the first three); the CLI does all of it.

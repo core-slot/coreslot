@@ -11,10 +11,38 @@ import (
 // maxShapeWords is how many words the command's shape has at most, the executable included.
 const maxShapeWords = 3
 
-// commandShape is the executable's base name and its leading word-like arguments, at most
-// maxShapeWords in all: it stops at the first argument that starts with "-" or a digit, or contains
-// "/", "=" or ".".
+// launchers run the command given after their own arguments, so a shape is taken from that command.
+var launchers = map[string]bool{
+	"caffeinate": true, "env": true, "nice": true, "nohup": true, "stdbuf": true, "time": true, "timeout": true,
+}
+
+// wrapped is the command a launcher in argv[0] runs: argv from the first argument after it that is
+// not empty, does not start with "-" or a digit, and is not an assignment (an "=" before any "/"),
+// taken again while that command is itself a launcher. It is argv when argv[0] is no launcher or a
+// launcher runs no command. It reads no launcher's options: an option's bare-word value is taken
+// for the command.
+func wrapped(argv []string) []string {
+	for launchers[filepath.Base(argv[0])] {
+		i := 1
+		for ; i < len(argv); i++ {
+			a, eq := argv[i], strings.IndexByte(argv[i], '=')
+			if a != "" && a[0] != '-' && (a[0] < '0' || a[0] > '9') && (eq < 0 || strings.Contains(a[:eq], "/")) {
+				break
+			}
+		}
+		if i == len(argv) {
+			break
+		}
+		argv = argv[i:]
+	}
+	return argv
+}
+
+// commandShape is the base name of the executable, or of the command a launcher runs (see
+// wrapped), and its leading word-like arguments, at most maxShapeWords in all: it stops at the
+// first argument that starts with "-" or a digit, or contains "/", "=" or ".".
 func commandShape(argv []string) string {
+	argv = wrapped(argv)
 	words := []string{filepath.Base(argv[0])}
 	for _, a := range argv[1:] {
 		if len(words) == maxShapeWords || a == "" || a[0] == '-' || a[0] >= '0' && a[0] <= '9' ||

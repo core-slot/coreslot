@@ -28,6 +28,46 @@ func TestCommandShape(t *testing.T) {
 	}
 }
 
+// A launcher's shape is its command's, past the launcher's own arguments. Each case names the
+// mutation of wrapped that turns it red.
+func TestCommandShapeSkipsLaunchers(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		want string
+	}{
+		// Not skipping an argument that starts with a digit gives "10m".
+		{[]string{"timeout", "10m", "npx", "jest", "--ci"}, "npx jest"},
+		// Not skipping an argument that starts with "-" gives "-n".
+		{[]string{"nice", "-n", "10", "cargo", "build"}, "cargo build"},
+		// Not skipping an assignment gives "A=1".
+		{[]string{"env", "A=1", "B=x/y", "go", "test", "./..."}, "go test"},
+		// Taking any "=" for an assignment gives "all"; skipping a path as well gives "timeout".
+		{[]string{"timeout", "5", "/opt/a=b/run", "all"}, "run all"},
+		{[]string{"timeout", "10m", "./scripts/x.sh"}, "x.sh"},
+		// Skipping one launcher only, not every one in a row, gives "timeout".
+		{[]string{"env", "A=1", "timeout", "10m", "npm", "run", "check"}, "npm run check"},
+		// Matching the path rather than its base name gives "time".
+		{[]string{"/usr/bin/time", "-p", "make", "all"}, "make all"},
+		// Reading an empty argument's first byte panics.
+		{[]string{"nohup", "", "make"}, "make"},
+		// A launcher that runs no command keeps its name; not stopping there panics.
+		{[]string{"env"}, "env"},
+		{[]string{"env", "A=1"}, "env"},
+		{[]string{"env", "A=1", "timeout", "10m"}, "timeout"},
+		// The documented limit: an option's bare-word value is taken for the command.
+		{[]string{"timeout", "-s", "KILL", "10m", "make"}, "KILL"},
+		// Unchanged: a shell string and another tool's flags are not read, and a launcher's name
+		// past argv[0] is an ordinary word.
+		{[]string{"sh", "-c", "go test ./..."}, "sh"},
+		{[]string{"python", "-m", "pytest"}, "python"},
+		{[]string{"make", "env", "check"}, "make env check"},
+	} {
+		if got := commandShape(c.argv); got != c.want {
+			t.Errorf("commandShape(%q) = %q, want %q", c.argv, got, c.want)
+		}
+	}
+}
+
 // Every worktree of a repository names it by the parent of the common git directory. Mutation:
 // naming the checkout's own directory reddens the worktree.
 func TestRepoNameWorktreesShare(t *testing.T) {
