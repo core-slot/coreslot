@@ -8,6 +8,18 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- The telemetry `no_pass` of a waiter behind the head while no hold is live and the headroom is unread is
+  `no_holds`, the head starting at once, rather than `headroom_unknown`.
+
+### Fixed
+
+- `status --json` no longer marks `stoppable` a hold that names pid 0 or 1, which is never a run's; such a hold
+  shows `owner_exited`.
+- A restart head's `expected_wait_s` no longer reads the whole calm for one poll when a watch sample lands just as
+  `status` reads its clock: the snapshot reads the clock once, after the hold bodies and the watch state.
+
 ## v0.9.0 (2026-11-18)
 
 ### Added

@@ -654,6 +654,41 @@ func TestSnapshotStoppable(t *testing.T) {
 	}
 }
 
+// A live hold that names pid 0 or 1, the kernel's and init's, is no run's: its owner counts as
+// exited and it is not stoppable, though the process table lists both pids from boot. Mutation:
+// dropping the pid floor in Snapshot reddens both pids.
+func TestSnapshotPIDFloor(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, nil)
+	if err := os.MkdirAll(filepath.Join(dir, store.HoldsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, pid := range []int{0, 1} {
+		h := wire.Hold{Label: "init", PID: pid, StartNS: int64(time.Hour), NeedMiB: 128, Victim: true}
+		body, err := wire.Encode(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, store.HoldsDir, wire.HoldName(h.StartNS, pid, 1, h.Label))
+		if err := os.WriteFile(p, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		startHelper(t, "lock", dir, p)
+	}
+	saved := listProcs
+	t.Cleanup(func() { listProcs = saved })
+	listProcs = func() (map[int]memsample.Proc, bool) { return map[int]memsample.Proc{0: {}, 1: {}}, true }
+	r, err := e.Snapshot()
+	if err != nil || len(r.Holds) != 2 {
+		t.Fatalf("holds %+v, %v; want two", r.Holds, err)
+	}
+	for _, h := range r.Holds {
+		if !h.OwnerExited || h.Stoppable {
+			t.Errorf("pid %d: owner exited %v, stoppable %v; want true, false", h.PID, h.OwnerExited, h.Stoppable)
+		}
+	}
+}
+
 // With the room negative (8000 MiB reserved of 6024 of headroom, 1024 of it the reserve) the
 // snapshot reports the room as it is, the free memory clamped at 0 and the machine's memory as the
 // reader gave it; the hold's typical run time and the time left of it come with the snapshot.
@@ -677,6 +712,42 @@ func TestSnapshotMemFigures(t *testing.T) {
 		m.HeadroomMiB != 6024 || m.ReserveMiB != config.DefaultReserveMiB || m.ReservedMiB != 8000 {
 		t.Errorf("mem %+v; want room -3000, free 0, machine 1707, headroom 6024, reserve %d, reserved 8000",
 			m, config.DefaultReserveMiB)
+	}
+	// Mutation: setting MachineMiB outside the Known branch reddens the unread headroom.
+	testHeadroom.ok = false
+	if r, err := e.Snapshot(); err != nil || r.Mem.Known || r.Mem.MachineMiB != 0 {
+		t.Errorf("headroom unread: mem %+v, %v; want unknown, machine 0", r.Mem, err)
+	}
+}
+
+// A snapshot judges everything at one clock read, taken after it read the holds and watch.json.
+// Its clock steps 1 s on every read, and another run's tick stamps a sample 1 ms after the first;
+// the sample the snapshot read is green for 5 s of the default 10 s calm, so the restart head
+// waits 5 s, and the hold, 100 s into its 600, has 500 s left. Mutations: reading the clock
+// before watch.json reddens W (10); reading it again for headWait (4) or for the holds (499), or
+// passing headWait a zero watch.Config (0), reddens one of them.
+func TestSnapshotOneClock(t *testing.T) {
+	clk := newFakeClock()
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, clk)
+	hold(t, e, spec.Request{NeedMiB: 128, TypicalS: 600})
+	enqueue(t, e, spec.Request{NeedMiB: 128, Restart: true})
+	clk.advance(100 * time.Second)
+	calm := watch.Detector{Level: watch.Green, CalmSinceNS: sampleWallNS - int64(5*time.Second)}
+	setWatch(t, e, clk, calm, 0)
+	base, reads := clk.clock().Realtime(), int64(0)
+	stepping := Clock{Monotonic: clk.clock().Monotonic, Realtime: func() int64 {
+		if reads++; reads == 1 {
+			setWatch(t, e, clk, calm, -time.Millisecond)
+		}
+		return base + (reads-1)*int64(time.Second)
+	}}
+	r, err := New(e.st, filepath.Join(dir, store.ConfigFile), testMachine, stepping).Snapshot()
+	if err != nil || len(r.Tickets) != 1 || len(r.Holds) != 1 {
+		t.Fatalf("tickets %+v, holds %+v, %v; want one of each", r.Tickets, r.Holds, err)
+	}
+	if tk, h := r.Tickets[0], r.Holds[0]; !tk.WaitKnown || tk.WaitS != 5 || h.LeftS != 500 {
+		t.Errorf("W %d (known %v), hold left %d s; want 5 and 500", tk.WaitS, tk.WaitKnown, h.LeftS)
 	}
 }
 
@@ -707,7 +778,8 @@ func waits(t *testing.T, e *Engine) []string {
 // 480 s ago, ends in 120 s. Mutations: passing FreeMiB (the clamped room) instead of the real one
 // reddens "room negative"; skipping headWait while the headroom is unread reddens "idle, headroom
 // unread"; a closure that returns a nil error reddens "restart, watch unreadable"; taking the last
-// live ticket instead of the first reddens "first ticket and the one behind it".
+// live ticket instead of the first reddens "first ticket and the one behind it"; dropping the
+// configuration check in front of headWait reddens "idle, configuration invalid".
 func TestSnapshotHeadWait(t *testing.T) {
 	scene := func(t *testing.T, headroom, typical int64) (*Engine, string) {
 		dir := newStateDir(t, "")
@@ -753,6 +825,15 @@ func TestSnapshotHeadWait(t *testing.T) {
 		testHeadroom.ok = false
 		enqueue(t, e, need(4000))
 		check(t, e, "0")
+	})
+	t.Run("idle, configuration invalid", func(t *testing.T) {
+		dir := newStateDir(t, "")
+		e := newEngine(t, dir, newFakeClock())
+		enqueue(t, e, need(4000))
+		if err := os.WriteFile(filepath.Join(dir, store.ConfigFile), []byte("[memory]\nreserve = \"lots\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		check(t, e, "unknown")
 	})
 	t.Run("no ticket", func(t *testing.T) {
 		e, _ := scene(t, 10024, 600)

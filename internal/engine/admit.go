@@ -219,9 +219,6 @@ func (t *Ticket) passes(head wire.Ticket, holds []liveHold, room int64, cfg conf
 	case t.req.TypicalS == 0:
 		t.out.NoPass = "no_typical"
 		return false
-	case !m.HeadroomOK:
-		t.out.NoPass = "headroom_unknown"
-		return false
 	case len(holds) == 0:
 		t.out.NoPass = "no_holds"
 		return false
