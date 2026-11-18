@@ -53,7 +53,7 @@ func cancelCommand(args []string, io IO) int {
 
 	e, err := openEngine(locate(), true)
 	if err != nil {
-		return cancelFailed(err, io)
+		return commandFailed("cancel", err, io)
 	}
 	if !e.Store().Exists() { // nothing has run, so nothing waits; do not create the directory for it
 		fmt.Fprintln(io.Stderr, "coreslot: cancel: no state directory yet (nothing has run), so no ticket is waiting")
@@ -62,7 +62,7 @@ func cancelCommand(args []string, io IO) int {
 	if byLabel {
 		rep, err := e.Snapshot()
 		if err != nil {
-			return cancelFailed(err, io)
+			return commandFailed("cancel", err, io)
 		}
 		var ids []string
 		for _, t := range rep.Tickets {
@@ -100,7 +100,7 @@ func cancelCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: cancel refused: %s; no cancel request was published\n", sectionBusyText(e, cancelWait))
 		return exitRefusal
 	default:
-		return cancelFailed(err, io)
+		return commandFailed("cancel", err, io)
 	}
 }
 
@@ -114,15 +114,15 @@ func sectionBusyText(e *engine.Engine, waited time.Duration) string {
 	return s
 }
 
-// cancelFailed reports an error that kept cancel from publishing its request. A refusal of the
-// engine and a state error (PROTOCOL.md section 14: the directory or its configuration cannot be
-// used) are refusals, exit 75; anything else is an internal error, exit 70.
-func cancelFailed(err error, io IO) int {
+// commandFailed reports an error that kept cancel or trim (the command name) from writing its
+// request. A refusal of the engine and a state error (PROTOCOL.md section 14: the directory or its
+// configuration cannot be used) are refusals, exit 75; anything else is an internal error, exit 70.
+func commandFailed(name string, err error, io IO) int {
 	if code, stateErr := classify(err); stateErr || code == exitRefusal {
-		fmt.Fprintf(io.Stderr, "coreslot: cancel refused: %s\n", text(refusalText(err)))
+		fmt.Fprintf(io.Stderr, "coreslot: %s refused: %s\n", name, text(refusalText(err)))
 		return exitRefusal
 	}
-	fmt.Fprintf(io.Stderr, "coreslot: cancel: %s\n", text(err.Error()))
+	fmt.Fprintf(io.Stderr, "coreslot: %s: %s\n", name, text(err.Error()))
 	return exitInternal
 }
 

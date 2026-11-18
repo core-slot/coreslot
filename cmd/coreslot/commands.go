@@ -16,7 +16,7 @@ import (
 // their control characters and newlines; JSON output encodes them.
 func text(s string) string { return wire.EscapeHuman(s) }
 
-// The usage and the flags of status, cancel, doctor, stats and report are the same on every
+// The usage and the flags of status, cancel, trim, doctor, stats and report are the same on every
 // platform: on Windows, where there is no budget (PROTOCOL.md section 16), they still decide
 // whether an invocation asks for help, which prints on stdout and exits 0 for every command
 // (section 19).
@@ -29,6 +29,18 @@ STALLED after 10s without a refresh, so use 10s or more.`
 
 const cancelUsage = `usage: coreslot cancel <ticket-id>
        coreslot cancel --label LABEL`
+
+const trimUsage = `usage: coreslot trim <hold-id>
+       coreslot trim --label LABEL
+
+Asks a running job's coreslot run to lower the job's reservation to what its
+command uses, and to follow it from then on, up to what it asked for. The id is
+the one coreslot status shows on the hold's line.`
+
+func trimFlags() (fs *flag.FlagSet, label *string) {
+	fs = newFlagSet("coreslot trim")
+	return fs, fs.String("label", "", "trim the one live hold with this label")
+}
 
 const doctorUsage = `usage: coreslot doctor [--clear] [--reset]`
 
@@ -81,7 +93,7 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-// noBudget is status, cancel, doctor, stats or report where there is no budget to inspect,
+// noBudget is status, cancel, trim, doctor, stats or report where there is no budget to inspect,
 // cancel or repair, and no run log to learn from (Windows). A request for help, recognized by the command's own flag set exactly as on unix,
 // prints the usage on stdout and exits 0; anything else says why the command cannot work and
 // exits 70.

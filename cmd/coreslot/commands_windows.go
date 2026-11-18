@@ -2,7 +2,7 @@
 
 package main
 
-// Windows has no budget (PROTOCOL.md section 16): there is nothing to inspect, cancel or repair,
+// Windows has no budget (PROTOCOL.md section 16): there is nothing to inspect, cancel, trim or repair,
 // and no run log to learn from, so these commands only answer a request for help (noBudget).
 
 func statusCommand(args []string, io IO) int {
@@ -13,6 +13,11 @@ func statusCommand(args []string, io IO) int {
 func cancelCommand(args []string, io IO) int {
 	fs, _ := cancelFlags()
 	return noBudget("cancel", cancelUsage, fs, args, io)
+}
+
+func trimCommand(args []string, io IO) int {
+	fs, _ := trimFlags()
+	return noBudget("trim", trimUsage, fs, args, io)
 }
 
 func doctorCommand(args []string, io IO) int {

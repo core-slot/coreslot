@@ -288,6 +288,9 @@ func (v statusView) human() string {
 	}
 	for _, h := range r.Holds {
 		need := holdNeed(h)
+		if a := askedMiB(h); a > h.NeedMiB {
+			need += " (asked " + spec.FormatMiB(a) + ")"
+		}
 		if h.Container {
 			need += "  container: its containers' memory is not measured"
 		}
@@ -308,7 +311,10 @@ func (v statusView) human() string {
 		if h.OwnerExited {
 			line += "  owner exited, held by a descendant"
 		}
-		p("%s", line)
+		if h.Trimmed {
+			line += "  trimmed"
+		}
+		p("%s  id %s", line, h.ID)
 	}
 
 	if len(v.tickets) == 0 {
@@ -479,12 +485,15 @@ type jsonMem struct {
 
 type jsonHold struct {
 	Name         string  `json:"name"`
+	ID           string  `json:"id"`
 	Label        string  `json:"label"`
 	PID          int     `json:"pid"`
 	StartNS      int64   `json:"start_ns"`
 	HeldForS     float64 `json:"held_for_s"`
 	ArrivalNS    int64   `json:"arrival_ns"`
-	NeedMiB      int64   `json:"need_mib"` // 0 for a run outside the budget
+	NeedMiB      int64   `json:"need_mib"`  // 0 for a run outside the budget
+	AskedMiB     int64   `json:"asked_mib"` // the need asked: need_mib unless the hold was trimmed
+	Trimmed      bool    `json:"trimmed"`
 	FootprintMiB int64   `json:"footprint_mib"`
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
@@ -547,7 +556,7 @@ func (v statusView) document() jsonStatus {
 		d.Ignored[dir] = r.Ignored[dir]
 	}
 	for _, h := range r.Holds {
-		jh := jsonHold{Name: h.Name, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
+		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
 			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable}
