@@ -27,8 +27,7 @@ func lockedByOther(t *testing.T, path string) bool {
 	defer f.Close()
 	err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 	if err == nil {
-		unix.Flock(int(f.Fd()), unix.LOCK_UN)
-		return false
+		return false // the close releases it
 	}
 	if !errors.Is(err, unix.EWOULDBLOCK) {
 		t.Errorf("flock %s: %v", path, err)
