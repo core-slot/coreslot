@@ -140,8 +140,8 @@ func TestOnlyTickingHoldsAreJobs(t *testing.T) {
 	oldest := wire.Hold{Label: "c", ArrivalNS: 3, DUserNS: 2e9, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 1e9}
 	newest := wire.Hold{Label: "c", ArrivalNS: 4, DUserNS: 2e9, NormalShare: 0.04, Learned: true, Victim: true, SampledNS: now - 1e9,
 		CPUNS: 1e9, TypicalCPUS: 10, TypicalS: 50, StallEWMA: 0.25}
-	holds := []liveHold{{"frozen", frozen}, {"stale", stale}, {"oldest", oldest}, {"newest", newest},
-		{"torn", wire.Hold{NeedMiB: 426}}}
+	holds := []liveHold{{name: "frozen", body: frozen}, {name: "stale", body: stale}, {name: "oldest", body: oldest},
+		{name: "newest", body: newest}, {name: "torn", body: wire.Hold{NeedMiB: 426}, unparsed: true}}
 	jobs := runningJobs(holds, now)
 	if e := watch.Excess(jobs, 2e9); e != 0 {
 		t.Errorf("E %v from holds that do not tick, want 0", e)
@@ -160,8 +160,8 @@ func TestOnlyTickingHoldsAreJobs(t *testing.T) {
 // one label can differ.
 func TestRunningJobsAreLearnedByTheirRun(t *testing.T) {
 	now := int64(1e18)
-	holds := []liveHold{{"a", wire.Hold{Label: "x", SampledNS: now, Learned: true, NormalShare: 0.25}},
-		{"b", wire.Hold{Label: "x", SampledNS: now}}}
+	holds := []liveHold{{name: "a", body: wire.Hold{Label: "x", SampledNS: now, Learned: true, NormalShare: 0.25}},
+		{name: "b", body: wire.Hold{Label: "x", SampledNS: now}}}
 	jobs := runningJobs(holds, now)
 	if !jobs[0].Learned || jobs[0].NormalShare != 0.25 || jobs[1].Learned {
 		t.Errorf("jobs = %+v, %+v; want a learned with 0.25, b learning", jobs[0], jobs[1])

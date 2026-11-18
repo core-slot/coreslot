@@ -151,7 +151,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
 | `ahead` | the ticket examined ahead of it; absent for the head |
-| `no_pass` | why it may not pass the head: `no_typical`, `headroom_unknown`, `no_holds`, `wait_unknown`, `watch_unreadable`, `too_long`; absent otherwise |
+| `no_pass` | why it may not pass the head: `no_typical`, `headroom_unknown`, `no_holds`, `wait_unknown`, `watch_unreadable`, `too_long`, and for going out of turn `head_fits`, `hold_unreadable`, `out_of_turn_live`; absent otherwise. `wait_unknown` and `too_long` also mean it has not yet watched the head for its typical run time |
 | `w_s` | the expected wait a pass was judged on, when computed |
 | `calm_left_s` | with `restart_calm`: seconds of calm still needed |
 | `headroom_mib`, `headroom_ok`, `reserve_mib` | as on a sample |
@@ -171,6 +171,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
 | `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
 | `w_s` | the expected wait, when computed |
+| `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait) or `turn` (out of turn); absent for the head |
 
 ### A wait that ends without a start
 
