@@ -17,7 +17,6 @@ import (
 // dockerReadBudget is the whole `status --docker` read: one deadline for every call.
 const dockerReadBudget = 2 * time.Second
 
-// The states of the docker object.
 const (
 	dockerOK          = "ok"
 	dockerOff         = "off"
@@ -59,7 +58,7 @@ func readDocker(enabled bool, loc location) *dockerView {
 	}
 	v := &dockerView{state: dockerOK, vm: vm, vmMiB: r.VMMiB}
 	for _, c := range r.Containers {
-		c.Name, c.Image, c.Project = cutBytes(c.Name, spec.MaxLabelBytes), cutBytes(c.Image, spec.MaxLabelBytes), cutBytes(c.Project, spec.MaxLabelBytes)
+		c.ID, c.Name, c.Image, c.Project = cutBytes(c.ID, spec.MaxLabelBytes), cutBytes(c.Name, spec.MaxLabelBytes), cutBytes(c.Image, spec.MaxLabelBytes), cutBytes(c.Project, spec.MaxLabelBytes)
 		v.containers = append(v.containers, c)
 	}
 	v.freeEst = r.FreeEstMiB()
@@ -84,13 +83,13 @@ func (d *dockerView) human(p func(format string, args ...any)) {
 	case dockerOff:
 		p("docker: off (%s)", d.reason)
 	case dockerNotRunning:
-		p("docker: not running (no Docker Desktop VM was found)")
+		p("docker: not running (no Docker Desktop VM on the Apple hypervisor was found; Docker VMM, OrbStack and Colima are not read)")
 	case dockerOtherEngine:
 		p("docker: the engine is not Docker Desktop; no figures")
 	case dockerNoReading:
 		p("docker: no reading (%s)", d.reason)
 	default:
-		foot := "footprint not known"
+		foot := "VM not identified"
 		if d.vm.State == memsample.VMIdentified {
 			foot = "footprint " + spec.FormatMiB(d.vm.FootprintMiB)
 		}
@@ -114,7 +113,7 @@ func (d *dockerView) human(p func(format string, args ...any)) {
 // jsonDocker is the docker object, present only with --docker. Every key is always there: vm, its
 // nulls and free_est_mib are empty in every state but ok, and containers is [] then.
 type jsonDocker struct {
-	State      string          `json:"state"` // ok, off, not_running, other_engine or no_reading
+	State      string          `json:"state"`
 	Reason     string          `json:"reason"`
 	VM         jsonDockerVM    `json:"vm"`
 	FreeEstMiB *int64          `json:"free_est_mib"`
@@ -128,7 +127,7 @@ type jsonDockerVM struct {
 }
 
 type jsonContainer struct {
-	ID       string `json:"id"` // the full id
+	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Image    string `json:"image"`
 	Project  string `json:"project"`

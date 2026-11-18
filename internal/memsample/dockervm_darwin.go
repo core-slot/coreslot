@@ -14,17 +14,19 @@ const (
 	pidCoalitionInfo = 20   // PROC_PIDCOALITIONINFO, absent from the public SDK headers
 )
 
-// lookupVM is DockerVM over this user's processes.
-func lookupVM() VM {
-	return dockerVM(listVMProcs, func(pid int) (int64, bool) {
-		ri, ok := rusage(pid, rusageV4)
-		return int64(ri[footprintAt] >> 20), ok
-	})
+// lookupVM is DockerVM over this user's processes; a test replaces it.
+var lookupVM = func() VM { return dockerVM(listVMProcs, footprintMiB) }
+
+// footprintMiB is the footprint of pid.
+func footprintMiB(pid int) (int64, bool) {
+	ri, ok := rusage(pid, rusageV4)
+	return int64(ri[footprintAt] >> 20), ok
 }
 
 // listVMProcs reads the pid, start time and executable path of every process of this user, and the
 // resource coalition of each one that runs a program DockerVM looks for. A process that is gone or
-// that cannot be read has no path and is skipped.
+// that cannot be read has no path and is skipped, unless its kernel name says it may be one of
+// those: then it is Unread.
 func listVMProcs() ([]vmProc, bool) {
 	table, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
@@ -43,12 +45,17 @@ func listVMProcs() ([]vmProc, bool) {
 		// with strlen); a process that cannot be read leaves it empty or fails.
 		clear(path[:1])
 		if _, err := info(callPidInfo, pid, pidPathInfo, 0, path); err != nil || path[0] == 0 {
+			if mayBeOfInterest(unix.ByteSliceToString(p.Proc.P_comm[:])) {
+				out = append(out, vmProc{PID: pid, Unread: true})
+			}
 			continue
 		}
 		vp := vmProc{PID: pid, StartNS: p.Proc.P_starttime.Nano(), Exec: unix.ByteSliceToString(path)}
 		if exeIs(vp.Exec, dockerBackendExe) || exeIs(vp.Exec, dockerVMExe) {
-			if cn, err := info(callPidInfo, pid, pidCoalitionInfo, 0, co); err == nil {
-				vp.Coalition, vp.HasCoalition = parseCoalition(co, cn)
+			cn, err := info(callPidInfo, pid, pidCoalitionInfo, 0, co)
+			var ok bool
+			if vp.Coalition, ok = parseCoalition(co, cn); err != nil || !ok {
+				vp.Unread = true
 			}
 		}
 		out = append(out, vp)

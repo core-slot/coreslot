@@ -39,8 +39,10 @@ func TestSweepFindsThisProcess(t *testing.T) {
 
 // A process whose executable is named like the VM's is found by the last element of its path, in the
 // full 39 bytes, where its names (kept to 16 in p_comm and 32 in pbi_name) match nothing: a copy of
-// the test binary named like the VM's helper, run as the helper. Mutations: reading the path flavor
-// into a buffer that is too short, or listVMProcs taking the name from procName, loses the match.
+// the test binary named like the VM's helper, run as the helper. With a backend in its real
+// coalition it is Docker's VM, at its real footprint. Mutations: reading the path flavor into a
+// buffer that is too short, or listVMProcs taking the name from procName, loses the match; a
+// coalition read into the wrong bytes, or a footprint read of another pid, reddens the last check.
 func TestListVMProcsReadsPathNotName(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
@@ -82,6 +84,33 @@ func TestListVMProcsReadsPathNotName(t *testing.T) {
 	}
 	if name, _ := procName(found.PID); name == dockerVMExe {
 		t.Errorf("procName kept all %d bytes of the name; the test no longer shows the truncation", len(name))
+	}
+	be := vmProc{PID: os.Getpid(), Exec: "/x/" + dockerBackendExe, Coalition: found.Coalition}
+	got := dockerVM(func() ([]vmProc, bool) { return []vmProc{be, *found}, true }, footprintMiB)
+	if got.State != VMIdentified || got.PID != found.PID || got.StartNS != found.StartNS || got.FootprintMiB <= 0 {
+		t.Errorf("DockerVM = %+v, want the helper (pid %d), identified, with a footprint", got, found.PID)
+	}
+}
+
+// Sweep's vm is DockerVM's process: read when identified, absent when not identified or not running.
+// Mutations: dropping the DockerVM wiring in Sweep, or reading vm whatever the state, reddens a row.
+func TestSweepVMComesFromDockerVM(t *testing.T) {
+	procs, ok := Listing()
+	if !ok {
+		t.Fatal("no listing")
+	}
+	self := VM{State: VMIdentified, PID: os.Getpid(), StartNS: procs[os.Getpid()].StartNS, FootprintMiB: 1}
+	saved := lookupVM
+	t.Cleanup(func() { lookupVM = saved })
+	for _, state := range []VMState{VMIdentified, VMNotIdentified, VMNotRunning} {
+		lookupVM = func() VM { v := self; v.State = state; return v }
+		_, vm, ok := Sweep(1)
+		if want := state == VMIdentified; !ok || (vm != nil) != want {
+			t.Errorf("state %d: Sweep's vm = %+v (ok %v), want present %v", state, vm, ok, want)
+		}
+		if vm != nil && (vm.StartNS != self.StartNS || vm.FootprintMiB <= 0) {
+			t.Errorf("vm = %+v, want this process's start time and a footprint", *vm)
+		}
 	}
 }
 

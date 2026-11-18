@@ -45,13 +45,14 @@ is `[]`.
 | key | type | meaning |
 |---|---|---|
 | `state` | string | `ok`, `off`, `not_running`, `other_engine` or `no_reading` |
-| `reason` | string | for `off`, why: `platform`, `config`, `nested`, `state-dir` or `remote-host`; for `no_reading`, the failed read's code: `connect`, `deadline`, `http` or `parse`; otherwise empty |
+| `reason` | string | for `off`, why: `platform`, `config`, `nested`, `state-dir` or `remote-host`; for `no_reading`, the failed read's code: `no_socket` (the socket went away between the check and the connect), `connect`, `deadline`, `http` or `parse`; otherwise empty |
 | `vm` | object | Docker's VM |
 | `free_est_mib` | int or null | an estimate of what the VM has left: its memory less the containers' usage |
 | `containers` | array | every running container, in the engine's order |
 
-`not_running` means no Docker socket exists or no Docker Desktop VM process was found; nothing was
-connected to. `other_engine` is an engine that is not Docker Desktop, which has no VM size to show.
+`not_running` means no Docker socket exists or no Docker Desktop VM on the Apple hypervisor was found;
+nothing was connected to. Docker VMM, OrbStack and Colima are not read in this release: with them it
+says `not_running` while the engine runs. `other_engine` is an engine that is not Docker Desktop, which has no VM size to show.
 `no_reading` is all or nothing: one failed call leaves no figures.
 
 ## `docker.vm`
@@ -65,11 +66,12 @@ connected to. `other_engine` is an engine that is not Docker Desktop, which has 
 ## `docker.containers[]`
 
 An engine's strings are carried like labels: JSON-encoded, so escape one before printing it to a
-terminal. `name`, `image` and `project` are cut to 128 bytes on a character boundary.
+terminal. `id`, `name`, `image` and `project` are cut to 128 bytes on a character boundary. A
+container whose id is not 64 hexadecimal characters makes the reading `no_reading`, with `parse`.
 
 | key | type | meaning |
 |---|---|---|
-| `id` | string | the container's full id |
+| `id` | string | the container's full id: 64 hexadecimal characters |
 | `name` | string | its name, without the leading slash |
 | `image` | string | the image it runs |
 | `project` | string | its Compose project; empty when it has none |

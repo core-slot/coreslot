@@ -349,7 +349,9 @@ ask: once per call, read-only, within 2 s. It shows Docker Desktop's VM and, for
 container, its name, image, Compose project and memory, to whoever runs it as you, so a process of
 yours can learn what your containers are called. `[docker] enabled = false` makes it print `off` and
 open no socket, and keeps the record from reading the engine too. A value that is not a boolean
-switches it off as well, and `status` and `doctor` say so.
+switches it off as well, and `status` and `doctor` say so. It reads only Docker Desktop with its VM
+on the Apple hypervisor; Docker VMM, OrbStack and Colima are not supported in this release, and for
+them it says `not_running`.
 
 `needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
 space or an `@` is not a bare TOML key, so quote it:

@@ -24,6 +24,8 @@ All notable changes to this project are recorded here. The format follows
   coalition of `com.docker.backend`, matched by executable path. A VM of another tool no longer counts, and the
   `com.docker.krun`, `sailor` and `virtualization` names are no longer looked for. A setup whose VM is not a
   Virtualization VM, such as Docker's VMM backend, no longer has a `vm`.
+- `status --docker` reads only Docker Desktop with its VM on the Apple hypervisor. Docker VMM, OrbStack and
+  Colima are not supported in this release: for them it says `not_running` and opens no socket.
 
 ### Fixed
 

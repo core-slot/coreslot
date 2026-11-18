@@ -12,7 +12,7 @@ const (
 )
 
 func proc(pid int, exec string, coalition uint64) vmProc {
-	return vmProc{PID: pid, StartNS: int64(pid) * 10, Exec: exec, Coalition: coalition, HasCoalition: true}
+	return vmProc{PID: pid, StartNS: int64(pid) * 10, Exec: exec, Coalition: coalition}
 }
 
 func fakeTable(procs ...vmProc) func() ([]vmProc, bool) {
@@ -82,13 +82,36 @@ func TestDockerVMShortCoalitionReadIsNoCoalition(t *testing.T) {
 			t.Errorf("parseCoalition(%d) = %d, %v, want no coalition", n, id, ok)
 		}
 	}
-	// A backend and a VM whose coalition read failed are not in a coalition together.
-	vm := proc(8, appleVM, 0)
-	vm.HasCoalition = false
-	be := proc(6, backend, 0)
-	be.HasCoalition = false
-	if got := dockerVM(fakeTable(be, vm), fakeFootprint); got != (VM{State: VMNotRunning}) {
-		t.Errorf("two processes with no coalition matched as coalition 0: %+v", got)
+}
+
+// A process of interest that could not be read leaves the answer open: VMNotIdentified, never
+// VMNotRunning, so status still reads the engine. Mutations: skipping an Unread process gives
+// VMNotRunning in rows 1 to 3 and VMIdentified in the last; coalition 0 for both in row 1 matches them.
+func TestDockerVMUnreadProcessIsNotIdentified(t *testing.T) {
+	lost := func(p vmProc) vmProc { p.Unread = true; return p }
+	for _, c := range []struct {
+		name  string
+		procs []vmProc
+	}{
+		{"backend and VM both lost their coalition", []vmProc{lost(proc(6, backend, 0)), lost(proc(8, appleVM, 0))}},
+		{"backend lost its coalition", []vmProc{lost(proc(6, backend, 0)), proc(8, appleVM, 1147)}},
+		{"backend's path was unreadable", []vmProc{{PID: 6, Unread: true}}},
+		{"a VM candidate lost its coalition", []vmProc{proc(6, backend, 1147), proc(8, appleVM, 1147), lost(proc(9, appleVM, 0))}},
+	} {
+		if got := dockerVM(fakeTable(c.procs...), fakeFootprint); got != (VM{State: VMNotIdentified}) {
+			t.Errorf("%s: DockerVM = %+v, want VMNotIdentified", c.name, got)
+		}
+	}
+}
+
+// The kernel's 16 bytes of a name say whether an unreadable process may be one DockerVM looks for.
+// Mutation: a prefix test either way round, or none, reddens a row.
+func TestMayBeOfInterest(t *testing.T) {
+	for comm, want := range map[string]bool{"com.docker.backe": true, "com.docker.back": true, "com.apple.Virtua": true,
+		"com.docker.krun": false, "com": false, "": false, "zsh": false, "com.docker.backend2": false} {
+		if got := mayBeOfInterest(comm); got != want {
+			t.Errorf("mayBeOfInterest(%q) = %v, want %v", comm, got, want)
+		}
 	}
 }
 

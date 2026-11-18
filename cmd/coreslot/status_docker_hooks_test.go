@@ -149,11 +149,17 @@ func TestStatusDockerShowsVMAndContainers(t *testing.T) {
 	}
 }
 
-// No VM process: not_running with every key present, and nothing connected to.
+// No VM process: not_running with every key present, nothing connected to, and the text names the
+// hypervisor and the engines that are not read. Mutation: the old "no Docker Desktop VM was found"
+// text lacks the first two words checked.
 func TestStatusDockerNoVMOpensNoSocket(t *testing.T) {
 	dir := budgetDir(t, 512)
 	f := dockerFake(t)
-	checkEmpty(t, dockerObject(t, dockerEnv(t, dir, f, 0, 0)), "not_running", "")
+	env := dockerEnv(t, dir, f, 0, 0)
+	checkEmpty(t, dockerObject(t, env), "not_running", "")
+	if r := cli(t, env, "status", "--docker"); !strings.Contains(r.stdout, "Apple hypervisor") || !strings.Contains(r.stdout, "Docker VMM, OrbStack and Colima are not read") {
+		t.Errorf("text does not say what is read:\n%s", r.stdout)
+	}
 	if n := f.Conns(); n != 0 {
 		t.Errorf("opened %d connections with no VM, want 0", n)
 	}
@@ -168,8 +174,8 @@ func TestStatusDockerVMNotIdentifiedStillLists(t *testing.T) {
 		len(d["containers"].([]any)) != 1 {
 		t.Errorf("docker = %v, want ok, not identified, no footprint, one container", d)
 	}
-	if r := cli(t, env, "status", "--docker"); !strings.Contains(r.stdout, "footprint not known") {
-		t.Errorf("text does not say the footprint is not known:\n%s", r.stdout)
+	if r := cli(t, env, "status", "--docker"); !strings.Contains(r.stdout, "VM not identified") {
+		t.Errorf("text does not say the VM is not identified:\n%s", r.stdout)
 	}
 }
 
@@ -188,9 +194,10 @@ func TestStatusDockerNoReading(t *testing.T) {
 	}
 }
 
-// Each way the features are off, and the no-socket rule, with no connection made. Mutations:
-// reading before the features are decided connects in every row; mapping no-socket to off turns
-// its row red.
+// Each way the features are off, and the no-socket rule, with no connection made. Every row but
+// remote-host names the fake in DOCKER_HOST, so a reading made first connects to it. Mutations:
+// reading first, from the sockets DOCKER_HOST names, reddens those rows; mapping no-socket to off
+// turns its row red.
 func TestStatusDockerOffReasons(t *testing.T) {
 	cases := []struct {
 		name, state, reason string
@@ -209,14 +216,15 @@ func TestStatusDockerOffReasons(t *testing.T) {
 			dir := stateDir(t, "[memory]\nreserve = \"0\"\n"+c.cfg)
 			budgetRoom.Store(dir, int64(512))
 			f := dockerFake(t)
+			host := "DOCKER_HOST=unix://" + f.Sock
 			var env []string
 			switch {
 			case c.name == "no-socket": // the hook names a path that is no socket
-				env = dockerEnv(t, dir, nil, 1, 4096, "CORESLOT_TESTHOOK_DOCKER_SOCKET="+filepath.Join(t.TempDir(), "absent.sock"))
+				env = dockerEnv(t, dir, nil, 1, 4096, "CORESLOT_TESTHOOK_DOCKER_SOCKET="+filepath.Join(t.TempDir(), "absent.sock"), host)
 			case c.hook:
-				env = dockerEnv(t, dir, f, 1, 4096, c.extra...)
+				env = dockerEnv(t, dir, f, 1, 4096, append([]string{host}, c.extra...)...)
 			default:
-				env = dockerEnv(t, dir, nil, 1, 4096, c.extra...)
+				env = dockerEnv(t, dir, nil, 1, 4096, append([]string{host}, c.extra...)...)
 			}
 			checkEmpty(t, dockerObject(t, env), c.state, c.reason)
 			if f.Conns() != 0 {
@@ -227,8 +235,10 @@ func TestStatusDockerOffReasons(t *testing.T) {
 }
 
 // Engine strings are shown as labels are: wire.EscapeHuman in the text, the labels' encoder in
-// JSON, each cut to 128 bytes on a rune boundary. Mutations: no cut leaves 300 bytes; a cut at byte
-// 128 splits the rune; skipping text() leaves the raw ESC in the text.
+// JSON, each cut to 128 bytes on a rune boundary. The fake sends the name's invalid byte raw, so the
+// replacement is the client's, and the text is one exact container line, so a prefix does not pass.
+// Mutations: no cut, or a cut at byte 128 splitting the rune, reddens the line and the JSON; skipping
+// text() leaves the raw ESC in the text.
 func TestStatusDockerEscapesEngineStrings(t *testing.T) {
 	dir := budgetDir(t, 512)
 	image := strings.Repeat("a", 127) + "é" + strings.Repeat("b", 170) // the rune spans bytes 127 and 128
@@ -240,10 +250,9 @@ func TestStatusDockerEscapesEngineStrings(t *testing.T) {
 	wantImage := strings.Repeat("a", 127)
 	wantName := ("x\x1b[31mred\u202e\ufffd" + strings.Repeat("n", 300))[:128]
 	r := cli(t, env, "status", "--docker")
-	for _, want := range []string{wire.EscapeHuman(wantImage), wire.EscapeHuman(wantName), wire.EscapeHuman("p\x1b[0m")} {
-		if !strings.Contains(r.stdout, want) {
-			t.Errorf("text lacks %q:\n%s", want, r.stdout)
-		}
+	line := fmt.Sprintf("  %s  %s  %s  project %s  usage 10 MiB of 100 MiB\n", fullID[:12], wire.EscapeHuman(wantName), wire.EscapeHuman(wantImage), wire.EscapeHuman("p\x1b[0m"))
+	if !strings.Contains(r.stdout, line) {
+		t.Errorf("text lacks the line %q:\n%s", line, r.stdout)
 	}
 	if strings.ContainsAny(r.stdout, "\x1b\u202e") {
 		t.Errorf("text carries a raw control character: %q", r.stdout)
