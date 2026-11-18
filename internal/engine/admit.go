@@ -253,8 +253,19 @@ func (t *Ticket) passes(head wire.Ticket, headKey state.Key, holds []liveHold, r
 	return false
 }
 
+// pressureNormal is the kernel's normal memory pressure level, as memsample.Parts reports it.
+const pressureNormal = 1
+
+// kernelPressure is the kernel's memory pressure level and whether it could be read; a system that
+// has none (Linux) reports it as not read. Tests replace it.
+var kernelPressure = func() (int, bool) {
+	_, level, ok := memsample.Parts()
+	return level, ok && level != 0
+}
+
 // outOfTurn is the first condition that keeps this ticket from going out of turn ahead of head, ""
-// when none does (PROTOCOL.md section 10.3): head does not fit the room now; every live hold's body
+// when none does (PROTOCOL.md section 10.3): head does not fit the room now; the kernel's memory
+// pressure level is normal (one that cannot be read is not); every live hold's body
 // parses and none arrived after head (or in the same nanosecond), so no other run is out of turn; and the ticket's typical run
 // time is at most the time it has watched head, its own absences excluded, or, when head's W is
 // unknown and head is a restart, the calm head still needs.
@@ -262,6 +273,9 @@ func (t *Ticket) outOfTurn(head wire.Ticket, headKey state.Key, holds []liveHold
 	cfg config.Config) string {
 	if head.NeedMiB <= room {
 		return "head_fits"
+	}
+	if level, ok := kernelPressure(); !ok || level != pressureNormal {
+		return "pressure_not_normal"
 	}
 	for _, h := range holds {
 		if h.unparsed {

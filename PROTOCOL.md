@@ -733,7 +733,10 @@ ticket of the re-election (section 12.1 step 5). A waiter is admitted ahead of t
    starts by the idle rule (section 12.4), so its expected wait is 0 and nobody passes, a container
    request included (section 12.1);
    or it **goes out of turn**, whatever `W` is (known or unknown): the head's need does not fit the
-   room; no live hold's body is malformed and no live hold's `arrival_ns` is at or after the head's
+   room; the kernel reports its memory pressure level as normal (on macOS
+   `kern.memorystatus_vm_pressure_level` 1), a level that is unknown, cannot be read or does not
+   exist (Linux has none) counting as not normal, since the room can be file cache that the kernel is
+   already short of; no live hold's body is malformed and no live hold's `arrival_ns` is at or after the head's
    order key (a hold that arrived after the head started ahead of it out of turn: a passer, a
    container request, or a run that passed an earlier head); and `d` is at most the time this waiter
    has **watched** the head's ticket, from its first observation of it, on its own monotonic clock and
