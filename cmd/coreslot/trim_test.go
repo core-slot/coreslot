@@ -55,7 +55,7 @@ func answerTrim(t *testing.T, g *engine.Grant, f func(h *wire.Hold)) {
 	go func() {
 		defer close(done)
 		for ctx.Err() == nil {
-			if _, ok := g.TrimRequested(); ok {
+			if g.TrimRequested() {
 				if err := g.UpdateHold(f); err != nil {
 					t.Errorf("answering the trim: %v", err)
 				}
@@ -216,10 +216,10 @@ func TestTrimByLabelAmbiguous(t *testing.T) {
 	if code, _, stderr := trimIn(t, dir, "--label", "solo"); code != 0 {
 		t.Fatalf("--label solo: exit %d (stderr %q)", code, stderr)
 	}
-	if _, ok := solo.TrimRequested(); !ok {
+	if !solo.TrimRequested() {
 		t.Error("--label solo wrote no request for solo's hold")
 	}
-	if _, ok := a.TrimRequested(); ok {
+	if a.TrimRequested() {
 		t.Error("--label solo asked a twin to trim")
 	}
 }

@@ -91,7 +91,6 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	p.container = r.o.containerCommand()
 	var tail *state.Tail // the attempt's readings; nil for a run that reserves nothing
 	var trim struct {
-		req   store.TrimRequest
 		found bool // a request names the hold: it holds for the attempt
 		said  bool // a write of the trimmed need succeeded and the run said so
 	}
@@ -150,7 +149,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		noCPUS := noCPU.add(d, active, func() bool { return p.container && listClient(sup.pid) }) // a run not yet container work scanned this listing
 		// The request is read after the tick has measured, until one is found.
 		if tail != nil && !trim.found {
-			trim.req, trim.found = g.TrimRequested()
+			trim.found = g.TrimRequested()
 		}
 		var need int64
 		if trim.found {
@@ -169,7 +168,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		})
 		if wrote && trim.found && !trim.said {
 			trim.said = true
-			r.sayTrimmed(g, trim.req, need, kib>>10)
+			r.sayTrimmed(g, need, kib>>10)
 		}
 		if !wrote {
 			continue
@@ -189,10 +188,10 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 
 // sayTrimmed says that the attempt's hold now reserves needMiB, lowered by hand with `coreslot
 // trim`, and follows its command's footprint, and records it: once, at the first write of it.
-func (r *run) sayTrimmed(g *engine.Grant, req store.TrimRequest, needMiB, footprintMiB int64) {
+func (r *run) sayTrimmed(g *engine.Grant, needMiB, footprintMiB int64) {
 	r.notice("the reservation of %s was lowered by hand with coreslot trim: it follows what the command uses, up to the %s it asked for (%s now)",
 		commandText(r.o.argv), spec.FormatMiB(g.GrantMiB()), spec.FormatMiB(needMiB))
-	r.record.trimmed(g.HoldName(), g.GrantMiB(), needMiB, footprintMiB, req)
+	r.record.trimmed(g.HoldName(), g.GrantMiB(), needMiB, footprintMiB)
 }
 
 // keptNotice says so when det's last round kept the hold, unless the round at lastNS, the last

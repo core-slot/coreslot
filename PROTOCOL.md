@@ -656,26 +656,25 @@ and is removed by reconciliation (section 10.4).
 asks for no trim writes none, and its absence is normal. It is one JSON object:
 
 ```json
-{"holds": {"01791719000000000000-0000006500-000002": {"requested_ns": 1791721200000000000, "requester_pid": 8100}}}
+{"holds": {"01791719000000000000-0000006500-000002": {}}}
 ```
 
 | Key | Type | Content |
 |---|---|---|
 | `holds` | object | one request per hold, by the hold's id: the first three fields of its name (section 7.1) |
-| `holds.<id>.requested_ns` | integer | `≥ 0`; the wall clock when the request was written |
-| `holds.<id>.requester_pid` | integer | `≥ 0`; the requester's pid; informational |
+| `holds.<id>` | object | the request; it carries nothing, and a writer writes `{}` |
 
 It is not a strict body. A missing file, one above 64 KiB, and one that is not a JSON object with
-an object under `holds` read as no request. Within `holds`, an entry whose key is not a hold id,
-whose value is not an object, or whose `requested_ns` or `requester_pid` is not an integer `≥ 0`
-is skipped alone, and the others still count; a key absent from an entry reads as `0`. Unknown keys
-are ignored. The file itself is checked as in section 4.2.
+an object under `holds` read as no request. Within `holds`, an entry whose key is not a hold id or
+whose value is not an object is skipped alone, and the others still count. Keys inside an entry and
+unknown keys are ignored. The file itself is checked as in section 4.2.
 
 It is written only inside the section and replaced with a plain `rename` (section 11), without a
-`gen` bump: no admission reads it. A writer adds or replaces the entry of the hold it asks for and
-keeps the entries of the other holds whose names `holds/` lists; it drops the rest, so a request
-does not outlive its hold for long. A rewrite that would make the file larger than 64 KiB is not
-written. A holder reads it outside the section, for its own hold's id (section 23.1).
+`gen` bump: no admission reads it. A writer adds the entry of the hold it asks for and keeps the
+ids of the other holds whose names `holds/` lists (it need not keep the keys inside their entries);
+it drops the rest. An entry of a hold that has ended therefore stays until a request is written
+once `holds/` no longer lists it, or a reset (section 4.4); nobody reads it. A rewrite that would
+make the file larger than 64 KiB is not written. A holder reads it outside the section, for its own hold's id (section 23.1).
 
 ## 8. The admission critical section
 
@@ -1645,7 +1644,7 @@ shows on the hold's line. Inside the section it finds the hold live, reserving 4
 did not exist, without a `gen` bump (section 7.13):
 
 ```json
-{"holds": {"01791719000000000000-0000006500-000002": {"requested_ns": 1791721200000000000, "requester_pid": 8100}}}
+{"holds": {"01791719000000000000-0000006500-000002": {}}}
 ```
 
 It leaves the section and reads the hold outside it, every 0.25 s.

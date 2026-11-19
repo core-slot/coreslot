@@ -297,5 +297,3 @@ is on the samples' `jobs`.
 | `asked_mib` | the need the hold was admitted with |
 | `need_mib` | what the hold reserves from that write: `asked_mib` while the attempt's window of readings is not yet full |
 | `footprint_mib` | the tree's footprint at that tick |
-| `requested_ns` | when the request was written, from `trim.json` |
-| `requester_pid` | the pid that wrote the request |

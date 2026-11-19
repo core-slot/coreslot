@@ -96,19 +96,17 @@ func TestTrimForeignFormatWritesNothing(t *testing.T) {
 	}
 }
 
-// A trim of a live hold writes its request with the engine's clock and this pid, keeps the request
-// of a hold that holds/ still lists though dead, drops one whose hold is gone, and bumps no gen.
+// A trim of a live hold writes its request, keeps the request of a hold that holds/ still lists
+// though dead, drops one whose hold is gone, and bumps no gen.
 // Mutations: passing only the live holds as listed drops the dead hold's request; bumping gen
 // after the write changes gen.
 func TestTrimPublishesForLiveHold(t *testing.T) {
 	dir := newStateDir(t, "")
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
+	e := newEngine(t, dir, newFakeClock())
 	g := hold(t, e, need(256)) // its section reconciled, so the dead hold below stays listed
 	deadID, _ := wire.ParseName(filepath.Base(holdPath(t, dir, 512)))
 	goneID := wire.ID{OrderKey: 2, PID: 4711, Seq: 1}
-	body := fmt.Sprintf(`{"holds":{%q:{"requested_ns":1,"requester_pid":10},%q:{"requested_ns":2,"requester_pid":20}}}`,
-		deadID, goneID)
+	body := fmt.Sprintf(`{"holds":{%q:{},%q:{}}}`, deadID, goneID)
 	if err := os.WriteFile(trimPath(dir), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -120,10 +118,7 @@ func TestTrimPublishesForLiveHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]store.TrimRequest{
-		deadID.String():       {RequestedNS: 1, RequesterPID: 10},
-		holdID(t, g).String(): {RequestedNS: clk.clock().Realtime(), RequesterPID: os.Getpid()},
-	}
+	want := map[string]bool{deadID.String(): true, holdID(t, g).String(): true}
 	if !maps.Equal(got, want) {
 		t.Errorf("trim.json holds %v; want %v", got, want)
 	}
@@ -155,27 +150,25 @@ func TestTrimTornBodyByID(t *testing.T) {
 // find the first one's request.
 func TestGrantTrimRequested(t *testing.T) {
 	dir := newStateDir(t, "")
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
+	e := newEngine(t, dir, newFakeClock())
 	g := hold(t, e, needLabel(256, "same"))
 	other := hold(t, e, needLabel(256, "same"))
-	if _, ok := g.TrimRequested(); ok {
+	if g.TrimRequested() {
 		t.Fatal("a request found before any trim")
 	}
 	if err := e.TrimContext(context.Background(), holdID(t, g)); err != nil {
 		t.Fatal(err)
 	}
-	r, ok := g.TrimRequested()
-	if !ok || r.RequesterPID != os.Getpid() || r.RequestedNS != clk.clock().Realtime() {
-		t.Errorf("TrimRequested = %+v, %v; want this process's request", r, ok)
+	if !g.TrimRequested() {
+		t.Error("TrimRequested = false; want the request just written")
 	}
-	if r, ok := other.TrimRequested(); ok {
-		t.Errorf("the other hold found %+v; want no request", r)
+	if other.TrimRequested() {
+		t.Error("the other hold found a request; want none")
 	}
 	if err := os.WriteFile(trimPath(dir), []byte(`not json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := g.TrimRequested(); ok {
+	if g.TrimRequested() {
 		t.Error("a request found in a malformed trim.json")
 	}
 }

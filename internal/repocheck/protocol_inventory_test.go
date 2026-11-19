@@ -20,7 +20,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"admit.lock", "admit.lock", "admit.lock"},
 	{"gen", "gen", "reconciled_ns"},
 	{"watch.json", "watch.json", "detector.level"},
-	{"trim.json", "trim.json", "requester_pid"},
+	{"trim.json", "trim.json", "holds.<id>"},
 	{"queue/", "Ticket", "queue/"},
 	{"holds/", "Hold", "holds/"},
 	{"cancel/", "Cancel request", "cancel/"},

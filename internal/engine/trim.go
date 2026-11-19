@@ -4,9 +4,7 @@ package engine
 
 import (
 	"context"
-	"os"
 
-	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -24,8 +22,7 @@ func (e *Engine) TrimContext(ctx context.Context, id wire.ID) error {
 		return err
 	}
 	defer sec.Leave()
-	now := e.clock.Realtime() // reconciliation and the request read the same clock
-	n, understood, err := sec.Prepare(now)
+	n, understood, err := sec.Prepare(e.clock.Realtime())
 	if err != nil {
 		return err
 	}
@@ -59,21 +56,17 @@ func (e *Engine) TrimContext(ctx context.Context, id wire.ID) error {
 		return ErrCommandExited
 	}
 	// Writing trim.json does not bump gen: no admission reads it.
-	return sec.RequestTrim(id, store.TrimRequest{RequestedNS: max(now, 0), RequesterPID: os.Getpid()}, listed)
+	return sec.RequestTrim(id, listed)
 }
 
-// TrimRequested reports the request in trim.json for this grant's own hold, read outside the
+// TrimRequested reports whether trim.json asks to trim this grant's own hold, read outside the
 // section. A grant without a hold, a missing or unreadable file and a file without an entry for
-// the hold all report none.
-func (g *Grant) TrimRequested() (store.TrimRequest, bool) {
+// the hold all report no request.
+func (g *Grant) TrimRequested() bool {
 	id, ok := wire.ParseName(g.holdName)
 	if !ok {
-		return store.TrimRequest{}, false
+		return false
 	}
 	reqs, err := g.e.st.ReadTrim()
-	if err != nil {
-		return store.TrimRequest{}, false
-	}
-	r, ok := reqs[id.String()]
-	return r, ok
+	return err == nil && reqs[id.String()]
 }

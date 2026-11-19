@@ -228,15 +228,13 @@ func TestRunTrimKeepsNeedThroughFailedListing(t *testing.T) {
 	}
 }
 
-// The run says once, and records once, that it acted on the request, with the request's
-// requester and time and what it reserves. Mutation: say and record at every trimmed write →
+// The run says once, and records once, that it acted on the request, with what it reserves. Mutation: say and record at every trimmed write →
 // three of each, red.
 func TestRunTrimEventOnce(t *testing.T) {
 	b := newBed(t, 16384)
 	g := hold(t, b.e, "x", 4000)
 	st := b.e.Store()
 	b.r.trimWindowS = 2
-	before := store.NowNS()
 	each := func(n int) {
 		if n == 1 {
 			requestTrim(t, b.e, g)
@@ -253,12 +251,8 @@ func TestRunTrimEventOnce(t *testing.T) {
 		t.Fatalf("%d trim events among %q, want 1", len(trims), eventNames(events(t, b.dir)))
 	}
 	m := trims[0]
-	if m["hold"] != g.HoldName() || m["asked_mib"] != 4000.0 || m["need_mib"] != 700.0 || m["footprint_mib"] != 300.0 ||
-		m["requester_pid"] != float64(os.Getpid()) {
-		t.Errorf("trim event %v; want hold %s, asked 4000, need 700, footprint 300, requester %d", m, g.HoldName(), os.Getpid())
-	}
-	if at, _ := m["requested_ns"].(float64); at < float64(before) || at > float64(store.NowNS()) {
-		t.Errorf("requested_ns %v, want the request's time", m["requested_ns"])
+	if m["hold"] != g.HoldName() || m["asked_mib"] != 4000.0 || m["need_mib"] != 700.0 || m["footprint_mib"] != 300.0 {
+		t.Errorf("trim event %v; want hold %s, asked 4000, need 700, footprint 300", m, g.HoldName())
 	}
 	if n := strings.Count(b.notices(t), trimNotice); n != 1 {
 		t.Errorf("stderr %q says the trim %d times, want once", b.notices(t), n)

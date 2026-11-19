@@ -26,7 +26,7 @@ func writeTrim(t *testing.T, dir, body string) {
 	}
 }
 
-func readTrim(t *testing.T, s *Store) map[string]TrimRequest {
+func readTrim(t *testing.T, s *Store) map[string]bool {
 	t.Helper()
 	got, err := s.ReadTrim()
 	if err != nil {
@@ -35,36 +35,36 @@ func readTrim(t *testing.T, s *Store) map[string]TrimRequest {
 	return got
 }
 
-// A trim.json that is missing, too large or malformed is no request, and a bad entry is skipped
-// alone. Mutations: failing the whole file on one bad entry empties the "bad entries beside a good
-// one" case; dropping the size check reads the file of 64 KiB + 1 bytes, whose JSON is whole.
+// A trim.json that is missing, too large or malformed is no request, a bad entry is skipped alone,
+// and an entry is a request whatever it holds. Mutations: failing the whole file on one bad entry
+// empties the "bad entries beside a good one" case; dropping the size check reads the file of
+// 64 KiB + 1 bytes, whose JSON is whole; requiring an empty entry drops a's in that case.
 func TestReadTrimLenient(t *testing.T) {
 	a, b := trimID(1).String(), trimID(2).String()
-	good := fmt.Sprintf(`{"holds":{%q:{"requested_ns":5,"requester_pid":6}}}`, a)
+	good := fmt.Sprintf(`{"holds":{%q:{}}}`, a)
 	padTo := func(n int) string {
-		head := fmt.Sprintf(`{"holds":{%q:{"requested_ns":5,"requester_pid":6}},"pad":"`, a)
+		head := fmt.Sprintf(`{"holds":{%q:{}},"pad":"`, a)
 		body := head + strings.Repeat("x", n-len(head)-2) + `"}`
 		if len(body) != n {
 			t.Fatalf("padded body is %d bytes, want %d", len(body), n)
 		}
 		return body
 	}
-	want := map[string]TrimRequest{a: {RequestedNS: 5, RequesterPID: 6}}
+	want := map[string]bool{a: true}
 	cases := []struct {
 		name string
 		body *string // nil: no file
-		want map[string]TrimRequest
+		want map[string]bool
 	}{
-		{"missing", nil, map[string]TrimRequest{}},
+		{"missing", nil, map[string]bool{}},
 		{"well-formed", &good, want},
 		{"64 KiB", ptr(padTo(maxTrimBytes)), want},
-		{"64 KiB + 1", ptr(padTo(maxTrimBytes + 1)), map[string]TrimRequest{}},
-		{"not JSON", ptr(`{"holds":`), map[string]TrimRequest{}},
-		{"not an object", ptr(`[1]`), map[string]TrimRequest{}},
-		{"holds not an object", ptr(`{"holds":[1]}`), map[string]TrimRequest{}},
-		{"bad entries beside a good one", ptr(fmt.Sprintf(`{"holds":{%q:{"requested_ns":5,"requester_pid":6,"later":[1]},`+
-			`%q:7,"x":{"requested_ns":1,"requester_pid":1},"%s-gate":{"requested_ns":1,"requester_pid":1},`+
-			`%q:null,%q:{"requested_ns":"5","requester_pid":6}},"unknown":{}}`,
+		{"64 KiB + 1", ptr(padTo(maxTrimBytes + 1)), map[string]bool{}},
+		{"not JSON", ptr(`{"holds":`), map[string]bool{}},
+		{"not an object", ptr(`[1]`), map[string]bool{}},
+		{"holds not an object", ptr(`{"holds":[1]}`), map[string]bool{}},
+		{"bad entries beside a good one", ptr(fmt.Sprintf(`{"holds":{%q:{"later":[1]},`+
+			`%q:7,"x":{},"%s-gate":{},%q:null,%q:[{}]},"unknown":{}}`,
 			a, b, trimID(3), trimID(4), trimID(5))), want},
 	}
 	for _, c := range cases {
@@ -89,34 +89,17 @@ func TestRequestTrimKeepsListedDropsGone(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	a, b, c := trimID(1), trimID(2), trimID(3)
-	writeTrim(t, dir, fmt.Sprintf(`{"holds":{%q:{"requested_ns":1,"requester_pid":10},%q:{"requested_ns":2,"requester_pid":20}}}`, a, b))
+	writeTrim(t, dir, fmt.Sprintf(`{"holds":{%q:{},%q:{}}}`, a, b))
 	sec := enter(t, s)
-	if err := sec.RequestTrim(c, TrimRequest{RequestedNS: 3, RequesterPID: 30}, map[string]bool{a.String(): true, c.String(): true}); err != nil {
+	if err := sec.RequestTrim(c, map[string]bool{a.String(): true, c.String(): true}); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]TrimRequest{a.String(): {1, 10}, c.String(): {3, 30}}
+	want := map[string]bool{a.String(): true, c.String(): true}
 	if got := readTrim(t, s); !maps.Equal(got, want) {
 		t.Errorf("after the rewrite: %v; want %v", got, want)
 	}
 	if fi, err := os.Lstat(filepath.Join(dir, TrimFile)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("trim.json: %v, %v; want a file of mode 0600", fi, err)
-	}
-}
-
-// A second request for one hold replaces the first; the file holds one entry for it.
-func TestRequestTrimReplacesSameHold(t *testing.T) {
-	dir := newDir(t)
-	s := open(t, dir)
-	sec := enter(t, s)
-	a := trimID(1)
-	listed := map[string]bool{a.String(): true}
-	for _, r := range []TrimRequest{{1, 10}, {2, 20}} {
-		if err := sec.RequestTrim(a, r, listed); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got, want := readTrim(t, s), map[string]TrimRequest{a.String(): {2, 20}}; !maps.Equal(got, want) {
-		t.Errorf("ReadTrim = %v; want %v", got, want)
 	}
 }
 
@@ -132,7 +115,7 @@ func TestRequestTrimFull(t *testing.T) {
 	for n := 1; ; n++ {
 		id := trimID(n)
 		listed[id.String()] = true
-		err := sec.RequestTrim(id, TrimRequest{RequestedNS: 1791720000000000000, RequesterPID: 4711}, listed)
+		err := sec.RequestTrim(id, listed)
 		if errors.Is(err, ErrTrimFull) {
 			after, rerr := os.ReadFile(filepath.Join(dir, TrimFile))
 			if rerr != nil || string(after) != string(before) || len(after) > maxTrimBytes {
@@ -160,7 +143,7 @@ func TestRequestTrimOutsideSectionFails(t *testing.T) {
 	s := open(t, dir)
 	sec := enter(t, s)
 	sec.Leave()
-	if err := sec.RequestTrim(trimID(1), TrimRequest{1, 2}, nil); !errors.Is(err, errLeft) {
+	if err := sec.RequestTrim(trimID(1), nil); !errors.Is(err, errLeft) {
 		t.Errorf("RequestTrim after Leave: %v; want errLeft", err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, TrimFile)); !errors.Is(err, os.ErrNotExist) {
@@ -199,7 +182,7 @@ func TestOpenChecksTrimFile(t *testing.T) {
 func TestResetRemovesTrimFile(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
-	if err := sec.RequestTrim(trimID(1), TrimRequest{1, 2}, nil); err != nil {
+	if err := sec.RequestTrim(trimID(1), nil); err != nil {
 		t.Fatal(err)
 	}
 	if live, done, err := sec.Reset(); err != nil || !live.Empty() || done.Removed != 8 {
