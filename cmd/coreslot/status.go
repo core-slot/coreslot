@@ -242,7 +242,7 @@ func (v statusView) human() string {
 	case !r.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
 		p("format: %d, which this client does not implement", r.Format)
 	case !r.FormatPresent:
-		p("format: not written yet (the first client writes 2)")
+		p("format: not written yet (the first client writes %d)", store.Format)
 	default:
 		p("format: %d", r.Format)
 	}
@@ -399,7 +399,7 @@ func plural(n int64, one, many string) string {
 // out a directory with none; "" when nothing was ignored.
 func ignoredText(ignored map[string]int) string {
 	var parts []string
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.OrderDir} {
 		if n := ignored[dir]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%s %d", dir, n))
 		}
@@ -543,7 +543,7 @@ func (v statusView) document() jsonStatus {
 	if x := r.Degraded; x != nil {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
 	}
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.OrderDir} {
 		d.Ignored[dir] = r.Ignored[dir]
 	}
 	for _, h := range r.Holds {

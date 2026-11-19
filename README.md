@@ -27,8 +27,9 @@ coreslot status                                # what runs, what waits, whether 
   waits in one first-in, first-out queue. A command that fits may pass the head of the queue when
   its earlier runs say it will be done before the head could start, or, while the head does not fit
   and the kernel reports normal memory pressure, out of turn: one at a time, and for no longer than
-  it has itself watched the head wait. A command with no earlier run never passes. The exception is container work: while another command runs, a command named
-  `docker`, `docker-compose` or `podman` with no pinned need passes the queue, with or without
+  it has itself watched the head wait. A command with no earlier run never passes. The exception is
+  container work: while another command runs, a command named `docker`, `docker-compose` or
+  `podman` with no pinned need passes the queue, with or without
   earlier runs ([how it decides](#how-it-decides)). When no coreslot command is running, the head of
   the queue always starts.
 - **It stops the newest commands only under real danger.** A little swap is survivable, so it does
@@ -237,7 +238,8 @@ xattr -d com.apple.quarantine ./coreslot
 `coreslot version` prints the version and the protocol formats it implements. A state directory of
 another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`,
 which also removes that format's run log, so every label learns its memory need again. On a
-format-2 directory the reset is a repair and keeps the run log; to make the labels learn again,
+directory of this client's format, or of format 2 (which the reset upgrades), the reset is a repair
+and keeps the run log; to make the labels learn again,
 remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 
 ## Usage
@@ -253,6 +255,7 @@ coreslot stats             # per label, what the need is learned from
 coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
 coreslot doctor            # state directory, filesystem, permissions, format, readings
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
+coreslot move <ticket-id> --first   # or --last, --before <id>, --after <id>; changes its place, keeps its run
 ```
 
 **`--restart=yes|no` is required** wherever coreslot could stop the command: when memory runs
@@ -395,7 +398,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 2
+- [Protocol](PROTOCOL.md), the normative definition of format 3
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)

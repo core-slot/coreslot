@@ -8,6 +8,20 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `coreslot move <ticket-id> --first | --last | --before <id> | --after <id>` (or `--label L`) changes a waiting
+  request's place in the queue without ending its run, which `cancel` and a new request could only send to the end.
+  The ticket keeps its file and its lock: the new place is an override in `order/`, read by every client that orders
+  the queue, removed with the ticket. `status` lists the queue in that order.
+
+### Changed
+
+- **Format 3.** The state directory gains `order/` (PROTOCOL.md sections 7.12, 9 and 13.3), which every client must
+  read, so a client of format 2 steps out of the budget with its existing notice. Run `coreslot doctor --reset` once
+  nothing is live: on a format-2 directory it is an upgrade that keeps the run log and the telemetry, so no label
+  learns its need again.
+
 ## v0.9.1 (2026-11-19)
 
 ### Changed

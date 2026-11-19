@@ -51,8 +51,9 @@ const (
 
 // aheadEntry is a well-formed ticket ahead of this one, from the last rescan.
 type aheadEntry struct {
-	name string
-	key  state.Key
+	name  string
+	key   state.Key // the name's: the observer's identity of the ticket
+	order state.Key // the effective order key (PROTOCOL.md section 9)
 }
 
 // Seams the tests replace to count a waiter's filesystem work: the election's mtime read and
@@ -82,7 +83,8 @@ type Ticket struct {
 	name string
 
 	// Everything below is guarded by stepMu.
-	key state.Key
+	key   state.Key // the name's
+	order state.Key // the effective order key, its override's when it has one (PROTOCOL.md section 9)
 
 	lastRefreshMono time.Duration
 	lastRefreshReal int64
@@ -447,12 +449,17 @@ func (t *Ticket) rescan() error {
 	if err != nil {
 		return err
 	}
+	orders, _, err := t.e.orders()
+	if err != nil {
+		return err
+	}
+	t.order = orderKey(t.id, orders)
 	present := make(map[string]bool, len(entries))
 	var ahead []aheadEntry
 	for _, en := range entries {
 		present[en.Name] = true
-		k := state.Key(en.ID)
-		if !k.Less(t.key) {
+		o := orderKey(en.ID, orders)
+		if !o.Less(t.order) {
 			continue
 		}
 		tk, err := t.ticketBody(en.Name)
@@ -460,7 +467,7 @@ func (t *Ticket) rescan() error {
 			return err
 		}
 		if tk != nil {
-			ahead = append(ahead, aheadEntry{name: en.Name, key: k})
+			ahead = append(ahead, aheadEntry{name: en.Name, key: state.Key(en.ID), order: o})
 		}
 	}
 	for name := range t.tickets {
@@ -475,9 +482,9 @@ func (t *Ticket) rescan() error {
 	}
 	slices.SortFunc(ahead, func(a, b aheadEntry) int {
 		switch {
-		case a.key.Less(b.key):
+		case a.order.Less(b.order):
 			return -1
-		case b.key.Less(a.key):
+		case b.order.Less(a.order):
 			return 1
 		}
 		return 0

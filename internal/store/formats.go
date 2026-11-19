@@ -4,7 +4,11 @@ package store
 // format the Unix layer acts on.
 
 // Format is the protocol format this client implements and writes (PROTOCOL.md section 15).
-const Format = 2
+const Format = 3
+
+// UpgradedFormat is the format a reset upgrades from as a repair, keeping the run log and the
+// telemetry (PROTOCOL.md section 4.4): format 2, which format 3 extends only by order/.
+const UpgradedFormat = 2
 
 // Understood reports whether this client implements format n. A FORMAT naming any other format is
 // not understood: a client writes nothing into that directory, and runs fail open until

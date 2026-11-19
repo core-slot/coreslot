@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"slices"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/memsample"
@@ -33,7 +34,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 2
+		r.FormatUnderstood = true // the first entry writes format 3
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}
@@ -54,6 +55,22 @@ func (e *Engine) Snapshot() (Report, error) {
 		return Report{}, err
 	}
 	r.Ignored[store.QueueDir] = ignored
+	orders, ignored, err := e.orders()
+	if err != nil {
+		return Report{}, err
+	}
+	r.Ignored[store.OrderDir] = ignored
+	// Queue order is the effective order (PROTOCOL.md section 9): an override's key, else the name's.
+	slices.SortStableFunc(tickets, func(a, b store.Entry) int {
+		ka, kb := orderKey(a.ID, orders), orderKey(b.ID, orders)
+		switch {
+		case ka.Less(kb):
+			return -1
+		case kb.Less(ka):
+			return 1
+		}
+		return 0
+	})
 	// The first live ticket in queue order is the head the passing rule judges others by: its index
 	// and restart are kept for its expected wait.
 	head, headRestart := -1, false
