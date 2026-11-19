@@ -1041,8 +1041,8 @@ know the request ignores it. A reader of a hold, admission and the watchdog incl
 
 > **Implementation note.** `coreslot trim <hold-id>`, or `coreslot trim --label LABEL` for the one
 > live hold reserving memory with that label, writes the request only for a live hold that reserves
-> memory and whose command has not exited (a live hold whose body does not parse is not refused),
-> and otherwise refuses (section 19). It then waits outside the section, up to 8 s, for the hold to
+> memory and whose command has not exited (a live hold whose body does not parse is not refused);
+> a hold that reserves nothing has nothing to lower, exit 0, and the rest is refused (section 19). It then waits outside the section, up to 8 s, for the hold to
 > show `trimmed`, and says what the hold reserves; a run that does not answer in time is not a
 > refusal. The run reads `trim.json` at each tick, after it has measured, until it finds a request
 > for its hold, and from then on writes, for the rest of the attempt, `need_mib = A` until the
@@ -1263,7 +1263,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold that reserves nothing or whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a run that does not answer within the wait is exit 0; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |

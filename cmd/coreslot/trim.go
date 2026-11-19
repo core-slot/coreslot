@@ -27,8 +27,8 @@ const trimAnswerPoll = 250 * time.Millisecond
 // (or the hold's full name) or by its label, to lower the hold's reservation to what its command
 // uses and to follow it. The request is written into trim.json inside the admission section;
 // the run reads it at its tick and answers in its hold's body, which trim then waits for outside
-// the section. A request that can do nothing (no such live hold, a hold that reserves nothing, a
-// command that has exited), a label that names no hold or several, a state directory that cannot
+// the section. A hold that reserves nothing has nothing to lower: exit 0, writing nothing. A
+// request that can do nothing (no such live hold, a command that has exited), a label that names no hold or several, a state directory that cannot
 // be used or whose format this client does not implement, and an admission section held for
 // longer than cancelWait are refusals (exit 75). A run that does not answer is not one: exit 0.
 func trimCommand(args []string, io IO) int {
@@ -105,8 +105,8 @@ func trimCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: trim: no live hold %s (it has ended, or the id is not a hold's)\n", id)
 		return exitRefusal
 	case errors.Is(err, engine.ErrNothingReserved):
-		fmt.Fprintf(io.Stderr, "coreslot: trim: %s reserves nothing (it runs outside the budget), so there is nothing to lower\n", name)
-		return exitRefusal
+		fmt.Fprintf(io.Stdout, "coreslot: %s reserves nothing (it runs outside the budget): nothing to lower\n", name)
+		return 0
 	case errors.Is(err, engine.ErrCommandExited):
 		fmt.Fprintf(io.Stderr, "coreslot: trim: the command of %s has exited; its run is releasing the hold\n", name)
 		return exitRefusal

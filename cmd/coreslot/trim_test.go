@@ -97,8 +97,9 @@ func TestTrimUsage(t *testing.T) {
 }
 
 // Each request that could do nothing is refused with exit 75 and its own sentence, and none writes
-// trim.json. Mutation: write the request before the engine's checks (TrimContext) → trim.json
-// exists after each refusal, red.
+// trim.json; a hold that reserves nothing is not a refusal, and writes none either. Mutations: write
+// the request before the engine's checks (TrimContext) → trim.json exists after each case, red;
+// handle ErrNothingReserved as a refusal → exit 75 for "nothing reserved", red.
 func TestTrimRefusals(t *testing.T) {
 	t.Run("no state directory", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "never ran")
@@ -131,17 +132,25 @@ func TestTrimRefusals(t *testing.T) {
 	if ids["live"] != holdIDOf(t, live) {
 		t.Fatalf("status gives the hold the id %q, want %q", ids["live"], holdIDOf(t, live))
 	}
-	for _, c := range []struct{ name, id, want string }{
-		{"no such hold", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String(), "coreslot: trim: no live hold " + wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String() + " (it has ended, or the id is not a hold's)\n"},
-		{"nothing reserved", ids["open"], "coreslot: trim: open reserves nothing (it runs outside the budget), so there is nothing to lower\n"},
-		{"command exited", ids["exited"], "coreslot: trim: the command of exited has exited; its run is releasing the hold\n"},
+	for _, c := range []struct {
+		name, id string
+		code     int
+		want     string // stderr for a refusal, stdout otherwise
+	}{
+		{"no such hold", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String(), 75, "coreslot: trim: no live hold " + wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String() + " (it has ended, or the id is not a hold's)\n"},
+		{"nothing reserved", ids["open"], 0, "coreslot: open reserves nothing (it runs outside the budget): nothing to lower\n"},
+		{"command exited", ids["exited"], 75, "coreslot: trim: the command of exited has exited; its run is releasing the hold\n"},
 	} {
 		r := cli(t, baseEnv(dir), "trim", c.id)
-		if r.code != 75 || r.stderr != c.want {
-			t.Errorf("%s: exit %d, stderr %q; want 75 and %q", c.name, r.code, r.stderr, c.want)
+		got := r.stdout
+		if c.code != 0 {
+			got = r.stderr
+		}
+		if r.code != c.code || got != c.want {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want %d and %q", c.name, r.code, r.stdout, r.stderr, c.code, c.want)
 		}
 		if trimFileExists(dir) {
-			t.Fatalf("%s: a refused trim wrote trim.json", c.name)
+			t.Fatalf("%s: trim.json written", c.name)
 		}
 	}
 	if r := cli(t, baseEnv(dir), "trim", "--label", "nobody"); r.code != 75 || r.stderr != "coreslot: trim: no live hold reserving memory has the label nobody\n" {
