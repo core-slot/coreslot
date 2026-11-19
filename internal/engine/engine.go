@@ -285,6 +285,7 @@ func (t *Ticket) publish(sec *store.Section) error {
 	t.f, t.id, t.name = f, id, name
 	t.mu.Unlock()
 	t.key = state.Key(id)
+	t.order = t.key
 	t.lastRefreshMono, t.lastRefreshReal, t.arrivalNS = e.clock.Monotonic(), arrival, arrival
 	return nil
 }

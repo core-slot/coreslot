@@ -147,11 +147,11 @@ func TestTrimRefusals(t *testing.T) {
 
 	t.Run("another format", func(t *testing.T) {
 		dir := stateDir(t, "")
-		if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 3\n"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 4\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		r := cli(t, baseEnv(dir), "trim", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String())
-		want := "coreslot: trim refused: state format 3 is not supported; run coreslot doctor --reset\n"
+		want := "coreslot: trim refused: state format 4 is not supported; run coreslot doctor --reset\n"
 		if r.code != 75 || r.stderr != want {
 			t.Errorf("exit %d, stderr %q; want 75 and %q", r.code, r.stderr, want)
 		}

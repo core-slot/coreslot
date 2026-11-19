@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -81,11 +82,11 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
 	// hold live a container request needs no pass; with none the idle start is the head's.
 	if !t.req.RealMemory || len(holds) == 0 {
-		head, headKey, err := t.reelect()
+		head, headKey, headOrder, err := t.reelect()
 		if err != nil {
 			return nil, err
 		}
-		if head != nil && !t.passes(*head, headKey, holds, room, cfg, m) {
+		if head != nil && !t.passes(*head, headKey, headOrder, holds, room, cfg, m) {
 			t.out.Reason = ReasonBehindHead
 			return nil, nil
 		}
@@ -161,43 +162,65 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
-// lists the names in queue/ again and returns the body of the first live ticket ahead of this
-// one, the head, and its key, nil when there is none: well-formed and neither gone, dead nor STALLED for this
-// observer, reading the mtime (lstat) of only well-formed tickets. A ticket this observer has
-// never watched, such as one published after the election, counts as live; the next election
-// then rescans whatever gen says, so a ticket published without a gen bump is watched from then
-// on and cannot keep the head out for longer than a stall.
-func (t *Ticket) reelect() (*wire.Ticket, state.Key, error) {
+// lists the names in queue/ and the overrides in order/ again and returns the body of the first live
+// ticket ahead of this one in effective order (section 9), the head, with its name's key (the
+// observer's identity) and its effective key; nil when there is none: well-formed and neither gone,
+// dead nor STALLED for this observer, reading the mtime (lstat) of only well-formed tickets. A
+// ticket this observer has never watched, such as one published after the election, counts as
+// live; the next election then rescans whatever gen says, so a ticket published without a gen bump
+// is watched from then on and cannot keep the head out for longer than a stall.
+func (t *Ticket) reelect() (*wire.Ticket, state.Key, state.Key, error) {
 	entries, err := t.e.st.ListNames(store.QueueDir)
 	if err != nil {
-		return nil, state.Key{}, err
+		return nil, state.Key{}, state.Key{}, err
 	}
-	now := t.e.clock.Monotonic()
+	orders, _, err := t.e.orders()
+	if err != nil {
+		return nil, state.Key{}, state.Key{}, err
+	}
+	t.order = orderKey(t.id, orders)
+	type entry struct {
+		name       string
+		key, order state.Key
+	}
+	ahead := make([]entry, 0, len(entries))
 	for _, en := range entries {
-		k := state.Key(en.ID)
-		if !k.Less(t.key) {
-			continue
+		if o := orderKey(en.ID, orders); o.Less(t.order) {
+			ahead = append(ahead, entry{en.Name, state.Key(en.ID), o})
 		}
-		tk, err := t.ticketBody(en.Name)
+	}
+	slices.SortFunc(ahead, func(a, b entry) int {
+		switch {
+		case a.order.Less(b.order):
+			return -1
+		case b.order.Less(a.order):
+			return 1
+		}
+		return 0
+	})
+	now := t.e.clock.Monotonic()
+	for _, en := range ahead {
+		k := en.key
+		tk, err := t.ticketBody(en.name)
 		if err != nil {
-			return nil, state.Key{}, err
+			return nil, state.Key{}, state.Key{}, err
 		}
 		if tk == nil {
 			continue
 		}
-		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.Name))
+		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.name))
 		if gone(err) {
 			continue
 		}
 		if err != nil {
-			return nil, state.Key{}, err
+			return nil, state.Key{}, state.Key{}, err
 		}
-		dead, err := probe(t.e.st, store.QueueDir, en.Name)
+		dead, err := probe(t.e.st, store.QueueDir, en.name)
 		if gone(err) || stray(err) || err == nil && dead {
 			continue
 		}
 		if err != nil {
-			return nil, state.Key{}, err
+			return nil, state.Key{}, state.Key{}, err
 		}
 		if _, seen := t.obs.Seen(k); !seen {
 			t.haveGen = false // rescan at the next election, so that it is watched from then on
@@ -207,16 +230,18 @@ func (t *Ticket) reelect() (*wire.Ticket, state.Key, error) {
 				continue
 			}
 		}
-		return tk, k, nil
+		return tk, k, en.order, nil
 	}
-	return nil, state.Key{}, nil
+	return nil, state.Key{}, state.Key{}, nil
 }
 
 // passes reports whether this ticket may start ahead of head, the first live ticket in the queue,
-// whose key is headKey (PROTOCOL.md section 10.3), and records how in t.out: by duration, when its
+// whose name's key is headKey and whose effective order key is headOrder (PROTOCOL.md section
+// 10.3), and records how in t.out: by duration, when its
 // typical run time is known and ends within W, head's expected wait for the room it needs, at least
 // the calm a restart still needs; or out of turn, whatever W is (outOfTurn).
-func (t *Ticket) passes(head wire.Ticket, headKey state.Key, holds []liveHold, room int64, cfg config.Config, m config.Machine) bool {
+func (t *Ticket) passes(head wire.Ticket, headKey, headOrder state.Key, holds []liveHold, room int64, cfg config.Config,
+	m config.Machine) bool {
 	switch { // with no hold live the head starts at once
 	case t.req.TypicalS == 0:
 		t.out.NoPass = "no_typical"
@@ -241,7 +266,7 @@ func (t *Ticket) passes(head wire.Ticket, headKey state.Key, holds []liveHold, r
 		t.out.NoPass = noPass
 		return false
 	}
-	why := t.outOfTurn(head, headKey, holds, room, now, noPass == "wait_unknown", cfg)
+	why := t.outOfTurn(head, headKey, headOrder, holds, room, now, noPass == "wait_unknown", cfg)
 	switch why {
 	case "":
 		t.out.Pass = "turn"
@@ -265,12 +290,13 @@ var kernelPressure = func() (int, bool) {
 
 // outOfTurn is the first condition that keeps this ticket from going out of turn ahead of head, ""
 // when none does (PROTOCOL.md section 10.3): head does not fit the room now; the kernel's memory
-// pressure level is normal (one that cannot be read is not); every live hold's body
-// parses and none arrived after head (or in the same nanosecond), so no other run is out of turn; and the ticket's typical run
+// pressure level is normal (one that cannot be read is not); every live hold's body parses and none
+// arrived after head's effective order key (or in the same nanosecond), so no other run is out of
+// turn; and the ticket's typical run
 // time is at most the time it has watched head, its own absences excluded, or, when head's W is
 // unknown and head is a restart, the calm head still needs.
-func (t *Ticket) outOfTurn(head wire.Ticket, headKey state.Key, holds []liveHold, room, nowNS int64, wUnknown bool,
-	cfg config.Config) string {
+func (t *Ticket) outOfTurn(head wire.Ticket, headKey, headOrder state.Key, holds []liveHold, room, nowNS int64,
+	wUnknown bool, cfg config.Config) string {
 	if head.NeedMiB <= room {
 		return "head_fits"
 	}
@@ -283,7 +309,7 @@ func (t *Ticket) outOfTurn(head wire.Ticket, headKey state.Key, holds []liveHold
 		}
 	}
 	for _, h := range holds {
-		if uint64(h.body.ArrivalNS) >= headKey.OrderKey { // the same nanosecond counts as after
+		if uint64(h.body.ArrivalNS) >= headOrder.OrderKey { // the same nanosecond counts as after
 			return "out_of_turn_live"
 		}
 	}

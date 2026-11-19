@@ -52,9 +52,10 @@ listed here; after it, an incompatible change to either needs a new major versio
 | Release | Formats implemented |
 |---|---|
 | `v0.4.0` | 2 |
+| unreleased | 3 (format 2 with `order/`; `doctor --reset` upgrades a format-2 directory and keeps its run log) |
 
 `coreslot version` prints the formats a binary implements, for example
-`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 2.
+`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 3.
 
 `telemetry/`, and the `log/watch.jsonl` an older client may have left or still write, need no new format number:
 they are optional files that no reader of the format needs, and no admission reads them

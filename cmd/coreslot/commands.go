@@ -30,6 +30,13 @@ STALLED after 10s without a refresh, so use 10s or more.`
 const cancelUsage = `usage: coreslot cancel <ticket-id>
        coreslot cancel --label LABEL`
 
+const moveUsage = `usage: coreslot move <ticket-id> --first | --last | --before <ticket-id> | --after <ticket-id>
+       coreslot move --label LABEL --first | --last | --before <ticket-id> | --after <ticket-id>
+
+Changes a waiting ticket's place in the queue without ending its run: --first and --last put it
+ahead of or behind every ticket waiting now, --before and --after next to another one. Tickets
+that arrive later queue behind it as usual.`
+
 const trimUsage = `usage: coreslot trim <hold-id>
        coreslot trim --label LABEL
 
@@ -80,10 +87,19 @@ func cancelFlags() (fs *flag.FlagSet, label *string) {
 	return fs, fs.String("label", "", "cancel the one waiting ticket with this label")
 }
 
+func moveFlags() (fs *flag.FlagSet, label *string, first, last *bool, before, after *string) {
+	fs = newFlagSet("coreslot move")
+	return fs, fs.String("label", "", "move the one waiting ticket with this label"),
+		fs.Bool("first", false, "put it ahead of every waiting ticket"),
+		fs.Bool("last", false, "put it behind every waiting ticket"),
+		fs.String("before", "", "put it just ahead of this waiting ticket"),
+		fs.String("after", "", "put it just behind this waiting ticket")
+}
+
 func doctorFlags() (fs *flag.FlagSet, doClear, doReset *bool) {
 	fs = newFlagSet("coreslot doctor")
 	return fs, fs.Bool("clear", false, "remove the degraded-mode record"),
-		fs.Bool("reset", false, "empty the state directory, if nothing is live; a format-2 run log is kept")
+		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 3 or 2 is kept")
 }
 
 // newFlagSet returns a flag set that returns its errors to the caller and prints nothing itself.

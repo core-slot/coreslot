@@ -10,11 +10,15 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- `coreslot move <ticket-id> --first | --last | --before <id> | --after <id>` (or `--label L`) changes a waiting
+  request's place in the queue without ending its run, which `cancel` and a new request could only send to the end.
+  The ticket keeps its file and its lock: the new place is an override in `order/`, read by every client that orders
+  the queue, removed with the ticket. `status` lists the queue in that order.
 - `coreslot trim <hold-id>` (or `--label LABEL`) asks a running job's `coreslot run` to reserve what the job has
   used lately, its largest reading of the last minute plus a margin of a tenth of its need and at least 256 MiB,
   instead of what it asked for; the reservation rises again as the job grows, never above what it asked for. It
   raises the room without changing the queue's order. The request is the new optional file `trim.json` in the
-  state directory, which no admission reads (`PROTOCOL.md` sections 7.12 and 12.5); refusals exit 75 as
+  state directory, which no admission reads (`PROTOCOL.md` sections 7.13 and 12.5); refusals exit 75 as
   `cancel`'s do.
 - `[watch] trim_window_s`, from 2 to 3600 seconds and 60 by default: how far back a trimmed job's reservation
   looks. An invalid value is a configuration warning and the default, never an invalid configuration.
@@ -25,10 +29,16 @@ All notable changes to this project are recorded here. The format follows
 
 ### Changed
 
-- A live hold's `need_mib` may now be lower than the need it asked for, after a `coreslot trim`. A client of an
-  earlier release on the same machine, and a consumer that took `need_mib` for the need asked (`status --json`, the
-  telemetry `jobs` and `holders`), then see the current reservation where they expected the need asked; admission
-  arithmetic is unaffected, since every release computes the room from `need_mib` as the body says it.
+- **Format 3.** The state directory gains `order/` (PROTOCOL.md sections 7.12, 9 and 13.3), which every client must
+  read, so a client of format 2 steps out of the budget with its existing notice. Run `coreslot doctor --reset` once
+  nothing is live: on a format-2 directory it is an upgrade that keeps the run log and the telemetry, so no label
+  learns its need again.
+  Format 3 also carries the trim requests of `trim.json` and a hold's optional keys `asked_mib` and `trimmed`
+  (sections 7.13 and 12.5).
+- A live hold's `need_mib` may now be lower than the need it asked for, after a `coreslot trim`. A consumer that
+  took `need_mib` for the need asked (`status --json`, the telemetry `jobs` and `holders`) then sees the current
+  reservation where it expected the need asked, which a trimmed hold carries as `asked_mib`; admission arithmetic
+  is unaffected, since it computes the room from `need_mib` as the body says it.
 
 ## v0.9.1 (2026-11-19)
 

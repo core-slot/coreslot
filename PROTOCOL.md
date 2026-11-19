@@ -1,17 +1,21 @@
-# coreslot protocol, format 2
+# coreslot protocol, format 3
 
-This document is the normative definition of the coreslot on-disk protocol, format 2: the state
+This document is the normative definition of the coreslot on-disk protocol, format 3: the state
 directory, its files and their bodies, the admission critical section, the watchdog that keeps
 memory pressure from stalling the work the clients started, and the descriptor and environment
 contract between a run and the command it starts. Memory is the only resource. A client written
 from this document alone, in any language, shares one memory budget and one watchdog with every
 other conforming client on the machine.
 
-Format 2's names, bodies and layout are never redefined once released: a release that needs
+Format 3 is format 2 with the order overrides of `order/` (sections 7.12, 9 and 13.3) and the trim
+requests of `trim.json` with a hold's two optional keys (sections 7.13 and 12.5); a reset
+upgrades a format-2 directory in place, keeping its run log (section 4.4).
+
+Format 3's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
 no admission reads, as the needs file is (section 5.4). Until `v1.0.0` a minor release may
-introduce such a number, and may change what format 2 means elsewhere, such as the configuration's
+introduce such a number, and may change what format 3 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
@@ -42,7 +46,7 @@ requirement on a client.
 
 ## 2. Contract inventory
 
-Every shared file, field, environment variable and transition of format 2, and where it is defined.
+Every shared file, field, environment variable and transition of format 3, and where it is defined.
 
 | Item | Kind | Defined in |
 |---|---|---|
@@ -50,10 +54,11 @@ Every shared file, field, environment variable and transition of format 2, and w
 | `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) |
 | `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
 | `watch.json` | file | [7.11](#711-watchjson), [23](#23-the-watchdog) |
-| `trim.json` | file | [7.12](#712-trimjson), [12.5](#125-trim) |
+| `trim.json` | file | [7.13](#713-trimjson), [12.5](#125-trim) |
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
+| `order/` | directory of order overrides | [7.12](#712-order-override), [9](#9-order), [13.3](#133-move) |
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
 | `telemetry/` (optional, not part of the format) | directory of the local record | [4.4](#44-layout), [23.6](#236-observe-mode-and-the-sample-log) |
@@ -62,6 +67,7 @@ Every shared file, field, environment variable and transition of format 2, and w
 | ticket body | body | [7.3](#73-ticket) |
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
+| order body | body | [7.12](#712-order-override) |
 | run-log memory keys | field | [20](#20-run-log) |
 | `CORESLOT_GRANTED_MEM` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
@@ -78,6 +84,7 @@ Every shared file, field, environment variable and transition of format 2, and w
 | restart | transition | [24](#24-restart-of-a-stopped-run), example [21.9](#219-stop-round-and-restart) |
 | cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
 | withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
+| move | transition | [13.3](#133-move) |
 | reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
 | pass-through | transition | [18](#18-nested-runs-pass-through), example [21.7](#217-pass-through) |
 
@@ -115,7 +122,7 @@ Every conforming client MUST preserve these invariants:
   bodies, and is not a cap. The exceptions are the idle rule (a head starts when no hold is live),
   an unreadable headroom (nothing gates the head), both of section 12.1, and a container request
   (section 12.1), whose room leaves out the hold bodies.
-- **I4 order:** ordinary admissions happen in order-key order (section 9) among waiters whose
+- **I4 order:** ordinary admissions happen in effective order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
   it except one that passes it, by duration or out of turn (section 10.3), and, while a hold is live, a container
   request (section 12.1), and a waiter is passed over only while it is STALLED, dead or canceled.
@@ -129,7 +136,7 @@ Every conforming client MUST preserve these invariants:
   allows after a yellow clear (section 12.4), and so delay it for as long as they keep coming or
   run; only a timeout of its own, if it has one, bounds that. The head keeps its place. With no hold
   live they leave the head its start.
-- **I6 one budget:** every client of format 2 reads the same holds and the same
+- **I6 one budget:** every client of format 3 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
   of them, one whose `victim` is false nor one whose label has no normal share, and a run signals only the process group of its own
@@ -208,10 +215,11 @@ FORMAT           metadata format (section 7.6)
 admit.lock       the admission lock (section 7.7); never deleted, semantics fixed for every format
 gen              {"gen": n, "reconciled_ns": t} (section 7.8)
 watch.json       the shared watchdog state (section 7.11)
-trim.json        requests to trim live holds (section 7.12); optional
+trim.json        requests to trim live holds (section 7.13); optional
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
+order/           order overrides (section 7.12)
 degraded         degraded-mode record (section 7.9)
 log/runs.jsonl   run log (section 7.10)
 telemetry/       the optional local record; absent is normal (below)
@@ -221,11 +229,11 @@ needs.toml       needs file (section 5.4); optional, present only under the over
 
 `log/` may also contain `runs.1.jsonl` and, left or still written by an older client, `watch.jsonl` and
 `watch.1.jsonl`. Each of
-`queue/`, `holds/`, `cancel/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
+`queue/`, `holds/`, `cancel/`, `order/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
 (section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
 of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
-the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/` and `log/` are created only
+the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `order/` and `log/` are created only
 by a client that has read a `FORMAT` it understands (section 15.2).
 
 `telemetry/` is optional, and its absence is normal: it exists only once a client has recorded
@@ -244,20 +252,23 @@ count); they are never removed except by reconciliation's rules (section 10.4).
 The directory is not a cache: liveness is decided by locks. Deleting or resetting `$S` while any
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
-process still locks; only then does it remove the entries of `queue/`, `holds/` and `cancel/`,
-`gen`, `watch.json`, `trim.json`, `degraded` and the `res/` directory a directory of another
-format may hold, and writes `FORMAT` naming format 2. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/` and
+`order/` (an override names a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`, `degraded`
+and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
+format 3. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 2, or is missing (which the first client writes as 2, section 15.1),
-the reset is a repair and keeps `log/` and `telemetry/` too: the run log is what every label's
+When `FORMAT` names format 3, or format 2 (an upgrade: format 3 only adds `order/`, `trim.json` and two
+optional keys of a hold), or is missing
+(which the first client writes as 3, section 15.1), the reset is a repair and keeps `log/` and
+`telemetry/` too: the run log is what every label's
 learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
 format or cannot be read, it removes the entries of `log/` and `telemetry/` as well, and the CLI
 says so of the run log: every label learns its need
 again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
-the directory as format 2; a live hold or ticket of any format stops it. It does not reconcile
-first (section 10.4): it removes every entry of `queue/`, `holds/` and `cancel/` reconciliation
+the directory as format 3; a live hold or ticket of any format stops it. It does not reconcile
+first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/` and `order/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
 the next reconciliation removes them once they are older than 30 s.
 
@@ -420,6 +431,7 @@ only make another client see a dead entry as live, never a live one as dead.
 ticket    = order-key "-" pid "-" seq [ "-" display ]
 hold      = start-ns  "-" pid "-" seq [ "-" display ]
 cancel    = order-key "-" pid "-" seq          ; the target ticket's identity
+order     = order-key "-" pid "-" seq          ; the target ticket's identity (section 7.12)
 ticket-id = order-key "-" pid "-" seq          ; a ticket name without its display
 order-key = 20DIGIT            ; section 9
 start-ns  = 20DIGIT            ; wall clock at admission, nanoseconds
@@ -439,7 +451,9 @@ conforms (the examples below replace each byte outside the set with `_` and keep
 Readers MUST NOT interpret it.
 
 The **name is authoritative** for identity: a ticket's or hold's owner is the pid in its name, its
-order-key or start time is the one in its name, and a ticket's id is its first three fields.
+order-key or start time is the one in its name, and a ticket's id is its first three fields. A
+ticket's place in the queue is its name's order-key unless an order override replaces it (section
+9); the override never renames the ticket.
 
 `seq` keeps one process's names apart; how a process draws it is not part of the protocol. A
 process MAY number every name and temporary from one counter or use several counters, and a
@@ -621,7 +635,22 @@ Times named `…_ns` under `detector` are on the host clock of the sample, not o
 reader brings one to the present by adding the sample's age, `host_now = sample.host.wall_ns + (now
 − sampled_ns)`.
 
-### 7.12 trim.json
+### 7.12 Order override
+
+`$S/order/<ticket-id>`, not lock-carrying, written only by a move (section 13.3) and removed with its
+ticket. Body:
+
+| Key | Type | Rule |
+|---|---|---|
+| `order_ns` | integer | `0..2^63−1`; the ticket's effective order key (section 9) |
+
+A malformed override, or one that is not a regular file of the user (section 4.2), is ignored and
+counted: its ticket keeps its name's order-key. An override is replaced, never edited: a move writes
+a temporary file and renames it over the name with a plain `rename` (section 11), so a reader sees
+the old body or the new one, never part of either. An override whose ticket is gone orders nothing
+and is removed by reconciliation (section 10.4).
+
+### 7.13 trim.json
 
 `$S/trim.json` holds the requests to trim live holds (section 12.5). It is optional: a client that
 asks for no trim writes none, and its absence is normal. It is one JSON object:
@@ -679,22 +708,30 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
   continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 2` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 3` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
 
 ## 9. Order
 
-The queue orders by arrival alone:
+The queue orders by arrival, unless a move placed a ticket elsewhere:
 
 ```
-order-key = max(0, arrival_ns)      (ascending; ties by pid, then seq)
+order-key           = max(0, arrival_ns)                        (the name's, section 7.1)
+effective order-key = order_ns of order/<ticket-id> if well formed, else order-key
+                      (ascending; ties by pid, then seq)
 ```
+
+Every ordering of the queue uses the effective order-key: the election and the front window
+(section 10.3), the re-election (section 12.1 step 5), the passing rule's head and its "at or after
+the head's order key", `status`, and the position a waiting client prints. A client reads `order/`
+with `queue/` whenever it lists the queue for one of them.
 
 `arrival_ns` is the wall clock read inside the enqueue section, except for a run that comes back
 after a stop: its `arrival_ns` is its first arrival, and so it keeps its place (section 24). A
-ticket is **ahead** of another when its (order-key, pid, seq) is smaller. A wall-clock step
+ticket is **ahead** of another when its (effective order-key, pid, seq) is smaller. A run that comes
+back after a stop is a new ticket, so an override of its earlier ticket does not follow it. A wall-clock step
 misorders the tickets enqueued across it by at most the size of the step and affects nothing else.
 
 ## 10. Liveness, waiting and reconciliation
@@ -773,8 +810,9 @@ ticket of the re-election (section 12.1 step 5). A waiter is admitted ahead of t
    room; the kernel reports its memory pressure level as normal (on macOS
    `kern.memorystatus_vm_pressure_level` 1), a level that is unknown, cannot be read or does not
    exist (Linux has none) counting as not normal, since the room can be file cache that the kernel is
-   already short of; no live hold's body is malformed and no live hold's `arrival_ns` is at or after the head's
-   order key (a hold that arrived after the head started ahead of it out of turn: a passer, a
+   already short of; no live hold's body is malformed and no live hold's `arrival_ns` is at or after
+   the head's effective order key (section 9) (a hold that arrived after the head started ahead of it
+   out of turn: a passer, a
    container request, or a run that passed an earlier head); and `d` is at most the time this waiter
    has **watched** the head's ticket, from its first observation of it, on its own monotonic clock and
    without its own absences (section 10.2), or, when `W` is unknown and the head has `restart`, at
@@ -816,7 +854,8 @@ the examination are counted without being examined.
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
 client that enters the section for any purpose other than admission
-(enqueue, cancellation publication, a trim request, removal of its own ticket or hold, a resume bump,
+(enqueue, cancellation publication, a move, a trim request, removal of its own ticket or hold, a resume
+bump,
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
 reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
@@ -827,11 +866,13 @@ neither does a reset (section 4.4), and neither does a watchdog tick (section 23
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
    that is not a regular file of the user, section 4.2, is ignored and counted, never probed or
    removed, and reconciliation goes on and writes `gen` as usual);
-2. removes every cancel request in `cancel/` whose ticket is gone: its ticket is any `queue/` entry
+2. removes every cancel request in `cancel/` and every order override in `order/` whose ticket is
+   gone: its ticket is any `queue/` entry
    that is not ignored as a stray (section 4.2) whose name matches the ticket grammar and whose
    first three fields are that id, whatever its body. An entry ignored as a stray (a wrong type,
-   owner or mode) is not an entry for this purpose: it never protects a cancel request;
-3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/` and `cancel/` whose mtime is
+   owner or mode) is not an entry for this purpose: it never protects a cancel request or an
+   override;
+3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/` and `order/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
    if it removed anything.
@@ -841,8 +882,8 @@ whole machine.
 
 ## 11. Atomic publication
 
-Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FORMAT`, `degraded`,
-`watch.json` or `trim.json`:
+Inside the section, a publication of a ticket, hold, cancel request, order override, `gen`, `FORMAT`,
+`degraded`, `watch.json` or `trim.json`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
    target's directory; on `EEXIST` (a young leftover of an earlier process with the same pid) the
@@ -861,7 +902,8 @@ Inside the section, a publication of a ticket, hold, cancel request, `gen`, `FOR
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
      already requested, which is not an error (section 13.1);
-   - `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`: with a plain `rename`.
+   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`: with a plain `rename`,
+     which replaces an existing file.
 
 The writer keeps its original descriptor: writing the body never closes the only lock-carrying
 descriptor. Temporary files are created only inside the section. A writer whose publication fails
@@ -907,8 +949,8 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
    observed, such as one published after its election, counts as live;
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
-7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket, bumps `gen`,
-   and leaves the section.
+7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket and its order
+   override if it has one, bumps `gen`, and leaves the section.
 
 A **container request** is the request of a container command (section 5.4) whose need neither its
 caller nor a `mem` in the needs file named: a person who pins a need chose to reserve it and to wait
@@ -988,7 +1030,7 @@ no hold live, the idle rule starts it like any other.
 ### 12.5 Trim
 
 A client MAY ask the holder of a live hold to lower its reservation, by writing a request for the
-hold's id into `trim.json` (section 7.12) inside the section. The request changes no body, moves no
+hold's id into `trim.json` (section 7.13) inside the section. The request changes no body, moves no
 ticket and admits nothing: whatever room it frees is taken in order, as any room is (section 12.1).
 
 A holder that finds a request for its own hold MAY lower its `need_mib` (section 7.4), and rewrite
@@ -1028,7 +1070,7 @@ step 1, so a cancel published before the owner's admitting section wins; one pub
 no ticket and has no effect: cancellation never revokes a hold, and never stops a command. A
 canceller that finds the request already published (section 11) treats the cancellation as already
 requested; that is not an error. On finding it, the owner closes its ticket descriptor (the ticket
-is dead at once), removes the ticket and the cancel request in its next section if it can enter one
+is dead at once), removes the ticket, the cancel request and its order override, if any, in its next section if it can enter one
 (bumping `gen`, section 7.8), and stops: the CLI exits with the refusal code.
 
 > **Implementation note.** The Go CLI checks `queue/` first and refuses, with a diagnostic that no
@@ -1040,6 +1082,27 @@ A waiter whose own deadline passes, whose wait is abandoned by its caller, or th
 (`Ctrl-C` on a waiting CLI, which then exits 130) withdraws by closing its ticket descriptor: the
 ticket is dead at once, and withdrawal never depends on entering the section. The waiter MAY then
 remove its ticket in a section, bumping `gen` (section 7.8); otherwise reconciliation removes it.
+
+### 13.3 Move
+
+A move changes a waiting ticket's place without touching the ticket or its run. Inside the section
+the mover reads the effective order-keys of the tickets in `queue/` (section 9) and publishes
+`order/<ticket-id>` (section 7.12) with the key that puts the ticket where it is asked to go:
+
+- **first:** the smallest effective key of the other tickets, less 1;
+- **last:** the largest effective key of the other tickets, plus 1;
+- **before** ticket `r`: `r`'s effective key, less 1; **after** `r`: `r`'s effective key, plus 1;
+
+each clamped to `0..2^63−1`; with no other ticket, first and last keep the ticket's own key. A key
+equal to another ticket's leaves their order to pid and seq. It replaces an earlier override of the
+same ticket and bumps `gen` (section 7.8), so every waiter rescans. A target or `r` that is not in
+`queue/` is not moved, and nothing is written. Tickets that arrive later queue behind the moved one
+as usual. The owner removes its override with its ticket (sections 12.1 step 7 and 13.1);
+reconciliation removes one whose ticket is gone (section 10.4). Any process of the user may move any
+ticket, as it may cancel one: a move is a convenience, not a control.
+
+> **Implementation note.** The Go CLI's `coreslot move` takes a ticket id or `--label`, and exactly
+> one of `--first`, `--last`, `--before <id>` and `--after <id>`.
 
 ## 14. Errors, fail-open and degraded mode
 
@@ -1088,12 +1151,12 @@ also exits 3 while a state error makes runs fail open (section 19).
 the layout other than `admit.lock`). Every format keeps `admit.lock`, an exclusive `flock` held
 only briefly by whoever changes admission state.
 
-A client that finds no `FORMAT` writes `coreslot-protocol 2` inside the section. Writing a newer
+A client that finds no `FORMAT` writes `coreslot-protocol 3` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
 ### 15.2 A format this client does not implement
 
-A state directory whose format is not 2 is not used. A client that finds another format leaves
+A state directory whose format is not 3 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
 writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json` or
 `admit.lock` body), and its run fails open (section 14) with one notice that names the format and
@@ -1105,10 +1168,11 @@ it closes its ticket's descriptor, so the ticket is dead at once, and fails open
 remove the file: that would be a write into a format it does not implement.
 
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
-another format a client publishes no cancel request, trim request or unbudgeted hold, records and
-clears no `degraded`, and does not remove its own hold after a run. A fail-open run still
-runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 2
-when nothing of either format is live, the other format's run log removed with the rest.
+another format a client publishes no cancel request, trim request or unbudgeted hold, records and clears no
+`degraded`, and does not remove its own hold after a run. A fail-open run still
+runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 3
+when nothing of either format is live, the other format's run log removed with the rest, except a
+format-2 directory's, which the upgrade keeps (section 4.4).
 
 > **Implementation note.** The Go CLI refuses cancellation, a trim and `doctor --clear` under
 > another format, with the same notice.
@@ -1200,7 +1264,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `trim`: no request was written (no such live hold, a hold that reserves nothing or whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a run that does not answer within the wait is exit 0; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold that reserves nothing or whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a run that does not answer within the wait is exit 0; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1292,7 +1356,7 @@ generation). One generation is kept.
 All examples use one Linux machine: `MemTotal` is 16 GiB (`memory = 16384`), the configuration
 declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 20`, `red_points = 40`,
 `red_samples = 10`, `gate_pages_s = 1000`, `floor = "2G"`, `calm_s = 30`, `post_kill_s = 15` and
-`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 2`
+`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 3`
 unless stated. Listings show the entries under `$S` that matter; `[L]` marks a file whose lock is
 held by a live process. `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is
 independent of the others; except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old
@@ -1578,7 +1642,7 @@ watch.json                                            (sampled 0.8 s ago, level 
 Pid 8100 runs `coreslot trim 01791719000000000000-0000006500-000002`, the id `coreslot status`
 shows on the hold's line. Inside the section it finds the hold live, reserving 4 096 MiB, with
 `child_exited` false. It writes `$S/.tmp-0000008100-000001` and renames it over `trim.json`, which
-did not exist, without a `gen` bump (section 7.12):
+did not exist, without a `gen` bump (section 7.13):
 
 ```json
 {"holds": {"01791719000000000000-0000006500-000002": {"requested_ns": 1791721200000000000, "requester_pid": 8100}}}
@@ -1662,7 +1726,7 @@ start until it exits, in both modes of section 23.6. Each tick:
    `no_cpu_s` (section 7.4) and `sampled_ns`. It sets `child_exited` once, when the command has exited.
    `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s` hold for the attempt: the run
    writes them once, when its command starts, before its first tick. For a hold that reserves
-   memory it also reads `trim.json` (section 7.12), outside the section, until it finds a request
+   memory it also reads `trim.json` (section 7.13), outside the section, until it finds a request
    for its hold; once it has, a run that acts on it writes `need_mib`, `asked_mib` and `trimmed`
    (section 12.5) in every rewrite of the attempt.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short

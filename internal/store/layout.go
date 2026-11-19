@@ -25,6 +25,7 @@ const (
 	QueueDir     = "queue"
 	HoldsDir     = "holds"
 	CancelDir    = "cancel"
+	OrderDir     = "order"
 	DegradedFile = "degraded"
 	WatchFile    = "watch.json"
 	TrimFile     = "trim.json"

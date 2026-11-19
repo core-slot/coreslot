@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// contractInventory is every shared file, field, environment variable and transition of format 2,
+// contractInventory is every shared file, field, environment variable and transition of format 3,
 // the items PROTOCOL.md's contract inventory (its section 2) must list, including the three the
 // state-directory override adds (section 4.1): `config.toml`, `needs.toml` and
 // `CORESLOT_STATE_DIR`. The list is kept here, apart from the document, so that an item added to,
@@ -24,6 +24,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"queue/", "Ticket", "queue/"},
 	{"holds/", "Hold", "holds/"},
 	{"cancel/", "Cancel request", "cancel/"},
+	{"order/", "Order override", "order/"},
 	{"degraded", "degraded", "degraded"},
 	{"log/", "log/ (run log)", "log/runs.jsonl"},
 	{"telemetry/", "Layout", "telemetry/"},
@@ -32,6 +33,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"ticket body", "Ticket", "need_mib"},
 	{"hold body", "Hold", "need_mib"},
 	{"cancel body", "Cancel request", "requester_pid"},
+	{"order body", "Order override", "order_ns"},
 	{"run-log memory keys", "Run log", "mem_peak_kib"},
 	{"CORESLOT_GRANTED_MEM", "Descriptor and environment contract", "CORESLOT_GRANTED_MEM"},
 	{"CORESLOT_HOLD", "Descriptor and environment contract", "CORESLOT_HOLD"},
@@ -48,6 +50,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"restart", "Restart of a stopped run", "first arrival"},
 	{"cancellation", "Cancellation", "cancel/<ticket-id>"},
 	{"withdrawal", "Withdrawal", "withdraws"},
+	{"move", "Move", "order/<ticket-id>"},
 	{"reconciliation", "Reconciliation", "reconciled_ns"},
 	{"pass-through", "Nested runs: pass-through", "pass-through"},
 }

@@ -31,7 +31,7 @@ escape one before printing it to a terminal.
 | `tickets` | array | the queue, in queue order |
 | `dead_holds` | array of string | names of holds whose lock is free, awaiting reconciliation |
 | `cancel_requests` | array of string | pending cancel requests (ticket ids) |
-| `ignored` | object | per directory (`queue`, `holds`, `cancel`), the number of entries that do not match the grammar or whose body is malformed |
+| `ignored` | object | per directory (`queue`, `holds`, `cancel`, `order`), the number of entries that do not match the grammar or whose body is malformed |
 | `observed_s` | number | how long `--observe` watched the queue; 0 without it |
 | `docker` | object | Docker Desktop's VM and its running containers; present only with `status --docker`, absent otherwise |
 
