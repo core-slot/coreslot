@@ -53,7 +53,7 @@ func cancelCommand(args []string, io IO) int {
 
 	e, err := openEngine(locate(), true)
 	if err != nil {
-		return cancelFailed(err, io)
+		return commandFailed("cancel", err, io)
 	}
 	if !e.Store().Exists() { // nothing has run, so nothing waits; do not create the directory for it
 		fmt.Fprintln(io.Stderr, "coreslot: cancel: no state directory yet (nothing has run), so no ticket is waiting")
@@ -82,7 +82,7 @@ func cancelCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: cancel refused: %s; no cancel request was published\n", sectionBusyText(e, cancelWait))
 		return exitRefusal
 	default:
-		return cancelFailed(err, io)
+		return commandFailed("cancel", err, io)
 	}
 }
 

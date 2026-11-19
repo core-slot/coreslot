@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"strconv"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/testhooks"
 	"github.com/core-slot/coreslot/internal/watch"
 )
@@ -30,6 +32,10 @@ type Config struct {
 	// DockerEnabled is [docker] enabled, default true: the read-only Docker display and its
 	// readings. A value that is no boolean reads as off, with a warning.
 	DockerEnabled bool
+	// TrimWindowS is [watch] trim_window_s: the seconds of readings a trimmed hold's reservation
+	// looks back over, from 2 to 3600, state.TrimWindowS by default. A value out of range or no
+	// number reads as the default, with a warning.
+	TrimWindowS int64
 	// Warnings are what a lenient key made of a value it could not use; Load never fails for them.
 	Warnings []string
 }
@@ -91,7 +97,8 @@ func parseSize(key string, v any) (int64, error) {
 }
 
 func defaults() Config {
-	return Config{ReserveMiB: DefaultReserveMiB, WindowsWarning: true, Watch: watch.Defaults(), DockerEnabled: true}
+	return Config{ReserveMiB: DefaultReserveMiB, WindowsWarning: true, Watch: watch.Defaults(), DockerEnabled: true,
+		TrimWindowS: state.TrimWindowS}
 }
 
 // notRegularError is the reason of a configuration path that resolves to something but a regular
@@ -159,6 +166,16 @@ func parse(data string) (Config, string) {
 		if msg := parseWatch(tbl, &c.Watch); msg != "" {
 			return Config{}, "[watch] " + msg
 		}
+		// A window a run cannot use falls back to the default and says so: it must not make an
+		// admission fail.
+		if v, ok := tbl["trim_window_s"]; ok {
+			if s, ok := trimWindow(v); ok {
+				c.TrimWindowS = s
+			} else {
+				c.Warnings = append(c.Warnings, fmt.Sprintf("[watch] trim_window_s %v: want a number of seconds from 2 to 3600: the window is %d s",
+					v, state.TrimWindowS))
+			}
+		}
 	}
 	// A telemetry that is no table, or an enabled that is no boolean, reads as off: the switch
 	// of an opt-in recorder must not make an admission fail.
@@ -183,6 +200,23 @@ func parse(data string) (Config, string) {
 		}
 	}
 	return c, ""
+}
+
+// trimWindow is v as a trim window: a number from 2 to 3600, rounded up to a whole second.
+func trimWindow(v any) (int64, bool) {
+	var s float64
+	switch n := v.(type) {
+	case int64:
+		s = float64(n)
+	case float64:
+		s = n
+	default:
+		return 0, false
+	}
+	if !(s >= 2 && s <= 3600) { // NaN too
+		return 0, false
+	}
+	return int64(math.Ceil(s)), true
 }
 
 // parseWatch reads the keys of [watch] into w: mode, sample_log, floor (a size above 0), the

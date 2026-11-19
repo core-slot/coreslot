@@ -141,8 +141,8 @@ func TestStatusWatch(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"\n  go test@repo  pid 4711  mem 2 GiB  held 3m12s  footprint 1.5 GiB  arrived 3m20s ago  stops 1\n",
-		"\n  npm run build  pid 4712  mem 512 MiB  held 5s  footprint 100 MiB  arrived 5s ago  next victim\n",
+		"\n  go test@repo  pid 4711  mem 2 GiB  held 3m12s  footprint 1.5 GiB  arrived 3m20s ago  stops 1  id ",
+		"\n  npm run build  pid 4712  mem 512 MiB  held 5s  footprint 100 MiB  arrived 5s ago  next victim  id ",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status:\n%s\nwant the line %q", out, want)

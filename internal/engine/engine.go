@@ -140,19 +140,39 @@ func (e *Engine) reading() (config.Config, config.Machine, error) {
 	return c, m, nil
 }
 
-// Oversized reports a need of needMiB that no moment can satisfy, with the bound it exceeds: the
-// machine's memory less the reserve, at least 0. Such a need starts only when no hold is live; with
-// the headroom unreadable nothing gates it, so bound is MaxInt64 and no need is over. telemetry is
-// the run's switch, from this same reading so that a run with telemetry off reads nothing more;
-// dockerOn is [docker] enabled from it, which the run keeps for its whole life. Both are false when
-// the reading failed.
-func (e *Engine) Oversized(needMiB int64) (boundMiB int64, over, telemetry, dockerOn bool) {
+// RunStart is what a run takes from its one reading of the configuration and the machine at its
+// start, and keeps for its whole life.
+type RunStart struct {
+	// BoundMiB is the machine's memory less the reserve, at least 0, and Over says that the need
+	// exceeds it: such a need starts only when no hold is live. With the headroom unreadable
+	// nothing gates it, so BoundMiB is MaxInt64 and no need is over.
+	BoundMiB int64
+	Over     bool
+	// Telemetry is the run's switch, from this same reading so that a run with telemetry off reads
+	// nothing more; DockerOn is [docker] enabled. Both are false when the reading failed.
+	Telemetry, DockerOn bool
+	// TrimWindowS is [watch] trim_window_s, state.TrimWindowS when the reading failed.
+	TrimWindowS int64
+}
+
+// ReadRunStart reads the configuration and the machine once for a run whose need is needMiB.
+func (e *Engine) ReadRunStart(needMiB int64) RunStart {
 	c, m, err := e.reading()
-	boundMiB = math.MaxInt64
+	s := RunStart{BoundMiB: math.MaxInt64, TrimWindowS: state.TrimWindowS}
 	if err == nil && m.HeadroomOK {
-		boundMiB = max(m.MemMiB-c.ReserveMiB, 0)
+		s.BoundMiB = max(m.MemMiB-c.ReserveMiB, 0)
 	}
-	return boundMiB, needMiB > boundMiB, err == nil && c.TelemetryEnabled, err == nil && c.DockerEnabled
+	s.Over = needMiB > s.BoundMiB
+	if err == nil {
+		s.Telemetry, s.DockerOn, s.TrimWindowS = c.TelemetryEnabled, c.DockerEnabled, c.TrimWindowS
+	}
+	return s
+}
+
+// Oversized is ReadRunStart's bound, its verdict and its two switches, from the same one reading.
+func (e *Engine) Oversized(needMiB int64) (boundMiB int64, over, telemetry, dockerOn bool) {
+	s := e.ReadRunStart(needMiB)
+	return s.BoundMiB, s.Over, s.Telemetry, s.DockerOn
 }
 
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,

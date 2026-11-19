@@ -19,6 +19,7 @@ func TestNoBudgetAnswersOnlyHelp(t *testing.T) {
 		{"status", statusUsage, func() *flag.FlagSet { fs, _, _, _ := statusFlags(); return fs }},
 		{"cancel", cancelUsage, func() *flag.FlagSet { fs, _ := cancelFlags(); return fs }},
 		{"doctor", doctorUsage, func() *flag.FlagSet { fs, _, _ := doctorFlags(); return fs }},
+		{"trim", trimUsage, func() *flag.FlagSet { fs, _ := trimFlags(); return fs }},
 	}
 	cases := []struct {
 		args []string
