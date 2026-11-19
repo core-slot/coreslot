@@ -242,7 +242,7 @@ func (v statusView) human() string {
 	case !r.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
 		p("format: %d, which this client does not implement", r.Format)
 	case !r.FormatPresent:
-		p("format: not written yet (the first client writes 2)")
+		p("format: not written yet (the first client writes %d)", store.Format)
 	default:
 		p("format: %d", r.Format)
 	}

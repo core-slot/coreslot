@@ -669,7 +669,7 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
   continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 2` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 3` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
@@ -1284,7 +1284,7 @@ generation). One generation is kept.
 All examples use one Linux machine: `MemTotal` is 16 GiB (`memory = 16384`), the configuration
 declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 20`, `red_points = 40`,
 `red_samples = 10`, `gate_pages_s = 1000`, `floor = "2G"`, `calm_s = 30`, `post_kill_s = 15` and
-`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 2`
+`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 3`
 unless stated. Listings show the entries under `$S` that matter; `[L]` marks a file whose lock is
 held by a live process. `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is
 independent of the others; except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old

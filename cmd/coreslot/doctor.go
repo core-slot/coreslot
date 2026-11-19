@@ -251,7 +251,7 @@ func doctorReport(loc location, io IO) int {
 	case !rep.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
 		problem("format: %d, which this client does not implement; runs fail open until `coreslot doctor --reset`", rep.Format)
 	case !rep.FormatPresent:
-		line("format: FORMAT not written yet (the first client writes 2)")
+		line("format: FORMAT not written yet (the first client writes %d)", store.Format)
 	default:
 		line("format: %d", rep.Format)
 	}

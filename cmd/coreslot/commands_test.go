@@ -1710,7 +1710,7 @@ func TestStatusAndDoctorReportFormatZero(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "FORMAT")); err != nil {
 		t.Fatal(err)
 	}
-	if r := cli(t, baseEnv(dir), "status"); !strings.Contains(r.stdout, "\nformat: not written yet (the first client writes 2)\n") {
+	if r := cli(t, baseEnv(dir), "status"); !strings.Contains(r.stdout, fmt.Sprintf("\nformat: not written yet (the first client writes %d)\n", store.Format)) {
 		t.Errorf("status without FORMAT: exit %d:\n%s", r.code, r.stdout)
 	}
 	if doc := statusDoc(t, dir, 0); doc["format_present"] != false || doc["format_understood"] != true {
