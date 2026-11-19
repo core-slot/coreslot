@@ -35,6 +35,12 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		grant:    g,
 		hold:     g.HoldName(),
 	}
+	if r.fw.upstream != "" && r.fwd == nil { // a restart keeps the forwarder of the first attempt
+		r.startForwarding()
+	}
+	if r.fwd != nil {
+		c.env = withDockerHost(c.env, r.fwd.addr)
+	}
 	return r.runChild(c)
 }
 

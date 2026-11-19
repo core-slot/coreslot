@@ -1,0 +1,1 @@
+docker_note is optional, but when present it is at most 64 bytes of [a-z0-9:. -]: an upper-case letter is outside the set

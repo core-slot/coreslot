@@ -6,10 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -299,24 +296,5 @@ func TestContainersLineOncePerWindow(t *testing.T) {
 	stopped.memWG.Wait()
 	if n := d.Conns(); n != 2 {
 		t.Errorf("%d connections, want none from a nil or stopped recorder", n-2)
-	}
-}
-
-// The binary reaches the socket by raw syscalls alone. Mutation: importing net in the docker client.
-func TestNoNetInBinary(t *testing.T) {
-	cmd := exec.Command("go", "list", "-deps", "./cmd/coreslot")
-	cmd.Dir = filepath.Join("..", "..")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list: %v: %s", err, out)
-	}
-	deps := strings.Fields(string(out))
-	if !slices.Contains(deps, "golang.org/x/sys/unix") {
-		t.Error("golang.org/x/sys/unix is not among the dependencies")
-	}
-	for _, p := range deps {
-		if p == "net" || p == "net/http" || p == "crypto" || strings.HasPrefix(p, "crypto/") {
-			t.Errorf("the binary depends on %s", p)
-		}
 	}
 }

@@ -8,6 +8,24 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- On macOS with Docker Desktop, a run whose label has a Docker interest (a command named `docker`,
+  `docker-compose` or `podman`, an earlier run of its label that did container work, or
+  `docker_forward = true` in `needs.toml`) gets a forwarder: a `coreslot forward` process that relays its
+  command's Docker traffic through a socket in `~/.coreslot-fw/`, which the command's `DOCKER_HOST` names, and
+  notes the containers the command creates or touches. The run reads their memory every 6 s, and `status` shows
+  each hold's Docker footprint, what its containers grew by since the run first touched them, and its note,
+  why a run has no forwarder or stopped counting; `status --json` carries them as `docker_footprint_mib` and
+  `docker_note` on each hold, under the same `schema` 1. The format stays 2: the hold body gains these two
+  optional keys. A run asks the command's `docker` twice whether it could reach another engine before it
+  gives a forwarder, which `docker_forward = false` turns off for a label. A forwarder serves its command's
+  background Docker connections after the command ends; `doctor` lists the forwarders still serving and
+  `doctor --reset` removes the entries of `~/.coreslot-fw` that none serves. `net` and `net/http` are now
+  linked; coreslot still connects only to unix sockets on this machine. Under an agent sandbox,
+  `~/.coreslot-fw` has to be admitted (README, "Under an agent sandbox"); to uninstall, remove it beside the
+  state directory.
+
 ## v0.9.1 (2026-11-19)
 
 ### Changed

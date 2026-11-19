@@ -22,7 +22,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/core-slot/coreslot/internal/docker/dockertest"
 	"github.com/core-slot/coreslot/internal/engine"
+	relay "github.com/core-slot/coreslot/internal/forward"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
@@ -852,6 +854,123 @@ func TestStatusShowsContainer(t *testing.T) {
 	}
 }
 
+// Each hold's Docker part, in both forms: the footprint its run wrote, 0 included, and its note;
+// a hold without them shows neither. Mutations: drop the two fields from info() → no key and no
+// text, red; omit a footprint of 0 → a's key and text missing, red.
+func TestStatusShowsHoldDockerPart(t *testing.T) {
+	dir := budgetDir(t, 4096)
+	c := openLib(t, dir)
+	zero, grown := int64(0), int64(1536)
+	for label, set := range map[string]func(h *wire.Hold){
+		"a": func(h *wire.Hold) { h.DockerFootprintMiB = &zero },
+		"b": func(h *wire.Hold) { h.DockerFootprintMiB, h.DockerNote = &grown, "ungated: blind" },
+		"c": func(h *wire.Hold) { h.DockerNote = "no-forwarder: config" },
+		"d": func(*wire.Hold) {},
+	} {
+		if err := hold(t, c, label, 1).UpdateHold(set); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := cli(t, baseEnv(dir), "status")
+	if r.code != 0 {
+		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
+	}
+	want := map[string][]string{
+		"a": {"  docker footprint 0 MiB"},
+		"b": {"  docker footprint 1.5 GiB", "  docker: ungated: blind"},
+		"c": {"  docker: no-forwarder: config"},
+		"d": nil,
+	}
+	lines := map[string]string{}
+	for _, line := range strings.Split(r.stdout, "\n") {
+		if label, _, ok := strings.Cut(strings.TrimSpace(line), "  pid "); ok {
+			lines[label] = line
+		}
+	}
+	for label, ws := range want {
+		line, ok := lines[label]
+		switch {
+		case !ok:
+			t.Errorf("no line for hold %s:\n%s", label, r.stdout)
+		case ws == nil && strings.Contains(line, "docker"):
+			t.Errorf("hold %s has no Docker part, its line says one: %q", label, line)
+		}
+		for _, w := range ws {
+			if !strings.Contains(line, w) {
+				t.Errorf("hold %s: the line lacks %q: %q", label, w, line)
+			}
+		}
+	}
+	for _, h := range statusDoc(t, dir, 0)["holds"].([]any) {
+		h := h.(map[string]any)
+		fp, hasFP := h["docker_footprint_mib"]
+		note, hasNote := h["docker_note"]
+		switch h["label"] {
+		case "a":
+			if fp != float64(0) || hasNote {
+				t.Errorf("hold a: docker_footprint_mib %v, docker_note %v (%v); want 0 and no note", fp, note, hasNote)
+			}
+		case "b":
+			if fp != float64(1536) || note != "ungated: blind" {
+				t.Errorf("hold b: docker_footprint_mib %v, docker_note %v", fp, note)
+			}
+		case "c":
+			if hasFP || note != "no-forwarder: config" {
+				t.Errorf("hold c: docker_footprint_mib %v (%v), docker_note %v", fp, hasFP, note)
+			}
+		case "d":
+			if hasFP || hasNote {
+				t.Errorf("hold d carries a Docker part: %v", h)
+			}
+		}
+	}
+
+	// The note is printed as a label is, whatever a body could carry: escaped for the terminal,
+	// and exact in JSON. Mutation: print the note without text() → the raw escape, red.
+	const hostile = "no-forwarder: \x1b[31mred\u202e"
+	rep := engine.Report{Holds: []engine.HolderInfo{{Name: "h", Label: "l", PID: 7, DockerNote: hostile}}}
+	if h := buildStatus(rep, 0, nil, 0).human(); strings.ContainsAny(h, "\x1b\u202e") || !strings.Contains(h, "docker: "+wire.EscapeHuman(hostile)) {
+		t.Errorf("status printed the note unescaped, or not as %s:\n%q", wire.EscapeHuman(hostile), h)
+	}
+	var doc struct {
+		Holds []struct {
+			Note string `json:"docker_note"`
+		} `json:"holds"`
+	}
+	if err := json.Unmarshal([]byte(statusJSON(t, rep)), &doc); err != nil || len(doc.Holds) != 1 || doc.Holds[0].Note != hostile {
+		t.Errorf("JSON note %+v (%v), want %q", doc, err, hostile)
+	}
+}
+
+// The container mark says its containers' memory is not measured only on a hold whose run does
+// not count them; one with a Docker footprint keeps the mark in JSON and says nothing in text.
+// Mutation: drop the footprint test from the mark's text → said twice, red.
+func TestContainerMarkTextOnlyWithoutDockerPart(t *testing.T) {
+	zero := int64(0)
+	rep := engine.Report{Holds: []engine.HolderInfo{
+		{Name: "m", Label: "measured", PID: 7, Container: true, DockerFootprintMiB: &zero},
+		{Name: "u", Label: "unmeasured", PID: 8, Container: true},
+	}}
+	const said = "container: its containers' memory is not measured"
+	h := buildStatus(rep, 0, nil, 0).human()
+	for _, line := range strings.Split(h, "\n") {
+		if strings.Contains(line, "measured  pid") && strings.Contains(line, said) != strings.Contains(line, "unmeasured") {
+			t.Errorf("the mark's text on the wrong hold: %q", line)
+		}
+	}
+	if strings.Count(h, said) != 1 {
+		t.Errorf("status says %q %d times, want once:\n%s", said, strings.Count(h, said), h)
+	}
+	var doc struct {
+		Holds []struct {
+			Container bool `json:"container"`
+		} `json:"holds"`
+	}
+	if err := json.Unmarshal([]byte(statusJSON(t, rep)), &doc); err != nil || len(doc.Holds) != 2 || !doc.Holds[0].Container || !doc.Holds[1].Container {
+		t.Errorf("JSON container marks %+v (%v), want both true", doc, err)
+	}
+}
+
 func TestStatusUsage(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, args := range [][]string{{"status", "--bogus"}, {"status", "extra"}, {"status", "--observe", "-1s"}} {
@@ -971,6 +1090,87 @@ func TestDoctorReports(t *testing.T) {
 		`: [memory] reserve: "lots" is not a size: want a number of GiB, such as 3 or 2.5G, or of MiB, such as 768M` + "\n"
 	if r.code != 1 || !strings.Contains(r.stdout, want) {
 		t.Errorf("doctor with an invalid configuration: exit %d, want the line %q in:\n%s", r.code, want, r.stdout)
+	}
+}
+
+// forwarderEntries makes the forwarder's directory under the state directory dir, as a run under
+// the override does, with one entry whose forwarder serves (its lock held until the test ends)
+// and one whose forwarder has ended, its socket swapped for a symlink days younger than the walk
+// keeps. It returns the directory and the two entries' names.
+func forwarderEntries(t *testing.T, dir string) (fw, serving, ended string) {
+	t.Helper()
+	fw, err := relay.Dir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serving, ended = relay.EntryName(4242, 1), relay.EntryName(4243, 2)
+	lock, ln, err := relay.Birth(filepath.Join(fw, serving))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close(); lock.Close() })
+	lock2, ln2, err := relay.Birth(filepath.Join(fw, ended))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln2.Close()
+	if err := relay.Swap(filepath.Join(fw, ended), filepath.Join(dir, "upstream.sock")); err != nil {
+		t.Fatal(err)
+	}
+	lock2.Close()
+	return fw, serving, ended
+}
+
+// shortBudgetDir is budgetDir in a directory short enough for a forwarder's socket.
+func shortBudgetDir(t *testing.T) string {
+	t.Helper()
+	dir := dockertest.SocketDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[memory]\nreserve = \"0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	budgetRoom.Store(dir, int64(4096))
+	return dir
+}
+
+// doctor lists the forwarders whose lock is held, by entry, and no other. Mutations: list every
+// entry instead of forward.Held's → the ended one listed, red; drop the listing → red.
+func TestDoctorListsServingForwarders(t *testing.T) {
+	dir := shortBudgetDir(t)
+	_, serving, ended := forwarderEntries(t, dir)
+	r := cli(t, baseEnv(dir), "doctor")
+	if r.code != 0 {
+		t.Fatalf("doctor exited %d (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+	if !strings.Contains(r.stdout, "forwarder serving: "+filepath.Join(dir, relay.DirName, serving)) || strings.Contains(r.stdout, ended) {
+		t.Errorf("doctor does not list %s alone as serving:\n%s", serving, r.stdout)
+	}
+}
+
+// `doctor --reset` removes the forwarder entries whose lock is free, a young swapped one included,
+// keeps a serving one and the directory, and while a hold is live refuses and removes nothing.
+// Mutations: remove the free entries before the live check → the refused reset removes the ended
+// one, red; forward.Walk instead of forward.RemoveFree → the young symlink stays, red.
+func TestDoctorResetRemovesFreeEntries(t *testing.T) {
+	dir := shortBudgetDir(t)
+	g := hold(t, openLib(t, dir), "gate", 1)
+	fw, serving, ended := forwarderEntries(t, dir)
+	exists := func(name string) bool {
+		_, err := os.Lstat(filepath.Join(fw, name))
+		return err == nil
+	}
+	if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 75 || !exists(ended) {
+		t.Fatalf("doctor --reset with a live hold: exit %d (stderr %q), ended entry there %v; want 75 and kept", r.code, r.stderr, exists(ended))
+	}
+	g.Close()
+	r := cli(t, baseEnv(dir), "doctor", "--reset")
+	if r.code != 0 || !strings.Contains(r.stdout, "reset: removed 1 forwarder entry whose lock was free") {
+		t.Fatalf("doctor --reset: exit %d (stderr %q):\n%s", r.code, r.stderr, r.stdout)
+	}
+	if exists(ended) || !exists(serving) {
+		t.Errorf("after the reset: ended entry there %v, serving entry there %v; want false, true", exists(ended), exists(serving))
+	}
+	if fi, err := os.Lstat(fw); err != nil || !fi.IsDir() {
+		t.Errorf("the forwarder's directory after the reset: %v, %v", fi, err)
 	}
 }
 

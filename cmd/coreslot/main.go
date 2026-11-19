@@ -64,6 +64,10 @@ func dispatch(args []string, io IO) int {
 		return statsCommand(args[1:], io)
 	case "report":
 		return reportCommand(args[1:], io)
+	case "forward": // a run's own forwarder, absent from the usage
+		if hasForward {
+			return forwardCommand(args[1:])
+		}
 	case "help", "-h", "--help":
 		fmt.Fprintln(io.Stdout, usage)
 		return 0

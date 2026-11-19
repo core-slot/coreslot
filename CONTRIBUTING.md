@@ -19,11 +19,16 @@ of the repository is. No contributor agreement or sign-off line is needed.
   `github.com/BurntSushi/toml` (`github.com/creack/pty` in tests only) without the maintainer's
   agreement. A dependency change regenerates [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 - **Nothing leaves the machine.** coreslot sends nothing anywhere, opens no network connection
-  itself and records nothing outside the user's state directory. The optional local record is off by
-  default; while it is on, a run doing container work talks to the local Docker socket, a unix socket,
-  to read memory, and `status --docker` does when asked, by raw syscalls, so `net`, `net/http` and `crypto` stay out of the binary. Looking
-  up the user's home directory goes through the system's name services, which may contact a directory
-  service such as LDAP ([SECURITY.md](SECURITY.md)). The run log and the local record never hold the
+  itself and writes nothing outside the user's state directory except, on macOS, the forwarder's
+  directory `~/.coreslot-fw/` beside it. The optional local record is off by default; while it is
+  on, a run doing container work reads memory from the local Docker socket, and `status --docker`
+  does when asked. A run with a forwarder relays its command's Docker traffic and reads its own
+  containers' memory every 6 s, and to decide whether to give one it starts `docker` twice, which
+  may contact a remote context or builder the user configured. The binary links `net` and
+  `net/http` (and with them `crypto/tls`) for the forwarder; coreslot connects only to unix sockets
+  on this machine, and a change must keep it so. Looking up the user's home directory goes through
+  the system's name services, which may contact a directory service such as LDAP
+  ([SECURITY.md](SECURITY.md)). The run log and the local record never hold the
   environment, nor the command line beyond a label, which an auto-label takes from the command's shape
   (README, "Labels are automatic").
 - **The internal packages stay quiet.** They never print, never install signal handlers and never

@@ -15,8 +15,13 @@ type HolderInfo struct {
 	NeedMiB      int64  // what the hold reserves; 0 for a run outside the budget
 	FootprintMiB int64  // what its run last measured
 	Stops        int
-	Container    bool  // container work: its containers' memory is not measured
+	Container    bool  // container work: its containers' memory is not measured unless DockerFootprintMiB is set
 	NoCPUS       int64 // how long its tree has used next to no CPU, in s; 0 under the mark
+	// DockerFootprintMiB is what its run's own containers have grown by, 0 included; nil when its
+	// run does not count them. DockerNote is why its Docker work has no forwarder or is not
+	// counted, "" when nothing is to be said.
+	DockerFootprintMiB *int64
+	DockerNote         string
 	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
 	// still held, so a descendant that inherited the hold's descriptor holds the reservation. Only
 	// Snapshot sets it, and only when the process table can be read.
