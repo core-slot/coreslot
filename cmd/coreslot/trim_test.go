@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +45,7 @@ func holdIDOf(t *testing.T, g *engine.Grant) string {
 }
 
 // answerTrim stands in for g's run: once trim.json names g's hold it applies f to the hold's body,
-// as a run does at its tick. It gives up when the test ends.
+// as a run does at its tick, or with f nil ends the hold. It gives up when the test ends.
 func answerTrim(t *testing.T, g *engine.Grant, f func(h *wire.Hold)) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -55,6 +54,10 @@ func answerTrim(t *testing.T, g *engine.Grant, f func(h *wire.Hold)) {
 	go func() {
 		defer close(done)
 		for ctx.Err() == nil {
+			if g.TrimRequested() && f == nil {
+				g.Close()
+				return
+			}
 			if g.TrimRequested() {
 				if err := g.UpdateHold(f); err != nil {
 					t.Errorf("answering the trim: %v", err)
@@ -224,29 +227,29 @@ func TestTrimByLabelAmbiguous(t *testing.T) {
 	}
 }
 
-// The command says what the run answered: lowered; following with nothing released yet, and why;
-// already following; or no answer, which is not a refusal. A container hold adds what is not
-// measured. Mutation: take a lowered need_mib as the answer instead of trimmed → the case that
-// sets trimmed alone gets "has not answered yet", red.
+// The command says what the run answered: lowered; following with nothing released yet; already
+// following; the hold ended before an answer; or no answer, which is not a refusal. A container
+// hold adds what is not measured. Mutations: take a lowered need_mib as the answer instead of
+// trimmed → the case that sets trimmed alone gets "has not answered yet", red; read a hold that is
+// gone as no answer → "ended" gets "has not answered yet", red.
 func TestTrimAnswers(t *testing.T) {
 	const asked = 4000
 	lowered := func(h *wire.Hold) { h.Trimmed, h.AskedMiB, h.NeedMiB, h.FootprintMiB = true, asked, 600, 200 }
 	following := func(h *wire.Hold) { h.Trimmed, h.AskedMiB, h.FootprintMiB = true, asked, 3000 }
 	cases := []struct {
 		name      string
-		config    string // [watch] in the configuration
-		age       time.Duration
 		container bool
+		end       bool               // the hold ends once asked, unanswered
 		before    func(h *wire.Hold) // the body before the command
 		answer    func(h *wire.Hold) // the run's answer; nil for none
-		want      []string           // the lines printed, quoted, but for a regular expression's \d+
+		want      []string           // the lines printed
 	}{
 		{name: "lowered", answer: lowered,
 			want: []string{"coreslot: x reserves 600 MiB now (asked 3.9 GiB) and follows what it uses"}},
-		{name: "young", answer: following,
-			want: []string{"coreslot: x follows what it uses from now on; nothing is released yet: it started \\d+s ago, and its reservation follows from its first minute on"}},
-		{name: "old", config: "trim_window_s = 2\n", age: 2500 * time.Millisecond, answer: following,
-			want: []string{"coreslot: x follows what it uses from now on; nothing is released yet: it used 2.9 GiB within the last 2s"}},
+		{name: "following", answer: following,
+			want: []string{"coreslot: x follows what it uses from now on; nothing is released yet (asked 3.9 GiB); coreslot status shows its reservation when it falls"}},
+		{name: "ended", end: true,
+			want: []string{"coreslot: x: asked, but the hold ended before its run answered"}},
 		{name: "no answer",
 			want: []string{"coreslot: x: asked; the run has not answered yet. A run started by an older coreslot never will; see coreslot status"}},
 		{name: "already", before: lowered,
@@ -259,7 +262,7 @@ func TestTrimAnswers(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			shortTrimWait(t, 1500*time.Millisecond)
 			dir := budgetDir(t, 16384)
-			writeConfig(t, dir, "[memory]\nreserve = \"0\"\n[watch]\n"+c.config)
+			writeConfig(t, dir, "[memory]\nreserve = \"0\"\n")
 			g := hold(t, openLib(t, dir), "x", asked)
 			if err := g.UpdateHold(func(h *wire.Hold) {
 				h.Container = c.container
@@ -269,14 +272,11 @@ func TestTrimAnswers(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if c.answer != nil {
+			if c.answer != nil || c.end {
 				answerTrim(t, g, c.answer)
 			}
-			time.Sleep(c.age)
 			code, stdout, stderr := trimIn(t, dir, holdIDOf(t, g))
-			want := regexp.QuoteMeta(strings.Join(c.want, "\n") + "\n")
-			want = strings.ReplaceAll(want, `\\d\+`, `\d+`)
-			if code != 0 || !regexp.MustCompile("^"+want+"$").MatchString(stdout) {
+			if want := strings.Join(c.want, "\n") + "\n"; code != 0 || stdout != want {
 				t.Errorf("exit %d, stdout %q (stderr %q); want 0 and %q", code, stdout, stderr, want)
 			}
 		})

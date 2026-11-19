@@ -14,8 +14,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/spec"
-	"github.com/core-slot/coreslot/internal/state"
-	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -125,50 +123,41 @@ func trimCommand(args []string, io IO) int {
 		containerLine(io.Stdout, before)
 		return 0
 	}
-	h, rep, recent, answered := awaitTrim(e, id)
-	if !answered {
+	h, answered, gone := awaitTrim(e, id)
+	switch {
+	case gone:
+		fmt.Fprintf(io.Stdout, "coreslot: %s: asked, but the hold ended before its run answered\n", name)
+		return 0
+	case !answered:
 		fmt.Fprintf(io.Stdout, "coreslot: %s: asked; the run has not answered yet. A run started by an older coreslot never will; see coreslot status\n", name)
 		return 0
 	}
 	name = labelText(h.Label)
-	window := rep.Config.TrimWindowS
-	if window <= 0 { // the configuration could not be read
-		window = state.TrimWindowS
-	}
-	age := time.Duration(max(store.NowNS()-h.StartNS, 0))
-	switch {
-	case h.NeedMiB < askedMiB(h):
+	if h.NeedMiB < askedMiB(h) {
 		fmt.Fprintf(io.Stdout, "coreslot: %s reserves %s now (asked %s) and follows what it uses\n",
 			name, spec.FormatMiB(h.NeedMiB), spec.FormatMiB(askedMiB(h)))
-	case age < time.Duration(window)*time.Second:
-		fmt.Fprintf(io.Stdout, "coreslot: %s follows what it uses from now on; nothing is released yet: it started %s ago, and its reservation follows from its first %s on\n",
-			name, duration(age), windowText(window))
-	default:
-		fmt.Fprintf(io.Stdout, "coreslot: %s follows what it uses from now on; nothing is released yet: it used %s within the last %s\n",
-			name, spec.FormatMiB(recent), windowText(window))
+	} else {
+		fmt.Fprintf(io.Stdout, "coreslot: %s follows what it uses from now on; nothing is released yet (asked %s); coreslot status shows its reservation when it falls\n",
+			name, spec.FormatMiB(askedMiB(h)))
 	}
 	containerLine(io.Stdout, h)
 	return 0
 }
 
 // awaitTrim polls the hold id for up to trimAnswerWait until its run says it acted on the
-// request (trimmed), and returns it with the snapshot it was read in and the largest footprint
-// seen meanwhile. A hold that is gone is no answer; a snapshot that fails is read again.
-func awaitTrim(e *engine.Engine, id wire.ID) (h engine.HolderInfo, rep engine.Report, recentMiB int64, answered bool) {
+// request (trimmed), and returns it. gone is a hold that a snapshot no longer shows; a snapshot
+// that fails is read again.
+func awaitTrim(e *engine.Engine, id wire.ID) (h engine.HolderInfo, answered, gone bool) {
 	deadline := time.Now().Add(trimAnswerWait)
 	for {
 		if r, err := e.Snapshot(); err == nil {
 			got, ok := findHold(r, id)
-			if !ok {
-				return h, r, recentMiB, false
-			}
-			recentMiB = max(recentMiB, got.FootprintMiB)
-			if got.Trimmed {
-				return got, r, recentMiB, true
+			if !ok || got.Trimmed {
+				return got, ok, !ok
 			}
 		}
 		if !time.Now().Before(deadline) {
-			return h, rep, recentMiB, false
+			return h, false, false
 		}
 		time.Sleep(min(trimAnswerPoll, time.Until(deadline)))
 	}
@@ -190,14 +179,6 @@ func askedMiB(h engine.HolderInfo) int64 {
 		return h.AskedMiB
 	}
 	return h.NeedMiB
-}
-
-// windowText is a trimmed hold's window of s seconds as a message says it.
-func windowText(s int64) string {
-	if s == 60 {
-		return "minute"
-	}
-	return duration(time.Duration(s) * time.Second)
 }
 
 // containerLine says, for container work, what a trimmed reservation cannot follow.
