@@ -8,6 +8,28 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `coreslot trim <hold-id>` (or `--label LABEL`) asks a running job's `coreslot run` to reserve what the job has
+  used lately, its largest reading of the last minute plus a margin of a tenth of its need and at least 256 MiB,
+  instead of what it asked for; the reservation rises again as the job grows, never above what it asked for. It
+  raises the room without changing the queue's order. The request is the new optional file `trim.json` in the
+  state directory, which no admission reads (`PROTOCOL.md` sections 7.12 and 12.5); refusals exit 75 as
+  `cancel`'s do.
+- `[watch] trim_window_s`, from 2 to 3600 seconds and 60 by default: how far back a trimmed job's reservation
+  looks. An invalid value is a configuration warning and the default, never an invalid configuration.
+- `status` shows each hold's `id`, what a trimmed hold asked for (`(asked …)`) and a `trimmed` mark;
+  `status --json` carries a hold's `id`, `asked_mib` and `trimmed`, under the same `schema` 1. A hold body may carry
+  the optional keys `asked_mib` and `trimmed`.
+- The telemetry `trim` event, written when a run first acts on a request to trim its hold.
+
+### Changed
+
+- A live hold's `need_mib` may now be lower than the need it asked for, after a `coreslot trim`. A client of an
+  earlier release on the same machine, and a consumer that took `need_mib` for the need asked (`status --json`, the
+  telemetry `jobs` and `holders`), then see the current reservation where they expected the need asked; admission
+  arithmetic is unaffected, since every release computes the room from `need_mib` as the body says it.
+
 ## v0.9.1 (2026-11-19)
 
 ### Changed
