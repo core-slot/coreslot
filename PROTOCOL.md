@@ -816,7 +816,7 @@ the examination are counted without being examined.
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
 client that enters the section for any purpose other than admission
-(enqueue, cancellation publication, removal of its own ticket or hold, a resume bump,
+(enqueue, cancellation publication, a trim request, removal of its own ticket or hold, a resume bump,
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
 reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
@@ -1116,8 +1116,9 @@ when nothing of either format is live, the other format's run log removed with t
 ## 16. Windows
 
 The CLI runs the command without a budget and prints one warning per run; `[platform]
-windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel` and `doctor`
-exit 70 on Windows (there is no budget to inspect, cancel or repair), and their `--help` exits 0.
+windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel`, `trim` and
+`doctor` exit 70 on Windows (there is no budget to inspect, cancel, trim or repair), and their
+`--help` exits 0.
 There is no watchdog on Windows.
 
 ## 17. Descriptor and environment contract
@@ -1129,7 +1130,7 @@ places them above. It sets this environment:
 
 | Variable | Value |
 |---|---|
-| `CORESLOT_GRANTED_MEM` | the memory the run reserves, in MiB: its need, also for a run outside the budget |
+| `CORESLOT_GRANTED_MEM` | the memory the run asked for, in MiB: its need, also for a run outside the budget; it stays the need asked when the hold is trimmed (section 12.5) and reserves less |
 | `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor, which is always fd 3 |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 | `CORESLOT_TELEMETRY` | `1`, for a run that is recording (section 5.3); absent otherwise, an inherited value included |
