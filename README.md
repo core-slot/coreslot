@@ -24,9 +24,10 @@ coreslot status                                # what runs, what waits, whether 
 - **It starts a command when the memory is there.** A command starts when the memory the machine
   can really hand out, less what running commands are still expected to grow into and a small
   reserve, covers what that command typically needs, learned from its earlier runs. Otherwise it
-  waits in one first-in, first-out queue. A command that fits may pass the head of the queue only
-  when its earlier runs say it will be done before the head could start; a command with no earlier
-  run never passes. The exception is container work: while another command runs, a command named
+  waits in one first-in, first-out queue. A command that fits may pass the head of the queue when
+  its earlier runs say it will be done before the head could start, or, while the head does not fit
+  and the kernel reports normal memory pressure, out of turn: one at a time, and for no longer than
+  it has itself watched the head wait. A command with no earlier run never passes. The exception is container work: while another command runs, a command named
   `docker`, `docker-compose` or `podman` with no pinned need passes the queue, with or without
   earlier runs ([how it decides](#how-it-decides)). When no coreslot command is running, the head of
   the queue always starts.
