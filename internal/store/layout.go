@@ -116,7 +116,7 @@ func openDir(dir string, create bool) (*Store, error) {
 	if err := checkFilesystem(dir); err != nil {
 		return nil, err
 	}
-	for _, d := range []string{QueueDir, HoldsDir, CancelDir, LogDir} {
+	for _, d := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir, LogDir} {
 		if err := CheckEntry(s.path(d), true); err != nil {
 			return nil, err
 		}

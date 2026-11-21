@@ -169,6 +169,21 @@ func TestOpenRejectsSymlinkedQueue(t *testing.T) {
 	wantStateError(t, err, "Open of a symlinked state directory")
 }
 
+// Every directory of the layout is checked when the state directory is opened, order/ and
+// vmwait/ as queue/ is, so status and doctor report a bad one at once. Mutation: leave OrderDir or
+// VMWaitDir out of openDir's list → its row opens without an error.
+func TestOpenRejectsSymlinkedOrderAndVMWait(t *testing.T) {
+	for _, name := range []string{OrderDir, VMWaitDir} {
+		dir := newDir(t)
+		open(t, dir)
+		if err := os.Symlink(t.TempDir(), filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+		_, err := OpenReadOnly(dir)
+		wantStateError(t, err, "OpenReadOnly with "+name+"/ a symlink to a directory")
+	}
+}
+
 func TestOpenRejectsGroupWritable(t *testing.T) {
 	for _, name := range []string{".", "holds", "admit.lock"} {
 		t.Run(name, func(t *testing.T) {
