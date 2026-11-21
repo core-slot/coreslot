@@ -37,7 +37,6 @@ type engagement struct{ upstream, note string }
 // the events attribute to the run.
 type forwarder struct {
 	addr, upstream, entry string
-	cmd                   *exec.Cmd
 	end                   *os.File
 	events                <-chan relay.Event
 	exited                <-chan struct{}
@@ -94,7 +93,7 @@ func startForwarder(exe, entry, upstream string) (*forwarder, error) {
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
 	addr := filepath.Join(entry, relay.SockName)
-	return &forwarder{addr: addr, upstream: upstream, entry: entry, cmd: cmd, end: endW, events: events, exited: exited}, nil
+	return &forwarder{addr: addr, upstream: upstream, entry: entry, end: endW, events: events, exited: exited}, nil
 }
 
 // readEvents reads the forwarder's event lines from r: whether the first is ready goes to ready,
