@@ -218,8 +218,8 @@ func TestPeakRoundsUpAtLeastOne(t *testing.T) {
 	}
 }
 
-// engagedRun is a run whose forwarder reports what the test sends on its channel, with the fake
-// engine f its upstream and its notices in a file of its own.
+// engagedRun is a run whose forwarder has relayed a connection and reports what the test sends on
+// its channel, with the fake engine f its upstream and its notices in a file of its own.
 func engagedRun(t *testing.T, f *dockertest.Fake) (r *run, events chan relay.Event, stderr string) {
 	t.Helper()
 	stderr = filepath.Join(t.TempDir(), "stderr")
@@ -231,25 +231,32 @@ func engagedRun(t *testing.T, f *dockertest.Fake) (r *run, events chan relay.Eve
 	events = make(chan relay.Event, eventsQueue)
 	r = restartable("make", "test")
 	r.io.Stderr = file
-	r.fwd = &forwarder{upstream: f.Sock, events: events, exited: make(chan struct{})}
+	r.fwd = &forwarder{upstream: f.Sock, events: events, exited: make(chan struct{}), connected: true}
 	return r, events, stderr
 }
 
-// An engaged run's hold carries its Docker footprint from its first write, 0 included; a run that
-// is not engaged carries none. Mutation: write the footprint only above 0, red.
+// An engaged run whose forwarder relayed a connection carries its Docker footprint from its first
+// hold write, 0 included; one whose forwarder has relayed none, and a run that is not engaged, carry
+// none. Mutations: write the footprint only above 0 → the connected row, red; write it before a
+// connection → the unconnected row, red.
 func TestEngagedHoldCarriesZeroFootprint(t *testing.T) {
 	f := dockertest.HTTP(t)
-	for _, engaged := range []bool{true, false} {
+	for _, c := range []struct {
+		name               string
+		engaged, connected bool
+	}{{"connected", true, true}, {"no connection yet", true, false}, {"not engaged", false, false}} {
 		g, st := watchedHold(t)
 		r, _, _ := engagedRun(t, f)
-		if !engaged {
+		if c.engaged {
+			r.fwd.connected = c.connected
+		} else {
 			r.fwd = nil
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		r.watchChild(ctx, &supervisor{pid: 42, group: true}, g, st)
-		if got := body(t, st, g).DockerFootprintMiB; engaged && (got == nil || *got != 0) || !engaged && got != nil {
-			t.Errorf("engaged %v: docker_footprint_mib %v", engaged, got)
+		if got := body(t, st, g).DockerFootprintMiB; c.connected && (got == nil || *got != 0) || !c.connected && got != nil {
+			t.Errorf("%s: docker_footprint_mib %v", c.name, got)
 		}
 	}
 }
