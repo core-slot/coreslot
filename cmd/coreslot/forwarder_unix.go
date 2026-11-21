@@ -4,7 +4,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/docker"
-	"github.com/core-slot/coreslot/internal/engine"
 	relay "github.com/core-slot/coreslot/internal/forward"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/testhooks"
@@ -26,7 +24,6 @@ import (
 const (
 	forwarderReady = 2 * time.Second // how long a forwarder has to say ready
 	eventsQueue    = 256             // events read from the pipe and not yet taken by the run
-	librarySocket  = "/var/run/docker.sock"
 )
 
 // engagement is docker.Engage's answer for a run: the upstream of its forwarder when engaged, else
@@ -126,40 +123,37 @@ func readEvents(r *os.File, ready chan<- bool, out chan<- relay.Event) {
 	}
 }
 
-// engage decides once, before the run queues, whether it gets a forwarder (docker.Engage), and says
-// why not once for a run with a Docker interest. Off macOS the features do not exist and nothing is
-// asked or said. Under the state directory's override a test's hook socket stands for Docker
-// Desktop's socket and for the one libraries use.
-func (r *run) engage(ctx context.Context) {
+// engage decides once, before the run queues, whether it gets a forwarder (docker.Engage). Off
+// macOS the features do not exist and nothing is said. Under the state directory's override a
+// test's hook socket stands for Docker Desktop's socket.
+func (r *run) engage() {
 	if runtime.GOOS != "darwin" {
 		return
 	}
 	env := environ()
-	ref, lib := "", librarySocket
+	ref := ""
 	if r.loc.home != "" {
 		ref = filepath.Join(r.loc.home, ".docker/run/docker.sock")
 	}
 	if hook := testhooks.DockerSocket(); env[config.StateDirEnv] != "" && hook != "" {
-		ref, lib = hook, hook
+		ref = hook
 	}
-	upstream, note := docker.Engage(ctx, docker.EngageInput{
-		Off:           r.dockerOff,
-		Probe:         env[engine.EnvProbe] != "",
-		Interest:      r.o.containerCommand() || r.marked,
-		Switch:        r.entry.DockerForward,
-		EntryBad:      r.entryBad,
-		UserHost:      env["DOCKER_HOST"],
-		Reference:     ref,
-		LibrarySocket: lib,
-		Ask:           func(ctx context.Context) (docker.Answers, error) { return askDocker(ctx, "docker", r.env) },
+	upstream, note := docker.Engage(docker.EngageInput{
+		Off:       r.dockerOff,
+		Interest:  r.o.containerCommand() || r.marked,
+		Switch:    r.entry.DockerForward,
+		EntryBad:  r.entryBad,
+		UserHost:  env["DOCKER_HOST"],
+		Reference: ref,
 	})
 	r.setEngagement(engagement{upstream: upstream, note: note})
 }
 
-// setEngagement records the run's engagement and says a note once.
+// setEngagement records the run's engagement and says its note once, unless the user turned the
+// forwarder off for the label with docker_forward = false: the hold still carries that note.
 func (r *run) setEngagement(fw engagement) {
 	r.fw = fw
-	if fw.note != "" {
+	if fw.note != "" && fw.note != docker.NoteSwitch {
 		r.notice("%s: the command's Docker work is not attributed to this run", fw.note)
 	}
 }

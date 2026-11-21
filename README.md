@@ -131,22 +131,18 @@ command's `DOCKER_HOST` names the forwarder's socket in `~/.coreslot-fw/`. Every
 the memory of those containers, and `status` shows what they have grown by since the run first
 touched them, as the hold's `docker footprint`. Such a run is container work from its first Docker
 connection, a library's included. A forwarder outlives its command while the command's background
-Docker connections stay open (`docker compose logs -f &`), and `coreslot doctor` lists it. Before
-it gives one, a run asks the `docker` on the command's `PATH` twice (`docker context ls` and
-`docker buildx inspect`, 2 s each) whether the command could reach another engine: a context with
-another endpoint, a builder of another driver or a `/var/run/docker.sock` that is not Docker
-Desktop's gives none, unless you set `DOCKER_HOST` to Docker Desktop's socket yourself or
-`docker_forward = true`. A `DOCKER_HOST` that names another engine always gives none. A run
-without a forwarder runs its command untouched and, with a Docker interest, says why once; `status`
-shows the reason as the hold's `docker:` note. `docker_forward = false` turns the forwarder off for
-a label.
+Docker connections stay open (`docker compose logs -f &`), and `coreslot doctor` lists it. A
+`DOCKER_HOST` that names another engine gives none. A run without a forwarder runs its command
+untouched and, with a Docker interest, says why once; `status` shows the reason as the hold's
+`docker:` note. `docker_forward = false` turns the forwarder off for a label, silently.
 
 Under a forwarder a few things look different:
 
 - `docker context show` prints `default`, `docker context ls` warns that `DOCKER_HOST` overrides the
   context, and buildx names its builder `default` rather than `desktop-linux`, with the same driver.
-- A context or builder the command creates or selects during the run is not used by its later
-  calls, since `DOCKER_HOST` wins over it.
+- A context selected with `docker context use`, before the run or during it, is not used, since
+  `DOCKER_HOST` wins over it: the command's Docker calls go to Docker Desktop. A label whose command
+  works against another engine through a context needs `docker_forward = false`.
 - A command that reads `$DOCKER_HOST` sees a path in `~/.coreslot-fw`.
 - If the forwarder is killed, the run points the address straight at Docker at once, but the
   streams open at that moment end, as they would if Docker restarted.
@@ -413,8 +409,7 @@ the machine samples and nothing else.
 Besides the record, coreslot talks to the Docker socket, always a unix socket on this machine, in
 two ways. On macOS every run with a forwarder relays whatever connects to the forwarder's socket,
 and whatever is still open after its command, and reads its own containers' memory every 6 s
-([Docker on macOS](#how-it-decides)); deciding whether to give one, a run starts `docker` twice,
-which may contact a remote context or builder you configured. `coreslot status --docker` reads it
+([Docker on macOS](#how-it-decides)). `coreslot status --docker` reads it
 only when you ask: once per call, read-only, within 2 s. It shows Docker Desktop's VM and, for every running
 container, its name, image, Compose project and memory, to whoever runs it as you, so a process of
 yours can learn what your containers are called. `[docker] enabled = false` makes it print `off` and

@@ -23,8 +23,7 @@ of the repository is. No contributor agreement or sign-off line is needed.
   directory `~/.coreslot-fw/` beside it. The optional local record is off by default; while it is
   on, a run doing container work reads memory from the local Docker socket, and `status --docker`
   does when asked. A run with a forwarder relays its command's Docker traffic and reads its own
-  containers' memory every 6 s, and to decide whether to give one it starts `docker` twice, which
-  may contact a remote context or builder the user configured. The binary links `net` and
+  containers' memory every 6 s. The binary links `net` and
   `net/http` (and with them `crypto/tls`) for the forwarder; coreslot connects only to unix sockets
   on this machine, and a change must keep it so. Looking up the user's home directory goes through
   the system's name services, which may contact a directory service such as LDAP

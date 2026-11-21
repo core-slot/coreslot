@@ -103,9 +103,7 @@ coreslot sends nothing anywhere and opens no network connection itself. Its opti
 (`[telemetry]`, off by default) stays in the state directory and holds labels, the names of the
 user's largest processes, whether or not coreslot runs them, and container image names; while it is on, a run doing container
 work reads memory from the local Docker socket. On macOS a run with a forwarder relays its command's
-Docker traffic and reads its own containers' memory every 6 s; deciding whether to give one, a run
-starts the `docker` on the command's `PATH` twice, which may contact a remote context or builder the
-user configured. coreslot links Go's `net` and `net/http` for the forwarder and connects only to unix
+Docker traffic and reads its own containers' memory every 6 s. coreslot links Go's `net` and `net/http` for the forwarder and connects only to unix
 sockets on this machine. `coreslot status --docker` reads the socket too
 when the user runs it with that flag: it shows the name, image and Compose project of every running container to
 whoever runs it as that user, as any process of the user could read them from the socket itself.

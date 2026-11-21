@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -227,34 +226,5 @@ func TestHTTPReadingFollowsSetUsage(t *testing.T) {
 	d.SetUsage(dockertest.LongID, 300<<20)
 	if r := docker.Read([]string{d.Sock}, dockertest.Soon()); len(r.Containers) != 1 || r.Containers[0].UsageMiB != 300 {
 		t.Errorf("after SetUsage: %+v", r)
-	}
-}
-
-// The stand-in answers both questions in the CLI's shapes and refuses anything else. Mutation: an
-// endpoint left out of a line reddens the endpoints.
-func TestCLIStandIn(t *testing.T) {
-	endpoints := []string{"unix:///var/run/docker.sock", "tcp://192.0.2.10:2376"}
-	dir := dockertest.CLI(t, endpoints, "docker-container")
-	out, err := exec.Command(dir+"/docker", "context", "ls", "--format", "{{json .}}").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got []string
-	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
-		var c map[string]any
-		if err := json.Unmarshal([]byte(line), &c); err != nil || len(c) != 5 || c["Error"] != "" {
-			t.Errorf("line %q: %v", line, err)
-		}
-		got = append(got, c["DockerEndpoint"].(string))
-	}
-	if !reflect.DeepEqual(got, endpoints) || !strings.Contains(string(out), `"Name":"default"`) {
-		t.Errorf("context ls:\n%s", out)
-	}
-	out, err = exec.Command(dir+"/docker", "buildx", "inspect").Output()
-	if err != nil || !strings.Contains(string(out), "\nDriver: docker-container\n") || !strings.HasPrefix(string(out), "Name:") {
-		t.Errorf("buildx inspect: %v\n%s", err, out)
-	}
-	if err := exec.Command(dir+"/docker", "ps").Run(); err == nil {
-		t.Error("docker ps succeeded, want a refusal")
 	}
 }

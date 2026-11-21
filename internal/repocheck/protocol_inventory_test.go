@@ -44,7 +44,6 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"CORESLOT_TELEMETRY", "Descriptor and environment contract", "CORESLOT_TELEMETRY"},
 	{"CORESLOT_STATE_DIR", "Location", "CORESLOT_STATE_DIR"},
 	{"DOCKER_HOST", "Descriptor and environment contract", "DOCKER_HOST"},
-	{"CORESLOT_PROBE", "Descriptor and environment contract", "CORESLOT_PROBE"},
 	{"enqueue", "Enqueue", "order key"},
 	{"refresh", "Refresh and STALLED", "futimens"},
 	{"admission", "Admission", "idle rule"},

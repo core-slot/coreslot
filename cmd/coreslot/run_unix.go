@@ -177,7 +177,7 @@ func (r *run) ordinary(nested bool) int {
 		ctx, done = context.WithTimeout(ctx, r.o.timeout)
 		defer done()
 	}
-	r.engage(ctx)
+	r.engage()
 	defer r.endForwarder()
 	for {
 		g, code, ok := r.wait(ctx, cancel, e, req)

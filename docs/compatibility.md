@@ -97,7 +97,7 @@ change in any release; parse `status --json` instead.
 | `report` | `--days N`, `--json` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
 | configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`, `[docker] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem`, `no_restart` and `docker_forward` |
-| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED`, `CORESLOT_TELEMETRY` (given to the command, read by nested runs); on macOS `DOCKER_HOST` (given to the command of a run with a forwarder), `CORESLOT_PROBE` (given to coreslot's own questions to `docker`, read by a run they start) |
+| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED`, `CORESLOT_TELEMETRY` (given to the command, read by nested runs); on macOS `DOCKER_HOST` (given to the command of a run with a forwarder) |
 | descriptors | the hold at fd 3 |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
 

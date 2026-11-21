@@ -389,31 +389,6 @@ func TestForwarderAcrossRestart(t *testing.T) {
 	}
 }
 
-// A run that coreslot's own questions started asks none and takes no forwarder, and says why.
-// Mutation: Probe left out of engage asks the stand-in docker on PATH.
-func TestProbeRunTakesNoForwarder(t *testing.T) {
-	b := newFwBed(t, "")
-	bin := t.TempDir()
-	stand := "#!/bin/sh\necho asked > \"$FWT/asked\"\nexit 1\n"
-	command := "#!/bin/sh\n" + saveHost + saveHold + "\n"
-	for name, body := range map[string]string{filepath.Join(bin, "docker"): stand, filepath.Join(b.work, "docker"): command} {
-		if err := os.WriteFile(name, []byte(body), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	env := append(append([]string{}, b.env...), "PATH="+bin+":"+os.Getenv("PATH"), "CORESLOT_PROBE=1")
-	r := cli(t, env, "run", "--restart=yes", "--label", "probe", "--mem", "64M", "--", filepath.Join(b.work, "docker"))
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s", r.code, r.stderr)
-	}
-	if b.file(t, "asked") != "" || strings.TrimSpace(b.file(t, "host")) != "" {
-		t.Errorf("a probe asked docker (%v) or got DOCKER_HOST %q", b.file(t, "asked") != "", b.file(t, "host"))
-	}
-	if count(r.stderr, docker.NoteProbe) != 1 || b.hold(t)["docker_note"] != docker.NoteProbe {
-		t.Errorf("notice %q, hold note %v; want %q once and in the hold", r.stderr, b.hold(t)["docker_note"], docker.NoteProbe)
-	}
-}
-
 // A command that is no container client by its name, and connects through its forwarder, is
 // container work from the next tick: never a stop's victim. Mutation: the connected event left
 // unread keeps the hold a victim.
@@ -428,21 +403,26 @@ func TestConnectionMarksContainerWork(t *testing.T) {
 }
 
 // A docker_forward that is not a boolean gives a container command no forwarder, its note in the
-// hold and one notice of it. Mutation: EntryBad left out of engage engages the run.
+// hold and one notice of it; docker_forward = false gives the note in the hold and no notice, the
+// user having chosen it. Mutations: EntryBad left out of engage engages the run; setEngagement
+// saying every note prints the switch's.
 func TestBadDockerForwardNote(t *testing.T) {
-	b := newFwBed(t, "[needs.\"bad\"]\ndocker_forward = \"x\"\n")
+	b := newFwBed(t, "[needs.\"bad\"]\ndocker_forward = \"x\"\n[needs.\"off\"]\ndocker_forward = false\n")
 	command := filepath.Join(b.work, "docker")
 	if err := os.WriteFile(command, []byte("#!/bin/sh\n"+saveHost+saveHold+"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	r := cli(t, b.env, "run", "--restart=yes", "--label", "bad", "--mem", "64M", "--", command)
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s", r.code, r.stderr)
-	}
-	if n := count(r.stderr, docker.NoteNeedsEntry); n != 1 || count(r.stderr, "needs file") != 1 {
-		t.Errorf("want one note and one needs-file notice:\n%s", r.stderr)
-	}
-	if note := b.hold(t)["docker_note"]; note != docker.NoteNeedsEntry || strings.TrimSpace(b.file(t, "host")) != "" {
-		t.Errorf("hold's docker_note %v, DOCKER_HOST %q; want %q and none", note, b.file(t, "host"), docker.NoteNeedsEntry)
+	for label, want := range map[string]string{"bad": docker.NoteNeedsEntry, "off": docker.NoteSwitch} {
+		r := cli(t, b.env, "run", "--restart=yes", "--label", label, "--mem", "64M", "--", command)
+		if r.code != 0 {
+			t.Fatalf("%s: exit %d: %s", label, r.code, r.stderr)
+		}
+		wantNotices := map[string]int{"bad": 1, "off": 0}[label]
+		if count(r.stderr, "no-forwarder") != wantNotices || count(r.stderr, "needs file") != wantNotices {
+			t.Errorf("%s: want %d notes and needs-file notices:\n%s", label, wantNotices, r.stderr)
+		}
+		if note := b.hold(t)["docker_note"]; note != want || strings.TrimSpace(b.file(t, "host")) != "" {
+			t.Errorf("%s: hold's docker_note %v, DOCKER_HOST %q; want %q and none", label, note, b.file(t, "host"), want)
+		}
 	}
 }

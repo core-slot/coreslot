@@ -77,7 +77,6 @@ Every shared file, field, environment variable and transition of format 3, and w
 | `CORESLOT_TELEMETRY` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_STATE_DIR` | environment | [4.1](#41-location) |
 | `DOCKER_HOST` | environment | [17](#17-descriptor-and-environment-contract) |
-| `CORESLOT_PROBE` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | enqueue | transition | [10.1](#101-enqueue), example [21.1](#211-enqueue) |
 | refresh | transition | [10.2](#102-refresh-and-stalled), example [21.2](#212-refresh) |
 | admission | transition | [12](#12-admission), example [21.3](#213-admission) |
@@ -552,7 +551,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `container` | boolean | optional; `true` once the run is container work (section 23.5); absent means `false`, and a writer omits it then |
 | `no_cpu_s` | integer | optional; `≥ 0`; how long its process tree has used next to no CPU, in seconds of the machine's awake time: 300 for each whole 5-minute window in a row in which each tick's listing (section 23.1) read at least one process of the tree and showed none that the tick before had not (a child born and reaped between two ticks leaves no time a tick sees, so a tree that keeps making processes never counts, and a wait loop that forks, such as `until nc -z db 5432; do sleep 1; done`, is never marked), so that an attempt's first window never counts either, the tree's `d_user_ns`, `d_sys_ns` and `d_page_wait_ns` together came to under 1 % of the window, and no container client (section 23.5) was in the tree at the window's end; a writer omits it below 1800. It informs `status` alone, which shows it only on a running hold (section 23.3): a wait that is not stuck, such as a slow network read, looks the same, and so does work outside the tree or in a part of it that cannot be read (a container whose client has closed, a build daemon, a child run as another user), so nothing else reads it and it never makes a hold dead or a victim |
 | `docker_footprint_mib` | integer | optional; `0..1073741824`; while the run's forwarder sees its containers (section 17), how much they have grown since the run first touched each, as the run's last sample of them read it (section 23.1), `0` included; absent for a run without a forwarder and once the run has lost sight of them. It informs `status` alone |
-| `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `probe`, `upstream`, `remote-context`, `builder`, `no-docker`, `address` or `start` (section 17), or `ungated: blind` once a run with a forwarder has lost sight of its containers. Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
+| `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `address` or `start` (section 17), or `ungated: blind` once a run with a forwarder has lost sight of its containers. Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -1166,10 +1165,6 @@ places them above. It sets this environment:
 | `CORESLOT_TELEMETRY` | `1`, for a run that is recording (section 5.3); absent otherwise, an inherited value included |
 | `DOCKER_HOST` | `unix://<address>`, the address of the run's forwarder, for an engaged run (below), replacing what it inherited; otherwise the inherited value, untouched |
 
-`CORESLOT_PROBE` is never given to a command: it is set to `1` only for coreslot's own questions to
-`docker` (below), beside `CORESLOT_UNBUDGETED=probe`. A run that finds it set asks nothing and takes
-no forwarder.
-
 Every descriptor the run itself opens under `$S` outside this contract stays close-on-exec (section
 4.2). A run that starts its command again after a stop (section 24) builds the contract from the
 hold of the new attempt: `CORESLOT_HOLD` names that hold.
@@ -1192,39 +1187,29 @@ process of its own (the CLI starts `coreslot forward` from its own executable, i
 its own) that relays every byte between the command and Docker's socket, and reads the stream only
 for the containers the command creates or touches (section 23.1). It keeps their references and
 nothing else of the stream, and logs none of it. A run is **engaged** when all of these hold; it
-judges the first five once, before it queues, and the last at its first admission, and the first
+judges the first four once, before it queues, and the last at its first admission, and the first
 condition that fails names its note (section 7.4):
 
 1. The Docker features are on: `[docker] enabled` is true (`config`, section 5.3), the run inherits
    no parent's context (`nested`: a pass-through or an `--independent` run inside another run's
    command takes none, its Docker work being its parent's), `$S` is not overridden (`state-dir`),
    and `DOCKER_HOST` is unset or names a unix socket (`remote-host`).
-2. It was not started by coreslot's own questions (`probe`), its label's needs entry and needs file
-   read (`needs-entry`), and the entry has no `docker_forward = false` (`switch`, section 5.4).
+2. Its label's needs entry and needs file read (`needs-entry`), and the entry has no
+   `docker_forward = false` (`switch`, section 5.4).
 3. Its label has a **Docker interest**: its command is a container command (section 5.4), a counted
    run of its label's last 20 (section 20) carries `container`, or its entry has
    `docker_forward = true`. A run without one is never engaged and says nothing.
 4. The upstream, the socket the user's `DOCKER_HOST` names or else Docker Desktop's own
    `<home>/.docker/run/docker.sock`, is the same file as Docker Desktop's, by device and inode after
    following symlinks (`upstream`, also when Docker is not running).
-5. Unless the user set `DOCKER_HOST` or the entry has `docker_forward = true`, nothing the command
-   could switch to: `/var/run/docker.sock`, where libraries look, is that same file, and every
-   context `docker context ls --format '{{json .}}'` lists has a unix endpoint that is that same
-   file (`remote-context`), and `docker buildx inspect` names a builder with the `docker` driver
-   (`builder`). The two questions run the `docker` the command's `PATH` finds, both at once, with
-   standard input `/dev/null`, the error output discarded, at most 64 KiB of output each and 2 s
-   each, after which their process group is killed; their environment is the command's plus
-   `CORESLOT_UNBUDGETED=probe` and `CORESLOT_PROBE=1`. No `docker`, or an answer that fails or comes
-   late, is `no-docker`. This step is a convenience against an accident of the user's own Docker
-   configuration, not a control: a different `docker` earlier on `PATH` may answer as it likes. It
-   never refuses a run; it only withholds the forwarder.
-6. At the run's first admission, the forwarder's directory and an address of at most 96 bytes can
+5. At the run's first admission, the forwarder's directory and an address of at most 96 bytes can
    be had (`address`, section 4.4), and the forwarder starts and reports that it is ready within 2 s
    (`start`).
 
 A run that is not engaged runs its command with the environment untouched and its Docker work
-unattributed; with a Docker interest it says why once and carries the note in its hold. An engaged
-run sets `DOCKER_HOST` for its command. The forwarder gets the read end of a pipe that only the run
+unattributed; with a Docker interest it carries the note in its hold and says it once, except
+`switch`, which the user chose. An engaged run sets `DOCKER_HOST` for its command. The forwarder
+gets the read end of a pipe that only the run
 writes and the write end of one on which it reports what it saw; the run's ends of both are
 close-on-exec, so the command never inherits them. When the run ends it closes its end: the
 forwarder swaps a symlink to the upstream over its socket (section 4.4), serves only the connections
@@ -1268,11 +1253,9 @@ The one exception is telemetry: a run recording it (section 5.3) gives its comma
 `CORESLOT_TELEMETRY=1`, and a pass-through that inherited it, reads `$S` without error and finds a
 FORMAT it understands appends its own lines to `$S/telemetry/events.jsonl`, outside any section.
 
-A pass-through takes no forwarder and asks `docker` nothing (section 17): its Docker work is its
-parent's, which the parent's forwarder sees when the parent has one. An `--independent` run inside
-another run's command takes none either (`no-forwarder: nested`). A run that finds `CORESLOT_PROBE`
-set was started by coreslot's own questions to `docker`; `CORESLOT_UNBUDGETED=probe` beside it makes
-it a pass-through by rule 1.
+A pass-through takes no forwarder (section 17): its Docker work is its parent's, which the
+parent's forwarder sees when the parent has one. An `--independent` run inside another run's
+command takes none either (`no-forwarder: nested`).
 
 A run whose `CORESLOT_HOLD` names such a hold, a pass-through or an `--independent` run, keeps its
 command in the process group it inherited, as `--same-group` does, so that a stop round's kill of
@@ -1666,7 +1649,6 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
 | stored sample | the period's below 1.5 s; fresh up to 6 s; a gap above 6 s or a 1 s clock skew |
 | restart | gives up after 3 stops; margin `max(256 MiB, need / 10)` |
 | stall share smoothing | time constant 10 s (`stall_ewma`) |
-| a forwarder's two questions to `docker` (macOS) | 2 s each, at most 64 KiB of output each |
 | a forwarder's ready report | within 2 s of its start |
 | a run's containers (macOS) | sampled every third tick (6 s), off the tick, under one 2 s deadline per sample; at most 256 per run, a 257th makes the run blind |
 | the tap | reads a request or response head of at most 64 KiB; a longer one makes the run blind |

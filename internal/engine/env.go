@@ -13,7 +13,6 @@ const (
 	EnvHold       = "CORESLOT_HOLD"
 	EnvUnbudgeted = "CORESLOT_UNBUDGETED"
 	EnvTelemetry  = "CORESLOT_TELEMETRY" // telemetry is on for the run this command runs under
-	EnvProbe      = "CORESLOT_PROBE"     // a run under coreslot's own questions to docker: it asks none and takes no forwarder
 	envGranted    = "CORESLOT_GRANTED_"  // the prefix every grant variable has
 )
 
