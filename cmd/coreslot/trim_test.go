@@ -336,3 +336,24 @@ func TestStatusShowsHoldIDAskedTrimmed(t *testing.T) {
 		}
 	}
 }
+
+// trim says a container hold's containers are not measured only when they are not: a hold with a
+// Docker footprint follows them too, as status says. Mutation: dropping the footprint test prints
+// the line for the measured hold.
+func TestTrimContainerLineOnlyWithoutDockerPart(t *testing.T) {
+	zero := int64(0)
+	for _, c := range []struct {
+		h    engine.HolderInfo
+		said bool
+	}{
+		{engine.HolderInfo{Container: true}, true},
+		{engine.HolderInfo{Container: true, DockerFootprintMiB: &zero}, false},
+		{engine.HolderInfo{}, false},
+	} {
+		var b strings.Builder
+		containerLine(&b, c.h)
+		if said := strings.Contains(b.String(), "not measured"); said != c.said {
+			t.Errorf("hold %+v: said %q, want the line %v", c.h, b.String(), c.said)
+		}
+	}
+}

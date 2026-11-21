@@ -70,7 +70,7 @@ func (h liveHold) info() HolderInfo {
 	id, _ := wire.ParseName(h.name)
 	return HolderInfo{Name: h.name, ID: id.String(), AskedMiB: b.AskedMiB, Trimmed: b.Trimmed, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
 		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS, TypicalS: b.TypicalS,
-		DockerFootprintMiB: b.DockerFootprintMiB, DockerNote: b.DockerNote}
+		DockerFootprintMiB: b.DockerFootprintMiB, DockerNote: b.DockerNote, DockerNeedMiB: b.DockerNeedMiB, DockerGrowthMiB: b.DockerGrowthMiB}
 }
 
 // holdLeftS is what remains of the hold's typical run time at nowNS, never below 0 and not capped

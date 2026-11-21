@@ -25,6 +25,9 @@ type HolderInfo struct {
 	// counted, "" when nothing is to be said.
 	DockerFootprintMiB *int64
 	DockerNote         string
+	// DockerNeedMiB is the Docker need of a run gated on Docker's VM, 0 for any other; DockerGrowthMiB
+	// the VM growth its hold reserves on the host.
+	DockerNeedMiB, DockerGrowthMiB int64
 	// OwnerExited: the process at PID has exited (or its pid was reused) while the hold's lock is
 	// still held, so a descendant that inherited the hold's descriptor holds the reservation. Only
 	// Snapshot sets it, and only when the process table can be read.
@@ -68,6 +71,10 @@ type TicketInfo struct {
 	// Snapshot sets them, and only on the first live ticket in queue order.
 	WaitS     int64
 	WaitKnown bool
+	// DockerNeedMiB is the Docker need of a gated ticket, 0 for any other; Noted that it has its
+	// note in vmwait/: it fits on the host and waits for Docker's VM.
+	DockerNeedMiB int64
+	Noted         bool
 }
 
 // MemInfo is the memory in a snapshot, in MiB. Known is false when the headroom could not be read

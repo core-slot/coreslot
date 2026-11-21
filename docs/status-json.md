@@ -50,7 +50,7 @@ is `[]`.
 | `free_est_mib` | int or null | an estimate of what the VM has left: its memory less the containers' usage |
 | `containers` | array | every running container, in the engine's order |
 
-`not_running` means no Docker Desktop VM on the Apple hypervisor was found; nothing was connected to. Docker VMM, OrbStack and Colima are not read in this release: with them it
+`not_running` means no Docker Desktop VM was found, on the Apple hypervisor or on Docker VMM; nothing was connected to. OrbStack and Colima are not read: with them it
 says `not_running` while the engine runs. `other_engine` is an engine that is not Docker Desktop, which has no VM size to show.
 `no_reading` is all or nothing: one failed call leaves no figures.
 
@@ -163,6 +163,8 @@ The watchdog, from the newest shared sample.
 | `stoppable` | bool | where a reader may offer to stop the run |
 | `docker_footprint_mib` | int | present, 0 included, while its run counts its own containers through a forwarder (macOS), from the forwarder's first connection: what they have grown by since the run first touched each |
 | `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address` or `ungated: blind` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
+| `docker_need_mib` | int | present while its run is gated on Docker Desktop's VM (macOS): its Docker need, the label's `docker_mem` |
+| `docker_growth_mib` | int | present while it is gated and reserves some: the growth of Docker Desktop's VM it reserves on the Mac, up to twice what its containers have yet to reach of its Docker need |
 
 `left_s` of 0 on a hold that is still live means it has outlived its typical run time.
 
@@ -203,6 +205,8 @@ only the watchdog's own stops restart it.
 | `state` | string | `waiting`, `stalled` or `dead` |
 | `stalled` | bool or null | null unless `--observe` ran |
 | `expected_wait_s` | int or null | the first live ticket's expected wait, see below |
+| `docker_need_mib` | int | present for a ticket gated on Docker Desktop's VM: its Docker need |
+| `vm_wait` | bool | present and true while the gated ticket fits on the Mac and waits for room in Docker Desktop's VM, or for a reading of it: every other run passes over it |
 
 `expected_wait_s` is the head's expected wait `W` of the passing rule, the rule by which a waiter
 with a typical run time may start ahead of the head when it is expected to end within `W`

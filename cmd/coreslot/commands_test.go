@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/docker/dockertest"
 	"github.com/core-slot/coreslot/internal/engine"
 	relay "github.com/core-slot/coreslot/internal/forward"
@@ -375,6 +376,91 @@ func TestStatusRoomSubtractsGrowth(t *testing.T) {
 	mem := doc["mem"].(map[string]any)
 	if doc["schema"] != float64(1) || mem["room_mib"] != float64(28) || mem["free_mib"] != float64(28) {
 		t.Errorf("schema %v, room_mib %v, free_mib %v; want 1, 28 and 28", doc["schema"], mem["room_mib"], mem["free_mib"])
+	}
+}
+
+// A gated hold shows its Docker need, its containers' footprint, the VM growth it reserves on the Mac
+// and its note, in the text and in JSON. Mutation: leaving the Docker need and growth out of the
+// engine's holder info (info) drops both from either form.
+func TestStatusShowsGatedHold(t *testing.T) {
+	dir := budgetDir(t, 8192)
+	g := hold(t, openLib(t, dir), "gate", 384)
+	used := int64(300)
+	if err := g.UpdateHold(func(h *wire.Hold) {
+		h.DockerNeedMiB, h.DockerGrowthMiB, h.DockerFootprintMiB, h.DockerNote = 2048, 3072, &used, docker.NoteNoReading
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "status")
+	for _, want := range []string{"mem 384 MiB  docker_mem 2 GiB", "docker footprint 300 MiB  reserved on the Mac for Docker's VM 3 GiB",
+		"docker: " + docker.NoteNoReading} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("status lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	h := statusDoc(t, dir, 0)["holds"].([]any)[0].(map[string]any)
+	if h["docker_need_mib"] != float64(2048) || h["docker_growth_mib"] != float64(3072) || h["docker_footprint_mib"] != float64(300) || h["docker_note"] != docker.NoteNoReading {
+		t.Errorf("hold %v; want docker_need_mib 2048, docker_growth_mib 3072, docker_footprint_mib 300 and the note", h)
+	}
+}
+
+// A waiting gated ticket shows its Docker need, and with its note in vmwait/ that it waits for
+// Docker's VM, in the text and in JSON (vm_wait); a ticket without either carries neither key.
+// Mutation: Snapshot not listing vmwait/ leaves vm_wait absent and the text silent.
+func TestStatusShowsGatedTicketAndNote(t *testing.T) {
+	dir := budgetDir(t, 512)
+	c := openLib(t, dir)
+	hold(t, c, "big", 512)
+	src := engine.DockerSource{Read: func(context.Context) engine.DockerReading { return engine.DockerReading{} }}
+	tk, err := c.EnqueueContext(context.Background(), spec.Request{Label: "gated", NeedMiB: 64, DockerNeedMiB: 2048}, engine.WithDocker(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tk.Withdraw() })
+	queue(t, c, "plain", 64)
+	if err := os.MkdirAll(filepath.Join(dir, store.VMWaitDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.VMWaitDir, tk.Name()), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "status")
+	if !strings.Contains(r.stdout, "gated  pid ") || !strings.Contains(r.stdout, "need mem 64 MiB and docker_mem 2 GiB") || strings.Count(r.stdout, "waits for Docker's VM") != 1 {
+		t.Errorf("status does not show the gated ticket and its note once:\n%s", r.stdout)
+	}
+	tickets := statusDoc(t, dir, 0)["tickets"].([]any)
+	gated, plain := tickets[0].(map[string]any), tickets[1].(map[string]any)
+	if gated["docker_need_mib"] != float64(2048) || gated["vm_wait"] != true {
+		t.Errorf("gated ticket %v; want docker_need_mib 2048 and vm_wait true", gated)
+	}
+	if _, ok := plain["docker_need_mib"]; ok || plain["vm_wait"] != nil {
+		t.Errorf("plain ticket %v carries a Docker key", plain)
+	}
+}
+
+// status reads the Docker part of each hold and ticket from their bodies: without --docker it runs
+// no program and opens no socket, whatever a hold or ticket carries. Mutation: status running
+// `docker` (the stand-in on PATH) to show a gated hold leaves its mark.
+func TestStatusRunsNoProgram(t *testing.T) {
+	dir := budgetDir(t, 8192)
+	g := hold(t, openLib(t, dir), "gate", 384)
+	if err := g.UpdateHold(func(h *wire.Hold) { h.DockerNeedMiB, h.DockerGrowthMiB = 2048, 3072 }); err != nil {
+		t.Fatal(err)
+	}
+	bin, mark := t.TempDir(), filepath.Join(t.TempDir(), "ran")
+	for _, name := range []string{"docker", "sh", "ps"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n/usr/bin/touch "+mark+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := append(baseEnv(dir), "PATH="+bin)
+	for _, args := range [][]string{{"status"}, {"status", "--json"}} {
+		if r := cli(t, env, args...); r.code != 0 {
+			t.Fatalf("%v exited %d: %s", args, r.code, r.stderr)
+		}
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Error("status ran a program")
 	}
 }
 
