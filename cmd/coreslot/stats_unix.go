@@ -126,7 +126,7 @@ func statsCommand(args []string, io IO) int {
 	for _, s := range l.stats {
 		fmt.Fprintf(&b, "%s  %d %s\n", text(s.Label), s.Runs, plural(int64(s.Runs), "run", "runs"))
 		line("window", s.Span())
-		line("need", needText(s.NeedMiB))
+		line("need", needText(s.NeedMiB, s.PeakNeedMiB))
 		line("waited", fmt.Sprintf("%.0fs", s.WaitedS))
 		line("current", currentText(l.needs, s.Label))
 	}
@@ -137,12 +137,16 @@ func statsCommand(args []string, io IO) int {
 	return 0
 }
 
-// needText is the need learned from a window, as the needs file would pin it.
-func needText(mib int64) string {
-	if mib == 0 {
+// needText is the need learned from a window and, as the needs file would pin it, the need its
+// peaks alone give; a need below that is the level the runs sustain, and says so.
+func needText(needMiB, peakNeedMiB int64) string {
+	switch {
+	case peakNeedMiB == 0:
 		return "nothing measured"
+	case needMiB < peakNeedMiB:
+		return fmt.Sprintf("%s sustained (mem = %q)", spec.FormatMiB(needMiB), spec.NeedText(peakNeedMiB))
 	}
-	return fmt.Sprintf("%s (mem = %q)", spec.FormatMiB(mib), spec.NeedText(mib))
+	return fmt.Sprintf("%s (mem = %q)", spec.FormatMiB(peakNeedMiB), spec.NeedText(peakNeedMiB))
 }
 
 func currentText(f needs.File, label string) string {
@@ -181,7 +185,7 @@ type jsonLabelStats struct {
 	FirstNS    int64        `json:"first_ns"`
 	LastNS     int64        `json:"last_ns"`
 	MemPeakKiB *int64       `json:"mem_peak_kib"`
-	Need       *string      `json:"need"` // the need learned from the window
+	Need       *string      `json:"need"` // the need the needs file would pin, learned from the window's peaks
 	WaitedS    float64      `json:"waited_s"`
 	Current    *jsonCurrent `json:"current"` // null when the needs file has no entry
 }
@@ -200,8 +204,8 @@ func writeStatsJSON(io IO, l learned) error {
 		if s.MemPeakKiB > 0 {
 			j.MemPeakKiB = &s.MemPeakKiB
 		}
-		if s.NeedMiB > 0 {
-			j.Need = new(spec.NeedText(s.NeedMiB))
+		if s.PeakNeedMiB > 0 {
+			j.Need = new(spec.NeedText(s.PeakNeedMiB))
 		}
 		e, ok, err := l.needs.Lookup(s.Label)
 		switch {
