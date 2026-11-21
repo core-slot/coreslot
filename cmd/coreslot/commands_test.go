@@ -1424,7 +1424,8 @@ func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
 		want         string
 	}{
 		{"current format", understoodFormat, true, false, kept},
-		{"upgrade", fmt.Sprintf("coreslot-protocol %d\n", store.UpgradedFormat), true, false, kept},
+		{"upgrade from 4", "coreslot-protocol 4\n", true, false, kept},
+		{"upgrade from 3", "coreslot-protocol 3\n", true, false, kept},
 		{"no FORMAT", "", true, false, kept},
 		{"current format without a log", understoodFormat, false, false, none},
 		{"format 2", "coreslot-protocol 2\n", true, false, other},
