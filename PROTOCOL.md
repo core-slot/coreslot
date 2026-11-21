@@ -1046,7 +1046,7 @@ know the request ignores it. A reader of a hold, admission and the watchdog incl
 > show `trimmed`, and says what the hold reserves; a run that does not answer in time is not a
 > refusal. The run reads `trim.json` at each tick, after it has measured, until it finds a request
 > for its hold, and from then on writes, for the rest of the attempt, `need_mib = A` until the
-> attempt's window of readings is full and then `max(1, min(A, recent + m))`: `A` the need asked,
+> attempt's window of readings is full and then `min(A, recent + m)`: `A` the need asked,
 > `recent` the largest reading of the window, the newest included, and `m = max(256 MiB, A / 10)`.
 > A reading is one listing of the tree that succeeded (section 20, every 1 s), and the window spans
 > `[watch] trim_window_s` (section 5.3) of them, counted from the attempt's start, so a trimmed hold
@@ -1651,7 +1651,7 @@ It leaves the section and reads the hold outside it, every 0.25 s.
 
 Pid 6500's next tick, at 12:20:01, measures 640 MiB and finds the request. Its window is full: the
 hold is far older than a minute. The margin is `max(256, 4096 / 10) = 409` MiB, so it reserves
-`max(1, min(4096, 700 + 409)) = 1109` MiB. It rewrites its hold in place:
+`min(4096, 700 + 409) = 1109` MiB. It rewrites its hold in place:
 
 ```json
 {"label": "pool:a", "pid": 6500, "start_ns": 1791719000000000000,

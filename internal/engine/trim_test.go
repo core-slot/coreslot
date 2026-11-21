@@ -172,25 +172,3 @@ func TestGrantTrimRequested(t *testing.T) {
 		t.Error("a request found in a malformed trim.json")
 	}
 }
-
-// A snapshot's hold carries its id, the need it asked for and its trimmed mark. Mutation:
-// leaving AskedMiB or Trimmed out of info() reads them as zero.
-func TestHolderInfoCarriesAskedAndTrimmed(t *testing.T) {
-	dir := newStateDir(t, "")
-	e := newEngine(t, dir, newFakeClock())
-	g := hold(t, e, need(256))
-	if err := g.UpdateHold(func(h *wire.Hold) { h.NeedMiB, h.AskedMiB, h.Trimmed = 100, 256, true }); err != nil {
-		t.Fatal(err)
-	}
-	r, err := e.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(r.Holds) != 1 {
-		t.Fatalf("holds %+v; want one", r.Holds)
-	}
-	h := r.Holds[0]
-	if h.ID != holdID(t, g).String() || h.NeedMiB != 100 || h.AskedMiB != 256 || !h.Trimmed {
-		t.Errorf("hold %+v; want id %s, need 100, asked 256, trimmed", h, holdID(t, g))
-	}
-}

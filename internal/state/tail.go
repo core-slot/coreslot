@@ -37,8 +37,8 @@ func (t *Tail) Add(footprintMiB int64) {
 }
 
 // Need is what the hold reserves: the need asked until the window holds as many readings as it
-// spans, then max(1, min(asked, recent + Margin(asked))), recent the largest reading in the
-// window, the newest included.
+// spans, then min(asked, recent + Margin(asked)), recent the largest reading in the window, the
+// newest included.
 func (t *Tail) Need() int64 {
 	if t.n < len(t.readings) {
 		return t.asked
@@ -49,7 +49,7 @@ func (t *Tail) Need() int64 {
 	}
 	m := Margin(t.asked)
 	if recent > t.asked-m { // recent + m would reach the need asked, or overflow
-		return max(1, t.asked)
+		return t.asked
 	}
-	return max(1, recent+m)
+	return recent + m
 }

@@ -71,16 +71,6 @@ func TestTailNeverAboveAsked(t *testing.T) {
 	}
 }
 
-// TestTailNeverZero: a full window never yields less than 1, whatever its readings. Only a
-// reading far below zero brings recent + margin under 1, so the case carries one. Mutation:
-// dropping max(1, …) gives -744 after the reading of -1000.
-func TestTailNeverZero(t *testing.T) {
-	tail := NewTail(1, 1)
-	if got, want := addAll(tail, 0, 5000, -1000), []int64{1, 1, 1}; !equalNeeds(got, want) {
-		t.Errorf("needs = %v; want %v", got, want)
-	}
-}
-
 // TestTailRisesAtOnce: a reading counts in the Need that follows its Add, so the reservation
 // rises in the same tick as the footprint. Mutation: leaving the newest reading out of recent (the
 // largest seen before the Add) gives 500 instead of 3400.
@@ -95,9 +85,11 @@ func TestTailRisesAtOnce(t *testing.T) {
 
 // FuzzTail: for any need asked, window and readings, the need stays within 1 and the need asked,
 // and once the window is full it covers the newest reading plus the margin, up to the need asked.
+// The first two seeds fill their window (asked 4000 over 3, asked 1 over 1). Mutation: Need
+// returning 0 once the window is full → red on the seeds.
 func FuzzTail(f *testing.F) {
-	f.Add(int64(4000), 3, []byte{0, 0, 0, 100, 0, 0, 3, 132, 0, 0, 0, 200})
-	f.Add(int64(1), 1, []byte{255, 255, 255, 255})
+	f.Add(int64(3999), 2, []byte{0, 0, 0, 100, 0, 0, 3, 132, 0, 0, 0, 200})
+	f.Add(int64(0), 0, []byte{255, 255, 255, 255})
 	f.Add(int64(1<<30), 120, []byte{})
 	f.Fuzz(func(t *testing.T, asked int64, window int, data []byte) {
 		asked = 1 + int64(uint64(asked)%(1<<30))

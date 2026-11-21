@@ -118,8 +118,8 @@ func TestNoPerGrantCap(t *testing.T) {
 			return config.Machine{MemMiB: 32768, HeadroomMiB: 20000, HeadroomOK: true}, nil
 		},
 		newFakeClock().clock())
-	if bound, over, _, _ := e.Oversized(40960); bound != 31744 || !over {
-		t.Errorf("Oversized(40960) = %d, %v; want 31744, true", bound, over)
+	if s := e.ReadRunStart(40960); s.BoundMiB != 31744 || !s.Over {
+		t.Errorf("ReadRunStart(40960) = %d, %v; want 31744, true", s.BoundMiB, s.Over)
 	}
 	tk := enqueue(t, e, spec.Request{NeedMiB: 40960})
 	body, err := e.readBody(store.QueueDir, tk.Name())
@@ -136,8 +136,8 @@ func TestNoPerGrantCap(t *testing.T) {
 }
 
 // With the headroom unreadable nothing gates an oversized need, so it is not reported as waiting for
-// idle. Mutation: drop HeadroomOK from Oversized → red.
-func TestOversizedNeedsAReading(t *testing.T) {
+// idle. Mutation: drop HeadroomOK from ReadRunStart → red.
+func TestReadRunStartNeedsAReading(t *testing.T) {
 	dir := newStateDir(t, "")
 	st, err := store.Open(dir)
 	if err != nil {
@@ -146,8 +146,8 @@ func TestOversizedNeedsAReading(t *testing.T) {
 	e := New(st, filepath.Join(dir, store.ConfigFile),
 		func() (config.Machine, error) { return config.Machine{MemMiB: 32768}, nil },
 		newFakeClock().clock())
-	if _, over, _, _ := e.Oversized(40960); over {
-		t.Errorf("Oversized(40960) with no headroom = true, want false")
+	if e.ReadRunStart(40960).Over {
+		t.Errorf("ReadRunStart(40960) with no headroom: Over = true, want false")
 	}
 }
 

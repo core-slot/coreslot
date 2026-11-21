@@ -240,7 +240,8 @@ func TestTrimByLabelAmbiguous(t *testing.T) {
 // following; the hold ended before an answer; or no answer, which is not a refusal. A container
 // hold adds what is not measured. Mutations: take a lowered need_mib as the answer instead of
 // trimmed → the case that sets trimmed alone gets "has not answered yet", red; read a hold that is
-// gone as no answer → "ended" gets "has not answered yet", red.
+// gone as no answer → "ended" gets "has not answered yet", red; leave Trimmed out of the
+// snapshot's hold (engine's info) → every answered case gets "has not answered yet", red.
 func TestTrimAnswers(t *testing.T) {
 	const asked = 4000
 	lowered := func(h *wire.Hold) { h.Trimmed, h.AskedMiB, h.NeedMiB, h.FootprintMiB = true, asked, 600, 200 }

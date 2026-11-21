@@ -318,7 +318,7 @@ func TestEnqueueLine(t *testing.T) {
 }
 
 // A need above what the machine can ever give says so on its enqueue. Mutation: ordinary not
-// keeping Oversized's answer leaves false.
+// keeping ReadRunStart's Over leaves false.
 func TestEnqueueSaysOversized(t *testing.T) {
 	dir := recordedDir(t, 512)
 	if r := cli(t, baseEnv(dir), "run", "--restart=yes", "--mem", "999999G", "--", "true"); r.code != 0 {
@@ -801,9 +801,9 @@ func TestOffCallsNothing(t *testing.T) {
 	}
 }
 
-// Oversized gives the switch from its one reading. Mutations: a second reading counts 2; a failed
-// read reporting the switch as on reddens the last row.
-func TestOversizedReadsOnce(t *testing.T) {
+// ReadRunStart gives the switch from its one reading. Mutations: a second reading counts 2; a
+// failed read reporting the switch as on reddens the last row.
+func TestReadRunStartReadsOnce(t *testing.T) {
 	for _, c := range []struct {
 		name, cfg string
 		fail      bool
@@ -827,7 +827,7 @@ func TestOversizedReadsOnce(t *testing.T) {
 				}
 				return config.Machine{MemMiB: 1024, HeadroomMiB: 512, HeadroomOK: true}, nil
 			}, engine.Clock{})
-			if _, _, got, _ := e.Oversized(1); got != c.want {
+			if got := e.ReadRunStart(1).Telemetry; got != c.want {
 				t.Errorf("telemetry %v, want %v", got, c.want)
 			}
 			if reads != 1 {
@@ -1772,7 +1772,7 @@ func TestNestedIndependentNeverConnects(t *testing.T) {
 }
 
 // [docker] enabled = false, read once at the run's start, keeps a container run with telemetry on
-// from opening the socket at all. Mutation: Oversized not reporting it, or the run not keeping it,
+// from opening the socket at all. Mutation: ReadRunStart not reporting it, or the run not keeping it,
 // connects and writes a containers line.
 func TestDisabledDockerRunNeverConnects(t *testing.T) {
 	docker := sleepingDocker(t)

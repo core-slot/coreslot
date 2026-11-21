@@ -169,12 +169,6 @@ func (e *Engine) ReadRunStart(needMiB int64) RunStart {
 	return s
 }
 
-// Oversized is ReadRunStart's bound, its verdict and its two switches, from the same one reading.
-func (e *Engine) Oversized(needMiB int64) (boundMiB int64, over, telemetry, dockerOn bool) {
-	s := e.ReadRunStart(needMiB)
-	return s.BoundMiB, s.Over, s.Telemetry, s.DockerOn
-}
-
 // refuseFormat is the refusal of a write into a state directory whose FORMAT names format n,
 // which this client does not implement: it matches ErrRefused and is a *store.FormatError, and
 // suffix ends its message.
