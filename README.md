@@ -307,6 +307,7 @@ coreslot report            # the last 7 days: runs, waits, memory stops, heavies
 coreslot doctor            # state directory, filesystem, permissions, format, readings, forwarders still serving
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
 coreslot move <ticket-id> --first   # or --last, --before <id>, --after <id>; changes its place, keeps its run
+coreslot trim <hold-id>       # or: coreslot trim --label L; a running job reserves what it uses
 ```
 
 **`--restart=yes|no` is required** wherever coreslot could stop the command: when memory runs
@@ -345,6 +346,25 @@ reaches only the command's pid, as in a terminal: signal the group, not coreslot
 **Run a pipeline under one `coreslot run`.** The stages of `a | b` run at the same time: write
 `coreslot run --restart=yes --label gate:pipe -- sh -c 'a | b'` so that they are one command with one need. The
 `--label` matters here: without it the pipeline is labelled `sh@proj`, like every other `sh -c`.
+
+**Lower a running job's reservation by hand.** A job reserves what it asked for until it ends,
+even when it uses far less, and the queue waits on what it may still grow into. `coreslot trim
+<hold-id>`, with the id `coreslot status` shows at the end of the job's line, asks the job's own
+`coreslot run` to reserve what the job has used lately (its largest reading of the last minute, or
+of `[watch] trim_window_s`) plus a margin of a tenth of its need, at least 256 MiB, instead of what
+it asked for. A job younger than that window keeps what it asked for until it is that old, and the
+reservation rises again as the job grows, never above what it asked for. It raises the room and
+nothing more: it does not change the queue's order, and nothing is admitted past the room. The
+job's run must be a coreslot that knows the request; an older one never answers, and `trim` says
+so. It is your call and your risk: if the job grows back and memory runs short, a stop round stops
+the newest restartable job, which may be another one. There is no undo: a trim holds until the
+job's attempt ends, and a job that is stopped and restarted comes back untrimmed, with its full
+need. For a container command the reservation follows the client's own memory, not its
+containers'. Exit status 75 means nothing was written; `trim` also exits 0 when the run never
+answers. Any process of yours can trim any of your jobs, and the job's own session learns of it
+from the one line its `coreslot run` prints. `status` marks such a job `trimmed` and shows
+`(asked …)` beside what it reserves; `status --json` has each hold's `id`, `asked_mib` and
+`trimmed`.
 
 ### What it did: `coreslot report`
 
@@ -385,6 +405,7 @@ reserve = "1G"        # memory kept free beyond every need
 [watch]
 mode = "enforce"      # "observe": everything but the kill
 sample_log = false    # deprecated, use [telemetry]; true: machine samples only
+trim_window_s = 60    # 2 to 3600: the seconds of use a trimmed job's reservation follows
 
 [telemetry]
 enabled = false       # true: keep a local record of what each run waited for

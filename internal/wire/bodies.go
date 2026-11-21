@@ -52,6 +52,8 @@ type Hold struct {
 	NoCPUS                       int64   // optional: how long the tree has used next to no CPU, in s
 	DockerNote                   string  // optional: why the run's Docker work has no forwarder or is not counted
 	DockerFootprintMiB           *int64  // optional: the growth of the run's containers since its first touch, 0 included; nil when not counted
+	AskedMiB                     int64   // optional: the need the hold was admitted with, 0 when NeedMiB is it
+	Trimmed                      bool    // optional: the holder acted on a request to trim it (trim.json)
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -99,6 +101,8 @@ type holdJSON struct {
 	NoCPUS             int64   `json:"no_cpu_s,omitempty"`
 	DockerNote         string  `json:"docker_note,omitempty"`
 	DockerFootprintMiB *int64  `json:"docker_footprint_mib,omitempty"`
+	AskedMiB           int64   `json:"asked_mib,omitempty"`
+	Trimmed            bool    `json:"trimmed,omitempty"`
 }
 
 type cancelJSON struct {
@@ -208,8 +212,8 @@ func (h Hold) validate() error {
 		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS, h.CPUNS, h.NoCPUS) < 0 {
 		return malformed("pid, stops and every time are at least 0")
 	}
-	if h.NeedMiB < 0 || h.NeedMiB > spec.MaxNeedMiB || h.FootprintMiB < 0 || h.FootprintMiB > spec.MaxNeedMiB {
-		return malformed("need_mib and footprint_mib are in [0, %d]", spec.MaxNeedMiB)
+	if min(h.NeedMiB, h.FootprintMiB, h.AskedMiB) < 0 || max(h.NeedMiB, h.FootprintMiB, h.AskedMiB) > spec.MaxNeedMiB {
+		return malformed("need_mib, footprint_mib and asked_mib are in [0, %d]", spec.MaxNeedMiB)
 	}
 	if !(h.NormalShare >= 0 && h.NormalShare <= 1) || !(h.StallEWMA >= 0 && h.StallEWMA <= 1) {
 		return malformed("normal_share and stall_ewma are in [0, 1]")
@@ -296,7 +300,7 @@ func DecodeHold(body []byte) (Hold, error) {
 	if h.NoCPUS, err = optional(o, "no_cpu_s", o.int64); err != nil {
 		return Hold{}, err
 	}
-	if h.Container, err = optional(o, "container", o.boolean); err != nil {
+	if h.AskedMiB, err = optional(o, "asked_mib", o.int64); err != nil {
 		return Hold{}, err
 	}
 	if h.DockerNote, err = optional(o, "docker_note", o.str); err != nil {
@@ -308,6 +312,14 @@ func DecodeHold(body []byte) (Hold, error) {
 			return Hold{}, err
 		}
 		h.DockerFootprintMiB = &f
+	}
+	for _, f := range []struct {
+		key string
+		dst *bool
+	}{{"container", &h.Container}, {"trimmed", &h.Trimmed}} {
+		if *f.dst, err = optional(o, f.key, o.boolean); err != nil {
+			return Hold{}, err
+		}
 	}
 	for _, f := range []struct {
 		key string

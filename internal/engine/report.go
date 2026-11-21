@@ -8,11 +8,14 @@ import (
 // HolderInfo describes one live hold as a waiter or a snapshot sees it.
 type HolderInfo struct {
 	Name         string // the hold's file name
+	ID           string // its first three fields: what a request to trim names
 	Label        string // the holder's label, unescaped: escape it before printing
 	PID          int    // the owner's pid
 	StartNS      int64  // wall clock at admission
 	ArrivalNS    int64  // wall clock at the run's first arrival in the queue
 	NeedMiB      int64  // what the hold reserves; 0 for a run outside the budget
+	AskedMiB     int64  // the need it was admitted with, when its body says; 0 when NeedMiB is it
+	Trimmed      bool   // its run acted on a request to trim it
 	FootprintMiB int64  // what its run last measured
 	Stops        int
 	Container    bool  // container work: its containers' memory is not measured unless DockerFootprintMiB is set

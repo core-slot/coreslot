@@ -101,6 +101,9 @@ type run struct {
 	marked   bool        // a counted run of the label's window was container work
 	fw       engagement  // whether the run gets a forwarder: docker.Engage, once before it queues
 	fwd      *forwarder  // the engaged run's forwarder, from its first admission
+	// trimWindowS is [watch] trim_window_s from the run's start: the window of a trimmed hold of
+	// any of its attempts.
+	trimWindowS int64
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -161,14 +164,15 @@ func (r *run) ordinary(nested bool) int {
 		return exitUsage
 	}
 	req := r.o.request()
-	bound, over, recording, dockerOn := e.Oversized(req.NeedMiB)
-	r.sockets, r.dockerOff = docker.Features(runtime.GOOS, dockerOn, environ(), r.loc.home, nested)
-	if over {
+	start := e.ReadRunStart(req.NeedMiB)
+	r.sockets, r.dockerOff = docker.Features(runtime.GOOS, start.DockerOn, environ(), r.loc.home, nested)
+	r.trimWindowS = start.TrimWindowS
+	if start.Over {
 		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when no other coreslot job runs",
-			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(bound))
+			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(start.BoundMiB))
 	}
-	if recording {
-		r.record.arm(r, bound)
+	if start.Telemetry {
+		r.record.arm(r, start.BoundMiB)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

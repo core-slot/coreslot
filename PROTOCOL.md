@@ -7,7 +7,8 @@ contract between a run and the command it starts. Memory is the only resource. A
 from this document alone, in any language, shares one memory budget and one watchdog with every
 other conforming client on the machine.
 
-Format 3 is format 2 with the order overrides of `order/` (sections 7.12, 9 and 13.3); a reset
+Format 3 is format 2 with the order overrides of `order/` (sections 7.12, 9 and 13.3) and the trim
+requests of `trim.json` with a hold's two optional keys (sections 7.13 and 12.5); a reset
 upgrades a format-2 directory in place, keeping its run log (section 4.4).
 
 Format 3's names, bodies and layout are never redefined once released: a release that needs
@@ -53,6 +54,7 @@ Every shared file, field, environment variable and transition of format 3, and w
 | `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) |
 | `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
 | `watch.json` | file | [7.11](#711-watchjson), [23](#23-the-watchdog) |
+| `trim.json` | file | [7.13](#713-trimjson), [12.5](#125-trim) |
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
@@ -81,6 +83,7 @@ Every shared file, field, environment variable and transition of format 3, and w
 | refresh | transition | [10.2](#102-refresh-and-stalled), example [21.2](#212-refresh) |
 | admission | transition | [12](#12-admission), example [21.3](#213-admission) |
 | level gate | transition | [12.4](#124-the-level-gate), example [21.8](#218-tick-and-level) |
+| trim | transition | [12.5](#125-trim), example [21.10](#2110-trim) |
 | tick | transition | [23.1](#231-the-tick), example [21.8](#218-tick-and-level) |
 | stop round | transition | [23.5](#235-stop-rounds), example [21.9](#219-stop-round-and-restart) |
 | restart | transition | [24](#24-restart-of-a-stopped-run), example [21.9](#219-stop-round-and-restart) |
@@ -217,6 +220,7 @@ FORMAT           metadata format (section 7.6)
 admit.lock       the admission lock (section 7.7); never deleted, semantics fixed for every format
 gen              {"gen": n, "reconciled_ns": t} (section 7.8)
 watch.json       the shared watchdog state (section 7.11)
+trim.json        requests to trim live holds (section 7.13); optional
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
@@ -275,11 +279,12 @@ The directory is not a cache: liveness is decided by locks. Deleting or resettin
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
 process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/` and
-`order/` (an override names a waiting ticket, and none survives), `gen`, `watch.json`, `degraded`
+`order/` (an override names a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`, `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
 format 3. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 3, or format 2 (an upgrade: format 3 only adds `order/`), or is missing
+When `FORMAT` names format 3, or format 2 (an upgrade: format 3 only adds `order/`, `trim.json` and two
+optional keys of a hold), or is missing
 (which the first client writes as 3, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
 learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
@@ -357,6 +362,7 @@ floor = "2G"          # a size
 calm_s = 10           # the waits of sections 12.4 and 23.5, in seconds
 post_kill_s = 15
 spacing_s = 3
+trim_window_s = 60    # the Go CLI's: the seconds of readings a trimmed hold follows (section 12.5)
 
 [platform]
 windows_warning = false   # default true (section 16)
@@ -375,7 +381,10 @@ enabled = true        # false: read no Docker socket (a client's display of Dock
   `calm_s`, `post_kill_s` and `spacing_s`, numbers not below 0, where 0 waits not at all. A key that
   is absent takes the release's default. The defaults and
   the values of the examples are not part of the format: a minor release may change them
-  (introduction).
+  (introduction). `trim_window_s` is the Go CLI's own key (section 12.5): a number of seconds from
+  2 to 3600, rounded up to a whole second, default 60. Unlike its neighbours it is lenient: any
+  other value reads as the default, with a warning where the configuration is shown, and never
+  makes the configuration invalid. No admission reads it, and another client may ignore it.
 - `[platform]`: `windows_warning`, a boolean.
 - `[telemetry]`: `enabled`, a boolean, default `false`. With `true` the machine samples of
   `sample_log` are taken too, while `sample_log = true` alone takes samples and records nothing
@@ -535,7 +544,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `pid` | integer | `≥ 0`; equal to the name's pid |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns |
 | `arrival_ns` | integer | `≥ 0`; when the run first arrived in the queue, also after a restart (section 24) |
-| `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB: the need asked; `0` for a run outside the budget (section 14), which reserves nothing |
+| `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB. It is the need asked when the hold is published; its holder MAY rewrite it afterwards to any value from 1 to the need asked (section 12.5). `0` for a run outside the budget (section 14), which reserves nothing |
 | `typical_s` | integer | optional; `≥ 0`; the run's typical run time in seconds (section 10.3), as it learned it when it started; `0` when it has none |
 | `stops` | integer | `≥ 0`; how often the run was stopped for memory before this attempt |
 | `footprint_mib` | integer | `0..1073741824`; the run's footprint as it last measured it; `0` when not measured |
@@ -550,6 +559,8 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `stall_ewma` | number | optional; `0..1`; its share `S` (section 23.3) smoothed over its ticks with a time constant of 10 s: the first tick's `S`, then `S̃ ← S̃ + (1 − e^(−p / 10 s)) (S − S̃)` for a tick period `p` |
 | `container` | boolean | optional; `true` once the run is container work (section 23.5); absent means `false`, and a writer omits it then |
 | `no_cpu_s` | integer | optional; `≥ 0`; how long its process tree has used next to no CPU, in seconds of the machine's awake time: 300 for each whole 5-minute window in a row in which each tick's listing (section 23.1) read at least one process of the tree and showed none that the tick before had not (a child born and reaped between two ticks leaves no time a tick sees, so a tree that keeps making processes never counts, and a wait loop that forks, such as `until nc -z db 5432; do sleep 1; done`, is never marked), so that an attempt's first window never counts either, the tree's `d_user_ns`, `d_sys_ns` and `d_page_wait_ns` together came to under 1 % of the window, and no container client (section 23.5) was in the tree at the window's end; a writer omits it below 1800. It informs `status` alone, which shows it only on a running hold (section 23.3): a wait that is not stuck, such as a slow network read, looks the same, and so does work outside the tree or in a part of it that cannot be read (a container whose client has closed, a build daemon, a child run as another user), so nothing else reads it and it never makes a hold dead or a victim |
+| `asked_mib` | integer | optional; `0..1073741824`; the need asked, written with `trimmed` by a holder that acted on a request to trim its hold (section 12.5); absent means `0`, which says that `need_mib` is the need asked, and a writer omits it then. No admission reads it |
+| `trimmed` | boolean | optional; `true` once the holder acted on a request to trim its hold (section 12.5): `need_mib` then follows its footprint; absent means `false`, and a writer omits it then. No admission reads it |
 | `docker_footprint_mib` | integer | optional; `0..1073741824`; while the run's forwarder sees its containers (section 17), how much they have grown since the run first touched each, as the run's last sample of them read it (section 23.1), `0` included; absent for a run without a forwarder, before its forwarder relays a first connection, and once the run has lost sight of them. It informs `status` alone |
 | `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `address` or `start` (section 17), or `ungated: blind` once a run with a forwarder has lost sight of its containers. Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
 
@@ -564,8 +575,9 @@ A hold is published with `stops`, `footprint_mib`, the three deltas, `normal_sha
 the run writes `stops`, `victim`, `normal_share`, `learned`, `typical_cpu_s` and a container
 command's `container`, which hold for the attempt, except that finding a client in its tree clears
 `victim` and sets `container` (section 23.5). Each tick (section 23.1) writes the measured keys,
-`cpu_ns` and `stall_ewma` among them, and `docker_footprint_mib` and `docker_note` as the run's
-Docker part stands, which the first write after the command's start carries too. Only
+`cpu_ns` and `stall_ewma` among them, `docker_footprint_mib` and `docker_note` as the run's Docker part
+stands, which the first write after the command's start carries too, and, once the holder has acted
+on a request to trim its hold, `need_mib`, `asked_mib` and `trimmed` (section 12.5). Only
 the holder writes its body, at publication and then in place: one write at offset 0
 of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
 their inode and the file never shrinks (I1). It keeps `label`, `pid` and
@@ -611,9 +623,9 @@ admission (12.1), publication of an unbudgeted hold (14), and removal of the
 client's own ticket after cancellation or withdrawal (13) or of its own hold (12.3); the resume bump
 of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
 removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
-itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `admit.lock` or the run log, nor the
-holder's rewrite of its own hold's body. A crash can separate a removal from its bump, so a reader
-never relies on a bump to learn that an entry is gone (section 10.3).
+itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `admit.lock` or the run
+log, nor the holder's rewrite of its own hold's body. A crash can separate a removal from its
+bump, so a reader never relies on a bump to learn that an entry is gone (section 10.3).
 
 ### 7.9 degraded
 
@@ -674,6 +686,32 @@ counted: its ticket keeps its name's order-key. An override is replaced, never e
 a temporary file and renames it over the name with a plain `rename` (section 11), so a reader sees
 the old body or the new one, never part of either. An override whose ticket is gone orders nothing
 and is removed by reconciliation (section 10.4).
+
+### 7.13 trim.json
+
+`$S/trim.json` holds the requests to trim live holds (section 12.5). It is optional: a client that
+asks for no trim writes none, and its absence is normal. It is one JSON object:
+
+```json
+{"holds": {"01791719000000000000-0000006500-000002": {}}}
+```
+
+| Key | Type | Content |
+|---|---|---|
+| `holds` | object | one request per hold, by the hold's id: the first three fields of its name (section 7.1) |
+| `holds.<id>` | object | the request; it carries nothing, and a writer writes `{}` |
+
+It is not a strict body. A missing file, one above 64 KiB, and one that is not a JSON object with
+an object under `holds` read as no request. Within `holds`, an entry whose key is not a hold id or
+whose value is not an object is skipped alone, and the others still count. Keys inside an entry and
+unknown keys are ignored. The file itself is checked as in section 4.2.
+
+It is written only inside the section and replaced with a plain `rename` (section 11), without a
+`gen` bump: no admission reads it. A writer adds the entry of the hold it asks for and keeps the
+ids of the other holds whose names `holds/` lists (it need not keep the keys inside their entries);
+it drops the rest. An entry of a hold that has ended therefore stays until a request is written
+once `holds/` no longer lists it, or a reset (section 4.4); nobody reads it. A rewrite that would
+make the file larger than 64 KiB is not written. A holder reads it outside the section, for its own hold's id (section 23.1).
 
 ## 8. The admission critical section
 
@@ -852,7 +890,8 @@ the examination are counted without being examined.
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
 client that enters the section for any purpose other than admission
-(enqueue, cancellation publication, a move, removal of its own ticket or hold, a resume bump,
+(enqueue, cancellation publication, a move, a trim request, removal of its own ticket or hold, a resume
+bump,
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
 reconcile before its own change. Writing a missing `FORMAT` (section 8) is part of whichever entry
@@ -880,7 +919,7 @@ whole machine.
 ## 11. Atomic publication
 
 Inside the section, a publication of a ticket, hold, cancel request, order override, `gen`, `FORMAT`,
-`degraded` or `watch.json`:
+`degraded`, `watch.json` or `trim.json`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
    target's directory; on `EEXIST` (a young leftover of an earlier process with the same pid) the
@@ -899,8 +938,8 @@ Inside the section, a publication of a ticket, hold, cancel request, order overr
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
      already requested, which is not an error (section 13.1);
-   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`: with a plain `rename`, which
-     replaces an existing file.
+   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`: with a plain `rename`,
+     which replaces an existing file.
 
 The writer keeps its original descriptor: writing the body never closes the only lock-carrying
 descriptor. Temporary files are created only inside the section. A writer whose publication fails
@@ -971,8 +1010,8 @@ the reserve. With the headroom known, such a request starts only under the idle 
 is live, a start no container request behind it takes (section 12.1). While its remaining growth,
 the need less its footprint, exceeds the headroom less the reserve, no later ordinary request starts
 beside it; a container request may.
-The hold's `need_mib` is the need asked, and so is `CORESLOT_GRANTED_MEM`. A CLI run says so once,
-before it queues, when the headroom is known.
+The hold's `need_mib` is published as the need asked, and `CORESLOT_GRANTED_MEM` is the need
+asked. A CLI run says so once, before it queues, when the headroom is known.
 
 ### 12.3 After the command exits
 
@@ -1023,6 +1062,34 @@ A **restarted** run (section 24) that finds a hold live first takes its part in 
 fresh sample, the level green, the level calm for `calm_s` (`host_now − calm_since_ns ≥ calm_s`),
 and, when the headroom is known, a room of at least its need plus `max(256 MiB, need / 10)`. With
 no hold live, the idle rule starts it like any other.
+
+### 12.5 Trim
+
+A client MAY ask the holder of a live hold to lower its reservation, by writing a request for the
+hold's id into `trim.json` (section 7.13) inside the section. The request changes no body, moves no
+ticket and admits nothing: whatever room it frees is taken in order, as any room is (section 12.1).
+
+A holder that finds a request for its own hold MAY lower its `need_mib` (section 7.4), and rewrite
+it at every tick after (section 23.1). It MUST NOT raise `need_mib` above the need asked, nor write
+0; a holder that lowers it SHOULD write `asked_mib` and `trimmed` with it. A holder that does not
+know the request ignores it. A reader of a hold, admission and the watchdog included, takes
+`need_mib` as it finds it. A request names one hold, and so one attempt: a restarted run (section
+24) comes back under a new hold that no request names.
+
+> **Implementation note.** `coreslot trim <hold-id>`, or `coreslot trim --label LABEL` for the one
+> live hold reserving memory with that label, writes the request (its exit statuses are section
+> 19's; a live hold whose body does not parse is not refused), then waits outside the section
+> (section 22) for the hold to show `trimmed` and says what the hold reserves. From the tick that
+> finds the request (section 23.1) to the attempt's end, the run writes `need_mib = A` until the
+> attempt's window of readings is full and then `min(A, recent + m)`: `A` the need asked,
+> `recent` the largest reading of the window, the newest included, and `m = max(256 MiB, A / 10)`.
+> A reading is one listing of the tree that succeeded (section 20, every 1 s); the window spans
+> `[watch] trim_window_s` (section 5.3) of them, counted from the attempt's start. A command that
+> grows past its reservation, or a machine that runs short meanwhile, is the watchdog's: stop
+> rounds take the newest victims as section 23.5 has them, which may be another run's command. A
+> trimmed run that is stopped comes back (section 24) with the need it had at its start or the
+> stopped attempt's peak, whichever is larger, under a new hold that is not trimmed. For container
+> work the reservation follows the client's own memory alone (section 23.5).
 
 ## 13. Cancellation and withdrawal
 
@@ -1124,9 +1191,9 @@ A client that finds no `FORMAT` writes `coreslot-protocol 3` inside the section.
 
 A state directory whose format is not 3 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
-writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json` or `admit.lock`
-body), and its run fails open (section 14) with one notice that names the format and `coreslot doctor
---reset`; under `--strict` it refuses with that notice. The decision is made at
+writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json` or
+`admit.lock` body), and its run fails open (section 14) with one notice that names the format and
+`coreslot doctor --reset`; under `--strict` it refuses with that notice. The decision is made at
 every section entry from the `FORMAT` read there (section 8).
 
 A waiting client reads `FORMAT` at every section entry; one that finds the format changed under
@@ -1134,20 +1201,21 @@ it closes its ticket's descriptor, so the ticket is dead at once, and fails open
 remove the file: that would be a write into a format it does not implement.
 
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
-another format a client publishes no cancel request or unbudgeted hold, records and clears no
+another format a client publishes no cancel request, trim request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
 runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 3
 when nothing of either format is live, the other format's run log removed with the rest, except a
 format-2 directory's, which the upgrade keeps (section 4.4).
 
-> **Implementation note.** The Go CLI refuses cancellation and `doctor --clear` under another
-> format, with the same notice.
+> **Implementation note.** The Go CLI refuses cancellation, a trim and `doctor --clear` under
+> another format, with the same notice.
 
 ## 16. Windows
 
 The CLI runs the command without a budget and prints one warning per run; `[platform]
-windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel` and `doctor`
-exit 70 on Windows (there is no budget to inspect, cancel or repair), and their `--help` exits 0.
+windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel`, `trim` and
+`doctor` exit 70 on Windows (there is no budget to inspect, cancel, trim or repair), and their
+`--help` exits 0.
 There is no watchdog on Windows.
 
 ## 17. Descriptor and environment contract
@@ -1159,7 +1227,7 @@ places them above. It sets this environment:
 
 | Variable | Value |
 |---|---|
-| `CORESLOT_GRANTED_MEM` | the memory the run reserves, in MiB: its need, also for a run outside the budget |
+| `CORESLOT_GRANTED_MEM` | the memory the run asked for, in MiB: its need, also for a run outside the budget; it stays the need asked when the hold is trimmed (section 12.5) and reserves less |
 | `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor, which is always fd 3 |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 | `CORESLOT_TELEMETRY` | `1`, for a run that is recording (section 5.3); absent otherwise, an inherited value included |
@@ -1271,7 +1339,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1279,8 +1347,8 @@ itself.
 | 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusal of `--clear` is 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
-`status` exits 3, `doctor` exits 1 and `cancel` refuses with 75. `--help` prints on stdout and exits
-0 for every command. A command's own exit 75 is its status like any other: the run prints no marker
+`status` exits 3, `doctor` exits 1 and `cancel` and `trim` refuse with 75. `--help` prints on
+stdout and exits 0 for every command. A command's own exit 75 is its status like any other: the run prints no marker
 for it, and only a give-up (section 24.2) prints one.
 
 ## 20. Run log
@@ -1381,7 +1449,8 @@ defaults to `fail`, so a `--timeout` that expires refuses; with `run` an ordinar
 outside the budget, while a restart (section 24) refuses whatever `--on-timeout` says. Strict mode
 is `--strict`; `--refusal-code` defaults to 75. The other
 commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
-`coreslot cancel --label LABEL`, `coreslot doctor [--clear] [--reset]`,
+`coreslot cancel --label LABEL`, `coreslot trim <hold-id>`, `coreslot trim --label LABEL`,
+`coreslot doctor [--clear] [--reset]`,
 `coreslot stats [--label LABEL] [--json]`, `coreslot report [--days N] [--json]` and
 `coreslot version`.
 
@@ -1629,6 +1698,64 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
    After a third stop the run prints `coreslot: gave up after 3 memory stops (run <hold>)`, naming
    the hold of its third attempt, and exits 75.
 
+### 21.10 Trim
+
+At 12:20:00 (`1791721200000000000`) pid 6500 holds 4 096 MiB for `pool:a`, admitted at 11:43:20;
+its tree uses 640 MiB, and its largest reading of the last minute was 700 MiB. Pid 7300's
+`gate:big`, enqueued at 12:19:00 with a need of 3 072 MiB, is head. The headroom reads 5 120 MiB,
+so the room is `5120 − 1024 − max(0, 4096 − 640) = 640` MiB and the head waits (section 12.1).
+
+Before:
+
+```
+gen                                                   {"gen": 80, "reconciled_ns": ...}
+queue/01791721140000000000-0000007300-000003-gate_big [L]
+holds/01791719000000000000-0000006500-000002-pool_a   [L]
+watch.json                                            (sampled 0.8 s ago, level green)
+```
+
+Pid 8100 runs `coreslot trim 01791719000000000000-0000006500-000002`, the id `coreslot status`
+shows on the hold's line. Inside the section it finds the hold live, reserving 4 096 MiB, with
+`child_exited` false. It writes `$S/.tmp-0000008100-000001` and renames it over `trim.json`, which
+did not exist, without a `gen` bump (section 7.13):
+
+```json
+{"holds": {"01791719000000000000-0000006500-000002": {}}}
+```
+
+It leaves the section and reads the hold outside it, every 0.25 s.
+
+Pid 6500's next tick, at 12:20:01, measures 640 MiB and finds the request. Its window is full: the
+hold is far older than a minute. The margin is `max(256, 4096 / 10) = 409` MiB, so it reserves
+`min(4096, 700 + 409) = 1109` MiB. It rewrites its hold in place:
+
+```json
+{"label": "pool:a", "pid": 6500, "start_ns": 1791719000000000000,
+ "arrival_ns": 1791719000000000000, "need_mib": 1109, "stops": 0, "footprint_mib": 640,
+ "d_user_ns": 1200000000, "d_sys_ns": 100000000, "d_page_wait_ns": 0, "normal_share": 0.04,
+ "sampled_ns": 1791721201000000000, "victim": true, "learned": true, "child_exited": false,
+ "asked_mib": 4096, "trimmed": true}
+```
+
+Pid 8100 reads `trimmed`, prints `coreslot: pool:a reserves 1.1 GiB now (asked 4 GiB) and follows
+what it uses` and exits 0. At its next admission attempt (section 22) the head computes the room
+again, with no `gen` bump to wait for: `5120 − 1024 − max(0, 1109 − 640) = 3627` MiB, and its 3 072
+MiB fit. The stored sample is fresh and green, so it publishes its hold, unlinks its ticket, bumps
+`gen` and leaves.
+
+After:
+
+```
+gen                                                   {"gen": 81, "reconciled_ns": ...}
+trim.json                                             (the request: its hold is still listed)
+holds/01791719000000000000-0000006500-000002-pool_a   [L]
+holds/01791721202000000000-0000007300-000004-gate_big [L]
+```
+
+Every later tick of pid 6500 writes the window's need again: if `pool:a` grows, its reservation
+rises with it, up to 4 096 MiB, and the room falls; a shortage that follows is a stop round's
+(section 23.5).
+
 ## 22. Timing constants
 
 | Constant | Value |
@@ -1649,6 +1776,9 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
 | stored sample | the period's below 1.5 s; fresh up to 6 s; a gap above 6 s or a 1 s clock skew |
 | restart | gives up after 3 stops; margin `max(256 MiB, need / 10)` |
 | stall share smoothing | time constant 10 s (`stall_ewma`) |
+| trim window (CLI) | `[watch] trim_window_s` of readings, 60 s by default |
+| trim answer (CLI) | waited for up to 8 s, read every 0.25 s outside the section |
+| trim section entry (CLI) | within 1 s, else refused |
 | a forwarder's ready report | within 2 s of its start |
 | a run's containers (macOS) | sampled every third tick (6 s), off the tick, under one 2 s deadline per sample; at most 256 per run, a 257th makes the run blind |
 | the tap | reads a request or response head of at most 64 KiB; a longer one makes the run blind |
@@ -1683,7 +1813,10 @@ start until it exits, in both modes of section 23.6. Each tick:
    dies, its tap loses track of a connection, a reference cannot be resolved, or a 257th container
    appears.
    `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s` hold for the attempt: the run
-   writes them once, when its command starts, before its first tick.
+   writes them once, when its command starts, before its first tick. For a hold that reserves
+   memory it also reads `trim.json` (section 7.13), outside the section, until it finds a request
+   for its hold; once it has, a run that acts on it writes `need_mib`, `asked_mib` and `trimmed`
+   (section 12.5) in every rewrite of the attempt.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short
    bound leaves its part of that period to the others) and reads `watch.json`. If the stored sample
    is at least 1.5 s old (a period less a quarter, so that runs ticking every 2 s never leave the

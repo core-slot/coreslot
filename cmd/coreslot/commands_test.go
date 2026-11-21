@@ -228,7 +228,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("holds = %v", holds)
 	}
 	h := holds[0].(map[string]any)
-	const holdKeys = "arrival_ns footprint_mib held_for_s label left_s name need_mib owner_exited pid start_ns stoppable stops typical_s"
+	const holdKeys = "arrival_ns asked_mib footprint_mib held_for_s id label left_s name need_mib owner_exited pid start_ns stoppable stops trimmed typical_s"
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}
@@ -2016,7 +2016,7 @@ func TestStatusShowsNoCPU(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("status exited %d (stderr %q)", r.code, r.stderr)
 	}
-	if strings.Count(r.stdout, "  no CPU for ") != 1 || !strings.Contains(r.stdout, "  no CPU for 2h10m\n") {
+	if strings.Count(r.stdout, "  no CPU for ") != 1 || !strings.Contains(r.stdout, "  no CPU for 2h10m  id ") {
 		t.Errorf("status does not say no CPU for 2h10m once:\n%s", r.stdout)
 	}
 	for _, h := range statusDoc(t, dir, 0)["holds"].([]any) {

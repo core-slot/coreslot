@@ -637,7 +637,7 @@ func TestOwnerExitedHoldHeldByDescendant(t *testing.T) {
 	}
 	const marker = "  owner exited, held by a descendant"
 	if out := cli(t, baseEnv(dir), "status").stdout; !strings.Contains(out, fmt.Sprintf("pid %d  mem 256 MiB  held ", cmd.Process.Pid)) ||
-		!strings.Contains(out, marker+"\n") {
+		!strings.Contains(out, marker+"  id ") {
 		t.Errorf("status lacks the hold of pid %d with %q:\n%s", cmd.Process.Pid, marker, out)
 	}
 	holds := statusDoc(t, dir, 0)["holds"].([]any)

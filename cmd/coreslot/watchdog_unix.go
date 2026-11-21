@@ -11,6 +11,7 @@ import (
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/telemetry"
 	"github.com/core-slot/coreslot/internal/watch"
@@ -78,7 +79,9 @@ var listClient = memsample.ContainerClient
 // stop from then on, and the next tick's hold update clears its Victim. The scan stays under a
 // forwarder, for a client that bypasses it. The scan needs a log, the one reader that outlives the
 // hold: a pass-through has none. An engaged run starts a sample of its containers every third tick,
-// and every hold write carries the last sample done.
+// and every hold write carries the last sample done. A hold that reserves memory keeps a window over
+// the listings that succeeded from the attempt's start; once a tick finds a request to trim it in
+// trim.json, every later tick writes the window's need into the hold, never above the need asked.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
@@ -88,6 +91,14 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	var noCPU noCPUMeter
 	smoothed := false
 	p.container = r.o.containerCommand()
+	var tail *state.Tail // the attempt's readings; nil for a run that reserves nothing
+	var trim struct {
+		found bool // a request names the hold: it holds for the attempt
+		said  bool // a write of the trimmed need succeeded and the run said so
+	}
+	if g != nil && g.GrantMiB() > 0 {
+		tail = state.NewTail(g.GrantMiB(), int(time.Duration(r.trimWindowS)*time.Second/memSampleEvery))
+	}
 	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
 		r.hold = g.HoldName()
 		r.updateHold(st, g, func(h *wire.Hold) {
@@ -107,6 +118,9 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			p.sumKiB, p.samples = p.sumKiB+kib, p.samples+1
 			if !p.ok || kib > p.kib {
 				p.kib, p.ok = kib, true
+			}
+			if tail != nil { // a listing that failed is no reading
+				tail.Add(kib >> 10)
 			}
 		}
 		if r.fwd != nil {
@@ -147,14 +161,30 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			// sample done.
 			go r.fwd.part.sample(ctx, r.fwd.upstream)
 		}
-		if !r.updateHold(st, g, func(h *wire.Hold) {
+		// The request is read after the tick has measured, until one is found.
+		if tail != nil && !trim.found {
+			trim.found = g.TrimRequested()
+		}
+		var need int64
+		if trim.found {
+			need = tail.Need()
+		}
+		wrote := r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, noCPUS
 			h.SampledNS, h.DockerNote, h.DockerFootprintMiB = store.NowNS(), r.dockerNote(), r.dockerFootprint()
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
 			}
-		}) {
+			if trim.found { // every update, as the footprint it follows
+				h.NeedMiB, h.AskedMiB, h.Trimmed = need, g.GrantMiB(), true
+			}
+		})
+		if wrote && trim.found && !trim.said {
+			trim.said = true
+			r.sayTrimmed(g, need, kib>>10)
+		}
+		if !wrote {
 			continue
 		}
 		det, err := g.Tick(ctx)
@@ -168,6 +198,14 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			return true, p
 		}
 	}
+}
+
+// sayTrimmed says that the attempt's hold now reserves needMiB, lowered by hand with `coreslot
+// trim`, and follows its command's footprint, and records it: once, at the first write of it.
+func (r *run) sayTrimmed(g *engine.Grant, needMiB, footprintMiB int64) {
+	r.notice("the reservation of %s was lowered by hand with coreslot trim: it follows what the command uses, up to the %s it asked for (%s now)",
+		commandText(r.o.argv), spec.FormatMiB(g.GrantMiB()), spec.FormatMiB(needMiB))
+	r.record.trimmed(g.HoldName(), g.GrantMiB(), needMiB, footprintMiB)
 }
 
 // keptNotice says so when det's last round kept the hold, unless the round at lastNS, the last

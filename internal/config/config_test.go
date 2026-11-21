@@ -305,3 +305,40 @@ func TestDockerEnabledNonBooleanIsOffWithWarning(t *testing.T) {
 		t.Errorf("the warning %q does not name [docker] enabled", c.Warnings[0])
 	}
 }
+
+// [watch] trim_window_s is a number of seconds from 2 to 3600, rounded up to a whole second;
+// absent, it is 60. Any other value is read leniently, as [docker] enabled is: the window is 60
+// with one warning that names the key, and Load does not fail. Mutations: accepting 1 reddens the
+// row for 1; returning a message for a wrong value makes Load fail for every invalid row.
+func TestTrimWindowConfig(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want int64
+		warn bool
+	}{
+		{"", 60, false},
+		{"[watch]\n", 60, false},
+		{"[watch]\ntrim_window_s = 30\n", 30, false},
+		{"[watch]\ntrim_window_s = 2\n", 2, false},
+		{"[watch]\ntrim_window_s = 2.5\n", 3, false},
+		{"[watch]\ntrim_window_s = 3600\n", 3600, false},
+		{"[watch]\ntrim_window_s = 1\n", 60, true},
+		{"[watch]\ntrim_window_s = 0\n", 60, true},
+		{"[watch]\ntrim_window_s = -5\n", 60, true},
+		{"[watch]\ntrim_window_s = 3601\n", 60, true},
+		{"[watch]\ntrim_window_s = nan\n", 60, true},
+		{"[watch]\ntrim_window_s = \"30\"\n", 60, true},
+		{"[watch]\ntrim_window_s = true\n", 60, true},
+	} {
+		c, err := Load(writeConfig(t, tc.body))
+		if err != nil {
+			t.Errorf("Load(%q): %v; want no error", tc.body, err)
+			continue
+		}
+		warned := len(c.Warnings) == 1 && strings.Contains(c.Warnings[0], "trim_window_s") && strings.Contains(c.Warnings[0], "60 s")
+		if c.TrimWindowS != tc.want || warned != tc.warn || (!tc.warn && len(c.Warnings) != 0) {
+			t.Errorf("Load(%q) = window %d, warnings %q; want %d, a warning naming trim_window_s and 60 s: %v",
+				tc.body, c.TrimWindowS, c.Warnings, tc.want, tc.warn)
+		}
+	}
+}

@@ -92,7 +92,7 @@ One line per machine sample, written by whichever run takes the sample.
 | `headroom_mib` | the headroom admission read |
 | `headroom_ok` | whether `headroom_mib` is a reading; when false, its 0 is not one |
 | `reserve_mib` | the reserve admission used |
-| `jobs` | the running, freshly ticked holds: `hold`, `label`, `arrival_ns`, `need_mib`, `footprint_mib`, the time deltas `d_user_ns`, `d_sys_ns`, `d_page_wait_ns`, `share` (null when the job reported no time), `normal_share`, `learned`, `victim`, `cpu_ns`, `typical_cpu_s`, `typical_s`, `stall_ewma` |
+| `jobs` | the running, freshly ticked holds: `hold`, `label`, `arrival_ns`, `need_mib`, `footprint_mib`, the time deltas `d_user_ns`, `d_sys_ns`, `d_page_wait_ns`, `share` (null when the job reported no time), `normal_share`, `learned`, `victim`, `cpu_ns`, `typical_cpu_s`, `typical_s`, `stall_ewma`. A job's `need_mib` is what its hold reserves at the sample, which may move during the hold's life once a `coreslot trim` lowered it ([`trim`](#trim)) |
 | `stop` | present on the sample that wrote a stop round: the holds it lists |
 | `wired`, `compressor`, `internal`, `free`, `speculative`, `purgeable`, `external` | macOS, MiB, from their own read, a moment after the paging counters: wired, compressor-held, anonymous and file-backed pages, and free ones as the host reports them, speculative pages included. Absent when the read failed |
 | `pressure_level` | macOS: the kernel's memory pressure, 1 normal, 2 warning, 4 critical |
@@ -161,7 +161,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `room_mib` | the room the person's line shows: at least 0; for a container waiter the real free memory |
 | `level` | the detector's level; absent with no sample |
 | `read_age_ms` | the age of that sample; absent with no sample |
-| `holders` | up to 16 live holds, those with the most left to grow into first: `hold`, `need_mib`, `footprint_mib`, `child_exited`, `owner_exited`, `sample_age_ms` (absent when never sampled) |
+| `holders` | up to 16 live holds, those with the most left to grow into first: `hold`, `need_mib`, `footprint_mib`, `child_exited`, `owner_exited`, `sample_age_ms` (absent when never sampled). A holder's `need_mib` is what it reserves now, which may move during a trimmed hold's life |
 
 ### `admitted`
 
@@ -287,3 +287,16 @@ holds that round spared); the candidates are the `jobs` with `victim`. A red or 
 sample that wrote none has `no_round`: `post_kill` (the last round is inside `post_kill_s`),
 `listed_alive` (a hold it listed still runs as a victim) or `nobody_stoppable` (a round that had
 no one to list).
+
+### `trim`
+
+Written once per attempt, when the run first writes into its hold that it acted on a `coreslot trim`
+request ([`PROTOCOL.md` section 12.5](../PROTOCOL.md#125-trim)). What the hold reserves after that
+is on the samples' `jobs`.
+
+| key | meaning |
+|---|---|
+| `hold` | the hold's name |
+| `asked_mib` | the need the hold was admitted with |
+| `need_mib` | what the hold reserves from that write: `asked_mib` while the attempt's window of readings is not yet full |
+| `footprint_mib` | the tree's footprint at that tick |

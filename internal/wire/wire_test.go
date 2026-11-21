@@ -468,7 +468,7 @@ func TestLargestBodiesFit(t *testing.T) {
 	h := Hold{Label: lbl, PID: math.MaxInt, StartNS: math.MaxInt64, ArrivalNS: math.MaxInt64, NeedMiB: spec.MaxNeedMiB,
 		TypicalS: math.MaxInt64, Stops: math.MaxInt, FootprintMiB: spec.MaxNeedMiB, DUserNS: math.MaxInt64, DSysNS: math.MaxInt64,
 		DPageWaitNS: math.MaxInt64, NormalShare: 1, SampledNS: math.MaxInt64, Victim: true, Learned: true, ChildExited: true,
-		Container: true}
+		Container: true, AskedMiB: spec.MaxNeedMiB, Trimmed: true}
 	b, err := Encode(h)
 	if err != nil {
 		t.Fatalf("largest hold refused: %v", err)
@@ -530,6 +530,35 @@ func TestHoldContainerKey(t *testing.T) {
 	}
 	if back, err := DecodeHold(b); err != nil || back != h {
 		t.Errorf("a marked hold reads back as %+v, %v; want %+v", back, err, h)
+	}
+}
+
+// A hold that was never trimmed encodes neither asked_mib nor trimmed, so that its body is the bytes
+// a client without the keys writes; a trimmed one writes both and reads back the same. Mutation:
+// dropping omitempty from either key writes "asked_mib":0 or "trimmed":false into every hold.
+func TestHoldTrimKeys(t *testing.T) {
+	old := `{"label":"x","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":4000,"stops":0,"footprint_mib":0,` +
+		`"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"normal_share":0,"sampled_ns":0,"victim":true,"learned":false,"child_exited":false}`
+	h, err := DecodeHold([]byte(old))
+	if err != nil || h.AskedMiB != 0 || h.Trimmed {
+		t.Fatalf("a hold without the keys: %+v, %v; want AskedMiB 0 and Trimmed false", h, err)
+	}
+	b, err := Encode(h)
+	if err != nil || string(b) != old {
+		t.Errorf("an untrimmed hold encodes to %s, %v; want the same bytes as %s", b, err, old)
+	}
+	h.NeedMiB, h.AskedMiB, h.Trimmed = 600, 4000, true
+	b, err = Encode(h)
+	if err != nil || !bytes.HasSuffix(b, []byte(`"child_exited":false,"asked_mib":4000,"trimmed":true}`)) {
+		t.Fatalf("a trimmed hold encodes to %s, %v", b, err)
+	}
+	if back, err := DecodeHold(b); err != nil || back != h {
+		t.Errorf("a trimmed hold reads back as %+v, %v; want %+v", back, err, h)
+	}
+	for _, refused := range []Hold{{AskedMiB: -1}, {AskedMiB: spec.MaxNeedMiB + 1}} {
+		if b, err := Encode(refused); err == nil {
+			t.Errorf("Encode accepted asked_mib %d: %s", refused.AskedMiB, b)
+		}
 	}
 }
 
@@ -714,7 +743,7 @@ func TestLargestFixtureMatchesEncode(t *testing.T) {
 		t.Errorf("largest hold encodes to %s, the fixture is %s", enc, body)
 	}
 	if h.Label != largestLabel(t) || h.NeedMiB != spec.MaxNeedMiB || h.FootprintMiB != spec.MaxNeedMiB ||
-		h.TypicalS != math.MaxInt64 {
+		h.TypicalS != math.MaxInt64 || h.AskedMiB != spec.MaxNeedMiB || !h.Trimmed {
 		t.Errorf("fixture is not the largest hold: %+v", h)
 	}
 }

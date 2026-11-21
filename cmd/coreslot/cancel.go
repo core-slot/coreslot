@@ -53,7 +53,7 @@ func cancelCommand(args []string, io IO) int {
 
 	e, err := openEngine(locate(), true)
 	if err != nil {
-		return cancelFailed(err, io)
+		return commandFailed("cancel", err, io)
 	}
 	if !e.Store().Exists() { // nothing has run, so nothing waits; do not create the directory for it
 		fmt.Fprintln(io.Stderr, "coreslot: cancel: no state directory yet (nothing has run), so no ticket is waiting")
@@ -82,7 +82,7 @@ func cancelCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: cancel refused: %s; no cancel request was published\n", sectionBusyText(e, cancelWait))
 		return exitRefusal
 	default:
-		return cancelFailed(err, io)
+		return commandFailed("cancel", err, io)
 	}
 }
 
@@ -123,9 +123,6 @@ func sectionBusyText(e *engine.Engine, waited time.Duration) string {
 	}
 	return s
 }
-
-// cancelFailed reports an error that kept cancel from publishing its request (commandFailed).
-func cancelFailed(err error, io IO) int { return commandFailed("cancel", err, io) }
 
 // commandFailed reports an error that kept verb (cancel, move) from publishing its file. A refusal
 // of the engine and a state error (PROTOCOL.md section 14: the directory or its configuration
