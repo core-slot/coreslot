@@ -351,3 +351,39 @@ func TestHungEngineNeverStallsTick(t *testing.T) {
 		}
 	})
 }
+
+// The selected context is DOCKER_CONTEXT, else config.json's currentContext under DOCKER_CONFIG,
+// else under the home directory's .docker; a missing or unparsable file selects none. Mutation:
+// ignore DOCKER_CONFIG → the "config dir" row reads the home's file, red.
+func TestSelectedContext(t *testing.T) {
+	home, cfg := t.TempDir(), t.TempDir()
+	for dir, body := range map[string]string{filepath.Join(home, ".docker"): `{"currentContext":"home-ctx"}`, cfg: `{"auths":{},"currentContext":"cfg-ctx"}`} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bad, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+		home string
+		want string
+	}{
+		{"variable", map[string]string{"DOCKER_CONTEXT": "env-ctx", "DOCKER_CONFIG": cfg}, home, "env-ctx"},
+		{"config dir", map[string]string{"DOCKER_CONFIG": cfg}, home, "cfg-ctx"},
+		{"home", map[string]string{}, home, "home-ctx"},
+		{"missing", map[string]string{"DOCKER_CONFIG": t.TempDir()}, home, ""},
+		{"unparsable", map[string]string{"DOCKER_CONFIG": bad}, home, ""},
+		{"no home", map[string]string{}, "", ""},
+	} {
+		if got := selectedContext(c.env, c.home); got != c.want {
+			t.Errorf("%s: selectedContext = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

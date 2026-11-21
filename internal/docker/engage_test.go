@@ -3,6 +3,7 @@
 package docker_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,6 +143,30 @@ func TestEngageNoReferenceSocket(t *testing.T) {
 	engage(t, "no reference, DOCKER_HOST naming it", in, "", docker.NoteUpstream)
 }
 
+// A context the user selected that is not Docker Desktop's withholds the forwarder, also under
+// docker_forward = true; none, default and desktop-linux do not, and the user's own DOCKER_HOST wins
+// over it, as it does in the CLI. Mutation: drop the context check → the "prod" rows engaged, red.
+func TestEngageSelectedContext(t *testing.T) {
+	f := newFiles(t)
+	for _, c := range []struct {
+		context, host string
+		forced        bool
+		wantNote      string
+	}{{"prod", "", false, docker.NoteContext}, {"prod", "", true, docker.NoteContext},
+		{"default", "", false, ""}, {"desktop-linux", "", false, ""}, {"prod", "unix://" + f.ref, false, ""}} {
+		in := good(f)
+		in.Context, in.UserHost = c.context, c.host
+		if c.forced {
+			in.Switch = yes()
+		}
+		want := f.ref
+		if c.wantNote != "" {
+			want = ""
+		}
+		engage(t, fmt.Sprintf("context %s, DOCKER_HOST %q, forced %v", c.context, c.host, c.forced), in, want, c.wantNote)
+	}
+}
+
 // A run without a Docker interest says nothing. Mutation: engage without
 // interest → upstream, red.
 func TestEngageNoInterestSilent(t *testing.T) {
@@ -153,7 +178,7 @@ func TestEngageNoInterestSilent(t *testing.T) {
 
 // Every note fits the hold's docker_note: at most 64 bytes of [a-z0-9:. -].
 func TestNoteWords(t *testing.T) {
-	notes := []string{docker.NoteNeedsEntry, docker.NoteSwitch, docker.NoteUpstream, docker.NoteAddress,
+	notes := []string{docker.NoteNeedsEntry, docker.NoteSwitch, docker.NoteUpstream, docker.NoteContext, docker.NoteAddress,
 		docker.NoteStart, docker.NoteBlind, docker.NoteNoReading, docker.NoteOversized}
 	for _, off := range []docker.Off{docker.OffConfig, docker.OffNested, docker.OffStateDir, docker.OffRemoteHost} {
 		notes = append(notes, docker.OffNote(off))

@@ -58,12 +58,12 @@ func newFwBed(t *testing.T, needs string, opts ...dockertest.Option) *fwBed {
 	}
 	budgetRoom.Store(b.dir, int64(1024))
 	b.fake = dockertest.HTTP(t, opts...)
-	for _, kv := range baseEnv(b.dir) {
-		if !strings.HasPrefix(kv, "DOCKER_HOST=") {
+	for _, kv := range baseEnv(b.dir) { // no Docker host, context or configuration of the machine's
+		if !strings.HasPrefix(kv, "DOCKER_HOST=") && !strings.HasPrefix(kv, "DOCKER_CONTEXT=") && !strings.HasPrefix(kv, "DOCKER_CONFIG=") {
 			b.env = append(b.env, kv)
 		}
 	}
-	b.env = append(b.env, "CORESLOT_TESTHOOK_DIR="+b.hooks, "CORESLOT_TESTHOOK_DOCKER_SOCKET="+b.fake.Sock,
+	b.env = append(b.env, "DOCKER_CONFIG="+t.TempDir(), "CORESLOT_TESTHOOK_DIR="+b.hooks, "CORESLOT_TESTHOOK_DOCKER_SOCKET="+b.fake.Sock,
 		"CORESLOT_TESTHOOK_HEADROOM_MIB=1024", "FWT="+b.work)
 	b.readings(calm(0))
 	return b

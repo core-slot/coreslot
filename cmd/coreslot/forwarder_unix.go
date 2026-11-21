@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -27,8 +28,8 @@ const (
 )
 
 // engagement is docker.Engage's answer for a run: the upstream of its forwarder when engaged, else
-// the note it carries ("" for a run that says nothing).
-type engagement struct{ upstream, note string }
+// the note it carries ("" for a run that says nothing) and, for NoteContext, the context it names.
+type engagement struct{ upstream, note, context string }
 
 // forwarder is a run's forwarder process, alive from its ready event: addr is the address the
 // command's DOCKER_HOST names, entry its directory, end the run's end of the pipe whose end ends it,
@@ -139,23 +140,50 @@ func (r *run) engage() {
 	if hook := testhooks.DockerSocket(); env[config.StateDirEnv] != "" && hook != "" {
 		ref = hook
 	}
+	selected := selectedContext(env, r.loc.home)
 	upstream, note := docker.Engage(docker.EngageInput{
 		Off:       r.dockerOff,
 		Interest:  r.o.containerCommand() || r.marked,
 		Switch:    r.entry.DockerForward,
 		EntryBad:  r.entryBad,
 		UserHost:  env["DOCKER_HOST"],
+		Context:   selected,
 		Reference: ref,
 	})
-	r.setEngagement(engagement{upstream: upstream, note: note})
+	r.setEngagement(engagement{upstream: upstream, note: note, context: selected})
+}
+
+// selectedContext is the Docker context the user selected: DOCKER_CONTEXT, else the currentContext
+// of $DOCKER_CONFIG/config.json (<home>/.docker/config.json); "" when none, or the file does not read.
+// A convenience against the user's own configuration: it only withholds a forwarder.
+func selectedContext(env map[string]string, home string) string {
+	if c := env["DOCKER_CONTEXT"]; c != "" {
+		return c
+	}
+	dir := env["DOCKER_CONFIG"]
+	if dir == "" {
+		if home == "" {
+			return ""
+		}
+		dir = filepath.Join(home, ".docker")
+	}
+	var c struct{ CurrentContext string }
+	if b, err := os.ReadFile(filepath.Join(dir, "config.json")); err != nil || json.Unmarshal(b, &c) != nil {
+		return ""
+	}
+	return c.CurrentContext
 }
 
 // setEngagement records the run's engagement and says its note once, unless the user turned the
 // forwarder off for the label with docker_forward = false: the hold still carries that note.
 func (r *run) setEngagement(fw engagement) {
 	r.fw = fw
-	if fw.note != "" && fw.note != docker.NoteSwitch {
-		r.notice("%s: the command's Docker work is not attributed to this run", fw.note)
+	said := fw.note // the hold's note stays a fixed word; the line names the context
+	if said == docker.NoteContext {
+		said += " " + text(fw.context)
+	}
+	if said != "" && said != docker.NoteSwitch {
+		r.notice("%s: the command's Docker work is not attributed to this run", said)
 	}
 }
 

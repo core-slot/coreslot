@@ -11,6 +11,7 @@ const (
 	NoteNeedsEntry = "no-forwarder: needs-entry" // the needs file does not load, or the label's entry does not parse
 	NoteSwitch     = "no-forwarder: switch"      // docker_forward = false
 	NoteUpstream   = "no-forwarder: upstream"    // the command's socket is not Docker Desktop's, or Docker is not running
+	NoteContext    = "no-forwarder: context"     // the user selected a Docker context other than Docker Desktop's
 	NoteAddress    = "no-forwarder: address"     // the forwarder's directory or address cannot be had
 	NoteStart      = "no-forwarder: start"       // the forwarder did not start
 	NoteBlind      = "ungated: blind"            // the run lost sight of its containers
@@ -26,13 +27,15 @@ func OffNote(off Off) string { return "no-forwarder: " + string(off) }
 // run; Interest that its label qualifies (a container command, a container mark in its window, a
 // Docker need); Switch the needs file's docker_forward (nil when absent); EntryBad that the needs
 // file does not load or the label's entry does not parse. UserHost is the user's DOCKER_HOST (""
-// when unset). Reference is Docker Desktop's own socket; a test names its fake engine.
+// when unset), Context the Docker context the user selected ("" for none). Reference is Docker
+// Desktop's own socket; a test names its fake engine.
 type EngageInput struct {
 	Off       Off
 	Interest  bool
 	Switch    *bool
 	EntryBad  bool
 	UserHost  string
+	Context   string
 	Reference string
 }
 
@@ -40,7 +43,8 @@ type EngageInput struct {
 // engaged. Otherwise note is the reason for a run with a Docker interest, and "" for a run without
 // one or on a platform without the features: such a run says nothing. The first reason wins: the
 // features off, a bad needs entry, docker_forward = false; then the upstream must be one socket, the
-// user's DOCKER_HOST or Docker Desktop's own, and the same file as Docker Desktop's. This withholds a
+// user's DOCKER_HOST or Docker Desktop's own, and the same file as Docker Desktop's; then, unless the
+// user set DOCKER_HOST, the selected context must be none, default or desktop-linux. This withholds a
 // forwarder; it never refuses a run.
 func Engage(in EngageInput) (upstream, note string) {
 	var why string
@@ -70,6 +74,9 @@ func Engage(in EngageInput) (upstream, note string) {
 	}
 	if !SameFile(upstream, in.Reference) {
 		return "", NoteUpstream
+	}
+	if in.UserHost == "" && in.Context != "" && in.Context != "default" && in.Context != "desktop-linux" {
+		return "", NoteContext
 	}
 	return upstream, ""
 }

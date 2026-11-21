@@ -562,7 +562,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `asked_mib` | integer | optional; `0..1073741824`; the need asked, written with `trimmed` by a holder that acted on a request to trim its hold (section 12.5); absent means `0`, which says that `need_mib` is the need asked, and a writer omits it then. No admission reads it |
 | `trimmed` | boolean | optional; `true` once the holder acted on a request to trim its hold (section 12.5): `need_mib` then follows its footprint; absent means `false`, and a writer omits it then. No admission reads it |
 | `docker_footprint_mib` | integer | optional; `0..1073741824`; while the run's forwarder sees its containers (section 17), how much they have grown since the run first touched each, as the run's last sample of them read it (section 23.1), `0` included; absent for a run without a forwarder, before its forwarder relays a first connection, and once the run has lost sight of them. It informs `status` alone |
-| `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `address` or `start` (section 17), or `ungated: blind` once a run with a forwarder has lost sight of its containers. Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
+| `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `context`, `address` or `start` (section 17), or `ungated: blind` once a run with a forwarder has lost sight of its containers. Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -1255,7 +1255,7 @@ process of its own (the CLI starts `coreslot forward` from its own executable, i
 its own) that relays every byte between the command and Docker's socket, and reads the stream only
 for the containers the command creates or touches (section 23.1). It keeps their references and
 nothing else of the stream, and logs none of it. A run is **engaged** when all of these hold; it
-judges the first four once, before it queues, and the last at its first admission, and the first
+judges the first five once, before it queues, and the last at its first admission, and the first
 condition that fails names its note (section 7.4):
 
 1. The Docker features are on: `[docker] enabled` is true (`config`, section 5.3), the run inherits
@@ -1270,7 +1270,13 @@ condition that fails names its note (section 7.4):
 4. The upstream, the socket the user's `DOCKER_HOST` names or else Docker Desktop's own
    `<home>/.docker/run/docker.sock`, is the same file as Docker Desktop's, by device and inode after
    following symlinks (`upstream`, also when Docker is not running).
-5. At the run's first admission, the forwarder's directory and an address of at most 96 bytes can
+5. Unless the user set `DOCKER_HOST`, which wins over a context in the CLI too, the context the user
+   selected is none, `default` or `desktop-linux` (`context`): `DOCKER_CONTEXT`, else the
+   `currentContext` of `config.json` in `DOCKER_CONFIG` or else `<home>/.docker`; a missing or
+   unparsable file selects none. coreslot starts no `docker` for it. This step is a convenience
+   against an accident of the user's own Docker configuration, not a control; it never refuses a
+   run, it only withholds the forwarder. The run's line names the context; the hold's note does not.
+6. At the run's first admission, the forwarder's directory and an address of at most 96 bytes can
    be had (`address`, section 4.4), and the forwarder starts and reports that it is ready within 2 s
    (`start`).
 

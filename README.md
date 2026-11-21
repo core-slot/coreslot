@@ -132,7 +132,8 @@ the memory of those containers, and `status` shows what they have grown by since
 touched them, as the hold's `docker footprint`. Such a run is container work from its first Docker
 connection, a library's included. A forwarder outlives its command while the command's background
 Docker connections stay open (`docker compose logs -f &`), and `coreslot doctor` lists it. A
-`DOCKER_HOST` that names another engine gives none. A run without a forwarder runs its command
+`DOCKER_HOST` that names another engine gives none, and so does a selected context other than
+`default` or `desktop-linux` (`docker context use`, `DOCKER_CONTEXT`), unless you set `DOCKER_HOST`. A run without a forwarder runs its command
 untouched and, with a Docker interest, says why once; `status` shows the reason as the hold's
 `docker:` note. `docker_forward = false` turns the forwarder off for a label, silently.
 
@@ -140,9 +141,8 @@ Under a forwarder a few things look different:
 
 - `docker context show` prints `default`, `docker context ls` warns that `DOCKER_HOST` overrides the
   context, and buildx names its builder `default` rather than `desktop-linux`, with the same driver.
-- A context selected with `docker context use`, before the run or during it, is not used, since
-  `DOCKER_HOST` wins over it: the command's Docker calls go to Docker Desktop. A label whose command
-  works against another engine through a context needs `docker_forward = false`.
+- A context the command selects during the run is not used by its later calls, since
+  `DOCKER_HOST` wins over it.
 - A command that reads `$DOCKER_HOST` sees a path in `~/.coreslot-fw`.
 - If the forwarder is killed, the run points the address straight at Docker at once, but the
   streams open at that moment end, as they would if Docker restarted.
