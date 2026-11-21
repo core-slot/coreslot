@@ -550,7 +550,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `stall_ewma` | number | optional; `0..1`; its share `S` (section 23.3) smoothed over its ticks with a time constant of 10 s: the first tick's `S`, then `S̃ ← S̃ + (1 − e^(−p / 10 s)) (S − S̃)` for a tick period `p` |
 | `container` | boolean | optional; `true` once the run is container work (section 23.5); absent means `false`, and a writer omits it then |
 | `no_cpu_s` | integer | optional; `≥ 0`; how long its process tree has used next to no CPU, in seconds of the machine's awake time: 300 for each whole 5-minute window in a row in which each tick's listing (section 23.1) read at least one process of the tree and showed none that the tick before had not (a child born and reaped between two ticks leaves no time a tick sees, so a tree that keeps making processes never counts, and a wait loop that forks, such as `until nc -z db 5432; do sleep 1; done`, is never marked), so that an attempt's first window never counts either, the tree's `d_user_ns`, `d_sys_ns` and `d_page_wait_ns` together came to under 1 % of the window, and no container client (section 23.5) was in the tree at the window's end; a writer omits it below 1800. It informs `status` alone, which shows it only on a running hold (section 23.3): a wait that is not stuck, such as a slow network read, looks the same, and so does work outside the tree or in a part of it that cannot be read (a container whose client has closed, a build daemon, a child run as another user), so nothing else reads it and it never makes a hold dead or a victim |
-| `docker_footprint_mib` | integer | optional; `0..1073741824`; while the run's forwarder sees its containers (section 17), how much they have grown since the run first touched each, as the run's last sample of them read it (section 23.1), `0` included; absent for a run without a forwarder and once the run has lost sight of them. It informs `status` alone |
+| `docker_footprint_mib` | integer | optional; `0..1073741824`; while the run's forwarder sees its containers (section 17), how much they have grown since the run first touched each, as the run's last sample of them read it (section 23.1), `0` included; absent for a run without a forwarder, before its forwarder relays a first connection, and once the run has lost sight of them. It informs `status` alone |
 | `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `address` or `start` (section 17), or `ungated: blind` once a run with a forwarder has lost sight of its containers. Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
@@ -1217,7 +1217,7 @@ already open, and exits when the last one closes. The run does not wait for it, 
 command left open in the background (`docker compose logs -f &`) keeps running, and `doctor` lists
 such a forwarder. A forwarder that dies first has its address swapped by the run at once, and the
 run stops counting its containers (`ungated: blind`). A relayed connection makes the run container
-work (section 23.5).
+work, as a client the run's scan finds does (section 23.5).
 
 On Linux a run SHOULD raise its own `oom_score_adj` to 500, never lowering a higher one, before it
 starts the command, which inherits it, so that the kernel's out-of-memory kill takes a coreslot
@@ -1858,9 +1858,9 @@ start. A stop in the window before the hit can still stop the run. A run outside
 ticking hold to mark and scans for its run-log line alone; a pass-through (section 18) writes no
 line and does not scan. The scan sees only the run's own tree, at its own pace: a client that
 connects by TCP, a call shorter than a second and a client outside the tree are not seen, and such
-work stays ordinary. A run with a forwarder (section 17) scans for no client: it is container work
-from the first connection its forwarder relays, which also sees a library client and a call shorter
-than a second.
+work stays ordinary. A run with a forwarder (section 17) scans as well, for a client that bypasses
+the forwarder, and is also container work from the first connection its forwarder relays, which
+sees a library client and a call shorter than a second too.
 
 > **Implementation note.** The Go CLI reads `p_comm` and, on macOS, the peer path of each unix
 > socket with `proc_pidfdinfo`. On Linux it reads the name in `/proc/PID/stat` alone: a client socket has no path

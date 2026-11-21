@@ -74,10 +74,11 @@ var listClient = memsample.ContainerClient
 // red round keeps it as nearly finished it says so, and when a stop round lists its hold, it kills
 // the command's group and returns stopped, or in observe mode says what it would stop. A command
 // named as a container client is container work from the start; any other is from the first
-// listing that finds a client in its tree: it takes no stop from then on, and the next tick's hold
-// update clears its Victim. The scan needs a log, the one reader that outlives the hold: a
-// pass-through has none. An engaged run starts a sample of its containers every third tick, and
-// every hold write carries the last sample done.
+// listing that finds a client in its tree, or from its forwarder's first connection: it takes no
+// stop from then on, and the next tick's hold update clears its Victim. The scan stays under a
+// forwarder, for a client that bypasses it. The scan needs a log, the one reader that outlives the
+// hold: a pass-through has none. An engaged run starts a sample of its containers every third tick,
+// and every hold write carries the last sample done.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
@@ -113,7 +114,8 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			if r.fwd.part.touching() { // off the watchdog's loop, as the sample is
 				go r.fwd.part.readTouches(r.fwd.upstream)
 			}
-		} else if !p.container && st != nil { // a forwarder's first connection replaces the scan
+		}
+		if !p.container && st != nil {
 			p.container = listClient(sup.pid)
 		}
 		if st != nil && n%telemetryTicks == 0 { // a pass-through's memory is its parent's, and it has no log

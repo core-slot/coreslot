@@ -402,6 +402,23 @@ func TestConnectionMarksContainerWork(t *testing.T) {
 	}
 }
 
+// A command that bypasses its forwarder, holding the engine's socket itself, is container work by
+// the client scan, as a run without a forwarder is: never a stop's victim, and its containers'
+// memory unmeasured (no Docker footprint). Mutation: the scan skipped under a forwarder keeps the
+// hold a victim.
+func TestBypassingClientIsContainerWork(t *testing.T) {
+	b := newFwBed(t, forced("fw"))
+	hold := `curl -sN --unix-socket "$ENGINE" http://docker/events > /dev/null & ` + saveHold + `kill $!; `
+	if r := b.run(t, "fw", hold, "ENGINE="+b.fake.Sock); r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	h := b.hold(t)
+	if _, fp := h["docker_footprint_mib"]; h["container"] != true || h["victim"] != false || fp {
+		t.Errorf("hold of a bypassing client: container %v, victim %v, docker_footprint_mib %v; want true, false, absent",
+			h["container"], h["victim"], h["docker_footprint_mib"])
+	}
+}
+
 // A docker_forward that is not a boolean gives a container command no forwarder, its note in the
 // hold and one notice of it; docker_forward = false gives the note in the hold and no notice, the
 // user having chosen it. Mutations: EntryBad left out of engage engages the run; setEngagement

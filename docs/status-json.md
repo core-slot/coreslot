@@ -157,7 +157,7 @@ The watchdog, from the newest shared sample.
 | `typical_s` | int | the label's typical run time; 0 when unknown |
 | `left_s` | int or null | what remains of `typical_s`, never below 0; null when `typical_s` is 0 |
 | `stoppable` | bool | where a reader may offer to stop the run |
-| `docker_footprint_mib` | int | present, 0 included, while its run counts its own containers through a forwarder (macOS): what they have grown by since the run first touched each |
+| `docker_footprint_mib` | int | present, 0 included, while its run counts its own containers through a forwarder (macOS), from the forwarder's first connection: what they have grown by since the run first touched each |
 | `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address` or `ungated: blind` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
 
 `left_s` of 0 on a hold that is still live means it has outlived its typical run time.

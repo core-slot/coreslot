@@ -33,13 +33,15 @@ type engagement struct{ upstream, note string }
 // forwarder is a run's forwarder process, alive from its ready event: addr is the address the
 // command's DOCKER_HOST names, entry its directory, end the run's end of the pipe whose end ends it,
 // events what its tap reports after ready (a line that does not parse is blind), exited is closed
-// once it has exited and been reaped, and part is what the events attribute to the run.
+// once it has exited and been reaped, connected is set from its first connection, and part is what
+// the events attribute to the run.
 type forwarder struct {
 	addr, upstream, entry string
 	cmd                   *exec.Cmd
 	end                   *os.File
 	events                <-chan relay.Event
 	exited                <-chan struct{}
+	connected             bool
 	part                  dockerPart
 }
 
@@ -233,7 +235,7 @@ func (r *run) forwarderEvents(p *peak) {
 				return
 			}
 			if e.Kind == relay.KindConnected {
-				p.container = true
+				r.fwd.connected, p.container = true, true
 			} else {
 				part.event(e)
 			}
@@ -255,10 +257,12 @@ func (r *run) dockerNote() string {
 	return r.fw.note
 }
 
-// dockerFootprint is the footprint the run's hold carries: its Docker part's while it is engaged
-// and not blind, 0 included, else none.
+// dockerFootprint is the footprint the run's hold carries: its Docker part's once its forwarder
+// relayed a connection and while it is not blind, 0 included, else none. Before that connection a
+// run that is container work, by a client that bypasses the forwarder, has its containers' memory
+// unmeasured.
 func (r *run) dockerFootprint() *int64 {
-	if r.fwd == nil || r.fwd.part.blind() {
+	if r.fwd == nil || !r.fwd.connected || r.fwd.part.blind() {
 		return nil
 	}
 	f := r.fwd.part.footprintMiB()
