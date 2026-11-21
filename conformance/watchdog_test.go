@@ -3,8 +3,10 @@
 package conformance
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -44,21 +46,26 @@ func (e Env) Learn(labels ...string) {
 	}
 }
 
-// WaitTicked waits until the run labelled label has written its tree into its hold, and returns
-// the hold's name. A body read torn by the run's rewrite in place (PROTOCOL.md section 7.4) is read
-// again.
+// WaitTicked waits until the run labelled label has written its tree into its hold and a shared
+// tick has stored a sample that lists the hold, and returns the hold's name. A run writes its hold
+// before its first shared tick, so a test that changes the readings or watch.json at once could
+// otherwise act before any sample exists. A body read torn by the run's rewrite in place
+// (PROTOCOL.md section 7.4) is read again.
 func (e Env) WaitTicked(label string) string {
 	e.t.Helper()
 	var name string
-	e.Eventually(startWait, label+" writes its tree into its hold", func() bool {
+	e.Eventually(startWait, label+" writes its tree into its hold and a sample lists it", func() bool {
 		h, ok := e.Hold(label)
 		name = h.Name
 		data, err := os.ReadFile(filepath.Join(e.Dir, store.HoldsDir, h.Name))
 		if !ok || err != nil {
 			return false
 		}
-		body, err := wire.DecodeHold(data)
-		return err == nil && body.SampledNS > 0
+		if body, err := wire.DecodeHold(data); err != nil || body.SampledNS == 0 {
+			return false
+		}
+		_, smp, at, err := e.Engine().Store().ReadWatch()
+		return err == nil && at > 0 && slices.Contains(smp.Live, name)
 	})
 	return name
 }
@@ -263,6 +270,9 @@ func TestKeptRunSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, smp, at, err := e.Engine().Store().ReadWatch()
+	if err == nil && smp.Host.WallNS == 0 { // a record of round 0 is never announced
+		err = errors.New("no stored sample to place the round at")
+	}
 	if err == nil {
 		round := smp.Host.WallNS
 		d.LastRoundNS, d.Stop = round, nil
