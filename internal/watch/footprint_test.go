@@ -72,7 +72,7 @@ func TestExcessFloorNeverRaisesE(t *testing.T) {
 	}
 }
 
-// A small busy tree does not hide a large tree's own stall: E is the large tree's 30, not the 11.5
+// A small busy tree whose own excess is higher leaves E at the large tree's 30, not the 11.5
 // a small tree with no excess but its weight would leave. Mutation: count small trees with no
 // excess but their weight → 11.5.
 func TestExcessSmallTreeHidesNoStall(t *testing.T) {
@@ -182,9 +182,11 @@ func TestKeepSubstituteReachesFloor(t *testing.T) {
 	}
 }
 
-// FuzzExcessFloorNeverRaises: for any jobs, E is at most the mean over every counted job.
+// FuzzExcessFloorNeverRaises: for any jobs, E is at most the mean over every counted job. Its seed
+// counts under plain go test: a learned 2 GiB job at S 0.5 over 1 s and a learned 24 MiB job at S 0
+// over 1 s, 25 points over both. Mutation: return the large trees' mean alone → 50 on the seed.
 func FuzzExcessFloorNeverRaises(f *testing.F) {
-	f.Add([]byte{0, 0, 0, 30, 0, 0, 7, 208, 0, 0, 0, 0, 20, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 200, 0, 0, 0, 0, 40, 1, 8, 0})
+	f.Add([]byte{0, 7, 161, 32, 0, 7, 161, 32, 0, 0, 0, 1, 0, 0, 8, 0, 0, 15, 66, 64, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 24})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var jobs []Job
 		for i := 0; i+16 <= len(data); i += 16 {
