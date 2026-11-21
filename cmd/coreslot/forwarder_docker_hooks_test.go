@@ -420,26 +420,43 @@ func TestBypassingClientIsContainerWork(t *testing.T) {
 }
 
 // A docker_forward that is not a boolean gives a container command no forwarder, its note in the
-// hold and one notice of it; docker_forward = false gives the note in the hold and no notice, the
-// user having chosen it. Mutations: EntryBad left out of engage engages the run; setEngagement
-// saying every note prints the switch's.
+// hold and one notice of it. A forwarder the user turned off, by docker_forward = false or
+// [docker] enabled = false, gives the note in the hold and no notice, also when another reason
+// comes first. Mutations: EntryBad left out of engage engages the run; setEngagement silencing only
+// the switch's note prints the remote-host and config rows.
 func TestBadDockerForwardNote(t *testing.T) {
 	b := newFwBed(t, "[needs.\"bad\"]\ndocker_forward = \"x\"\n[needs.\"off\"]\ndocker_forward = false\n")
 	command := filepath.Join(b.work, "docker")
 	if err := os.WriteFile(command, []byte("#!/bin/sh\n"+saveHost+saveHold+"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for label, want := range map[string]string{"bad": docker.NoteNeedsEntry, "off": docker.NoteSwitch} {
-		r := cli(t, b.env, "run", "--restart=yes", "--label", label, "--mem", "64M", "--", command)
+	for _, c := range []struct {
+		label, host, config, wantNote string
+		notices                       int
+	}{
+		{"bad", "", "", docker.NoteNeedsEntry, 1},
+		{"off", "", "", docker.NoteSwitch, 0},
+		{"off", "tcp://192.0.2.10:2376", "", docker.OffNote(docker.OffRemoteHost), 0},
+		{"plain", "", "[docker]\nenabled = false\n", docker.OffNote(docker.OffConfig), 0},
+	} {
+		env := b.env
+		if c.host != "" {
+			env = append(append([]string{}, b.env...), "DOCKER_HOST="+c.host)
+		}
+		if c.config != "" {
+			if err := os.WriteFile(filepath.Join(b.dir, "config.toml"), []byte("[memory]\nreserve = \"0\"\n[watch]\ncalm_s = 0\n"+c.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := cli(t, env, "run", "--restart=yes", "--label", c.label, "--mem", "64M", "--", command)
 		if r.code != 0 {
-			t.Fatalf("%s: exit %d: %s", label, r.code, r.stderr)
+			t.Fatalf("%s: exit %d: %s", c.wantNote, r.code, r.stderr)
 		}
-		wantNotices := map[string]int{"bad": 1, "off": 0}[label]
-		if count(r.stderr, "no-forwarder") != wantNotices || count(r.stderr, "needs file") != wantNotices {
-			t.Errorf("%s: want %d notes and needs-file notices:\n%s", label, wantNotices, r.stderr)
+		if count(r.stderr, "no-forwarder") != c.notices || count(r.stderr, "needs file") != c.notices {
+			t.Errorf("%s: want %d notes:\n%s", c.wantNote, c.notices, r.stderr)
 		}
-		if note := b.hold(t)["docker_note"]; note != want || strings.TrimSpace(b.file(t, "host")) != "" {
-			t.Errorf("%s: hold's docker_note %v, DOCKER_HOST %q; want %q and none", label, note, b.file(t, "host"), want)
+		if note := b.hold(t)["docker_note"]; note != c.wantNote || strings.TrimSpace(b.file(t, "host")) != c.host {
+			t.Errorf("%s: hold's docker_note %v, DOCKER_HOST %q; want the note and %q", c.wantNote, note, b.file(t, "host"), c.host)
 		}
 	}
 }

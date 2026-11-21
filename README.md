@@ -133,9 +133,11 @@ touched them, as the hold's `docker footprint`. Such a run is container work fro
 connection, a library's included. A forwarder outlives its command while the command's background
 Docker connections stay open (`docker compose logs -f &`), and `coreslot doctor` lists it. A
 `DOCKER_HOST` that names another engine gives none, and so does a selected context other than
-`default` or `desktop-linux` (`docker context use`, `DOCKER_CONTEXT`), unless you set `DOCKER_HOST`. A run without a forwarder runs its command
-untouched and, with a Docker interest, says why once; `status` shows the reason as the hold's
-`docker:` note. `docker_forward = false` turns the forwarder off for a label, silently.
+`default` or `desktop-linux` (`docker context use`, `DOCKER_CONTEXT`), unless you set `DOCKER_HOST`.
+A run without a forwarder runs its command untouched and, with a Docker interest, says why once;
+`status` shows the reason as the hold's `docker:` note. `docker_forward = false` turns the forwarder
+off for a label, and `[docker] enabled = false` for every run; a run you turned it off for says
+nothing.
 
 Under a forwarder a few things look different:
 

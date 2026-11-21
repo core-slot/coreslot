@@ -175,14 +175,16 @@ func selectedContext(env map[string]string, home string) string {
 }
 
 // setEngagement records the run's engagement and says its note once, unless the user turned the
-// forwarder off for the label with docker_forward = false: the hold still carries that note.
+// forwarder off, by the label's docker_forward = false or [docker] enabled = false, whatever other
+// reason also holds: the hold still carries the note.
 func (r *run) setEngagement(fw engagement) {
 	r.fw = fw
 	said := fw.note // the hold's note stays a fixed word; the line names the context
 	if said == docker.NoteContext {
 		said += " " + text(fw.context)
 	}
-	if said != "" && said != docker.NoteSwitch {
+	userOff := r.dockerOff == docker.OffConfig || r.entry.DockerForward != nil && !*r.entry.DockerForward
+	if said != "" && !userOff {
 		r.notice("%s: the command's Docker work is not attributed to this run", said)
 	}
 }

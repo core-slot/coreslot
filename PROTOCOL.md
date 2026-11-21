@@ -1281,8 +1281,9 @@ condition that fails names its note (section 7.4):
    (`start`).
 
 A run that is not engaged runs its command with the environment untouched and its Docker work
-unattributed; with a Docker interest it carries the note in its hold and says it once, except
-`switch`, which the user chose. An engaged run sets `DOCKER_HOST` for its command. The forwarder
+unattributed; with a Docker interest it carries the note in its hold and says it once, unless the
+user turned the forwarder off (`docker_forward = false` or `[docker] enabled = false`), whatever
+reason came first. An engaged run sets `DOCKER_HOST` for its command. The forwarder
 gets the read end of a pipe that only the run
 writes and the write end of one on which it reports what it saw; the run's ends of both are
 close-on-exec, so the command never inherits them. When the run ends it closes its end: the
