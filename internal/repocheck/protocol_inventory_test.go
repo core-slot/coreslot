@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// contractInventory is every shared file, field, environment variable and transition of format 3,
+// contractInventory is every shared file, field, environment variable and transition of format 4,
 // the items PROTOCOL.md's contract inventory (its section 2) must list, including the three the
 // state-directory override adds (section 4.1): `config.toml`, `needs.toml` and
 // `CORESLOT_STATE_DIR`. The list is kept here, apart from the document, so that an item added to,
@@ -25,6 +25,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"holds/", "Hold", "holds/"},
 	{"cancel/", "Cancel request", "cancel/"},
 	{"order/", "Order override", "order/"},
+	{"vmwait/", "Note", "vmwait/"},
 	{"degraded", "degraded", "degraded"},
 	{"log/", "log/ (run log)", "log/runs.jsonl"},
 	{"telemetry/", "Layout", "telemetry/"},
@@ -32,6 +33,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"needs.toml", "Needs file", "no_restart"},
 	{"~/.coreslot-fw", "Layout", ".coreslot-fw"},
 	{"docker_forward", "Needs file", "docker_forward"},
+	{"docker_mem", "Needs file", "docker_mem"},
 	{"ticket body", "Ticket", "need_mib"},
 	{"hold body", "Hold", "need_mib"},
 	{"cancel body", "Cancel request", "requester_pid"},
@@ -39,6 +41,9 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"run-log memory keys", "Run log", "mem_peak_kib"},
 	{"docker_footprint_mib", "Hold", "docker_footprint_mib"},
 	{"docker_note", "Hold", "docker_note"},
+	{"docker_need_mib", "Ticket", "docker_need_mib"},
+	{"docker_growth_mib", "Hold", "docker_growth_mib"},
+	{"docker_sampled_ns", "Hold", "docker_sampled_ns"},
 	{"CORESLOT_GRANTED_MEM", "Descriptor and environment contract", "CORESLOT_GRANTED_MEM"},
 	{"CORESLOT_HOLD", "Descriptor and environment contract", "CORESLOT_HOLD"},
 	{"CORESLOT_UNBUDGETED", "Errors, fail-open and degraded mode", "CORESLOT_UNBUDGETED"},
@@ -49,6 +54,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"refresh", "Refresh and STALLED", "futimens"},
 	{"admission", "Admission", "idle rule"},
 	{"level gate", "The level gate", "calm_s"},
+	{"gated admission", "A gated request", "VM test"},
 	{"trim", "Trim", "trim.json"},
 	{"tick", "The tick", "footprint_mib"},
 	{"stop round", "Stop rounds", "SIGKILL"},

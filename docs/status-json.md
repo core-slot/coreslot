@@ -59,8 +59,8 @@ says `not_running` while the engine runs. `other_engine` is an engine that is no
 | key | type | meaning |
 |---|---|---|
 | `mem_mib` | int or null | the VM's memory as the engine reports it |
-| `identified` | bool | exactly one Docker VM process was found, so `footprint_mib` is its footprint |
-| `footprint_mib` | int or null | the VM process's physical footprint; null unless `identified` |
+| `identified` | bool | exactly one Docker VM process was found, so `footprint_mib` is its footprint: a process running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor` (Docker VMM) in the resource coalition of `com.docker.backend` |
+| `footprint_mib` | int or null | the VM process's physical footprint: on Apple's hypervisor the most the guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now, file cache included; null unless `identified` |
 
 ## `docker.containers[]`
 
@@ -162,7 +162,7 @@ The watchdog, from the newest shared sample.
 | `left_s` | int or null | what remains of `typical_s`, never below 0; null when `typical_s` is 0 |
 | `stoppable` | bool | where a reader may offer to stop the run |
 | `docker_footprint_mib` | int | present, 0 included, while its run counts its own containers through a forwarder (macOS), from the forwarder's first connection: what they have grown by since the run first touched each |
-| `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address` or `ungated: blind` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
+| `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address`, `ungated: blind` or `ungated: no-reading` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
 | `docker_need_mib` | int | present while its run is gated on Docker Desktop's VM (macOS): its Docker need, the label's `docker_mem` |
 | `docker_growth_mib` | int | present while it is gated and reserves some: the growth of Docker Desktop's VM it reserves on the Mac, up to twice what its containers have yet to reach of its Docker need |
 

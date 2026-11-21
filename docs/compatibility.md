@@ -52,10 +52,11 @@ listed here; after it, an incompatible change to either needs a new major versio
 | Release | Formats implemented |
 |---|---|
 | `v0.4.0` | 2 |
-| unreleased | 3 (format 2 with `order/`; `doctor --reset` upgrades a format-2 directory and keeps its run log) |
+| `v0.10.0` | 3 (format 2 with `order/`; `doctor --reset` upgrades a format-2 directory and keeps its run log) |
+| unreleased | 4 (format 3 with `vmwait/` and the Docker keys of tickets and holds; `doctor --reset` upgrades a format-3 directory and keeps its run log) |
 
 `coreslot version` prints the formats a binary implements, for example
-`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 3.
+`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 4.
 
 `telemetry/`, and the `log/watch.jsonl` an older client may have left or still write, need no new format number:
 they are optional files that no reader of the format needs, and no admission reads them
@@ -97,7 +98,7 @@ change in any release; parse `status --json` instead.
 | `stats` | `--label LABEL`, `--json` |
 | `report` | `--days N`, `--json` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
-| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `trim_window_s`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`, `[docker] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem`, `no_restart` and `docker_forward` |
+| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `trim_window_s`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`, `[docker] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem`, `no_restart`, `docker_forward` and `docker_mem` |
 | environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED`, `CORESLOT_TELEMETRY` (given to the command, read by nested runs); on macOS `DOCKER_HOST` (given to the command of a run with a forwarder) |
 | descriptors | the hold at fd 3 |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
@@ -116,7 +117,8 @@ never removed, renamed or given another meaning; a consumer MUST ignore fields i
 Removing or changing a field raises the number, and that release prints the new one. Labels are
 carried exactly, JSON-encoded. Under schema 1, `config_warnings` (an array, always present) and
 `docker` (an object, present only with `status --docker`) are keys added after the first release,
-as are each hold's `docker_footprint_mib` and `docker_note`, present only when the hold carries them.
+as are each hold's `docker_footprint_mib`, `docker_note`, `docker_need_mib` and `docker_growth_mib` and
+each ticket's `docker_need_mib` and `vm_wait`, present only when they have something to say.
 [status-json.md](status-json.md) describes every key of the document.
 
 ## Deprecation window

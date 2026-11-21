@@ -1,21 +1,23 @@
-# coreslot protocol, format 3
+# coreslot protocol, format 4
 
-This document is the normative definition of the coreslot on-disk protocol, format 3: the state
+This document is the normative definition of the coreslot on-disk protocol, format 4: the state
 directory, its files and their bodies, the admission critical section, the watchdog that keeps
 memory pressure from stalling the work the clients started, and the descriptor and environment
 contract between a run and the command it starts. Memory is the only resource. A client written
 from this document alone, in any language, shares one memory budget and one watchdog with every
 other conforming client on the machine.
 
-Format 3 is format 2 with the order overrides of `order/` (sections 7.12, 9 and 13.3) and the trim
-requests of `trim.json` with a hold's two optional keys (sections 7.13 and 12.5); a reset
-upgrades a format-2 directory in place, keeping its run log (section 4.4).
+Format 4 is format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of `vmwait/`
+(section 7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4). Every client of
+format 4 takes the holds' `docker_growth_mib` off its room (section 12.1) and passes over a noted
+ticket (section 10.3), which a client of format 3 does not; a reset upgrades a format-3 directory in
+place, keeping its run log (section 4.4).
 
-Format 3's names, bodies and layout are never redefined once released: a release that needs
+Format 4's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
 no admission reads, as the needs file is (section 5.4). Until `v1.0.0` a minor release may
-introduce such a number, and may change what format 3 means elsewhere, such as the configuration's
+introduce such a number, and may change what format 4 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
@@ -43,10 +45,12 @@ requirement on a client.
 - Sizes: `KiB` = 1 024 bytes, `MiB` = 1 048 576 bytes, `GiB` = 1 024 MiB.
 - **Need:** the memory a run asks for, in MiB. **Footprint:** the memory the run's process tree
   uses, in MiB. **Room:** what the live holds leave of the machine's free memory (section 12.1).
+- **Docker need:** the memory a run asks for inside Docker Desktop's VM, in MiB. A request that
+  waits for it is **gated** (section 12.6).
 
 ## 2. Contract inventory
 
-Every shared file, field, environment variable and transition of format 3, and where it is defined.
+Every shared file, field, environment variable and transition of format 4, and where it is defined.
 
 | Item | Kind | Defined in |
 |---|---|---|
@@ -59,6 +63,7 @@ Every shared file, field, environment variable and transition of format 3, and w
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
 | `order/` | directory of order overrides | [7.12](#712-order-override), [9](#9-order), [13.3](#133-move) |
+| `vmwait/` | directory of notes | [7.14](#714-note), [12.6](#126-a-gated-request) |
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
 | `telemetry/` (optional, not part of the format) | directory of the local record | [4.4](#44-layout), [23.6](#236-observe-mode-and-the-sample-log) |
@@ -66,6 +71,7 @@ Every shared file, field, environment variable and transition of format 3, and w
 | `needs.toml` (under the override only) | file | [5.4](#54-needs-file) |
 | `~/.coreslot-fw` (macOS, not part of the layout) | directory of forwarder entries | [4.4](#44-layout), [17](#17-descriptor-and-environment-contract) |
 | `docker_forward` | field of the needs file | [5.4](#54-needs-file), [17](#17-descriptor-and-environment-contract) |
+| `docker_mem` | field of the needs file | [5.4](#54-needs-file), [12.6](#126-a-gated-request) |
 | ticket body | body | [7.3](#73-ticket) |
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
@@ -73,6 +79,9 @@ Every shared file, field, environment variable and transition of format 3, and w
 | run-log memory keys | field | [20](#20-run-log) |
 | `docker_footprint_mib` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
 | `docker_note` | field of the hold body | [7.4](#74-hold), [17](#17-descriptor-and-environment-contract) |
+| `docker_need_mib` | field of the ticket and hold bodies | [7.3](#73-ticket), [7.4](#74-hold), [12.6](#126-a-gated-request) |
+| `docker_growth_mib` | field of the hold body | [7.4](#74-hold), [12.6](#126-a-gated-request), [23.1](#231-the-tick) |
+| `docker_sampled_ns` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
 | `CORESLOT_GRANTED_MEM` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
@@ -83,6 +92,7 @@ Every shared file, field, environment variable and transition of format 3, and w
 | refresh | transition | [10.2](#102-refresh-and-stalled), example [21.2](#212-refresh) |
 | admission | transition | [12](#12-admission), example [21.3](#213-admission) |
 | level gate | transition | [12.4](#124-the-level-gate), example [21.8](#218-tick-and-level) |
+| gated admission | transition | [12.6](#126-a-gated-request) |
 | trim | transition | [12.5](#125-trim), example [21.10](#2110-trim) |
 | tick | transition | [23.1](#231-the-tick), example [21.8](#218-tick-and-level) |
 | stop round | transition | [23.5](#235-stop-rounds), example [21.9](#219-stop-round-and-restart) |
@@ -126,11 +136,14 @@ Every conforming client MUST preserve these invariants:
   (section 12.1). The budget is soft: the room is computed from the kernel's readings and the hold
   bodies, and is not a cap. The exceptions are the idle rule (a head starts when no hold is live),
   an unreadable headroom (nothing gates the head), both of section 12.1, and a container request
-  (section 12.1), whose room leaves out the hold bodies.
+  (section 12.1), whose room leaves out the hold bodies, all but their `docker_growth_mib` when it
+  is gated. A gated request (section 12.6) must also pass its VM test: a second condition, never
+  an exception.
 - **I4 order:** ordinary admissions happen in effective order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
   it except one that passes it, by duration or out of turn (section 10.3), and, while a hold is live, a container
-  request (section 12.1), and a waiter is passed over only while it is STALLED, dead or canceled.
+  request (section 12.1), and a run passing over a noted ticket (section 12.6); a waiter is passed
+  over only while it is STALLED, dead, canceled or noted.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
   no process is stopped inside the admission section, the head is admitted within 3 s; up to 4
@@ -140,8 +153,10 @@ Every conforming client MUST preserve these invariants:
   container requests (section 12.1) may take the room a head waits for, or the start that spacing
   allows after a yellow clear (section 12.4), and so delay it for as long as they keep coming or
   run; only a timeout of its own, if it has one, bounds that. The head keeps its place. With no hold
-  live they leave the head its start.
-- **I6 one budget:** every client of format 3 reads the same holds and the same
+  live they leave the head its start. A gated head (section 12.6) is admitted within 3 s of a
+  reading by which both its tests pass; one whose VM test fails has its note by the end of that
+  attempt, or within 2 s of its last note change.
+- **I6 one budget:** every client of format 4 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
   of them, one whose `victim` is false nor one whose label has no normal share, and a run signals only the process group of its own
@@ -225,6 +240,7 @@ queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
 order/           order overrides (section 7.12)
+vmwait/          notes of gated tickets (section 7.14)
 degraded         degraded-mode record (section 7.9)
 log/runs.jsonl   run log (section 7.10)
 telemetry/       the optional local record; absent is normal (below)
@@ -234,11 +250,11 @@ needs.toml       needs file (section 5.4); optional, present only under the over
 
 `log/` may also contain `runs.1.jsonl` and, left or still written by an older client, `watch.jsonl` and
 `watch.1.jsonl`. Each of
-`queue/`, `holds/`, `cancel/`, `order/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
+`queue/`, `holds/`, `cancel/`, `order/`, `vmwait/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
 (section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
 of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
-the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `order/` and `log/` are created only
+the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `order/`, `vmwait/` and `log/` are created only
 by a client that has read a `FORMAT` it understands (section 15.2).
 
 `telemetry/` is optional, and its absence is normal: it exists only once a client has recorded
@@ -278,14 +294,14 @@ count); they are never removed except by reconciliation's rules (section 10.4).
 The directory is not a cache: liveness is decided by locks. Deleting or resetting `$S` while any
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
-process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/` and
-`order/` (an override names a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`, `degraded`
+process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/`,
+`order/` and `vmwait/` (an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`, `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
-format 3. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+format 4. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 3, or format 2 (an upgrade: format 3 only adds `order/`, `trim.json` and two
-optional keys of a hold), or is missing
-(which the first client writes as 3, section 15.1), the reset is a repair and keeps `log/` and
+When `FORMAT` names format 4, or format 3 (an upgrade: format 4 only adds `vmwait/` and optional
+Docker keys of tickets and holds), or is missing
+(which the first client writes as 4, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
 learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
 format or cannot be read, it removes the entries of `log/` and `telemetry/` as well, and the CLI
@@ -293,8 +309,8 @@ says so of the run log: every label learns its need
 again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
-the directory as format 3; a live hold or ticket of any format stops it. It does not reconcile
-first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/` and `order/` reconciliation
+the directory as format 4; a live hold or ticket of any format stops it. It does not reconcile
+first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `order/` and `vmwait/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
 the next reconciliation removes them once they are older than 30 s. Once it has
 recreated the directory, nothing being live, it also removes every entry and birth of the
@@ -321,8 +337,8 @@ nothing is known of, is `max(1, min(4096, memory / 4))` MiB.
 
 ### 5.2 Sizes
 
-A size, in the configuration's `reserve` and `floor`, the needs file's `mem` and the CLI's
-`--mem`, is a number of 1 to 6 ASCII decimal digits, optionally followed by `.` and 1 to 3 digits,
+A size, in the configuration's `reserve` and `floor`, the needs file's `mem` and `docker_mem` and
+the CLI's `--mem`, is a number of 1 to 6 ASCII decimal digits, optionally followed by `.` and 1 to 3 digits,
 then optionally `G` (GiB, also meant without a suffix) or `M` (MiB). Its value is the number in
 MiB, rounded up to a whole MiB (`"9.5G"` is 9 728 MiB, `"768M"` is 768 MiB, `"3"` is 3 072 MiB). In
 a TOML file a size may also be an integer, which counts GiB. A size of 0 is valid where the key
@@ -371,7 +387,7 @@ windows_warning = false   # default true (section 16)
 enabled = false       # true: record the wait of every run and a sample of the machine
 
 [docker]
-enabled = true        # false: read no Docker socket (a client's display of Docker, not admission)
+enabled = true        # false: read no Docker socket, give no run a forwarder, gate none
 ```
 
 - `[memory]`: `reserve`, a size (section 5.2), 0 allowed.
@@ -390,8 +406,8 @@ enabled = true        # false: read no Docker socket (a client's display of Dock
   `sample_log` are taken too, while `sample_log = true` alone takes samples and records nothing
   else. A `telemetry` that is not a table, or an `enabled` that is not a boolean, reads as
   disabled and is not an error.
-- `[docker]`: `enabled`, a boolean, default `true`. It decides only whether a client reads the Docker
-  socket to show Docker's VM and containers; admission never depends on it. A `docker` that is not a
+- `[docker]`: `enabled`, a boolean, default `true`. With `false` a client reads no Docker socket and
+  gives no run a forwarder (section 17), so it gates no request (section 12.6). A `docker` that is not a
   table, or an `enabled` that is not a boolean, reads as disabled and is not an error; a client
   that shows the configuration says so as a warning.
 - `memory`, `watch` and `platform`, when present, MUST be tables; any other value of one of them is
@@ -417,15 +433,18 @@ mem = "3G"          # a size (section 5.2); the need, which learning never repla
 [needs."gate:docker"]
 no_restart = true   # a stop round never lists this label's runs (section 23.5)
 docker_forward = true   # macOS: give its runs a forwarder (section 17); false: never
+docker_mem = "4G"   # macOS: the Docker need its engaged runs are gated on (section 12.6)
 ```
 
-Each key of `[needs]` is a label, matched exactly. An entry's `mem` is a size above 0, and
-`no_restart` and `docker_forward` booleans; a known key with another value makes the entry
+Each key of `[needs]` is a label, matched exactly. An entry's `mem` and `docker_mem` are sizes above
+0, and `no_restart` and `docker_forward` booleans; a known key with another value makes the entry
 unreadable. A key the reader does not know is ignored. `docker_forward` decides whether the label's
 runs get a forwarder (section 17): `true` whatever the label's history, `false` never, and absent by
 the label's Docker interest. An unreadable entry, or a needs file that does not load, gives no
 forwarder to a label with a Docker interest (`no-forwarder: needs-entry`, section 7.4): a switch
-that cannot be read never reads as on.
+that cannot be read never reads as on. `mem` is the need of the command's own process tree on the
+host, a container command's included, which it makes an ordinary request (section 12.1); the memory
+its containers take inside Docker's VM is `docker_mem`.
 
 A **container command** is one whose argv[0] has the basename `docker`, `docker-compose` or
 `podman`, whatever the program is; `sh -c 'docker run ...'` is not one.
@@ -466,6 +485,7 @@ ticket    = order-key "-" pid "-" seq [ "-" display ]
 hold      = start-ns  "-" pid "-" seq [ "-" display ]
 cancel    = order-key "-" pid "-" seq          ; the target ticket's identity
 order     = order-key "-" pid "-" seq          ; the target ticket's identity (section 7.12)
+note      = ticket                             ; its ticket's whole name (section 7.14)
 ticket-id = order-key "-" pid "-" seq          ; a ticket name without its display
 order-key = 20DIGIT            ; section 9
 start-ns  = 20DIGIT            ; wall clock at admission, nanoseconds
@@ -532,6 +552,7 @@ Body:
 | `need_mib` | integer | `1..1073741824` (1 PiB); the memory the run needs, in MiB |
 | `created_ns` | integer | `≥ 0`; the run's arrival: the wall clock when the ticket was published, a restarted run's first arrival (section 24) |
 | `restart` | boolean | optional; `true` for a stopped run coming back (section 24), which waits under the restart conditions of section 12.4 |
+| `docker_need_mib` | integer | optional; `1..1073741824` when present; the Docker need of a gated request (section 12.6); absent for any other, and a writer omits it then |
 
 ### 7.4 Hold
 
@@ -562,7 +583,10 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `asked_mib` | integer | optional; `0..1073741824`; the need asked, written with `trimmed` by a holder that acted on a request to trim its hold (section 12.5); absent means `0`, which says that `need_mib` is the need asked, and a writer omits it then. No admission reads it |
 | `trimmed` | boolean | optional; `true` once the holder acted on a request to trim its hold (section 12.5): `need_mib` then follows its footprint; absent means `false`, and a writer omits it then. No admission reads it |
 | `docker_footprint_mib` | integer | optional; `0..1073741824`; while the run's forwarder sees its containers (section 17), how much they have grown since the run first touched each, as the run's last sample of them read it (section 23.1), `0` included; absent for a run without a forwarder, before its forwarder relays a first connection, and once the run has lost sight of them. It informs `status` alone |
-| `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `context`, `address` or `start` (section 17), or `ungated: blind` once a run with a forwarder has lost sight of its containers. Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
+| `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `context`, `address` or `start` (section 17), `ungated: blind` once a run with a forwarder has lost sight of its containers, or `ungated: no-reading` or `ungated: oversized` for a gated request admitted without its Docker need (section 12.6). Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
+| `docker_need_mib` | integer | optional; `1..1073741824` when present; the Docker need the hold was admitted on (section 12.6), written while its run sees its containers; absent for any other hold, and a writer omits it then |
+| `docker_growth_mib` | integer | optional; `0..1073741824`; the growth of Docker's VM the hold reserves on the host (section 12.6); written with `docker_need_mib` alone, and every room takes it off (section 12.1) |
+| `docker_sampled_ns` | integer | optional; `≥ 0`; written with `docker_need_mib` alone: the wall clock of the reading that admitted the hold, then of its run's last sample of its containers (section 23.1) |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -576,7 +600,8 @@ the run writes `stops`, `victim`, `normal_share`, `learned`, `typical_cpu_s` and
 command's `container`, which hold for the attempt, except that finding a client in its tree clears
 `victim` and sets `container` (section 23.5). Each tick (section 23.1) writes the measured keys,
 `cpu_ns` and `stall_ewma` among them, `docker_footprint_mib` and `docker_note` as the run's Docker part
-stands, which the first write after the command's start carries too, and, once the holder has acted
+stands, which the first write after the command's start carries too, a gated hold's three Docker
+keys (section 23.1), with which it is published (section 12.6), and, once the holder has acted
 on a request to trim its hold, `need_mib`, `asked_mib` and `trimmed` (section 12.5). Only
 the holder writes its body, at publication and then in place: one write at offset 0
 of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
@@ -596,10 +621,10 @@ live hold as section 7.2 says.
 ### 7.6 FORMAT
 
 `$S/FORMAT` holds the line `coreslot-protocol <n>` where `<n>` is 1 to 9 ASCII decimal digits, read
-as a decimal number; leading zeros are allowed (`02` is format 2) and writers write none. Writers
+as a decimal number; leading zeros are allowed (`04` is format 4) and writers write none. Writers
 write the line followed by one LF. Readers MUST accept the line with or without the final LF. Any
 other content (a sign, more than 9 digits, a CR or other whitespace, a second line) is a malformed
-`FORMAT`: a state error. A well-formed `<n>` other than 2, including 0, is a format this document
+`FORMAT`: a state error. A well-formed `<n>` other than 4, including 0, is a format this document
 does not define (section 15.2). Section 15 defines what a client does with it.
 
 ### 7.7 admit.lock
@@ -620,7 +645,9 @@ only inside the section and replaced with a plain `rename` (section 11). `gen` i
 
 A section bumps `gen` once when it publishes or removes a ticket or hold: enqueue (section 10.1),
 admission (12.1), publication of an unbudgeted hold (14), and removal of the
-client's own ticket after cancellation or withdrawal (13) or of its own hold (12.3); the resume bump
+client's own ticket after cancellation or withdrawal (13) or of its own hold (12.3); it also bumps
+`gen` once when it publishes or removes a note on its own (12.6), a note removed with its ticket
+taking the ticket's bump. The resume bump
 of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
 removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
 itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `admit.lock` or the run
@@ -713,6 +740,16 @@ it drops the rest. An entry of a hold that has ended therefore stays until a req
 once `holds/` no longer lists it, or a reset (section 4.4); nobody reads it. A rewrite that would
 make the file larger than 64 KiB is not written. A holder reads it outside the section, for its own hold's id (section 23.1).
 
+### 7.14 Note
+
+`$S/vmwait/<ticket>`, not lock-carrying: the **note** of a gated ticket (section 12.6), named by its
+ticket's whole name, an empty regular file of mode `0600`. It says, for as long as it exists, "on
+the host I fit; I wait for room in Docker's VM, or for a reading of it". Only its ticket's owner
+publishes or removes it, inside the section (sections 11 and 12.6); reconciliation removes one whose
+ticket is gone (section 10.4), and a reset every one (section 4.4). A reader goes by the name alone: it never reads a note's body, and a
+note that is not a regular file of the user still passes over the ticket of its name, whose owner
+would note it anyway.
+
 ## 8. The admission critical section
 
 `admit.lock` is the protocol's linearization point. Enqueue, admission, cancellation publication,
@@ -727,7 +764,9 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   by its deadline gives up without having changed anything.
 - **The section never waits** for anything but the filesystem: no sleeping for memory, no lock
   other than non-blocking ones, bounded work. Reading the machine's memory and the host readings
-  (section 23.2) is bounded work: a few sysctls or `/proc` reads, no subprocess.
+  (section 23.2) is bounded work: a few sysctls or `/proc` reads, no subprocess. Docker is never
+  read inside it: a gated request reads Docker's VM between two entries of one attempt (section
+  12.6).
 - A client SHOULD prevent its own job-control stop while it holds any lock it took only
   momentarily: while inside the section, and while it holds the probe lock of a ticket or hold
   (section 6), inside the section or outside it. A process stopped holding a probe lock makes
@@ -744,7 +783,7 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
   continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 3` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 4` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
@@ -805,12 +844,13 @@ waiter that cannot enter the section at once retries the bump at its next refres
 
 A waiter:
 
-- reads `gen` once per second; when its `gen` field changed, rescans `queue/` (a change of
-  `reconciled_ns` alone MAY also trigger a rescan, which does no harm);
+- reads `gen` once per second; when its `gen` field changed, rescans `queue/` and lists `vmwait/`
+  (a change of `reconciled_ns` alone MAY also trigger a rescan, which does no harm);
 - each second, examines the tickets ahead of it, from the nearest: a dead one (its probe succeeds)
   is skipped; a gone one (it no longer exists: its probe fails with `ENOENT`) is skipped; a STALLED
-  one is skipped; an ignored (malformed, non-matching or stray) entry is skipped; the
-  first live, non-stalled ticket ends the examination. When none is found the waiter is the head:
+  one is skipped; an ignored (malformed, non-matching or stray) entry is skipped; a live ticket
+  with a note (section 12.6) is skipped, and still observed; the first live, non-stalled ticket
+  without a note ends the examination. When none is found the waiter is the head:
   this examination is the **election**, and the waiter enters the section and tries admission
   (section 12);
 - in each election also watches the **front window**: the first 4 tickets of the queue that are
@@ -818,7 +858,9 @@ A waiter:
   even when the examination ended before reaching them. Watching the front window keeps every
   waiter's timers on the front of the queue running; the election's rule is unchanged. A dead
   ticket that is not yet removed still takes a slot of the window until reconciliation removes it
-  (section 10.4);
+  (section 10.4). A gated waiter also watches every gated ticket ahead of it beyond the window,
+  whose Docker needs its VM test sums (section 12.6), so that STALLED applies to them too; one it
+  has never observed counts until it has watched it for the stall time;
 - checks `cancel/` for its own ticket id on every poll (section 13.1);
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
   rescan when `gen` changed) before each attempt;
@@ -902,13 +944,13 @@ neither does a reset (section 4.4), and neither does a watchdog tick (section 23
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
    that is not a regular file of the user, section 4.2, is ignored and counted, never probed or
    removed, and reconciliation goes on and writes `gen` as usual);
-2. removes every cancel request in `cancel/` and every order override in `order/` whose ticket is
-   gone: its ticket is any `queue/` entry
+2. removes every cancel request in `cancel/`, every order override in `order/` and every note in
+   `vmwait/` whose ticket is gone: its ticket is any `queue/` entry
    that is not ignored as a stray (section 4.2) whose name matches the ticket grammar and whose
-   first three fields are that id, whatever its body. An entry ignored as a stray (a wrong type,
-   owner or mode) is not an entry for this purpose: it never protects a cancel request or an
-   override;
-3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/` and `order/` whose mtime is
+   first three fields are that id (for a note, whose name is the note's), whatever its body. An entry ignored as a stray (a wrong type,
+   owner or mode) is not an entry for this purpose: it never protects a cancel request, an
+   override or a note;
+3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `order/` and `vmwait/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
    if it removed anything.
@@ -950,6 +992,11 @@ removed by reconciliation; no client removes another writer's temporary in any o
 entry; the entry stays published, and reconciliation removes the extra name once its mtime is
 older than 30 s (section 10.4).
 
+A note (section 7.14) has no body, so it needs no temporary: its owner creates it at its name with
+`O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, and closes it. `EEXIST` means the note is
+already published, which is not an error; a `vmwait/` that already holds 65 536 entries is a state
+error (section 4.4).
+
 ## 12. Admission
 
 ### 12.1 Steps
@@ -958,13 +1005,15 @@ The room is
 
 ```
 room = headroom − reserve − Σ over live holds of max(0, need − footprint)
+                           − Σ over live holds of docker_growth
 ```
 
 where `headroom` and `reserve` are the readings of section 5.1 and the configuration (section 5.3),
 and a **live hold** is a well-formed hold of `holds/` whose probe fails because some process holds
 it. A live hold contributes its `need_mib` less its `footprint_mib`, and nothing when the footprint
-is the larger or `need_mib` is 0 (a run outside the budget). A live hold whose body does not
-parse contributes the cold start need (section 5.1) in full. Stray and gone holds are left out.
+is the larger or `need_mib` is 0 (a run outside the budget), and its `docker_growth_mib` in full:
+the growth of Docker's VM it reserves on the host (section 12.6), 0 when absent. A live hold whose
+body does not parse contributes the cold start need (section 5.1) in full, and no growth. Stray and gone holds are left out.
 The room may be negative. A request **fits** when its need is at most the room.
 
 Inside the section the head, a waiter that may pass it (section 10.3) or a container request
@@ -978,21 +1027,24 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
    means "no coreslot job running", never machine load. When a hold is live and the headroom is
    known, the head leaves the section and waits unless its request fits. When the headroom is
    unknown nothing gates the head;
-5. repeats the election (section 10.3) over a fresh listing of `queue/`, the **re-election**: every
-   well-formed ticket ahead of it in order is probed, and if any is neither dead nor STALLED for
-   this observer (its mtime from the listing counts as an observation), the head leaves the section
+5. repeats the election (section 10.3) over a fresh listing of `queue/` and `vmwait/`, the
+   **re-election**: every well-formed ticket ahead of it in order is probed, and if any is neither
+   dead nor STALLED for this observer (its mtime from the listing counts as an observation) nor
+   noted (section 12.6), the head leaves the section
    and waits, unless it may pass the first of them (section 10.3). A ticket the head has never
    observed, such as one published after its election, counts as live;
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket and its order
-   override if it has one, bumps `gen`, and leaves the section.
+   override and note if it has them, bumps `gen`, and leaves the section.
+
+A gated request (section 12.6) also passes its VM test between steps 6 and 7.
 
 A **container request** is the request of a container command (section 5.4) whose need neither its
 caller nor a `mem` in the needs file named: a person who pins a need chose to reserve it and to wait
 for it. A client MAY make a container request of such a command, and MUST NOT make one of anything
 else. While a hold is live it waits only on real memory: its room leaves out the live holds, so it
-is `headroom − reserve`, and step 5 does not apply, so it needs no pass and starts ahead of any live
+is `headroom − reserve`, less the holds' `docker_growth_mib` when it is gated, and step 5 does not apply, so it needs no pass and starts ahead of any live
 ticket, at most once per election (section 10.3). With no hold live it is an ordinary ticket: step 5
 applies, so the head goes first by the idle rule. Steps 4 and 6 apply as to any request, so while a
 hold is live it waits while the level gate holds it and while the headroom is below the reserve plus
@@ -1052,7 +1104,8 @@ defines it:
   request back;
 - unknown: the gate holds nothing back;
 - otherwise (green): for `calm_s` after `yellow_cleared_ns`, at most one request starts per
-  `spacing_s`: an admission is recorded in `detector.last_admit_ns`, and no further request starts
+  `spacing_s`: an admission is recorded in `detector.last_admit_ns` once it is made (a gated
+  request's after its VM test, section 12.6), and no further request starts
   until `spacing_s` has passed since the recorded one. Spacing applies only while the stored
   sample's `wall_ns` is not 0 and neither `yellow_cleared_ns` nor `last_admit_ns` is later than
   `host_now`: a host clock that restarted (a reboot keeps `watch.json`) spaces nothing.
@@ -1090,6 +1143,95 @@ know the request ignores it. A reader of a hold, admission and the watchdog incl
 > trimmed run that is stopped comes back (section 24) with the need it had at its start or the
 > stopped attempt's peak, whichever is larger, under a new hold that is not trimmed. For container
 > work the reservation follows the client's own memory alone (section 23.5).
+
+### 12.6 A gated request
+
+A **gated** request waits for room inside Docker Desktop's VM as well as on the host, and its hold
+then reserves on the host the growth of the VM that its containers may still cause. A client MAY
+gate the request of a run that has a Docker need and sees its containers through a forwarder
+(section 17); without one a run cannot see what its need turns into, so a Docker need on any other
+run is ignored, never refused. Only a gated ticket's own process judges its Docker part, and no
+client infers what another ticket waits for: every other client needs from this section only the
+holds' growth in its room (section 12.1) and the passing over a noted ticket (below).
+
+**A reading** of Docker's VM is taken outside the section. It gives `V`, the VM's memory as the
+engine reports it; `free_est`, `V` less the memory usage of every running container (less its
+inactive file pages, as `docker stats` counts it); `vm_now`, the footprint on the host of the VM's
+process now; and its **instant**, the wall clock just before its first request. It is complete or
+it is none: a call that fails or misses a 2 s deadline, an engine other than Docker Desktop, or a VM
+process that is not identified makes a **failed** reading. In MiB:
+
+```
+docker_reserve = min(3072, V / 4)                                       (integer division)
+docker_room    = free_est − docker_reserve
+                          − Σ over live gated holds of max(0, docker_need − docker_footprint)
+growth         = min(max(0, V − vm_now), 2 × max(0, docker_need − docker_footprint))
+```
+
+A **live gated hold** is a live hold (section 12.1) whose body carries `docker_need_mib`; an absent
+`docker_footprint_mib` counts 0. The factor 2 is the most Docker's VM was measured to take on the
+host per MiB its containers newly reached; the first term is what the VM can still take at all.
+
+**An attempt.** A gated ticket attempts when any ticket would (sections 10.3 and 12.1), through steps
+1 to 6 of section 12.1. Its **host test** is steps 4 and 6, the room and the level gate, with its own
+`need_mib` and nothing for its own growth; the idle rule is the host's and never skips the VM test.
+Once steps 1 to 6 let it in, its **VM test** passes on the reading in hand when
+
+```
+docker_need ≤ docker_room − Σ over live gated tickets ahead of it of docker_need
+```
+
+The tickets summed are those ahead of it that carry `docker_need_mib`, noted or not, live for this
+observer as in the re-election (step 5), except one whose `docker_need_mib` is above
+`V − docker_reserve` by this reading, which can never be gated (below). So a later gated request
+never takes VM room an earlier one waits for, and a small one starts beside a large one when the VM
+holds both.
+
+A ticket reads at most once per 2 s. When steps 1 to 6 let it in, this attempt has taken no reading
+and the one in hand is 2 s old or more, it leaves the section, reads, and enters again at once from
+step 1: the same attempt, not a new one of section 10.3's "once per election". A reading whose
+instant is earlier than the `docker_sampled_ns` of a live gated hold would count that hold's latest
+growth as free twice: the ticket leaves, reads again and enters again, once per attempt; a second
+such reading ends the attempt without a note. An attempt therefore enters the section at most three
+times. When both tests pass, the level gate records the start (section 12.4) and the ticket is
+admitted (step 7): its hold is published with `docker_need_mib`, `docker_sampled_ns` the reading's
+instant and `docker_growth_mib` the `growth` of the reading's `V` and `vm_now` and a Docker footprint
+of 0 (a restart's own, section 24.1), so that no admission sees the hold without it.
+
+**The note.** When the VM test fails, or the reading failed, the ticket publishes its note (section
+7.14) in that section, unless it has one, it makes a single attempt (a no-wait try then reports that
+it would wait), or it published one less than 2 s ago. It removes the note at an attempt whose host
+test fails, when its Docker part goes ungated, and with its ticket. Every run, gated or not, passes
+over a live ticket that has a note in its election and re-election (sections 10.3 and 12.1 step 5):
+the first live ticket without a note is its head, and when there is none it is the head itself and
+the idle rule is its. So a run that needs only the host never waits for a ticket that waits only
+for the VM. Nothing is reserved on the host for a noted ticket, and the runs that pass it may take
+host memory it needs. A note is as old as its owner's last attempt that changed it.
+
+**Ungated.** After 8 failed readings in a row (a count, not a clock: a success resets it, and a
+suspended process misses none), or at the first reading by which its Docker need is above
+`V − docker_reserve` (**oversized**), the ticket's Docker part is **ungated**: it removes its note,
+waits as an ordinary ticket from then on, and its hold carries no Docker need, only the
+`docker_note` `ungated: no-reading` or `ungated: oversized`. Its ticket keeps its body, so the gated
+tickets behind it still sum its `docker_need_mib`, unless it is oversized, until it is admitted or
+leaves. Readings are taken only at attempts that steps 1 to 6 let in, so a gated head short of host
+memory counts none.
+
+**What a gated hold reserves.** Its `docker_growth_mib` comes off every room (section 12.1) for as
+long as it is live, and its holder rewrites it at each sample of its containers (section 23.1). It
+is 0 once the containers have taken their need, and on a VM grown to its size (`vm_now ≥ V`). The
+VM test never passes by duration: a run's end does not free VM room while its containers outlive
+it, and the head's expected wait `W` (section 10.3) adds back no `docker_growth_mib`.
+
+> **Implementation note.** The Go CLI gates an engaged run (section 17) whose label has a
+> `docker_mem` (section 5.4). Its reading first looks for Docker's VM process, the one process
+> running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor`
+> (Docker VMM) in the resource coalition of a process running `com.docker.backend`, and opens no
+> socket when it finds none; then it asks the engine for `/info`, the running containers and the
+> stats of each. `vm_now` is that process's physical footprint: on Apple's hypervisor the most the
+> guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now,
+> file cache included, which falls within seconds of the guest freeing memory. README, "Waiting for
+> Docker's VM", says what the reservation does not hold back.
 
 ## 13. Cancellation and withdrawal
 
@@ -1184,12 +1326,12 @@ also exits 3 while a state error makes runs fail open (section 19).
 the layout other than `admit.lock`). Every format keeps `admit.lock`, an exclusive `flock` held
 only briefly by whoever changes admission state.
 
-A client that finds no `FORMAT` writes `coreslot-protocol 3` inside the section. Writing a newer
+A client that finds no `FORMAT` writes `coreslot-protocol 4` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
 ### 15.2 A format this client does not implement
 
-A state directory whose format is not 3 is not used. A client that finds another format leaves
+A state directory whose format is not 4 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
 writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json` or
 `admit.lock` body), and its run fails open (section 14) with one notice that names the format and
@@ -1203,9 +1345,9 @@ remove the file: that would be a write into a format it does not implement.
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
 another format a client publishes no cancel request, trim request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
-runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 3
+runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 4
 when nothing of either format is live, the other format's run log removed with the rest, except a
-format-2 directory's, which the upgrade keeps (section 4.4).
+format-3 directory's, which the upgrade keeps (section 4.4).
 
 > **Implementation note.** The Go CLI refuses cancellation, a trim and `doctor --clear` under
 > another format, with the same notice.
@@ -1266,7 +1408,8 @@ condition that fails names its note (section 7.4):
    `docker_forward = false` (`switch`, section 5.4).
 3. Its label has a **Docker interest**: its command is a container command (section 5.4), a counted
    run of its label's last 20 (section 20) carries `container`, or its entry has
-   `docker_forward = true`. A run without one is never engaged and says nothing.
+   `docker_forward = true` or a `docker_mem` (section 12.6). A run without one is never engaged and
+   says nothing.
 4. The upstream, the socket the user's `DOCKER_HOST` names or else Docker Desktop's own
    `<home>/.docker/run/docker.sock`, is the same file as Docker Desktop's, by device and inode after
    following symlinks (`upstream`, also when Docker is not running).
@@ -1448,7 +1591,7 @@ generation). One generation is kept.
 All examples use one Linux machine: `MemTotal` is 16 GiB (`memory = 16384`), the configuration
 declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 20`, `red_points = 40`,
 `red_samples = 10`, `gate_pages_s = 1000`, `floor = "2G"`, `calm_s = 30`, `post_kill_s = 15` and
-`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 3`
+`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 4`
 unless stated. Listings show the entries under `$S` that matter; `[L]` marks a file whose lock is
 held by a live process. `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is
 independent of the others; except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old
@@ -1800,6 +1943,9 @@ rises with it, up to 4 096 MiB, and the room falls; a shortage that follows is a
 | a run's containers (macOS) | sampled every third tick (6 s), off the tick, under one 2 s deadline per sample; at most 256 per run, a 257th makes the run blind |
 | the tap | reads a request or response head of at most 64 KiB; a longer one makes the run blind |
 | forwarder entries | the walk at most once an hour, at most 65 536 names; a swapped entry removed 30 days after its forwarder ended |
+| a gated ticket's reading | at most once per 2 s, under one 2 s deadline; one more at once when its instant is too early; ungated after 8 failed in a row |
+| a gated ticket's note | published at most once per 2 s |
+| a gated hold's growth | rewritten at each sample of its containers (6 s) |
 
 ## 23. The watchdog
 
@@ -1829,6 +1975,13 @@ start until it exits, in both modes of section 23.6. Each tick:
    sight of them, and writes `ungated: blind` without a footprint from then on, when its forwarder
    dies, its tap loses track of a connection, a reference cannot be resolved, or a 257th container
    appears.
+   A gated hold (section 12.6) keeps its three Docker keys while its run sees its containers. At
+   each sample of them that completes, its run writes `docker_sampled_ns`, the sample's end, and
+   `docker_growth_mib`, the `growth` of section 12.6 from its Docker need, the sample's footprint, the `V` of the
+   reading that admitted it and `vm_now` read from the VM process it last identified, looked for
+   again once that process is gone; when it finds none it keeps the last `docker_growth_mib`, since
+   unknown is not zero. A run that loses sight of its containers, or whose forwarder did not start,
+   writes none of the three from then on, and its hold reserves no growth.
    `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s` hold for the attempt: the run
    writes them once, when its command starts, before its first tick. For a hold that reserves
    memory it also reads `trim.json` (section 7.13), outside the section, until it finds a request
@@ -2052,7 +2205,9 @@ starts the same command again, under a new hold whose `stops` is the number of s
 A run with `--no-wait` does not come back, since a restart waits for calm: it refuses with the
 refusal code, naming the stop. A forwarder (section 17) belongs to the run, not to an attempt: the
 command started again gets the same `DOCKER_HOST`, and its containers keep counting from their
-first touch.
+first touch. A run with a Docker need (section 12.6) that still sees them comes back gated on it,
+and its new hold's first `docker_growth_mib` takes the stopped attempt's last Docker footprint; the
+restart conditions of section 12.4, its margin included, concern its host need alone.
 
 > **Implementation note.** When the run's start need was learned (section 5.4), the Go CLI asks for
 > the larger of the reached peak and the 90th percentile of the `mem_peak_kib` of the label's last
