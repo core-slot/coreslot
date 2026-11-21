@@ -46,13 +46,17 @@ type HolderInfo struct {
 
 // WatchInfo is the shared watch state in a snapshot.
 type WatchInfo struct {
-	Level      watch.Level
-	Excess     float64 // E, in points, at the newest sample
-	SampledNS  int64   // when, by the wall clock, the newest sample was taken; 0 when none was
-	Fresh      bool    // the newest sample is young enough for admission to read
-	Observe    bool    // [watch] mode is observe: nothing is stopped
-	NextVictim string  // the hold the next stop round lists first; "" when none
-	Learning   int     // running jobs whose label has no normal share yet: no part of E, stopped by a floor round only
+	Level     watch.Level
+	Excess    float64 // E, in points, at the newest sample
+	SampledNS int64   // when, by the wall clock, the newest sample was taken; 0 when none was
+	Fresh     bool    // the newest sample is young enough for admission to read
+	Observe   bool    // the watchdog's mode is observe: nothing is stopped
+	// ModeSource says where the mode comes from, "config" or "override" (this machine's, set by
+	// `coreslot watch`), and ModeUntilNS when an override ends, 0 for until removed or none.
+	ModeSource  string
+	ModeUntilNS int64
+	NextVictim  string // the hold the next stop round lists first; "" when none
+	Learning    int    // running jobs whose label has no normal share yet: no part of E, stopped by a floor round only
 }
 
 // TicketInfo describes one queue entry in a snapshot.

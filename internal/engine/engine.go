@@ -122,7 +122,26 @@ func (e *Engine) Config() (config.Config, error) {
 	if err != nil {
 		return config.Config{}, &store.StateError{Reason: err.Error(), Err: err}
 	}
+	if c.Watch.Observe, _, _, err = e.WatchMode(c.Watch.Observe); err != nil {
+		return config.Config{}, err
+	}
 	return c, nil
+}
+
+// WatchMode is the watchdog's mode given the configuration's (observe or not): this machine's
+// override's while it holds (PROTOCOL.md section 7.15), its until_ns 0 or later than the host's wall
+// clock, else the configuration's. source is "override" or "config", untilNS the override's end (0:
+// until removed, or no override). Every reader of the mode goes through Config, so the ticks, the
+// stop rounds, the run's records and status read one mode.
+func (e *Engine) WatchMode(configured bool) (observe bool, source string, untilNS int64, err error) {
+	mode, until, ok, err := e.st.ReadWatchMode()
+	if err != nil {
+		return configured, "config", 0, err
+	}
+	if !ok || (until != 0 && until <= store.NowNS()) {
+		return configured, "config", 0, nil
+	}
+	return mode == "observe", "override", until, nil
 }
 
 // reading reads the configuration and the machine's memory afresh, as every admission does

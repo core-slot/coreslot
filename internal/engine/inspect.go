@@ -154,7 +154,10 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Tickets[head].WaitS, r.Tickets[head].WaitKnown = w, noPass == ""
 	}
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
-		Fresh: fresh(at, now)}
+		Fresh: fresh(at, now), ModeSource: "config"}
+	if _, src, until, err := e.WatchMode(false); err == nil { // the source and end do not depend on the configured mode
+		r.Watch.ModeSource, r.Watch.ModeUntilNS = src, until
+	}
 	if r.Watch.Fresh { // the newest sample knows which jobs have a learned normal S; this client does not
 		if next, _ := watch.StopList(smp.Jobs, d.Level == watch.Floor, 1, d.Kept, smp.Host.WallNS+now-at); len(next) > 0 {
 			r.Watch.NextVictim = next[0]
