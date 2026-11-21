@@ -218,12 +218,13 @@ func (e *Engine) enterUntil(ctx context.Context) (*store.Section, error) {
 }
 
 // EnqueueContext enters the section, reads FORMAT, reconciles if due, publishes a ticket for
-// req (PROTOCOL.md section 10.1) keeping its lock-carrying descriptor, bumps gen and leaves. When
+// req (PROTOCOL.md section 10.1) keeping its lock-carrying descriptor, bumps gen and leaves; opts
+// change how the ticket waits. When
 // the format is not one this client implements, nothing is written and the error matches
 // ErrRefused. An invalid request is a *spec.UsageError. Its wait for the section ends with ctx: it then returns a
 // *SectionBusyError matching ctx.Err() (or ctx.Err() itself when ctx had already ended) having
 // published nothing. Once inside the section it completes.
-func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket, error) {
+func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request, opts ...EnqueueOption) (*Ticket, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -240,6 +241,9 @@ func (e *Engine) EnqueueContext(ctx context.Context, req spec.Request) (*Ticket,
 		return nil, refuseFormat(n, "")
 	}
 	t := newTicket(e, req)
+	for _, o := range opts {
+		o(t)
+	}
 	if err := t.publish(sec); err != nil {
 		return nil, err
 	}
@@ -258,8 +262,11 @@ func (t *Ticket) publish(sec *store.Section) error {
 	if t.req.ArrivalNS > 0 {
 		arrival = t.req.ArrivalNS
 	}
-	body, err := wire.Encode(wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival,
-		Restart: t.req.Restart})
+	tk := wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival, Restart: t.req.Restart}
+	if t.gated() {
+		tk.DockerNeedMiB = t.req.DockerNeedMiB
+	}
+	body, err := wire.Encode(tk)
 	if err != nil {
 		return err
 	}

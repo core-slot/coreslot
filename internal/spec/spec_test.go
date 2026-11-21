@@ -26,6 +26,12 @@ func TestValidateBounds(t *testing.T) {
 		{"need above the machine", func(r *Request) { r.NeedMiB = 40960 }, true},
 		{"need MaxNeedMiB", func(r *Request) { r.NeedMiB = MaxNeedMiB }, true},
 		{"need above MaxNeedMiB", func(r *Request) { r.NeedMiB = MaxNeedMiB + 1 }, false},
+		// Mutation: dropping the Docker bounds accepts the negative and the oversized values.
+		{"Docker need MaxNeedMiB", func(r *Request) { r.DockerNeedMiB = MaxNeedMiB }, true},
+		{"Docker need above MaxNeedMiB", func(r *Request) { r.DockerNeedMiB = MaxNeedMiB + 1 }, false},
+		{"Docker need negative", func(r *Request) { r.DockerNeedMiB = -1 }, false},
+		{"Docker footprint above MaxNeedMiB", func(r *Request) { r.DockerFootprintMiB = MaxNeedMiB + 1 }, false},
+		{"Docker footprint negative", func(r *Request) { r.DockerFootprintMiB = -1 }, false},
 	}
 	for _, tc := range edge {
 		r := base()

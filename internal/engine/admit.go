@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
@@ -29,86 +28,131 @@ func fresh(atNS, nowNS int64) bool {
 // request, which waits only on real memory (PROTOCOL.md section 12.1 steps 1 to 7). It returns the
 // grant when admitted, nil with no error when the ticket must keep waiting (the section was busy, a
 // live ticket ahead may not be passed, or the live holds leave too little), and ErrCanceled when a
-// cancel request was published before this section.
+// cancel request was published before this section. A gated ticket's attempt leaves the section to
+// read Docker's VM and enters it again, at most three times in all (docker.go).
 func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
+	var at attempt
+	for {
+		g, read, err := t.admitEntry(ctx, single, &at)
+		if g != nil || err != nil || !read {
+			return g, err
+		}
+		t.read(ctx, &at)
+	}
+}
+
+// admitEntry is one section entry of an attempt; read reports that the ticket leaves to read
+// Docker's VM and enters again.
+func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *Grant, read bool, err error) {
 	point("admit.before-enter")
 	sec, entered, err := t.e.enter(ctx, single)
 	if err != nil || !entered {
-		return nil, err
+		return nil, false, err
 	}
 	defer sec.Leave()
 	n, understood, err := sec.Format()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !understood {
-		return nil, refuseFormat(n, "")
+		return nil, false, refuseFormat(n, "")
 	}
 
 	// 1. A cancel request published before this section wins.
 	cancelled, err := t.cancelRequested()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if cancelled {
 		if t.settle(statusCancelled) {
 			t.removeOwn(sec)
 		}
-		return nil, ErrCanceled
+		return nil, false, ErrCanceled
+	}
+	gated := t.gated()
+	if !gated { // a ticket whose Docker part went ungated waits as any other
+		if err := t.unnote(sec); err != nil {
+			return nil, false, err
+		}
 	}
 
 	// 2-4. The room: the headroom less the reserve and what the live holds still have to grow
 	// into. With no hold live the head starts whatever the numbers say; a headroom that cannot be
-	// read gates nothing. A container request's room leaves the holds out.
+	// read gates nothing. A container request's room leaves the holds out, except the VM growth
+	// they reserve when the request is gated. The room and the level gate are the Mac test: when
+	// it fails, a note goes at once.
 	cfg, m, err := t.e.reading()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	holds, _, _, err := holdListing(t.e.st, spec.ColdStartMiB(m.MemMiB))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	need := t.req.NeedMiB
 	var reserved []state.MemHold
-	if !t.req.RealMemory {
+	if !t.req.RealMemory || gated {
 		reserved = reservations(holds)
 	}
 	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reserved)
+	if t.req.RealMemory && gated {
+		room = state.GrowthRoom(m.HeadroomMiB, cfg.ReserveMiB, reserved)
+	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		t.out.Reason = ReasonRoomShort
-		return nil, nil
+		return nil, false, t.unnote(sec)
 	}
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
 	// hold live a container request needs no pass; with none the idle start is the head's.
 	if !t.req.RealMemory || len(holds) == 0 {
 		head, headKey, headOrder, err := t.reelect()
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if head != nil && !t.passes(*head, headKey, headOrder, holds, room, cfg, m) {
 			t.out.Reason = ReasonBehindHead
-			return nil, nil
+			return nil, false, nil
 		}
 	}
+	var record func() // the level gate's record of this start, made only when it admits
 	if len(holds) > 0 {
-		if wait, err := t.watchWait(sec, cfg, m, need, room); wait || err != nil {
-			return nil, err
+		wait, rec, err := t.watchWait(sec, cfg, m, need, room)
+		if err != nil {
+			return nil, false, err
 		}
+		if wait {
+			return nil, false, t.unnote(sec)
+		}
+		record = rec
 	} else {
 		t.out.WatchGate = "no_holds"
 	}
 
-	// 7. Publish the hold, close and unlink the ticket, bump gen. A Withdraw that came first
-	// wins; once the hold is published the ticket is admitted and Withdraw has no effect.
+	// 6. A gated request's VM test, on a reading taken outside the section.
+	var dock *DockerReading
+	if gated {
+		read, admit, err := t.vmTest(sec, holds, at)
+		if read || !admit || err != nil {
+			return nil, read, err
+		}
+		dock = &t.reading
+	}
+	if record != nil {
+		record()
+	}
+
+	// 7. Publish the hold, close and unlink the ticket (and its note), bump gen. A Withdraw that
+	// came first wins; once the hold is published the ticket is admitted and Withdraw has no effect.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.status != statusWaiting {
-		return nil, ErrCanceled
+		return nil, false, ErrCanceled
 	}
-	g := &Grant{e: t.e, grantMiB: need, admission: t.out}
-	if err := g.publishHold(sec, t.req, t.arrivalNS, need); err != nil {
-		return nil, err
+	t.out.DockerUngated = t.ungated
+	g = &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
+	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock); err != nil {
+		return nil, false, err
 	}
 	t.f.Close()
 	_, _ = sec.RemoveOwnTicket(t.name) // already gone counts as success (PROTOCOL.md 10.3)
@@ -116,13 +160,15 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 	// every election, so the closed ticket is passed over without a rescan.
 	_ = sec.BumpGen()
 	t.status, t.grant = statusAdmitted, g
-	return g, nil
+	return g, false, nil
 }
 
-// watchWait reports whether the shared watch state keeps the ticket out while holds are live. The
-// detector's times are on the sample's clock, which the sample's age carries to now. A restart
-// takes its part in the tick, so that calm is measured even when no run ticks.
-func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machine, need, room int64) (bool, error) {
+// watchWait reports whether the shared watch state keeps the ticket out while holds are live, and
+// otherwise returns how to record this start for spacing, nil when it needs no record; the caller
+// records it only when it admits. The detector's times are on the sample's clock, which the
+// sample's age carries to now. A restart takes its part in the tick, so that calm is measured even
+// when no run ticks.
+func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machine, need, room int64) (bool, func(), error) {
 	c := cfg.Watch
 	if t.req.Restart {
 		_, _, _ = sec.Tick(t.e.clock.Realtime(), t.e.sampler(cfg, m), c) // a failed sample is Unknown
@@ -139,43 +185,38 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 	}
 	switch {
 	case err != nil:
-		return false, err
+		return false, nil, err
 	case refused != "":
 		t.out.Reason, t.out.CalmLeftS = refused, float64(calmNS)/1e9
-		return true, nil
+		return true, nil, nil
 	case !ok || d.Level == watch.Unknown:
-		return false, nil
+		return false, nil, nil
 	case d.Level >= watch.Yellow:
 		t.out.Reason = ReasonWatchLevel
-		return true, nil
+		return true, nil, nil
 	// Spacing needs the clear and the last start on this sample's clock: a reboot keeps watch.json.
 	case s.Host.WallNS == 0 || d.YellowClearedNS > mono || d.LastAdmitNS > mono ||
 		mono-d.YellowClearedNS >= int64(c.CalmS*1e9): // no clear within calm_s: no spacing
 	case d.LastAdmitNS >= d.YellowClearedNS && mono-d.LastAdmitNS < spacing:
 		t.out.Reason = ReasonWatchSpacing
-		return true, nil
+		return true, nil, nil
 	default:
-		d.LastAdmitNS = mono
-		_ = sec.SetWatch(d, s, at) // a start it could not record only spaces the next less
+		return false, func() {
+			d.LastAdmitNS = mono
+			_ = sec.SetWatch(d, s, at) // a start it could not record only spaces the next less
+		}, nil
 	}
-	return false, nil
+	return false, nil, nil
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
 // lists the names in queue/, the overrides in order/ and the notes in vmwait/ again and returns the
 // body of the first live ticket ahead of this one in effective order (section 9), the head, with its
 // name's key (the observer's identity) and its effective key; nil when there is none: well-formed,
-// without a note, and neither gone, dead nor STALLED for this observer, reading the mtime (lstat) of
-// only well-formed tickets. A
-// ticket this observer has never watched, such as one published after the election, counts as
-// live; the next election then rescans whatever gen says, so a ticket published without a gen bump
-// is watched from then on and cannot keep the head out for longer than a stall.
+// without a note, and live for this observer (liveAhead), reading the mtime (lstat) of only
+// well-formed tickets.
 func (t *Ticket) reelect() (*wire.Ticket, state.Key, state.Key, error) {
-	entries, err := t.e.st.ListNames(store.QueueDir)
-	if err != nil {
-		return nil, state.Key{}, state.Key{}, err
-	}
-	orders, _, err := t.e.orders()
+	ahead, err := t.listAhead()
 	if err != nil {
 		return nil, state.Key{}, state.Key{}, err
 	}
@@ -183,29 +224,8 @@ func (t *Ticket) reelect() (*wire.Ticket, state.Key, state.Key, error) {
 	if err != nil {
 		return nil, state.Key{}, state.Key{}, err
 	}
-	t.order = orderKey(t.id, orders)
-	type entry struct {
-		name       string
-		key, order state.Key
-	}
-	ahead := make([]entry, 0, len(entries))
-	for _, en := range entries {
-		if o := orderKey(en.ID, orders); o.Less(t.order) {
-			ahead = append(ahead, entry{en.Name, state.Key(en.ID), o})
-		}
-	}
-	slices.SortFunc(ahead, func(a, b entry) int {
-		switch {
-		case a.order.Less(b.order):
-			return -1
-		case b.order.Less(a.order):
-			return 1
-		}
-		return 0
-	})
 	now := t.e.clock.Monotonic()
 	for _, en := range ahead {
-		k := en.key
 		tk, err := t.ticketBody(en.name)
 		if err != nil {
 			return nil, state.Key{}, state.Key{}, err
@@ -213,34 +233,65 @@ func (t *Ticket) reelect() (*wire.Ticket, state.Key, state.Key, error) {
 		if tk == nil {
 			continue
 		}
-		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.name))
-		if gone(err) {
-			continue
-		}
+		live, err := t.liveAhead(en, now)
 		if err != nil {
 			return nil, state.Key{}, state.Key{}, err
 		}
-		dead, err := probe(t.e.st, store.QueueDir, en.name)
-		if gone(err) || stray(err) || err == nil && dead {
-			continue
+		if live && !notes[en.name] {
+			return tk, en.key, en.order, nil
 		}
-		if err != nil {
-			return nil, state.Key{}, state.Key{}, err
-		}
-		if _, seen := t.obs.Seen(k); !seen {
-			t.haveGen = false // rescan at the next election, so that it is watched from then on
-		} else {
-			t.obs.Observe(k, fi.ModTime().UnixNano(), now)
-			if t.obs.Stalled(k, now) {
-				continue
-			}
-		}
-		if notes[en.name] {
-			continue
-		}
-		return tk, k, en.order, nil
 	}
 	return nil, state.Key{}, state.Key{}, nil
+}
+
+// listAhead lists the names in queue/ and the overrides in order/ inside the section: the tickets
+// ahead of this one in effective order (section 9), farthest first.
+func (t *Ticket) listAhead() ([]aheadEntry, error) {
+	entries, err := t.e.st.ListNames(store.QueueDir)
+	if err != nil {
+		return nil, err
+	}
+	orders, _, err := t.e.orders()
+	if err != nil {
+		return nil, err
+	}
+	t.order = orderKey(t.id, orders)
+	ahead := make([]aheadEntry, 0, len(entries))
+	for _, en := range entries {
+		if o := orderKey(en.ID, orders); o.Less(t.order) {
+			ahead = append(ahead, aheadEntry{name: en.Name, key: state.Key(en.ID), order: o})
+		}
+	}
+	sortAhead(ahead)
+	return ahead, nil
+}
+
+// liveAhead reports whether the ticket en ahead is live for this observer at now: neither gone,
+// dead, stray nor STALLED, reading its mtime (lstat) and probing its lock. A ticket this observer
+// has never watched, such as one published after the election, counts as live; the next election
+// then rescans whatever gen says, so a ticket published without a gen bump is watched from then on
+// and cannot keep the head out for longer than a stall.
+func (t *Ticket) liveAhead(en aheadEntry, now time.Duration) (bool, error) {
+	fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, en.name))
+	if gone(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	dead, err := probe(t.e.st, store.QueueDir, en.name)
+	if gone(err) || stray(err) || err == nil && dead {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, seen := t.obs.Seen(en.key); !seen {
+		t.haveGen = false // rescan at the next election, so that it is watched from then on
+		return true, nil
+	}
+	t.obs.Observe(en.key, fi.ModTime().UnixNano(), now)
+	return !t.obs.Stalled(en.key, now), nil
 }
 
 // passes reports whether this ticket may start ahead of head, the first live ticket in the queue,
@@ -356,17 +407,28 @@ type Grant struct {
 	failOpen  string  // the reason of a fail-open run's grant
 	admission Outcome // the attempt that admitted it; never changes
 
+	dockerGated   bool
+	dockerVMMiB   int64
+	dockerUngated string
+
 	mu     sync.Mutex
 	body   wire.Hold // the hold's body as last written
 	closed bool
 }
 
 // publishHold publishes the grant's hold for req, which arrived at arrivalNS, reserving needMiB,
-// inside sec and keeps its descriptor.
-func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64) error {
+// inside sec and keeps its descriptor. A grant admitted on its Docker need by the reading dock
+// carries that need, the VM growth it reserves on the host and the reading's stamp from this first
+// body on.
+func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64, dock *DockerReading) error {
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, PID: os.Getpid(), StartNS: start, ArrivalNS: max(arrivalNS, 0),
 		NeedMiB: needMiB, TypicalS: req.TypicalS}
+	if dock != nil {
+		h.DockerNeedMiB, h.DockerSampledNS = req.DockerNeedMiB, max(dock.StartedNS, 0)
+		h.DockerGrowthMiB = min(state.Growth(dock.VMMiB, dock.VMNowMiB, req.DockerNeedMiB, req.DockerFootprintMiB), spec.MaxNeedMiB)
+		g.dockerGated, g.dockerVMMiB = true, dock.VMMiB
+	}
 	f, name, err := sec.PublishHold(h, g.e.seq())
 	if err != nil {
 		return err

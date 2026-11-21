@@ -14,6 +14,8 @@ const (
 	ReasonBehindTicket, ReasonSectionBusy, ReasonRoomShort, ReasonBehindHead, ReasonWatchLevel, ReasonWatchSpacing,
 	ReasonRestartStale, ReasonRestartLevel, ReasonRestartCalm, ReasonRestartMargin WaitReason = "behind_ticket", "section_busy", "room_short", "behind_head", "watch_level", "watch_spacing",
 		"restart_stale", "restart_level", "restart_calm", "restart_margin"
+	// A gated ticket that fits on the host waits for room in Docker's VM, or for a reading of it.
+	ReasonVMRoomShort, ReasonDockerNoReading WaitReason = "vm_room_short", "docker_no_reading"
 )
 
 // Outcome is what the ticket's last admission attempt decided and the numbers it used. Comparable, carried by value.
@@ -27,6 +29,8 @@ type Outcome struct {
 	HeadroomMiB, ReserveMiB, RoomMiB int64
 	HeadroomOK                       bool
 	WatchGate                        string // checked, stale, unknown, no_holds
+	Noted                            bool   // the ticket has its note: it fits on the host and waits for Docker's VM
+	DockerUngated                    string // why a request with a Docker need is not gated (Grant.DockerUngated)
 }
 
 // Admission is the outcome of the attempt that admitted the grant; zero for a grant no attempt made.
