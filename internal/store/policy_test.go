@@ -92,12 +92,12 @@ func TestOpenCreatesLayoutWithModes(t *testing.T) {
 }
 
 func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
-	// A directory written by a client of format 4: the format-stable file and FORMAT only.
+	// A directory written by a client of the next format: the format-stable file and FORMAT only.
 	dir := newDir(t)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{AdmitLock: "", FormatFile: "coreslot-protocol 4\n"} {
+	for name, body := range map[string]string{AdmitLock: "", FormatFile: foreignFormat} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +105,7 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	before := snapshot(t, dir)
 	s := open(t, dir)
 	sec := enter(t, s)
-	if n, understood, err := sec.Format(); n != 4 || understood || err != nil {
+	if n, understood, err := sec.Format(); n != Format+1 || understood || err != nil {
 		t.Fatalf("Format = %d, %v, %v", n, understood, err)
 	}
 	// What a client of a foreign format reads must work without the directories it may not create.
@@ -167,6 +167,21 @@ func TestOpenRejectsSymlinkedQueue(t *testing.T) {
 	}
 	_, err = Open(link)
 	wantStateError(t, err, "Open of a symlinked state directory")
+}
+
+// Every directory of the layout is checked when the state directory is opened, order/ and
+// vmwait/ as queue/ is, so status and doctor report a bad one at once. Mutation: leave OrderDir or
+// VMWaitDir out of openDir's list → its row opens without an error.
+func TestOpenRejectsSymlinkedOrderAndVMWait(t *testing.T) {
+	for _, name := range []string{OrderDir, VMWaitDir} {
+		dir := newDir(t)
+		open(t, dir)
+		if err := os.Symlink(t.TempDir(), filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+		_, err := OpenReadOnly(dir)
+		wantStateError(t, err, "OpenReadOnly with "+name+"/ a symlink to a directory")
+	}
 }
 
 func TestOpenRejectsGroupWritable(t *testing.T) {

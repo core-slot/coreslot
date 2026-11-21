@@ -294,10 +294,16 @@ func (v statusView) human() string {
 		if h.Container && h.DockerFootprintMiB == nil {
 			need += "  container: its containers' memory is not measured"
 		}
+		if h.DockerNeedMiB > 0 {
+			need += "  docker_mem " + spec.FormatMiB(h.DockerNeedMiB)
+		}
 		line := fmt.Sprintf("  %s  pid %d  %s  held %s  footprint %s", labelText(h.Label), h.PID, need,
 			duration(time.Duration(max(v.nowNS-h.StartNS, 0))), spec.FormatMiB(h.FootprintMiB))
 		if f := h.DockerFootprintMiB; f != nil {
 			line += "  docker footprint " + spec.FormatMiB(*f)
+		}
+		if h.DockerNeedMiB > 0 {
+			line += "  reserved on the Mac for Docker's VM " + spec.FormatMiB(h.DockerGrowthMiB)
 		}
 		if h.DockerNote != "" {
 			line += "  docker: " + text(h.DockerNote)
@@ -333,8 +339,15 @@ func (v statusView) human() string {
 		if t.position > 0 {
 			pos = fmt.Sprint(t.position)
 		}
-		line := fmt.Sprintf("  %s. %s  pid %d  need mem %s  waiting %s", pos, labelText(t.info.Label),
-			t.info.PID, spec.FormatMiB(t.info.NeedMiB), duration(t.waited))
+		need := "mem " + spec.FormatMiB(t.info.NeedMiB)
+		if t.info.DockerNeedMiB > 0 {
+			need += " and docker_mem " + spec.FormatMiB(t.info.DockerNeedMiB)
+		}
+		line := fmt.Sprintf("  %s. %s  pid %d  need %s  waiting %s", pos, labelText(t.info.Label),
+			t.info.PID, need, duration(t.waited))
+		if t.info.Noted {
+			line += "  waits for Docker's VM"
+		}
 		switch t.state {
 		case "stalled":
 			line += "  STALLED"
@@ -511,6 +524,10 @@ type jsonHold struct {
 	// DockerFootprintMiB is present, 0 included, while its run counts its own containers.
 	DockerFootprintMiB *int64 `json:"docker_footprint_mib,omitempty"`
 	DockerNote         string `json:"docker_note,omitempty"`
+	// DockerNeedMiB and DockerGrowthMiB are present while the hold is gated on Docker's VM: its
+	// Docker need and the VM growth it reserves on the Mac.
+	DockerNeedMiB   int64 `json:"docker_need_mib,omitempty"`
+	DockerGrowthMiB int64 `json:"docker_growth_mib,omitempty"`
 }
 
 type jsonTicket struct {
@@ -527,6 +544,8 @@ type jsonTicket struct {
 	// ExpectedWaitS is the passing rule's expected wait for the first live ticket, null for every
 	// other ticket and where the rule leaves it unknown.
 	ExpectedWaitS *int64 `json:"expected_wait_s"`
+	DockerNeedMiB int64  `json:"docker_need_mib,omitempty"` // a gated ticket's Docker need
+	VMWait        bool   `json:"vm_wait,omitempty"`         // it fits on the Mac and waits for Docker's VM
 }
 
 func (v statusView) document() jsonStatus {
@@ -569,7 +588,7 @@ func (v statusView) document() jsonStatus {
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
 			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable,
-			DockerFootprintMiB: h.DockerFootprintMiB, DockerNote: h.DockerNote}
+			DockerFootprintMiB: h.DockerFootprintMiB, DockerNote: h.DockerNote, DockerNeedMiB: h.DockerNeedMiB, DockerGrowthMiB: h.DockerGrowthMiB}
 		if h.TypicalS > 0 {
 			jh.LeftS = &h.LeftS
 		}
@@ -578,7 +597,7 @@ func (v statusView) document() jsonStatus {
 	for _, t := range v.tickets {
 		jt := jsonTicket{Name: t.info.Name, ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
 			NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
-			Position: t.position, State: t.state}
+			Position: t.position, State: t.state, DockerNeedMiB: t.info.DockerNeedMiB, VMWait: t.info.Noted}
 		if t.info.WaitKnown {
 			jt.ExpectedWaitS = &t.info.WaitS
 		}

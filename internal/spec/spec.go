@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// Bounds of format 3 (PROTOCOL.md section 7).
+// Bounds of format 4 (PROTOCOL.md section 7).
 const (
 	MaxLabelBytes = 128
 	// MaxNeedMiB bounds every MiB amount of a body (1 PiB), so that summing a full directory of
@@ -28,6 +28,12 @@ type Request struct {
 	Restart    bool  // a stopped command coming back: it waits for calm and a margin over its need
 	TypicalS   int64 // the label's typical run time in whole seconds; 0 is unknown, which never passes
 	RealMemory bool  // a container request: it waits only on real memory; the waiter's own, never written (PROTOCOL.md section 12.1)
+	// DockerNeedMiB is the memory the run asks for inside Docker's VM; 0 is none. With a Docker
+	// source (engine.WithDocker) it gates the request.
+	DockerNeedMiB int64
+	// DockerFootprintMiB is what the run's containers already use, for a stopped command coming
+	// back; 0 otherwise.
+	DockerFootprintMiB int64
 }
 
 // UsageError reports input that can never be valid: the CLI's exit 64.
@@ -56,6 +62,10 @@ func ParseDigits(s string) (int, bool) {
 func (r Request) Validate() error {
 	if r.NeedMiB < 1 || r.NeedMiB > MaxNeedMiB {
 		return usagef("a need of %d MiB: want 1 to %d", r.NeedMiB, MaxNeedMiB)
+	}
+	if min(r.DockerNeedMiB, r.DockerFootprintMiB) < 0 || max(r.DockerNeedMiB, r.DockerFootprintMiB) > MaxNeedMiB {
+		return usagef("a Docker need of %d MiB with %d MiB used: want 0 to %d each", r.DockerNeedMiB,
+			r.DockerFootprintMiB, MaxNeedMiB)
 	}
 	return ValidateLabel(r.Label)
 }

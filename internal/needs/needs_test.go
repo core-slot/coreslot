@@ -118,3 +118,24 @@ func show(b *bool) string {
 	}
 	return strconv.FormatBool(*b)
 }
+
+// docker_mem is a size above 0, as mem is: the label's Docker need in MiB. "0" or a value that is
+// not a size makes the whole entry unreadable, as a bad docker_forward does, so that the run gets
+// neither a forwarder nor a gate. Mutation: accept 0 → the "0" row is read, red.
+func TestNeedsDockerMem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "needs.toml")
+	write(t, path, "[needs.\"a\"]\ndocker_mem = \"2G\"\n[needs.\"b\"]\ndocker_mem = 3\n")
+	f := load(t, path)
+	for label, want := range map[string]int64{"a": 2048, "b": 3072} {
+		if e, ok, err := f.Lookup(label); err != nil || !ok || e.DockerMemMiB != want || e.MemMiB != 0 {
+			t.Errorf("Lookup(%q) = %+v, %v, %v; want DockerMemMiB %d", label, e, ok, err, want)
+		}
+	}
+	for _, v := range []string{`"0"`, `0`, `"lots"`} {
+		write(t, path, "[needs.\"a\"]\nmem = \"1G\"\ndocker_mem = "+v+"\n")
+		e, ok, err := load(t, path).Lookup("a")
+		if ok || err == nil || !strings.Contains(err.Error(), "docker_mem") || e.MemMiB != 0 {
+			t.Errorf("docker_mem = %s: Lookup = %+v, %v, %v; want an error naming docker_mem and no entry", v, e, ok, err)
+		}
+	}
+}

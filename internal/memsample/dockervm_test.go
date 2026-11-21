@@ -9,6 +9,7 @@ const (
 	appleVM = "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
 	backend = "/Applications/Docker.app/Contents/MacOS/com.docker.backend"
 	krun    = "/Applications/Docker.app/Contents/MacOS/com.docker.krun"
+	sailor  = "/Applications/Docker.app/Contents/MacOS/com.docker.sailor"
 )
 
 func proc(pid int, exec string, coalition uint64) vmProc {
@@ -135,5 +136,41 @@ func TestDockerVMNameFromPathNotComm(t *testing.T) {
 func TestDockerVMUnlistableIsNotIdentified(t *testing.T) {
 	if got := dockerVM(func() ([]vmProc, bool) { return nil, false }, fakeFootprint); got.State != VMNotIdentified {
 		t.Errorf("DockerVM = %+v, want VMNotIdentified", got)
+	}
+}
+
+// Docker VMM's VM, com.docker.sailor, in the coalition of Docker's backend is identified as the
+// Apple backend's VM is. Mutation: dropping it from the VM programs gives VMNotRunning.
+func TestDockerVMFindsSailor(t *testing.T) {
+	got := dockerVM(fakeTable(proc(6, backend, 1147), proc(7, krun, 1147), proc(8, sailor, 1147)), fakeFootprint)
+	if want := (VM{State: VMIdentified, PID: 8, StartNS: 80, FootprintMiB: 800}); got != want {
+		t.Errorf("DockerVM = %+v, want %+v", got, want)
+	}
+}
+
+// One VM of each program in Docker's coalition is two candidates: not identified. Mutation: looking
+// for the programs one after the other, the first found winning, identifies one.
+func TestDockerVMOneOfEachNotIdentified(t *testing.T) {
+	got := dockerVM(fakeTable(proc(6, backend, 1147), proc(8, appleVM, 1147), proc(9, sailor, 1147)), fakeFootprint)
+	if got != (VM{State: VMNotIdentified}) {
+		t.Errorf("DockerVM = %+v, want VMNotIdentified", got)
+	}
+}
+
+// A com.docker.sailor outside Docker's coalition is not Docker's VM. Mutation: matching the sailor
+// by name alone identifies it.
+func TestSailorOutsideDockerCoalitionNotRunning(t *testing.T) {
+	got := dockerVM(fakeTable(proc(6, backend, 1147), proc(9, sailor, 2000)), fakeFootprint)
+	if got != (VM{State: VMNotRunning}) {
+		t.Errorf("DockerVM = %+v, want VMNotRunning", got)
+	}
+}
+
+// The kernel keeps 16 bytes of com.docker.sailor, com.docker.sailo: a process of that name whose
+// path cannot be read may be Docker VMM's VM, which leaves the answer open. Mutation: leaving the
+// sailor out of mayBeOfInterest makes it false.
+func TestMayBeOfInterestSailor(t *testing.T) {
+	if !mayBeOfInterest("com.docker.sailo") {
+		t.Error(`mayBeOfInterest("com.docker.sailo") = false, want true`)
 	}
 }

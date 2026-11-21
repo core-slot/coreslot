@@ -48,7 +48,7 @@ func TestListVMProcsReadsPathNotName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	copyPath := filepath.Join(t.TempDir(), dockerVMExe)
+	copyPath := filepath.Join(t.TempDir(), dockerVMExes[0])
 	src, err := os.ReadFile(self)
 	if err != nil {
 		t.Fatal(err)
@@ -79,10 +79,10 @@ func TestListVMProcsReadsPathNotName(t *testing.T) {
 			found = &procs[i]
 		}
 	}
-	if found == nil || !exeIs(found.Exec, dockerVMExe) {
-		t.Fatalf("the helper is %+v, want an executable named %s", found, dockerVMExe)
+	if found == nil || !exeIs(found.Exec, dockerVMExes[0]) {
+		t.Fatalf("the helper is %+v, want an executable named %s", found, dockerVMExes[0])
 	}
-	if name, _ := procName(found.PID); name == dockerVMExe {
+	if name, _ := procName(found.PID); name == dockerVMExes[0] {
 		t.Errorf("procName kept all %d bytes of the name; the test no longer shows the truncation", len(name))
 	}
 	be := vmProc{PID: os.Getpid(), Exec: "/x/" + dockerBackendExe, Coalition: found.Coalition}

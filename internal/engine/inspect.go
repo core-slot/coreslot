@@ -34,7 +34,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 3
+		r.FormatUnderstood = true // the first entry writes format 4
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}
@@ -60,6 +60,10 @@ func (e *Engine) Snapshot() (Report, error) {
 		return Report{}, err
 	}
 	r.Ignored[store.OrderDir] = ignored
+	notes, err := e.notes()
+	if err != nil {
+		return Report{}, err
+	}
 	// Queue order is the effective order (PROTOCOL.md section 9): an override's key, else the name's.
 	slices.SortStableFunc(tickets, func(a, b store.Entry) int {
 		ka, kb := orderKey(a.ID, orders), orderKey(b.ID, orders)
@@ -107,7 +111,7 @@ func (e *Engine) Snapshot() (Report, error) {
 		}
 		r.Tickets = append(r.Tickets, TicketInfo{Name: en.Name, ID: en.ID.String(), Label: tk.Label,
 			PID: en.ID.PID, NeedMiB: tk.NeedMiB, CreatedNS: tk.CreatedNS,
-			MtimeNS: en.MtimeNS, Dead: dead})
+			MtimeNS: en.MtimeNS, Dead: dead, DockerNeedMiB: tk.DockerNeedMiB, Noted: notes[en.Name]})
 	}
 
 	live, dead, ignored, err := holdListing(e.st, spec.ColdStartMiB(machine.MemMiB))

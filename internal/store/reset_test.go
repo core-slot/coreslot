@@ -15,9 +15,9 @@ import (
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
-// resetFixture fills a state directory of format 3 with one of everything a reset removes (dead
-// tickets and holds, a cancel request, a stray, a temporary file, degraded, gen, FORMAT), the run
-// and watch logs, which a repair keeps and a format change removes, and everything it keeps
+// resetFixture fills a state directory of the current format with one of everything a reset removes
+// (dead tickets and holds, a cancel request, a stray, a temporary file, degraded, gen, FORMAT), the
+// run and watch logs, which a repair keeps and a format change removes, and everything it keeps
 // (admit.lock, config.toml). It returns the section the caller is in.
 func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	t.Helper()
@@ -68,8 +68,8 @@ func resetFixture(t *testing.T, dir string) (*Store, *Section) {
 	return s, sec
 }
 
-// A reset of a format-3 state with nothing alive (a repair) removes the entries of queue/,
-// holds/ and cancel/, degraded and gen, writes FORMAT 3, and keeps admit.lock (with the same
+// A reset of a current-format state with nothing alive (a repair) removes the entries of queue/,
+// holds/ and cancel/, degraded and gen, writes FORMAT 4, and keeps admit.lock (with the same
 // inode), config.toml and the run and watch logs, which every label's learned need and normal
 // stall share come from. Mutation: remove log/ on every reset and the logs are gone.
 func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
@@ -101,8 +101,8 @@ func TestResetRemovesEverythingButTheAnchors(t *testing.T) {
 			t.Errorf("a repair removed log/%s", name)
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, FormatFile)); err != nil || string(b) != "coreslot-protocol 3\n" {
-		t.Errorf("FORMAT after the reset: %q, %v; want coreslot-protocol 3", b, err)
+	if b, err := os.ReadFile(filepath.Join(dir, FormatFile)); err != nil || string(b) != currentFormat {
+		t.Errorf("FORMAT after the reset: %q, %v; want %q", b, err, currentFormat)
 	}
 	for _, f := range []string{DegradedFile, GenFile} {
 		if exists(filepath.Join(dir, f)) {
@@ -181,7 +181,7 @@ func TestResetRepairsMalformedFormat(t *testing.T) {
 	if err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %v", live, err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 3\n" {
+	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != currentFormat {
 		t.Errorf("the malformed FORMAT was not replaced: %q", b)
 	}
 	if got := names(t, filepath.Join(dir, LogDir)); len(got) != 0 || done.LogRemoved != 2 || done.FormatErr == nil {
@@ -189,9 +189,9 @@ func TestResetRepairsMalformedFormat(t *testing.T) {
 	}
 }
 
-// A state directory without FORMAT is one the first client writes as format 3 (PROTOCOL.md
+// A state directory without FORMAT is one the first client writes as format 4 (PROTOCOL.md
 // section 15.1), so its reset is a repair that keeps the run and watch logs. Mutation: keep log/
-// only when FORMAT is present and names format 3.
+// only when FORMAT is present and names format 4.
 func TestResetWithoutFormatIsARepair(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
@@ -205,8 +205,8 @@ func TestResetWithoutFormatIsARepair(t *testing.T) {
 	if got := names(t, filepath.Join(dir, LogDir)); len(got) != 2 || done.LogKept != 2 || done.LogRemoved != 0 {
 		t.Errorf("log/ holds %v after the reset, which did %+v; want both logs kept", got, done)
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 3\n" {
-		t.Errorf("FORMAT after the reset: %q, want coreslot-protocol 3", b)
+	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != currentFormat {
+		t.Errorf("FORMAT after the reset: %q, want %q", b, currentFormat)
 	}
 }
 
@@ -305,13 +305,13 @@ func setOtherLengthHolder(t *testing.T, dir string) {
 	}
 }
 
-// A reset recreates a directory of any other format as format 3: FORMAT 1 with its res/
+// A reset recreates a directory of any other format as format 4: FORMAT 1 with its res/
 // directory, a newer format with an entry no grammar of this client describes, and format 0 all
-// end as an empty layout under FORMAT 3, admit.lock kept, the run and watch logs of the other
+// end as an empty layout under FORMAT 4, admit.lock kept, the run and watch logs of the other
 // format removed with the rest. Mutations: skip the res/ removal and the format-1 case keeps
 // res/; keep log/ on every reset and the logs survive.
 func TestResetRecreatesAForeignFormat(t *testing.T) {
-	for _, body := range []string{"coreslot-protocol 1\n", "coreslot-protocol 4\n", "coreslot-protocol 0", "coreslot-protocol 007\n"} {
+	for _, body := range []string{"coreslot-protocol 1\n", foreignFormat, "coreslot-protocol 0", "coreslot-protocol 007\n"} {
 		t.Run(body, func(t *testing.T) {
 			dir := newDir(t)
 			_, sec := resetFixture(t, dir)
@@ -333,8 +333,8 @@ func TestResetRecreatesAForeignFormat(t *testing.T) {
 			if done.LogRemoved != 2 || done.LogKept != 0 || done.FormatErr != nil {
 				t.Errorf("Reset did %+v; want the 2 entries of log/ removed under a readable FORMAT", done)
 			}
-			if b, err := os.ReadFile(filepath.Join(dir, FormatFile)); err != nil || string(b) != "coreslot-protocol 3\n" {
-				t.Errorf("FORMAT %q, %v; want coreslot-protocol 3", b, err)
+			if b, err := os.ReadFile(filepath.Join(dir, FormatFile)); err != nil || string(b) != currentFormat {
+				t.Errorf("FORMAT %q, %v; want %q", b, err, currentFormat)
 			}
 			if exists(filepath.Join(dir, "res")) || len(names(t, filepath.Join(dir, QueueDir))) != 0 {
 				t.Errorf("res/ or queue/ entries survived: %v", names(t, dir))
@@ -444,16 +444,17 @@ func TestSectionHeldProbe(t *testing.T) {
 }
 
 // telemetry/ is handled as log/ is: a repair keeps its files, and so does the upgrade from format
-// 2, which format 3 only extends by order/; a format change removes them, and its files are counted
-// in Removed only, never in LogKept or LogRemoved. Mutations: leaving TelemetryDir out of the reset
-// keeps the files in the last case; counting them as the run log raises LogKept or LogRemoved;
-// dropping UpgradedFormat from the repair test removes them in the upgrade.
+// 3, which format 4 only extends by vmwait/ and optional keys; format 2 is another format now, and
+// a format change removes them, and its files are counted in Removed only, never in LogKept or
+// LogRemoved. Mutations: leaving TelemetryDir out of the reset keeps the files in the last cases;
+// counting them as the run log raises LogKept or LogRemoved; dropping UpgradedFormat from the
+// repair test removes them in the upgrade.
 func TestResetHandlesTelemetryDir(t *testing.T) {
 	for _, tc := range []struct {
 		name, format string
 		kept         bool
-	}{{"repair", "coreslot-protocol 3\n", true}, {"upgrade from 2", "coreslot-protocol 2\n", true},
-		{"format change", "coreslot-protocol 4\n", false}} {
+	}{{"repair", currentFormat, true}, {"upgrade from 3", fmt.Sprintf("coreslot-protocol %d\n", UpgradedFormat), true},
+		{"format 2 is another format", "coreslot-protocol 2\n", false}, {"format change", foreignFormat, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := newDir(t)
 			_, sec := resetFixture(t, dir)
@@ -490,30 +491,75 @@ func TestResetHandlesTelemetryDir(t *testing.T) {
 	}
 }
 
-// A reset empties order/ with queue/: an override names a waiting ticket, and none survives a reset.
-// The upgrade from format 2 writes FORMAT 3. Mutation: leaving OrderDir out of the reset keeps the
-// override.
-func TestResetEmptiesOrderAndUpgrades(t *testing.T) {
+// A reset empties order/ and vmwait/ with queue/: an override names a waiting ticket, and so does a
+// note, and none survives a reset; the directories themselves stay. The upgrade from format 3 keeps
+// the run log and writes FORMAT 4. Mutations: leaving VMWaitDir out of the reset keeps the note;
+// leaving OrderDir out keeps the override.
+func TestResetClearsVMWaitAndOrder(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol 2\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FormatFile), fmt.Appendf(nil, "coreslot-protocol %d\n", UpgradedFormat), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	id := wire.ID{OrderKey: 1791720000000000000, PID: 4711, Seq: 1}
 	if err := sec.PublishOrder(id, []byte(`{"order_ns":5}`)); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(dir, VMWaitDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, VMWaitDir, ticketName(1)), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	live, done, err := sec.Reset()
 	if err != nil || !live.Empty() {
 		t.Fatalf("Reset = %+v, %+v, %v", live, done, err)
 	}
-	if got := names(t, filepath.Join(dir, OrderDir)); len(got) != 0 {
-		t.Errorf("order/ still holds %v", got)
+	for _, d := range []string{OrderDir, VMWaitDir} {
+		if !exists(filepath.Join(dir, d)) {
+			t.Errorf("the reset removed %s/ itself", d)
+		} else if got := names(t, filepath.Join(dir, d)); len(got) != 0 {
+			t.Errorf("%s/ still holds %v", d, got)
+		}
 	}
 	if done.LogKept != 2 {
-		t.Errorf("the upgrade from format 2 kept %d entries of log/, want 2", done.LogKept)
+		t.Errorf("the upgrade from format %d kept %d entries of log/, want 2", UpgradedFormat, done.LogKept)
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 3\n" {
-		t.Errorf("FORMAT %q after the upgrade, want coreslot-protocol 3", b)
+	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != currentFormat {
+		t.Errorf("FORMAT %q after the upgrade, want %q", b, currentFormat)
+	}
+}
+
+// A reset of a format-3 directory is the upgrade to 4: it keeps the run log and the telemetry and
+// writes FORMAT 4. A format-2 directory is now another format: its run log and telemetry go.
+// Mutation: UpgradedFormat = 2 keeps format 2's files and removes format 3's.
+func TestResetFromThreeKeepsLogAndTelemetry(t *testing.T) {
+	for _, tc := range []struct {
+		format int
+		kept   bool
+	}{{3, true}, {2, false}} {
+		t.Run(fmt.Sprint("format ", tc.format), func(t *testing.T) {
+			dir := newDir(t)
+			_, sec := resetFixture(t, dir)
+			if err := os.WriteFile(filepath.Join(dir, FormatFile), fmt.Appendf(nil, "coreslot-protocol %d\n", tc.format), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(dir, TelemetryDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, TelemetryDir, EventsFile), []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if live, done, err := sec.Reset(); err != nil || !live.Empty() {
+				t.Fatalf("Reset = %+v, %+v, %v", live, done, err)
+			}
+			logs, tel := names(t, filepath.Join(dir, LogDir)), names(t, filepath.Join(dir, TelemetryDir))
+			if kept := len(logs) == 2 && len(tel) == 1; kept != tc.kept || (!tc.kept && len(logs)+len(tel) != 0) {
+				t.Errorf("after the reset of format %d log/ holds %v and telemetry/ %v; want them kept: %v", tc.format, logs, tel, tc.kept)
+			}
+			if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != currentFormat {
+				t.Errorf("FORMAT %q after the reset, want %q", b, currentFormat)
+			}
+		})
 	}
 }

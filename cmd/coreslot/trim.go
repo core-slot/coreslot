@@ -181,9 +181,10 @@ func askedMiB(h engine.HolderInfo) int64 {
 	return h.NeedMiB
 }
 
-// containerLine says, for container work, what a trimmed reservation cannot follow.
+// containerLine says, for container work whose containers are not measured, what a trimmed
+// reservation cannot follow.
 func containerLine(w io.Writer, h engine.HolderInfo) {
-	if h.Container {
+	if h.Container && h.DockerFootprintMiB == nil {
 		fmt.Fprintln(w, "coreslot: its containers' memory is not measured, so its reservation follows the client's own memory")
 	}
 }

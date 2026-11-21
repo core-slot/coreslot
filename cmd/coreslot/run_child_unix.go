@@ -14,7 +14,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/telemetry"
 	"github.com/core-slot/coreslot/internal/watch"
@@ -35,13 +37,34 @@ func (r *run) admitted(e *engine.Engine, g *engine.Grant) int {
 		grant:    g,
 		hold:     g.HoldName(),
 	}
+	r.gate, r.ungated = nil, ""
+	switch {
+	case g.DockerGated():
+		r.gate = &dockerGate{needMiB: r.dockerNeedMiB, vMiB: g.DockerVMMiB()}
+	case g.DockerUngated() != "":
+		r.ungated = "ungated: " + g.DockerUngated()
+		r.sayUngated()
+	}
 	if r.fw.upstream != "" && r.fwd == nil { // a restart keeps the forwarder of the first attempt
 		r.startForwarding()
+	}
+	if r.fwd == nil { // without its forwarder a run cannot see what its need turns into
+		r.dockerNeedMiB = 0
 	}
 	if r.fwd != nil {
 		c.env = withDockerHost(c.env, r.fwd.addr)
 	}
 	return r.runChild(c)
+}
+
+// sayUngated says why the attempt's Docker part runs ungated: its command starts without waiting
+// for room in Docker's VM.
+func (r *run) sayUngated() {
+	why := "Docker cannot be read"
+	if r.ungated == docker.NoteOversized {
+		why = "the Docker need of " + spec.FormatMiB(r.dockerNeedMiB) + " can never fit Docker's VM"
+	}
+	r.notice("%s: %s; %s starts without waiting for room in Docker's VM", r.ungated, why, commandText(r.o.argv))
 }
 
 // child is what a run starts its command with.

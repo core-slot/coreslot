@@ -5,8 +5,8 @@ did in `$S/telemetry/`. It is off by default. coreslot sends nothing anywhere an
 connection itself; while the record is on, a run doing container work reads memory from the local Docker
 socket, a unix socket ([`containers`](#containers)). That is not the only Docker reading: on macOS a run
 with a forwarder relays whatever connects to the forwarder's socket, and what is still open after its
-command, and reads its own containers' memory every 6 s, record or not
-([README](../README.md#how-it-decides)). `[watch] sample_log = true`, deprecated,
+command, and reads its own containers' memory every 6 s, and a run with a Docker need reads Docker's
+VM while it waits, at most once every 2 s plus one immediate retry, record or not ([README](../README.md#how-it-decides)). `[watch] sample_log = true`, deprecated,
 writes `samples.jsonl` alone and nothing else.
 
 The directory is optional and its absence is normal: no admission reads it, and it is not part of
@@ -149,7 +149,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 
 | key | meaning |
 |---|---|
-| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin` |
+| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
 | `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time from its start to the end of its first step: reading the configuration, publishing the ticket, which waits for the admission section while that is held, and that step |
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
@@ -230,7 +230,7 @@ Nothing is written where processes cannot be swept.
 
 | key | meaning |
 |---|---|
-| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name`, `footprint_mib`, `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
+| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor` (Docker VMM) in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name`, `footprint_mib` (on Apple's hypervisor the most the guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now, file cache included), `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
 | `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
 
 ### `containers`

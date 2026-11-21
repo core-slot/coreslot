@@ -271,7 +271,7 @@ func TestFreshMachineRunsQuietly(t *testing.T) {
 	if want := int64(confHeadroomMiB - config.DefaultReserveMiB); rep.Mem.FreeMiB != want {
 		t.Errorf("mem %+v, want %d MiB free", rep.Mem, want)
 	}
-	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != 3 {
+	if rep.Degraded != nil || rep.ConfigError != "" || rep.FormatError != "" || rep.Format != store.Format {
 		t.Errorf("degraded %v, config error %v, format %d %v", rep.Degraded, rep.ConfigError, rep.Format, rep.FormatError)
 	}
 	for _, name := range []string{store.ConfigFile, store.DegradedFile} {

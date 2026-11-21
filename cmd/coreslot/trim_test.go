@@ -159,11 +159,11 @@ func TestTrimRefusals(t *testing.T) {
 
 	t.Run("another format", func(t *testing.T) {
 		dir := stateDir(t, "")
-		if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 4\n"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte(foreignFormat), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		r := cli(t, baseEnv(dir), "trim", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String())
-		want := "coreslot: trim refused: state format 4 is not supported; run coreslot doctor --reset\n"
+		want := fmt.Sprintf("coreslot: trim refused: state format %d is not supported; run coreslot doctor --reset\n", store.Format+1)
 		if r.code != 75 || r.stderr != want {
 			t.Errorf("exit %d, stderr %q; want 75 and %q", r.code, r.stderr, want)
 		}
@@ -333,6 +333,27 @@ func TestStatusShowsHoldIDAskedTrimmed(t *testing.T) {
 		got := doc.Holds[i]
 		if got.ID != want.id || got.AskedMiB == nil || *got.AskedMiB != want.asked || got.Trimmed == nil || *got.Trimmed != want.trimmed {
 			t.Errorf("hold %d: %s; want id %q asked_mib %d trimmed %v", i, statusJSON(t, rep), want.id, want.asked, want.trimmed)
+		}
+	}
+}
+
+// trim says a container hold's containers are not measured only when they are not: a hold with a
+// Docker footprint follows them too, as status says. Mutation: dropping the footprint test prints
+// the line for the measured hold.
+func TestTrimContainerLineOnlyWithoutDockerPart(t *testing.T) {
+	zero := int64(0)
+	for _, c := range []struct {
+		h    engine.HolderInfo
+		said bool
+	}{
+		{engine.HolderInfo{Container: true}, true},
+		{engine.HolderInfo{Container: true, DockerFootprintMiB: &zero}, false},
+		{engine.HolderInfo{}, false},
+	} {
+		var b strings.Builder
+		containerLine(&b, c.h)
+		if said := strings.Contains(b.String(), "not measured"); said != c.said {
+			t.Errorf("hold %+v: said %q, want the line %v", c.h, b.String(), c.said)
 		}
 	}
 }

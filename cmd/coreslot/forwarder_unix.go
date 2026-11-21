@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -17,9 +18,11 @@ import (
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/docker"
+	"github.com/core-slot/coreslot/internal/engine"
 	relay "github.com/core-slot/coreslot/internal/forward"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/testhooks"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 const (
@@ -143,7 +146,7 @@ func (r *run) engage() {
 	selected := selectedContext(env, r.loc.home)
 	upstream, note := docker.Engage(docker.EngageInput{
 		Off:       r.dockerOff,
-		Interest:  r.o.containerCommand() || r.marked,
+		Interest:  r.o.containerCommand() || r.marked || r.entry.DockerMemMiB > 0,
 		Switch:    r.entry.DockerForward,
 		EntryBad:  r.entryBad,
 		UserHost:  env["DOCKER_HOST"],
@@ -278,12 +281,50 @@ func (r *run) forwarderEvents(p *peak) {
 }
 
 // dockerNote is the note the run's hold carries: ungated: blind once the run lost sight of its
-// containers, else its engagement's note.
+// containers, else why the engine ungated the attempt's Docker part, else its engagement's note.
 func (r *run) dockerNote() string {
-	if r.fwd != nil && r.fwd.part.blind() {
+	switch {
+	case r.fwd != nil && r.fwd.part.blind():
 		return docker.NoteBlind
+	case r.ungated != "":
+		return r.ungated
 	}
 	return r.fw.note
+}
+
+// dockerGated reports whether the attempt's hold still reserves its Docker need's growth: it was
+// admitted on it, and its run sees its containers.
+func (r *run) dockerGated() bool {
+	return r.gate != nil && r.fwd != nil && !r.fwd.part.blind()
+}
+
+// setDockerKeys writes into h, for a grant admitted on its Docker need, the growth and stamp of
+// the attempt's last sample, and drops its Docker keys once the attempt is no longer gated (its
+// forwarder did not start, or the run lost sight of its containers). Before the first sample the
+// admission's keys stay.
+func (r *run) setDockerKeys(g *engine.Grant, h *wire.Hold) {
+	switch {
+	case !g.DockerGated():
+	case !r.dockerGated():
+		h.DockerNeedMiB, h.DockerGrowthMiB, h.DockerSampledNS = 0, 0, 0
+	default:
+		growth, known, ns := r.gate.last()
+		if known {
+			h.DockerGrowthMiB = growth
+		}
+		if ns > 0 {
+			h.DockerSampledNS = ns
+		}
+	}
+}
+
+// sampleDocker samples the containers of fwd's part and, for an attempt gated by gate (nil for
+// one that is not), the VM growth its hold reserves; it runs off the tick path.
+func sampleDocker(ctx context.Context, fwd *forwarder, gate *dockerGate) {
+	part := &fwd.part
+	if part.sample(ctx, fwd.upstream) && gate != nil {
+		gate.sampled(part.footprintMiB(), store.NowNS())
+	}
 }
 
 // dockerFootprint is the footprint the run's hold carries: its Docker part's once its forwarder

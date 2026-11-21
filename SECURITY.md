@@ -40,7 +40,7 @@ boundary and does not enforce anything.
   every forwarded command's Docker traffic, registry credentials and build contexts included, for a
   run's life and for the 30 days its swapped socket stays; whoever can write the state directory (its
   run log marks a label's container work) or the needs file decides which labels get `DOCKER_HOST`
-  set. Both are write access of the same, trusted user.
+  set and which wait for Docker's VM (`docker_mem`). Both are write access of the same, trusted user.
 - **One host, one user.** Never share the state directory across users or hosts. Locks on network
   filesystems are not host-local, and a second user's processes are not part of the budget.
   coreslot refuses a state directory on a network, FUSE or VM-shared filesystem (NFS, SMB, AFP,
@@ -103,7 +103,8 @@ coreslot sends nothing anywhere and opens no network connection itself. Its opti
 (`[telemetry]`, off by default) stays in the state directory and holds labels, the names of the
 user's largest processes, whether or not coreslot runs them, and container image names; while it is on, a run doing container
 work reads memory from the local Docker socket. On macOS a run with a forwarder relays its command's
-Docker traffic and reads its own containers' memory every 6 s. coreslot links Go's `net` and `net/http` for the forwarder and connects only to unix
+Docker traffic and reads its own containers' memory every 6 s, and a run with a Docker need reads
+Docker's VM and its running containers while it waits, at most once every 2 s plus one immediate retry. coreslot links Go's `net` and `net/http` for the forwarder and connects only to unix
 sockets on this machine. `coreslot status --docker` reads the socket too
 when the user runs it with that flag: it shows the name, image and Compose project of every running container to
 whoever runs it as that user, as any process of the user could read them from the socket itself.

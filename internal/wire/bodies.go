@@ -23,10 +23,11 @@ func malformed(format string, args ...any) error {
 
 // Ticket is the body of a queue entry (PROTOCOL.md section 7.3).
 type Ticket struct {
-	Label     string
-	NeedMiB   int64
-	CreatedNS int64
-	Restart   bool // optional: a stopped run coming back
+	Label         string
+	NeedMiB       int64
+	CreatedNS     int64
+	Restart       bool  // optional: a stopped run coming back
+	DockerNeedMiB int64 // optional: the gated run's Docker need, 1..MaxNeedMiB when present
 }
 
 // Hold is the body of a holds entry (section 7.4): the reservation of a run and what its run last
@@ -54,6 +55,9 @@ type Hold struct {
 	DockerFootprintMiB           *int64  // optional: the growth of the run's containers since its first touch, 0 included; nil when not counted
 	AskedMiB                     int64   // optional: the need the hold was admitted with, 0 when NeedMiB is it
 	Trimmed                      bool    // optional: the holder acted on a request to trim it (trim.json)
+	DockerNeedMiB                int64   // optional: the gated run's Docker need, 1..MaxNeedMiB when present
+	DockerGrowthMiB              int64   // optional: the VM growth the hold reserves on the host
+	DockerSampledNS              int64   // optional: when the run last read its containers' memory
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -71,10 +75,11 @@ type Order struct {
 // ---------------------------------------------------------------- encoding
 
 type ticketJSON struct {
-	Label     string `json:"label"`
-	NeedMiB   int64  `json:"need_mib"`
-	CreatedNS int64  `json:"created_ns"`
-	Restart   bool   `json:"restart,omitempty"`
+	Label         string `json:"label"`
+	NeedMiB       int64  `json:"need_mib"`
+	CreatedNS     int64  `json:"created_ns"`
+	Restart       bool   `json:"restart,omitempty"`
+	DockerNeedMiB int64  `json:"docker_need_mib,omitempty"`
 }
 
 type holdJSON struct {
@@ -103,6 +108,9 @@ type holdJSON struct {
 	DockerFootprintMiB *int64  `json:"docker_footprint_mib,omitempty"`
 	AskedMiB           int64   `json:"asked_mib,omitempty"`
 	Trimmed            bool    `json:"trimmed,omitempty"`
+	DockerNeedMiB      int64   `json:"docker_need_mib,omitempty"`
+	DockerGrowthMiB    int64   `json:"docker_growth_mib,omitempty"`
+	DockerSampledNS    int64   `json:"docker_sampled_ns,omitempty"`
 }
 
 type cancelJSON struct {
@@ -187,6 +195,9 @@ func (t Ticket) validate() error {
 	if t.CreatedNS < 0 {
 		return malformed("created_ns is negative")
 	}
+	if t.DockerNeedMiB < 0 || t.DockerNeedMiB > spec.MaxNeedMiB {
+		return malformed("docker_need_mib is in [1, %d] when present", spec.MaxNeedMiB)
+	}
 	return nil
 }
 
@@ -209,11 +220,12 @@ func (h Hold) validate() error {
 		return malformed("%v", err)
 	}
 	if h.PID < 0 || h.Stops < 0 ||
-		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS, h.CPUNS, h.NoCPUS) < 0 {
+		min(h.StartNS, h.ArrivalNS, h.TypicalS, h.DUserNS, h.DSysNS, h.DPageWaitNS, h.SampledNS, h.CPUNS, h.NoCPUS, h.DockerSampledNS) < 0 {
 		return malformed("pid, stops and every time are at least 0")
 	}
-	if min(h.NeedMiB, h.FootprintMiB, h.AskedMiB) < 0 || max(h.NeedMiB, h.FootprintMiB, h.AskedMiB) > spec.MaxNeedMiB {
-		return malformed("need_mib, footprint_mib and asked_mib are in [0, %d]", spec.MaxNeedMiB)
+	if min(h.NeedMiB, h.FootprintMiB, h.AskedMiB, h.DockerNeedMiB, h.DockerGrowthMiB) < 0 ||
+		max(h.NeedMiB, h.FootprintMiB, h.AskedMiB, h.DockerNeedMiB, h.DockerGrowthMiB) > spec.MaxNeedMiB {
+		return malformed("need_mib, footprint_mib, asked_mib, docker_need_mib and docker_growth_mib are in [0, %d]", spec.MaxNeedMiB)
 	}
 	if !(h.NormalShare >= 0 && h.NormalShare <= 1) || !(h.StallEWMA >= 0 && h.StallEWMA <= 1) {
 		return malformed("normal_share and stall_ewma are in [0, 1]")
@@ -252,6 +264,9 @@ func DecodeTicket(body []byte) (Ticket, error) {
 		return Ticket{}, err
 	}
 	if t.Restart, err = optional(o, "restart", o.boolean); err != nil {
+		return Ticket{}, err
+	}
+	if t.DockerNeedMiB, err = dockerNeed(o); err != nil {
 		return Ticket{}, err
 	}
 	if err := t.validate(); err != nil {
@@ -303,6 +318,15 @@ func DecodeHold(body []byte) (Hold, error) {
 	if h.AskedMiB, err = optional(o, "asked_mib", o.int64); err != nil {
 		return Hold{}, err
 	}
+	if h.DockerNeedMiB, err = dockerNeed(o); err != nil {
+		return Hold{}, err
+	}
+	if h.DockerGrowthMiB, err = optional(o, "docker_growth_mib", o.int64); err != nil {
+		return Hold{}, err
+	}
+	if h.DockerSampledNS, err = optional(o, "docker_sampled_ns", o.int64); err != nil {
+		return Hold{}, err
+	}
 	if h.DockerNote, err = optional(o, "docker_note", o.str); err != nil {
 		return Hold{}, err
 	}
@@ -341,6 +365,19 @@ func DecodeHold(body []byte) (Hold, error) {
 		return Hold{}, err
 	}
 	return h, nil
+}
+
+// dockerNeed reads the optional docker_need_mib of a ticket or hold: absent is 0, and a present
+// value is at least 1, so that a present 0 is malformed rather than read as no need.
+func dockerNeed(o object) (int64, error) {
+	if _, ok := o["docker_need_mib"]; !ok {
+		return 0, nil
+	}
+	n, err := o.int64("docker_need_mib")
+	if err == nil && n < 1 {
+		return 0, malformed("docker_need_mib is at least 1 when present")
+	}
+	return n, err
 }
 
 // DecodeOrder parses and validates an order override body.

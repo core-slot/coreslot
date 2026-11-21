@@ -160,6 +160,43 @@ forwarder's socket only when its path is at most 96 bytes, so a user name longer
 home directory whose path has a space, gets no forwarder. Java Docker libraries have not been tested
 with it.
 
+**Waiting for Docker's VM.** Give a label a Docker need, `docker_mem = "4G"` in
+[`needs.toml`](#configuration), and each of its runs that gets a forwarder waits until that much
+fits inside Docker Desktop's VM, as well as its own need on the Mac: the VM's memory less what its
+running containers use, less 3 GiB or a quarter of the VM if that is smaller, less what the
+containers of running such runs have yet to take and what such runs waiting ahead of it ask for. A
+run without a forwarder ignores its Docker need. While it waits, the run reads Docker's socket at
+most once every 2 s, plus one immediate retry when a running hold has just sampled its containers,
+and only when it would otherwise start on the Mac; after 8 readings in a row that fail (Docker quit
+or restarting, its VM not found), or once the need can never fit the VM, it waits for the Mac alone
+and says so when it starts. A run that fits on the Mac and waits only for the VM shows `waits for
+Docker's VM` in `status`, and every other run passes it: a `go test` or a `docker compose down`
+behind it starts. Once started, its hold reserves on the Mac the growth its containers may still
+cause the VM, up to twice what they have yet to reach of the need and never more than the VM can
+still grow. `status` shows each hold's `docker_mem`, its `docker footprint` and what is `reserved on
+the Mac for Docker's VM`, and each waiting run's `docker_mem`. Docker Desktop's VM is read on
+Apple's hypervisor and on Docker VMM alike. `--mem` and `mem` stay the memory of the command's own
+processes: on a command named `docker`, a pin reserves that on the Mac and makes it queue as usual,
+so a pin meant as the containers' memory belongs in `docker_mem`.
+
+What the reservation does not hold back:
+
+- It is held from a run's start, not tested before it: a run with a Docker need starts on its own
+  need on the Mac even when the Mac has no room left for the growth. Later runs leave that room,
+  but what goes beyond it shows as memory pressure, and since no stop round stops container work,
+  the watchdog stops other commands to make up for it.
+- Growth caused by Docker work without a Docker need, and by the VM's file cache, is not reserved.
+- A run whose containers never reach its need (a stack that was already up, a need set too large)
+  keeps up to twice the need reserved for as long as it runs, on a VM that has not grown to its
+  size.
+- On Docker VMM the VM gives memory back to the Mac as its containers free it, so a hold reserves
+  for as long as its containers have not filled its need, and for up to 6 s after the VM gives
+  memory back its reservation can be too low. On Apple's hypervisor a VM grown to its size
+  reserves nothing more.
+- Runs behind one that waits for the VM may take Mac memory it needs. Room in the VM goes to
+  waiting runs in arrival order, so containers outside coreslot that keep the VM full hold every
+  such run; only `--timeout` bounds that.
+
 **Under an agent sandbox.** A sandboxed run can make and reach the forwarder's socket only where the
 sandbox admits `~/.coreslot-fw`. For the Claude Code sandbox, add it beside the Docker socket the
 sandbox already allows, with your own home directory in place of `/Users/ana`:
@@ -296,7 +333,7 @@ xattr -d com.apple.quarantine ./coreslot
 `coreslot version` prints the version and the protocol formats it implements. A state directory of
 another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`,
 which also removes that format's run log, so every label learns its memory need again. On a
-directory of this client's format, or of format 2 (which the reset upgrades), the reset is a repair
+directory of this client's format, or of format 3 (which the reset upgrades), the reset is a repair
 and keeps the run log; to make the labels learn again,
 remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 
@@ -421,7 +458,7 @@ trim_window_s = 60    # 2 to 3600: the seconds of use a trimmed job's reservatio
 enabled = false       # true: keep a local record of what each run waited for
 
 [docker]
-enabled = true        # false: never read the Docker socket, for `status --docker` or the record
+enabled = true        # false: never read the Docker socket; no forwarder, no Docker need
 ```
 
 `[watch]` also takes the thresholds and waits
@@ -438,16 +475,17 @@ means, what the record holds and how large it grows. `sample_log` is deprecated:
 the machine samples and nothing else.
 
 Besides the record, coreslot talks to the Docker socket, always a unix socket on this machine, in
-two ways. On macOS every run with a forwarder relays whatever connects to the forwarder's socket,
-and whatever is still open after its command, and reads its own containers' memory every 6 s
-([Docker on macOS](#how-it-decides)). `coreslot status --docker` reads it
+three ways. On macOS every run with a forwarder relays whatever connects to the forwarder's socket,
+and whatever is still open after its command, and reads its own containers' memory every 6 s, and
+a run with a Docker need reads Docker's VM while it waits, at most once every 2 s plus one immediate
+retry ([Docker on macOS](#how-it-decides)). `coreslot status --docker` reads it
 only when you ask: once per call, read-only, within 2 s. It shows Docker Desktop's VM and, for every running
 container, its name, image, Compose project and memory, to whoever runs it as you, so a process of
 yours can learn what your containers are called. `[docker] enabled = false` makes it print `off` and
 open no socket, keeps the record from reading the engine too, and gives no run a forwarder. A value that is not a boolean
-switches it off as well, and `status` and `doctor` say so. It reads only Docker Desktop with its VM
-on the Apple hypervisor; Docker VMM, OrbStack and Colima are not supported in this release, and for
-them it says `not_running`.
+switches it off as well, and `status` and `doctor` say so. It reads only Docker Desktop, on Apple's
+hypervisor or Docker VMM; OrbStack and Colima are not supported, and for them it says
+`not_running`.
 
 `needs.toml`, beside it, pins what a label needs and spares it from stop rounds. A label with a
 space or an `@` is not a bare TOML key, so quote it:
@@ -459,6 +497,7 @@ mem = "3G"            # a pin: learning never replaces it
 [needs."gate:docker"]
 no_restart = true     # never stopped by a stop round, so never restarted; wins over --restart=yes
 docker_forward = true # macOS: always give its runs a forwarder; false: never
+docker_mem = "4G"     # macOS: its runs wait for this much room in Docker's VM
 ```
 
 The state lives in `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`
@@ -485,7 +524,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 3
+- [Protocol](PROTOCOL.md), the normative definition of format 4
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)

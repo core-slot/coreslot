@@ -167,7 +167,8 @@ func waitLoop(ctx context.Context, s stepper, clk waitClock, w io.Writer, line f
 
 // waitingLine is the line a waiting run prints every 30 s, for example `coreslot: waiting for
 // mem 3 GiB: position 2 (1m00s); holders: gate pid 4711 mem 1 GiB (3m12s)`, where 1m00s is how
-// long the run has waited. Why it waits and the holds come from one snapshot.
+// long the run has waited. Why it waits and the holds come from one snapshot, except that a gated
+// run that fits on the Mac says it waits for Docker's VM.
 func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 	why, advice := "", ""
 	var holders []engine.HolderInfo
@@ -175,6 +176,12 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 		if why, holders = r.why(); why != "" {
 			why = "; " + why
 		}
+	}
+	switch w.Outcome.Reason {
+	case engine.ReasonVMRoomShort:
+		why = "; waits for room in Docker's VM"
+	case engine.ReasonDockerNoReading:
+		why = "; waits for a reading of Docker's VM"
 	}
 	r.record.waiting(w)
 	if !r.advised {
@@ -184,7 +191,11 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 	if r.o.request().RealMemory && len(holders) > 0 { // it waits on neither the queue nor the holds
 		place, holders = "", nil
 	}
-	return fmt.Sprintf("coreslot: waiting for %s%s (%s)%s%s%s%s", r.o.needText(), place,
+	need := r.o.needText()
+	if r.dockerNeedMiB > 0 {
+		need += " and docker_mem " + spec.FormatMiB(r.dockerNeedMiB)
+	}
+	return fmt.Sprintf("coreslot: waiting for %s%s (%s)%s%s%s%s", need, place,
 		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
 }
 

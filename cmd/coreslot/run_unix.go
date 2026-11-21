@@ -102,6 +102,12 @@ type run struct {
 	marked   bool        // a counted run of the label's window was container work
 	fw       engagement  // whether the run gets a forwarder: docker.Engage, once before it queues
 	fwd      *forwarder  // the engaged run's forwarder, from its first admission
+	// dockerNeedMiB is the Docker need the run is gated on: its label's docker_mem while it is
+	// engaged, 0 otherwise and once its forwarder failed to start. gate is the attempt admitted on
+	// it, nil for one that was not; ungated the note of an attempt the engine ungated.
+	dockerNeedMiB int64
+	gate          *dockerGate
+	ungated       string
 	// trimWindowS is [watch] trim_window_s from the run's start: the window of a trimmed hold of
 	// any of its attempts.
 	trimWindowS int64
@@ -188,6 +194,10 @@ func (r *run) ordinary(nested bool) int {
 	}
 	r.engage()
 	defer r.endForwarder()
+	if r.fw.upstream != "" { // gating needs the forwarder: a need on a run without one is ignored
+		r.dockerNeedMiB = r.entry.DockerMemMiB
+	}
+	req.DockerNeedMiB = r.dockerNeedMiB
 	for {
 		g, code, ok := r.wait(ctx, cancel, e, req)
 		if !ok {
@@ -222,7 +232,15 @@ func (r *run) ordinary(nested bool) int {
 
 // requeue makes req the request of the command g ran, coming back after a stop. A run whose start
 // need was learned reserves at least its label's peak-only need, so that its bursts are reserved.
+// It keeps its Docker need while it still sees its containers, with what they use now.
 func (r *run) requeue(req *spec.Request, g *engine.Grant) {
+	req.DockerNeedMiB, req.DockerFootprintMiB = 0, 0
+	if r.fwd != nil && !r.fwd.part.blind() {
+		req.DockerNeedMiB = r.dockerNeedMiB
+		if f := r.dockerFootprint(); f != nil {
+			req.DockerFootprintMiB = min(*f, spec.MaxNeedMiB)
+		}
+	}
 	if r.o.needSource == "learned" { // the start need's source, before the first requeue rewrites it
 		r.restartFloorMiB = r.peakNeedMiB
 	}
@@ -276,7 +294,14 @@ func (r *run) wait(ctx context.Context, cancel context.CancelFunc, e *engine.Eng
 		enqCtx, c = context.WithTimeout(ctx, noWaitFor)
 		defer c()
 	}
-	t, err := e.EnqueueContext(enqCtx, req)
+	var opts []engine.EnqueueOption
+	if req.DockerNeedMiB > 0 {
+		opts = append(opts, engine.WithDocker(newDockerSource(r.sockets)))
+	}
+	if r.o.noWait {
+		opts = append(opts, engine.NoWait())
+	}
+	t, err := e.EnqueueContext(enqCtx, req, opts...)
 	if err == nil {
 		r.record.enqueue(e, t, req)
 		if r.o.noWait {

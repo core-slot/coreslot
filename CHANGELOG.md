@@ -8,6 +8,32 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- On macOS, a label's Docker need, `docker_mem` in `needs.toml`: each of its runs that gets a forwarder waits until
+  that much fits inside Docker Desktop's VM, as well as its own need on the Mac, reading Docker's socket at most
+  once every 2 s, plus one immediate retry, while it could otherwise start. Once started, its hold reserves on the
+  Mac the growth its containers may still cause the VM, which comes off every run's room. A run that fits on the Mac
+  and waits only for the VM has a note in the new `vmwait/` directory, and every other run passes over it. After 8
+  failed readings in a row, or for a need that can never fit the VM, the run waits for the Mac alone and says so
+  when it starts. `status` shows each hold's `docker_mem` and what it reserves on the Mac for Docker's VM, and each
+  waiting run's `docker_mem` and VM wait; `status --json` carries them as `docker_need_mib` and `docker_growth_mib`
+  on holds and `docker_need_mib` and `vm_wait` on tickets, under the same `schema` 1. The telemetry `waiting` line's
+  `reason` gains `vm_room_short` and `docker_no_reading`. README, "Waiting for Docker's VM", says what the
+  reservation does not hold back.
+
+### Changed
+
+- **Format 4.** Tickets and holds gain the optional keys `docker_need_mib`, `docker_growth_mib` and
+  `docker_sampled_ns`, and the state directory gains `vmwait/` (`PROTOCOL.md` sections 7.14 and 12.6). Every
+  client must take the holds' VM growth off its room and pass over a noted ticket, so a client of format 3 steps
+  out of the budget with its existing notice. Run `coreslot doctor --reset` once nothing is live: on a format-3
+  directory it is an upgrade that keeps the run log and the telemetry. A format-2 directory is now another format,
+  whose reset removes its run log.
+- Docker VMM is read and budgeted again: Docker Desktop's VM is found on Docker VMM (`com.docker.sailor`) as on
+  Apple's hypervisor, for `status --docker`, the telemetry `memory` line's `vm` and a run's Docker need.
+- `[docker] enabled = false` also turns off every run's Docker need.
+
 ## v0.10.0 (2026-11-21)
 
 ### Added

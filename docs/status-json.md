@@ -50,7 +50,7 @@ is `[]`.
 | `free_est_mib` | int or null | an estimate of what the VM has left: its memory less the containers' usage |
 | `containers` | array | every running container, in the engine's order |
 
-`not_running` means no Docker Desktop VM on the Apple hypervisor was found; nothing was connected to. Docker VMM, OrbStack and Colima are not read in this release: with them it
+`not_running` means no Docker Desktop VM was found, on the Apple hypervisor or on Docker VMM; nothing was connected to. OrbStack and Colima are not read: with them it
 says `not_running` while the engine runs. `other_engine` is an engine that is not Docker Desktop, which has no VM size to show.
 `no_reading` is all or nothing: one failed call leaves no figures.
 
@@ -59,8 +59,8 @@ says `not_running` while the engine runs. `other_engine` is an engine that is no
 | key | type | meaning |
 |---|---|---|
 | `mem_mib` | int or null | the VM's memory as the engine reports it |
-| `identified` | bool | exactly one Docker VM process was found, so `footprint_mib` is its footprint |
-| `footprint_mib` | int or null | the VM process's physical footprint; null unless `identified` |
+| `identified` | bool | exactly one Docker VM process was found, so `footprint_mib` is its footprint: a process running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor` (Docker VMM) in the resource coalition of `com.docker.backend` |
+| `footprint_mib` | int or null | the VM process's physical footprint: on Apple's hypervisor the most the guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now, file cache included; null unless `identified` |
 
 ## `docker.containers[]`
 
@@ -110,8 +110,9 @@ The memory budget. `free_mib` and `room_mib` are the room a new job may take: th
 memory the kernel can hand out now without paging,
 [`PROTOCOL.md` section 5.1](../PROTOCOL.md#51-the-machines-memory)), less `reserve_mib` (what
 admission keeps free), less what each live hold reserves and its run has not used yet
-(`need_mib − footprint_mib`, never below 0). `reserved_mib` is a different number, the sum of the
-live holds' needs. `room_mib` is unclamped: it is negative when the reserve and the holds take more
+(`need_mib − footprint_mib`, never below 0), less the growth of Docker Desktop's VM that each
+live hold of a run gated on Docker reserves on the host (its body's `docker_growth_mib`).
+`reserved_mib` is a different number, the sum of the live holds' needs. `room_mib` is unclamped: it is negative when the reserve and the holds take more
 than the headroom, with no hold live too when the headroom is below the reserve. `free_mib` is the
 same room clamped at 0. A reader of
 telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
@@ -123,7 +124,7 @@ telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
 | `machine_mib` | int | the machine's memory |
 | `reserve_mib` | int | what admission keeps free |
 | `headroom_mib` | int | the headroom admission read |
-| `room_mib` | int | `headroom_mib` less `reserve_mib` less the holds' unused needs; may be below 0 |
+| `room_mib` | int | `headroom_mib` less `reserve_mib` less the holds' unused needs and their reserved VM growth; may be below 0 |
 
 ## `watch`
 
@@ -161,7 +162,9 @@ The watchdog, from the newest shared sample.
 | `left_s` | int or null | what remains of `typical_s`, never below 0; null when `typical_s` is 0 |
 | `stoppable` | bool | where a reader may offer to stop the run |
 | `docker_footprint_mib` | int | present, 0 included, while its run counts its own containers through a forwarder (macOS), from the forwarder's first connection: what they have grown by since the run first touched each |
-| `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address` or `ungated: blind` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
+| `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address`, `ungated: blind` or `ungated: no-reading` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
+| `docker_need_mib` | int | present while its run is gated on Docker Desktop's VM (macOS): its Docker need, the label's `docker_mem` |
+| `docker_growth_mib` | int | present while it is gated and reserves some: the growth of Docker Desktop's VM it reserves on the Mac, up to twice what its containers have yet to reach of its Docker need |
 
 `left_s` of 0 on a hold that is still live means it has outlived its typical run time.
 
@@ -202,6 +205,8 @@ only the watchdog's own stops restart it.
 | `state` | string | `waiting`, `stalled` or `dead` |
 | `stalled` | bool or null | null unless `--observe` ran |
 | `expected_wait_s` | int or null | the first live ticket's expected wait, see below |
+| `docker_need_mib` | int | present for a ticket gated on Docker Desktop's VM: its Docker need |
+| `vm_wait` | bool | present and true while the gated ticket fits on the Mac and waits for room in Docker Desktop's VM, or for a reading of it: every other run passes over it |
 
 `expected_wait_s` is the head's expected wait `W` of the passing rule, the rule by which a waiter
 with a typical run time may start ahead of the head when it is expected to end within `W`

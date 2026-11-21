@@ -15,7 +15,9 @@ import (
 
 	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/docker/dockertest"
+	"github.com/core-slot/coreslot/internal/engine"
 	relay "github.com/core-slot/coreslot/internal/forward"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 const partMiB = 1 << 20
@@ -203,21 +205,6 @@ func TestBlindEventIsBlind(t *testing.T) {
 	}
 }
 
-// A container that lived one sample at 0.2 MiB peaks at 1 MiB: rounded up, never 0. Mutation: the
-// peak cut like the footprint gives 0, red.
-func TestPeakRoundsUpAtLeastOne(t *testing.T) {
-	id := dockertest.ID('a')
-	f := partEngine(t, id, "db", partMiB/5)
-	var p dockerPart
-	p.event(created(id))
-	p.sample(context.Background(), f.Sock)
-	f.SetUsage(id, 0)
-	p.sample(context.Background(), f.Sock)
-	if p.peakMiB() != 1 || p.footprintMiB() != 0 {
-		t.Errorf("peak %d, footprint %d; want 1, 0", p.peakMiB(), p.footprintMiB())
-	}
-}
-
 // engagedRun is a run whose forwarder has relayed a connection and reports what the test sends on
 // its channel, with the fake engine f its upstream and its notices in a file of its own.
 func engagedRun(t *testing.T, f *dockertest.Fake) (r *run, events chan relay.Event, stderr string) {
@@ -384,6 +371,28 @@ func TestSelectedContext(t *testing.T) {
 	} {
 		if got := selectedContext(c.env, c.home); got != c.want {
 			t.Errorf("%s: selectedContext = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A gated command coming back after a stop keeps its Docker need, and its request carries what its
+// containers use now, from which its first body reserves the growth; a run that lost sight of them
+// comes back without either. Mutation: requeue leaving DockerFootprintMiB at 0 reddens the first row.
+func TestRestartKeepsDockerNeedAndFootprint(t *testing.T) {
+	for _, blind := range []bool{false, true} {
+		r := &run{dockerNeedMiB: 2048, fwd: &forwarder{connected: true}}
+		r.fwd.part.footprint = 700*partMiB + 5
+		if blind {
+			r.fwd.part.setBlind()
+		}
+		req := spec.Request{NeedMiB: 64, DockerNeedMiB: 2048}
+		r.requeue(&req, &engine.Grant{})
+		want := [2]int64{2048, 700}
+		if blind {
+			want = [2]int64{}
+		}
+		if got := [2]int64{req.DockerNeedMiB, req.DockerFootprintMiB}; got != want || !req.Restart {
+			t.Errorf("blind %v: Docker need and footprint %v, restart %v; want %v and a restart", blind, got, req.Restart, want)
 		}
 	}
 }

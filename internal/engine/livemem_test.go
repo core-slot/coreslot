@@ -14,6 +14,7 @@ import (
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -195,6 +196,59 @@ func TestTornLiveHoldCountsAtColdStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	admitted(t, step(t, enqueue(t, e, need(598))))
+}
+
+// A live hold whose body does not parse reserves its cold-start need on the host and nothing for
+// Docker, though the bytes it holds name a Docker need and growth: one torn, one whose body names
+// another run than its file. A parsed hold reserves its growth, and a hold that reserves only growth
+// counts. Mutations: copying the body's docker_growth_mib into the stand-in gives the second
+// growth 7000; including a hold only when NeedMiB > 0 drops the growth-only one.
+func TestTornHoldCountsNoDockerTerms(t *testing.T) {
+	dir := newStateDir(t, "")
+	e := newEngine(t, dir, newFakeClock())
+	if err := os.MkdirAll(filepath.Join(dir, store.HoldsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other := wire.Hold{Label: "other", PID: 4343, StartNS: 9, NeedMiB: 100, DockerNeedMiB: 4000, DockerGrowthMiB: 7000}
+	gated := wire.Hold{Label: "gated", PID: 4444, StartNS: 3, NeedMiB: 200, FootprintMiB: 50, DockerNeedMiB: 4000, DockerGrowthMiB: 1500}
+	growthOnly := wire.Hold{Label: "growth", PID: 4545, StartNS: 4, DockerNeedMiB: 1000, DockerGrowthMiB: 600}
+	bodies := map[string][]byte{
+		wire.HoldName(1, 4242, 1, "torn"):   []byte(`{"label":"torn","pid":4242,"start_ns":1,"docker_need_mib":4000,"docker_growth_mib":7000`),
+		wire.HoldName(2, 4343, 1, "other"):  mustEncode(t, other),
+		wire.HoldName(3, 4444, 1, "gated"):  mustEncode(t, gated),
+		wire.HoldName(4, 4545, 1, "growth"): mustEncode(t, growthOnly),
+	}
+	for name, body := range bodies {
+		p := filepath.Join(dir, store.HoldsDir, name)
+		if err := os.WriteFile(p, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { f.Close() })
+		if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+			t.Fatal(err)
+		}
+	}
+	live, _, _, err := holdListing(e.st, 426)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []state.MemHold{{NeedMiB: 426}, {NeedMiB: 426}, {NeedMiB: 200, FootprintMiB: 50, GrowthMiB: 1500}, {GrowthMiB: 600}}
+	if got := reservations(live); !slices.Equal(got, want) {
+		t.Errorf("reservations %+v; want %+v", got, want)
+	}
+}
+
+func mustEncode(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := wire.Encode(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // Two runs that read the run log at different moments sample one machine and agree on E: A1

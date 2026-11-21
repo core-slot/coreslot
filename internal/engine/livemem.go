@@ -70,7 +70,7 @@ func (h liveHold) info() HolderInfo {
 	id, _ := wire.ParseName(h.name)
 	return HolderInfo{Name: h.name, ID: id.String(), AskedMiB: b.AskedMiB, Trimmed: b.Trimmed, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
 		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS, TypicalS: b.TypicalS,
-		DockerFootprintMiB: b.DockerFootprintMiB, DockerNote: b.DockerNote}
+		DockerFootprintMiB: b.DockerFootprintMiB, DockerNote: b.DockerNote, DockerNeedMiB: b.DockerNeedMiB, DockerGrowthMiB: b.DockerGrowthMiB}
 }
 
 // holdLeftS is what remains of the hold's typical run time at nowNS, never below 0 and not capped
@@ -79,13 +79,14 @@ func holdLeftS(h wire.Hold, nowNS int64) int64 {
 	return max(0, h.TypicalS-(nowNS-h.StartNS)/1e9)
 }
 
-// reservations are the room's input: each live hold that reserves memory, with the footprint its
-// run last wrote.
+// reservations are the room's input: each live hold that reserves memory or growth of Docker's VM,
+// with the footprint and the growth its run last wrote. A hold whose body did not parse carries
+// its cold-start need and no growth (holdListing).
 func reservations(holds []liveHold) []state.MemHold {
 	out := make([]state.MemHold, 0, len(holds))
 	for _, h := range holds {
-		if h.body.NeedMiB > 0 {
-			out = append(out, state.MemHold{NeedMiB: h.body.NeedMiB, FootprintMiB: h.body.FootprintMiB})
+		if b := h.body; b.NeedMiB > 0 || b.DockerGrowthMiB > 0 {
+			out = append(out, state.MemHold{NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, GrowthMiB: b.DockerGrowthMiB})
 		}
 	}
 	return out

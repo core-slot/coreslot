@@ -65,9 +65,8 @@ func readDocker(enabled bool, loc location) *dockerView {
 	case r.OtherEngine:
 		return &dockerView{state: dockerOtherEngine}
 	}
-	v := &dockerView{state: dockerOK, vm: vm, vmMiB: r.VMMiB, freeEst: r.VMMiB, containers: []jsonContainer{}}
+	v := &dockerView{state: dockerOK, vm: vm, vmMiB: r.VMMiB, freeEst: r.FreeEstMiB(), containers: []jsonContainer{}}
 	for _, c := range r.Containers {
-		v.freeEst -= c.UsageMiB
 		v.containers = append(v.containers, jsonContainer{ID: c.ID, Name: cutBytes(c.Name, spec.MaxLabelBytes),
 			Image: cutBytes(c.Image, spec.MaxLabelBytes), Project: cutBytes(c.Project, spec.MaxLabelBytes), UsageMiB: c.UsageMiB, LimitMiB: c.LimitMiB})
 	}
@@ -92,7 +91,7 @@ func (d *dockerView) human(p func(format string, args ...any)) {
 	case dockerOff:
 		p("docker: off (%s)", d.reason)
 	case dockerNotRunning:
-		p("docker: not running (no Docker Desktop VM on the Apple hypervisor was found; Docker VMM, OrbStack and Colima are not read)")
+		p("docker: not running (no Docker Desktop VM was found, on the Apple hypervisor or Docker VMM; OrbStack and Colima are not read)")
 	case dockerOtherEngine:
 		p("docker: the engine is not Docker Desktop; no figures")
 	case dockerNoReading:

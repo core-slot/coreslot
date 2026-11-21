@@ -44,7 +44,6 @@ type dockerPart struct {
 	touches    []string                  // the ones readTouches has not read yet, in order
 	lost       bool
 	footprint  uint64 // the last completed sample's, in bytes
-	peak       uint64 // the largest footprint so far, in bytes
 }
 
 // setBlind makes the part blind.
@@ -150,12 +149,12 @@ func (p *dockerPart) addLocked(id string, c partContainer) {
 }
 
 // sample reads the usage of each of the part's containers, all under one deadline, and makes the
-// result the part's footprint. It runs in a goroutine of its own, one reader at a time, as
-// readTouches does. A container whose read fails keeps its last usage; one that is
-// gone uses nothing; one not read since its first touch takes this read as its baseline.
-func (p *dockerPart) sample(ctx context.Context, sock string) {
+// result the part's footprint; done reports that it did. It runs in a goroutine of its own, one
+// reader at a time, as readTouches does. A container whose read fails keeps its last usage; one
+// that is gone uses nothing; one not read since its first touch takes this read as its baseline.
+func (p *dockerPart) sample(ctx context.Context, sock string) (done bool) {
 	if !p.reading.CompareAndSwap(false, true) {
-		return
+		return false
 	}
 	defer p.reading.Store(false)
 	p.mu.Lock()
@@ -166,7 +165,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 	lost := p.lost
 	p.mu.Unlock()
 	if lost {
-		return
+		return false
 	}
 	type read struct {
 		usage uint64
@@ -176,7 +175,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 	deadline := time.Now().Add(partDeadline)
 	for _, id := range ids {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		c, gone, code := docker.Stat(sock, docker.Listed{ID: id}, deadline)
 		if code == "" {
@@ -186,7 +185,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.lost {
-		return
+		return false
 	}
 	var sum uint64
 	for id, c := range p.containers {
@@ -204,7 +203,8 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 			sum += c.usage - c.baseline
 		}
 	}
-	p.footprint, p.peak = sum, max(p.peak, sum)
+	p.footprint = sum
+	return true
 }
 
 // footprintMiB is the last completed sample's footprint in whole MiB, cut.
@@ -212,11 +212,4 @@ func (p *dockerPart) footprintMiB() int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return int64(p.footprint >> 20)
-}
-
-// peakMiB is the largest footprint so far in MiB, rounded up, so that any byte counted is at least 1.
-func (p *dockerPart) peakMiB() int64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return int64((p.peak + 1<<20 - 1) >> 20)
 }

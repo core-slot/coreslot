@@ -433,6 +433,13 @@ func listing(t *testing.T, dir string) string {
 	return b.String()
 }
 
+// currentFormat is FORMAT naming the format this client writes; foreignFormat names the next one,
+// which it does not implement.
+var (
+	currentFormat = fmt.Sprintf("coreslot-protocol %d\n", store.Format)
+	foreignFormat = fmt.Sprintf("coreslot-protocol %d\n", store.Format+1)
+)
+
 func writeFormat(t *testing.T, dir, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, store.FormatFile), []byte(body), 0o600); err != nil {
@@ -446,14 +453,14 @@ func TestUnknownFormatRefuses(t *testing.T) {
 	refused := func(t *testing.T, err error) {
 		t.Helper()
 		var fe *store.FormatError
-		if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != 4 {
-			t.Fatalf("%v, want a refusal naming format 4", err)
+		if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != store.Format+1 {
+			t.Fatalf("%v, want a refusal naming format %d", err, store.Format+1)
 		}
 	}
 	t.Run("enqueue", func(t *testing.T) {
 		dir := newStateDir(t, "")
 		e := newEngine(t, dir, newFakeClock())
-		writeFormat(t, dir, "coreslot-protocol 4\n")
+		writeFormat(t, dir, foreignFormat)
 		before := listing(t, dir)
 		_, err := e.EnqueueContext(context.Background(), need(128))
 		refused(t, err)
@@ -468,7 +475,7 @@ func TestUnknownFormatRefuses(t *testing.T) {
 		startHelper(t, "lock", dir, holdPath(t, dir, 1024))
 		tk := enqueue(t, e, need(128))
 		step(t, tk)
-		writeFormat(t, dir, "coreslot-protocol 4\n")
+		writeFormat(t, dir, foreignFormat)
 		clk.advance(time.Second)
 		_, err := tk.Step(context.Background())
 		refused(t, err)
@@ -500,7 +507,7 @@ func TestFailOpenHold(t *testing.T) {
 		t.Errorf("after Close: holds %v, gen %d -> %d; want removed with one bump", entries, before, readGen(t, e))
 	}
 
-	for _, format := range []string{"coreslot-protocol 4\n", "coreslot-protocol x\n"} {
+	for _, format := range []string{foreignFormat, "coreslot-protocol x\n"} {
 		writeFormat(t, dir, format)
 		before := listing(t, dir)
 		g, err := e.FailOpen(need(256), "state error")
@@ -527,7 +534,7 @@ func TestSnapshotTellsFormatZeroFromAbsent(t *testing.T) {
 		{"format 0", "coreslot-protocol 0\n", 0, true, false, false},
 		{"format 00", "coreslot-protocol 00", 0, true, false, false},
 		{"format 1", "coreslot-protocol 1\n", 1, true, false, false},
-		{"format 3", "coreslot-protocol 3\n", 3, true, true, false},
+		{"the current format", currentFormat, store.Format, true, true, false},
 		{"malformed", "coreslot-protocol x\n", 0, true, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -574,7 +581,7 @@ func TestSnapshotReadsWithoutWriting(t *testing.T) {
 	if m := r.Mem; m.ReservedMiB != 384 || m.FreeMiB != 640 || m.RealFreeMiB != 1024 {
 		t.Errorf("mem %+v, want reserved 384, free 640, real free 1024", m)
 	}
-	if r.Format != 3 || !r.FormatUnderstood {
+	if r.Format != store.Format || !r.FormatUnderstood {
 		t.Errorf("format %d understood %v", r.Format, r.FormatUnderstood)
 	}
 }
@@ -952,5 +959,51 @@ func TestCalmLeftCountsTheSampleAge(t *testing.T) {
 		if got := calmLeft(d, sample, now-k.age, now, c); got != k.want {
 			t.Errorf("%s: calmLeft = %v, want %v", k.name, time.Duration(got), time.Duration(k.want))
 		}
+	}
+}
+
+// The re-election inside the admitting section passes over a ticket noted since the election.
+// Mutation: dropping the note test from the re-election keeps the container request behind it.
+func TestReelectSkipsNoted(t *testing.T) {
+	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	ahead := enqueue(t, e, need(128))
+	c := enqueue(t, e, container())
+	old := point
+	point = func(p string) {
+		if p == "admit.before-enter" {
+			note(t, e, ahead.Name()) // after the election, before the section
+		}
+	}
+	t.Cleanup(func() { point = old })
+	if r := step(t, c); !isAdmitted(r) {
+		t.Fatalf("the only ticket ahead is noted: want admitted by the idle rule, got %#v", r)
+	}
+}
+
+// Withdrawal and cancellation remove the ticket's note with the ticket. Mutation: leaving the note
+// out of the removal of one's own ticket keeps it.
+func TestWithdrawRemovesNote(t *testing.T) {
+	dir, e, _, tk := blocked(t, 128)
+	note(t, e, tk.Name())
+	if err := tk.Withdraw(); err != nil {
+		t.Fatal(err)
+	}
+	if exists(filepath.Join(dir, store.VMWaitDir, tk.Name())) {
+		t.Error("the withdrawn ticket's note is still there")
+	}
+}
+
+func TestCancelRemovesNote(t *testing.T) {
+	dir, e, clk, tk := blocked(t, 128)
+	note(t, e, tk.Name())
+	if err := e.CancelContext(context.Background(), ticketID(tk)); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Second)
+	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCanceled) {
+		t.Fatalf("Step: %v, want ErrCanceled", err)
+	}
+	if exists(filepath.Join(dir, store.VMWaitDir, tk.Name())) {
+		t.Error("the cancelled ticket's note is still there")
 	}
 }

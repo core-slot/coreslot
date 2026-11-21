@@ -68,8 +68,10 @@ var (
 // Ticket is one request waiting in the queue. Its
 // methods are safe for concurrent use: Steps are serialized, and Withdraw never waits for one.
 type Ticket struct {
-	e   *Engine
-	req spec.Request
+	e      *Engine
+	req    spec.Request
+	docker DockerSource // set by WithDocker: the ticket is gated when its request has a Docker need
+	noWait bool         // NoWait
 
 	stepMu sync.Mutex // serializes Step and Poll
 
@@ -96,16 +98,26 @@ type Ticket struct {
 	haveGen bool
 	ahead   []aheadEntry            // ascending: the nearest ticket ahead is the last
 	tickets map[string]*wire.Ticket // ticket name -> its body, nil when malformed
+	notes   map[string]bool         // the names of the tickets with a note in vmwait/, from the last rescan
 
 	nextElection time.Duration
 	backoff      time.Duration
 	attempts     int // admission attempts made
 	last         Waiting
 	out          Outcome // what the last attempt, or the step that made none, decided
+
+	// A gated ticket's part (docker.go).
+	reading DockerReading // the last reading taken
+	readAt  time.Duration // when it was taken, on the monotonic clock
+	failed  int           // failed readings in a row
+	ungated string        // why the Docker part went ungated; "" while it is gated
+	noted   bool          // the ticket's note is published
+	notedAt time.Duration // when it was last published, on the monotonic clock
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
-	return &Ticket{e: e, req: req, tickets: map[string]*wire.Ticket{}, last: Waiting{Position: 1}}
+	return &Ticket{e: e, req: req, tickets: map[string]*wire.Ticket{}, last: Waiting{Position: 1},
+		readAt: -ReadEvery, notedAt: -noteEvery}
 }
 
 // Name is the ticket's file name in queue/.
@@ -276,6 +288,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 func (t *Ticket) waiting() Waiting {
 	w := t.last
 	w.Evals, w.Outcome = t.attempts, t.out
+	w.Outcome.Noted, w.Outcome.DockerUngated = t.noted, t.ungated
 	return w
 }
 
@@ -391,7 +404,8 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 		if !dead {
 			t.obs.Observe(a.key, fi.ModTime().UnixNano(), now)
 		}
-		if state.PassedOver(state.Ticket{Key: a.key, Dead: dead}, &t.obs, now) {
+		// A live ticket with a note waits only for Docker's VM: it is passed over, still observed.
+		if state.PassedOver(state.Ticket{Key: a.key, Dead: dead}, &t.obs, now) || t.notes[a.name] {
 			passed++
 			continue
 		}
@@ -416,12 +430,18 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 // within the I5 bound, not one successor after another.
 const FrontWindow = 4
 
-// watchFront observes the mtime of the first FrontWindow tickets ahead that are not gone,
-// except those the scan examined in this pass (t.ahead[stop:]). It only observes: the election
-// still decides from the scan alone.
+// watchFront observes the mtime of the first FrontWindow tickets ahead that are not gone and, for
+// a gated waiter, of every gated ticket beyond them, whose Docker needs its VM test sums, except
+// those the scan examined in this pass (t.ahead[stop:]). It only observes: the election still
+// decides from the scan alone.
 func (t *Ticket) watchFront(stop int, now time.Duration) error {
-	for j, watched := 0, 0; j < stop && watched < FrontWindow; {
+	gated := t.gated()
+	for j, watched := 0, 0; j < stop && (watched < FrontWindow || gated); {
 		a := t.ahead[j]
+		if watched >= FrontWindow && !t.gatedTicket(a.name) {
+			j++
+			continue
+		}
 		fi, err := lstat(filepath.Join(t.e.st.Dir(), store.QueueDir, a.name))
 		if gone(err) {
 			t.obs.Forget(a.key)
@@ -439,8 +459,8 @@ func (t *Ticket) watchFront(stop int, now time.Duration) error {
 	return nil
 }
 
-// rescan re-lists the names in queue/ (the listing alone: no entry's metadata is read, so its
-// cost is the directory read). Tickets ahead of this one whose bodies are well-formed are kept
+// rescan re-lists the names in queue/ and the notes in vmwait/ (the listings alone: no entry's
+// metadata is read, so their cost is the directory reads). Tickets ahead of this one whose bodies are well-formed are kept
 // for the election; malformed ones take no place in the queue (PROTOCOL.md section 7.2). A stray
 // entry is found out when the election examines it. Bodies never change once published, so each
 // is read once, when its name is first seen.
@@ -451,6 +471,9 @@ func (t *Ticket) rescan() error {
 	}
 	orders, _, err := t.e.orders()
 	if err != nil {
+		return err
+	}
+	if t.notes, err = t.e.notes(); err != nil {
 		return err
 	}
 	t.order = orderKey(t.id, orders)
@@ -480,6 +503,13 @@ func (t *Ticket) rescan() error {
 			t.obs.Forget(a.key)
 		}
 	}
+	sortAhead(ahead)
+	t.ahead = ahead
+	return nil
+}
+
+// sortAhead sorts tickets by effective order key, farthest ahead first.
+func sortAhead(ahead []aheadEntry) {
 	slices.SortFunc(ahead, func(a, b aheadEntry) int {
 		switch {
 		case a.order.Less(b.order):
@@ -489,8 +519,20 @@ func (t *Ticket) rescan() error {
 		}
 		return 0
 	})
-	t.ahead = ahead
-	return nil
+}
+
+// notes lists vmwait/: the names of the tickets that have a note. A stray entry is listed too, and
+// passes over only a ticket of that name, which its owner would note anyway.
+func (e *Engine) notes() (map[string]bool, error) {
+	entries, err := e.st.ListNames(store.VMWaitDir)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]bool, len(entries))
+	for _, en := range entries {
+		m[en.Name] = true
+	}
+	return m, nil
 }
 
 // ticketBody returns the body of the ticket name in queue/, nil when it is malformed, reading it

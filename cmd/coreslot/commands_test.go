@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/docker/dockertest"
 	"github.com/core-slot/coreslot/internal/engine"
 	relay "github.com/core-slot/coreslot/internal/forward"
@@ -359,6 +360,108 @@ func statusJSON(t *testing.T, rep engine.Report) string {
 		t.Fatal(err)
 	}
 	return buf.String()
+}
+
+// status --json's room_mib and free_mib subtract the VM growth a live hold reserves, on top of its
+// need, and the document stays schema 1: of 512 MiB a hold of 384 that reserves 100 of growth
+// leaves 28. Mutation: dropping Σ GrowthMiB from state.Room, or the growth from reservations,
+// leaves 128.
+func TestStatusRoomSubtractsGrowth(t *testing.T) {
+	dir := budgetDir(t, 512)
+	g := hold(t, openLib(t, dir), "gate", 384)
+	if err := g.UpdateHold(func(h *wire.Hold) { h.DockerNeedMiB, h.DockerGrowthMiB = 1000, 100 }); err != nil {
+		t.Fatal(err)
+	}
+	doc := statusDoc(t, dir, 0)
+	mem := doc["mem"].(map[string]any)
+	if doc["schema"] != float64(1) || mem["room_mib"] != float64(28) || mem["free_mib"] != float64(28) {
+		t.Errorf("schema %v, room_mib %v, free_mib %v; want 1, 28 and 28", doc["schema"], mem["room_mib"], mem["free_mib"])
+	}
+}
+
+// A gated hold shows its Docker need, its containers' footprint, the VM growth it reserves on the Mac
+// and its note, in the text and in JSON. Mutation: leaving the Docker need and growth out of the
+// engine's holder info (info) drops both from either form.
+func TestStatusShowsGatedHold(t *testing.T) {
+	dir := budgetDir(t, 8192)
+	g := hold(t, openLib(t, dir), "gate", 384)
+	used := int64(300)
+	if err := g.UpdateHold(func(h *wire.Hold) {
+		h.DockerNeedMiB, h.DockerGrowthMiB, h.DockerFootprintMiB, h.DockerNote = 2048, 3072, &used, docker.NoteNoReading
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "status")
+	for _, want := range []string{"mem 384 MiB  docker_mem 2 GiB", "docker footprint 300 MiB  reserved on the Mac for Docker's VM 3 GiB",
+		"docker: " + docker.NoteNoReading} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("status lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	h := statusDoc(t, dir, 0)["holds"].([]any)[0].(map[string]any)
+	if h["docker_need_mib"] != float64(2048) || h["docker_growth_mib"] != float64(3072) || h["docker_footprint_mib"] != float64(300) || h["docker_note"] != docker.NoteNoReading {
+		t.Errorf("hold %v; want docker_need_mib 2048, docker_growth_mib 3072, docker_footprint_mib 300 and the note", h)
+	}
+}
+
+// A waiting gated ticket shows its Docker need, and with its note in vmwait/ that it waits for
+// Docker's VM, in the text and in JSON (vm_wait); a ticket without either carries neither key.
+// Mutation: Snapshot not listing vmwait/ leaves vm_wait absent and the text silent.
+func TestStatusShowsGatedTicketAndNote(t *testing.T) {
+	dir := budgetDir(t, 512)
+	c := openLib(t, dir)
+	hold(t, c, "big", 512)
+	src := engine.DockerSource{Read: func(context.Context) engine.DockerReading { return engine.DockerReading{} }}
+	tk, err := c.EnqueueContext(context.Background(), spec.Request{Label: "gated", NeedMiB: 64, DockerNeedMiB: 2048}, engine.WithDocker(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tk.Withdraw() })
+	queue(t, c, "plain", 64)
+	if err := os.MkdirAll(filepath.Join(dir, store.VMWaitDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, store.VMWaitDir, tk.Name()), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "status")
+	if !strings.Contains(r.stdout, "gated  pid ") || !strings.Contains(r.stdout, "need mem 64 MiB and docker_mem 2 GiB") || strings.Count(r.stdout, "waits for Docker's VM") != 1 {
+		t.Errorf("status does not show the gated ticket and its note once:\n%s", r.stdout)
+	}
+	tickets := statusDoc(t, dir, 0)["tickets"].([]any)
+	gated, plain := tickets[0].(map[string]any), tickets[1].(map[string]any)
+	if gated["docker_need_mib"] != float64(2048) || gated["vm_wait"] != true {
+		t.Errorf("gated ticket %v; want docker_need_mib 2048 and vm_wait true", gated)
+	}
+	if _, ok := plain["docker_need_mib"]; ok || plain["vm_wait"] != nil {
+		t.Errorf("plain ticket %v carries a Docker key", plain)
+	}
+}
+
+// status reads the Docker part of each hold and ticket from their bodies: without --docker it runs
+// no program and opens no socket, whatever a hold or ticket carries. Mutation: status running
+// `docker` (the stand-in on PATH) to show a gated hold leaves its mark.
+func TestStatusRunsNoProgram(t *testing.T) {
+	dir := budgetDir(t, 8192)
+	g := hold(t, openLib(t, dir), "gate", 384)
+	if err := g.UpdateHold(func(h *wire.Hold) { h.DockerNeedMiB, h.DockerGrowthMiB = 2048, 3072 }); err != nil {
+		t.Fatal(err)
+	}
+	bin, mark := t.TempDir(), filepath.Join(t.TempDir(), "ran")
+	for _, name := range []string{"docker", "sh", "ps"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n/usr/bin/touch "+mark+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := append(baseEnv(dir), "PATH="+bin)
+	for _, args := range [][]string{{"status"}, {"status", "--json"}} {
+		if r := cli(t, env, args...); r.code != 0 {
+			t.Fatalf("%v exited %d: %s", args, r.code, r.stderr)
+		}
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Error("status ran a program")
+	}
 }
 
 // status prints mem in bytes and each hold's need, `unbudgeted` for one that reserves nothing.
@@ -1224,8 +1327,8 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 	}
 }
 
-// A reset of an idle format-3 directory (a repair) empties it but keeps the run log, which every
-// label's learned need comes from, and says so. Mutation: remove log/ on every reset.
+// A reset of an idle directory of the current format (a repair) empties it but keeps the run log,
+// which every label's learned need comes from, and says so. Mutation: remove log/ on every reset.
 func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
@@ -1253,8 +1356,8 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 			t.Errorf("%s survived: %v", f, err)
 		}
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != "coreslot-protocol 3\n" {
-		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 3", b)
+	if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != understoodFormat {
+		t.Errorf("FORMAT after the reset %q, want %q", b, understoodFormat)
 	}
 	for _, d := range []string{"queue", "holds", "cancel"} {
 		if got := entries(t, dir, d); len(got) != 0 {
@@ -1294,7 +1397,7 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	if r.code != 1 {
 		t.Fatalf("doctor --reset left %s behind and exited %d, want 1: a state problem is never 70", stuck, r.code)
 	}
-	// gen was removed although the stuck entry could not be; the run log of format 3 is kept.
+	// gen was removed although the stuck entry could not be; the run log of the current format is kept.
 	if !strings.Contains(r.stderr, "removed 1 entries; 1 could not be removed: ") {
 		t.Errorf("stderr %q: want how many entries were removed (1) and how many could not be (1)", r.stderr)
 	}
@@ -1303,10 +1406,11 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	}
 }
 
-// What a reset says of the run log follows what it did with log/: kept on a repair (FORMAT 3 or
-// none yet), removed with the reason under another format or an unreadable FORMAT, and not named
-// when there was none; a partial reset says it too. Mutations: choose the line from the format
-// alone; drop the note from the partial reset's line; keep log/ only under a present FORMAT 3.
+// What a reset says of the run log follows what it did with log/: kept on a repair (the current
+// FORMAT, the one it upgrades from, or none yet), removed with the reason under another format (2
+// among them) or an unreadable FORMAT, and not named when there was none; a partial reset says it
+// too. Mutations: choose the line from the format alone; drop the note from the partial reset's
+// line; keep log/ only under a present current FORMAT; keep it under FORMAT 2 again.
 func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
 	const (
 		kept       = "; kept admit.lock, config.toml and the run log; wrote FORMAT\n"
@@ -1319,9 +1423,11 @@ func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
 		log, stuck   bool
 		want         string
 	}{
-		{"format 3", "coreslot-protocol 3\n", true, false, kept},
+		{"current format", understoodFormat, true, false, kept},
+		{"upgrade", fmt.Sprintf("coreslot-protocol %d\n", store.UpgradedFormat), true, false, kept},
 		{"no FORMAT", "", true, false, kept},
-		{"format 3 without a log", "coreslot-protocol 3\n", false, false, none},
+		{"current format without a log", understoodFormat, false, false, none},
+		{"format 2", "coreslot-protocol 2\n", true, false, other},
 		{"format 1", "coreslot-protocol 1\n", true, false, other},
 		{"format 1 without a log", "coreslot-protocol 1\n", false, false, none},
 		{"malformed FORMAT", "coreslot-protocol x\n", true, false, unreadable},
@@ -1512,7 +1618,7 @@ func TestVersionListsFormats(t *testing.T) {
 	if r.code != 0 || m == nil {
 		t.Fatalf("version: exit %d, stdout %q", r.code, r.stdout)
 	}
-	if want := "3"; m[1] != want {
+	if want := fmt.Sprint(store.Format); m[1] != want {
 		t.Errorf("formats %q, want %q", m[1], want)
 	}
 	if r := cli(t, baseEnv(stateDir(t, "")), "--version"); r.code != 0 || !versionLine.MatchString(r.stdout) {
@@ -1578,11 +1684,11 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 	}
 }
 
-// A directory of format 1, with its res/ files and a dead hold, is not used: a run runs
-// unbudgeted at once with one notice that says what to do, --strict refuses, and doctor --reset
-// recreates the directory as format 3, its res/ and its run and watch logs gone, and says that
-// every label learns again. Mutations: keep format 1 in store.Understood (the run queues on it
-// and prints nothing); skip the res/ removal in Reset; keep log/ on every reset.
+// A directory of format 1, with its res/ files and a dead hold, is not used: a run runs unbudgeted
+// at once with one notice that says what to do, --strict refuses, and doctor --reset recreates the
+// directory as the current format, its res/ and its run and watch logs gone, and says that every
+// label learns again. Mutations: keep format 1 in store.Understood (the run queues on it and prints
+// nothing); skip the res/ removal in Reset; keep log/ on every reset.
 func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, d := range []string{"res/mem", "holds", "log"} {
@@ -1613,8 +1719,8 @@ func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, " entries, the run log of another format among them, so every label learns its memory need again; kept admit.lock and config.toml; wrote FORMAT\n") {
 		t.Fatalf("doctor --reset: exit %d (stderr %q); stdout %q does not say the run log went", r.code, r.stderr, r.stdout)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 3\n" {
-		t.Errorf("FORMAT after the reset: %q, %v; want coreslot-protocol 3", b, err)
+	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != understoodFormat {
+		t.Errorf("FORMAT after the reset: %q, %v; want %q", b, err, understoodFormat)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "res")); !os.IsNotExist(err) {
 		t.Errorf("res/ survived the reset: %v", err)
@@ -1650,11 +1756,11 @@ func TestDoctorFormatRefusals(t *testing.T) {
 		}
 		return dir
 	}
-	t.Run("clear under format 4", func(t *testing.T) {
-		dir := setup(t, "coreslot-protocol 4\n")
+	t.Run("clear under the next format", func(t *testing.T) {
+		dir := setup(t, foreignFormat)
 		before := tree(t, dir)
 		r := cli(t, baseEnv(dir), "doctor", "--clear")
-		if r.code != 75 || !strings.Contains(r.stderr, "state format 4 is not supported; run coreslot doctor --reset") {
+		if r.code != 75 || !strings.Contains(r.stderr, fmt.Sprintf("state format %d is not supported; run coreslot doctor --reset", store.Format+1)) {
 			t.Errorf("doctor --clear: exit %d, want 75 (stderr %q)", r.code, r.stderr)
 		}
 		if after := tree(t, dir); after != before {
@@ -1673,8 +1779,8 @@ func TestDoctorFormatRefusals(t *testing.T) {
 		if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
 			t.Errorf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)
 		}
-		if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != "coreslot-protocol 3\n" {
-			t.Errorf("FORMAT after the reset %q, want coreslot-protocol 3", b)
+		if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != understoodFormat {
+			t.Errorf("FORMAT after the reset %q, want %q", b, understoodFormat)
 		}
 	})
 }
@@ -1944,13 +2050,13 @@ func TestDoctorNamesSectionHolder(t *testing.T) {
 // The engine's refusal reaches the user once prefixed: `coreslot: cancel refused: ...`.
 func TestCancelRefusalHasOnePrefix(t *testing.T) {
 	dir := stateDir(t, "")
-	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 4\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte(foreignFormat), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r := cli(t, baseEnv(dir), "cancel", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String())
-	want := "coreslot: cancel refused: state format 4 is not supported; run coreslot doctor --reset\n"
+	want := fmt.Sprintf("coreslot: cancel refused: state format %d is not supported; run coreslot doctor --reset\n", store.Format+1)
 	if r.code != 75 || r.stderr != want {
-		t.Errorf("cancel under format 4: exit %d, stderr %q; want 75 and %q", r.code, r.stderr, want)
+		t.Errorf("cancel under format %d: exit %d, stderr %q; want 75 and %q", store.Format+1, r.code, r.stderr, want)
 	}
 }
 
