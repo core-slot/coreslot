@@ -185,3 +185,36 @@ func TestStrayNeverProtectsACancelRequest(t *testing.T) {
 		}
 	}
 }
+
+// An order override is replaced by a later one of the same ticket, and reconciliation removes one
+// whose ticket is gone, as it removes such a cancel request, and keeps the live ticket's.
+// Mutations: publishing without replacement fails the second publication; leaving OrderDir out of
+// reconciliation step 2 keeps the orphan.
+func TestOrderOverrideReplacedAndReconciled(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	live, err := sec.Publish(QueueDir, ticketName(1), []byte(`{}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	idOf := func(seq int) wire.ID { return wire.ID{OrderKey: 1791720000000000000, PID: 4711, Seq: seq} }
+	for _, body := range []string{`{"order_ns":7}`, `{"order_ns":8}`} {
+		if err := sec.PublishOrder(idOf(1), []byte(body)); err != nil {
+			t.Fatalf("PublishOrder %s: %v", body, err)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, OrderDir, idOf(1).String())); err != nil || string(b) != `{"order_ns":8}` {
+		t.Errorf("override %q, %v; want the later one", b, err)
+	}
+	if err := sec.PublishOrder(idOf(2), []byte(`{"order_ns":9}`)); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := sec.ReconcileIfDue(time.Now().UnixNano()); err != nil || removed != 1 {
+		t.Errorf("reconciliation removed %d, %v; want the orphan override", removed, err)
+	}
+	if got := names(t, filepath.Join(dir, OrderDir)); len(got) != 1 || got[0] != idOf(1).String() {
+		t.Errorf("order/ holds %v, want only the live ticket's override", got)
+	}
+}

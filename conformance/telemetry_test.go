@@ -141,7 +141,7 @@ func runScript(e Env, label, script string, flags ...string) *Proc {
 	return e.Start(append(args, "--", "sh", "-c", script)...)
 }
 
-const foreignFormat = `printf 'coreslot-protocol 3\n' > "$CORESLOT_STATE_DIR/FORMAT"; `
+const foreignFormat = `printf 'coreslot-protocol 4\n' > "$CORESLOT_STATE_DIR/FORMAT"; `
 
 // lifeRows is the lifecycle, row by row. Live lines come every 30 s, so most runs here have none.
 var lifeRows = []lifeRow{
@@ -224,7 +224,7 @@ var lifeRows = []lifeRow{
 		check: func(t *testing.T, o *lifeOutcome) { o.wantField(t, "B", "refused", "reason", "no_wait") }},
 	{name: "foreign_format", config: roomConfig(1000), want: map[string]string{"R": `^$`},
 		trace: func(t *testing.T, e Env, o *lifeOutcome) {
-			writeFormat(e, "3")
+			writeFormat(e, "4")
 			runBlind(e, o)
 		}},
 	{name: "malformed_format", config: roomConfig(1000), want: map[string]string{"R": `^$`},

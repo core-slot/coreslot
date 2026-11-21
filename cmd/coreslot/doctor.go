@@ -31,7 +31,7 @@ const (
 // doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
 // permissions, format, the configuration and the degraded record, and
 // reports every finding. --clear removes the degraded record. --reset recreates the state as this
-// client's format, whatever format it had, keeping the run log of format 2, but only when nothing
+// client's format, whatever format it had, keeping the run log of format 3 or 2, but only when nothing
 // is live (PROTOCOL.md section 4.4). It exits 1 when it found a problem, else 3 while degraded
 // mode is recorded, else 0; a refused --clear or --reset is 75 (PROTOCOL.md section 19).
 func doctorCommand(args []string, io IO) int {
@@ -263,7 +263,7 @@ func doctorReport(loc location, io IO) int {
 	case !rep.FormatUnderstood: // before absence: a FORMAT naming format 0 is present, not absent
 		problem("format: %d, which this client does not implement; runs fail open until `coreslot doctor --reset`", rep.Format)
 	case !rep.FormatPresent:
-		line("format: FORMAT not written yet (the first client writes 2)")
+		line("format: FORMAT not written yet (the first client writes %d)", store.Format)
 	default:
 		line("format: %d", rep.Format)
 	}

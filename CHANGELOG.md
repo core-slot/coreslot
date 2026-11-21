@@ -10,6 +10,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- `coreslot move <ticket-id> --first | --last | --before <id> | --after <id>` (or `--label L`) changes a waiting
+  request's place in the queue without ending its run, which `cancel` and a new request could only send to the end.
+  The ticket keeps its file and its lock: the new place is an override in `order/`, read by every client that orders
+  the queue, removed with the ticket. `status` lists the queue in that order.
 - On macOS with Docker Desktop, a run whose label has a Docker interest (a command named `docker`,
   `docker-compose` or `podman`, an earlier run of its label that did container work, or
   `docker_forward = true` in `needs.toml`) gets a forwarder: a `coreslot forward` process that relays its
@@ -17,7 +21,7 @@ All notable changes to this project are recorded here. The format follows
   notes the containers the command creates or touches. The run reads their memory every 6 s, and `status` shows
   each hold's Docker footprint, what its containers grew by since the run first touched them, and its note,
   why a run has no forwarder or stopped counting; `status --json` carries them as `docker_footprint_mib` and
-  `docker_note` on each hold, under the same `schema` 1. The format stays 2: the hold body gains these two
+  `docker_note` on each hold, under the same `schema` 1. The format stays 3: the hold body gains these two
   optional keys. A run asks the command's `docker` twice whether it could reach another engine before it
   gives a forwarder, which `docker_forward = false` turns off for a label. A forwarder serves its command's
   background Docker connections after the command ends; `doctor` lists the forwarders still serving and
@@ -25,6 +29,13 @@ All notable changes to this project are recorded here. The format follows
   linked; coreslot still connects only to unix sockets on this machine. Under an agent sandbox,
   `~/.coreslot-fw` has to be admitted (README, "Under an agent sandbox"); to uninstall, remove it beside the
   state directory.
+
+### Changed
+
+- **Format 3.** The state directory gains `order/` (PROTOCOL.md sections 7.12, 9 and 13.3), which every client must
+  read, so a client of format 2 steps out of the budget with its existing notice. Run `coreslot doctor --reset` once
+  nothing is live: on a format-2 directory it is an upgrade that keeps the run log and the telemetry, so no label
+  learns its need again.
 
 ## v0.9.1 (2026-11-19)
 

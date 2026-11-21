@@ -32,6 +32,7 @@ commands:
   run      run a command inside the budget
   status   show the budget, its holders and its queue
   cancel   cancel a waiting request
+  move     change a waiting request's place in the queue
   doctor   check the state directory and the configuration
   stats    show what each label's recent runs used
   report   summarize the runs, waits and memory stops of the last days
@@ -58,6 +59,8 @@ func dispatch(args []string, io IO) int {
 		return statusCommand(args[1:], io)
 	case "cancel":
 		return cancelCommand(args[1:], io)
+	case "move":
+		return moveCommand(args[1:], io)
 	case "doctor":
 		return doctorCommand(args[1:], io)
 	case "stats":

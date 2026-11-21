@@ -133,15 +133,23 @@ func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
 	if err := sec.live(); err != nil {
 		return false, err
 	}
-	if _, ok := wire.ParseName(name); !ok {
+	id, ok := wire.ParseName(name)
+	if !ok {
 		return false, fmt.Errorf("store: %q is not a ticket name", name)
 	}
 	removed, _, err = removeOwnEntry(sec.s.path(QueueDir, name))
 	var se *StateError
 	if errors.As(err, &se) {
-		return false, nil
+		removed, err = false, nil
 	}
-	return removed, err
+	if err != nil {
+		return removed, err
+	}
+	// Its order override goes with it (PROTOCOL.md section 7.12).
+	if _, err := sec.removeByID(OrderDir, id); err != nil {
+		return removed, err
+	}
+	return removed, nil
 }
 
 // removeOwnEntry is removeIfDead for an entry its owner has just closed: its own ticket
@@ -172,10 +180,22 @@ const (
 // found it (PROTOCOL.md section 13.1). A missing request is not an error, and a stray entry
 // under that name (not a regular file of the user) is left alone (section 4.2).
 func (sec *Section) RemoveCancel(id wire.ID) (removed bool, err error) {
+	return sec.removeByID(CancelDir, id)
+}
+
+// RemoveOrder removes the order override of the ticket id inside the section: its owner's, with its
+// ticket (PROTOCOL.md section 7.12). A missing override is not an error, and a stray entry under
+// that name is left alone (section 4.2).
+func (sec *Section) RemoveOrder(id wire.ID) (removed bool, err error) {
+	return sec.removeByID(OrderDir, id)
+}
+
+// removeByID removes dir/<id> inside the section unless it is missing or a stray.
+func (sec *Section) removeByID(dir string, id wire.ID) (removed bool, err error) {
 	if err := sec.live(); err != nil {
 		return false, err
 	}
-	p := sec.s.path(CancelDir, id.String())
+	p := sec.s.path(dir, id.String())
 	fi, err := os.Lstat(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil

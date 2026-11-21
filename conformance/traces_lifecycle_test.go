@@ -592,7 +592,7 @@ func layout(t *testing.T, e Env) map[string]string {
 // wait. The waiters find it as they next enter the section and fail open: their commands run
 // unbudgeted, holding no hold. A run that arrives afterwards does the same without queueing.
 // Nobody reserves more than H did before, and nobody writes anything: no ticket, hold, gen bump,
-// admit.lock body, degraded record or run-log line. The format-2 holder's release, whose section
+// admit.lock body, degraded record or run-log line. The format-3 holder's release, whose section
 // finds FORMAT 1, leaves its hold in place rather than removing it under a format it does not
 // implement, and the holder writes no run-log line either: it re-reads FORMAT just before the
 // append (PROTOCOL.md section 20). The run log never comes to exist.

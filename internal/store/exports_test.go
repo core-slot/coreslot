@@ -20,7 +20,7 @@ func TestReadFormatOutsideSection(t *testing.T) {
 	if exists(filepath.Join(dir, FormatFile)) {
 		t.Fatal("ReadFormat wrote FORMAT")
 	}
-	for body, want := range map[string]int{"coreslot-protocol 1\n": 1, "coreslot-protocol 01": 1, "coreslot-protocol 2\n": 2} {
+	for body, want := range map[string]int{"coreslot-protocol 1\n": 1, "coreslot-protocol 01": 1, "coreslot-protocol 3\n": 3} {
 		if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

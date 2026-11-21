@@ -92,12 +92,12 @@ func TestOpenCreatesLayoutWithModes(t *testing.T) {
 }
 
 func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
-	// A directory written by a client of format 3: the format-stable file and FORMAT only.
+	// A directory written by a client of format 4: the format-stable file and FORMAT only.
 	dir := newDir(t)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{AdmitLock: "", FormatFile: "coreslot-protocol 3\n"} {
+	for name, body := range map[string]string{AdmitLock: "", FormatFile: "coreslot-protocol 4\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +105,7 @@ func TestOpenUnderUnknownFormatAddsNothing(t *testing.T) {
 	before := snapshot(t, dir)
 	s := open(t, dir)
 	sec := enter(t, s)
-	if n, understood, err := sec.Format(); n != 3 || understood || err != nil {
+	if n, understood, err := sec.Format(); n != 4 || understood || err != nil {
 		t.Fatalf("Format = %d, %v, %v", n, understood, err)
 	}
 	// What a client of a foreign format reads must work without the directories it may not create.

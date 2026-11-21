@@ -1307,7 +1307,7 @@ func TestPassThroughRefusesForeignFormat(t *testing.T) {
 	env := func(dir string) []string {
 		return append(baseEnv(dir), engine.EnvUnbudgeted+"=parent", engine.EnvTelemetry+"=1")
 	}
-	for name, body := range map[string]string{"foreign": "coreslot-protocol 3\n", "malformed": "coreslot-protocol x\n"} {
+	for name, body := range map[string]string{"foreign": "coreslot-protocol 4\n", "malformed": "coreslot-protocol x\n"} {
 		t.Run(name, func(t *testing.T) {
 			dir := recordedDir(t, 1024)
 			setFormat(t, dir, body)
@@ -1323,7 +1323,7 @@ func TestPassThroughRefusesForeignFormat(t *testing.T) {
 	t.Run("changed while it ran", func(t *testing.T) {
 		dir := recordedDir(t, 1024)
 		e := append(env(dir), "S="+dir)
-		if r := cli(t, e, "run", "--restart=yes", "--", "sh", "-c", `printf 'coreslot-protocol 3\n' > "$S/FORMAT"`); r.code != 0 {
+		if r := cli(t, e, "run", "--restart=yes", "--", "sh", "-c", `printf 'coreslot-protocol 4\n' > "$S/FORMAT"`); r.code != 0 {
 			t.Fatalf("exit %d: %q", r.code, r.stderr)
 		}
 		if got := eventNames(events(t, dir)); got != "outside" {
@@ -1409,7 +1409,7 @@ func wantSilent(t *testing.T, b *bed, code, want int) {
 func TestFailOpenForeignFormatRecordsNothing(t *testing.T) {
 	t.Run("first sight", func(t *testing.T) {
 		dir := recordedDir(t, 1024)
-		setFormat(t, dir, "coreslot-protocol 3\n")
+		setFormat(t, dir, "coreslot-protocol 4\n")
 		r := cli(t, baseEnv(dir), append([]string{"run", "--restart=yes", "--"}, helper(t, "getenv", engine.EnvTelemetry)...)...)
 		if r.code != 0 || strings.TrimSpace(r.stdout) != "" || hasTelemetryDir(dir) {
 			t.Errorf("exit %d stdout %q telemetry/ %v", r.code, r.stdout, hasTelemetryDir(dir))
@@ -1417,7 +1417,7 @@ func TestFailOpenForeignFormatRecordsNothing(t *testing.T) {
 	})
 	t.Run("after an enqueue", func(t *testing.T) {
 		b := failOpenBed(t)
-		setFormat(t, b.dir, "coreslot-protocol 3\n")
+		setFormat(t, b.dir, "coreslot-protocol 4\n")
 		wantSilent(t, b, b.r.failOpen(b.e, &store.FormatError{N: 3}), 0)
 	})
 }
@@ -1515,7 +1515,7 @@ func TestTimeoutRunWithoutHold(t *testing.T) {
 // mark. Mutation: the recorder not reading FORMAT lets ended through.
 func TestTimeoutRunForeignFormatRecordsNothing(t *testing.T) {
 	b := failOpenBed(t)
-	setFormat(t, b.dir, "coreslot-protocol 3\n")
+	setFormat(t, b.dir, "coreslot-protocol 4\n")
 	wantSilent(t, b, b.r.timeoutRun(b.e), 0)
 }
 
@@ -1912,7 +1912,7 @@ func TestEnqueueNamesIndependentParent(t *testing.T) {
 // not reading FORMAT reddens "run log", a Stop on any failed append "a plain failure", and updateHold
 // without its FORMAT check "hold update".
 func TestNoEndedAfterFormatChange(t *testing.T) {
-	for name, format := range map[string]string{"unknown": "coreslot-protocol 3\n", "malformed": "coreslot-protocol x\n"} {
+	for name, format := range map[string]string{"unknown": "coreslot-protocol 4\n", "malformed": "coreslot-protocol x\n"} {
 		t.Run(name, func(t *testing.T) {
 			dir := recordedDir(t, 1024)
 			env := append(baseEnv(dir), "S="+dir, "F="+format)
@@ -1925,7 +1925,7 @@ func TestNoEndedAfterFormatChange(t *testing.T) {
 		})
 	}
 	t.Run("run log", func(t *testing.T) {
-		b := newEnded(t, "sh", "-c", `printf 'coreslot-protocol 3\n' > "$S/FORMAT"`)
+		b := newEnded(t, "sh", "-c", `printf 'coreslot-protocol 4\n' > "$S/FORMAT"`)
 		t.Setenv("S", b.dir)
 		if code := b.r.runChild(b.child("", "")); code != 0 {
 			t.Fatalf("exit %d", code)
@@ -1957,7 +1957,7 @@ func TestNoEndedAfterFormatChange(t *testing.T) {
 			t.Fatalf("not admitted: %d %q", code, b.notices(t))
 		}
 		defer g.Close()
-		setFormat(t, b.dir, "coreslot-protocol 3\n")
+		setFormat(t, b.dir, "coreslot-protocol 4\n")
 		if b.r.updateHold(b.e.Store(), g, func(*wire.Hold) {}) {
 			t.Error("the hold was updated under a foreign FORMAT")
 		}
