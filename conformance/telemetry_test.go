@@ -226,7 +226,7 @@ var lifeRows = []lifeRow{
 		check: func(t *testing.T, o *lifeOutcome) { o.wantField(t, "B", "refused", "reason", "no_wait") }},
 	{name: "foreign_format", config: roomConfig(1000), want: map[string]string{"R": `^$`},
 		trace: func(t *testing.T, e Env, o *lifeOutcome) {
-			writeFormat(e, "4")
+			writeFormat(e, fmt.Sprint(store.Format+1))
 			runBlind(e, o)
 		}},
 	{name: "malformed_format", config: roomConfig(1000), want: map[string]string{"R": `^$`},
