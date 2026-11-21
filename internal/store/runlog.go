@@ -42,9 +42,12 @@ type RunRecord struct {
 	TickShare *float64 `json:"tick_share,omitempty"`
 	// MemPeakKiB is the command tree's memory peak in KiB, nil when unknown and then not encoded.
 	MemPeakKiB *int64 `json:"mem_peak_kib,omitempty"`
-	Stops      int    `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
-	Exit       int    `json:"exit"`
-	FailOpen   string `json:"fail_open"`
+	// MemSustainedKiB is the largest level the tree's footprint held for 5 watch ticks in a row
+	// (PROTOCOL.md section 20), in KiB; nil, and then not encoded, when the run had no such row.
+	MemSustainedKiB *int64 `json:"mem_sustained_kib,omitempty"`
+	Stops           int    `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
+	Exit            int    `json:"exit"`
+	FailOpen        string `json:"fail_open"`
 	// Container says the run was container work (PROTOCOL.md section 20); encoded only when true.
 	Container bool `json:"container,omitempty"`
 }

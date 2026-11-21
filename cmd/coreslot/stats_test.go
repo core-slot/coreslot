@@ -11,10 +11,10 @@ import (
 )
 
 // statsDir is a state directory whose run log is testdata/runs-stats.jsonl.
-func statsDir(t *testing.T) string {
+func statsDir(t *testing.T, fixture string) string {
 	t.Helper()
 	dir := stateDir(t, "")
-	data, err := os.ReadFile(filepath.Join("testdata", "runs-stats.jsonl"))
+	data, err := os.ReadFile(filepath.Join("testdata", fixture))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func statsDir(t *testing.T) string {
 // The text names each label's runs, its window and the need learned from it; a fail-open run's
 // line changes none of it. Mutation: learn from Window[0] instead of the window's p90.
 func TestStatsText(t *testing.T) {
-	r := cli(t, baseEnv(statsDir(t)), "stats")
+	r := cli(t, baseEnv(statsDir(t, "runs-stats.jsonl")), "stats")
 	if r.code != 0 {
 		t.Fatalf("stats exited %d: %s", r.code, r.stderr)
 	}
@@ -44,7 +44,7 @@ func TestStatsText(t *testing.T) {
 
 // Mutation: leave skipped_lines at 0.
 func TestStatsJSON(t *testing.T) {
-	r := cli(t, baseEnv(statsDir(t)), "stats", "--json")
+	r := cli(t, baseEnv(statsDir(t, "runs-stats.jsonl")), "stats", "--json")
 	if r.code != 0 {
 		t.Fatalf("stats --json exited %d: %s", r.code, r.stderr)
 	}
@@ -67,6 +67,19 @@ func TestStatsJSON(t *testing.T) {
 	}
 }
 
+// A label whose runs hold less than their peaks shows the need admission uses, and suggests its
+// peak-only need as the pin, in the text and in the JSON. Mutation: suggest NeedMiB as the pin →
+// mem = "7G", or "need": "7G" in the JSON.
+func TestStatsSustained(t *testing.T) {
+	dir := statsDir(t, "runs-stats-sustained.jsonl")
+	if r := cli(t, baseEnv(dir), "stats"); r.code != 0 || !strings.Contains(r.stdout, `need  7 GiB sustained (mem = "8G")`) {
+		t.Errorf("stats: exit %d:\n%s", r.code, r.stdout)
+	}
+	if r := cli(t, baseEnv(dir), "stats", "--json"); r.code != 0 || !strings.Contains(r.stdout, `"need": "8G"`) {
+		t.Errorf("stats --json: exit %d:\n%s", r.code, r.stdout)
+	}
+}
+
 func TestStatsNoLog(t *testing.T) {
 	r := cli(t, baseEnv(stateDir(t, "")), "stats")
 	if r.code != 0 || !strings.Contains(r.stdout, "no runs recorded") {
@@ -77,7 +90,7 @@ func TestStatsNoLog(t *testing.T) {
 // A needs file that cannot be read is one notice for stats, which goes on as if it had no
 // entries. Mutation: fail learn on the needs file's error → exit 1, red.
 func TestStatsMalformedNeedsIsANotice(t *testing.T) {
-	dir := statsDir(t)
+	dir := statsDir(t, "runs-stats.jsonl")
 	writeNeeds(t, dir, "[needs\nnot toml\n")
 	for _, args := range [][]string{{"stats"}, {"stats", "--json"}} {
 		r := cli(t, baseEnv(dir), args...)

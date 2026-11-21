@@ -107,6 +107,99 @@ func TestNeedIsP90(t *testing.T) {
 	if got, ok := NeedMiB(Window(runs, "x", WindowRuns)); !ok || got != 19*1024 {
 		t.Errorf("NeedMiB = %d, %v; want %d, true", got, ok, 19*1024)
 	}
+	if got, ok := PeakNeedMiB(Window(runs, "x", WindowRuns)); !ok || got != 19*1024 {
+		t.Errorf("PeakNeedMiB = %d, %v; want %d, true", got, ok, 19*1024)
+	}
+}
+
+// G is 1 GiB in KiB.
+const G = int64(1) << 20
+
+// line is a counted run at t0+i with a peak and, when sustained is not 0, a sustained level, both
+// in KiB.
+func line(i, peak, sustained int64) store.RunRecord {
+	r := run("x", i)
+	r.MemPeakKiB = k(peak)
+	if sustained != 0 {
+		r.MemSustainedKiB = k(sustained)
+	}
+	return r
+}
+
+// A line's figure is its sustained level, never more than 1 GiB under its peak. Mutations: drop the
+// cap side → 3072; drop the sustained side → 8192 for both.
+func TestFigureSides(t *testing.T) {
+	for _, c := range []struct{ sustained, want int64 }{{15 * G / 2, 7680}, {3 * G, 7168}} {
+		if got, ok := NeedMiB([]store.RunRecord{line(1, 8*G, c.sustained)}); !ok || got != c.want {
+			t.Errorf("peak 8G sustained %d KiB: NeedMiB = %d, %v; want %d, true", c.sustained, got, ok, c.want)
+		}
+	}
+}
+
+// Another client's line: a sustained level above its peak reads as the peak, and a sustained level
+// without a peak is not counted; a label whose peaks are all 0 needs 1 MiB, while its peak-only
+// need stays 0; a small run's figure can fall more than its peak's tenth. Mutations: count a line
+// with the key and no peak → ok alone, above 4096 beside the 4G line; floor PeakNeedMiB too → 1.
+func TestFigureEdges(t *testing.T) {
+	if got, _ := NeedMiB([]store.RunRecord{line(1, 8*G, 9*G)}); got != 8192 {
+		t.Errorf("sustained above the peak: NeedMiB = %d; want 8192", got)
+	}
+	keyOnly := run("x", 2)
+	keyOnly.MemSustainedKiB = k(9 * G)
+	if got, ok := NeedMiB([]store.RunRecord{keyOnly}); ok {
+		t.Errorf("a key without a peak alone: NeedMiB = %d, true; want false", got)
+	}
+	if got, ok := NeedMiB([]store.RunRecord{line(1, 4*G, 0), keyOnly}); !ok || got != 4096 {
+		t.Errorf("a key without a peak beside a 4G line: NeedMiB = %d, %v; want 4096, true", got, ok)
+	}
+	zero := []store.RunRecord{line(1, 0, 0)}
+	if got, ok := NeedMiB(zero); !ok || got != 1 {
+		t.Errorf("peak 0: NeedMiB = %d, %v; want 1, true", got, ok)
+	}
+	if got, ok := PeakNeedMiB(zero); !ok || got != 0 {
+		t.Errorf("peak 0: PeakNeedMiB = %d, %v; want 0, true", got, ok)
+	}
+	if got, _ := NeedMiB([]store.RunRecord{line(1, 512<<10, 100<<10)}); got != 100 {
+		t.Errorf("peak 512 MiB sustained 100 MiB: NeedMiB = %d; want 100", got)
+	}
+}
+
+// nineteenOf is 20 lines that all peak at 8G, the first n of them with a sustained 7G.
+func nineteenOf(n int) []store.RunRecord {
+	var runs []store.RunRecord
+	for i := range 20 {
+		s := int64(0)
+		if i < n {
+			s = 7 * G
+		}
+		runs = append(runs, line(int64(i+1), 8*G, s))
+	}
+	return runs
+}
+
+// The need is the figure at the 90th percentile: it falls only once 19 of 20 runs sustain less,
+// while the peak-only need stays the peak. Mutation: index n*9/10 − 1 → 7168 at 18.
+func TestNeedMovesAtNineteenOfTwenty(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want int64
+	}{{18, 8192}, {19, 7168}} {
+		runs := nineteenOf(c.n)
+		if got, ok := NeedMiB(runs); !ok || got != c.want {
+			t.Errorf("%d of 20 sustained: NeedMiB = %d, %v; want %d, true", c.n, got, ok, c.want)
+		}
+		if got, ok := PeakNeedMiB(runs); !ok || got != 8192 {
+			t.Errorf("%d of 20 sustained: PeakNeedMiB = %d, %v; want 8192, true", c.n, got, ok)
+		}
+	}
+}
+
+// Summarize carries both needs. Mutation: fill PeakNeedMiB from NeedMiB → 7168.
+func TestSummarizeCarriesBoth(t *testing.T) {
+	s := only(t, Summarize(nineteenOf(19)))
+	if s.NeedMiB != 7168 || s.PeakNeedMiB != 8192 {
+		t.Errorf("NeedMiB %d PeakNeedMiB %d; want 7168 and 8192", s.NeedMiB, s.PeakNeedMiB)
+	}
 }
 
 // A run that was stopped says nothing about what its label needs.

@@ -548,3 +548,26 @@ func TestRunWritesNoCPUMark(t *testing.T) {
 		})
 	}
 }
+
+// The sustained level is fed by the watch ticks alone, with the tick's own listing: over 11
+// listings of n MiB the ticks read 2, 4, 6, 8 and 10 MiB, whose least is 2. Mutations: remove the
+// call → none; move it before the tick's continue → 7 MiB.
+func TestWatchSustainedIsTickFed(t *testing.T) {
+	g, st := watchedHold(t)
+	_, p := watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 11,
+		func(int) bool { return false }, nil)
+	if !p.sustained || p.sustainedKiB != 2<<10 {
+		t.Errorf("sustained %v %d KiB; want %d", p.sustained, p.sustainedKiB, 2<<10)
+	}
+}
+
+// A tick whose listing failed ends the row: listings of 9 MiB with the tenth failed give four good
+// ticks, then a failed one, and no level. Mutations: pass a constant true for ok → a row ending in
+// 0, sustained; move the call before the tick's continue → 9 MiB.
+func TestWatchSustainedNeedsFiveGoodTicks(t *testing.T) {
+	_, g, st := trimHold(t, 4000)
+	_, p := trimWatch(t, trimRun(t, 60), g, st, []int64{9, 9, 9, 9, 9, 9, 9, 9, 9, -1, 9}, nil)
+	if p.sustained {
+		t.Errorf("sustained %d KiB; want none", p.sustainedKiB)
+	}
+}
