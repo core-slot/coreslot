@@ -75,3 +75,68 @@ func TestSetMemPeakUnknown(t *testing.T) {
 		t.Errorf("mem peak %v, want none", rec.MemPeakKiB)
 	}
 }
+
+// ticks feeds readings to a fresh peak's tick, a negative reading as a listing that failed.
+func ticks(readings ...int64) peak {
+	var p peak
+	for _, r := range readings {
+		p.tick(max(r, 0), r >= 0)
+	}
+	return p
+}
+
+// The sustained level is the largest, over every sustainTicks tick readings in a row, of their
+// least. Mutations: sustainTicks − 1, or report the least reading so far → a level after four
+// readings; the largest of each row → 9 for the dip; keep the first row → 1 and 4.
+func TestSustainedRows(t *testing.T) {
+	if p := ticks(5, 5, 5, 5); p.sustained {
+		t.Errorf("four readings: sustained %d; want none", p.sustainedKiB)
+	}
+	for _, c := range []struct {
+		readings []int64
+		want     int64
+	}{
+		{[]int64{5, 5, 5, 5, 5}, 5},
+		{[]int64{1, 9, 9, 9, 9, 9, 2}, 9},
+		{[]int64{9, 9, 3, 9, 9, 9, 9}, 3},
+		{[]int64{4, 4, 4, 4, 4, 8, 8, 8, 8, 8}, 8},
+	} {
+		if p := ticks(c.readings...); !p.sustained || p.sustainedKiB != c.want {
+			t.Errorf("%v: sustained %v %d; want %d", c.readings, p.sustained, p.sustainedKiB, c.want)
+		}
+	}
+}
+
+// A tick whose listing failed ends the row: four readings on each side of it are no level. Mutation:
+// skip a failed tick instead of ending the row → 7.
+func TestSustainedFailedTickEndsRow(t *testing.T) {
+	readings := []int64{7, 7, 7, 7, -1, 7, 7, 7, 7}
+	if p := ticks(readings...); p.sustained {
+		t.Errorf("%v: sustained %d; want none", readings, p.sustainedKiB)
+	}
+	if p := ticks(append(readings, 7)...); !p.sustained || p.sustainedKiB != 7 {
+		t.Errorf("one more 7: sustained %v %d; want 7", p.sustained, p.sustainedKiB)
+	}
+}
+
+// The record carries the sustained level beside the peak, the rusage floor raising the peak alone,
+// and no key without a level. Mutation: write the key whenever p.ok → the last record has it.
+func TestSetMemPeakSustained(t *testing.T) {
+	p := peak{kib: 9, ok: true, sustainedKiB: 5, sustained: true}
+	for _, c := range []struct {
+		rss  *int64
+		peak int64
+	}{{nil, 9}, {new(int64(12)), 12}} {
+		var rec store.RunRecord
+		setMemPeak(&rec, c.rss, p)
+		if rec.MemPeakKiB == nil || *rec.MemPeakKiB != c.peak || rec.MemSustainedKiB == nil || *rec.MemSustainedKiB != 5 {
+			t.Errorf("rss %v: peak %v sustained %v; want %d and 5", c.rss, rec.MemPeakKiB, rec.MemSustainedKiB, c.peak)
+		}
+	}
+	p.sustained = false
+	var rec store.RunRecord
+	setMemPeak(&rec, nil, p)
+	if rec.MemSustainedKiB != nil {
+		t.Errorf("no level: sustained %d; want none", *rec.MemSustainedKiB)
+	}
+}

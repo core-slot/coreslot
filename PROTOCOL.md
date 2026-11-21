@@ -431,8 +431,8 @@ A **container command** is one whose argv[0] has the basename `docker`, `docker-
 `podman`, whatever the program is; `sh -c 'docker run ...'` is not one.
 
 > **Implementation note.** The Go CLI takes a run's need from `--mem`, else the label's `mem`, else
-> the 90th percentile of the `mem_peak_kib` of the label's last 20 counted runs (section 20) rounded
-> up to a whole MiB, else, for a container command, 1 MiB, else the cold start (section 5.1). A
+> the 90th percentile of the figures of the label's last 20 counted runs (section 20) rounded up to
+> a whole MiB and at least 1, else, for a container command, 1 MiB, else the cold start (section 5.1). A
 > run's `victim` (section 7.4) is true only when it was started with `--restart=yes` and its label
 > has no `no_restart = true`, which wins over the flag; `--restart=no` makes it false. A container
 > command counts as `no_restart` however its need was settled, a pin included: a stop would kill the
@@ -1379,6 +1379,7 @@ informative string; a writer that cannot fit it writes no line. The object carri
 | `sys_s` | number | optional; system seconds of the command (below) |
 | `tick_share` | number | optional; `0..1`; the run's share of time lost to memory over its ticks whose paging gate was closed (below) |
 | `mem_peak_kib` | integer | optional; memory peak of the command's process tree, in KiB (below) |
+| `mem_sustained_kib` | integer | optional; the largest level the tree's memory held for 5 ticks in a row, in KiB (below) |
 | `stops` | integer | optional; on the line of a stopped attempt, how often the run has been stopped for memory, this stop included; absent on every other line |
 | `exit` | integer | the run's exit status |
 | `fail_open` | string | the fail-open reason, or empty |
@@ -1414,6 +1415,12 @@ among them added once, since shared memory is held once. A process that exits be
 and its reading is skipped. `mem_peak_kib` is the largest sum, or the rusage's `ru_maxrss` when no
 reading succeeded or that is larger.
 
+The key `mem_sustained_kib` is OPTIONAL too, under the same rule. A writer that ticks (section 23.1)
+takes, at each watch tick of the shared period, that tick's sum; over every 5 consecutive ticks
+whose sums all succeeded it takes the least of the 5, and `mem_sustained_kib` is the largest of
+those. A tick whose listing failed has no sum and ends the row. A writer that does not tick, or
+whose attempt had no 5 such ticks in a row, omits the key.
+
 The key `container` is OPTIONAL too: a writer writes it only when true, and a reader treats an
 absent key as false. It says that the run's memory peak leaves out its containers.
 It changes no counting: such a run counts as any other.
@@ -1431,7 +1438,10 @@ generation). One generation is kept.
 > **Implementation note.** To fit a line into 4 KiB the Go CLI shortens `fail_open`. It samples
 > memory on macOS and Linux and writes the rusage's peak elsewhere when it knows it. `coreslot
 > stats` and `coreslot report` read both generations of the log and skip lines that do not
-> parse. A label's need is the 90th percentile of the `mem_peak_kib` of its last 20 counted runs.
+> parse. A label's need is the 90th percentile of its last 20 counted runs' figures, rounded up to a
+> whole MiB and at least 1 MiB. A run's figure is its `mem_sustained_kib`, never above its
+> `mem_peak_kib` nor more than 1 GiB under it; its `mem_peak_kib` when the line has no
+> `mem_sustained_kib`; none when the line has no `mem_peak_kib`.
 
 ## 21. Worked examples
 
@@ -1693,12 +1703,12 @@ holds are live: `pool:a` (arrival 11:43:20, need 4 096 MiB, footprint 1 536 MiB)
 
    ```json
    {"time_ns": 1791720780000000000, "label": "lint", "waited_s": 1.0, "ran_s": 99.0,
-    "mem_peak_kib": 2355200, "stops": 1,
+    "mem_peak_kib": 2355200, "mem_sustained_kib": 2150400, "stops": 1,
     "exit": 137, "fail_open": ""}
    ```
 
    Its new ticket is `queue/01791720780000000000-0000007400-000010-lint`, the order key being its
-   first arrival, with `need_mib` 2 300 (the larger of its peak and its learned need). It starts
+   first arrival, with `need_mib` 2 300 (at least the larger of its peak and its start need). It starts
    again when it is admitted, the level has been green for 30 s and the room is at least `2 300 +
    max(256, 230) = 2 556` MiB. The new hold has `"arrival_ns": 1791720780000000000` and, from its first tick,
    `"stops": 1`.
@@ -2031,13 +2041,18 @@ The `coreslot run` of a stopped command keeps running. It reaps the command, clo
 (section 12.3), appends one run-log line for the stopped attempt with `stops` (section 20) and
 enqueues again (section 10.1) with its **first arrival**: the order key of the new ticket and the
 `arrival_ns` of its next hold are those of its first attempt, so it keeps its place. Its need is
-the larger of the peak footprint the stopped attempt reached and the need the run had at its start.
+at least the larger of the peak footprint the stopped attempt reached and the need the run had at
+its start.
 It waits as any request does and, in addition, under the restart conditions of section 12.4; on admission it
 starts the same command again, under a new hold whose `stops` is the number of stops so far.
 A run with `--no-wait` does not come back, since a restart waits for calm: it refuses with the
 refusal code, naming the stop. A forwarder (section 17) belongs to the run, not to an attempt: the
 command started again gets the same `DOCKER_HOST`, and its containers keep counting from their
 first touch.
+
+> **Implementation note.** When the run's start need was learned (section 5.4), the Go CLI asks for
+> the larger of the reached peak and the 90th percentile of the `mem_peak_kib` of the label's last
+> 20 counted runs, so that a stopped run comes back with its bursts reserved.
 
 ### 24.2 Giving up
 

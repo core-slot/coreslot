@@ -308,15 +308,16 @@ func TestRunLogUsageKeys(t *testing.T) {
 	}
 }
 
-// The memory keys are written when known and left out when not, never as a measured zero.
-// Mutation: drop omitempty from mem_peak_kib.
+// The memory keys are written when known and left out when not, never as a measured zero; the
+// sustained level follows the peak and reads back. Mutations: drop omitempty from mem_peak_kib or
+// mem_sustained_kib.
 func TestRunRecordMemKeys(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	kib := int64(368640)
+	kib, sustained := int64(368640), int64(307200)
 	r := RunRecord{TimeNS: 1791720000000000000, Label: "mem"}
 	measured := r
-	measured.MemPeakKiB = &kib
+	measured.MemPeakKiB, measured.MemSustainedKiB = &kib, &sustained
 	for _, rec := range []RunRecord{r, measured} {
 		if err := s.AppendRun(rec); err != nil {
 			t.Fatal(err)
@@ -326,11 +327,15 @@ func TestRunRecordMemKeys(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
 	}
-	if strings.Contains(lines[0], `"mem_peak_kib"`) {
-		t.Errorf("a line without memory has mem_peak_kib: %s", lines[0])
+	if strings.Contains(lines[0], `"mem_peak_kib"`) || strings.Contains(lines[0], `"mem_sustained_kib"`) {
+		t.Errorf("a line without memory has a memory key: %s", lines[0])
 	}
-	if want := `"mem_peak_kib":368640`; !strings.Contains(lines[1], want) {
+	if want := `"mem_peak_kib":368640,"mem_sustained_kib":307200`; !strings.Contains(lines[1], want) {
 		t.Errorf("line = %s; want it to contain %s", lines[1], want)
+	}
+	runs, _, err := s.ReadRuns()
+	if err != nil || len(runs) != 2 || runs[1].MemSustainedKiB == nil || *runs[1].MemSustainedKiB != sustained {
+		t.Errorf("read back %+v, %v; want mem_sustained_kib 307200 on the second", runs, err)
 	}
 }
 

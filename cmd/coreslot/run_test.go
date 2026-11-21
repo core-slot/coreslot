@@ -657,7 +657,7 @@ func TestWrappedClientIsMarked(t *testing.T) {
 	if v, ok := lines[1]["container"]; ok {
 		t.Errorf("the true run's record has container %v", v)
 	}
-	if need, ok, _, _, _, _, _ := readLog(location{dir: dir}, "w"); !ok || need <= 0 {
+	if need, ok, _, _, _, _, _, _ := readLog(location{dir: dir}, "w"); !ok || need <= 0 {
 		t.Errorf("learned need %d, %v; want one", need, ok)
 	}
 }
@@ -1053,6 +1053,9 @@ func TestRunLogsTreePeak(t *testing.T) {
 	kib, ok := lines[0]["mem_peak_kib"].(float64)
 	if !ok || kib < 360<<10 {
 		t.Errorf("mem_peak_kib %v; want at least %d KiB", lines[0]["mem_peak_kib"], 360<<10)
+	}
+	if v, has := lines[0]["mem_sustained_kib"]; has { // a 2.5 s command has no five ticks
+		t.Errorf("mem_sustained_kib %v; want none", v)
 	}
 }
 

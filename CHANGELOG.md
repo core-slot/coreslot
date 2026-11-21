@@ -54,6 +54,14 @@ All notable changes to this project are recorded here. The format follows
   took `need_mib` for the need asked (`status --json`, the telemetry `jobs` and `holders`) then sees the current
   reservation where it expected the need asked, which a trimmed hold carries as `asked_mib`; admission arithmetic
   is unaffected, since it computes the room from `need_mib` as the body says it.
+- A label's learned need counts the level its runs' memory holds, not their briefest peak. Each run writes the new
+  optional run-log key `mem_sustained_kib`, the largest level its tree held for 5 watch ticks in a row (about 10 s),
+  and a run's figure is that level, never more than 1 GiB under its peak; a line without the key counts its peak.
+  The need of a label with brief peaks falls once its last 20 runs carry the key, by up to 1 GiB, and for a label
+  of small runs of 10 to 20 s possibly by more of its need. A label whose measured peaks are all 0 now asks for 1 MiB.
+- `coreslot stats` prints `need  <need> sustained (mem = "<peak need>")` when the runs hold less than their peaks,
+  and still suggests the peak-only need as the pin; `stats --json`'s `need` is that pin.
+- A stopped run whose need was learned comes back with at least its label's peak-only need reserved.
 
 ## v0.9.1 (2026-11-19)
 

@@ -35,12 +35,12 @@ const (
 // maxStops is the memory stops after which a run gives up.
 const maxStops = 3
 
-// readLog reads the run log once for a run: the need it gives label, the p90 peak of its last
-// counted runs (ok false when unknown), the label's normal share of system time (learned false
-// when none of those runs has a tick share), its typical run time (0 when unknown), its typical
-// CPU seconds (0 when too few of those runs report them) and whether one of those runs was
+// readLog reads the run log once for a run: the need it gives label (ok false when unknown), the
+// need its peaks alone give (0 when unknown), the label's normal share of system time (learned
+// false when none of those runs has a tick share), its typical run time (0 when unknown), its
+// typical CPU seconds (0 when too few of those runs report them) and whether one of those runs was
 // container work.
-func readLog(loc location, label string) (needMiB int64, ok bool, share float64, learned bool, typicalS int64, typicalCPUS float64, marked bool) {
+func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB int64, share float64, learned bool, typicalS int64, typicalCPUS float64, marked bool) {
 	if loc.err != nil {
 		return
 	}
@@ -54,6 +54,7 @@ func readLog(loc location, label string) (needMiB int64, ok bool, share float64,
 	}
 	window := runstats.Window(runs, label, runstats.WindowRuns)
 	needMiB, ok = runstats.NeedMiB(window)
+	peakNeedMiB, _ = runstats.PeakNeedMiB(window)
 	share, learned = runstats.NormalShare(window)
 	typicalS = runstats.TypicalS(window)
 	typicalCPUS = runstats.TypicalCPUS(window)
@@ -104,6 +105,10 @@ type run struct {
 	// trimWindowS is [watch] trim_window_s from the run's start: the window of a trimmed hold of
 	// any of its attempts.
 	trimWindowS int64
+	// peakNeedMiB is the need the label's peaks alone give, from the run log read at the start;
+	// restartFloorMiB is it when the run's start need was learned, else 0: what every restart of
+	// the run reserves at least.
+	peakNeedMiB, restartFloorMiB int64
 }
 
 // runCommand runs `coreslot run` and returns its exit status (PROTOCOL.md section 19).
@@ -131,14 +136,14 @@ func runCommand(args []string, io IO) int {
 		lookup = func(string) (needs.Entry, bool, bool) { return entry, found, bad } // its notice said once
 	}
 	machine, _ := readMachine()
-	needMiB, known, share, learned, typicalS, cpuS, marked := readLog(loc, o.label)
+	needMiB, known, peakNeedMiB, share, learned, typicalS, cpuS, marked := readLog(loc, o.label)
 	o.typicalS = typicalS
 	o.resolveNeed(lookup, func() (int64, bool) { return needMiB, known }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
 	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned, cpuS: cpuS, memMiB: machine.MemMiB,
-		entry: entry, entryBad: bad, marked: marked}
+		entry: entry, entryBad: bad, marked: marked, peakNeedMiB: peakNeedMiB}
 	return r.decide()
 }
 
@@ -215,10 +220,14 @@ func (r *run) ordinary(nested bool) int {
 	}
 }
 
-// requeue makes req the request of the command g ran, coming back after a stop.
+// requeue makes req the request of the command g ran, coming back after a stop. A run whose start
+// need was learned reserves at least its label's peak-only need, so that its bursts are reserved.
 func (r *run) requeue(req *spec.Request, g *engine.Grant) {
+	if r.o.needSource == "learned" { // the start need's source, before the first requeue rewrites it
+		r.restartFloorMiB = r.peakNeedMiB
+	}
 	r.o.needSource = "restart_peak"
-	req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, r.o.need)
+	req.ArrivalNS, req.Restart, req.NeedMiB = g.ArrivalNS(), true, restartNeed(r.peakKiB, max(r.o.need, r.restartFloorMiB))
 	r.start = time.Now()
 }
 

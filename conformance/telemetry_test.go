@@ -372,8 +372,9 @@ func (row lifeRow) outcome(t *testing.T, on bool) *lifeOutcome {
 	return o
 }
 
-// varyingRunKeys are run-log keys that come and go with timing: a tick's share and the sampled peak.
-var varyingRunKeys = []string{"tick_share", "mem_peak_kib"}
+// varyingRunKeys are run-log keys that come and go with timing: a tick's share, the sampled peak and
+// the sustained level, which a run has only after five ticks.
+var varyingRunKeys = []string{"tick_share", "mem_peak_kib", "mem_sustained_kib"}
 
 // read collects what the row left in the state directory.
 func (o *lifeOutcome) read(t *testing.T, e Env) {

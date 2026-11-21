@@ -314,3 +314,53 @@ func TestRestartAfterTrimIsUntrimmed(t *testing.T) {
 		t.Errorf("second attempt: need %v trimmed %v asked %v; want 4000, neither key", need, trimmed, asked)
 	}
 }
+
+// requeued is the need of r's request after one more stop, its reached peak 2 GiB.
+func requeued(t *testing.T, r *run, g *engine.Grant) int64 {
+	t.Helper()
+	r.peakKiB = 2 << 20
+	req := spec.Request{Label: "x", NeedMiB: r.o.need}
+	r.requeue(&req, g)
+	return req.NeedMiB
+}
+
+// A stopped run whose need was learned comes back with at least its label's peak-only need, at
+// every stop. Mutations: use r.o.need alone → 7168; read needSource at each requeue without keeping
+// the floor → 7168 at the second.
+func TestRequeueLearnedUsesPeakNeed(t *testing.T) {
+	g, _ := watchedHold(t)
+	r := restartable("make", "test")
+	r.o.need, r.o.needSource, r.peakNeedMiB = 7168, "learned", 8192
+	for stop := 1; stop <= 2; stop++ {
+		if got := requeued(t, r, g); got != 8192 {
+			t.Errorf("stop %d: need %d; want 8192", stop, got)
+		}
+	}
+}
+
+// A run whose need was not learned comes back as before, whatever its label learned: a flag or a
+// pin is never raised, and a cold start keeps its cold need. Mutation: keep the floor for every
+// run → 8192.
+func TestRequeuePinnedIgnoresPeakNeed(t *testing.T) {
+	g, _ := watchedHold(t)
+	cold := restartable("make", "test")
+	if cold.o.need != 4096 || cold.o.needSource != "cold" {
+		t.Fatalf("cold start: need %d from %q; want 4096 from cold", cold.o.need, cold.o.needSource)
+	}
+	for _, c := range []struct {
+		name   string
+		need   int64
+		source string
+	}{{"flag", 4096, "flag"}, {"pin", 4096, "pin"}, {"a flag above", 12288, "flag"}, {"cold", 0, ""}} {
+		r := cold
+		if c.source != "" {
+			r = restartable("make", "test")
+			r.o.need, r.o.needSource = c.need, c.source
+		}
+		want := r.o.need
+		r.peakNeedMiB = 8192
+		if got := requeued(t, r, g); got != want {
+			t.Errorf("%s: need %d; want %d", c.name, got, want)
+		}
+	}
+}

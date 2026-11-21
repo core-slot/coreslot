@@ -98,8 +98,12 @@ the [compatibility policy](docs/compatibility.md) says how.
 ## How it decides
 
 **Admission.** A command's need is `--mem`, else the `mem` of its label in
-[`needs.toml`](#configuration), else the 90th percentile of the memory peaks of the label's last 20
-counted runs ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)), else 1 MiB for a command named
+[`needs.toml`](#configuration), else the 90th percentile of what the label's last 20 counted runs
+held ([`PROTOCOL.md` section 20](PROTOCOL.md#20-run-log)): the level a run's memory held for about
+10 s, at most 1 GiB under its peak, or its peak for a run shorter than that. Brief peaks are
+therefore not reserved: the watchdog acts when pressure lasts, a stopped run comes back with its
+label's peak reserved, and a label pinned in `needs.toml` reserves its full peak, which `coreslot
+stats` prints. Else 1 MiB for a command named
 `docker`, `docker-compose` or `podman`, else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
 (on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
 less the reserve, less what each running command still has to grow into (its need less what it uses

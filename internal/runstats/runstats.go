@@ -24,7 +24,10 @@ type Stats struct {
 	Window     []store.RunRecord // its last WindowRuns, oldest first
 	MemPeakKiB int64             // the window's largest peak, 0 when no run has one
 	NeedMiB    int64             // the need learned from the window (NeedMiB), 0 when none was measured
-	WaitedS    float64           // summed over the window
+	// PeakNeedMiB is the need learned from the window's peaks alone (PeakNeedMiB), 0 when no run
+	// has a peak: what a stopped run comes back with, and the pin stats suggests.
+	PeakNeedMiB int64
+	WaitedS     float64 // summed over the window
 }
 
 // counted reports whether r says what its label needs: labelled, not run without the budget, not
@@ -45,20 +48,47 @@ func Window(runs []store.RunRecord, label string, n int) []store.RunRecord {
 	return rs[max(len(rs)-n, 0):]
 }
 
-// NeedMiB is the p90 of the window's memory peaks, rounded up to a whole MiB; ok is false when
-// no run measured one.
+// SustainCapKiB is how far under its peak a run's figure may fall: 1 GiB, in KiB.
+const SustainCapKiB = 1 << 20
+
+// NeedMiB is what the window says its label needs: the p90 of its runs' figures, rounded up to a
+// whole MiB and at least 1. A run's figure is its sustained level, never above its peak nor more
+// than SustainCapKiB under it; the peak for a run without a sustained level; none for a run
+// without a peak. ok is false when no run has a figure.
 func NeedMiB(window []store.RunRecord) (mib int64, ok bool) {
-	var peaks []int64
-	for _, r := range window {
-		if r.MemPeakKiB != nil {
-			peaks = append(peaks, *r.MemPeakKiB)
+	mib, ok = p90MiB(window, func(r store.RunRecord) int64 {
+		p := *r.MemPeakKiB
+		if r.MemSustainedKiB == nil {
+			return p
 		}
-	}
-	if len(peaks) == 0 {
+		return max(min(*r.MemSustainedKiB, p), p-SustainCapKiB)
+	})
+	if !ok {
 		return 0, false
 	}
-	slices.Sort(peaks)
-	return (peaks[min(len(peaks)-1, len(peaks)*9/10)] + 1023) / 1024, true
+	return max(1, mib), true
+}
+
+// PeakNeedMiB is the p90 of the window's memory peaks, rounded up to a whole MiB; ok is false when
+// no run measured one.
+func PeakNeedMiB(window []store.RunRecord) (mib int64, ok bool) {
+	return p90MiB(window, func(r store.RunRecord) int64 { return *r.MemPeakKiB })
+}
+
+// p90MiB is the p90 of figure over the window's runs that have a peak, in KiB, rounded up to a
+// whole MiB; ok is false when none has one.
+func p90MiB(window []store.RunRecord, figure func(store.RunRecord) int64) (mib int64, ok bool) {
+	var figs []int64
+	for _, r := range window {
+		if r.MemPeakKiB != nil {
+			figs = append(figs, figure(r))
+		}
+	}
+	if len(figs) == 0 {
+		return 0, false
+	}
+	slices.Sort(figs)
+	return (figs[min(len(figs)-1, len(figs)*9/10)] + 1023) / 1024, true
 }
 
 // TypicalS is the label's typical run time: the p90 of the window's ran_s, rounded up to a whole
@@ -138,6 +168,7 @@ func summarize(label string, n int, window []store.RunRecord) Stats {
 		}
 	}
 	s.NeedMiB, _ = NeedMiB(window)
+	s.PeakNeedMiB, _ = PeakNeedMiB(window)
 	return s
 }
 
