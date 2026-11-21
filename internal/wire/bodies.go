@@ -3,6 +3,7 @@ package wire
 import (
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/core-slot/coreslot/internal/spec"
 )
@@ -49,6 +50,8 @@ type Hold struct {
 	StallEWMA                    float64 // optional: the run's smoothed stall share, 0..1
 	Container                    bool    // optional: container work, so never a stop round's victim
 	NoCPUS                       int64   // optional: how long the tree has used next to no CPU, in s
+	DockerNote                   string  // optional: why the run's Docker work has no forwarder or is not counted
+	DockerFootprintMiB           *int64  // optional: the growth of the run's containers since its first touch, 0 included; nil when not counted
 	AskedMiB                     int64   // optional: the need the hold was admitted with, 0 when NeedMiB is it
 	Trimmed                      bool    // optional: the holder acted on a request to trim it (trim.json)
 }
@@ -75,29 +78,31 @@ type ticketJSON struct {
 }
 
 type holdJSON struct {
-	Label        string  `json:"label"`
-	PID          int     `json:"pid"`
-	StartNS      int64   `json:"start_ns"`
-	ArrivalNS    int64   `json:"arrival_ns"`
-	NeedMiB      int64   `json:"need_mib"`
-	TypicalS     int64   `json:"typical_s,omitempty"`
-	Stops        int     `json:"stops"`
-	FootprintMiB int64   `json:"footprint_mib"`
-	DUserNS      int64   `json:"d_user_ns"`
-	DSysNS       int64   `json:"d_sys_ns"`
-	DPageWaitNS  int64   `json:"d_page_wait_ns"`
-	NormalShare  float64 `json:"normal_share"`
-	SampledNS    int64   `json:"sampled_ns"`
-	Victim       bool    `json:"victim"`
-	Learned      bool    `json:"learned"`
-	ChildExited  bool    `json:"child_exited"`
-	CPUNS        int64   `json:"cpu_ns,omitempty"`
-	TypicalCPUS  float64 `json:"typical_cpu_s,omitempty"`
-	StallEWMA    float64 `json:"stall_ewma,omitempty"`
-	Container    bool    `json:"container,omitempty"`
-	NoCPUS       int64   `json:"no_cpu_s,omitempty"`
-	AskedMiB     int64   `json:"asked_mib,omitempty"`
-	Trimmed      bool    `json:"trimmed,omitempty"`
+	Label              string  `json:"label"`
+	PID                int     `json:"pid"`
+	StartNS            int64   `json:"start_ns"`
+	ArrivalNS          int64   `json:"arrival_ns"`
+	NeedMiB            int64   `json:"need_mib"`
+	TypicalS           int64   `json:"typical_s,omitempty"`
+	Stops              int     `json:"stops"`
+	FootprintMiB       int64   `json:"footprint_mib"`
+	DUserNS            int64   `json:"d_user_ns"`
+	DSysNS             int64   `json:"d_sys_ns"`
+	DPageWaitNS        int64   `json:"d_page_wait_ns"`
+	NormalShare        float64 `json:"normal_share"`
+	SampledNS          int64   `json:"sampled_ns"`
+	Victim             bool    `json:"victim"`
+	Learned            bool    `json:"learned"`
+	ChildExited        bool    `json:"child_exited"`
+	CPUNS              int64   `json:"cpu_ns,omitempty"`
+	TypicalCPUS        float64 `json:"typical_cpu_s,omitempty"`
+	StallEWMA          float64 `json:"stall_ewma,omitempty"`
+	Container          bool    `json:"container,omitempty"`
+	NoCPUS             int64   `json:"no_cpu_s,omitempty"`
+	DockerNote         string  `json:"docker_note,omitempty"`
+	DockerFootprintMiB *int64  `json:"docker_footprint_mib,omitempty"`
+	AskedMiB           int64   `json:"asked_mib,omitempty"`
+	Trimmed            bool    `json:"trimmed,omitempty"`
 }
 
 type cancelJSON struct {
@@ -216,8 +221,17 @@ func (h Hold) validate() error {
 	if !(h.TypicalCPUS >= 0) {
 		return malformed("typical_cpu_s is at least 0")
 	}
+	if f := h.DockerFootprintMiB; f != nil && (*f < 0 || *f > spec.MaxNeedMiB) {
+		return malformed("docker_footprint_mib is in [0, %d]", spec.MaxNeedMiB)
+	}
+	if !dockerNote.MatchString(h.DockerNote) {
+		return malformed("docker_note is at most 64 bytes of [a-z0-9:. -]")
+	}
 	return nil
 }
+
+// dockerNote is the rule of a hold's docker_note.
+var dockerNote = regexp.MustCompile(`^[a-z0-9:. -]{0,64}$`)
 
 // ---------------------------------------------------------------- decoding
 
@@ -288,6 +302,16 @@ func DecodeHold(body []byte) (Hold, error) {
 	}
 	if h.AskedMiB, err = optional(o, "asked_mib", o.int64); err != nil {
 		return Hold{}, err
+	}
+	if h.DockerNote, err = optional(o, "docker_note", o.str); err != nil {
+		return Hold{}, err
+	}
+	if _, ok := o["docker_footprint_mib"]; ok {
+		f, err := o.int64("docker_footprint_mib")
+		if err != nil {
+			return Hold{}, err
+		}
+		h.DockerFootprintMiB = &f
 	}
 	for _, f := range []struct {
 		key string

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
@@ -35,9 +37,10 @@ const maxStops = 3
 
 // readLog reads the run log once for a run: the need it gives label (ok false when unknown), the
 // need its peaks alone give (0 when unknown), the label's normal share of system time (learned
-// false when none of those runs has a tick share), its typical run time (0 when unknown) and its
-// typical CPU seconds (0 when too few of those runs report them).
-func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB int64, share float64, learned bool, typicalS int64, typicalCPUS float64) {
+// false when none of those runs has a tick share), its typical run time (0 when unknown), its
+// typical CPU seconds (0 when too few of those runs report them) and whether one of those runs was
+// container work.
+func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB int64, share float64, learned bool, typicalS int64, typicalCPUS float64, marked bool) {
 	if loc.err != nil {
 		return
 	}
@@ -55,7 +58,13 @@ func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB in
 	share, learned = runstats.NormalShare(window)
 	typicalS = runstats.TypicalS(window)
 	typicalCPUS = runstats.TypicalCPUS(window)
+	marked = containerMarked(window)
 	return
+}
+
+// containerMarked reports whether a counted run of window was container work.
+func containerMarked(window []store.RunRecord) bool {
+	return slices.ContainsFunc(window, func(rec store.RunRecord) bool { return rec.Container })
 }
 
 // run is one `coreslot run`.
@@ -87,6 +96,12 @@ type run struct {
 	parentHold string    // the live parent hold of an --independent run
 	sockets    []string  // where the run looks for Docker's engine, and dockerOff why it does not: docker.Features, once at its start
 	dockerOff  docker.Off
+
+	entry    needs.Entry // the label's needs entry, looked up once
+	entryBad bool        // the needs file does not load, or the label's entry does not parse
+	marked   bool        // a counted run of the label's window was container work
+	fw       engagement  // whether the run gets a forwarder: docker.Engage, once before it queues
+	fwd      *forwarder  // the engaged run's forwarder, from its first admission
 	// trimWindowS is [watch] trim_window_s from the run's start: the window of a trimmed hold of
 	// any of its attempts.
 	trimWindowS int64
@@ -112,19 +127,23 @@ func runCommand(args []string, io IO) int {
 		o.label = autoLabel(o.argv, cwd)
 	}
 	var lookup needsLookup
+	var entry needs.Entry
+	var found, bad bool
 	if loc.err == nil {
-		lookup = newNeedsLookup(loc.cfgPath, func(format string, args ...any) {
+		entry, found, bad = newNeedsLookup(loc.cfgPath, func(format string, args ...any) {
 			fmt.Fprintf(io.Stderr, "coreslot: "+format+"\n", args...)
-		})
+		})(o.label)
+		lookup = func(string) (needs.Entry, bool, bool) { return entry, found, bad } // its notice said once
 	}
 	machine, _ := readMachine()
-	needMiB, known, peakNeedMiB, share, learned, typicalS, cpuS := readLog(loc, o.label)
+	needMiB, known, peakNeedMiB, share, learned, typicalS, cpuS, marked := readLog(loc, o.label)
 	o.typicalS = typicalS
 	o.resolveNeed(lookup, func() (int64, bool) { return needMiB, known }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
-	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned, cpuS: cpuS, memMiB: machine.MemMiB, peakNeedMiB: peakNeedMiB}
+	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned, cpuS: cpuS, memMiB: machine.MemMiB,
+		entry: entry, entryBad: bad, marked: marked, peakNeedMiB: peakNeedMiB}
 	return r.decide()
 }
 
@@ -167,6 +186,8 @@ func (r *run) ordinary(nested bool) int {
 		ctx, done = context.WithTimeout(ctx, r.o.timeout)
 		defer done()
 	}
+	r.engage()
+	defer r.endForwarder()
 	for {
 		g, code, ok := r.wait(ctx, cancel, e, req)
 		if !ok {

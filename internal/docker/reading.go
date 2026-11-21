@@ -22,6 +22,7 @@ const DesktopOS = "Docker Desktop"
 type Container struct {
 	ID, Name, Image, Project string
 	UsageMiB, LimitMiB       int64
+	UsageBytes               uint64 // UsageMiB before it is cut to whole MiB
 }
 
 // Reading is a budget reading of the engine: all of it or nothing. Code is set when any call failed.
@@ -58,10 +59,15 @@ func UsedBytes(s Stats) uint64 {
 // ShortID cuts an id to the 12 characters the CLI shows.
 func ShortID(id string) string { return id[:min(12, len(id))] }
 
+// IsID says whether id is a container id as the engine makes one: 64 hexadecimal characters.
+func IsID(id string) bool {
+	return len(id) == 64 && strings.Trim(id, "0123456789abcdefABCDEF") == ""
+}
+
 // StatsPath is the request for one container's stats, once. An id is the engine's own text, so it
-// is put in a request only when it is 64 hexadecimal characters.
+// is put in a request only when IsID accepts it.
 func StatsPath(id string) (string, bool) {
-	if len(id) != 64 || strings.Trim(id, "0123456789abcdefABCDEF") != "" {
+	if !IsID(id) {
 		return "", false
 	}
 	return "/containers/" + id + "/stats?stream=false&one-shot=true", true
@@ -130,7 +136,8 @@ func Stat(sock string, l Listed, deadline time.Time) (c Container, gone bool, co
 		c.Name = strings.TrimPrefix(l.Names[0], "/")
 	}
 	c.ID, c.Image, c.Project = l.ID, l.Image, l.Labels[composeKey]
-	c.UsageMiB, c.LimitMiB = int64(UsedBytes(s)>>20), int64(s.MemoryStats.Limit>>20)
+	c.UsageBytes = UsedBytes(s)
+	c.UsageMiB, c.LimitMiB = int64(c.UsageBytes>>20), int64(s.MemoryStats.Limit>>20)
 	return c, false, ""
 }
 

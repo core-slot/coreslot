@@ -33,6 +33,14 @@ boundary and does not enforce anything.
   names it), or corrupt the state, `watch.json` included. coreslot detects many forms of corruption and fails open or refuses, but it
   does not defend against a hostile process of the same user. Such a process already has the
   user's whole account.
+- **The forwarder (macOS).** A run's forwarder relays its command's Docker traffic between a socket
+  in `~/.coreslot-fw/` and Docker's own. Its socket grants exactly what Docker's socket grants, to
+  the same user: it is attribution, not a control. It keeps the references of containers and nothing
+  else of the stream, and logs none of it. Whoever can write `~/.coreslot-fw` can redirect or answer
+  every forwarded command's Docker traffic, registry credentials and build contexts included, for a
+  run's life and for the 30 days its swapped socket stays; whoever can write the state directory (its
+  run log marks a label's container work) or the needs file decides which labels get `DOCKER_HOST`
+  set. Both are write access of the same, trusted user.
 - **One host, one user.** Never share the state directory across users or hosts. Locks on network
   filesystems are not host-local, and a second user's processes are not part of the budget.
   coreslot refuses a state directory on a network, FUSE or VM-shared filesystem (NFS, SMB, AFP,
@@ -56,6 +64,12 @@ The full rules are in
   coreslot follows the ancestors of the state directory without checking them, so that user could
   replace one of them.
 - Every directory coreslot creates is mode `0700`, every file `0600`, created with `O_NOFOLLOW`.
+- On macOS coreslot writes one directory outside the state directory, `~/.coreslot-fw/` beside it,
+  and its entries. It must pass the state directory's checks: a real directory of the user's, not a
+  symlink, not group- or world-writable, host-local; otherwise no run gets a forwarder. In it, an entry's `docker.sock` is the forwarder's socket (`0600`) or,
+  once the forwarder has ended, a symlink to Docker's socket. `coreslot doctor --reset` also removes
+  every entry whose lock is free, so an address something outside coreslot may still hold stops
+  reaching Docker.
 - Every existing path of the layout must be of the expected type, owned by the real user id, not a
   symlink, and not group- or world-writable; anything else is a state error. coreslot then fails
   open (runs the command unbudgeted and says so) or, with `--strict`, refuses. `telemetry/` is the
@@ -65,7 +79,8 @@ The full rules are in
   removed.
 - A process whose effective user id differs from its real one (setuid) is unsupported.
 - Descriptors on state files are close-on-exec, except the hold descriptor deliberately passed to
-  the command, which keeps the reservation alive for as long as any process holds it.
+  the command, which keeps the reservation alive for as long as any process holds it. The two pipes
+  between a run and its forwarder are close-on-exec too: the command never inherits them.
 - The run log (`log/runs.jsonl`) never records the environment, nor the command line beyond its
   label. A label is recorded in the run log, in `status`, in the names of tickets and holds and,
   with the local record on, in `telemetry/events.jsonl` and `samples.jsonl` (up to about 1 GiB);
@@ -80,17 +95,19 @@ The full rules are in
 ### Out of scope
 
 Denial of service by a same-user process (a hold that is never released, stopping inside the
-section), anything that requires write access to the user's state directory or configuration, and
-a command that uses more than its need. Reports about them are welcome as ordinary issues when coreslot could detect or report
+section), anything that requires write access to the user's state directory, configuration or
+`~/.coreslot-fw/`, and a command that uses more than its need. Reports about them are welcome as ordinary issues when coreslot could detect or report
 the situation better.
 
 coreslot sends nothing anywhere and opens no network connection itself. Its optional local record
 (`[telemetry]`, off by default) stays in the state directory and holds labels, the names of the
 user's largest processes, whether or not coreslot runs them, and container image names; while it is on, a run doing container
-work talks to the local Docker socket, a unix socket, to read memory, and so does `coreslot status --docker`
+work reads memory from the local Docker socket. On macOS a run with a forwarder relays its command's
+Docker traffic and reads its own containers' memory every 6 s. coreslot links Go's `net` and `net/http` for the forwarder and connects only to unix
+sockets on this machine. `coreslot status --docker` reads the socket too
 when the user runs it with that flag: it shows the name, image and Compose project of every running container to
 whoever runs it as that user, as any process of the user could read them from the socket itself.
-`[docker] enabled = false` in the configuration stops both. Looking up the user's home
+`[docker] enabled = false` in the configuration stops all of it. Looking up the user's home
 directory (`getpwuid`, or the `getent` fallback) goes through the system's name services (NSS on
 Linux, Open Directory on macOS), which may contact a directory service such as LDAP, as any
 program that looks up the user does.

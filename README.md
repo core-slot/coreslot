@@ -41,7 +41,9 @@ coreslot status                                # what runs, what waits, whether 
   own `coreslot run` started and has not yet reaped.
 - **There is no daemon, no root and no setup.** State is a directory of files and `flock(2)` locks,
   so a killed run never leaks its reservation, and a client written from
-  [`PROTOCOL.md`](PROTOCOL.md) shares the same budget.
+  [`PROTOCOL.md`](PROTOCOL.md) shares the same budget. On macOS a run's Docker helper may outlive
+  its command while that command's background Docker connections stay open
+  ([Docker on macOS](#how-it-decides)).
 
 **Measured.** On a 16 GB MacBook Air, four agents started a VS Code type check (twice), FastAPI's
 tests and SQLAlchemy's ORM tests at once, five times unwrapped and five times under `coreslot run`,
@@ -109,8 +111,8 @@ now). A command starts when its need fits the room. A need larger than the machi
 reserve starts only when no other coreslot job runs. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
-**Container work.** A container's processes are not in the command's tree, so coreslot cannot measure
-them. Container work is a command named `docker`, `docker-compose` or `podman`, or a run whose tree
+**Container work.** A container's processes are not in the command's tree, so the run's footprint
+leaves them out (on macOS a forwarder reads them apart, below). Container work is a command named `docker`, `docker-compose` or `podman`, or a run whose tree
 holds one or, on macOS, talks to a socket named `docker.sock`. A program named `docker` counts
 whatever it is, a wrapper script of your own included. While another command runs, a command so
 named waits only on the machine's real memory: it passes the queue and ignores what running commands
@@ -124,6 +126,54 @@ goes by process names alone. It does not see a client that connects by TCP, a Po
 on macOS, a call shorter than a second, or a client outside the run's tree. So an indirect command
 whose only Docker call is a quick `docker run -d` stays ordinary work and can be stopped: give it
 `--restart=no`, or `no_restart` in `needs.toml`.
+
+**Docker on macOS.** With Docker Desktop, a run whose label has a Docker interest (a command named
+`docker`, `docker-compose` or `podman`, an earlier run of its label that did container work, or
+`docker_forward = true` in `needs.toml`) gets a *forwarder*: a small `coreslot forward` process that
+relays its command's Docker traffic and notes which containers the command creates or touches. The
+command's `DOCKER_HOST` names the forwarder's socket in `~/.coreslot-fw/`. Every 6 s the run reads
+the memory of those containers, and `status` shows what they have grown by since the run first
+touched them, as the hold's `docker footprint`. Such a run is container work from its first Docker
+connection, a library's included. A forwarder outlives its command while the command's background
+Docker connections stay open (`docker compose logs -f &`), and `coreslot doctor` lists it. A
+`DOCKER_HOST` that names another engine gives none, and so does a selected context other than
+`default` or `desktop-linux` (`docker context use`, `DOCKER_CONTEXT`), unless you set `DOCKER_HOST`.
+A run without a forwarder runs its command untouched and, with a Docker interest, says why once;
+`status` shows the reason as the hold's `docker:` note. `docker_forward = false` turns the forwarder
+off for a label, and `[docker] enabled = false` for every run; a run you turned it off for says
+nothing.
+
+Under a forwarder a few things look different:
+
+- `docker context show` prints `default`, `docker context ls` warns that `DOCKER_HOST` overrides the
+  context, and buildx names its builder `default` rather than `desktop-linux`, with the same driver.
+- A context the command selects during the run is not used by its later calls, since
+  `DOCKER_HOST` wins over it.
+- A command that reads `$DOCKER_HOST` sees a path in `~/.coreslot-fw`.
+- If the forwarder is killed, the run points the address straight at Docker at once, but the
+  streams open at that moment end, as they would if Docker restarted.
+
+No forwarder sees image builds, containers the daemon starts by itself, or work sent with an
+explicit `-H` or `--context`, or by a library configured elsewhere than `DOCKER_HOST` (a
+testcontainers `tc.host` line, say): that work stays unattributed. A container can bind-mount the
+forwarder's socket only when its path is at most 96 bytes, so a user name longer than 45 bytes, or a
+home directory whose path has a space, gets no forwarder. Java Docker libraries have not been tested
+with it.
+
+**Under an agent sandbox.** A sandboxed run can make and reach the forwarder's socket only where the
+sandbox admits `~/.coreslot-fw`. For the Claude Code sandbox, add it beside the Docker socket the
+sandbox already allows, with your own home directory in place of `/Users/ana`:
+
+```json
+"sandbox": {
+  "network":    { "allowUnixSockets": ["/Users/ana/.coreslot-fw"] },
+  "filesystem": { "allowWrite":       ["/Users/ana/.coreslot-fw"] }
+}
+```
+
+Without it, a run with a Docker interest notes `no-forwarder: address` when it cannot make
+`~/.coreslot-fw`, or `no-forwarder: start` when its forwarder cannot make or bind its socket there,
+and runs its command untouched.
 
 **Labels are automatic.** Without `--label`, the label is the command's shape (its executable and
 up to two leading word-like arguments: `go test`, `npm run test`) and the name of the git repository
@@ -246,6 +296,9 @@ directory of this client's format, or of format 2 (which the reset upgrades), th
 and keeps the run log; to make the labels learn again,
 remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 
+To uninstall, remove the binary, the state directory and `~/.config/coreslot/` and, on macOS,
+`~/.coreslot-fw/` beside the state directory.
+
 ## Usage
 
 ```sh
@@ -257,7 +310,7 @@ coreslot status            # the watchdog's level, running commands, the queue; 
 coreslot status --docker   # also Docker Desktop's VM and each running container, read from the Docker socket
 coreslot stats             # per label, what the need is learned from
 coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
-coreslot doctor            # state directory, filesystem, permissions, format, readings
+coreslot doctor            # state directory, filesystem, permissions, format, readings, forwarders still serving
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
 coreslot move <ticket-id> --first   # or --last, --before <id>, --after <id>; changes its place, keeps its run
 coreslot trim <hold-id>       # or: coreslot trim --label L; a running job reserves what it uses
@@ -375,16 +428,19 @@ notes](calibration/README.md#what-the-defaults-rest-on) say which defaults the r
 of where the machine's memory was, in `telemetry/` under the state directory. It is off by default.
 coreslot sends nothing anywhere and opens no network connection itself; looking up the home
 directory may contact a directory service such as LDAP ([SECURITY.md](SECURITY.md)). While the
-record is on, a run doing container work talks to the local Docker socket, a unix socket, about
-every 30 s, to read each container's memory. [The keys](docs/telemetry.md) say what each line
+record is on, a run doing container work reads each container's memory from the local Docker
+socket, a unix socket, about every 30 s. [The keys](docs/telemetry.md) say what each line
 means, what the record holds and how large it grows. `sample_log` is deprecated: alone, it writes
 the machine samples and nothing else.
 
-`coreslot status --docker` is the one other thing that reads the Docker socket, and only when you
-ask: once per call, read-only, within 2 s. It shows Docker Desktop's VM and, for every running
+Besides the record, coreslot talks to the Docker socket, always a unix socket on this machine, in
+two ways. On macOS every run with a forwarder relays whatever connects to the forwarder's socket,
+and whatever is still open after its command, and reads its own containers' memory every 6 s
+([Docker on macOS](#how-it-decides)). `coreslot status --docker` reads it
+only when you ask: once per call, read-only, within 2 s. It shows Docker Desktop's VM and, for every running
 container, its name, image, Compose project and memory, to whoever runs it as you, so a process of
 yours can learn what your containers are called. `[docker] enabled = false` makes it print `off` and
-open no socket, and keeps the record from reading the engine too. A value that is not a boolean
+open no socket, keeps the record from reading the engine too, and gives no run a forwarder. A value that is not a boolean
 switches it off as well, and `status` and `doctor` say so. It reads only Docker Desktop with its VM
 on the Apple hypervisor; Docker VMM, OrbStack and Colima are not supported in this release, and for
 them it says `not_running`.
@@ -398,6 +454,7 @@ mem = "3G"            # a pin: learning never replaces it
 
 [needs."gate:docker"]
 no_restart = true     # never stopped by a stop round, so never restarted; wins over --restart=yes
+docker_forward = true # macOS: always give its runs a forwarder; false: never
 ```
 
 The state lives in `~/Library/Application Support/coreslot/` on macOS and `~/.local/state/coreslot/`
@@ -410,8 +467,9 @@ on Linux. `CORESLOT_STATE_DIR` overrides it for tests and moves the configuratio
   more than its need, and a tool that never goes through `coreslot run` is neither queued nor
   stopped. Work you run outside it is your own priority. A hostile process of the same user can
   corrupt the state ([SECURITY.md](SECURITY.md)).
-- **Not a daemon.** Nothing runs between commands; there is no network and no distribution of work
-  across machines.
+- **Not a daemon.** Nothing runs between commands, except a forwarder still serving a finished
+  command's background Docker connections; there is no network and no distribution of work across
+  machines.
 - **Not multi-user.** One budget per user; never share the state directory across users or hosts.
 - **Not for Windows.** coreslot builds there, but runs every command at once, without a budget,
   with a warning.

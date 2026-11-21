@@ -5,6 +5,7 @@ package needs
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -77,4 +78,43 @@ func TestLoadMissing(t *testing.T) {
 	if _, ok, err := f.Lookup("a"); ok || err != nil {
 		t.Fatalf("Lookup in a missing file = %v, %v", ok, err)
 	}
+}
+
+// docker_forward is a boolean, read as a pointer: absent is nil, so that false and absent stay
+// apart. Mutation: read it into a plain bool → the absent entry's nil, red.
+func TestDockerForwardBoolean(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "needs.toml")
+	write(t, path, "[needs.\"on\"]\ndocker_forward = true\n[needs.\"off\"]\ndocker_forward = false\n[needs.\"absent\"]\nmem = \"1G\"\n")
+	f := load(t, path)
+	for label, want := range map[string]*bool{"on": ptr(true), "off": ptr(false), "absent": nil} {
+		e, ok, err := f.Lookup(label)
+		if err != nil || !ok {
+			t.Fatalf("Lookup(%q) = %v, %v", label, ok, err)
+		}
+		if (e.DockerForward == nil) != (want == nil) || want != nil && *e.DockerForward != *want {
+			t.Errorf("Lookup(%q).DockerForward = %v, want %v", label, show(e.DockerForward), show(want))
+		}
+	}
+}
+
+// A docker_forward that is not a boolean makes the whole entry unreadable, as a bad mem does: a
+// mistyped switch must not turn into "on". Mutation: ignore a non-boolean → ok, red.
+func TestDockerForwardBadMakesEntryUnreadable(t *testing.T) {
+	for _, v := range []string{`"yes"`, `1`, `"true"`} {
+		path := filepath.Join(t.TempDir(), "needs.toml")
+		write(t, path, "[needs.\"a\"]\nmem = \"1G\"\ndocker_forward = "+v+"\n")
+		e, ok, err := load(t, path).Lookup("a")
+		if ok || err == nil || !strings.Contains(err.Error(), "docker_forward") || e.MemMiB != 0 {
+			t.Errorf("docker_forward = %s: Lookup = %+v, %v, %v; want an error naming docker_forward and no entry", v, e, ok, err)
+		}
+	}
+}
+
+func ptr(b bool) *bool { return &b }
+
+func show(b *bool) string {
+	if b == nil {
+		return "nil"
+	}
+	return strconv.FormatBool(*b)
 }
