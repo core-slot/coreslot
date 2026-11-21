@@ -2,8 +2,11 @@
 
 With `[telemetry] enabled = true` coreslot keeps a local record of what the machine and each run
 did in `$S/telemetry/`. It is off by default. coreslot sends nothing anywhere and opens no network
-connection itself; while the record is on, a run doing container work talks to the local Docker socket, a
-unix socket, to read memory ([`containers`](#containers)). `[watch] sample_log = true`, deprecated,
+connection itself; while the record is on, a run doing container work reads memory from the local Docker
+socket, a unix socket ([`containers`](#containers)). That is not the only Docker reading: on macOS a run
+with a forwarder relays whatever connects to the forwarder's socket, and what is still open after its
+command, and reads its own containers' memory every 6 s, record or not
+([README](../README.md#how-it-decides)). `[watch] sample_log = true`, deprecated,
 writes `samples.jsonl` alone and nothing else.
 
 The directory is optional and its absence is normal: no admission reads it, and it is not part of
@@ -241,7 +244,7 @@ the socket, so a nested `--independent` container run writes no `containers` lin
 would otherwise read as its parent command's container work. A stale `CORESLOT_HOLD` that names no
 ancestor, which `nested_miss` reports, does not stop it.
 
-It reads the Docker socket: the unix socket `DOCKER_HOST` names, or else
+The line comes from the Docker socket: the unix socket `DOCKER_HOST` names, or else
 `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and `/var/run/docker.sock`, in that
 order (none when no home is located, which is the case under `CORESLOT_STATE_DIR`: the system's
 socket alone would reach an engine no location of ours belongs to). `[docker] enabled = false` in

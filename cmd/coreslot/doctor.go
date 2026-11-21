@@ -8,12 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/config"
 	"github.com/core-slot/coreslot/internal/engine"
+	relay "github.com/core-slot/coreslot/internal/forward"
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
@@ -97,6 +99,16 @@ func doctorAct(doReset bool, loc location, io IO) int {
 			kept = "admit.lock, config.toml and the run log"
 		}
 		fmt.Fprintf(io.Stdout, "reset: removed %d entries%s; kept %s; wrote FORMAT\n", done.Removed, resetLogNote(done), kept)
+		if fw := forwarderDir(loc); fw != "" { // nothing is live: an entry whose lock is free serves nothing of coreslot's
+			n, err := relay.RemoveFree(fw)
+			if n > 0 {
+				fmt.Fprintf(io.Stdout, "reset: removed %d forwarder %s whose lock was free from %s\n", n, plural(int64(n), "entry", "entries"), text(fw))
+			}
+			if err != nil {
+				fmt.Fprintf(io.Stderr, "coreslot: doctor --reset: forwarder directory: %s\n", text(err.Error()))
+				return exitProblems
+			}
+		}
 		return 0
 	}
 	why, err := formatRefusal(e.Store())
@@ -314,6 +326,16 @@ func doctorReport(loc location, io IO) int {
 		}
 		if ignored := ignoredText(rep.Ignored); ignored != "" {
 			line("note: ignored entries (malformed or stray, never trusted or removed): %s", ignored)
+		}
+	}
+
+	if fw := forwarderDir(loc); fw != "" {
+		held, err := relay.Held(fw)
+		if err != nil { // not a problem of the state: such a directory only keeps runs from getting a forwarder
+			line("note: forwarder directory: %s", text(err.Error()))
+		}
+		for _, name := range held {
+			line("forwarder serving: %s (its run is live, or its command's background Docker connections are still open)", text(filepath.Join(fw, name)))
 		}
 	}
 

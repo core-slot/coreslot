@@ -97,10 +97,13 @@ change in any release; parse `status --json` instead.
 | `stats` | `--label LABEL`, `--json` |
 | `report` | `--days N`, `--json` |
 | `version` | the output line `coreslot <version> (protocol formats: <list>)` |
-| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `trim_window_s`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`, `[docker] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem` and `no_restart` |
-| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED`, `CORESLOT_TELEMETRY` (given to the command, read by nested runs) |
+| configuration | `<home>/.config/coreslot/config.toml`: `[memory] reserve`, `[watch]` (`mode`, `trim_window_s`, `sample_log` (deprecated) and the thresholds of [`PROTOCOL.md` section 5.3](../PROTOCOL.md#53-configuration-file)), `[platform] windows_warning`, `[telemetry] enabled`, `[docker] enabled`; `needs.toml` beside it: `[needs."<label>"]` with `mem`, `no_restart` and `docker_forward` |
+| environment | `CORESLOT_STATE_DIR` (read); `CORESLOT_GRANTED_MEM` (MiB), `CORESLOT_HOLD` (fd 3), `CORESLOT_UNBUDGETED`, `CORESLOT_TELEMETRY` (given to the command, read by nested runs); on macOS `DOCKER_HOST` (given to the command of a run with a forwarder) |
 | descriptors | the hold at fd 3 |
 | exit statuses | the command's own, 130, 75, 64, 126, 127, 70, 3, 1, as [`PROTOCOL.md` section 19](../PROTOCOL.md#19-exit-status) defines them |
+
+`coreslot forward`, which a run starts as its forwarder on macOS, is not a supported command: its
+arguments and what it reports to the run may change in any release.
 
 The marker line that a run prints when it gives up after 3 stops
 ([`PROTOCOL.md` section 24.2](../PROTOCOL.md#242-giving-up)) is a contract too, so that an agent
@@ -112,7 +115,8 @@ The document carries a `"schema"` number. Within one schema number, fields may b
 never removed, renamed or given another meaning; a consumer MUST ignore fields it does not know.
 Removing or changing a field raises the number, and that release prints the new one. Labels are
 carried exactly, JSON-encoded. Under schema 1, `config_warnings` (an array, always present) and
-`docker` (an object, present only with `status --docker`) are keys added after the first release.
+`docker` (an object, present only with `status --docker`) are keys added after the first release,
+as are each hold's `docker_footprint_mib` and `docker_note`, present only when the hold carries them.
 [status-json.md](status-json.md) describes every key of the document.
 
 ## Deprecation window

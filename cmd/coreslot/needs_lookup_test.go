@@ -150,7 +150,7 @@ func TestRequestContainerMark(t *testing.T) {
 // A run with no label never reads the needs file. Mutation: drop the label check → red.
 func TestNeedsUnlabelled(t *testing.T) {
 	calls := 0
-	lookup := func(string) (needs.Entry, bool) { calls++; return needs.Entry{}, false }
+	lookup := func(string) (needs.Entry, bool, bool) { calls++; return needs.Entry{}, false, false }
 	wantNeed(t, []string{"--", "true"}, lookup, noLearned, 8192, 2048)
 	if calls != 0 {
 		t.Errorf("lookup called %d times for an unlabelled run", calls)
@@ -187,11 +187,38 @@ func TestNestedQuietOnEntryMem(t *testing.T) {
 func TestNeedsLookupUnreadable(t *testing.T) {
 	lookup, notices := lookupOf(t, "[needs\n")
 	for range 2 {
-		if _, ok := lookup("a"); ok {
+		if _, ok, _ := lookup("a"); ok {
 			t.Error("a malformed file gave an entry")
 		}
 	}
 	if len(*notices) != 1 || !strings.HasPrefix((*notices)[0], "needs file ") || !strings.HasSuffix((*notices)[0], "; ignoring it") {
 		t.Errorf("notices %q, want one \"needs file …: …; ignoring it\"", *notices)
+	}
+}
+
+// A needs file that does not load is bad for every label, so that a docker_forward it may hold
+// never turns into "on"; a file that loads is bad only for the label whose entry does not parse,
+// and a label it does not name is merely not found. Mutation: return found == false, bad == false
+// on a load error → the first rows, red.
+func TestEngageNeedsFileUnloadable(t *testing.T) {
+	unloadable, _ := lookupOf(t, "[needs.\"a\"]\ndocker_forward = no\n")
+	loads, _ := lookupOf(t, "[needs.\"a\"]\ndocker_forward = \"x\"\n[needs.\"b\"]\ndocker_forward = true\n")
+	for _, c := range []struct {
+		name         string
+		lookup       needsLookup
+		label        string
+		found, bad   bool
+		forwardIsSet bool
+	}{
+		{"unloadable, its label", unloadable, "a", false, true, false},
+		{"unloadable, another label", unloadable, "other", false, true, false},
+		{"a bad entry", loads, "a", false, true, false},
+		{"a good entry", loads, "b", true, false, true},
+		{"no entry", loads, "other", false, false, false},
+	} {
+		e, found, bad := c.lookup(c.label)
+		if found != c.found || bad != c.bad || (e.DockerForward != nil) != c.forwardIsSet {
+			t.Errorf("%s: lookup(%q) = %+v, found %v, bad %v; want found %v, bad %v", c.name, c.label, e, found, bad, c.found, c.bad)
+		}
 	}
 }

@@ -5,12 +5,14 @@ import (
 	"github.com/core-slot/coreslot/internal/spec"
 )
 
-// needsLookup finds the needs file's entry for a label.
-type needsLookup func(label string) (e needs.Entry, ok bool)
+// needsLookup finds the needs file's entry for a label. bad is a file that does not load, for
+// every label, or an entry of this label that does not parse: no entry, and the run takes no
+// forwarder, since what the entry meant cannot be known.
+type needsLookup func(label string) (e needs.Entry, found bool, bad bool)
 
 // newNeedsLookup is resolveNeed's lookup of the needs file beside the configuration cfgPath. The
 // file is loaded once, on first use. A file that cannot be read, or an entry that does not
-// parse, is one notice and no entry: the run goes on as if the file had none.
+// parse, is one notice and no entry: the run goes on as if the file had none, and bad says so.
 func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 	path := needs.PathFor(cfgPath)
 	var (
@@ -18,7 +20,7 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 		err    error
 		loaded bool
 	)
-	return func(label string) (needs.Entry, bool) {
+	return func(label string) (needs.Entry, bool, bool) {
 		if !loaded {
 			loaded = true
 			if f, err = needs.Load(path); err != nil {
@@ -26,14 +28,14 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 			}
 		}
 		if err != nil {
-			return needs.Entry{}, false
+			return needs.Entry{}, false, true
 		}
 		e, ok, lerr := f.Lookup(label)
 		if lerr != nil {
 			notice("needs file %s: %s; ignoring it", text(path), text(lerr.Error()))
-			return needs.Entry{}, false
+			return needs.Entry{}, false, true
 		}
-		return e, ok
+		return e, ok, false
 	}
 }
 
@@ -45,7 +47,7 @@ func newNeedsLookup(cfgPath string, notice func(string, ...any)) needsLookup {
 func (o *runOptions) resolveNeed(lookup needsLookup, learned func() (int64, bool), totalMiB int64) {
 	var e needs.Entry
 	if lookup != nil && o.label != "" {
-		e, _ = lookup(o.label)
+		e, _, _ = lookup(o.label)
 	}
 	o.noRestart = e.NoRestart || o.containerCommand()
 	if mib := o.mem; mib > 0 {

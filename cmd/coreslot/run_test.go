@@ -657,7 +657,7 @@ func TestWrappedClientIsMarked(t *testing.T) {
 	if v, ok := lines[1]["container"]; ok {
 		t.Errorf("the true run's record has container %v", v)
 	}
-	if need, ok, _, _, _, _ := readLog(location{dir: dir}, "w"); !ok || need <= 0 {
+	if need, ok, _, _, _, _, _ := readLog(location{dir: dir}, "w"); !ok || need <= 0 {
 		t.Errorf("learned need %d, %v; want one", need, ok)
 	}
 }

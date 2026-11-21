@@ -75,11 +75,13 @@ var listClient = memsample.ContainerClient
 // red round keeps it as nearly finished it says so, and when a stop round lists its hold, it kills
 // the command's group and returns stopped, or in observe mode says what it would stop. A command
 // named as a container client is container work from the start; any other is from the first
-// listing that finds a client in its tree: it takes no stop from then on, and the next tick's hold
-// update clears its Victim. The scan needs a log, the one reader that outlives the hold: a
-// pass-through has none. A hold that reserves memory keeps a window over the listings that
-// succeeded from the attempt's start; once a tick finds a request to trim it in trim.json, every
-// later tick writes the window's need into the hold, never above the need asked.
+// listing that finds a client in its tree, or from its forwarder's first connection: it takes no
+// stop from then on, and the next tick's hold update clears its Victim. The scan stays under a
+// forwarder, for a client that bypasses it. The scan needs a log, the one reader that outlives the
+// hold: a pass-through has none. An engaged run starts a sample of its containers every third tick,
+// and every hold write carries the last sample done. A hold that reserves memory keeps a window over
+// the listings that succeeded from the attempt's start; once a tick finds a request to trim it in
+// trim.json, every later tick writes the window's need into the hold, never above the need asked.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
@@ -102,6 +104,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		r.updateHold(st, g, func(h *wire.Hold) {
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
 			h.TypicalCPUS, h.Container = r.cpuS, p.container
+			h.DockerNote, h.DockerFootprintMiB = r.dockerNote(), r.dockerFootprint()
 		})
 	}
 	for n := 1; ; n++ {
@@ -118,6 +121,12 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			}
 			if tail != nil { // a listing that failed is no reading
 				tail.Add(kib >> 10)
+			}
+		}
+		if r.fwd != nil {
+			r.forwarderEvents(&p)
+			if r.fwd.part.touching() { // off the watchdog's loop, as the sample is
+				go r.fwd.part.readTouches(r.fwd.upstream)
 			}
 		}
 		if !p.container && st != nil {
@@ -147,6 +156,11 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
 		noCPUS := noCPU.add(d, active, func() bool { return p.container && listClient(sup.pid) }) // a run not yet container work scanned this listing
+		if r.fwd != nil && (n/listingsPerTick)%sampleTicks == 0 {
+			// Off the tick path: a hung engine never delays a tick, and the hold takes the last
+			// sample done.
+			go r.fwd.part.sample(ctx, r.fwd.upstream)
+		}
 		// The request is read after the tick has measured, until one is found.
 		if tail != nil && !trim.found {
 			trim.found = g.TrimRequested()
@@ -158,7 +172,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		wrote := r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, noCPUS
-			h.SampledNS = store.NowNS()
+			h.SampledNS, h.DockerNote, h.DockerFootprintMiB = store.NowNS(), r.dockerNote(), r.dockerFootprint()
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
 			}

@@ -291,11 +291,17 @@ func (v statusView) human() string {
 		if a := askedMiB(h); a > h.NeedMiB {
 			need += " (asked " + spec.FormatMiB(a) + ")"
 		}
-		if h.Container {
+		if h.Container && h.DockerFootprintMiB == nil {
 			need += "  container: its containers' memory is not measured"
 		}
 		line := fmt.Sprintf("  %s  pid %d  %s  held %s  footprint %s", labelText(h.Label), h.PID, need,
 			duration(time.Duration(max(v.nowNS-h.StartNS, 0))), spec.FormatMiB(h.FootprintMiB))
+		if f := h.DockerFootprintMiB; f != nil {
+			line += "  docker footprint " + spec.FormatMiB(*f)
+		}
+		if h.DockerNote != "" {
+			line += "  docker: " + text(h.DockerNote)
+		}
 		if h.ArrivalNS > 0 {
 			line += "  arrived " + duration(time.Duration(max(v.nowNS-h.ArrivalNS, 0))) + " ago"
 		}
@@ -502,6 +508,9 @@ type jsonHold struct {
 	TypicalS     int64   `json:"typical_s"`          // 0 when unknown
 	LeftS        *int64  `json:"left_s"`             // null when typical_s is 0
 	Stoppable    bool    `json:"stoppable"`
+	// DockerFootprintMiB is present, 0 included, while its run counts its own containers.
+	DockerFootprintMiB *int64 `json:"docker_footprint_mib,omitempty"`
+	DockerNote         string `json:"docker_note,omitempty"`
 }
 
 type jsonTicket struct {
@@ -559,7 +568,8 @@ func (v statusView) document() jsonStatus {
 		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
-			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable}
+			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable,
+			DockerFootprintMiB: h.DockerFootprintMiB, DockerNote: h.DockerNote}
 		if h.TypicalS > 0 {
 			jh.LeftS = &h.LeftS
 		}

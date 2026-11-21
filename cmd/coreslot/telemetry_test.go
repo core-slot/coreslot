@@ -1677,11 +1677,13 @@ func TestWaiterNeverConnects(t *testing.T) {
 	}
 }
 
-// Only a supervised run that is container work, with telemetry on, reads the socket: not one that
-// is not, not one with telemetry off, not a pass-through. Mutations: the call without the p.container
-// test reddens the first row; the call outside the log test reddens the pass-through; a read that
-// does not go through the recorder, or MemoryAsync on a nil recorder calling Sweep, reddens the off
-// row; leaving the call out reddens the last. ([docker] enabled = false is TestDisabledDockerRunNeverConnects.)
+// A run without a Docker part (no forwarder) reads the socket only for the telemetry line: only a
+// supervised run that is container work, with telemetry on, reads it; not one that is not, not one
+// with telemetry off, not a pass-through. Mutations: the call without the p.container test reddens
+// the first row; the call outside the log test reddens the pass-through; a read that does not go
+// through the recorder, or MemoryAsync on a nil recorder calling Sweep, reddens the off row; leaving
+// the call out reddens the last. ([docker] enabled = false is TestDisabledDockerRunNeverConnects; an
+// engaged run's own reads are TestEngagedRunReadsOnlyItsContainers.)
 func TestNoContainerRunNeverConnects(t *testing.T) {
 	for _, c := range []struct {
 		name               string
@@ -1716,8 +1718,8 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 			} else {
 				code = b.r.runChild(b.child("", ""))
 			}
-			if code != 0 {
-				t.Fatalf("exit %d", code)
+			if code != 0 || b.r.fwd != nil {
+				t.Fatalf("exit %d, forwarder %v: want 0 and none", code, b.r.fwd)
 			}
 			if c.want > 0 {
 				waitFor(t, 5*time.Second, "the containers line", func() bool { return len(linesOf(t, b.dir, "containers")) == 1 })
