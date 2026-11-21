@@ -470,3 +470,237 @@ func TestNoDockerCallInsideSection(t *testing.T) {
 		t.Errorf("%d readings, want 3", f.reads)
 	}
 }
+
+// ---------------------------------------------------------------- when the Docker part cannot be judged
+
+// testFailedReadings is the count of failed readings in a row that ungates a Docker part.
+const testFailedReadings = 8
+
+// Seven failed readings in a row leave the ticket gated and noted; the eighth ungates its Docker
+// part: its note goes, and it is admitted on the host alone, its hold reserving nothing in the VM.
+// Mutation: ungating at seven makes the seventh attempt admit.
+func TestEightFailedReadingsUngate(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	f := &fakeDocker{clk: clk} // every reading fails
+	tk := enqueueGated(t, e, gated(128, 1000), f)
+	for i := 1; i < testFailedReadings; i++ {
+		w := waitOutcome(t, tk)
+		if f.reads != i || !w.Outcome.Noted || !hasNote(dir, tk) || w.Outcome.DockerUngated != "" {
+			t.Fatalf("after %d failed readings: %d reads, %+v, note %v", i, f.reads, w.Outcome, hasNote(dir, tk))
+		}
+		clk.advance(ReadEvery)
+	}
+	g := admitted(t, step(t, tk))
+	if g.DockerGated() || g.DockerUngated() != "no-reading" || hasNote(dir, tk) {
+		t.Errorf("gated %v, ungated %q, note %v; want ungated no-reading and no note", g.DockerGated(), g.DockerUngated(), hasNote(dir, tk))
+	}
+	if h := readHold(t, e, g); h.DockerNeedMiB != 0 || h.DockerGrowthMiB != 0 {
+		t.Errorf("an ungated hold reserves Docker need %d and growth %d", h.DockerNeedMiB, h.DockerGrowthMiB)
+	}
+}
+
+// A successful reading resets the count. Mutation: a success that leaves the count ungates at the
+// first failure after it.
+func TestSuccessResetsCount(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	f := &fakeDocker{clk: clk}
+	tk := enqueueGated(t, e, gated(128, 1000), f)
+	for i := 0; i < 2*(testFailedReadings-1)+1; i++ {
+		f.reading = DockerReading{}
+		if i == testFailedReadings-1 {
+			f.reading = vm(500) // a success, on which the VM test fails
+		}
+		if w := waitOutcome(t, tk); w.Outcome.DockerUngated != "" {
+			t.Fatalf("reading %d: ungated (%+v)", i+1, w.Outcome)
+		}
+		clk.advance(ReadEvery)
+	}
+	if g := admitted(t, step(t, tk)); g.DockerUngated() != "no-reading" {
+		t.Errorf("ungated %q after 8 failures in a row, want no-reading", g.DockerUngated())
+	}
+}
+
+// A failed reading publishes the note: the ticket fits on the host and waits for a reading.
+// Mutation: no note after a failed reading.
+func TestFailedReadingPublishesNote(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	tk := enqueueGated(t, e, gated(128, 1000), &fakeDocker{clk: clk})
+	wantReason(t, waitOutcome(t, tk), ReasonDockerNoReading, "")
+	if !hasNote(dir, tk) {
+		t.Error("no note after a failed reading")
+	}
+}
+
+// A note is published at most once every 2 s; its removal is not spaced. Mutation: dropping the
+// spacing publishes it again 1 s after the first.
+func TestNoteAtMostOnceEveryTwoSeconds(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	f := &fakeDocker{clk: clk, reading: vm(500)}
+	tk := enqueueGated(t, e, gated(128, 1000), f)
+	want := func(when string, noted bool) {
+		t.Helper()
+		if w := waitOutcome(t, tk); w.Outcome.Noted != noted || hasNote(dir, tk) != noted {
+			t.Fatalf("%s: noted %v, note %v; want %v (%+v)", when, w.Outcome.Noted, hasNote(dir, tk), noted, w.Outcome)
+		}
+	}
+	want("0 s", true)
+	clk.advance(500 * time.Millisecond)
+	g := hold(t, e, need(1024)) // passes over the noted ticket and takes the host
+	want("0.5 s, the host full", false)
+	g.Close()
+	clk.advance(500 * time.Millisecond)
+	want("1 s", false)
+	clk.advance(time.Second)
+	want("2 s", true)
+}
+
+// A noted passer whose typical run time no longer fits the head's wait stops attempting past the
+// re-election, so it stops reading and keeps its note. Mutation: reading before the re-election
+// takes a reading at every attempt.
+func TestNotedTicketThatStopsAttemptingStopsReading(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	old := kernelPressure
+	kernelPressure = func() (int, bool) { return 2, true } // nobody goes out of turn
+	t.Cleanup(func() { kernelPressure = old })
+	start := clk.clock().Realtime()
+	lockHere(t, writeHold(t, dir, wire.Hold{Label: "ending", NeedMiB: 512, StartNS: start, TypicalS: 105}))
+	head := enqueue(t, e, need(1024)) // waits 105 s for the hold's 512 MiB
+	f := &fakeDocker{clk: clk, reading: vm(500)}
+	g := enqueueGated(t, e, spec.Request{Label: "g", NeedMiB: 128, TypicalS: 100, DockerNeedMiB: 1000}, f)
+	if w := waitOutcome(t, g); !w.Outcome.Noted || w.Outcome.Pass != "duration" || f.reads != 1 {
+		t.Fatalf("the first attempt: %+v with %d readings; want a pass by duration, a reading and a note", w.Outcome, f.reads)
+	}
+	clk.advance(10 * time.Second) // the head's wait is now 95 s
+	for i := 0; i < 3; i++ {
+		step(t, head)
+		w := waitOutcome(t, g)
+		wantReason(t, w, ReasonBehindHead, "pressure_not_normal")
+		if f.reads != 1 || !hasNote(dir, g) {
+			t.Fatalf("attempt %d: %d readings, note %v; want 1 and the note kept", i+2, f.reads, hasNote(dir, g))
+		}
+		clk.advance(ReadEvery)
+	}
+}
+
+// A Docker need above V less the Docker reserve can never fit: the first reading that shows it
+// ungates the part, and the ticket is admitted on the host alone. Mutation: without the oversized
+// rule it waits for VM room for ever.
+func TestOversizedUngatedAtFirstReading(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	limit := testVMMiB - state.DockerReserve(testVMMiB)
+	f := &fakeDocker{clk: clk, reading: vm(limit)} // an empty VM
+	g := admitted(t, step(t, enqueueGated(t, e, gated(128, limit+1), f)))
+	if f.reads != 1 || g.DockerGated() || g.DockerUngated() != "oversized" {
+		t.Errorf("%d readings, gated %v, ungated %q; want 1, false, oversized", f.reads, g.DockerGated(), g.DockerUngated())
+	}
+}
+
+// --no-wait's single attempt enters twice (the Mac test, then the VM test on a reading taken
+// between) and a failed VM test, or a failed reading, is "would wait" with no note. Mutation:
+// ignoring NoWait publishes the note.
+func TestNoWaitEntersTwice(t *testing.T) {
+	for _, r := range []DockerReading{vm(500), {}} {
+		dir := newStateDir(t, "")
+		clk := newFakeClock()
+		e := newEngine(t, dir, clk)
+		f := &fakeDocker{clk: clk, reading: r}
+		tk := enqueueGated(t, e, gated(128, 1000), f, NoWait())
+		enters, tries := countEntries(t)
+		w := waitOutcome(t, tk)
+		if *enters+*tries != 2 || f.reads != 1 || hasNote(dir, tk) || w.Outcome.Noted {
+			t.Errorf("reading OK %v: %d entries, %d readings, note %v; want 2, 1 and none (%+v)", r.OK,
+				*enters+*tries, f.reads, hasNote(dir, tk), w.Outcome)
+		}
+	}
+}
+
+// A ticket whose Docker part went ungated keeps its body, so the gated tickets behind it still sum
+// its Docker need while it waits for the host. Mutation: summing only the noted tickets ahead
+// admits the candidate.
+func TestUngatedTicketStaysInOthersSums(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	lockHere(t, holdPath(t, dir, 1)) // a hold live: the container request needs no re-election
+	fu := &fakeDocker{clk: clk}      // every reading fails
+	u := enqueueGated(t, e, gated(128, 4000), fu)
+	fu.onRead = func() {
+		if fu.reads == testFailedReadings {
+			lockHere(t, holdPath(t, dir, 1024)) // the host is full by the time it goes ungated
+		}
+	}
+	var w Waiting
+	for i := 0; i < testFailedReadings; i++ {
+		w = waitOutcome(t, u)
+		clk.advance(ReadEvery)
+	}
+	if o := w.Outcome; o.DockerUngated != "no-reading" || o.Reason != ReasonRoomShort || o.Noted {
+		t.Fatalf("after 8 failed readings: %+v; want ungated, short of the host, no note", o)
+	}
+	c := enqueueGated(t, e, gatedContainer(1000), &fakeDocker{clk: clk, reading: vm(4500)})
+	wantReason(t, waitOutcome(t, c), ReasonVMRoomShort, "")
+}
+
+// An attempt whose readings the stamp rule rejects at every entry enters the section three times
+// and reads twice, then ends; the next attempt does the same. Mutation: keeping the attempt's state
+// per entry instead of per attempt re-reads at every entry until the readings pass.
+func TestAtMostThreeEntries(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	sampled := clk.clock().Realtime() + int64(time.Hour)
+	lockHere(t, writeHold(t, dir, wire.Hold{Label: "gated", NeedMiB: 128, DockerNeedMiB: 500, DockerSampledNS: sampled}))
+	f := &fakeDocker{clk: clk, reading: vm(10000)} // stamped with the clock: before the hold's sample
+	f.onRead = func() {
+		if f.reads > 6 { // only a mutation reads this often: then the readings pass, and the attempt ends
+			f.reading.StartedNS = sampled
+		}
+	}
+	tk := enqueueGated(t, e, gated(128, 1000), f)
+	enters, tries := countEntries(t)
+	for i := 1; i <= 3; i++ {
+		r := step(t, tk)
+		if n := *enters + *tries; n != 3*i || f.reads != 2*i || isAdmitted(r) {
+			t.Fatalf("attempt %d: %d entries and %d readings in all, admitted %v; want %d and %d", i, n, f.reads,
+				isAdmitted(r), 3*i, 2*i)
+		}
+		clk.advance(ReadEvery)
+	}
+}
+
+// A Docker part that cannot be judged, because it cannot be read or never fits, is ungated and
+// admitted, never refused: there is no strict form of either. Mutation: refusing an oversized need
+// with ErrRefused.
+func TestUngatedPartIsNeverRefused(t *testing.T) {
+	limit := testVMMiB - state.DockerReserve(testVMMiB)
+	for _, tc := range []struct {
+		why     string
+		reading DockerReading
+		need    int64
+	}{{"no-reading", DockerReading{}, 1000}, {"oversized", vm(limit), limit + 1}} {
+		clk := newFakeClock()
+		e := newEngine(t, newStateDir(t, ""), clk)
+		tk := enqueueGated(t, e, gated(128, tc.need), &fakeDocker{clk: clk, reading: tc.reading})
+		var r StepResult
+		for i := 0; i < testFailedReadings && !isAdmitted(r); i++ {
+			var err error
+			if r, err = tk.Step(context.Background()); err != nil {
+				t.Fatalf("%s: Step: %v", tc.why, err)
+			}
+			clk.advance(ReadEvery)
+		}
+		if g := admitted(t, r); g.DockerUngated() != tc.why {
+			t.Errorf("ungated %q, want %q", g.DockerUngated(), tc.why)
+		}
+	}
+}

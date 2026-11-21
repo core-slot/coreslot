@@ -10,7 +10,7 @@ import (
 	"github.com/core-slot/coreslot/internal/store"
 )
 
-// A gated ticket (PROTOCOL.md section 12.1) is judged by two tests: the Mac test, which is what any
+// A gated ticket is judged by two tests: the Mac test, which is what any
 // request is judged by, inside the section and with no Docker call; and the VM test, inside the
 // section too but on a reading of Docker's VM that the ticket takes outside it, between two
 // entries of the same attempt. A ticket that fits on the host and waits for the VM, or for a
@@ -23,6 +23,16 @@ const ReadEvery = 2 * time.Second
 // noteEvery is the least time between two publications of a ticket's note; removals are not
 // spaced.
 const noteEvery = 2 * time.Second
+
+// failedReadingsUngate is how many failed readings in a row ungate a ticket's Docker part. A count,
+// not a clock: a success resets it, and a suspended process misses none.
+const failedReadingsUngate = 8
+
+// Why a Docker part goes ungated: Grant.DockerUngated and Outcome.DockerUngated.
+const (
+	ungatedNoReading = "no-reading" // failedReadingsUngate failed readings in a row
+	ungatedOversized = "oversized"  // the Docker need is above V less the Docker reserve
+)
 
 // DockerReading is one reading of Docker Desktop's VM, taken outside the admission section.
 type DockerReading struct {
@@ -63,7 +73,8 @@ func (g *Grant) DockerVMMiB() int64 { return g.dockerVMMiB }
 
 // DockerUngated says why a request with a Docker need was admitted ungated: "no-reading" after
 // failedReadingsUngate failed readings in a row, "oversized" when the need can never fit the VM;
-// "" otherwise.
+// "" otherwise. An ungated ticket waits as any other from then on, but its ticket keeps its Docker
+// need, which the gated tickets behind it still sum.
 func (g *Grant) DockerUngated() string { return g.dockerUngated }
 
 // attempt is what one admission attempt of a gated ticket keeps between its section entries. An
@@ -86,10 +97,22 @@ func (t *Ticket) gatedTicket(name string) bool {
 	return tk != nil && tk.DockerNeedMiB > 0
 }
 
-// read takes a reading outside the section.
+// read takes a reading outside the section, and ungates the Docker part after failedReadingsUngate
+// failed readings in a row, or at a reading by which the need can never fit the VM.
 func (t *Ticket) read(ctx context.Context, at *attempt) {
 	t.readAt, at.read = t.e.clock.Monotonic(), true
-	t.reading = t.docker.Read(ctx)
+	r := t.docker.Read(ctx)
+	t.reading = r
+	if !r.OK {
+		if t.failed++; t.failed >= failedReadingsUngate {
+			t.ungated = ungatedNoReading
+		}
+		return
+	}
+	t.failed = 0
+	if t.req.DockerNeedMiB > r.VMMiB-state.DockerReserve(r.VMMiB) {
+		t.ungated = ungatedOversized
+	}
 }
 
 // vmTest is a gated ticket's part of an entry, after its Mac test passed: read reports that the

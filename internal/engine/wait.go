@@ -109,6 +109,7 @@ type Ticket struct {
 	// A gated ticket's part (docker.go).
 	reading DockerReading // the last reading taken
 	readAt  time.Duration // when it was taken, on the monotonic clock
+	failed  int           // failed readings in a row
 	ungated string        // why the Docker part went ungated; "" while it is gated
 	noted   bool          // the ticket's note is published
 	notedAt time.Duration // when it was last published, on the monotonic clock
