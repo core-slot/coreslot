@@ -89,7 +89,9 @@ jobs:
         run: govulncheck ./...
 
       - name: go test -race
-        run: go test -race ./...
+        # cmd/coreslot and conformance each take close to ten minutes on a hosted macOS runner, go
+        # test's default per-package limit, so they get twenty.
+        run: go test -race -timeout 20m ./...
 
       - name: Tests that need the test hooks (conformance and the rest)
         # Only the tests that exist with the coreslot_testhooks tag alone: `go test -race ./...`
@@ -111,7 +113,7 @@ jobs:
             [ -n "$only" ] || continue
             found=$((found + $(wc -l <<<"$only")))
             echo "::group::$pkg"
-            go test -tags coreslot_testhooks -race -short -run "^($(paste -sd'|' - <<<"$only"))\$" "$pkg"
+            go test -tags coreslot_testhooks -race -short -timeout 20m -run "^($(paste -sd'|' - <<<"$only"))\$" "$pkg"
             echo "::endgroup::"
           done
           if [ "$found" -eq 0 ]; then
