@@ -135,6 +135,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if g == nil || n%listingsPerTick != 0 {
 			continue
 		}
+		p.tick(kib, ok)
 		d, fresh := treeDeltas(prev, times)
 		prev = times
 		// A child born and reaped between two ticks leaves no time a tick sees, so a tree that keeps
