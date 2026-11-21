@@ -1,4 +1,4 @@
-# Wire-format fixtures (protocol format 3)
+# Wire-format fixtures (protocol format 4)
 
 Test vectors for the names and bodies of `PROTOCOL.md` section 7. The Go reference implementation
 reads these files; it does not generate them at test time. This
@@ -52,10 +52,12 @@ Verdict reminders, all from `PROTOCOL.md`:
   characters backslash, u, d, 8, 0, 0. Many JSON libraries replace a lone surrogate with U+FFFD or
   keep it as a lone code unit before you can see it, so scan the raw bytes. `bad-*surrogate*` and
   `ok-escaped-backslash-then-u-is-not-an-escape` exercise this.
-- Every key of the table is required, except the ticket's `restart` and the hold's `typical_s`,
-  `cpu_ns`, `typical_cpu_s`, `stall_ewma`, `container`, `no_cpu_s`, `asked_mib` and `trimmed`, which
-  are optional and read as `false` and `0` when absent (`ok-restart`, `ok-typical-s`,
-  `ok-keep-estimate`, `ok-container`, `ok-no-cpu`, `ok-trimmed`). A missing
+- Every key of the table is required, except the ticket's `restart` and `docker_need_mib` and the
+  hold's `typical_s`, `cpu_ns`, `typical_cpu_s`, `stall_ewma`, `container`, `no_cpu_s`, `asked_mib`,
+  `trimmed`, `docker_note`, `docker_footprint_mib`, `docker_need_mib`, `docker_growth_mib` and
+  `docker_sampled_ns`, which are optional and read as `false`, `""` and `0` when absent
+  (`ok-restart`, `ok-docker-need`, `ok-typical-s`, `ok-keep-estimate`, `ok-container`, `ok-no-cpu`,
+  `ok-trimmed`, `ok-docker-part`, `ok-docker-gated`). A missing
   required key, a `null`, a value of another JSON type, or a value outside the key's rule is
   malformed (`bad-restart-not-a-boolean`, `bad-typical-s-negative`, `bad-cpu-ns-negative`,
   `bad-typical-cpu-s-negative`, `bad-stall-ewma-above-one`, `bad-container-not-a-boolean`,
@@ -67,10 +69,13 @@ Verdict reminders, all from `PROTOCOL.md`:
   Keys are compared after JSON unescaping.
 - Unknown keys, at any depth, are ignored (their values may be any JSON).
 - Ticket: `need_mib` is an integer in 1..1073741824 and `created_ns` is at least 0
-  (`bad-need-mib-*`, `ok-need-mib-maximum`, `bad-created-ns-negative`).
-- Hold: `need_mib`, `footprint_mib` and `asked_mib` are integers in 0..1073741824, every other integer is at
-  least 0, `normal_share` is a number from 0 to 1 (a fraction or an exponent is fine there, and a
-  string is not) and `learned` is a boolean, and every key is required (`bad-missing-*`,
+  (`bad-need-mib-*`, `ok-need-mib-maximum`, `bad-created-ns-negative`); `docker_need_mib`, when
+  present, is an integer in 1..1073741824 (`bad-docker-need-zero`).
+- Hold: `need_mib`, `footprint_mib`, `asked_mib`, `docker_footprint_mib` and `docker_growth_mib` are
+  integers in 0..1073741824, `docker_need_mib`, when present, is one in 1..1073741824, every other
+  integer is at least 0 (`bad-docker-footprint-negative`, `bad-docker-growth-negative`),
+  `normal_share` is a number from 0 to 1 (a fraction or an exponent is fine there, and a string is
+  not) and `learned` is a boolean, and every key is required (`bad-missing-*`,
   `bad-normal-share-*`, `ok-unbudgeted-run`, `ok-need-and-footprint-maximum`).
 - Cancel: `requested_ns` and `requester_pid` are at least 0 (`bad-requested-ns-negative`,
   `bad-requester-pid-negative`, `ok-zeros`).

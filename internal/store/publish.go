@@ -347,7 +347,7 @@ func (sec *Section) BumpGen() error {
 const formatPrefix = "coreslot-protocol "
 
 // Format reads FORMAT, which every entry does before changing anything (PROTOCOL.md section
-// 8). When FORMAT is absent it writes `coreslot-protocol 3`. It reports the format n and
+// 8). When FORMAT is absent it writes `coreslot-protocol 4`. It reports the format n and
 // whether this client implements it (Understood). A malformed FORMAT is a *StateError. When the
 // format is understood it also rewrites admit.lock's informational body to name this holder; when
 // it is not, it writes nothing at all.

@@ -1224,8 +1224,8 @@ func TestDoctorRefusesLiveReset(t *testing.T) {
 	}
 }
 
-// A reset of an idle format-3 directory (a repair) empties it but keeps the run log, which every
-// label's learned need comes from, and says so. Mutation: remove log/ on every reset.
+// A reset of an idle directory of the current format (a repair) empties it but keeps the run log,
+// which every label's learned need comes from, and says so. Mutation: remove log/ on every reset.
 func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
@@ -1253,8 +1253,8 @@ func TestDoctorResetEmptiesAnIdleDirectory(t *testing.T) {
 			t.Errorf("%s survived: %v", f, err)
 		}
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != "coreslot-protocol 3\n" {
-		t.Errorf("FORMAT after the reset %q, want coreslot-protocol 3", b)
+	if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != understoodFormat {
+		t.Errorf("FORMAT after the reset %q, want %q", b, understoodFormat)
 	}
 	for _, d := range []string{"queue", "holds", "cancel"} {
 		if got := entries(t, dir, d); len(got) != 0 {
@@ -1294,7 +1294,7 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	if r.code != 1 {
 		t.Fatalf("doctor --reset left %s behind and exited %d, want 1: a state problem is never 70", stuck, r.code)
 	}
-	// gen was removed although the stuck entry could not be; the run log of format 3 is kept.
+	// gen was removed although the stuck entry could not be; the run log of the current format is kept.
 	if !strings.Contains(r.stderr, "removed 1 entries; 1 could not be removed: ") {
 		t.Errorf("stderr %q: want how many entries were removed (1) and how many could not be (1)", r.stderr)
 	}
@@ -1303,10 +1303,11 @@ func TestDoctorResetReportsPartialRemoval(t *testing.T) {
 	}
 }
 
-// What a reset says of the run log follows what it did with log/: kept on a repair (FORMAT 3 or
-// none yet), removed with the reason under another format or an unreadable FORMAT, and not named
-// when there was none; a partial reset says it too. Mutations: choose the line from the format
-// alone; drop the note from the partial reset's line; keep log/ only under a present FORMAT 3.
+// What a reset says of the run log follows what it did with log/: kept on a repair (the current
+// FORMAT, the one it upgrades from, or none yet), removed with the reason under another format (2
+// among them) or an unreadable FORMAT, and not named when there was none; a partial reset says it
+// too. Mutations: choose the line from the format alone; drop the note from the partial reset's
+// line; keep log/ only under a present current FORMAT; keep it under FORMAT 2 again.
 func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
 	const (
 		kept       = "; kept admit.lock, config.toml and the run log; wrote FORMAT\n"
@@ -1319,9 +1320,11 @@ func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
 		log, stuck   bool
 		want         string
 	}{
-		{"format 3", "coreslot-protocol 3\n", true, false, kept},
+		{"current format", understoodFormat, true, false, kept},
+		{"upgrade", fmt.Sprintf("coreslot-protocol %d\n", store.UpgradedFormat), true, false, kept},
 		{"no FORMAT", "", true, false, kept},
-		{"format 3 without a log", "coreslot-protocol 3\n", false, false, none},
+		{"current format without a log", understoodFormat, false, false, none},
+		{"format 2", "coreslot-protocol 2\n", true, false, other},
 		{"format 1", "coreslot-protocol 1\n", true, false, other},
 		{"format 1 without a log", "coreslot-protocol 1\n", false, false, none},
 		{"malformed FORMAT", "coreslot-protocol x\n", true, false, unreadable},
@@ -1512,7 +1515,7 @@ func TestVersionListsFormats(t *testing.T) {
 	if r.code != 0 || m == nil {
 		t.Fatalf("version: exit %d, stdout %q", r.code, r.stdout)
 	}
-	if want := "3"; m[1] != want {
+	if want := fmt.Sprint(store.Format); m[1] != want {
 		t.Errorf("formats %q, want %q", m[1], want)
 	}
 	if r := cli(t, baseEnv(stateDir(t, "")), "--version"); r.code != 0 || !versionLine.MatchString(r.stdout) {
@@ -1578,11 +1581,11 @@ func TestStatusAndDoctorCreateNothing(t *testing.T) {
 	}
 }
 
-// A directory of format 1, with its res/ files and a dead hold, is not used: a run runs
-// unbudgeted at once with one notice that says what to do, --strict refuses, and doctor --reset
-// recreates the directory as format 3, its res/ and its run and watch logs gone, and says that
-// every label learns again. Mutations: keep format 1 in store.Understood (the run queues on it
-// and prints nothing); skip the res/ removal in Reset; keep log/ on every reset.
+// A directory of format 1, with its res/ files and a dead hold, is not used: a run runs unbudgeted
+// at once with one notice that says what to do, --strict refuses, and doctor --reset recreates the
+// directory as the current format, its res/ and its run and watch logs gone, and says that every
+// label learns again. Mutations: keep format 1 in store.Understood (the run queues on it and prints
+// nothing); skip the res/ removal in Reset; keep log/ on every reset.
 func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, d := range []string{"res/mem", "holds", "log"} {
@@ -1613,8 +1616,8 @@ func TestForeignFormatFailsOpenAndResets(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, " entries, the run log of another format among them, so every label learns its memory need again; kept admit.lock and config.toml; wrote FORMAT\n") {
 		t.Fatalf("doctor --reset: exit %d (stderr %q); stdout %q does not say the run log went", r.code, r.stderr, r.stdout)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != "coreslot-protocol 3\n" {
-		t.Errorf("FORMAT after the reset: %q, %v; want coreslot-protocol 3", b, err)
+	if b, err := os.ReadFile(filepath.Join(dir, "FORMAT")); err != nil || string(b) != understoodFormat {
+		t.Errorf("FORMAT after the reset: %q, %v; want %q", b, err, understoodFormat)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "res")); !os.IsNotExist(err) {
 		t.Errorf("res/ survived the reset: %v", err)
@@ -1650,11 +1653,11 @@ func TestDoctorFormatRefusals(t *testing.T) {
 		}
 		return dir
 	}
-	t.Run("clear under format 4", func(t *testing.T) {
-		dir := setup(t, "coreslot-protocol 4\n")
+	t.Run("clear under the next format", func(t *testing.T) {
+		dir := setup(t, foreignFormat)
 		before := tree(t, dir)
 		r := cli(t, baseEnv(dir), "doctor", "--clear")
-		if r.code != 75 || !strings.Contains(r.stderr, "state format 4 is not supported; run coreslot doctor --reset") {
+		if r.code != 75 || !strings.Contains(r.stderr, fmt.Sprintf("state format %d is not supported; run coreslot doctor --reset", store.Format+1)) {
 			t.Errorf("doctor --clear: exit %d, want 75 (stderr %q)", r.code, r.stderr)
 		}
 		if after := tree(t, dir); after != before {
@@ -1673,8 +1676,8 @@ func TestDoctorFormatRefusals(t *testing.T) {
 		if r := cli(t, baseEnv(dir), "doctor", "--reset"); r.code != 0 {
 			t.Errorf("doctor --reset: exit %d (stderr %q)", r.code, r.stderr)
 		}
-		if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != "coreslot-protocol 3\n" {
-			t.Errorf("FORMAT after the reset %q, want coreslot-protocol 3", b)
+		if b, _ := os.ReadFile(filepath.Join(dir, "FORMAT")); string(b) != understoodFormat {
+			t.Errorf("FORMAT after the reset %q, want %q", b, understoodFormat)
 		}
 	})
 }
@@ -1944,13 +1947,13 @@ func TestDoctorNamesSectionHolder(t *testing.T) {
 // The engine's refusal reaches the user once prefixed: `coreslot: cancel refused: ...`.
 func TestCancelRefusalHasOnePrefix(t *testing.T) {
 	dir := stateDir(t, "")
-	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte("coreslot-protocol 4\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "FORMAT"), []byte(foreignFormat), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r := cli(t, baseEnv(dir), "cancel", wire.ID{OrderKey: 1, PID: 2, Seq: 3}.String())
-	want := "coreslot: cancel refused: state format 4 is not supported; run coreslot doctor --reset\n"
+	want := fmt.Sprintf("coreslot: cancel refused: state format %d is not supported; run coreslot doctor --reset\n", store.Format+1)
 	if r.code != 75 || r.stderr != want {
-		t.Errorf("cancel under format 4: exit %d, stderr %q; want 75 and %q", r.code, r.stderr, want)
+		t.Errorf("cancel under format %d: exit %d, stderr %q; want 75 and %q", store.Format+1, r.code, r.stderr, want)
 	}
 }
 

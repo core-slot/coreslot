@@ -27,20 +27,19 @@ const otherRes = "res"
 type ResetDone struct {
 	Removed    int   // entries removed, those of log/ included
 	LogRemoved int   // entries of log/ removed: FORMAT named another format or could not be read
-	LogKept    int   // entries of log/ kept: a repair, under FORMAT 3, 2 or none yet
+	LogKept    int   // entries of log/ kept: a repair, under FORMAT 4, 3 or none yet
 	FormatErr  error // why FORMAT could not be read, when it could not
 }
 
 // Reset recreates the state directory (`coreslot doctor --reset`) inside the section the caller
 // entered, whatever format its FORMAT names, malformed or absent included: it removes every entry
-// of queue/, holds/, cancel/ and order/, degraded, gen, watch.json, trim.json and another format's
-// res/ with its files, then writes FORMAT of the format written. Under FORMAT 3, or 2 (an upgrade:
-// format 3 only adds order/, trim.json and two optional keys of a hold), or none yet (which the
-// first client writes as 3), it is a repair and keeps the entries of log/ and telemetry/; otherwise
-// it removes them
-// too, those of telemetry/ counted in Removed only. It keeps admit.lock and config.toml (the
-// format-stable file whose inode live clients may hold open, and the configuration) and the
-// directories themselves. It does not read the configuration.
+// of queue/, holds/, cancel/, order/ and vmwait/, degraded, gen, watch.json, trim.json and another
+// format's res/ with its files, then writes FORMAT of the format written. Under FORMAT 4, or 3 (an
+// upgrade: format 4 only adds vmwait/ and optional Docker keys of tickets and holds), or none yet
+// (which the first client writes as 4), it is a repair and keeps the entries of log/ and
+// telemetry/; otherwise it removes them too, those of telemetry/ counted in Removed only. It keeps
+// admit.lock and config.toml (the format-stable file whose inode live clients may hold open, and
+// the configuration) and the directories themselves. It does not read the configuration.
 //
 // It first checks that nothing is alive: no hold or ticket whose lock is held, by names of either
 // format. When anything is alive it removes nothing and returns it. An entry that is not a
@@ -58,7 +57,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 	}
 	s := sec.s
 	listed := map[string][]string{}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, LogDir, TelemetryDir} {
+	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir, LogDir, TelemetryDir} {
 		if err := CheckEntry(s.path(dir), true); err != nil {
 			return live, done, err
 		}
@@ -115,7 +114,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 		}
 		return false
 	}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, LogDir, TelemetryDir} {
+	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir, LogDir, TelemetryDir} {
 		for _, name := range listed[dir] {
 			switch {
 			case dir != LogDir && dir != TelemetryDir:

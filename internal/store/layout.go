@@ -19,13 +19,16 @@ import (
 
 // Names of the layout (PROTOCOL.md section 4.4).
 const (
-	FormatFile   = "FORMAT"
-	AdmitLock    = "admit.lock"
-	GenFile      = "gen"
-	QueueDir     = "queue"
-	HoldsDir     = "holds"
-	CancelDir    = "cancel"
-	OrderDir     = "order"
+	FormatFile = "FORMAT"
+	AdmitLock  = "admit.lock"
+	GenFile    = "gen"
+	QueueDir   = "queue"
+	HoldsDir   = "holds"
+	CancelDir  = "cancel"
+	OrderDir   = "order"
+	// VMWaitDir holds the notes of gated tickets that wait for Docker's VM: a note is named as its
+	// ticket and is an empty file of mode 0600 that carries no lock.
+	VMWaitDir    = "vmwait"
 	DegradedFile = "degraded"
 	WatchFile    = "watch.json"
 	TrimFile     = "trim.json"

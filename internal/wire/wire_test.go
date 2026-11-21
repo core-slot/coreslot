@@ -468,7 +468,8 @@ func TestLargestBodiesFit(t *testing.T) {
 	h := Hold{Label: lbl, PID: math.MaxInt, StartNS: math.MaxInt64, ArrivalNS: math.MaxInt64, NeedMiB: spec.MaxNeedMiB,
 		TypicalS: math.MaxInt64, Stops: math.MaxInt, FootprintMiB: spec.MaxNeedMiB, DUserNS: math.MaxInt64, DSysNS: math.MaxInt64,
 		DPageWaitNS: math.MaxInt64, NormalShare: 1, SampledNS: math.MaxInt64, Victim: true, Learned: true, ChildExited: true,
-		Container: true, AskedMiB: spec.MaxNeedMiB, Trimmed: true}
+		Container: true, AskedMiB: spec.MaxNeedMiB, Trimmed: true,
+		DockerNeedMiB: spec.MaxNeedMiB, DockerGrowthMiB: spec.MaxNeedMiB, DockerSampledNS: math.MaxInt64}
 	b, err := Encode(h)
 	if err != nil {
 		t.Fatalf("largest hold refused: %v", err)
@@ -479,7 +480,7 @@ func TestLargestBodiesFit(t *testing.T) {
 	if back, err := DecodeHold(b); err != nil || back != h {
 		t.Errorf("largest hold does not round trip: %v", err)
 	}
-	tk := Ticket{Label: lbl, NeedMiB: spec.MaxNeedMiB, CreatedNS: math.MaxInt64, Restart: true}
+	tk := Ticket{Label: lbl, NeedMiB: spec.MaxNeedMiB, CreatedNS: math.MaxInt64, Restart: true, DockerNeedMiB: spec.MaxNeedMiB}
 	b, err = Encode(tk)
 	if err != nil || len(b) > MaxBodyBytes {
 		t.Fatalf("largest ticket: %d bytes, %v", len(b), err)
@@ -558,6 +559,57 @@ func TestHoldTrimKeys(t *testing.T) {
 	for _, refused := range []Hold{{AskedMiB: -1}, {AskedMiB: spec.MaxNeedMiB + 1}} {
 		if b, err := Encode(refused); err == nil {
 			t.Errorf("Encode accepted asked_mib %d: %s", refused.AskedMiB, b)
+		}
+	}
+}
+
+// A ticket and a hold without a Docker need encode none of the Docker budget keys, so their bodies
+// are the bytes a client without them writes; with them they read back the same. A present
+// docker_need_mib is at least 1, and a present docker_growth_mib may be 0. Mutations: dropping
+// omitempty from a key writes it into every body; reading docker_need_mib with optional's zero
+// accepts a present 0; dropping a key from validate accepts an out-of-range value.
+func TestDockerBudgetKeys(t *testing.T) {
+	tk := Ticket{Label: "x", NeedMiB: 1, CreatedNS: 5}
+	if b, err := Encode(tk); err != nil || string(b) != `{"label":"x","need_mib":1,"created_ns":5}` {
+		t.Errorf("a ticket with no Docker need encodes to %s, %v", b, err)
+	}
+	tk.DockerNeedMiB = 4096
+	b, err := Encode(tk)
+	if err != nil || !bytes.HasSuffix(b, []byte(`"created_ns":5,"docker_need_mib":4096}`)) {
+		t.Fatalf("a gated ticket encodes to %s, %v", b, err)
+	}
+	if back, err := DecodeTicket(b); err != nil || back != tk {
+		t.Errorf("a gated ticket reads back as %+v, %v; want %+v", back, err, tk)
+	}
+	plain := `{"label":"x","pid":7300,"start_ns":3,"arrival_ns":2,"need_mib":1,"stops":0,"footprint_mib":0,` +
+		`"d_user_ns":0,"d_sys_ns":0,"d_page_wait_ns":0,"normal_share":0,"sampled_ns":0,"victim":false,"learned":false,"child_exited":false}`
+	h, err := DecodeHold([]byte(plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := Encode(h); err != nil || string(b) != plain {
+		t.Errorf("a hold with no Docker need encodes to %s, %v; want %s", b, err, plain)
+	}
+	h.DockerNeedMiB, h.DockerGrowthMiB, h.DockerSampledNS = 4096, 7168, 9
+	b, err = Encode(h)
+	if err != nil || !bytes.HasSuffix(b, []byte(`"child_exited":false,"docker_need_mib":4096,"docker_growth_mib":7168,"docker_sampled_ns":9}`)) {
+		t.Fatalf("a gated hold encodes to %s, %v", b, err)
+	}
+	if back, err := DecodeHold(b); err != nil || back != h {
+		t.Errorf("a gated hold reads back as %+v, %v; want %+v", back, err, h)
+	}
+	open := strings.TrimSuffix(plain, "}")
+	if back, err := DecodeHold([]byte(open + `,"docker_growth_mib":0}`)); err != nil || back.DockerGrowthMiB != 0 {
+		t.Errorf("a hold with docker_growth_mib 0 reads as %+v, %v; want it accepted", back, err)
+	}
+	if _, err := DecodeHold([]byte(open + `,"docker_need_mib":0}`)); !errors.Is(err, ErrMalformed) {
+		t.Errorf("DecodeHold accepted a present docker_need_mib of 0: %v", err)
+	}
+	for _, refused := range []any{Ticket{Label: "x", NeedMiB: 1, DockerNeedMiB: -1}, Ticket{Label: "x", NeedMiB: 1, DockerNeedMiB: spec.MaxNeedMiB + 1},
+		Hold{DockerNeedMiB: -1}, Hold{DockerNeedMiB: spec.MaxNeedMiB + 1}, Hold{DockerGrowthMiB: -1},
+		Hold{DockerGrowthMiB: spec.MaxNeedMiB + 1}, Hold{DockerSampledNS: -1}} {
+		if b, err := Encode(refused); err == nil {
+			t.Errorf("Encode accepted %+v: %s", refused, b)
 		}
 	}
 }
@@ -743,7 +795,8 @@ func TestLargestFixtureMatchesEncode(t *testing.T) {
 		t.Errorf("largest hold encodes to %s, the fixture is %s", enc, body)
 	}
 	if h.Label != largestLabel(t) || h.NeedMiB != spec.MaxNeedMiB || h.FootprintMiB != spec.MaxNeedMiB ||
-		h.TypicalS != math.MaxInt64 || h.AskedMiB != spec.MaxNeedMiB || !h.Trimmed {
+		h.TypicalS != math.MaxInt64 || h.AskedMiB != spec.MaxNeedMiB || !h.Trimmed ||
+		h.DockerNeedMiB != spec.MaxNeedMiB || h.DockerGrowthMiB != spec.MaxNeedMiB || h.DockerSampledNS != math.MaxInt64 {
 		t.Errorf("fixture is not the largest hold: %+v", h)
 	}
 }

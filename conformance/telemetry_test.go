@@ -141,7 +141,9 @@ func runScript(e Env, label, script string, flags ...string) *Proc {
 	return e.Start(append(args, "--", "sh", "-c", script)...)
 }
 
-const foreignFormat = `printf 'coreslot-protocol 4\n' > "$CORESLOT_STATE_DIR/FORMAT"; `
+// foreignFormat is a shell command that writes FORMAT naming the next format, which this client does
+// not implement.
+var foreignFormat = fmt.Sprintf(`printf 'coreslot-protocol %d\n' > "$CORESLOT_STATE_DIR/FORMAT"; `, store.Format+1)
 
 // lifeRows is the lifecycle, row by row. Live lines come every 30 s, so most runs here have none.
 var lifeRows = []lifeRow{

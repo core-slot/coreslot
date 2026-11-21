@@ -84,12 +84,12 @@ func TestTrimForeignFormatWritesNothing(t *testing.T) {
 	dir := newStateDir(t, "")
 	e := newEngine(t, dir, newFakeClock())
 	g := hold(t, e, need(256))
-	writeFormat(t, dir, "coreslot-protocol 4\n")
+	writeFormat(t, dir, foreignFormat)
 	before := listing(t, dir)
 	err := e.TrimContext(context.Background(), holdID(t, g))
 	var fe *store.FormatError
-	if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != 4 {
-		t.Fatalf("TrimContext = %v; want a refusal naming format 4", err)
+	if !errors.Is(err, ErrRefused) || !errors.As(err, &fe) || fe.N != store.Format+1 {
+		t.Fatalf("TrimContext = %v; want a refusal naming format %d", err, store.Format+1)
 	}
 	if after := listing(t, dir); after != before {
 		t.Errorf("a refused trim wrote to the state directory:\nbefore:\n%s\nafter:\n%s", before, after)

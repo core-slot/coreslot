@@ -1,0 +1,1 @@
+docker_growth_mib is optional, but when present it is in [0, 1073741824]: -1 is below

@@ -507,36 +507,60 @@ func snapshot(t *testing.T, dir string) string {
 	return b.String()
 }
 
+// currentFormat is FORMAT naming the format this client writes; foreignFormat names the next one,
+// which it does not implement.
+var (
+	currentFormat = fmt.Sprintf("coreslot-protocol %d\n", Format)
+	foreignFormat = fmt.Sprintf("coreslot-protocol %d\n", Format+1)
+)
+
+// The format is 4, the one that adds the Docker keys and vmwait/, and a reset upgrades from 3, which
+// lacks only those. Mutations: Format = 3 or UpgradedFormat = 2 turns it red, and so does a
+// writeFormat that writes another number.
+func TestFormatIsFour(t *testing.T) {
+	if Format != 4 || UpgradedFormat != 3 || VMWaitDir != "vmwait" {
+		t.Fatalf("Format %d, UpgradedFormat %d, VMWaitDir %q; want 4, 3 and vmwait", Format, UpgradedFormat, VMWaitDir)
+	}
+	dir := newDir(t)
+	sec := enter(t, open(t, dir))
+	if _, _, err := sec.Format(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 4\n" {
+		t.Errorf("a first client wrote FORMAT %q, want coreslot-protocol 4", b)
+	}
+}
+
 func TestFormatUnknownIsReported(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol 4"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte(strings.TrimSuffix(foreignFormat, "\n")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshot(t, dir)
 	sec := enter(t, s)
 	n, understood, err := sec.Format()
-	if err != nil || n != 4 || understood {
-		t.Fatalf("Format over coreslot-protocol 4 = %d, %v, %v; want 4, false, nil", n, understood, err)
+	if err != nil || n != Format+1 || understood {
+		t.Fatalf("Format over %q = %d, %v, %v; want %d, false, nil", foreignFormat, n, understood, err, Format+1)
 	}
 	if after := snapshot(t, dir); after != before {
 		t.Errorf("Format of an unknown format changed the directory:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
-	// The same client implementing format 4 understands it.
-	if n, understood, err := sec.format(func(n int) bool { return n == 3 || n == 4 }); err != nil || n != 4 || !understood {
-		t.Errorf("Format with 4 implemented = %d, %v, %v", n, understood, err)
+	// The same client implementing the next format too understands it.
+	if n, understood, err := sec.format(func(n int) bool { return n == Format || n == Format+1 }); err != nil || n != Format+1 || !understood {
+		t.Errorf("Format with %d implemented = %d, %v, %v", Format+1, n, understood, err)
 	}
 }
 
-func TestFormatWritesThreeWhenAbsentAndRejectsMalformed(t *testing.T) {
+func TestFormatWritesItsOwnWhenAbsentAndRejectsMalformed(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
 	sec := enter(t, s)
 	n, understood, err := sec.Format()
-	if err != nil || n != 3 || !understood {
-		t.Fatalf("Format with no FORMAT = %d, %v, %v; want 3, true, nil", n, understood, err)
+	if err != nil || n != Format || !understood {
+		t.Fatalf("Format with no FORMAT = %d, %v, %v; want %d, true, nil", n, understood, err, Format)
 	}
-	if body, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(body) != "coreslot-protocol 3\n" {
+	if body, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(body) != currentFormat {
 		t.Errorf("FORMAT = %q", body)
 	}
 	// An understood format names the holder in admit.lock's body.
@@ -587,6 +611,24 @@ func writeTmp(t *testing.T, dir string, pid, seq int, age time.Duration) string 
 func exists(p string) bool {
 	_, err := os.Lstat(p)
 	return err == nil
+}
+
+// Reconciliation removes a temporary file in vmwait/ older than 30 s, as in the other directories,
+// and leaves a young one. Mutation: leaving VMWaitDir out of step 3 keeps the old one.
+func TestReconcileRemovesVMWaitTemporaries(t *testing.T) {
+	dir := newDir(t)
+	sec := enter(t, open(t, dir))
+	d := filepath.Join(dir, VMWaitDir)
+	if err := os.Mkdir(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := writeTmp(t, d, 3998, 2, time.Hour)
+	young := writeTmp(t, d, 3998, 3, 5*time.Second)
+	removed, err := sec.ReconcileIfDue(time.Now().UnixNano())
+	if err != nil || removed != 1 || exists(old) || !exists(young) {
+		t.Errorf("ReconcileIfDue = %d, %v; old temporary exists %v, young %v; want 1 removed, the old one",
+			removed, err, exists(old), exists(young))
+	}
 }
 
 func TestReconcileRemovesOnlyDead(t *testing.T) {

@@ -237,7 +237,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	}
 
 	// 3. Temporary files older than 30 s.
-	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, OrderDir} {
+	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir} {
 		d := sec.s.path(dir)
 		names, err := readNames(d)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -262,7 +262,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 				if dir == "" {
 					return removed, err
 				}
-				continue // a stray entry of queue/, holds/ or cancel/: skipped, never removed
+				continue // a stray entry of a directory of the layout: skipped, never removed
 			}
 			if time.Duration(nowNS-fi.ModTime().UnixNano()) <= TmpMaxAge {
 				continue
