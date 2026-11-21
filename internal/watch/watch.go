@@ -36,8 +36,8 @@ const minWorkShare = 0.10
 
 // minFootprintMiB is the footprint a job must reach to raise E: a smaller tree's system time, which
 // S counts whole, need not be memory work, and its stop frees nothing. E is the smaller of the
-// mean over every counted job and the mean over those at or above it, so the floor never raises E
-// and a small tree never hides a large one's stall. Not calibrated.
+// mean over every counted job and the mean over those at or above it, so the floor never raises E,
+// and E is below the large trees' own mean only when that first mean is lower still. Not calibrated.
 const minFootprintMiB = 128
 
 const (

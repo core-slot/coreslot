@@ -72,11 +72,12 @@ func TestHighNormalShareNotYellow(t *testing.T) {
 
 // Two idle polling jobs spend 80 % of their few milliseconds in the system, and the gate is open at
 // idle on a Mac: with under a tenth of the period between them, they carry no excess and the
-// machine stays green.
+// machine stays green. Their trees are above the footprint floor, so only the busy floor holds
+// them out. Mutation: drop the busy floor → yellow at sample 1.
 func TestIdleJobsCarryNoExcess(t *testing.T) {
 	c := Defaults()
 	f := newFeed(c)
-	idle := Job{DUserNS: 5e6, DSysNS: 20e6, NormalShare: 0.04, Learned: true}
+	idle := Job{DUserNS: 5e6, DSysNS: 20e6, NormalShare: 0.04, Learned: true, FootprintMiB: 1024}
 	for i := range 30 {
 		if l := f.step(c, true, idle, idle); l != Green {
 			t.Fatalf("sample %d: %v, want green", i, l)

@@ -69,7 +69,7 @@ All notable changes to this project are recorded here. The format follows
   tree under 128 MiB that spent its time in the kernel while the host paged for other reasons could raise the stall
   excess on its own, and a red round then stopped it, freeing nothing, again on every attempt of the same run. The
   excess is now the smaller of the mean over every measured command and the same mean over those of 128 MiB or more,
-  so it never rises and a small busy tree no longer hides a large tree's own stall. A red round spares a nearly
+  so it never rises, and it falls below the large trees' own mean only where the old mean was lower still. A red round spares a nearly
   finished command only when the command it stops in its place holds at least 128 MiB.
 
 ## v0.9.1 (2026-11-19)
