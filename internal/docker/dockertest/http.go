@@ -29,7 +29,7 @@ const (
 )
 
 // HTTPOption shapes the engine HTTP serves. It is Engine's Option: every option of Engine applies,
-// and Continue, MissingImage and SlowWait apply to HTTP alone.
+// and Continue and MissingImage apply to HTTP alone.
 type HTTPOption = Option
 
 // Continue makes every answer follow an interim 100 Continue.
@@ -38,9 +38,6 @@ func Continue() Option { return func(e *engine) { e.cont = true } }
 // MissingImage makes every create answer 404, as an engine does for an image it does not hold; the
 // fake never pulls.
 func MissingImage() Option { return func(e *engine) { e.missing = true } }
-
-// SlowWait makes a container's wait answer only after d.
-func SlowWait(d time.Duration) Option { return func(e *engine) { e.slowWait = d } }
 
 // hcontainer is a container of the HTTP engine.
 type hcontainer struct {
@@ -189,8 +186,6 @@ func (h *httpEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.hijack(w, r)
-	case len(parts) == 2 && parts[0] == "containers" && r.Method == "DELETE":
-		h.remove(w, r, parts[1])
 	case len(parts) == 3 && parts[0] == "containers":
 		h.container(w, r, parts[1], parts[2])
 	default:
@@ -312,16 +307,6 @@ func (h *httpEngine) container(w http.ResponseWriter, r *http.Request, ref, op s
 		set(true)
 	case "POST stop":
 		set(false)
-	case "POST wait":
-		select {
-		case <-time.After(h.slowWait):
-		case <-r.Context().Done():
-			return
-		}
-		h.mu.Lock()
-		c.running = false // it ran to its end
-		h.mu.Unlock()
-		answer(w, 200, `{"StatusCode":0}`)
 	case "POST attach":
 		h.hijack(w, r)
 	case "POST exec":
@@ -406,22 +391,6 @@ func (h *httpEngine) logs(w http.ResponseWriter, r *http.Request, c *hcontainer)
 	}
 	if stderr {
 		frame(2, "stderr of "+c.ID[:12]+"\n")
-	}
-}
-
-func (h *httpEngine) remove(w http.ResponseWriter, r *http.Request, ref string) {
-	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	c := h.find(ref)
-	switch {
-	case c == nil:
-		answer(w, 404, fmt.Sprintf(`{"message":"No such container: %s"}`, ref))
-	case c.running && !force:
-		answer(w, 409, `{"message":"cannot remove a running container"}`)
-	default:
-		h.list = slices.DeleteFunc(h.list, func(x *hcontainer) bool { return x == c })
-		w.WriteHeader(204)
 	}
 }
 

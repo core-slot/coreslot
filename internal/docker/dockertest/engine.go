@@ -134,9 +134,8 @@ type engine struct {
 	delay      time.Duration
 	pad        int
 	done       chan struct{}
-	cont       bool          // HTTP: a 100 Continue before every answer
-	missing    bool          // HTTP: every create finds no image
-	slowWait   time.Duration // HTTP: a wait answers after this
+	cont       bool // HTTP: a 100 Continue before every answer
+	missing    bool // HTTP: every create finds no image
 }
 
 // Option shapes the engine Engine serves.

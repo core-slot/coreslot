@@ -44,7 +44,6 @@ type dockerPart struct {
 	touches    []string                  // the ones readTouches has not read yet, in order
 	lost       bool
 	footprint  uint64 // the last completed sample's, in bytes
-	peak       uint64 // the largest footprint so far, in bytes
 }
 
 // setBlind makes the part blind.
@@ -204,7 +203,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 			sum += c.usage - c.baseline
 		}
 	}
-	p.footprint, p.peak = sum, max(p.peak, sum)
+	p.footprint = sum
 }
 
 // footprintMiB is the last completed sample's footprint in whole MiB, cut.
@@ -212,11 +211,4 @@ func (p *dockerPart) footprintMiB() int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return int64(p.footprint >> 20)
-}
-
-// peakMiB is the largest footprint so far in MiB, rounded up, so that any byte counted is at least 1.
-func (p *dockerPart) peakMiB() int64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return int64((p.peak + 1<<20 - 1) >> 20)
 }

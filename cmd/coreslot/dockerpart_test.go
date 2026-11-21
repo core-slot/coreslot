@@ -203,21 +203,6 @@ func TestBlindEventIsBlind(t *testing.T) {
 	}
 }
 
-// A container that lived one sample at 0.2 MiB peaks at 1 MiB: rounded up, never 0. Mutation: the
-// peak cut like the footprint gives 0, red.
-func TestPeakRoundsUpAtLeastOne(t *testing.T) {
-	id := dockertest.ID('a')
-	f := partEngine(t, id, "db", partMiB/5)
-	var p dockerPart
-	p.event(created(id))
-	p.sample(context.Background(), f.Sock)
-	f.SetUsage(id, 0)
-	p.sample(context.Background(), f.Sock)
-	if p.peakMiB() != 1 || p.footprintMiB() != 0 {
-		t.Errorf("peak %d, footprint %d; want 1, 0", p.peakMiB(), p.footprintMiB())
-	}
-}
-
 // engagedRun is a run whose forwarder has relayed a connection and reports what the test sends on
 // its channel, with the fake engine f its upstream and its notices in a file of its own.
 func engagedRun(t *testing.T, f *dockertest.Fake) (r *run, events chan relay.Event, stderr string) {

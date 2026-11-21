@@ -20,9 +20,11 @@ func PathFor(cfgPath string) string {
 	return filepath.Join(filepath.Dir(cfgPath), "needs.toml")
 }
 
-// Entry is what the needs file says about one label. MemMiB is 0 when the entry leaves it out.
+// Entry is what the needs file says about one label. MemMiB and DockerMemMiB are 0 when the entry
+// leaves them out.
 type Entry struct {
 	MemMiB        int64
+	DockerMemMiB  int64 // docker_mem: the run's Docker need, what its containers take of Docker's VM
 	NoRestart     bool  // the run is never stopped to free memory
 	DockerForward *bool // docker_forward: a forwarder always (true) or never (false); nil when absent
 }
@@ -56,8 +58,8 @@ func Load(path string) (File, error) {
 	return File{entries: tbl}, nil
 }
 
-// Lookup returns the entry for label. An empty label finds nothing. mem is a size, a string or an
-// integer of GiB. Unknown keys are ignored; a known key with a bad value is an error naming the
+// Lookup returns the entry for label. An empty label finds nothing. mem and docker_mem are sizes
+// above 0, a string or an integer of GiB. Unknown keys are ignored; a known key with a bad value is an error naming the
 // label and the key.
 func (f File) Lookup(label string) (Entry, bool, error) {
 	if label == "" {
@@ -75,19 +77,17 @@ func (f File) Lookup(label string) (Entry, bool, error) {
 		return Entry{}, false, fmt.Errorf("[needs.%q] %s: %v", label, key, err)
 	}
 	var e Entry
-	if v, ok := tbl["mem"]; ok {
-		s, err := scalar(v)
-		if err != nil {
-			return bad("mem", err)
+	for _, k := range []struct {
+		key string
+		dst *int64
+	}{{"mem", &e.MemMiB}, {"docker_mem", &e.DockerMemMiB}} {
+		if v, ok := tbl[k.key]; ok {
+			mib, err := size(v)
+			if err != nil {
+				return bad(k.key, err)
+			}
+			*k.dst = mib
 		}
-		mib, err := spec.ParseBytes(s)
-		if err == nil && mib == 0 {
-			err = errors.New("mem needs more than 0")
-		}
-		if err != nil {
-			return bad("mem", err)
-		}
-		e.MemMiB = mib
 	}
 	if v, ok := tbl["no_restart"]; ok {
 		b, ok := v.(bool)
@@ -104,6 +104,19 @@ func (f File) Lookup(label string) (Entry, bool, error) {
 		e.DockerForward = &b
 	}
 	return e, true, nil
+}
+
+// size is a value written as a size above 0, in MiB.
+func size(v any) (int64, error) {
+	s, err := scalar(v)
+	if err != nil {
+		return 0, err
+	}
+	mib, err := spec.ParseBytes(s)
+	if err == nil && mib == 0 {
+		err = errors.New("needs more than 0")
+	}
+	return mib, err
 }
 
 // scalar is a value written as a string or a TOML integer, as text.
