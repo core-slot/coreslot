@@ -145,8 +145,11 @@ func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
 	if err != nil {
 		return removed, err
 	}
-	// Its order override goes with it (PROTOCOL.md section 7.12).
+	// Its order override and its note go with it (PROTOCOL.md section 7.12).
 	if _, err := sec.removeByID(OrderDir, id); err != nil {
+		return removed, err
+	}
+	if _, err := sec.removeNote(name); err != nil {
 		return removed, err
 	}
 	return removed, nil
@@ -192,10 +195,23 @@ func (sec *Section) RemoveOrder(id wire.ID) (removed bool, err error) {
 
 // removeByID removes dir/<id> inside the section unless it is missing or a stray.
 func (sec *Section) removeByID(dir string, id wire.ID) (removed bool, err error) {
+	return sec.removeEntry(dir, id.String())
+}
+
+// removeNote removes vmwait/<ticketName> inside the section unless it is missing or a stray.
+func (sec *Section) removeNote(ticketName string) (removed bool, err error) {
+	if !nameMatches(VMWaitDir, ticketName) {
+		return false, fmt.Errorf("store: a note for %q: not a ticket name", ticketName)
+	}
+	return sec.removeEntry(VMWaitDir, ticketName)
+}
+
+// removeEntry removes dir/name inside the section unless it is missing or a stray.
+func (sec *Section) removeEntry(dir, name string) (removed bool, err error) {
 	if err := sec.live(); err != nil {
 		return false, err
 	}
-	p := sec.s.path(dir, id.String())
+	p := sec.s.path(dir, name)
 	fi, err := os.Lstat(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil

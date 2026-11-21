@@ -76,9 +76,9 @@ const maxTmpAttempts = 1000
 // noReplaceDirs are the directories whose entries are published without replacement.
 var noReplaceDirs = []string{QueueDir, HoldsDir, CancelDir}
 
-// listedDirs are the directories List and ListNames read: noReplaceDirs and order/, whose entries a
-// later override of the same ticket replaces.
-var listedDirs = []string{QueueDir, HoldsDir, CancelDir, OrderDir}
+// listedDirs are the directories List and ListNames read: noReplaceDirs, order/, whose entries a
+// later override of the same ticket replaces, and vmwait/, whose notes are named as their tickets.
+var listedDirs = []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir}
 
 // Publish publishes body as dir/name inside the section (PROTOCOL.md section 11), where dir is
 // QueueDir, HoldsDir or CancelDir and name matches that directory's grammar (a ticket or hold
@@ -161,8 +161,53 @@ func (sec *Section) PublishOrder(id wire.ID, body []byte) error {
 	return nil
 }
 
+// PublishNote publishes the note of the ticket ticketName inside the section: the empty file
+// vmwait/<ticketName>, of mode 0600, carrying no lock, and bumps gen. A note that exists already
+// is left as it is and gen is not bumped. A directory already holding MaxEntries entries is a
+// *StateError.
+func (sec *Section) PublishNote(ticketName string) error {
+	if err := sec.live(); err != nil {
+		return err
+	}
+	if !nameMatches(VMWaitDir, ticketName) {
+		return fmt.Errorf("store: a note for %q: not a ticket name", ticketName)
+	}
+	d := sec.s.path(VMWaitDir)
+	if err := ensureDir(d); err != nil {
+		return err
+	}
+	existing, err := readNames(d)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(existing, ticketName) {
+		return nil
+	}
+	if len(existing) >= maxEntries {
+		return stateErrorf("%s is full: it holds %d entries", d, len(existing))
+	}
+	f, err := OpenFile(filepath.Join(d, ticketName), os.O_RDONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return sec.BumpGen()
+}
+
+// RemoveNote removes the note of the ticket ticketName inside the section and bumps gen. A missing
+// note is not an error and bumps nothing; a stray entry under that name is left alone (PROTOCOL.md
+// section 4.2).
+func (sec *Section) RemoveNote(ticketName string) error {
+	removed, err := sec.removeNote(ticketName)
+	if err != nil || !removed {
+		return err
+	}
+	return sec.BumpGen()
+}
+
 // nameMatches reports whether name matches dir's grammar: a ticket or hold name in QueueDir and
-// HoldsDir, a ticket id in CancelDir and OrderDir (PROTOCOL.md section 7.1).
+// HoldsDir, a ticket name in VMWaitDir, a ticket id in CancelDir and OrderDir (PROTOCOL.md section
+// 7.1).
 func nameMatches(dir, name string) bool {
 	if dir == CancelDir || dir == OrderDir {
 		_, ok := wire.ParseID(name)

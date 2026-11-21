@@ -865,3 +865,82 @@ func TestReconcileUnlinksWhileHoldingProbeLock(t *testing.T) {
 		t.Errorf("remove.before-unlink reached %d times; ticket exists %v", reached, exists(path))
 	}
 }
+
+// ---------------------------------------------------------------- notes
+
+// Publishing a note and removing it each bump gen once; publishing an existing note and removing a
+// missing one change nothing, gen included. The note is an empty file of mode 0600 named as its
+// ticket. Mutation: bumping gen when the note already exists makes the second publication bump.
+func TestNoteBumpsGenOnce(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	name := ticketName(1)
+	gen := func() int64 {
+		t.Helper()
+		g, err := s.ReadGen()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return g.N
+	}
+	steps := []struct {
+		what string
+		do   func(string) error
+		bump int64
+	}{
+		{"publish", sec.PublishNote, 1}, {"publish again", sec.PublishNote, 0},
+		{"remove", sec.RemoveNote, 1}, {"remove again", sec.RemoveNote, 0},
+	}
+	for _, st := range steps {
+		before := gen()
+		if err := st.do(name); err != nil {
+			t.Fatalf("%s: %v", st.what, err)
+		}
+		if got := gen(); got != before+st.bump {
+			t.Errorf("%s: gen %d -> %d, want +%d", st.what, before, got, st.bump)
+		}
+		if st.what == "publish" {
+			fi, err := os.Lstat(filepath.Join(dir, VMWaitDir, name))
+			if err != nil || fi.Size() != 0 || fi.Mode().Perm() != 0o600 {
+				t.Errorf("the note: %v, %v; want an empty file of mode 0600", fi, err)
+			}
+		}
+	}
+	if err := sec.PublishNote("not-a-ticket"); err == nil {
+		t.Error("a note under a name outside the ticket grammar was published")
+	}
+}
+
+// Reconciliation removes a note whose ticket is gone, the note of a dead ticket it removes
+// included, and keeps a live ticket's. Mutation: leaving vmwait/ out of the removal of entries
+// whose ticket is gone keeps both orphans.
+func TestReconcileRemovesOrphanNote(t *testing.T) {
+	dir := newDir(t)
+	s := open(t, dir)
+	sec := enter(t, s)
+	live, dead, gone := ticketName(1), ticketName(2), ticketName(3)
+	f, err := sec.Publish(QueueDir, live, []byte(`{}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	d, err := sec.Publish(QueueDir, dead, []byte(`{}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close() // withdrawn: dead
+	for _, name := range []string{live, dead, gone} {
+		if err := sec.PublishNote(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sec.ReconcileIfDue(NowNS()); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{live: true, dead: false, gone: false} {
+		if got := exists(filepath.Join(dir, VMWaitDir, name)); got != want {
+			t.Errorf("note %s exists %v after reconciliation, want %v", name, got, want)
+		}
+	}
+}

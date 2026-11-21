@@ -162,10 +162,11 @@ func (t *Ticket) watchWait(sec *store.Section, cfg config.Config, m config.Machi
 }
 
 // reelect is the re-election inside the admitting section (PROTOCOL.md section 12.1 step 5): it
-// lists the names in queue/ and the overrides in order/ again and returns the body of the first live
-// ticket ahead of this one in effective order (section 9), the head, with its name's key (the
-// observer's identity) and its effective key; nil when there is none: well-formed and neither gone,
-// dead nor STALLED for this observer, reading the mtime (lstat) of only well-formed tickets. A
+// lists the names in queue/, the overrides in order/ and the notes in vmwait/ again and returns the
+// body of the first live ticket ahead of this one in effective order (section 9), the head, with its
+// name's key (the observer's identity) and its effective key; nil when there is none: well-formed,
+// without a note, and neither gone, dead nor STALLED for this observer, reading the mtime (lstat) of
+// only well-formed tickets. A
 // ticket this observer has never watched, such as one published after the election, counts as
 // live; the next election then rescans whatever gen says, so a ticket published without a gen bump
 // is watched from then on and cannot keep the head out for longer than a stall.
@@ -175,6 +176,10 @@ func (t *Ticket) reelect() (*wire.Ticket, state.Key, state.Key, error) {
 		return nil, state.Key{}, state.Key{}, err
 	}
 	orders, _, err := t.e.orders()
+	if err != nil {
+		return nil, state.Key{}, state.Key{}, err
+	}
+	notes, err := t.e.notes()
 	if err != nil {
 		return nil, state.Key{}, state.Key{}, err
 	}
@@ -229,6 +234,9 @@ func (t *Ticket) reelect() (*wire.Ticket, state.Key, state.Key, error) {
 			if t.obs.Stalled(k, now) {
 				continue
 			}
+		}
+		if notes[en.name] {
+			continue
 		}
 		return tk, k, en.order, nil
 	}

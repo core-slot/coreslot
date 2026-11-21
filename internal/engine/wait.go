@@ -96,6 +96,7 @@ type Ticket struct {
 	haveGen bool
 	ahead   []aheadEntry            // ascending: the nearest ticket ahead is the last
 	tickets map[string]*wire.Ticket // ticket name -> its body, nil when malformed
+	notes   map[string]bool         // the names of the tickets with a note in vmwait/, from the last rescan
 
 	nextElection time.Duration
 	backoff      time.Duration
@@ -391,7 +392,8 @@ func (t *Ticket) elect(now time.Duration) (head bool, err error) {
 		if !dead {
 			t.obs.Observe(a.key, fi.ModTime().UnixNano(), now)
 		}
-		if state.PassedOver(state.Ticket{Key: a.key, Dead: dead}, &t.obs, now) {
+		// A live ticket with a note waits only for Docker's VM: it is passed over, still observed.
+		if state.PassedOver(state.Ticket{Key: a.key, Dead: dead}, &t.obs, now) || t.notes[a.name] {
 			passed++
 			continue
 		}
@@ -439,8 +441,8 @@ func (t *Ticket) watchFront(stop int, now time.Duration) error {
 	return nil
 }
 
-// rescan re-lists the names in queue/ (the listing alone: no entry's metadata is read, so its
-// cost is the directory read). Tickets ahead of this one whose bodies are well-formed are kept
+// rescan re-lists the names in queue/ and the notes in vmwait/ (the listings alone: no entry's
+// metadata is read, so their cost is the directory reads). Tickets ahead of this one whose bodies are well-formed are kept
 // for the election; malformed ones take no place in the queue (PROTOCOL.md section 7.2). A stray
 // entry is found out when the election examines it. Bodies never change once published, so each
 // is read once, when its name is first seen.
@@ -451,6 +453,9 @@ func (t *Ticket) rescan() error {
 	}
 	orders, _, err := t.e.orders()
 	if err != nil {
+		return err
+	}
+	if t.notes, err = t.e.notes(); err != nil {
 		return err
 	}
 	t.order = orderKey(t.id, orders)
@@ -491,6 +496,20 @@ func (t *Ticket) rescan() error {
 	})
 	t.ahead = ahead
 	return nil
+}
+
+// notes lists vmwait/: the names of the tickets that have a note. A stray entry is listed too, and
+// passes over only a ticket of that name, which its owner would note anyway.
+func (e *Engine) notes() (map[string]bool, error) {
+	entries, err := e.st.ListNames(store.VMWaitDir)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]bool, len(entries))
+	for _, en := range entries {
+		m[en.Name] = true
+	}
+	return m, nil
 }
 
 // ticketBody returns the body of the ticket name in queue/, nil when it is malformed, reading it

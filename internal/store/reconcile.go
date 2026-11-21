@@ -195,7 +195,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	}
 
 	// 1. Dead tickets and holds.
-	tickets := map[string]bool{} // ids of the tickets still present
+	tickets := map[string]bool{} // ids and names of the tickets still present
 	for _, dir := range []string{QueueDir, HoldsDir} {
 		entries, _, err := sec.s.List(dir)
 		if err != nil {
@@ -213,14 +213,15 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 			if r {
 				removed++
 			} else if !gone && dir == QueueDir {
-				tickets[e.ID.String()] = true
+				tickets[e.ID.String()], tickets[e.Name] = true, true
 			}
 		}
 	}
 
-	// 2. Cancel requests and order overrides whose ticket is gone. tickets holds only the entries
-	// of step 1 that are live and not stray: a stray never protects either (PROTOCOL.md section 10.4).
-	for _, dir := range []string{CancelDir, OrderDir} {
+	// 2. Cancel requests, order overrides and notes whose ticket is gone. tickets holds only the
+	// entries of step 1 that are live and not stray: a stray never protects any (PROTOCOL.md section
+	// 10.4).
+	for _, dir := range []string{CancelDir, OrderDir, VMWaitDir} {
 		named, _, err := sec.s.List(dir)
 		if err != nil {
 			return removed, err

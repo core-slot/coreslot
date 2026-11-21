@@ -961,3 +961,49 @@ func TestCalmLeftCountsTheSampleAge(t *testing.T) {
 		}
 	}
 }
+
+// The re-election inside the admitting section passes over a ticket noted since the election.
+// Mutation: dropping the note test from the re-election keeps the container request behind it.
+func TestReelectSkipsNoted(t *testing.T) {
+	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	ahead := enqueue(t, e, need(128))
+	c := enqueue(t, e, container())
+	old := point
+	point = func(p string) {
+		if p == "admit.before-enter" {
+			note(t, e, ahead.Name()) // after the election, before the section
+		}
+	}
+	t.Cleanup(func() { point = old })
+	if r := step(t, c); !isAdmitted(r) {
+		t.Fatalf("the only ticket ahead is noted: want admitted by the idle rule, got %#v", r)
+	}
+}
+
+// Withdrawal and cancellation remove the ticket's note with the ticket. Mutation: leaving the note
+// out of the removal of one's own ticket keeps it.
+func TestWithdrawRemovesNote(t *testing.T) {
+	dir, e, _, tk := blocked(t, 128)
+	note(t, e, tk.Name())
+	if err := tk.Withdraw(); err != nil {
+		t.Fatal(err)
+	}
+	if exists(filepath.Join(dir, store.VMWaitDir, tk.Name())) {
+		t.Error("the withdrawn ticket's note is still there")
+	}
+}
+
+func TestCancelRemovesNote(t *testing.T) {
+	dir, e, clk, tk := blocked(t, 128)
+	note(t, e, tk.Name())
+	if err := e.CancelContext(context.Background(), ticketID(tk)); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Second)
+	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCanceled) {
+		t.Fatalf("Step: %v, want ErrCanceled", err)
+	}
+	if exists(filepath.Join(dir, store.VMWaitDir, tk.Name())) {
+		t.Error("the cancelled ticket's note is still there")
+	}
+}

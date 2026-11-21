@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // waitWork counts a waiter's filesystem work through the seams of wait.go.
@@ -415,5 +417,64 @@ func TestFrontWindowCoversFourStoppedTickets(t *testing.T) {
 	}
 	if at["W1"] != 10 || at["W2"] != at["W1"] {
 		t.Fatalf("admitted at %v (waiter -> second), want W1 at 10 s and W2 in the same second", at)
+	}
+}
+
+// note publishes the note of the ticket name, as its gated owner does when it waits for Docker's VM.
+func note(t *testing.T, e *Engine, name string) {
+	t.Helper()
+	sec, err := e.st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	if err := sec.PublishNote(name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A live ticket with a note is passed over: with nothing else ahead the waiter behind it is the
+// head and the idle rule is its own. Mutation: dropping the note test from the election leaves the
+// waiter behind the noted ticket.
+func TestElectSkipsNotedTicket(t *testing.T) {
+	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	noted := enqueue(t, e, need(128))
+	note(t, e, noted.Name())
+	if r := step(t, enqueue(t, e, need(128))); !isAdmitted(r) {
+		t.Fatalf("behind a noted ticket alone: want admitted by the idle rule, got %#v", r)
+	}
+}
+
+// The election passes over a noted ticket and stops at the first live one without a note beyond it.
+// Mutation: inverting the note test stops the election at the noted ticket.
+func TestElectStopsAtFirstUnnotedLive(t *testing.T) {
+	e := newEngine(t, newStateDir(t, ""), newFakeClock())
+	first := enqueue(t, e, need(128))
+	noted := enqueue(t, e, need(128))
+	note(t, e, noted.Name())
+	r := step(t, enqueue(t, e, need(128)))
+	if w, ok := r.(Waiting); !ok || w.Ahead != first.Name() || w.Position != 2 {
+		t.Fatalf("got %#v; want waiting at position 2 behind %s", r, first.Name())
+	}
+}
+
+// A noted ticket is still observed while it is passed over, so it goes STALLED as any ticket does
+// when its owner stops. Mutation: passing over a noted ticket before reading its mtime leaves it
+// unobserved and never STALLED.
+func TestNotedTicketStillInFrontWindow(t *testing.T) {
+	dir := newStateDir(t, "")
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	h := startHelper(t, "enqueue", dir, "1024") // stopped: its mtime never changes
+	note(t, e, h.detail)
+	startHelper(t, "lock", dir, holdPath(t, dir, 1024)) // the waiter is never admitted
+	w := enqueue(t, e, need(128))
+	id, _ := wire.ParseName(h.detail)
+	for sec := 0; sec <= 10; sec++ {
+		step(t, w)
+		clk.advance(time.Second)
+	}
+	if !w.obs.Stalled(state.Key(id), clk.clock().Monotonic()) {
+		t.Fatal("the noted ticket was not watched: not STALLED after 10 s unchanged")
 	}
 }
