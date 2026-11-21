@@ -105,6 +105,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
 			h.TypicalCPUS, h.Container = r.cpuS, p.container
 			h.DockerNote, h.DockerFootprintMiB = r.dockerNote(), r.dockerFootprint()
+			r.setDockerKeys(g, h)
 		})
 	}
 	for n := 1; ; n++ {
@@ -160,7 +161,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if r.fwd != nil && (n/listingsPerTick)%sampleTicks == 0 {
 			// Off the tick path: a hung engine never delays a tick, and the hold takes the last
 			// sample done.
-			go r.fwd.part.sample(ctx, r.fwd.upstream)
+			go sampleDocker(ctx, r.fwd, r.gate)
 		}
 		// The request is read after the tick has measured, until one is found.
 		if tail != nil && !trim.found {
@@ -174,6 +175,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, noCPUS
 			h.SampledNS, h.DockerNote, h.DockerFootprintMiB = store.NowNS(), r.dockerNote(), r.dockerFootprint()
+			r.setDockerKeys(g, h)
 			if p.container { // every update, so that a failed one repeats by itself
 				h.Victim, h.Container = false, true
 			}

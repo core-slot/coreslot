@@ -23,6 +23,15 @@ func footprintMiB(pid int) (int64, bool) {
 	return int64(ri[footprintAt] >> 20), ok
 }
 
+// vmFootprint is the footprint of pid while it is the process started at startNS.
+func vmFootprint(pid int, startNS int64) (int64, bool) {
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || int(kp.Proc.P_pid) != pid || kp.Proc.P_starttime.Nano() != startNS {
+		return 0, false
+	}
+	return footprintMiB(pid)
+}
+
 // listVMProcs reads the pid, start time and executable path of every process of this user, and the
 // resource coalition of each one that runs a program DockerVM looks for. A process that is gone or
 // that cannot be read has no path and is skipped, unless its kernel name says it may be one of
@@ -51,7 +60,7 @@ func listVMProcs() ([]vmProc, bool) {
 			continue
 		}
 		vp := vmProc{PID: pid, StartNS: p.Proc.P_starttime.Nano(), Exec: unix.ByteSliceToString(path)}
-		if exeIs(vp.Exec, dockerBackendExe) || exeIs(vp.Exec, dockerVMExe) {
+		if exeIs(vp.Exec, dockerBackendExe) || isVMExe(vp.Exec) {
 			cn, err := info(callPidInfo, pid, pidCoalitionInfo, 0, co)
 			var ok bool
 			if vp.Coalition, ok = parseCoalition(co, cn); err != nil || !ok {

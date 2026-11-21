@@ -1655,8 +1655,10 @@ func sleepingDocker(t *testing.T) string {
 	return path
 }
 
-// A waiter never connects, not even a nested one whose own command is container work while another
-// hold is: only supervision does. Mutation: ContainersAsync called from the waiting line.
+// A waiter without a Docker need never connects, not even a nested one whose own command is
+// container work while another hold is: only supervision does. (A gated waiter reads Docker's VM
+// at its attempts that fit on the Mac: TestGatedWaiterReadsOnlyAtAttempts.) Mutation:
+// ContainersAsync called from the waiting line.
 func TestWaiterNeverConnects(t *testing.T) {
 	eng, dials := fakeEngine(t)
 	fakeSweep(t)
@@ -1674,6 +1676,9 @@ func TestWaiterNeverConnects(t *testing.T) {
 	b.r.parentHold, b.r.o.argv, b.r.o.pinned = filepath.Base(hold), []string{"docker", "build", "."}, true
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
+	if b.r.dockerNeedMiB != 0 {
+		t.Fatal("the waiter has a Docker need")
+	}
 	b.wait(t, ctx)
 	waitFor(t, 5*time.Second, "the waiter's memory line", func() bool { return len(linesOf(t, b.dir, "memory")) == 1 })
 	time.Sleep(100 * time.Millisecond)

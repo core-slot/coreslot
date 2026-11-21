@@ -149,12 +149,12 @@ func (p *dockerPart) addLocked(id string, c partContainer) {
 }
 
 // sample reads the usage of each of the part's containers, all under one deadline, and makes the
-// result the part's footprint. It runs in a goroutine of its own, one reader at a time, as
-// readTouches does. A container whose read fails keeps its last usage; one that is
-// gone uses nothing; one not read since its first touch takes this read as its baseline.
-func (p *dockerPart) sample(ctx context.Context, sock string) {
+// result the part's footprint; done reports that it did. It runs in a goroutine of its own, one
+// reader at a time, as readTouches does. A container whose read fails keeps its last usage; one
+// that is gone uses nothing; one not read since its first touch takes this read as its baseline.
+func (p *dockerPart) sample(ctx context.Context, sock string) (done bool) {
 	if !p.reading.CompareAndSwap(false, true) {
-		return
+		return false
 	}
 	defer p.reading.Store(false)
 	p.mu.Lock()
@@ -165,7 +165,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 	lost := p.lost
 	p.mu.Unlock()
 	if lost {
-		return
+		return false
 	}
 	type read struct {
 		usage uint64
@@ -175,7 +175,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 	deadline := time.Now().Add(partDeadline)
 	for _, id := range ids {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		c, gone, code := docker.Stat(sock, docker.Listed{ID: id}, deadline)
 		if code == "" {
@@ -185,7 +185,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.lost {
-		return
+		return false
 	}
 	var sum uint64
 	for id, c := range p.containers {
@@ -204,6 +204,7 @@ func (p *dockerPart) sample(ctx context.Context, sock string) {
 		}
 	}
 	p.footprint = sum
+	return true
 }
 
 // footprintMiB is the last completed sample's footprint in whole MiB, cut.

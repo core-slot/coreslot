@@ -15,7 +15,9 @@ import (
 
 	"github.com/core-slot/coreslot/internal/docker"
 	"github.com/core-slot/coreslot/internal/docker/dockertest"
+	"github.com/core-slot/coreslot/internal/engine"
 	relay "github.com/core-slot/coreslot/internal/forward"
+	"github.com/core-slot/coreslot/internal/spec"
 )
 
 const partMiB = 1 << 20
@@ -369,6 +371,28 @@ func TestSelectedContext(t *testing.T) {
 	} {
 		if got := selectedContext(c.env, c.home); got != c.want {
 			t.Errorf("%s: selectedContext = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A gated command coming back after a stop keeps its Docker need, and its request carries what its
+// containers use now, from which its first body reserves the growth; a run that lost sight of them
+// comes back without either. Mutation: requeue leaving DockerFootprintMiB at 0 reddens the first row.
+func TestRestartKeepsDockerNeedAndFootprint(t *testing.T) {
+	for _, blind := range []bool{false, true} {
+		r := &run{dockerNeedMiB: 2048, fwd: &forwarder{connected: true}}
+		r.fwd.part.footprint = 700*partMiB + 5
+		if blind {
+			r.fwd.part.setBlind()
+		}
+		req := spec.Request{NeedMiB: 64, DockerNeedMiB: 2048}
+		r.requeue(&req, &engine.Grant{})
+		want := [2]int64{2048, 700}
+		if blind {
+			want = [2]int64{}
+		}
+		if got := [2]int64{req.DockerNeedMiB, req.DockerFootprintMiB}; got != want || !req.Restart {
+			t.Errorf("blind %v: Docker need and footprint %v, restart %v; want %v and a restart", blind, got, req.Restart, want)
 		}
 	}
 }

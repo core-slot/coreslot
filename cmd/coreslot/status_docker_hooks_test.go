@@ -103,14 +103,14 @@ func TestStatusDockerShowsVMAndContainers(t *testing.T) {
 }
 
 // No VM process: not_running with every key present, nothing connected to, and the text names the
-// hypervisor and the engines that are not read. Mutation: the old "no Docker Desktop VM was found"
-// text lacks the first two words checked.
+// backends it looks on and the engines that are not read. Mutation: the earlier text, which said
+// Docker VMM is not read, lacks the second phrase checked.
 func TestStatusDockerNoVMOpensNoSocket(t *testing.T) {
 	dir := budgetDir(t, 512)
 	f := dockerFake(t)
 	env := dockerEnv(t, dir, f, 0, 0)
 	checkEmpty(t, dockerObject(t, env), "not_running", "")
-	if r := cli(t, env, "status", "--docker"); !strings.Contains(r.stdout, "Apple hypervisor") || !strings.Contains(r.stdout, "Docker VMM, OrbStack and Colima are not read") {
+	if r := cli(t, env, "status", "--docker"); !strings.Contains(r.stdout, "Apple hypervisor") || !strings.Contains(r.stdout, "or Docker VMM; OrbStack and Colima are not read") {
 		t.Errorf("text does not say what is read:\n%s", r.stdout)
 	}
 	if n := f.Conns(); n != 0 {

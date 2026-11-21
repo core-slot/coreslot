@@ -34,6 +34,16 @@ type Reading struct {
 	Containers  []Container
 }
 
+// FreeEstMiB is the VM's memory less what its running containers use: an estimate of what is
+// free inside it.
+func (r Reading) FreeEstMiB() int64 {
+	free := r.VMMiB
+	for _, c := range r.Containers {
+		free -= c.UsageMiB
+	}
+	return free
+}
+
 // Stats is the part of a container's stats the readings use.
 type Stats struct {
 	MemoryStats struct {
