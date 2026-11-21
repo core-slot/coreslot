@@ -34,6 +34,12 @@ const (
 // toward E: an idle polling job is mostly system time and says nothing about memory. Not calibrated.
 const minWorkShare = 0.10
 
+// minFootprintMiB is the footprint a job must reach to raise E: a smaller tree's system time, which
+// S counts whole, need not be memory work, and its stop frees nothing. E is the smaller of the
+// mean over every counted job and the mean over those at or above it, so the floor never raises E
+// and a small tree never hides a large one's stall. Not calibrated.
+const minFootprintMiB = 128
+
 const (
 	clearSamples   = 15                      // samples in a row below yellow_points that clear yellow
 	floorGrowthMiB = 256                     // swap growth over the floor window that makes floor an edge
@@ -249,17 +255,26 @@ func Share(j Job) (s float64, ok bool) {
 }
 
 // Excess is the stall excess E in points: the mean of max(0, S − normal) over the learned jobs that
-// worked for at least minWorkShare of the period of periodNS ns, weighted by their time; 0 when
-// none did.
+// worked for at least minWorkShare of the period of periodNS ns, weighted by their time, or the same
+// mean over those of them whose footprint reaches minFootprintMiB when that is smaller; a mean over
+// no job is 0.
 func Excess(jobs []Job, periodNS int64) float64 {
-	var sum, weight float64
+	var sum, weight, sumBig, weightBig float64
 	for _, j := range jobs {
 		w := float64(j.DUserNS + j.DSysNS + j.DPageWaitNS)
 		if s, ok := Share(j); ok && j.Learned && w >= minWorkShare*float64(periodNS) {
-			sum += w * max(0, s-j.NormalShare)
-			weight += w
+			x := w * max(0, s-j.NormalShare)
+			sum, weight = sum+x, weight+w
+			if j.FootprintMiB >= minFootprintMiB {
+				sumBig, weightBig = sumBig+x, weightBig+w
+			}
 		}
 	}
+	return min(mean(sum, weight), mean(sumBig, weightBig))
+}
+
+// mean is 100·sum/weight in points, 0 when weight is.
+func mean(sum, weight float64) float64 {
 	if weight == 0 {
 		return 0
 	}

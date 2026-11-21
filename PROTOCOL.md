@@ -1891,7 +1891,10 @@ E = 100 × Σ wᵢ · max(0, Sᵢ − S0ᵢ) / Σ wᵢ      wᵢ = d_userᵢ + d
 
 over the holds that have a normal share and worked for at least a tenth of the period,
 `wᵢ ≥ 0.1 × (the period)`, and 0 when there are none: an idle job's few milliseconds, mostly system
-time, say nothing about memory. A learning hold is no part of `E`: it still reserves memory (section
+time, say nothing about memory. `E` is the smaller of that mean and the same mean over those of the
+holds whose `footprint_mib` is at least 128 (0 when there are none): a smaller tree's system time,
+which `S` counts whole, need not be memory work, so it never raises `E`, and it never hides a
+larger tree's stall. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
 have no normal share (`status --json`: `watch.learning`); at red, when a red round has no victim
 (every running hold is the oldest, learning or never a victim), it does not say that the watchdog is
@@ -1964,10 +1967,11 @@ has `victim` true. Rounds are one at a time.
    first keep sets the deadline to the round's time plus its `t3`, and every later one needs the
    estimate to keep shrinking within it. The newest victim is passed over only when exactly one
    job takes its place: the next victim of the round's order alone has a footprint of at least
-   what the round must free, `max(shortage, 1)`, and a smaller `cpu_ns`, so that work done counts
+   what the round must free, `max(shortage, 1)`, and of at least 128 MiB, and a smaller `cpu_ns`,
+   so that a keep never trades a stop for that of a tree that frees nothing, work done counts
    against work done and the round never stops a chain of older jobs for it. With no next victim,
-   or one that does not cover the shortage alone or has done as much work, it is stopped as
-   before. The round writes `detector.kept`: the record
+   or one that does not cover the shortage alone, is under 128 MiB or has done as much work, it is
+   stopped as before. The round writes `detector.kept`: the record
    `{deadline_ns, left_s: t3, done: p, round_ns}` of the victim it kept, the deadline kept from
    the first. A record lasts as long as its hold is live, also while its run misses a tick, and
    goes when a sample finds the hold gone. The rule spares work that is almost done when memory

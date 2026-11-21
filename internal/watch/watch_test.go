@@ -37,21 +37,22 @@ func (f *feed) step(c Config, gate bool, jobs ...Job) Level {
 	return l
 }
 
-// job is one hold that spent 2 s with share of it in the system, its normal share normal.
+// job is one hold of 1 GiB, above the footprint floor, that spent 2 s with share of it in the
+// system, its normal share normal.
 func job(share, normal float64) Job {
 	sys := int64(share * 2e9)
-	return Job{Hold: "h", DUserNS: 2e9 - sys, DSysNS: sys, NormalShare: normal, Learned: true}
+	return Job{Hold: "h", DUserNS: 2e9 - sys, DSysNS: sys, NormalShare: normal, Learned: true, FootprintMiB: 1024}
 }
 
 // The Air's ramp, at the cliff: 0.8 s user, 0.6 s system and 0.6 s waiting on pages in a period
 // is S 60 % against a normal 4 %: 56 points.
 func TestExcessFromAirRamp(t *testing.T) {
-	j := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04, Learned: true}
+	j := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04, Learned: true, FootprintMiB: 5120}
 	if e := Excess([]Job{j}, 2e9); math.Abs(e-56) > 1e-9 {
 		t.Errorf("excess %v, want 56", e)
 	}
 	// Weighted by time: a calm job with three times the time pulls it to a quarter.
-	calm := Job{DUserNS: 6e9, NormalShare: 0.04, Learned: true}
+	calm := Job{DUserNS: 6e9, NormalShare: 0.04, Learned: true, FootprintMiB: 512}
 	if e := Excess([]Job{j, calm}, 2e9); math.Abs(e-14) > 1e-9 {
 		t.Errorf("excess with a calm job %v, want 14", e)
 	}
@@ -438,7 +439,7 @@ func TestColdJobCarriesNoExcess(t *testing.T) {
 
 // E comes from the learned jobs alone: a cold job with three times the time does not dilute it.
 func TestExcessIgnoresColdJobs(t *testing.T) {
-	learned := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04, Learned: true}
+	learned := Job{DUserNS: 8e8, DSysNS: 6e8, DPageWaitNS: 6e8, NormalShare: 0.04, Learned: true, FootprintMiB: 5120}
 	cold := Job{DUserNS: 6e9, DSysNS: 6e9}
 	if e := Excess([]Job{learned, cold}, 2e9); math.Abs(e-56) > 1e-9 {
 		t.Errorf("excess %v with a cold job, want 56", e)
