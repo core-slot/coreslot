@@ -124,9 +124,6 @@ func sectionBusyText(e *engine.Engine, waited time.Duration) string {
 	return s
 }
 
-// cancelFailed reports an error that kept cancel from publishing its request (commandFailed).
-func cancelFailed(err error, io IO) int { return commandFailed("cancel", err, io) }
-
 // commandFailed reports an error that kept verb (cancel, move) from publishing its file. A refusal
 // of the engine and a state error (PROTOCOL.md section 14: the directory or its configuration
 // cannot be used) are refusals, exit 75; anything else is an internal error, exit 70.
