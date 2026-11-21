@@ -8,6 +8,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.10.0 (2026-11-21)
+
 ### Added
 
 - `coreslot move <ticket-id> --first | --last | --before <id> | --after <id>` (or `--label L`) changes a waiting
@@ -35,9 +37,10 @@ All notable changes to this project are recorded here. The format follows
   why a run has no forwarder or stopped counting; `status --json` carries them as `docker_footprint_mib` and
   `docker_note` on each hold, under the same `schema` 1. The format stays 3: the hold body gains these two
   optional keys. `docker_forward = false` turns the forwarder off for a label, and a selected Docker
-  context other than `default` or `desktop-linux` gives no forwarder. A forwarder serves its command's
-  background Docker connections after the command ends; `doctor` lists the forwarders still serving and
-  `doctor --reset` removes the entries of `~/.coreslot-fw` that none serves. `net` and `net/http` are now
+  context other than `default` or `desktop-linux` gives no forwarder. A run whose forwarder the user turned off
+  (`docker_forward = false`, or `[docker] enabled = false`) says nothing about it; only its hold keeps the note.
+  A forwarder serves its command's background Docker connections after the command ends; `doctor` lists the
+  forwarders still serving and `doctor --reset` removes the entries of `~/.coreslot-fw` that none serves. `net` and `net/http` are now
   linked; coreslot still connects only to unix sockets on this machine. Under an agent sandbox,
   `~/.coreslot-fw` has to be admitted (README, "Under an agent sandbox"); to uninstall, remove it beside the
   state directory.
@@ -69,8 +72,8 @@ All notable changes to this project are recorded here. The format follows
   tree under 128 MiB that spent its time in the kernel while the host paged for other reasons could raise the stall
   excess on its own, and a red round then stopped it, freeing nothing, again on every attempt of the same run. The
   excess is now the smaller of the mean over every measured command and the same mean over those of 128 MiB or more,
-  so it never rises, and it falls below the large trees' own mean only where the old mean was lower still. A red round spares a nearly
-  finished command only when the command it stops in its place holds at least 128 MiB.
+  so it never rises, and it falls below the large trees' own mean only where the old mean was lower still. A red
+  round spares a nearly finished command only when the command it stops in its place holds at least 128 MiB.
 
 ## v0.9.1 (2026-11-19)
 
