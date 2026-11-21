@@ -27,6 +27,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/config"
+	"github.com/core-slot/coreslot/internal/docker/dockertest"
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/testhooks"
@@ -208,6 +209,8 @@ type Env struct {
 
 	pause  []string      // CORESLOT_TESTHOOK_PAUSE of the next Start
 	offset time.Duration // CORESLOT_TESTHOOK_REALTIME_OFFSET of the next Start
+
+	dockerSock, dockerConfig string // set by SetEngine: the fake engine's socket, an empty Docker configuration
 }
 
 type shared struct {
@@ -232,6 +235,25 @@ func State(t *testing.T) Env {
 	}
 	e.SetReadings(calm(0))
 	return e
+}
+
+// DockerState is State whose state directory is short enough for a forwarder's address, which a
+// path under t.TempDir exceeds; it has no space.
+func DockerState(t *testing.T) Env {
+	t.Helper()
+	e := State(t)
+	e.Dir = filepath.Join(dockertest.SocketDir(t), "s")
+	return e
+}
+
+// SetEngine starts a fake Docker engine with opts and makes it Docker Desktop's socket for every
+// later Start, through the test hook; the processes then see none of the machine's Docker host,
+// context or configuration.
+func (e *Env) SetEngine(opts ...dockertest.Option) *dockertest.Fake {
+	e.t.Helper()
+	f := dockertest.HTTP(e.t, opts...)
+	e.dockerSock, e.dockerConfig = f.Sock, e.t.TempDir()
+	return f
 }
 
 // calm is the machine readings of a host that pages nothing and has ample swap room, with
@@ -316,12 +338,16 @@ func (e Env) StepClock(d time.Duration) {
 func (e Env) environ() []string {
 	var env []string
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "CORESLOT_") {
+		docker := strings.HasPrefix(kv, "DOCKER_HOST=") || strings.HasPrefix(kv, "DOCKER_CONTEXT=") || strings.HasPrefix(kv, "DOCKER_CONFIG=")
+		if !strings.HasPrefix(kv, "CORESLOT_") && !(docker && e.dockerSock != "") {
 			env = append(env, kv)
 		}
 	}
 	env = append(env, "CORESLOT_STATE_DIR="+e.Dir, "CORESLOT_TESTHOOK_DIR="+e.HookDir,
 		"CORESLOT_TESTHOOK_HEADROOM_MIB="+strconv.Itoa(confHeadroomMiB))
+	if e.dockerSock != "" {
+		env = append(env, "CORESLOT_TESTHOOK_DOCKER_SOCKET="+e.dockerSock, "DOCKER_CONFIG="+e.dockerConfig)
+	}
 	if len(e.pause) > 0 {
 		env = append(env, "CORESLOT_TESTHOOK_PAUSE="+strings.Join(e.pause, ","))
 	}
