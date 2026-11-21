@@ -67,7 +67,8 @@ func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []s
 // info is the hold as a waiter or a snapshot shows it.
 func (h liveHold) info() HolderInfo {
 	b := h.body
-	return HolderInfo{Name: h.name, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
+	id, _ := wire.ParseName(h.name)
+	return HolderInfo{Name: h.name, ID: id.String(), AskedMiB: b.AskedMiB, Trimmed: b.Trimmed, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
 		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS, TypicalS: b.TypicalS}
 }
 

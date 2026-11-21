@@ -28,6 +28,7 @@ const (
 	OrderDir     = "order"
 	DegradedFile = "degraded"
 	WatchFile    = "watch.json"
+	TrimFile     = "trim.json"
 	LogDir       = "log"
 	RunLog       = "runs.jsonl"
 	RunLogOld    = "runs.1.jsonl"
@@ -124,7 +125,7 @@ func openDir(dir string, create bool) (*Store, error) {
 		}
 		f.Close()
 	}
-	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, ConfigFile,
+	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, TrimFile, ConfigFile,
 		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld), filepath.Join(LogDir, WatchLog),
 		filepath.Join(LogDir, WatchLogOld)} {
 		if err := CheckEntry(s.path(name), false); err != nil {

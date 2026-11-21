@@ -143,12 +143,15 @@ The watchdog, from the newest shared sample.
 | key | type | meaning |
 |---|---|---|
 | `name` | string | the hold's file name in `holds/` |
+| `id` | string | its first three fields: what `coreslot trim` takes |
 | `label` | string | the holder's label |
 | `pid` | int | the owner's pid as the hold names it: the `coreslot run` process that published it |
 | `start_ns` | int | when the hold was admitted |
 | `held_for_s` | number | how long it has been held |
 | `arrival_ns` | int | when its run first arrived in the queue |
 | `need_mib` | int | what the hold reserves; 0 for a run outside the budget |
+| `asked_mib` | int | the need the hold was admitted with; equal to `need_mib` unless the hold was trimmed |
+| `trimmed` | bool | its run acted on a `coreslot trim` request: `need_mib` follows what the command uses, up to `asked_mib` |
 | `footprint_mib` | int | what its run last measured |
 | `stops` | int | how many times it was stopped |
 | `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read; true for a `pid` of 0 or 1, never a run's |

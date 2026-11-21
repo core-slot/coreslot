@@ -14,7 +14,7 @@ import (
 // PROTOCOL.md section 14, for the CLI. The classes a caller acts on stay
 // distinct, and ok is false for them: nil, a *spec.UsageError, the end of a context (canceled
 // or past its deadline) and the engine's sentinels (ErrCanceled, ErrRefused, ErrAlreadyAdmitted,
-// ErrNoTicket), matched with errors.Is and errors.As. Every other error means the budget cannot
+// ErrNoTicket, ErrNoHold, ErrNothingReserved, ErrCommandExited), matched with errors.Is and errors.As. Every other error means the budget cannot
 // be used, a state error: ok is true and reason is the *store.StateError's reason when one is
 // in err's chain, otherwise err's text (an I/O error, such as a state directory removed under a
 // waiter or a directory it may not write).
@@ -24,7 +24,8 @@ func StateReason(err error) (reason string, ok bool) {
 	case err == nil, errors.As(err, &usage),
 		errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, ErrCanceled), errors.Is(err, ErrRefused),
-		errors.Is(err, ErrAlreadyAdmitted), errors.Is(err, ErrNoTicket):
+		errors.Is(err, ErrAlreadyAdmitted), errors.Is(err, ErrNoTicket),
+		errors.Is(err, ErrNoHold), errors.Is(err, ErrNothingReserved), errors.Is(err, ErrCommandExited):
 		return "", false
 	}
 	return reasonOf(err), true
