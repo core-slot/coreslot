@@ -130,7 +130,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 			}
 		}
 	}
-	for _, name := range []string{DegradedFile, GenFile, WatchFile, TrimFile} {
+	for _, name := range []string{DegradedFile, GenFile, WatchFile, TrimFile, WatchModeFile} {
 		remove(s.path(name))
 	}
 	if _, err := os.Lstat(s.path(otherRes)); err == nil {

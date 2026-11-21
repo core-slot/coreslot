@@ -28,16 +28,17 @@ const (
 	OrderDir   = "order"
 	// VMWaitDir holds the notes of gated tickets that wait for Docker's VM: a note is named as its
 	// ticket and is an empty file of mode 0600 that carries no lock.
-	VMWaitDir    = "vmwait"
-	DegradedFile = "degraded"
-	WatchFile    = "watch.json"
-	TrimFile     = "trim.json"
-	LogDir       = "log"
-	RunLog       = "runs.jsonl"
-	RunLogOld    = "runs.1.jsonl"
-	WatchLog     = "watch.jsonl"
-	WatchLogOld  = "watch.1.jsonl"
-	ConfigFile   = "config.toml"
+	VMWaitDir     = "vmwait"
+	DegradedFile  = "degraded"
+	WatchFile     = "watch.json"
+	TrimFile      = "trim.json"
+	WatchModeFile = "watch-mode"
+	LogDir        = "log"
+	RunLog        = "runs.jsonl"
+	RunLogOld     = "runs.1.jsonl"
+	WatchLog      = "watch.jsonl"
+	WatchLogOld   = "watch.1.jsonl"
+	ConfigFile    = "config.toml"
 )
 
 // The telemetry directory and its files (an opt-in recorder; no admission reads them).
@@ -128,7 +129,7 @@ func openDir(dir string, create bool) (*Store, error) {
 		}
 		f.Close()
 	}
-	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, TrimFile, ConfigFile,
+	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, TrimFile, WatchModeFile, ConfigFile,
 		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld), filepath.Join(LogDir, WatchLog),
 		filepath.Join(LogDir, WatchLogOld)} {
 		if err := CheckEntry(s.path(name), false); err != nil {
