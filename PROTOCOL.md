@@ -1040,22 +1040,19 @@ know the request ignores it. A reader of a hold, admission and the watchdog incl
 24) comes back under a new hold that no request names.
 
 > **Implementation note.** `coreslot trim <hold-id>`, or `coreslot trim --label LABEL` for the one
-> live hold reserving memory with that label, writes the request only for a live hold that reserves
-> memory and whose command has not exited (a live hold whose body does not parse is not refused);
-> a hold that reserves nothing has nothing to lower, exit 0, and the rest is refused (section 19). It then waits outside the section, up to 8 s, for the hold to
-> show `trimmed`, and says what the hold reserves; a run that does not answer in time is not a
-> refusal. The run reads `trim.json` at each tick, after it has measured, until it finds a request
-> for its hold, and from then on writes, for the rest of the attempt, `need_mib = A` until the
+> live hold reserving memory with that label, writes the request (its exit statuses are section
+> 19's; a live hold whose body does not parse is not refused), then waits outside the section
+> (section 22) for the hold to show `trimmed` and says what the hold reserves. From the tick that
+> finds the request (section 23.1) to the attempt's end, the run writes `need_mib = A` until the
 > attempt's window of readings is full and then `min(A, recent + m)`: `A` the need asked,
 > `recent` the largest reading of the window, the newest included, and `m = max(256 MiB, A / 10)`.
-> A reading is one listing of the tree that succeeded (section 20, every 1 s), and the window spans
-> `[watch] trim_window_s` (section 5.3) of them, counted from the attempt's start, so a trimmed hold
-> keeps the need asked until its window is full. The reservation rises again with the footprint,
-> up to `A`. A command that grows past it, or a machine that runs short meanwhile, is the
-> watchdog's: stop rounds take the newest victims as section 23.5 has them, which may be another
-> run's command. A trimmed run that is stopped comes back (section 24) with the need it had at its
-> start or the stopped attempt's peak, whichever is larger, under a new hold that is not trimmed.
-> For container work the reservation follows the client's own memory alone (section 23.5).
+> A reading is one listing of the tree that succeeded (section 20, every 1 s); the window spans
+> `[watch] trim_window_s` (section 5.3) of them, counted from the attempt's start. A command that
+> grows past its reservation, or a machine that runs short meanwhile, is the watchdog's: stop
+> rounds take the newest victims as section 23.5 has them, which may be another run's command. A
+> trimmed run that is stopped comes back (section 24) with the need it had at its start or the
+> stopped attempt's peak, whichever is larger, under a new hold that is not trimmed. For container
+> work the reservation follows the client's own memory alone (section 23.5).
 
 ## 13. Cancellation and withdrawal
 

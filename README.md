@@ -306,8 +306,13 @@ reservation rises again as the job grows, never above what it asked for. It rais
 nothing more: it does not change the queue's order, and nothing is admitted past the room. The
 job's run must be a coreslot that knows the request; an older one never answers, and `trim` says
 so. It is your call and your risk: if the job grows back and memory runs short, a stop round stops
-the newest restartable job, which may be another one. `status` marks such a job `trimmed` and
-shows `(asked …)` beside what it reserves; `status --json` has each hold's `id`, `asked_mib` and
+the newest restartable job, which may be another one. There is no undo: a trim holds until the
+job's attempt ends, and a job that is stopped and restarted comes back untrimmed, with its full
+need. For a container command the reservation follows the client's own memory, not its
+containers'. Exit status 75 means nothing was written; `trim` also exits 0 when the run never
+answers. Any process of yours can trim any of your jobs, and the job's own session learns of it
+from the one line its `coreslot run` prints. `status` marks such a job `trimmed` and shows
+`(asked …)` beside what it reserves; `status --json` has each hold's `id`, `asked_mib` and
 `trimmed`.
 
 ### What it did: `coreslot report`
