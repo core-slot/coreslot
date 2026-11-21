@@ -1893,8 +1893,8 @@ over the holds that have a normal share and worked for at least a tenth of the p
 `wᵢ ≥ 0.1 × (the period)`, and 0 when there are none: an idle job's few milliseconds, mostly system
 time, say nothing about memory. `E` is the smaller of that mean and the same mean over those of the
 holds whose `footprint_mib` is at least 128 (0 when there are none): a smaller tree's system time,
-which `S` counts whole, need not be memory work, so it never raises `E`, and it never hides a
-larger tree's stall. A learning hold is no part of `E`: it still reserves memory (section
+which `S` counts whole, need not be memory work, so it never raises `E`, and `E` is below the larger
+trees' own mean only when the mean over every counted hold is lower still. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
 have no normal share (`status --json`: `watch.learning`); at red, when a red round has no victim
 (every running hold is the oldest, learning or never a victim), it does not say that the watchdog is
