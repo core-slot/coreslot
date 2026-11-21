@@ -207,7 +207,7 @@ func TestSamplersWithDifferentLogViewsAgree(t *testing.T) {
 	for _, share := range []float64{0, 0.04} { // A1 learning, A3 learned
 		g := hold(t, early, needLabel(100, "x"))
 		if err := g.UpdateHold(func(h *wire.Hold) {
-			h.DUserNS, h.DSysNS, h.SampledNS = 8e8, 12e8, clk.clock().Realtime()
+			h.DUserNS, h.DSysNS, h.SampledNS, h.FootprintMiB = 8e8, 12e8, clk.clock().Realtime(), 1024
 			h.NormalShare, h.Learned = share, share > 0
 		}); err != nil {
 			t.Fatal(err)
