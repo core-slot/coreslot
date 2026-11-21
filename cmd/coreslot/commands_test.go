@@ -361,6 +361,23 @@ func statusJSON(t *testing.T, rep engine.Report) string {
 	return buf.String()
 }
 
+// status --json's room_mib and free_mib subtract the VM growth a live hold reserves, on top of its
+// need, and the document stays schema 1: of 512 MiB a hold of 384 that reserves 100 of growth
+// leaves 28. Mutation: dropping Σ GrowthMiB from state.Room, or the growth from reservations,
+// leaves 128.
+func TestStatusRoomSubtractsGrowth(t *testing.T) {
+	dir := budgetDir(t, 512)
+	g := hold(t, openLib(t, dir), "gate", 384)
+	if err := g.UpdateHold(func(h *wire.Hold) { h.DockerNeedMiB, h.DockerGrowthMiB = 1000, 100 }); err != nil {
+		t.Fatal(err)
+	}
+	doc := statusDoc(t, dir, 0)
+	mem := doc["mem"].(map[string]any)
+	if doc["schema"] != float64(1) || mem["room_mib"] != float64(28) || mem["free_mib"] != float64(28) {
+		t.Errorf("schema %v, room_mib %v, free_mib %v; want 1, 28 and 28", doc["schema"], mem["room_mib"], mem["free_mib"])
+	}
+}
+
 // status prints mem in bytes and each hold's need, `unbudgeted` for one that reserves nothing.
 func TestStatusHumanMem(t *testing.T) {
 	rep := memReport()

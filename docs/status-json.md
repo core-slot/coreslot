@@ -110,8 +110,9 @@ The memory budget. `free_mib` and `room_mib` are the room a new job may take: th
 memory the kernel can hand out now without paging,
 [`PROTOCOL.md` section 5.1](../PROTOCOL.md#51-the-machines-memory)), less `reserve_mib` (what
 admission keeps free), less what each live hold reserves and its run has not used yet
-(`need_mib − footprint_mib`, never below 0). `reserved_mib` is a different number, the sum of the
-live holds' needs. `room_mib` is unclamped: it is negative when the reserve and the holds take more
+(`need_mib − footprint_mib`, never below 0), less the growth of Docker Desktop's VM that each
+live hold of a run gated on Docker reserves on the host (its body's `docker_growth_mib`).
+`reserved_mib` is a different number, the sum of the live holds' needs. `room_mib` is unclamped: it is negative when the reserve and the holds take more
 than the headroom, with no hold live too when the headroom is below the reserve. `free_mib` is the
 same room clamped at 0. A reader of
 telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
@@ -123,7 +124,7 @@ telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
 | `machine_mib` | int | the machine's memory |
 | `reserve_mib` | int | what admission keeps free |
 | `headroom_mib` | int | the headroom admission read |
-| `room_mib` | int | `headroom_mib` less `reserve_mib` less the holds' unused needs; may be below 0 |
+| `room_mib` | int | `headroom_mib` less `reserve_mib` less the holds' unused needs and their reserved VM growth; may be below 0 |
 
 ## `watch`
 
