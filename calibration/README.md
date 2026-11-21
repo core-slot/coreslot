@@ -120,6 +120,7 @@ yellow after 15 samples below it, as the detector does.
 | `floor = 2G`, 256 MiB in 20 s | not calibrated | A round value. No sample of the ten passes has the level floor (1602 samples: 1249 green, 222 yellow, 131 red), and a pass stops when swap used has grown 6 GiB. |
 | `spacing_s = 3`, `post_kill_s = 15` | not calibrated | Every pass ran in observe mode: the kill, the restart, the spacing and the calm wait never ran on a real machine. |
 | busy floor, 10 % of a period | not calibrated | Chosen so that idle polling jobs, mostly system time, carry no excess; nothing in the records tests it. |
+| footprint floor, 128 MiB | not calibrated | Small trees that spend most of their time in the kernel add no excess. The red passes' hogs are 5 GiB or more at their first red sample and the control trees 187–427 MiB, so the floor changes none of them; a control under 128 MiB would measure nothing. |
 | `reserve = 1G` | not calibrated | The room at the cliff was 0.9 to 1.0 GiB at the median on the Air and 3.5 to 4.0 GiB on the Pro, and no in-run sample had a negative room at 1 GiB. With 1 GiB more it would have been negative in 11 full-speed, 16 slowing and 62 cliff samples, all the Air's; with 2 GiB more in every sample of the Air's control. That bounds the reserve; it does not choose it. |
 
 Linux is not calibrated at all.

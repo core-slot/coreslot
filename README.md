@@ -206,8 +206,12 @@ kernel is actually paging:
 | red | they lose a large share of it for tens of seconds | a stop round: the newest commands are killed until their footprints cover how far free memory is under the reserve |
 | floor | swap is nearly out of room and still growing | the same stop round, at once, and it may take a command that is still learning |
 
+A command whose tree holds under 128 MiB adds nothing to the share of time lost to memory, so it never
+makes the level yellow or red by itself.
+
 A red round may spare its newest victim when it is nearly finished and stop the next newest instead,
-if that one alone covers what the round must free and has done less CPU work. Nearly finished means
+if that one alone covers what the round must free, holds at least 128 MiB, and has done less CPU
+work. Nearly finished means
 a command whose label has at least 10 earlier runs, whose CPU time so far, against the median CPU
 time of those runs, says it will end within the label's typical run time (slowed by the share of its
 recent time it lost to memory). A later round spares it again only before the time that first
