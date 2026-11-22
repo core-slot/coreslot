@@ -138,6 +138,9 @@ The watchdog, from the newest shared sample.
 | `reason` | string | why it is not, empty when it is |
 | `next_victim` | string | the hold the next stop round lists first; empty when none |
 | `learning` | int | running jobs whose label has no normal share yet |
+| `mode` | string | the watchdog's mode on this machine, `enforce` or `observe`, whether or not a job runs |
+| `mode_source` | string | where the mode comes from: `config` (`[watch] mode`) or `override` (`coreslot watch`, this machine only) |
+| `mode_until_ns` | int | when an override ends, by the wall clock; 0 for an override until switched back, or none |
 
 ## `holds[]`
 

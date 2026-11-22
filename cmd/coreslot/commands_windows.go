@@ -25,6 +25,11 @@ func trimCommand(args []string, io IO) int {
 	return noBudget("trim", trimUsage, fs, args, io)
 }
 
+func watchCommand(args []string, io IO) int {
+	fs, _ := watchFlags()
+	return noBudget("watch", watchUsage, fs, args, io)
+}
+
 func doctorCommand(args []string, io IO) int {
 	fs, _, _ := doctorFlags()
 	return noBudget("doctor", doctorUsage, fs, args, io)

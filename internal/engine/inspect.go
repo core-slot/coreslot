@@ -158,6 +158,9 @@ func (e *Engine) Snapshot() (Report, error) {
 	if _, src, until, err := e.WatchMode(false); err == nil { // the source and end do not depend on the configured mode
 		r.Watch.ModeSource, r.Watch.ModeUntilNS = src, until
 	}
+	for _, h := range r.Holds {
+		r.Watch.EnforceRoundLive = r.Watch.EnforceRoundLive || !d.Observed && slices.Contains(d.Stop, h.Name)
+	}
 	if r.Watch.Fresh { // the newest sample knows which jobs have a learned normal S; this client does not
 		if next, _ := watch.StopList(smp.Jobs, d.Level == watch.Floor, 1, d.Kept, smp.Host.WallNS+now-at); len(next) > 0 {
 			r.Watch.NextVictim = next[0]

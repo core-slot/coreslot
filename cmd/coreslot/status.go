@@ -406,6 +406,12 @@ func (v statusView) watchLine() string {
 	if on, why := v.protection(); !on {
 		state = "not protecting: " + why
 	}
+	if w := v.rep.Watch; w.ModeSource == "override" {
+		state += "; " + modeName(w.Observe) + " mode " + modeSourceText(w.ModeSource, w.ModeUntilNS)
+	}
+	if w := v.rep.Watch; w.Observe && w.EnforceRoundLive {
+		state += "; a stop round written before the switch still stops the jobs it listed"
+	}
 	if w := v.rep.Watch; w.Fresh {
 		return fmt.Sprintf("watch: %s, E %.1f points; %s", w.Level, w.Excess, state)
 	}
@@ -490,6 +496,9 @@ type jsonWatch struct {
 	Reason       string  `json:"reason"`
 	NextVictim   string  `json:"next_victim"`
 	Learning     int     `json:"learning"`
+	Mode         string  `json:"mode"`          // enforce or observe, holds or none
+	ModeSource   string  `json:"mode_source"`   // config, or override (coreslot watch, this machine)
+	ModeUntilNS  int64   `json:"mode_until_ns"` // when an override ends; 0 for until switched back or none
 }
 
 // jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
@@ -564,7 +573,8 @@ func (v statusView) document() jsonStatus {
 		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB, MachineMiB: r.Mem.MachineMiB,
 			ReserveMiB: r.Mem.ReserveMiB, HeadroomMiB: r.Mem.HeadroomMiB, RoomMiB: r.Mem.RoomMiB}
 	}
-	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim, Learning: r.Watch.Learning}
+	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim, Learning: r.Watch.Learning,
+		Mode: modeName(r.Watch.Observe), ModeSource: r.Watch.ModeSource, ModeUntilNS: r.Watch.ModeUntilNS}
 	d.Watch.Protecting, d.Watch.Reason = v.protection()
 	if r.Watch.Fresh {
 		d.Watch.Level = r.Watch.Level.String()

@@ -82,3 +82,41 @@ func TestSnapshotShowsTheModeSource(t *testing.T) {
 		t.Errorf("watch %+v; want observe from the override, until removed", r.Watch)
 	}
 }
+
+// A snapshot flags a stop round written in enforce mode whose listed hold is still live, which its
+// run acts on whatever the mode is now; an observed round, or one whose holds are gone, is no such
+// round. Mutation: ignoring d.Observed flags the observed round.
+func TestSnapshotFlagsALiveEnforceRound(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		observed bool
+		listLive bool
+		want     bool
+	}{{"enforce round, hold live", false, true, true}, {"observed round", true, true, false}, {"hold gone", false, false, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEngine(t, newStateDir(t, ""), newFakeClock())
+			g := hold(t, e, need(64))
+			listed := "01795300000000000000-0000000001-000001-gone"
+			if c.listLive {
+				listed = g.HoldName()
+			}
+			sec, err := e.st.Enter(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, smp, at, err := e.st.ReadWatch()
+			if err == nil {
+				d.Stop, d.Observed = []string{listed}, c.observed
+				err = sec.SetWatch(d, smp, at)
+			}
+			sec.Leave()
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := e.Snapshot()
+			if err != nil || r.Watch.EnforceRoundLive != c.want {
+				t.Errorf("EnforceRoundLive %v (%v); want %v", r.Watch.EnforceRoundLive, err, c.want)
+			}
+		})
+	}
+}

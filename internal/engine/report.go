@@ -55,8 +55,11 @@ type WatchInfo struct {
 	// `coreslot watch`), and ModeUntilNS when an override ends, 0 for until removed or none.
 	ModeSource  string
 	ModeUntilNS int64
-	NextVictim  string // the hold the next stop round lists first; "" when none
-	Learning    int    // running jobs whose label has no normal share yet: no part of E, stopped by a floor round only
+	// EnforceRoundLive says that the last stop round was written in enforce mode and a hold it
+	// listed is still live: its runs act on it as written, whatever the mode is now.
+	EnforceRoundLive bool
+	NextVictim       string // the hold the next stop round lists first; "" when none
+	Learning         int    // running jobs whose label has no normal share yet: no part of E, stopped by a floor round only
 }
 
 // TicketInfo describes one queue entry in a snapshot.

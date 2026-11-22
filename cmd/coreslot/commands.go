@@ -37,6 +37,15 @@ Changes a waiting ticket's place in the queue without ending its run: --first an
 ahead of or behind every ticket waiting now, --before and --after next to another one. Tickets
 that arrive later queue behind it as usual.`
 
+const watchUsage = `usage: coreslot watch
+       coreslot watch observe | enforce [--for DURATION]
+       coreslot watch config`
+
+func watchFlags() (fs *flag.FlagSet, forD *time.Duration) {
+	fs = newFlagSet("coreslot watch")
+	return fs, fs.Duration("for", 0, "end the switch after this long (1m or more), then the configuration's mode applies")
+}
+
 const trimUsage = `usage: coreslot trim <hold-id>
        coreslot trim --label LABEL
 
