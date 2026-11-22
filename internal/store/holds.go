@@ -145,9 +145,11 @@ func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
 	if err != nil {
 		return removed, err
 	}
-	// Its order override and its note go with it (PROTOCOL.md section 7.12).
-	if _, err := sec.removeByID(OrderDir, id); err != nil {
-		return removed, err
+	// Its order override, its start request and its note go with it (PROTOCOL.md sections 7.12, 7.16).
+	for _, dir := range []string{OrderDir, StartDir} {
+		if _, err := sec.removeByID(dir, id); err != nil {
+			return removed, err
+		}
 	}
 	if _, err := sec.removeNote(name); err != nil {
 		return removed, err
@@ -184,11 +186,6 @@ const (
 // under that name (not a regular file of the user) is left alone (section 4.2).
 func (sec *Section) RemoveCancel(id wire.ID) (removed bool, err error) {
 	return sec.removeByID(CancelDir, id)
-}
-
-// RemoveStart removes the start request for the ticket id inside the section, as RemoveCancel does.
-func (sec *Section) RemoveStart(id wire.ID) (removed bool, err error) {
-	return sec.removeByID(StartDir, id)
 }
 
 // RemoveOrder removes the order override of the ticket id inside the section: its owner's, with its

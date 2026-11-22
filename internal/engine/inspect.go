@@ -180,6 +180,20 @@ func (e *Engine) Snapshot() (Report, error) {
 	for _, en := range cancels {
 		r.Cancels = append(r.Cancels, en.Name)
 	}
+	starts, ignored, err := e.st.List(store.StartDir)
+	if err != nil {
+		return Report{}, err
+	}
+	r.Ignored[store.StartDir] = ignored
+	for _, en := range starts {
+		s := StartInfo{Ticket: en.Name}
+		if body, err := e.readBody(store.StartDir, en.Name); err == nil {
+			if c, err := wire.DecodeCancel(body); err == nil {
+				s.RequestedNS = c.RequestedNS
+			}
+		}
+		r.Starts = append(r.Starts, s)
+	}
 
 	r.Section, err = e.sectionInfo()
 	if err != nil {

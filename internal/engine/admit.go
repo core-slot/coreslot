@@ -45,30 +45,11 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 // Docker's VM and enters again.
 func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *Grant, read bool, err error) {
 	point("admit.before-enter")
-	sec, entered, err := t.e.enter(ctx, single)
-	if err != nil || !entered {
+	sec, err := t.enterAdmission(ctx, single)
+	if sec == nil || err != nil {
 		return nil, false, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format()
-	if err != nil {
-		return nil, false, err
-	}
-	if !understood {
-		return nil, false, refuseFormat(n, "")
-	}
-
-	// 1. A cancel request published before this section wins.
-	cancelled, err := t.cancelRequested()
-	if err != nil {
-		return nil, false, err
-	}
-	if cancelled {
-		if t.settle(statusCancelled) {
-			t.removeOwn(sec)
-		}
-		return nil, false, ErrCanceled
-	}
 	gated := t.gated()
 	if !gated { // a ticket whose Docker part went ungated waits as any other
 		if err := t.unnote(sec); err != nil {
@@ -141,18 +122,75 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	if record != nil {
 		record()
 	}
+	g, err = t.publishAdmission(sec, dock, false)
+	return g, false, err
+}
 
-	// 7. Publish the hold, close and unlink the ticket (and its note), bump gen. A Withdraw that
-	// came first wins; once the hold is published the ticket is admitted and Withdraw has no effect.
+// enterAdmission enters the section for an admission and checks its format and step 1: a cancel
+// request published before this section wins. It returns nil with no error when the section was
+// busy; the caller leaves a section it returns.
+func (t *Ticket) enterAdmission(ctx context.Context, single bool) (*store.Section, error) {
+	sec, entered, err := t.e.enter(ctx, single)
+	if err != nil || !entered {
+		return nil, err
+	}
+	n, understood, err := sec.Format()
+	if err == nil && !understood {
+		err = refuseFormat(n, "")
+	}
+	cancelled := false
+	if err == nil {
+		cancelled, err = t.cancelRequested()
+	}
+	if err == nil && cancelled {
+		if t.settle(statusCancelled) {
+			t.removeOwn(sec)
+		}
+		err = ErrCanceled
+	}
+	if err != nil {
+		sec.Leave()
+		return nil, err
+	}
+	return sec, nil
+}
+
+// startNow admits the ticket at once on its start request (PROTOCOL.md section 12.1, the forced
+// admission): no room test, level gate (so no spacing slot), order, pass or VM test. Its hold
+// reserves the full need and keeps the ticket's arrival, so a red round takes it by its queue
+// arrival like any other run. A gated ticket's hold carries its Docker keys from a reading taken
+// outside the section, as a gated admission's does; with no reading to be had it carries none.
+func (t *Ticket) startNow(ctx context.Context, single bool) (*Grant, error) {
+	if t.gated() && t.e.clock.Monotonic()-t.readAt >= ReadEvery {
+		t.read(ctx, &attempt{})
+	}
+	sec, err := t.enterAdmission(ctx, single)
+	if sec == nil || err != nil {
+		return nil, err
+	}
+	defer sec.Leave()
+	t.out = Outcome{Pass: "forced"}
+	var dock *DockerReading
+	if t.gated() && t.reading.OK {
+		dock = &t.reading
+	}
+	return t.publishAdmission(sec, dock, true)
+}
+
+// publishAdmission is step 7: publish the hold, close and unlink the ticket (with its note, order
+// override and start request), bump gen. A Withdraw that came first wins; once the hold is
+// published the ticket is admitted and Withdraw has no effect.
+func (t *Ticket) publishAdmission(sec *store.Section, dock *DockerReading, forced bool) (*Grant, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.status != statusWaiting {
-		return nil, false, ErrCanceled
+		return nil, ErrCanceled
 	}
 	t.out.DockerUngated = t.ungated
-	g = &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
-	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock); err != nil {
-		return nil, false, err
+	need := t.req.NeedMiB
+	g := &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
+	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock, forced); err != nil {
+		return nil, err
 	}
 	t.f.Close()
 	_, _ = sec.RemoveOwnTicket(t.name) // already gone counts as success (PROTOCOL.md 10.3)
@@ -160,7 +198,7 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	// every election, so the closed ticket is passed over without a rescan.
 	_ = sec.BumpGen()
 	t.status, t.grant = statusAdmitted, g
-	return g, false, nil
+	return g, nil
 }
 
 // watchWait reports whether the shared watch state keeps the ticket out while holds are live, and
@@ -420,10 +458,10 @@ type Grant struct {
 // inside sec and keeps its descriptor. A grant admitted on its Docker need by the reading dock
 // carries that need, the VM growth it reserves on the host and the reading's stamp from this first
 // body on.
-func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64, dock *DockerReading) error {
+func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64, dock *DockerReading, forced bool) error {
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, PID: os.Getpid(), StartNS: start, ArrivalNS: max(arrivalNS, 0),
-		NeedMiB: needMiB, TypicalS: req.TypicalS}
+		NeedMiB: needMiB, TypicalS: req.TypicalS, Forced: forced}
 	if dock != nil {
 		h.DockerNeedMiB, h.DockerSampledNS = req.DockerNeedMiB, max(dock.StartedNS, 0)
 		h.DockerGrowthMiB = min(state.Growth(dock.VMMiB, dock.VMNowMiB, req.DockerNeedMiB, req.DockerFootprintMiB), spec.MaxNeedMiB)

@@ -15,9 +15,9 @@ import (
 
 // A start request is published without replacement, as a cancel request is: a second one for the
 // same ticket finds it already requested. Reconciliation removes a request whose ticket is gone and
-// keeps the live ticket's; RemoveStart removes it; a reset empties start/. Mutations: leaving
-// StartDir out of noReplaceDirs replaces the second; out of reconciliation step 2 keeps the orphan;
-// out of the reset keeps the request.
+// keeps the live ticket's; removing the ticket removes it; a reset empties start/. Mutations:
+// leaving StartDir out of noReplaceDirs replaces the second; out of reconciliation step 2 keeps the
+// orphan; out of RemoveOwnTicket or the reset keeps the request.
 func TestStartRequests(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
@@ -43,8 +43,12 @@ func TestStartRequests(t *testing.T) {
 	if _, err := os.Lstat(path(2)); !os.IsNotExist(err) {
 		t.Errorf("the orphaned start request was kept: %v", err)
 	}
-	if removed, err := sec.RemoveStart(idOf(1)); err != nil || !removed {
-		t.Errorf("RemoveStart = %v, %v; want true", removed, err)
+	live.Close()
+	if removed, err := sec.RemoveOwnTicket(ticketName(1)); err != nil || !removed {
+		t.Fatalf("RemoveOwnTicket = %v, %v", removed, err)
+	}
+	if _, err := os.Lstat(path(1)); !os.IsNotExist(err) {
+		t.Errorf("the start request outlived its ticket: %v", err)
 	}
 	sec.Leave()
 

@@ -68,7 +68,7 @@ func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []s
 func (h liveHold) info() HolderInfo {
 	b := h.body
 	id, _ := wire.ParseName(h.name)
-	return HolderInfo{Name: h.name, ID: id.String(), AskedMiB: b.AskedMiB, Trimmed: b.Trimmed, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
+	return HolderInfo{Name: h.name, ID: id.String(), AskedMiB: b.AskedMiB, Trimmed: b.Trimmed, Forced: b.Forced, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
 		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS, TypicalS: b.TypicalS,
 		DockerFootprintMiB: b.DockerFootprintMiB, DockerNote: b.DockerNote, DockerNeedMiB: b.DockerNeedMiB, DockerGrowthMiB: b.DockerGrowthMiB}
 }
