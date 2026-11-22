@@ -407,7 +407,8 @@ func (v statusView) watchLine() string {
 		state = "not protecting: " + why
 	}
 	if w := v.rep.Watch; w.ModeSource == "override" {
-		state += "; " + modeName(w.Observe) + " mode " + modeSourceText(w.ModeSource, w.ModeUntilNS)
+		state += fmt.Sprintf("; %s mode %s, the configuration says %s (`coreslot watch config` returns to it)",
+			modeName(w.Observe), switchedText(w.ModeUntilNS), modeName(w.ConfiguredObserve))
 	}
 	if w := v.rep.Watch; w.Observe && w.EnforceRoundLive {
 		state += "; a stop round written before the switch still stops the jobs it listed"

@@ -527,7 +527,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 4
+- [Protocol](PROTOCOL.md), the normative definition of format 5
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)

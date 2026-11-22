@@ -23,9 +23,11 @@ func setWatchMode(t *testing.T, e *Engine, mode string, untilNS int64) {
 }
 
 // The mode every reader gets from Config, and so from reading (both ticks, the stop rounds, the
-// run's records, status), is the override's while it holds and the configuration's otherwise.
-// Mutations: Config ignoring the override keeps the configuration's mode in the override rows;
-// ignoring until_ns keeps observe in the expired row.
+// run's records, status), is the override's while it holds and the configuration's otherwise; Config
+// also says where it came from and what the configuration says. Mutations: Config ignoring the
+// override keeps the configuration's mode in the override rows; ignoring until_ns keeps observe in
+// the expired row; recording the effective mode as the configured one reads observe in the
+// "override enforce" row.
 func TestConfigAppliesTheWatchModeOverride(t *testing.T) {
 	now := store.NowNS()
 	for _, c := range []struct {
@@ -52,13 +54,16 @@ func TestConfigAppliesTheWatchModeOverride(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, source, until, err := e.WatchMode(false)
-			if err != nil || cfg.Watch.Observe != c.observe || rc.Watch.Observe != c.observe || source != c.source {
-				t.Errorf("Config observe %v, reading observe %v, source %q (%v); want %v, %q",
-					cfg.Watch.Observe, rc.Watch.Observe, source, err, c.observe, c.source)
+			m := cfg.Mode
+			if cfg.Watch.Observe != c.observe || rc.Watch.Observe != c.observe || m.Source != c.source {
+				t.Errorf("Config observe %v, reading observe %v, source %q; want %v, %q",
+					cfg.Watch.Observe, rc.Watch.Observe, m.Source, c.observe, c.source)
 			}
-			if c.source == "override" && until != c.until {
-				t.Errorf("until %d, want %d", until, c.until)
+			if c.source == "override" && m.UntilNS != c.until {
+				t.Errorf("until %d, want %d", m.UntilNS, c.until)
+			}
+			if m.ConfiguredObserve != (c.config != "") {
+				t.Errorf("configured observe %v, want %v", m.ConfiguredObserve, c.config != "")
 			}
 		})
 	}

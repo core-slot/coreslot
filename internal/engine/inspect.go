@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"cmp"
 	"slices"
 	"time"
 
@@ -154,10 +155,8 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Tickets[head].WaitS, r.Tickets[head].WaitKnown = w, noPass == ""
 	}
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
-		Fresh: fresh(at, now), ModeSource: "config"}
-	if _, src, until, err := e.WatchMode(false); err == nil { // the source and end do not depend on the configured mode
-		r.Watch.ModeSource, r.Watch.ModeUntilNS = src, until
-	}
+		Fresh: fresh(at, now), ModeSource: cmp.Or(cfg.Mode.Source, "config"), ModeUntilNS: cfg.Mode.UntilNS,
+		ConfiguredObserve: cfg.Mode.ConfiguredObserve}
 	for _, h := range r.Holds {
 		r.Watch.EnforceRoundLive = r.Watch.EnforceRoundLive || !d.Observed && slices.Contains(d.Stop, h.Name)
 	}
