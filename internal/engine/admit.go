@@ -408,10 +408,7 @@ const pressureNormal = 1
 
 // kernelPressure is the kernel's memory pressure level and whether it could be read; a system that
 // has none (Linux) reports it as not read. Tests replace it.
-var kernelPressure = func() (int, bool) {
-	_, level, ok := memsample.Parts()
-	return level, ok && level != 0
-}
+var kernelPressure = memsample.Pressure
 
 // outOfTurn is the first condition that keeps this ticket from going out of turn ahead of head, ""
 // when none does (PROTOCOL.md section 10.3): head does not fit the room now; the kernel's memory
