@@ -781,9 +781,9 @@ in section 4.2. Being in `$S`, it is per machine; the configuration file stays e
 and an override wins over a later edit of it until removed or ended. A reset removes it (section 4.4).
 
 > **Implementation note.** `coreslot watch observe|enforce [--for DURATION]` writes it, `--for` of
-> 1 min or more giving `until_ns`; `coreslot watch config` removes it; `coreslot watch` alone prints
-> the effective mode and its source. `status` shows the source in its watch line, and `status --json`
-> carries `watch.mode`, `watch.mode_source` and `watch.mode_until_ns` whether or not a job runs.
+> 1 min or more giving `until_ns`; `coreslot watch config` removes it. `status` shows the source in its
+> watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and `watch.mode_until_ns`
+> whether or not a job runs.
 
 ## 8. The admission critical section
 

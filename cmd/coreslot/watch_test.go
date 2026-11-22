@@ -9,25 +9,27 @@ import (
 	"testing"
 )
 
-// watch prints the mode and its source, sets an override with or without an end, and returns to
-// the configuration. Mutation: printWatchMode reading the configured mode instead of the effective
-// one prints enforce after `watch observe`.
+// watch sets an override with or without an end and returns to the configuration, and status
+// follows each step. Mutation: writing the override's end as 0 makes status read "until switched
+// back" after --for.
 func TestWatchCommandSwitchesThisMachine(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, c := range []struct {
-		args []string
-		want string
+		args       []string
+		say, state string
 	}{
-		{[]string{"watch"}, "in enforce mode on this machine (from the configuration)"},
-		{[]string{"watch", "observe", "--for", "1h"}, "in observe mode on this machine (switched by hand until "},
-		{[]string{"watch", "observe"}, "in observe mode on this machine (switched by hand until switched back;"},
-		{[]string{"watch"}, "in observe mode on this machine (switched by hand until switched back;"},
-		{[]string{"watch", "--for", "2h", "enforce"}, "in enforce mode on this machine (switched by hand until "},
-		{[]string{"watch", "config"}, "in enforce mode on this machine (from the configuration)"},
+		{[]string{"watch", "observe", "--for", "1h"}, "in observe mode on this machine, switched by hand until ", "observe mode switched by hand until "},
+		{[]string{"watch", "observe"}, "in observe mode on this machine, switched by hand until switched back", "observe mode switched by hand until switched back"},
+		{[]string{"watch", "--for", "2h", "enforce"}, "in enforce mode on this machine, switched by hand until ", "enforce mode switched by hand until "},
+		{[]string{"watch", "config"}, "follows the configuration's mode", "watch: no fresh sample; not protecting: no coreslot job is running\n"},
 	} {
 		r := cli(t, baseEnv(dir), c.args...)
-		if r.code != 0 || !strings.Contains(r.stdout, c.want) {
-			t.Errorf("%q: exit %d, stdout %q, stderr %q; want 0 and %q", c.args, r.code, r.stdout, r.stderr, c.want)
+		st := cli(t, baseEnv(dir), "status").stdout
+		if r.code != 0 || !strings.Contains(r.stdout, c.say) || !strings.Contains(st, c.state) {
+			t.Errorf("%q: exit %d, stdout %q, stderr %q, status %q; want 0, %q and %q", c.args, r.code, r.stdout, r.stderr, st, c.say, c.state)
+		}
+		if c.args[1] == "observe" && len(c.args) == 4 && strings.Contains(st, "until switched back") {
+			t.Errorf("after --for 1h status reads %q", st)
 		}
 	}
 }
@@ -36,14 +38,14 @@ func TestWatchCommandSwitchesThisMachine(t *testing.T) {
 // end are usage errors that change nothing. Mutation: dropping the minimum accepts --for 10s.
 func TestWatchCommandUsage(t *testing.T) {
 	dir := stateDir(t, "")
-	for _, args := range [][]string{{"watch", "off"}, {"watch", "observe", "enforce"}, {"watch", "observe", "--for", "10s"},
+	for _, args := range [][]string{{"watch"}, {"watch", "off"}, {"watch", "observe", "enforce"}, {"watch", "observe", "--for", "10s"},
 		{"watch", "config", "--for", "1h"}, {"watch", "--for", "1h"}} {
 		if r := cli(t, baseEnv(dir), args...); r.code != exitUsage {
 			t.Errorf("%q: exit %d (%q); want %d", args, r.code, r.stderr, exitUsage)
 		}
 	}
-	if r := cli(t, baseEnv(dir), "watch"); !strings.Contains(r.stdout, "from the configuration") {
-		t.Errorf("after the usage errors: %q; want the configuration's mode", r.stdout)
+	if st := cli(t, baseEnv(dir), "status").stdout; strings.Contains(st, "switched by hand") {
+		t.Errorf("after the usage errors status reads %q; want the configuration's mode", st)
 	}
 }
 

@@ -7,9 +7,7 @@ package store
 const Format = 5
 
 // Upgraded reports whether a reset upgrades format n as a repair, keeping the run log and the
-// telemetry (PROTOCOL.md section 4.4): format 4, which format 5 extends only by watch-mode, and
-// format 3, which format 4 extended only by vmwait/ and the optional Docker keys of tickets and
-// holds.
+// telemetry (PROTOCOL.md section 4.4).
 func Upgraded(n int) bool { return n == 4 || n == 3 }
 
 // Understood reports whether this client implements format n. A FORMAT naming any other format is

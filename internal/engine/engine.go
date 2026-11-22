@@ -10,6 +10,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -128,11 +129,9 @@ func (e *Engine) Config() (config.Config, error) {
 	return c, nil
 }
 
-// WatchMode is the watchdog's mode given the configuration's (observe or not): this machine's
-// override's while it holds (PROTOCOL.md section 7.15), its until_ns 0 or later than the host's wall
-// clock, else the configuration's. source is "override" or "config", untilNS the override's end (0:
-// until removed, or no override). Every reader of the mode goes through Config, so the ticks, the
-// stop rounds, the run's records and status read one mode.
+// WatchMode is the effective mode of PROTOCOL.md section 7.15 given the configuration's, with its
+// source ("override" or "config") and the override's end. Every reader of the mode goes through
+// Config, so both ticks, the stop rounds, the run's records and status read one mode.
 func (e *Engine) WatchMode(configured bool) (observe bool, source string, untilNS int64, err error) {
 	mode, until, ok, err := e.st.ReadWatchMode()
 	if err != nil {
@@ -142,6 +141,20 @@ func (e *Engine) WatchMode(configured bool) (observe bool, source string, untilN
 		return configured, "config", 0, nil
 	}
 	return mode == "observe", "override", until, nil
+}
+
+// SetWatchModeContext sets this machine's override inside the section, entered within ctx, or
+// removes it for mode "". A directory of a format this client does not implement is refused.
+func (e *Engine) SetWatchModeContext(ctx context.Context, mode string, untilNS int64) error {
+	sec, err := e.enterUntil(ctx)
+	if err != nil {
+		return err
+	}
+	defer sec.Leave()
+	if n, understood, err := sec.Prepare(e.clock.Realtime()); err != nil || !understood {
+		return cmp.Or(err, refuseFormat(n, ""))
+	}
+	return sec.SetWatchMode(mode, untilNS)
 }
 
 // reading reads the configuration and the machine's memory afresh, as every admission does

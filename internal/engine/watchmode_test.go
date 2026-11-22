@@ -17,12 +17,7 @@ func setWatchMode(t *testing.T, e *Engine, mode string, untilNS int64) {
 		t.Fatal(err)
 	}
 	defer sec.Leave()
-	if mode == "" {
-		err = sec.RemoveWatchMode()
-	} else {
-		err = sec.SetWatchMode(mode, untilNS)
-	}
-	if err != nil {
+	if err := sec.SetWatchMode(mode, untilNS); err != nil {
 		t.Fatal(err)
 	}
 }

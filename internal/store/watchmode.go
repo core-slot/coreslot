@@ -8,7 +8,6 @@ import (
 	"io/fs"
 )
 
-// maxWatchModeBytes bounds watch-mode: a larger file reads as no override.
 const maxWatchModeBytes = 4 << 10
 
 type watchModeFile struct {
@@ -17,12 +16,9 @@ type watchModeFile struct {
 	UntilNS int64  `json:"until_ns"`
 }
 
-// ReadWatchMode reads this machine's override of the watchdog's mode (PROTOCOL.md section 7.15):
-// its mode, "observe" or "enforce", and when it ends on the host's wall clock (0: until removed).
-// It needs no section: the file is replaced whole, never rewritten. A missing file, one above
-// 4 KiB, one that is not a JSON object, an unknown mode or a negative until_ns is no override (ok
-// false); only a file that cannot be read, such as one that breaks the filesystem policy (a
-// *StateError), is an error.
+// ReadWatchMode reads this machine's override of the watchdog's mode (PROTOCOL.md section 7.15).
+// A file that is not a valid override is none (ok false); only a file that cannot be read, such as
+// one that breaks the filesystem policy (a *StateError), is an error.
 func (s *Store) ReadWatchMode() (mode string, untilNS int64, ok bool, err error) {
 	body, err := s.ReadSmall(WatchModeFile, maxWatchModeBytes)
 	switch {
@@ -40,10 +36,14 @@ func (s *Store) ReadWatchMode() (mode string, untilNS int64, ok bool, err error)
 	return f.Mode, f.UntilNS, true, nil
 }
 
-// SetWatchMode replaces this machine's override inside the section with mode ("observe" or
-// "enforce") until untilNS on the host's wall clock, 0 for until removed.
+// SetWatchMode replaces this machine's override inside the section, or removes it for mode "".
 func (sec *Section) SetWatchMode(mode string, untilNS int64) error {
-	if mode != "observe" && mode != "enforce" {
+	switch mode {
+	case "":
+		_, err := sec.removeEntry("", WatchModeFile)
+		return err
+	case "observe", "enforce":
+	default:
 		return errors.New("store: watch mode " + mode + ": want observe or enforce")
 	}
 	body, err := json.Marshal(watchModeFile{Mode: mode, SetNS: NowNS(), UntilNS: max(untilNS, 0)})
@@ -51,11 +51,4 @@ func (sec *Section) SetWatchMode(mode string, untilNS int64) error {
 		return err
 	}
 	return sec.replaceFile(WatchModeFile, body)
-}
-
-// RemoveWatchMode removes this machine's override inside the section; a missing file is not an
-// error.
-func (sec *Section) RemoveWatchMode() error {
-	_, err := sec.removeEntry("", WatchModeFile)
-	return err
 }

@@ -35,15 +35,15 @@ func TestWatchModeRoundTrip(t *testing.T) {
 		t.Errorf("watch-mode %v, %v; want a file of mode 0600", fi, err)
 	}
 	sec := enter(t, s)
-	if err := sec.RemoveWatchMode(); err != nil {
+	if err := sec.SetWatchMode("", 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := sec.RemoveWatchMode(); err != nil {
+	if err := sec.SetWatchMode("", 0); err != nil {
 		t.Errorf("removing a missing override: %v", err)
 	}
 	sec.Leave()
 	if _, _, ok, _ := s.ReadWatchMode(); ok {
-		t.Error("an override after RemoveWatchMode")
+		t.Error("an override after its removal")
 	}
 	sec = enter(t, s)
 	defer sec.Leave()

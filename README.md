@@ -280,8 +280,8 @@ each default, and which are not calibrated. See
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
 the kill and says what it would have stopped. `coreslot watch observe` or `coreslot watch enforce` switches
 the mode on this machine without touching the configuration, until `coreslot watch config`, or for a while
-with `--for 2h`; `coreslot watch` and `status` say which mode applies and where it comes from. A stop
-round already written still acts after a switch to observe.
+with `--for 2h`; `status` says which mode applies and where it comes from. A stop round already written
+still acts after a switch to observe.
 
 A command is judged only once a run of its label has completed and measured that. Until then coreslot does
 not know what is normal for it (the median share its earlier runs measured, the same way, while the

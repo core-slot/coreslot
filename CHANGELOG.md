@@ -12,8 +12,7 @@ All notable changes to this project are recorded here. The format follows
 
 - `coreslot watch observe` and `coreslot watch enforce` switch the watchdog's mode on this machine, until
   `coreslot watch config` or, with `--for DURATION` (1 min or more), for a while; the configuration file is never
-  written, and a stop round already written still acts. `coreslot watch` prints the mode and where it comes from.
-  `status` shows an override in its watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and
+  written, and a stop round already written still acts. `status` shows an override in its watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and
   `watch.mode_until_ns` whether or not a job runs, under the same `schema` 1. The `enqueue` telemetry's `mode` is
   the mode in force.
 
