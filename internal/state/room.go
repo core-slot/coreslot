@@ -28,15 +28,19 @@ func GrowthRoom(headroomMiB, reserveMiB int64, holds []MemHold) int64 {
 	return room
 }
 
-// GrowthFactor is how much Docker's VM grew, at worst, per MiB its containers newly reached.
-const GrowthFactor = 2
-
 // Growth is the VM growth a gated hold reserves on the host: what the VM of size vMiB, holding
-// vmNowMiB now, can still take, but no more than GrowthFactor times what the hold's containers
-// have yet to reach of their Docker need. It is 0 on a VM grown to its size and once the
-// containers have taken their need.
-func Growth(vMiB, vmNowMiB, dockerNeedMiB, dockerFootprintMiB int64) int64 {
-	return min(max(0, vMiB-vmNowMiB), GrowthFactor*max(0, dockerNeedMiB-dockerFootprintMiB))
+// vmNowMiB now, can still take, but no more than k times what the hold's containers have yet to
+// reach of their Docker need, rounded up. k is how much the VM grew, at worst, per MiB its
+// containers newly reached: 2 on the Apple backend, whose VM keeps the pages of a transient that
+// touches twice what it keeps, and 3/2 on Docker VMM (vmm), which gives them back within seconds.
+// It is 0 on a VM grown to its size and once the containers have taken their need.
+func Growth(vMiB, vmNowMiB, dockerNeedMiB, dockerFootprintMiB int64, vmm bool) int64 {
+	left := max(0, dockerNeedMiB-dockerFootprintMiB)
+	grow := 2 * left
+	if vmm {
+		grow = (3*left + 1) / 2
+	}
+	return min(max(0, vMiB-vmNowMiB), grow)
 }
 
 // DockerHold is one live hold's Docker part as a gated run reads it, in MiB.

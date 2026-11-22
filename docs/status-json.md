@@ -164,7 +164,7 @@ The watchdog, from the newest shared sample.
 | `docker_footprint_mib` | int | present, 0 included, while its run counts its own containers through a forwarder (macOS), from the forwarder's first connection: what they have grown by since the run first touched each |
 | `docker_note` | string | present when its run says why its Docker work has no forwarder or is not counted, such as `no-forwarder: address`, `ungated: blind` or `ungated: no-reading` ([`PROTOCOL.md` section 7.4](../PROTOCOL.md#74-hold)) |
 | `docker_need_mib` | int | present while its run is gated on Docker Desktop's VM (macOS): its Docker need, the label's `docker_mem` |
-| `docker_growth_mib` | int | present while it is gated and reserves some: the growth of Docker Desktop's VM it reserves on the Mac, up to twice what its containers have yet to reach of its Docker need |
+| `docker_growth_mib` | int | present while it is gated and reserves some: the growth of Docker Desktop's VM it reserves on the Mac, up to twice what its containers have yet to reach of its Docker need on Apple's hypervisor, one and a half times on Docker VMM |
 
 `left_s` of 0 on a hold that is still live means it has outlived its typical run time.
 

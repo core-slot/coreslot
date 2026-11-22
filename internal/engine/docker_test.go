@@ -354,22 +354,25 @@ func TestGatedWaiterObservesEveryGatedTicketAhead(t *testing.T) {
 }
 
 // The admitted hold carries its Docker need, the growth the admitting reading gives from the
-// request's footprint, and that reading's stamp, in the body it is published with. Mutation:
-// leaving the footprint out of the growth makes it 2000.
+// request's footprint and the reading's backend, and that reading's stamp, in the body it is
+// published with: 2 × 700 on the Apple backend, 3/2 × 700 on Docker VMM. Mutations: leaving the
+// footprint out of the growth makes it 2000; ignoring the reading's backend makes VMM's 1400.
 func TestAdmittedHoldCarriesGrowthInFirstBody(t *testing.T) {
-	clk := newFakeClock()
-	e := newEngine(t, newStateDir(t, ""), clk)
-	f := &fakeDocker{clk: clk, reading: DockerReading{OK: true, VMMiB: testVMMiB, FreeEstMiB: 10000, VMNowMiB: 10000}}
-	req := gated(128, 1000)
-	req.DockerFootprintMiB = 300
-	g := admitted(t, step(t, enqueueGated(t, e, req, f)))
-	h := readHold(t, e, g)
-	if h.DockerNeedMiB != 1000 || h.DockerGrowthMiB != 1400 || h.DockerSampledNS != f.started {
-		t.Errorf("hold need %d, growth %d, sampled %d; want 1000, 1400, %d", h.DockerNeedMiB, h.DockerGrowthMiB,
-			h.DockerSampledNS, f.started)
-	}
-	if !g.DockerGated() || g.DockerVMMiB() != testVMMiB || g.DockerUngated() != "" {
-		t.Errorf("grant gated %v, V %d, ungated %q", g.DockerGated(), g.DockerVMMiB(), g.DockerUngated())
+	for vmm, want := range map[bool]int64{false: 1400, true: 1050} {
+		clk := newFakeClock()
+		e := newEngine(t, newStateDir(t, ""), clk)
+		f := &fakeDocker{clk: clk, reading: DockerReading{OK: true, VMMiB: testVMMiB, FreeEstMiB: 10000, VMNowMiB: 10000, VMM: vmm}}
+		req := gated(128, 1000)
+		req.DockerFootprintMiB = 300
+		g := admitted(t, step(t, enqueueGated(t, e, req, f)))
+		h := readHold(t, e, g)
+		if h.DockerNeedMiB != 1000 || h.DockerGrowthMiB != want || h.DockerSampledNS != f.started {
+			t.Errorf("vmm %v: hold need %d, growth %d, sampled %d; want 1000, %d, %d", vmm, h.DockerNeedMiB, h.DockerGrowthMiB,
+				h.DockerSampledNS, want, f.started)
+		}
+		if !g.DockerGated() || g.DockerVMMiB() != testVMMiB || g.DockerUngated() != "" {
+			t.Errorf("grant gated %v, V %d, ungated %q", g.DockerGated(), g.DockerVMMiB(), g.DockerUngated())
+		}
 	}
 }
 

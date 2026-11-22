@@ -49,39 +49,33 @@ func TestRoomSubtractsGrowth(t *testing.T) {
 	}
 }
 
-// TestGrowthZeroOnGrownVM: a VM at or past its size V takes nothing more from the host. Mutation:
-// dropping the max(0, …) around V − vm_now gives −1000 for the VM past its size.
-func TestGrowthZeroOnGrownVM(t *testing.T) {
-	for _, vmNow := range []int64{8000, 9000} {
-		if got := Growth(8000, vmNow, 4000, 0); got != 0 {
-			t.Errorf("Growth(V 8000, vm_now %d, need 4000, footprint 0) = %d; want 0", vmNow, got)
+// TestGrowth: min(max(0, V − vm_now), k × max(0, need − footprint)) rounded up, k 2 on the Apple
+// backend and 3/2 on Docker VMM. Each row names the mutation it catches.
+func TestGrowth(t *testing.T) {
+	cases := []struct {
+		name               string
+		v, vmNow, need, fp int64
+		vmm                bool
+		want               int64
+	}{
+		// Dropping the max(0, …) around V − vm_now gives −1000.
+		{"VM past its size", 8000, 9000, 4000, 0, false, 0},
+		{"VM at its size, VMM", 8000, 8000, 4000, 0, true, 0},
+		// Dropping the max(0, …) around need − footprint gives −2000.
+		{"need overfilled", 26005, 10000, 4000, 5000, false, 0},
+		// Dropping the first term gives 8000.
+		{"capped by the VM", 26005, 25005, 4000, 0, false, 1000},
+		// k = 1 on the Apple backend gives 2000.
+		{"Apple: twice the remaining need", 26005, 6005, 3000, 1000, false, 4000},
+		// k = 2 on VMM, the backend ignored, gives 4000.
+		{"VMM: 3/2 the remaining need", 26005, 6005, 3000, 1000, true, 3000},
+		// Rounding down gives 1501.
+		{"VMM: rounded up", 26005, 6005, 2001, 1000, true, 1502},
+	}
+	for _, c := range cases {
+		if got := Growth(c.v, c.vmNow, c.need, c.fp, c.vmm); got != c.want {
+			t.Errorf("%s: Growth(V %d, vm_now %d, need %d, footprint %d, vmm %v) = %d; want %d", c.name, c.v, c.vmNow, c.need, c.fp, c.vmm, got, c.want)
 		}
-	}
-}
-
-// TestGrowthZeroWhenNeedFilled: containers that took their need cause no more growth. Mutation:
-// dropping the max(0, …) around need − footprint gives −2000 for the need overfilled.
-func TestGrowthZeroWhenNeedFilled(t *testing.T) {
-	for _, fp := range []int64{4000, 5000} {
-		if got := Growth(26005, 10000, 4000, fp); got != 0 {
-			t.Errorf("Growth(V 26005, vm_now 10000, need 4000, footprint %d) = %d; want 0", fp, got)
-		}
-	}
-}
-
-// TestGrowthCappedByVM: what the VM can still take bounds the growth: V − vm_now is 1000 and the
-// remaining need 4000, so 1000. Mutation: dropping the first term gives 8000.
-func TestGrowthCappedByVM(t *testing.T) {
-	if got := Growth(26005, 25005, 4000, 0); got != 1000 {
-		t.Errorf("Growth = %d; want 1000", got)
-	}
-}
-
-// TestGrowthTwiceRemaining: on a VM with room to grow, a hold reserves twice its remaining need:
-// need 3000, footprint 1000, so 4000. Mutation: GrowthFactor = 1 gives 2000.
-func TestGrowthTwiceRemaining(t *testing.T) {
-	if got := Growth(26005, 6005, 3000, 1000); got != 4000 {
-		t.Errorf("Growth = %d; want 4000", got)
 	}
 }
 

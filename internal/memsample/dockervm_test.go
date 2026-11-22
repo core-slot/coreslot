@@ -24,7 +24,8 @@ func fakeTable(procs ...vmProc) func() ([]vmProc, bool) {
 func fakeFootprint(pid int) (int64, bool) { return int64(pid) * 100, true }
 
 // The Virtualization VM in the coalition of Docker's backend is identified with its pid, start time
-// and footprint. Mutation: returning VMNotRunning, or the footprint of the backend, turns it red.
+// and footprint, not as Docker VMM. Mutation: returning VMNotRunning, the footprint of the backend,
+// or VMM for every VM program turns it red.
 func TestDockerVMIdentified(t *testing.T) {
 	got := dockerVM(fakeTable(proc(5, "/bin/zsh", 9), proc(6, backend, 1147), proc(7, backend, 1147), proc(8, appleVM, 1147)), fakeFootprint)
 	if want := (VM{State: VMIdentified, PID: 8, StartNS: 80, FootprintMiB: 800}); got != want {
@@ -140,10 +141,11 @@ func TestDockerVMUnlistableIsNotIdentified(t *testing.T) {
 }
 
 // Docker VMM's VM, com.docker.sailor, in the coalition of Docker's backend is identified as the
-// Apple backend's VM is. Mutation: dropping it from the VM programs gives VMNotRunning.
+// Apple backend's VM is, as Docker VMM. Mutation: dropping it from the VM programs gives
+// VMNotRunning; VMM never set gives false.
 func TestDockerVMFindsSailor(t *testing.T) {
 	got := dockerVM(fakeTable(proc(6, backend, 1147), proc(7, krun, 1147), proc(8, sailor, 1147)), fakeFootprint)
-	if want := (VM{State: VMIdentified, PID: 8, StartNS: 80, FootprintMiB: 800}); got != want {
+	if want := (VM{State: VMIdentified, PID: 8, StartNS: 80, FootprintMiB: 800, VMM: true}); got != want {
 		t.Errorf("DockerVM = %+v, want %+v", got, want)
 	}
 }
