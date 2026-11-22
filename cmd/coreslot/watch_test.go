@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,7 @@ func TestWatchCommandSwitchesThisMachine(t *testing.T) {
 		say, state string
 	}{
 		{[]string{"watch", "observe", "--for", "1h"}, "in observe mode on this machine, switched by hand until ", "observe mode switched by hand until "},
-		{[]string{"watch", "observe"}, "in observe mode on this machine, switched by hand until switched back", "observe mode switched by hand until switched back"},
+		{[]string{"watch", "observe"}, "in observe mode on this machine, switched by hand until switched back", "observe mode switched by hand until switched back, the configuration says enforce"},
 		{[]string{"watch", "--for", "2h", "enforce"}, "in enforce mode on this machine, switched by hand until ", "enforce mode switched by hand until "},
 		{[]string{"watch", "config"}, "follows the configuration's mode", "watch: no fresh sample; not protecting: no coreslot job is running\n"},
 	} {
@@ -34,11 +35,12 @@ func TestWatchCommandSwitchesThisMachine(t *testing.T) {
 	}
 }
 
-// Anything but observe, enforce or config, a --for under a minute and a --for without a mode to
-// end are usage errors that change nothing. Mutation: dropping the minimum accepts --for 10s.
+// Anything but observe, enforce or config, a --for that is not positive and a --for without a mode
+// to end are usage errors that change nothing. Mutation: accepting --for 0 writes an override with
+// no end.
 func TestWatchCommandUsage(t *testing.T) {
 	dir := stateDir(t, "")
-	for _, args := range [][]string{{"watch"}, {"watch", "off"}, {"watch", "observe", "enforce"}, {"watch", "observe", "--for", "10s"},
+	for _, args := range [][]string{{"watch"}, {"watch", "off"}, {"watch", "observe", "enforce"}, {"watch", "observe", "--for", "0s"},
 		{"watch", "config", "--for", "1h"}, {"watch", "--for", "1h"}} {
 		if r := cli(t, baseEnv(dir), args...); r.code != exitUsage {
 			t.Errorf("%q: exit %d (%q); want %d", args, r.code, r.stderr, exitUsage)
@@ -47,13 +49,26 @@ func TestWatchCommandUsage(t *testing.T) {
 	if st := cli(t, baseEnv(dir), "status").stdout; strings.Contains(st, "switched by hand") {
 		t.Errorf("after the usage errors status reads %q; want the configuration's mode", st)
 	}
+	none := filepath.Join(t.TempDir(), "none")
+	if r := cli(t, baseEnv(none), "watch", "observe"); r.code != exitRefusal || !strings.Contains(r.stderr, "no state directory yet") {
+		t.Errorf("watch with no state directory: exit %d, stderr %q; want %d naming it", r.code, r.stderr, exitRefusal)
+	}
 }
 
-// status shows the mode with no hold live, in text and in JSON. Mutations: emitting watch.mode only
-// while a hold is live leaves it empty here; leaving the override out of the watch line drops
-// "switched by hand".
+// status shows the mode with no hold live, in text and in JSON, and the configuration's mode beside
+// an override. Mutations: emitting watch.mode only while a hold is live leaves it empty here; leaving
+// the override out of the watch line drops "switched by hand"; naming the effective mode as the
+// configuration's reads "the configuration says observe".
 func TestStatusShowsTheWatchMode(t *testing.T) {
 	dir := stateDir(t, "")
+	if r := cli(t, baseEnv(dir), "watch", "enforce"); r.code != 0 {
+		t.Fatalf("watch enforce: %d %q", r.code, r.stderr)
+	}
+	writeConfig(t, dir, "[watch]\nmode = \"observe\"\n")
+	if r := cli(t, baseEnv(dir), "status"); !strings.Contains(r.stdout, "enforce mode switched by hand until switched back, the configuration says observe") {
+		t.Errorf("status text lacks the configuration's mode beside the override:\n%s", r.stdout)
+	}
+	writeConfig(t, dir, "")
 	if r := cli(t, baseEnv(dir), "watch", "observe"); r.code != 0 {
 		t.Fatalf("watch observe: %d %q", r.code, r.stderr)
 	}

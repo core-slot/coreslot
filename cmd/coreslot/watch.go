@@ -17,27 +17,21 @@ import (
 // mode (PROTOCOL.md section 7.15), never the configuration file. It refuses (exit 75) as `move` does.
 func watchCommand(args []string, io IO) int {
 	fs, forD := watchFlags()
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				fmt.Fprintln(io.Stdout, watchUsage)
-				return 0
-			}
-			fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), watchUsage)
-			return exitUsage
+	positional, err := parseInterleaved(fs, args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(io.Stdout, watchUsage)
+			return 0
 		}
-		if fs.NArg() == 0 {
-			break
-		}
-		positional, args = append(positional, fs.Arg(0)), fs.Args()[1:]
+		fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), watchUsage)
+		return exitUsage
 	}
 	set := false
 	fs.Visit(func(f *flag.Flag) { set = set || f.Name == "for" })
 	verb := firstOf(positional)
 	if len(positional) != 1 || verb != "observe" && verb != "enforce" && verb != "config" ||
-		set && (verb == "config" || *forD < time.Minute) {
-		fmt.Fprintf(io.Stderr, "coreslot: watch takes observe, enforce (with --for of 1m or more) or config\n%s\n", watchUsage)
+		set && (verb == "config" || *forD <= 0) {
+		fmt.Fprintf(io.Stderr, "coreslot: watch takes observe, enforce (with a positive --for) or config\n%s\n", watchUsage)
 		return exitUsage
 	}
 	mode, until := verb, int64(0)
@@ -51,6 +45,10 @@ func watchCommand(args []string, io IO) int {
 	if err != nil {
 		return commandFailed("watch", err, io)
 	}
+	if !e.Store().Exists() {
+		fmt.Fprintln(io.Stderr, "coreslot: watch: no state directory yet (nothing has run); the mode was not changed")
+		return exitRefusal
+	}
 	ctx, stop := context.WithTimeout(context.Background(), cancelWait)
 	defer stop()
 	var busy *engine.SectionBusyError
@@ -63,7 +61,7 @@ func watchCommand(args []string, io IO) int {
 	case mode == "":
 		fmt.Fprintln(io.Stdout, "coreslot: the watchdog follows the configuration's mode on this machine")
 	default:
-		fmt.Fprintf(io.Stdout, "coreslot: the watchdog is in %s mode on this machine, %s\n", mode, modeSourceText("override", until))
+		fmt.Fprintf(io.Stdout, "coreslot: the watchdog is in %s mode on this machine, %s (`coreslot watch config` returns to the configuration)\n", mode, switchedText(until))
 	}
 	return 0
 }
@@ -76,13 +74,10 @@ func modeName(observe bool) string {
 	return "enforce"
 }
 
-// modeSourceText says where the mode comes from: the configuration, or the override and its end.
-func modeSourceText(source string, untilNS int64) string {
-	switch {
-	case source != "override":
-		return "from the configuration"
-	case untilNS == 0:
-		return "switched by hand until switched back (`coreslot watch config` returns to the configuration)"
+// switchedText says how long a switch by hand holds: until switched back, or until its end.
+func switchedText(untilNS int64) string {
+	if untilNS == 0 {
+		return "switched by hand until switched back"
 	}
-	return "switched by hand until " + time.Unix(0, untilNS).Format("15:04") + " (`coreslot watch config` returns to the configuration)"
+	return "switched by hand until " + time.Unix(0, untilNS).Format("15:04")
 }

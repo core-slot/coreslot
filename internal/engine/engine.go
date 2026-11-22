@@ -123,24 +123,20 @@ func (e *Engine) Config() (config.Config, error) {
 	if err != nil {
 		return config.Config{}, &store.StateError{Reason: err.Error(), Err: err}
 	}
-	if c.Watch.Observe, _, _, err = e.WatchMode(c.Watch.Observe); err != nil {
-		return config.Config{}, err
-	}
-	return c, nil
-}
-
-// WatchMode is the effective mode of PROTOCOL.md section 7.15 given the configuration's, with its
-// source ("override" or "config") and the override's end. Every reader of the mode goes through
-// Config, so both ticks, the stop rounds, the run's records and status read one mode.
-func (e *Engine) WatchMode(configured bool) (observe bool, source string, untilNS int64, err error) {
+	// The effective mode of PROTOCOL.md section 7.15: this machine's override while it holds, else
+	// the configuration's. Every reader of the mode goes through Config, so both ticks, the stop
+	// rounds, the run's records and status read one mode. The override is a convenience against no
+	// one: any process of the user can write it, as it can edit the configuration, and it refuses
+	// nothing; status showing "switched by hand" is the reminder that it holds.
 	mode, until, ok, err := e.st.ReadWatchMode()
 	if err != nil {
-		return configured, "config", 0, err
+		return config.Config{}, err
 	}
-	if !ok || (until != 0 && until <= store.NowNS()) {
-		return configured, "config", 0, nil
+	c.Mode.Source, c.Mode.ConfiguredObserve = "config", c.Watch.Observe
+	if ok && (until == 0 || until > store.NowNS()) {
+		c.Watch.Observe, c.Mode.Source, c.Mode.UntilNS = mode == "observe", "override", until
 	}
-	return mode == "observe", "override", until, nil
+	return c, nil
 }
 
 // SetWatchModeContext sets this machine's override inside the section, entered within ctx, or

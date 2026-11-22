@@ -55,7 +55,7 @@ const watchUsage = `usage: coreslot watch observe | enforce [--for DURATION]
 
 func watchFlags() (fs *flag.FlagSet, forD *time.Duration) {
 	fs = newFlagSet("coreslot watch")
-	return fs, fs.Duration("for", 0, "end the switch after this long (1m or more), then the configuration's mode applies")
+	return fs, fs.Duration("for", 0, "end the switch after this long, then the configuration's mode applies")
 }
 
 const trimUsage = `usage: coreslot trim <hold-id>
@@ -121,6 +121,21 @@ func doctorFlags() (fs *flag.FlagSet, doClear, doReset *bool) {
 	fs = newFlagSet("coreslot doctor")
 	return fs, fs.Bool("clear", false, "remove the degraded-mode record"),
 		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 5, 4 or 3 is kept")
+}
+
+// parseInterleaved parses args with fs, its flags before or after the positional arguments, and
+// returns those in order.
+func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return positional, nil
+		}
+		positional, args = append(positional, fs.Arg(0)), fs.Args()[1:]
+	}
 }
 
 // newFlagSet returns a flag set that returns its errors to the caller and prints nothing itself.

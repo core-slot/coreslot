@@ -99,6 +99,10 @@ One line per machine sample, written by whichever run takes the sample.
 | `AnonPages`, `Shmem`, `Slab`, `SReclaimable`, `PageTables`, `Zswap` | Linux, MiB, from `/proc/meminfo`; a key the kernel does not report is absent |
 | `oom_kill`, `psi_full_us` | Linux: the count of OOM kills since boot (`/proc/vmstat`) and the PSI `full` stall, in total µs since boot, where the kernel reports it |
 | `short_mib`, `kept`, `no_round` | why a round stopped or kept whom, or why none was written; see `stopped` and `kept` |
+| `ncpu` | the logical CPUs this process may run on (Go's `runtime.NumCPU`) |
+| `load1`, `load5` | the host's 1- and 5-minute load averages: macOS `vm.loadavg`, Linux `/proc/loadavg`. Absent when not read |
+| `cpu_busy_pct` | the busy part of the host's CPU ticks since the previous sample, in percent: user, nice and system over all ticks (macOS `HOST_CPU_LOAD_INFO`, Linux the `cpu` line of `/proc/stat`, whose total runs through `steal`). Absent on the first sample after a gap, and when a counter went back (macOS's 32-bit ticks wrap) |
+| `psi_cpu_some_us_s` | Linux: PSI cpu `some` in microseconds per second since the previous sample (`/proc/pressure/cpu`); absent without PSI |
 
 A sample whose reading failed reports `level` `unknown`, zero readings and `headroom_ok` false.
 
@@ -206,6 +210,7 @@ attempt's only copy.
 | `signal` | the signal that killed the command, by name; an `exit 137` of the command's own is not one |
 | `stopped_by` | `watchdog_red` or `watchdog_floor` when a stop round killed it, `outside` when a SIGKILL did that coreslot did not send; absent otherwise |
 | `mean_footprint_mib` | the mean of the tree's 1 s readings, in whole MiB; absent for a run with no reading |
+| `tree_cpu_s` | the user and system time of the hold's watch ticks, summed: the CPU seconds the samples' `jobs[].d_user_ns` and `d_sys_ns` carry. It misses a process that started and ended between two ticks, which the record's `user_s` and `sys_s` count once it is reaped. Absent for a run that held no hold or never ticked |
 
 ### `outside` and `live`
 

@@ -54,6 +54,8 @@ type WatchInfo struct {
 	Observe     bool    // the watchdog's mode is observe: nothing is stopped
 	ModeSource  string  // "config" or "override" (coreslot watch, this machine)
 	ModeUntilNS int64   // when an override ends; 0 for until removed, or none
+	// ConfiguredObserve is the configuration's own mode, which an override replaces.
+	ConfiguredObserve bool
 	// EnforceRoundLive: the last round was written in enforce mode and a hold it listed is live,
 	// so it still stops that hold whatever the mode is now (PROTOCOL.md section 23.5).
 	EnforceRoundLive bool

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"runtime"
 	"slices"
 
 	"github.com/core-slot/coreslot/internal/memsample"
@@ -160,6 +161,17 @@ func (s *Store) appendSample(now int64, cur watch.Sample, d watch.Detector, stop
 		if len(kept) > 0 {
 			l["kept"] = kept
 		}
+	}
+	// The host's CPU, each key absent where it was not read: never a 0 for unknown.
+	l["ncpu"] = runtime.NumCPU()
+	if h.HasLoad {
+		l["load1"], l["load5"] = h.Load1, h.Load5
+	}
+	if d.Rates.HasCPUBusy {
+		l["cpu_busy_pct"] = d.Rates.CPUBusyPct
+	}
+	if d.Rates.HasPSICPU {
+		l["psi_cpu_some_us_s"] = d.Rates.PSICPUSomeUSS
 	}
 	if parts, pressure, ok := Parts(); ok { // a failed read costs the keys, not the line
 		for k, v := range parts {

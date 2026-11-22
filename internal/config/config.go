@@ -38,6 +38,14 @@ type Config struct {
 	TrimWindowS int64
 	// Warnings are what a lenient key made of a value it could not use; Load never fails for them.
 	Warnings []string
+	// Mode says where Watch.Observe came from, as the engine sets it (PROTOCOL.md section 7.15):
+	// Source is "config" or "override", UntilNS an override's end (0 for until removed, or none),
+	// and ConfiguredObserve the configuration's own mode. Load leaves it zero.
+	Mode struct {
+		Source            string
+		UntilNS           int64
+		ConfiguredObserve bool
+	}
 }
 
 // Error reports a configuration that cannot be read or is invalid: a state error. Err is the

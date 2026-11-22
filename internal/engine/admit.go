@@ -489,7 +489,7 @@ func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, nee
 		NeedMiB: needMiB, TypicalS: req.TypicalS, Forced: forced}
 	if dock != nil {
 		h.DockerNeedMiB, h.DockerSampledNS = req.DockerNeedMiB, max(dock.StartedNS, 0)
-		h.DockerGrowthMiB = min(state.Growth(dock.VMMiB, dock.VMNowMiB, req.DockerNeedMiB, req.DockerFootprintMiB), spec.MaxNeedMiB)
+		h.DockerGrowthMiB = min(state.Growth(dock.VMMiB, dock.VMNowMiB, req.DockerNeedMiB, req.DockerFootprintMiB, dock.VMM), spec.MaxNeedMiB)
 		g.dockerGated, g.dockerVMMiB = true, dock.VMMiB
 	}
 	f, name, err := sec.PublishHold(h, g.e.seq())

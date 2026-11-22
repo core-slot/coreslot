@@ -1111,6 +1111,42 @@ func TestMeanFootprint(t *testing.T) {
 	}
 }
 
+// A hold's tree CPU is the user and system time of its ticks' deltas, summed: listing 2 counts its
+// new process whole (1.5 s), listing 4 the 2.5 s since; page wait is not CPU. ended carries it as
+// tree_cpu_s, and a run that never ticked has none rather than 0. Mutations: adding page wait gives
+// 6 s; keeping the last delta gives 2.5 s; writing tree_cpu_s without a tick reddens the absence.
+func TestTreeCPUOnEnded(t *testing.T) {
+	_, g, st := trimHold(t, 256)
+	saved, savedClient := listTree, listClient
+	t.Cleanup(func() { listTree, listClient = saved, savedClient })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	times := []memsample.TreeTimes{{UserNS: 1e9, SysNS: 5e8, PageWaitNS: 1e9}, {UserNS: 3e9, SysNS: 1e9, PageWaitNS: 2e9}}
+	n := 0
+	listTree = func(int) (int64, map[int]memsample.TreeTimes, bool) {
+		n++
+		if n == 2*listingsPerTick {
+			cancel()
+		}
+		return 1 << 10, map[int]memsample.TreeTimes{7: times[min(n-1, 2*listingsPerTick-1)/listingsPerTick]}, true
+	}
+	listClient = func(int) bool { return false }
+	_, p := trimRun(t, 60).watchChild(ctx, &supervisor{pid: 42, group: true}, g, st)
+	if p.cpuNS != 4e9 || p.cpuTicks != 2 {
+		t.Fatalf("tree CPU %d ns over %d ticks; want 4e9 over 2", p.cpuNS, p.cpuTicks)
+	}
+	b := newEnded(t, "true")
+	b.r.record.ended(b.child("", ""), store.RunRecord{}, &supervisor{}, p, false)
+	if got := event(t, events(t, b.dir), "ended")["tree_cpu_s"]; got != 4.0 {
+		t.Errorf("tree_cpu_s %v; want 4", got)
+	}
+	b = newEnded(t, "true")
+	b.r.record.ended(b.child("", ""), store.RunRecord{}, &supervisor{}, peak{}, false)
+	if got, ok := event(t, events(t, b.dir), "ended")["tree_cpu_s"]; ok {
+		t.Errorf("tree_cpu_s %v with no tick", got)
+	}
+}
+
 // A signal between the admission and the start names itself; a release that found its files
 // replaced silences the line. Mutation: the release error dropped, as before.
 func TestNotStartedSignal(t *testing.T) {
