@@ -15,6 +15,11 @@ func cancelCommand(args []string, io IO) int {
 	return noBudget("cancel", cancelUsage, fs, args, io)
 }
 
+func startCommand(args []string, io IO) int {
+	fs, _, _ := startFlags()
+	return noBudget("start", startUsage, fs, args, io)
+}
+
 func moveCommand(args []string, io IO) int {
 	fs, _, _, _, _, _ := moveFlags()
 	return noBudget("move", moveUsage, fs, args, io)

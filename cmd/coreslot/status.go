@@ -326,6 +326,9 @@ func (v statusView) human() string {
 		if h.Trimmed {
 			line += "  trimmed"
 		}
+		if h.Forced {
+			line += "  started now, out of turn"
+		}
 		p("%s  id %s", line, h.ID)
 	}
 
@@ -375,6 +378,19 @@ func (v statusView) human() string {
 	}
 	if n := len(r.Cancels); n > 0 {
 		p("pending cancel requests: %d", n)
+	}
+	if starts := startRequests(r, v.nowNS); len(starts) > 0 {
+		unanswered := 0
+		for _, s := range starts {
+			if s.Unanswered {
+				unanswered++
+			}
+		}
+		line := fmt.Sprintf("pending start requests: %d", len(starts))
+		if unanswered > 0 {
+			line += fmt.Sprintf(", %d unanswered (a stopped run, or one an older coreslot started, never answers)", unanswered)
+		}
+		p("%s", line)
 	}
 	if ignored := ignoredText(r.Ignored); ignored != "" {
 		p("ignored entries (malformed or stray): %s", ignored)
@@ -430,7 +446,7 @@ func plural(n int64, one, many string) string {
 // out a directory with none; "" when nothing was ignored.
 func ignoredText(ignored map[string]int) string {
 	var parts []string
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.OrderDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir} {
 		if n := ignored[dir]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%s %d", dir, n))
 		}
@@ -460,9 +476,39 @@ type jsonStatus struct {
 	Tickets          []jsonTicket   `json:"tickets"`
 	DeadHolds        []string       `json:"dead_holds"`
 	CancelRequests   []string       `json:"cancel_requests"`
+	StartRequests    []jsonStart    `json:"start_requests"`
 	Ignored          map[string]int `json:"ignored"`
 	ObservedS        float64        `json:"observed_s"`
 	Docker           *jsonDocker    `json:"docker,omitempty"` // only with --docker
+}
+
+// jsonStart is a pending start request: unanswered once older than startAnswerAge while its ticket
+// still waits.
+type jsonStart struct {
+	Ticket     string  `json:"ticket"`
+	AgeS       float64 `json:"age_s"`
+	Unanswered bool    `json:"unanswered"`
+}
+
+// startAnswerAge is the age at which a start request whose ticket still waits is unanswered: a
+// live run of this coreslot acts on it at its next poll.
+const startAnswerAge = 10 * time.Second
+
+// startRequests are r's pending start requests at nowNS.
+func startRequests(r engine.Report, nowNS int64) []jsonStart {
+	waiting := map[string]bool{}
+	for _, t := range r.Tickets {
+		waiting[t.ID] = waiting[t.ID] || !t.Dead
+	}
+	out := []jsonStart{} // never null in the document
+	for _, s := range r.Starts {
+		var age time.Duration // 0 for a malformed body, whose time is unknown and which its run ignores
+		if s.RequestedNS > 0 {
+			age = time.Duration(max(nowNS-s.RequestedNS, 0))
+		}
+		out = append(out, jsonStart{Ticket: s.Ticket, AgeS: age.Seconds(), Unanswered: age > startAnswerAge && waiting[s.Ticket]})
+	}
+	return out
 }
 
 type jsonDegraded struct {
@@ -522,6 +568,7 @@ type jsonHold struct {
 	NeedMiB      int64   `json:"need_mib"`  // 0 for a run outside the budget
 	AskedMiB     int64   `json:"asked_mib"` // the need asked: need_mib unless the hold was trimmed
 	Trimmed      bool    `json:"trimmed"`
+	Forced       bool    `json:"forced"` // admitted at once on a start request, whatever the room
 	FootprintMiB int64   `json:"footprint_mib"`
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
@@ -563,7 +610,7 @@ func (v statusView) document() jsonStatus {
 		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatPresent: r.FormatPresent,
 		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError, ConfigWarnings: nonNil(r.Config.Warnings),
 		Section: jsonSection{Held: r.Section.Held}, Holds: []jsonHold{}, Tickets: []jsonTicket{},
-		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
+		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels), StartRequests: startRequests(r, v.nowNS),
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
 	}
 	if v.docker != nil {
@@ -590,11 +637,11 @@ func (v statusView) document() jsonStatus {
 	if x := r.Degraded; x != nil {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
 	}
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.OrderDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir} {
 		d.Ignored[dir] = r.Ignored[dir]
 	}
 	for _, h := range r.Holds {
-		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
+		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Forced: h.Forced, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
 			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable,

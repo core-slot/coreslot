@@ -28,6 +28,7 @@ type trimDocHold struct {
 	AskedMiB     int64  `json:"asked_mib"`
 	FootprintMiB int64  `json:"footprint_mib"`
 	Trimmed      bool   `json:"trimmed"`
+	Forced       bool   `json:"forced"`
 }
 
 // statusDoc runs `status --json` and decodes it.

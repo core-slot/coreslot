@@ -196,7 +196,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	queue(t, c, "waiting", 256)
 
 	doc := statusDoc(t, dir, 0)
-	const top = "cancel_requests config_error config_warnings dead_holds degraded format format_error format_present format_understood gen holds ignored mem observed_s reconciled_ns schema section state_dir state_dir_exists tickets watch"
+	const top = "cancel_requests config_error config_warnings dead_holds degraded format format_error format_present format_understood gen holds ignored mem observed_s reconciled_ns schema section start_requests state_dir state_dir_exists tickets watch"
 	if got := keysOf(doc); got != top {
 		t.Errorf("top-level keys\n got %s\nwant %s", got, top)
 	}
@@ -229,7 +229,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("holds = %v", holds)
 	}
 	h := holds[0].(map[string]any)
-	const holdKeys = "arrival_ns asked_mib footprint_mib held_for_s id label left_s name need_mib owner_exited pid start_ns stoppable stops trimmed typical_s"
+	const holdKeys = "arrival_ns asked_mib footprint_mib forced held_for_s id label left_s name need_mib owner_exited pid start_ns stoppable stops trimmed typical_s"
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}

@@ -32,6 +32,7 @@ commands:
   run      run a command inside the budget
   status   show the budget, its holders and its queue
   cancel   cancel a waiting request
+  start    start a waiting request now, out of turn
   move     change a waiting request's place in the queue
   trim     lower a running job's reservation to what it uses
   watch    switch the watchdog between observe and enforce on this machine
@@ -61,6 +62,8 @@ func dispatch(args []string, io IO) int {
 		return statusCommand(args[1:], io)
 	case "cancel":
 		return cancelCommand(args[1:], io)
+	case "start":
+		return startCommand(args[1:], io)
 	case "move":
 		return moveCommand(args[1:], io)
 	case "trim":
