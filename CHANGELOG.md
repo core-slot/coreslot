@@ -10,6 +10,16 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,
+  lets the jobs behind it that typically run 2 min or less, and would not fit beside it, start first, until a
+  deadline of a quarter of its typical run time (10 min for a 40-min head), which it publishes in the new
+  `yield.json`. It starts by the deadline, or once the short jobs still running end; a short job that runs past its
+  typical time, or 3 s with nobody taking the room, ends the yield at once. A head never yields twice, nor when it is a
+  restart, was moved, cannot read the headroom or the kernel's pressure is not normal (so never on Linux). Tickets
+  carry their label's `typical_s`. `status` reads "letting short jobs go first until 14:32"; `status --json` gains the
+  top-level `head` and `yield`, under the same `schema` 1; telemetry gains the `waiting` reason `yielding` with
+  `until_ns`, `yield_ended`, the `short` pass and its `no_pass` reasons.
+
 - `coreslot start <ticket-id>` (or `--label L`) starts a waiting job now, ahead of the queue and whatever memory is
   free: its own run admits itself at its next poll with a hold that still reserves its full need, so the room may go
   below zero and other jobs wait. It waits up to 8 s for the run to start, or returns at once with `--no-wait`. A
@@ -38,8 +48,9 @@ All notable changes to this project are recorded here. The format follows
 ### Changed
 
 - **Format 5.** The state directory gains `watch-mode`, this machine's override of the watchdog's mode
-  (`PROTOCOL.md` section 7.15), which every client must read for the mode it ticks in, and `start/`, the start
-  requests, whose holds carry the optional key `forced` (sections 7.16 and 13.4), so a client of format 4 steps
+  (`PROTOCOL.md` section 7.15), which every client must read for the mode it ticks in, `start/`, the start
+  requests, whose holds carry the optional key `forced` (sections 7.16 and 13.4), and `yield.json`, the head's yield
+  (section 7.17), with the ticket's optional `typical_s`, so a client of format 4 steps
   out of the budget with its existing notice. Run `coreslot doctor --reset` once nothing is live: on a format-4 or a
   format-3 directory it is an upgrade that keeps the run log and the telemetry. A format-2 directory is another
   format, whose reset removes its run log.

@@ -62,6 +62,7 @@ Every shared file, field, environment variable and transition of format 5, and w
 | `watch.json` | file | [7.11](#711-watchjson), [23](#23-the-watchdog) |
 | `trim.json` | file | [7.13](#713-trimjson), [12.5](#125-trim) |
 | `watch-mode` | file | [7.15](#715-watch-mode), [23.1](#231-the-tick) |
+| `yield.json` | file | [7.17](#717-yieldjson), [10.3](#103-waiting-and-election) |
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
@@ -84,6 +85,7 @@ Every shared file, field, environment variable and transition of format 5, and w
 | run-log memory keys | field | [20](#20-run-log) |
 | `docker_footprint_mib` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
 | `docker_note` | field of the hold body | [7.4](#74-hold), [17](#17-descriptor-and-environment-contract) |
+| `typical_s` | field of the ticket and hold bodies | [7.3](#73-ticket), [7.4](#74-hold), [10.3](#103-waiting-and-election) |
 | `docker_need_mib` | field of the ticket and hold bodies | [7.3](#73-ticket), [7.4](#74-hold), [12.6](#126-a-gated-request) |
 | `docker_growth_mib` | field of the hold body | [7.4](#74-hold), [12.6](#126-a-gated-request), [23.1](#231-the-tick) |
 | `docker_sampled_ns` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
@@ -106,6 +108,7 @@ Every shared file, field, environment variable and transition of format 5, and w
 | cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
 | withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
 | start now | transition | [13.4](#134-start-now), example [21.11](#2111-start-now) |
+| yield | transition | [10.3](#103-waiting-and-election), example [21.12](#2112-yield) |
 | move | transition | [13.3](#133-move) |
 | reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
 | pass-through | transition | [18](#18-nested-runs-pass-through), example [21.7](#217-pass-through) |
@@ -150,8 +153,8 @@ Every conforming client MUST preserve these invariants:
 - **I4 order:** ordinary admissions happen in effective order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
   it except one that passes it, by duration or out of turn (section 10.3), and, while a hold is live, a container
-  request (section 12.1), and a run passing over a noted ticket (section 12.6); a forced start
-  (section 13.4) starts ahead of every ticket; a waiter is passed over only while it is STALLED,
+  request (section 12.1), a run passing over a noted ticket (section 12.6), and a short job passing a
+  yielding head (section 10.3); a forced start (section 13.4) starts ahead of every ticket; a waiter is passed over only while it is STALLED,
   dead, canceled or noted.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
@@ -162,7 +165,9 @@ Every conforming client MUST preserve these invariants:
   container requests (section 12.1) may take the room a head waits for, or the start that spacing
   allows after a yellow clear (section 12.4), and so delay it for as long as they keep coming or
   run; only a timeout of its own, if it has one, bounds that. The head keeps its place. With no hold
-  live they leave the head its start. A gated head (section 12.6) is admitted within 3 s of a
+  live they leave the head its start. A yielding head (section 10.3) is admitted by the deadline it
+  published, or as soon as the room allows after it: the overrun of short jobs still running then is
+  the delay past it. A gated head (section 12.6) is admitted within 3 s of a
   reading by which both its tests pass; one whose VM test fails has its note by the end of that
   attempt, or within 2 s of its last note change.
 - **I6 one budget:** every client of format 5 reads the same holds and the same
@@ -246,6 +251,7 @@ gen              {"gen": n, "reconciled_ns": t} (section 7.8)
 watch.json       the shared watchdog state (section 7.11)
 trim.json        requests to trim live holds (section 7.13); optional
 watch-mode       this machine's override of the watchdog's mode (section 7.15); optional
+yield.json       the head's yield to short jobs (section 7.17); optional
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
@@ -307,11 +313,12 @@ client is live loses the reservations of its holds and is not supported. The CLI
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
 process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/`,
 `start/`, `order/` and `vmwait/` (a start request, an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`,
-`watch-mode` (a reset returns the watchdog to the configuration's mode), `degraded`
+`watch-mode` (a reset returns the watchdog to the configuration's mode), `yield.json`, `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
 format 5. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 5, or format 4 or 3 (an upgrade: format 5 only adds `watch-mode`, `start/` and the hold's optional `forced`, and
+When `FORMAT` names format 5, or format 4 or 3 (an upgrade: format 5 only adds `watch-mode`, `start/`, `yield.json`, the hold's optional `forced` and the ticket's
+optional `typical_s`, and
 format 4 `vmwait/` and optional Docker keys of tickets and holds), or is missing
 (which the first client writes as 5, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
@@ -565,6 +572,7 @@ Body:
 | `created_ns` | integer | `≥ 0`; the run's arrival: the wall clock when the ticket was published, a restarted run's first arrival (section 24) |
 | `restart` | boolean | optional; `true` for a stopped run coming back (section 24), which waits under the restart conditions of section 12.4 |
 | `docker_need_mib` | integer | optional; `1..1073741824` when present; the Docker need of a gated request (section 12.6); absent for any other, and a writer omits it then |
+| `typical_s` | integer | optional; `≥ 0`; the run's typical run time in seconds (section 10.3), as its hold will carry it; `0` or absent when it has none, and a writer omits it then. A head reads it to find the short jobs behind it (section 10.3) |
 
 ### 7.4 Hold
 
@@ -799,12 +807,36 @@ and an override wins over a later edit of it until removed or ended. A reset rem
 request's (section 7.5), `requester_pid` being the starter's. It asks the ticket's own run to start
 at once (section 13.4).
 
+### 7.17 yield.json
+
+`$S/yield.json` is the head's yield to short jobs (section 10.3), at most one. It is optional, and its
+absence is normal. It is one JSON object:
+
+```json
+{"head": "01791720000000000000-0000005120-000001", "start_ns": 1791720600000000000, "until_ns": 1791721200000000000, "last_pass_ns": 0}
+```
+
+| Key | Type | Content |
+|---|---|---|
+| `head` | string | the yielding head's ticket id |
+| `start_ns` | integer | `≥ 0`; when the yield started, by the host's wall clock |
+| `until_ns` | integer | `≥ 0`; the deadline it published, by the host's wall clock |
+| `last_pass_ns` | integer | `≥ 0`; when a short job last passed it; `0` before any |
+
+A record is **valid** when it parses, its `head` is the current head's id (section 10.3) and the
+reader's wall clock is before `until_ns`; any other record is stale. A file above 4 KiB or one that
+is not such an object reads as no record. Only the head writes it, and each short job that passes
+sets its `last_pass_ns`; it is written and removed only inside the section, replaced with a plain
+`rename` (section 11), without a `gen` bump, and read with no section. The file itself is checked as
+in section 4.2. Reconciliation removes it once its head's ticket is gone (section 10.4), the head
+removes a stale one, and a reset removes it (section 4.4).
+
 ## 8. The admission critical section
 
 `admit.lock` is the protocol's linearization point. Enqueue, admission, cancel and start publication,
 reconciliation and run-log rotation MUST happen while holding
 `flock(LOCK_EX)` on it; so does every other publication (section 11), every write of `watch.json`
-and every removal of a ticket, hold, cancel or start request, or temporary file. A refresh (section 10.2), a
+and every removal of a ticket, hold, cancel or start request, `yield.json` or temporary file. A refresh (section 10.2), a
 probe, the rewrite of a hold's own body and a run-log append happen outside it.
 
 - **Entry is non-blocking.** A client tries `LOCK_EX|LOCK_NB` and retries with backoff from 10 ms
@@ -915,7 +947,8 @@ A waiter:
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
   rescan when `gen` changed) before each attempt;
 - behind a live ticket, when its run has a typical run time or its request is a container request
-  (section 12.1), makes a single admission attempt per election to pass the head (below).
+  (section 12.1), makes a single admission attempt per election to pass the head (below), and as head
+  may yield to short jobs (below).
 
 **Passing.** A run's **typical run time** `d`, in whole seconds, is learned from its label's
 counted runs (section 20) when it starts, and its hold carries it as `typical_s`; a run of a label
@@ -963,6 +996,48 @@ no pass (section 12.1) and leaves the head its place.
 > **Implementation note.** The Go CLI's typical run time is the 90th percentile of the `ran_s` of
 > the window its need is learned from (section 5.4), rounded up to a whole second and at least 1.
 
+**Short jobs past a long head.** A head that could start now may let short jobs go first, by a
+deadline it publishes in `yield.json` (section 7.17). A waiter `w` behind the head `h` in effective
+order (section 9) is **short** when its ticket is live (its lock cannot be taken), it has no note
+(section 7.14), no `restart` and a ticket `typical_s` in `1..120`, and it fits the room but would not
+fit beside the head (`need_w ≤ room < need_w + need_h`). The head keeps no STALLED verdict on the
+tickets behind it: a stopped owner's ticket can be short, and the no-taker rule below ends a yield it
+cannot use.
+
+The head **starts a yield** at an attempt that would admit it (section 12.1, after the VM test and
+before the level gate records the start, so a yield uses no spacing slot) when: the headroom was read
+and its need fits the room; the kernel's pressure level is normal (as for going out of turn); its
+typical run time is at least 600 s; it has no `restart`, is no container request, has no order
+override (section 7.12) and never yielded before; and a short waiter is behind it. It writes the
+record with `start_ns` now and `until_ns` now plus a quarter of its typical run time (10 min for a
+40-min head), capped at its own wait deadline less 60 s when it has one, and does not yield when that
+cap is not more than 3 s away. It publishes no hold and keeps waiting. A head with no hold live may
+yield: the idle rule is for a head that cannot fit.
+
+The head **ends its yield**, removes the record and is admitted as usual at that or a later attempt,
+when: its wall clock reaches `until_ns`; its own monotonic clock says the yield's length has passed
+since it started (a backward step of the wall clock cannot lengthen it); a short job overruns (a live
+hold whose `arrival_ns` is at or after the head's effective order key has a `typical_s` above 0 and
+has run longer than it; a hold with none never counts); nobody takes it: it has fit the room for 3 s
+in a row by its monotonic clock with `last_pass_ns` unchanged, the count restarting whenever the head
+does not fit or a pass is noted, so each short job that ends gives the next 3 s, which is at least two
+of its elections; its record is missing or names another ticket (another head removed it as stale:
+it leaves that file); or another ticket becomes head. Every end is final: a ticket yields at most
+once.
+
+A waiter **passes as short**, besides fitting the room and the level gate as any admission, when a
+valid record names the head, it is short (from its own request; a noted waiter is not), it is
+expected to end by the deadline (`now + d ≤ until_ns`), no short job overruns, and the kernel's
+pressure level is normal. The `no_holds` restriction does not apply to it. In the admitting section
+it sets the record's `last_pass_ns` to now. Several short jobs may start, side by side or one after
+another, as the room allows. While a valid record names the head no other pass applies: the head
+fits, so it ends in no time and cannot be passed out of turn.
+
+**The head's bound.** Every short job starts expected to end by the deadline, so the head starts by
+the deadline, or as soon as the room allows after it: the delay past the deadline is the overrun of
+the short jobs running then, never a chain, since an overrun ends the yield and stops new passes. At
+a wait deadline of its own the head may still time out as a head that never yielded would.
+
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting. It
 loses its place, though. No other client sees the ticket any more, so waiters behind it may be
@@ -999,7 +1074,8 @@ neither does a reset (section 4.4), and neither does a watchdog tick (section 23
    that is not ignored as a stray (section 4.2) whose name matches the ticket grammar and whose
    first three fields are that id (for a note, whose name is the note's), whatever its body. An entry ignored as a stray (a wrong type,
    owner or mode) is not an entry for this purpose: it never protects a cancel or start request, an
-   override or a note;
+   override or a note. It also removes `yield.json` when its `head` is no such ticket, or it is no
+   record (section 7.17);
 3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `start/`, `order/` and `vmwait/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
@@ -1011,7 +1087,7 @@ whole machine.
 ## 11. Atomic publication
 
 Inside the section, a publication of a ticket, hold, cancel or start request, order override, `gen`, `FORMAT`,
-`degraded`, `watch.json`, `trim.json` or `watch-mode`:
+`degraded`, `watch.json`, `trim.json`, `watch-mode` or `yield.json`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
    target's directory; on `EEXIST` (a young leftover of an earlier process with the same pid) the
@@ -1031,7 +1107,7 @@ Inside the section, a publication of a ticket, hold, cancel or start request, or
      is already requested; the canceller removes its temporary and reports the cancellation as
      already requested, which is not an error (section 13.1). A start request is published the
      same way (section 13.4);
-   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`: with a plain `rename`,
+   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`, `yield.json`: with a plain `rename`,
      which replaces an existing file.
 
 The writer keeps its original descriptor: writing the body never closes the only lock-carrying
@@ -1082,14 +1158,15 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
    **re-election**: every well-formed ticket ahead of it in order is probed, and if any is neither
    dead nor STALLED for this observer (its mtime from the listing counts as an observation) nor
    noted (section 12.6), the head leaves the section
-   and waits, unless it may pass the first of them (section 10.3). A ticket the head has never
+   and waits, unless it may pass the first of them (section 10.3), as short included. A ticket the head has never
    observed, such as one published after its election, counts as live;
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket and its order
    override, start request and note if it has them, bumps `gen`, and leaves the section.
 
-A gated request (section 12.6) also passes its VM test between steps 6 and 7.
+A gated request (section 12.6) also passes its VM test between steps 6 and 7. A head that passed
+them may then yield to short jobs instead of step 7 (section 10.3), before step 6 records its start.
 
 A **forced start** (section 13.4) takes step 1 and then step 7 alone: no room, no idle rule, no
 re-election, no level gate, and no VM test. Its hold says its full need, its ticket's `arrival_ns`
@@ -2031,6 +2108,22 @@ start/                                                 (empty)
 The room is now `1024 − 2048 = −1024` MiB. Pid 5120 keeps its place at the head and waits until
 memory frees up. Had a red round come, it would list a run that arrived after 12:01:40 before pid
 6000's.
+
+### 21.12 Yield
+
+The room is 4 096 MiB and no hold is live. Pid 5120 heads the queue with 3 072 MiB and a typical run
+time of 2 400 s (40 min); behind it pid 6000 needs 2 048 MiB with `typical_s` 60, and pid 6100
+2 560 MiB with `typical_s` 90. Each would fit alone and neither beside the head (4 096 − 3 072 = 1 024).
+
+At 12:10:00 pid 5120 could start. It finds both short, writes `yield.json` with `start_ns`
+1791720600000000000 and `until_ns` 1791721200000000000 (12:20:00), and keeps waiting. At its next
+election pid 6000 passes as short (it ends by 12:11:00, before the deadline), publishes its hold and
+sets `last_pass_ns`. Pid 6100 does not fit beside it and waits; so does the head.
+
+At 12:11:05 pid 6000 is still running, past its 60 s: an overrun. The head removes the record at its
+next attempt; pid 6100, which would otherwise pass once pid 6000 ends, no longer finds a record. When
+pid 6000 ends at 12:11:20, the head fits and starts; pid 6100 starts after it as usual. The head waited
+80 s for a job that saved pid 6000 a 40-min wait.
 
 ## 22. Timing constants
 
