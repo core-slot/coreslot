@@ -94,6 +94,7 @@ change in any release; parse `status --json` instead.
 | `status` | `--json`, `--docker`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
 | `trim` | `<hold-id>`, `--label LABEL` |
+| `watch` | `observe`, `enforce` (with `--for DURATION`), `config` |
 | `doctor` | `--clear`, `--reset` |
 | `stats` | `--label LABEL`, `--json` |
 | `report` | `--days N`, `--json` |

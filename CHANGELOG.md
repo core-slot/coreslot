@@ -10,6 +10,13 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- `coreslot watch observe` and `coreslot watch enforce` switch the watchdog's mode on this machine, until
+  `coreslot watch config` or, with `--for DURATION` (1 min or more), for a while; the configuration file is never
+  written, and a stop round already written still acts. `coreslot watch` prints the mode and where it comes from.
+  `status` shows an override in its watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and
+  `watch.mode_until_ns` whether or not a job runs, under the same `schema` 1. The `enqueue` telemetry's `mode` is
+  the mode in force.
+
 - On macOS, a label's Docker need, `docker_mem` in `needs.toml`: each of its runs that gets a forwarder waits until
   that much fits inside Docker Desktop's VM, as well as its own need on the Mac, reading Docker's socket at most
   once every 2 s, plus one immediate retry, while it could otherwise start. Once started, its hold reserves on the
@@ -24,6 +31,11 @@ All notable changes to this project are recorded here. The format follows
 
 ### Changed
 
+- **Format 5.** The state directory gains `watch-mode`, this machine's override of the watchdog's mode
+  (`PROTOCOL.md` section 7.15), which every client must read for the mode it ticks in, so a client of format 4 steps
+  out of the budget with its existing notice. Run `coreslot doctor --reset` once nothing is live: on a format-4 or a
+  format-3 directory it is an upgrade that keeps the run log and the telemetry. A format-2 directory is another
+  format, whose reset removes its run log.
 - **Format 4.** Tickets and holds gain the optional keys `docker_need_mib`, `docker_growth_mib` and
   `docker_sampled_ns`, and the state directory gains `vmwait/` (`PROTOCOL.md` sections 7.14 and 12.6). Every
   client must take the holds' VM growth off its room and pass over a noted ticket, so a client of format 3 steps

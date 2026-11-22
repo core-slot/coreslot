@@ -136,7 +136,7 @@ Written once the ticket is published; an enqueue that fails writes nothing.
 | `on_timeout` | `run` or `fail` |
 | `version` | coreslot's version |
 | `mem_mib` | the machine's memory |
-| `mode` | `[watch] mode`, `enforce` or `observe`; absent when the configuration cannot be read |
+| `mode` | the watchdog's mode on this machine, `enforce` or `observe`: `[watch] mode`, or the override `coreslot watch` sets; absent when the configuration cannot be read |
 | `reserve_mib` | the reserve; absent likewise |
 | `watch_config` | the effective `[watch]` thresholds: `yellow_points`, `red_points`, `red_samples`, `gate_pages_s`, `floor_mib`, `calm_s`, `post_kill_s`, `spacing_s`; absent likewise |
 | `nested_miss` | why an inherited `CORESLOT_HOLD` did not count: `malformed`, `not_ancestor`, `dead`, `unresolved`; absent without one |

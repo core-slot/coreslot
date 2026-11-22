@@ -21,6 +21,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"gen", "gen", "reconciled_ns"},
 	{"watch.json", "watch.json", "detector.level"},
 	{"trim.json", "trim.json", "holds.<id>"},
+	{"watch-mode", "watch-mode", "until_ns"},
 	{"queue/", "Ticket", "queue/"},
 	{"holds/", "Hold", "holds/"},
 	{"cancel/", "Cancel request", "cancel/"},
