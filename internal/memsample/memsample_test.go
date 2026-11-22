@@ -1,6 +1,7 @@
 package memsample
 
 import (
+	"encoding/binary"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -168,6 +169,52 @@ func TestPSITotalParse(t *testing.T) {
 	}
 }
 
+// vm.loadavg is three 32-bit fixed-point loads, 4 bytes of padding and a 64-bit scale: loads of
+// 3.5 and 1.25 at scale 2048. Mutations: reading the scale at byte 12 (the padding) gives no
+// reading; the 15-minute load for the 5-minute one gives 0.5.
+func TestLoadavgDarwinParse(t *testing.T) {
+	b := make([]byte, 24)
+	binary.LittleEndian.PutUint32(b[0:], 7168)
+	binary.LittleEndian.PutUint32(b[4:], 2560)
+	binary.LittleEndian.PutUint32(b[8:], 1024)
+	binary.LittleEndian.PutUint64(b[16:], 2048)
+	if l1, l5, ok := loadavgDarwin(b); !ok || l1 != 3.5 || l5 != 1.25 {
+		t.Errorf("loadavgDarwin = %v, %v, %v; want 3.5, 1.25, true", l1, l5, ok)
+	}
+	for _, bad := range [][]byte{b[:20], make([]byte, 24)} { // short, scale 0
+		if _, _, ok := loadavgDarwin(bad); ok {
+			t.Errorf("loadavgDarwin(%v) read a load", bad)
+		}
+	}
+}
+
+// /proc/loadavg's first two fields. Mutation: the third field for the second gives 0.75.
+func TestLoadavgLinuxParse(t *testing.T) {
+	if l1, l5, ok := loadavgLinux("2.50 1.10 0.75 3/812 4242\n"); !ok || l1 != 2.5 || l5 != 1.1 {
+		t.Errorf("loadavgLinux = %v, %v, %v; want 2.5, 1.1, true", l1, l5, ok)
+	}
+	for _, bad := range []string{"", "2.50\n", "x 1.10 0.75\n"} {
+		if _, _, ok := loadavgLinux(bad); ok {
+			t.Errorf("loadavgLinux(%q) read a load", bad)
+		}
+	}
+}
+
+// The aggregate cpu line, not a per-core one: busy is user + nice + system, total the eight fields
+// through steal, guest left out. Mutations: matching cpu0 as a prefix gives 1 and 2; counting
+// iowait busy gives 160; adding guest to the total gives 1050.
+func TestCPUTicksLinuxParse(t *testing.T) {
+	const text = "cpu0 1 0 0 1 0 0 0 0 0 0\ncpu  100 10 40 800 10 5 5 30 50 0\nintr 1\n"
+	if busy, total, ok := cpuTicksLinux(text); !ok || busy != 150 || total != 1000 {
+		t.Errorf("cpuTicksLinux = %d, %d, %v; want 150, 1000, true", busy, total, ok)
+	}
+	for _, bad := range []string{"", "cpu  1 2 3\n", "cpu  1 2 3 4 5 6 7 x 9\n"} {
+		if _, _, ok := cpuTicksLinux(bad); ok {
+			t.Errorf("cpuTicksLinux(%q) read ticks", bad)
+		}
+	}
+}
+
 // Mutation: match the key as a prefix, and pswpin_zero's 9 is read.
 func TestVmstatParse(t *testing.T) {
 	const text = "nr_free_pages 1000\npswpin_zero 9\npswpin 42\npswpout 7\n"
@@ -202,11 +249,12 @@ func TestNoSubprocessImports(t *testing.T) {
 	}
 }
 
-// The readings hook names HostReading's fields: it replaces those it names and keeps the others.
+// The readings hook names HostReading's fields: it replaces those it names, a load included, and
+// keeps the others. Mutation: no float case panics on Load1.
 func TestReadingsReplaceNamedFields(t *testing.T) {
 	r := overlay(HostReading{SwapIns: 7, SwapUsedMiB: 9}, map[string]int64{"Decomp": 5,
-		"HasPSI": 1, "SwapFreeMiB": 100, "WallNS": 3e9, "AwakeNS": 2e9})
-	want := HostReading{Decomp: 5, SwapIns: 7, HasPSI: true, SwapUsedMiB: 9, SwapFreeMiB: 100, WallNS: 3e9, AwakeNS: 2e9}
+		"HasPSI": 1, "SwapFreeMiB": 100, "WallNS": 3e9, "AwakeNS": 2e9, "Load1": 12})
+	want := HostReading{Decomp: 5, SwapIns: 7, HasPSI: true, SwapUsedMiB: 9, SwapFreeMiB: 100, WallNS: 3e9, AwakeNS: 2e9, Load1: 12}
 	if r != want {
 		t.Errorf("overlay = %+v, want %+v", r, want)
 	}

@@ -190,5 +190,8 @@ func (x *runRecord) ended(c child, rec store.RunRecord, sup *supervisor, p peak,
 	if p.samples > 0 {
 		f["mean_footprint_mib"] = p.sumKiB / p.samples / 1024
 	}
+	if p.cpuTicks > 0 {
+		f["tree_cpu_s"] = float64(p.cpuNS) / 1e9
+	}
 	x.Emit("ended", f)
 }

@@ -25,6 +25,8 @@ type peak struct {
 	rowN         int                 // the row's length so far
 	sustainedKiB int64
 	sustained    bool
+	cpuNS        int64 // the tree's user and system time, summed over the hold's ticks
+	cpuTicks     int64 // the ticks summed
 }
 
 // tick records one watch tick's reading of the tree; ok false, a listing that failed, ends the row.

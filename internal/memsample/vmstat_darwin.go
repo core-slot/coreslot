@@ -84,6 +84,23 @@ func Parts() (parts map[string]int64, pressure int, ok bool) {
 		"external": mib(externalAt)}, int(level), true
 }
 
+// cpuTicks reads the CPU ticks since boot of host_statistics64's HOST_CPU_LOAD_INFO, which it
+// answers as host_statistics does: struct host_cpu_load_info, natural_t cpu_ticks[4] (user,
+// system, idle, nice). busy is user, system and nice; the 32-bit counters wrap, which a reader of
+// two readings sees as a total that went back.
+func cpuTicks() (busy, total uint64, ok bool) {
+	const hostCPULoadInfo = 3 // HOST_CPU_LOAD_INFO
+	var t [4]uint32
+	count := uint32(len(t))
+	kr, _, _ := syscall_syscall6(libc_host_statistics64_trampoline_addr, hostPort(), hostCPULoadInfo,
+		uintptr(unsafe.Pointer(&t[0])), uintptr(unsafe.Pointer(&count)), 0, 0)
+	if int32(kr) != 0 || count != uint32(len(t)) {
+		return 0, 0, false
+	}
+	busy = uint64(t[0]) + uint64(t[1]) + uint64(t[3])
+	return busy, busy + uint64(t[2]), true
+}
+
 // timebase is mach_timebase_info: a mach tick is numer/denom ns.
 var timebase = sync.OnceValues(func() ([2]uint32, error) {
 	var tb [2]uint32

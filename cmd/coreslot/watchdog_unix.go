@@ -86,7 +86,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
 	prev := map[int]memsample.TreeTimes{}
-	var round, keptRound, cpuNS int64
+	var round, keptRound int64
 	var stall float64
 	var noCPU noCPUMeter
 	smoothed := false
@@ -153,7 +153,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		active := !ok || fresh
 		// The CPU time so far is the sum of the tick deltas: a process that ended between two
 		// listings loses its time since the earlier one, so the progress it gives is low, never high.
-		cpuNS += d.UserNS + d.SysNS
+		p.cpuNS, p.cpuTicks = p.cpuNS+d.UserNS+d.SysNS, p.cpuTicks+1
 		if s, ok := watch.Share(watch.Job{DUserNS: d.UserNS, DSysNS: d.SysNS, DPageWaitNS: d.PageWaitNS}); ok {
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
@@ -173,7 +173,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		}
 		wrote := r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
-			h.CPUNS, h.StallEWMA, h.NoCPUS = cpuNS, stall, noCPUS
+			h.CPUNS, h.StallEWMA, h.NoCPUS = p.cpuNS, stall, noCPUS
 			h.SampledNS, h.DockerNote, h.DockerFootprintMiB = store.NowNS(), r.dockerNote(), r.dockerFootprint()
 			r.setDockerKeys(g, h)
 			if p.container { // every update, so that a failed one repeats by itself

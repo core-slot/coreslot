@@ -10,6 +10,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- Telemetry records the host's CPU without acting on it: each sample line gains `ncpu`, `load1` and `load5`,
+  `cpu_busy_pct` (the busy part of the CPU ticks since the previous sample) and, on Linux with PSI,
+  `psi_cpu_some_us_s`. Each key is absent where it was not read, never 0. A run's `ended` line gains `tree_cpu_s`,
+  its hold's tree CPU summed over its watch ticks. Admission is unchanged.
 - On macOS, a label's Docker need, `docker_mem` in `needs.toml`: each of its runs that gets a forwarder waits until
   that much fits inside Docker Desktop's VM, as well as its own need on the Mac, reading Docker's socket at most
   once every 2 s, plus one immediate retry, while it could otherwise start. Once started, its hold reserves on the
