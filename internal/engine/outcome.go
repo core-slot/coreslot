@@ -16,6 +16,7 @@ const (
 		"restart_stale", "restart_level", "restart_calm", "restart_margin"
 	// A gated ticket that fits on the host waits for room in Docker's VM, or for a reading of it.
 	ReasonVMRoomShort, ReasonDockerNoReading WaitReason = "vm_room_short", "docker_no_reading"
+	ReasonYielding                           WaitReason = "yielding" // a long head that fits lets short jobs go first
 )
 
 // Outcome is what the ticket's last admission attempt decided and the numbers it used. Comparable, carried by value.
@@ -31,6 +32,8 @@ type Outcome struct {
 	WatchGate                        string // checked, stale, unknown, no_holds
 	Noted                            bool   // the ticket has its note: it fits on the host and waits for Docker's VM
 	DockerUngated                    string // why a request with a Docker need is not gated (Grant.DockerUngated)
+	YieldUntilNS                     int64  // a yielding head's deadline
+	YieldEnded                       string // why the head's yield ended at this attempt: record, deadline, clock, overrun, headship, no_taker
 }
 
 // Admission is the outcome of the attempt that admitted the grant; zero for a grant no attempt made.
