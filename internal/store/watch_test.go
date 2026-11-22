@@ -7,11 +7,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
@@ -390,6 +393,66 @@ func TestSampleLineEscapesLabels(t *testing.T) {
 	}
 	if strings.Contains(string(body), "\u0085") {
 		t.Errorf("a raw U+0085 in %q", body)
+	}
+}
+
+// A sample line records the host's CPU: ncpu always, the loads when read, and over a pair of
+// samples the busy part of the CPU ticks and the PSI cpu stall per second; a counter that went back
+// (macOS's ticks wrap) or a reading not taken leaves its key out, never a 0. Ticks 1000/4000 then
+// 1600/6000 are 30 %; 0.5 s of PSI over 2 s is 250000 µs/s. Mutations: the busy delta over the
+// total ticks gives 10; no check on a counter that went back writes line 3's busy; loads written
+// without HasLoad put 0 on line 3; the PSI delta not divided by the seconds gives 500000.
+func TestSampleCPUKeys(t *testing.T) {
+	dir := newDir(t)
+	sec := enter(t, open(t, dir))
+	c := watch.Defaults()
+	c.SampleLog = true
+	m := &machine{}
+	cpu := []memsample.HostReading{
+		{Load1: 3.5, Load5: 2.25, HasLoad: true, CPUBusy: 1000, CPUTotal: 4000, PSICPUSomeUS: 1e6, HasPSICPU: true},
+		{Load1: 4, Load5: 2.5, HasLoad: true, CPUBusy: 1600, CPUTotal: 6000, PSICPUSomeUS: 15e5, HasPSICPU: true},
+		{CPUBusy: 100, CPUTotal: 200},
+	}
+	read := func() (watch.Sample, error) {
+		s, err := m.read()
+		h := cpu[m.calls-1]
+		s.Host.Load1, s.Host.Load5, s.Host.HasLoad, s.Host.CPUBusy, s.Host.CPUTotal = h.Load1, h.Load5, h.HasLoad, h.CPUBusy, h.CPUTotal
+		s.Host.PSICPUSomeUS, s.Host.HasPSICPU = h.PSICPUSomeUS, h.HasPSICPU
+		return s, err
+	}
+	now := NowNS()
+	for i := range cpu {
+		if _, _, err := sec.Tick(now+int64(i)*21e8, read, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(filepath.Join(dir, TelemetryDir, SamplesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string]any{
+		{"ncpu": float64(runtime.NumCPU()), "load1": 3.5, "load5": 2.25},
+		{"ncpu": float64(runtime.NumCPU()), "load1": 4.0, "load5": 2.5, "cpu_busy_pct": 30.0, "psi_cpu_some_us_s": 250000.0},
+		{"ncpu": float64(runtime.NumCPU())},
+	}
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(lines) != len(want) {
+		t.Fatalf("%d lines, want %d", len(lines), len(want))
+	}
+	for i, l := range lines {
+		var v map[string]any
+		if err := json.Unmarshal([]byte(l), &v); err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]any{}
+		for _, k := range []string{"ncpu", "load1", "load5", "cpu_busy_pct", "psi_cpu_some_us_s"} {
+			if x, ok := v[k]; ok {
+				got[k] = x
+			}
+		}
+		if !reflect.DeepEqual(got, want[i]) {
+			t.Errorf("line %d: %v; want %v", i+1, got, want[i])
+		}
 	}
 }
 

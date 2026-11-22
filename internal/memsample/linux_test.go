@@ -3,8 +3,10 @@
 package memsample
 
 import (
+	"os"
 	"slices"
 	"testing"
+	"time"
 )
 
 // A name may hold spaces and either parenthesis, so the fields start after the last ')'. Mutation: the
@@ -16,5 +18,27 @@ func TestParseStat(t *testing.T) {
 	}
 	if _, _, ok := parseStat("42 no name"); ok {
 		t.Errorf("parseStat(no parenthesis) ok, want not")
+	}
+}
+
+// The load, the cpu line and, where the kernel reports it, PSI cpu read live, and a second of
+// ticks passes. Mutations: a wrong path for /proc/stat leaves CPUTotal 0; the PSI cpu read left out
+// keeps HasPSICPU false on a kernel with the file.
+func TestReadHostLinuxCPULive(t *testing.T) {
+	a, err := ReadHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	b, err := ReadHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.HasLoad || a.CPUTotal == 0 || b.CPUTotal <= a.CPUTotal || b.CPUBusy < a.CPUBusy || b.CPUBusy > b.CPUTotal {
+		t.Errorf("CPU: load %v (%v), ticks %d/%d then %d/%d; want a load and ticks that advance", a.HasLoad, a.Load1,
+			a.CPUBusy, a.CPUTotal, b.CPUBusy, b.CPUTotal)
+	}
+	if _, err := os.Stat(procPSICPU); err == nil && hasPSICPU() != b.HasPSICPU {
+		t.Errorf("PSI cpu: the kernel reports it (%v), the reading has it %v", hasPSICPU(), b.HasPSICPU)
 	}
 }

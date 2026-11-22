@@ -119,12 +119,18 @@ func (l Level) String() string {
 	return "unknown"
 }
 
-// Rates are the paging counters' rates per second over the last period.
+// Rates are the paging counters' rates per second over the last period, and the host's CPU over
+// it: the busy part of its ticks in percent, and the PSI cpu stall per second. The CPU ones are
+// recorded, never judged.
 type Rates struct {
-	DecompS    float64 `json:"decomp_s"`
-	SwapInsS   float64 `json:"swapins_s"`
-	PSISomeUSS float64 `json:"psi_some_us_s"`
-	HasPSI     bool    `json:"has_psi"`
+	DecompS       float64 `json:"decomp_s"`
+	SwapInsS      float64 `json:"swapins_s"`
+	PSISomeUSS    float64 `json:"psi_some_us_s"`
+	HasPSI        bool    `json:"has_psi"`
+	CPUBusyPct    float64 `json:"cpu_busy_pct"`
+	HasCPUBusy    bool    `json:"has_cpu_busy"`
+	PSICPUSomeUSS float64 `json:"psi_cpu_some_us_s"`
+	HasPSICPU     bool    `json:"has_psi_cpu"`
 }
 
 // Point is what the detector keeps of one sample: when, the swap used, and whether its excess
@@ -240,6 +246,13 @@ func rates(prev, cur memsample.HostReading) (r Rates, ok bool) {
 	r = Rates{DecompS: float64(cur.Decomp-prev.Decomp) / s, SwapInsS: float64(cur.SwapIns-prev.SwapIns) / s}
 	if prev.HasPSI && cur.HasPSI {
 		r.PSISomeUSS, r.HasPSI = float64(cur.PSISomeUS-prev.PSISomeUS)/s, true
+	}
+	// A CPU counter that went back (macOS's 32-bit ticks wrap) gives no rate, and no gap.
+	if prev.CPUTotal > 0 && cur.CPUTotal > prev.CPUTotal && cur.CPUBusy >= prev.CPUBusy && cur.CPUBusy-prev.CPUBusy <= cur.CPUTotal-prev.CPUTotal {
+		r.CPUBusyPct, r.HasCPUBusy = 100*float64(cur.CPUBusy-prev.CPUBusy)/float64(cur.CPUTotal-prev.CPUTotal), true
+	}
+	if prev.HasPSICPU && cur.HasPSICPU && cur.PSICPUSomeUS >= prev.PSICPUSomeUS {
+		r.PSICPUSomeUSS, r.HasPSICPU = float64(cur.PSICPUSomeUS-prev.PSICPUSomeUS)/s, true
 	}
 	return r, true
 }
