@@ -62,13 +62,14 @@ func TestTraceLongHeadYieldsToShortJobs(t *testing.T) {
 // its yield, and with it the record.
 func TestTraceAnOverrunEndsTheYield(t *testing.T) {
 	e, big, head := yieldScene(t, map[string]float64{"s1": 1, "s2": 30})
-	s1, s2 := e.Run("s1", "--mem", "2G"), e.Run("s2", "--mem", "2560M") // s2 does not fit beside s1
-	for _, p := range []*Proc{s1, s2} {
-		e.Eventually(startWait, p.name+" says it waits", func() bool { return strings.Contains(p.Stderr(), "waiting for") })
-	}
+	s1 := e.Run("s1", "--mem", "2G")
+	e.Eventually(startWait, "s1 says it waits", func() bool { return strings.Contains(s1.Stderr(), "waiting for") })
 	e.ReleaseChild("big")
 	big.ExitCode(0)
 	e.WaitStarted("s1")
+	// s2 arrives once s1 runs, so it cannot win the first pass: it does not fit beside s1.
+	s2 := e.Run("s2", "--mem", "2560M")
+	e.Eventually(startWait, "s2 says it waits", func() bool { return strings.Contains(s2.Stderr(), "waiting for") })
 	e.Eventually(startWait, "the head sees the overrun", func() bool {
 		_, ok, err := e.Engine().Store().ReadYield()
 		return err == nil && !ok
