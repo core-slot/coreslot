@@ -58,6 +58,7 @@ type Hold struct {
 	DockerNeedMiB                int64   // optional: the gated run's Docker need, 1..MaxNeedMiB when present
 	DockerGrowthMiB              int64   // optional: the VM growth the hold reserves on the host
 	DockerSampledNS              int64   // optional: when the run last read its containers' memory
+	Forced                       bool    // optional: admitted at once on a start request, whatever the room (section 7.16)
 }
 
 // Cancel is the body of a cancel request (section 7.5).
@@ -111,6 +112,7 @@ type holdJSON struct {
 	DockerNeedMiB      int64   `json:"docker_need_mib,omitempty"`
 	DockerGrowthMiB    int64   `json:"docker_growth_mib,omitempty"`
 	DockerSampledNS    int64   `json:"docker_sampled_ns,omitempty"`
+	Forced             bool    `json:"forced,omitempty"`
 }
 
 type cancelJSON struct {
@@ -340,7 +342,7 @@ func DecodeHold(body []byte) (Hold, error) {
 	for _, f := range []struct {
 		key string
 		dst *bool
-	}{{"container", &h.Container}, {"trimmed", &h.Trimmed}} {
+	}{{"container", &h.Container}, {"trimmed", &h.Trimmed}, {"forced", &h.Forced}} {
 		if *f.dst, err = optional(o, f.key, o.boolean); err != nil {
 			return Hold{}, err
 		}

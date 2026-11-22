@@ -186,6 +186,11 @@ func (sec *Section) RemoveCancel(id wire.ID) (removed bool, err error) {
 	return sec.removeByID(CancelDir, id)
 }
 
+// RemoveStart removes the start request for the ticket id inside the section, as RemoveCancel does.
+func (sec *Section) RemoveStart(id wire.ID) (removed bool, err error) {
+	return sec.removeByID(StartDir, id)
+}
+
 // RemoveOrder removes the order override of the ticket id inside the section: its owner's, with its
 // ticket (PROTOCOL.md section 7.12). A missing override is not an error, and a stray entry under
 // that name is left alone (section 4.2).
