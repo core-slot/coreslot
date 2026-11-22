@@ -10,6 +10,13 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- `coreslot start <ticket-id>` (or `--label L`) starts a waiting job now, ahead of the queue and whatever memory is
+  free: its own run admits itself at its next poll with a hold that still reserves its full need, so the room may go
+  below zero and other jobs wait. It waits up to 8 s for the run to start, or returns at once with `--no-wait`. A
+  started job is a red-round victim by its queue arrival, like any other. `status` marks its hold `started now, out of
+  turn`; `status --json` carries each hold's `forced` and the pending `start_requests` (`ticket`, `age_s`,
+  `unanswered`), under the same `schema` 1, and the `admitted` telemetry line's `pass` gains `forced`.
+
 - `coreslot watch observe` and `coreslot watch enforce` switch the watchdog's mode on this machine, until
   `coreslot watch config` or, with `--for DURATION` (1 min or more), for a while; the configuration file is never
   written, and a stop round already written still acts. `status` shows an override in its watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and
@@ -31,7 +38,8 @@ All notable changes to this project are recorded here. The format follows
 ### Changed
 
 - **Format 5.** The state directory gains `watch-mode`, this machine's override of the watchdog's mode
-  (`PROTOCOL.md` section 7.15), which every client must read for the mode it ticks in, so a client of format 4 steps
+  (`PROTOCOL.md` section 7.15), which every client must read for the mode it ticks in, and `start/`, the start
+  requests, whose holds carry the optional key `forced` (sections 7.16 and 13.4), so a client of format 4 steps
   out of the budget with its existing notice. Run `coreslot doctor --reset` once nothing is live: on a format-4 or a
   format-3 directory it is an upgrade that keeps the run log and the telemetry. A format-2 directory is another
   format, whose reset removes its run log.

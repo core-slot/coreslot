@@ -93,6 +93,7 @@ change in any release; parse `status --json` instead.
 | `run` | `--mem SIZE` (such as `3G` or `768M`), `--label`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--same-group`, `--refusal-code` |
 | `status` | `--json`, `--docker`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
+| `start` | `<ticket-id>`, `--label LABEL`, `--no-wait` |
 | `trim` | `<hold-id>`, `--label LABEL` |
 | `watch` | `observe`, `enforce` (with `--for DURATION`), `config` |
 | `doctor` | `--clear`, `--reset` |
