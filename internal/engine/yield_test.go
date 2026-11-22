@@ -386,6 +386,23 @@ func TestARecordOfAnotherHeadLetsNobodyPass(t *testing.T) {
 	}
 }
 
+// A yielding head that loses its headship to a ticket now ahead of it ends its yield and removes
+// its record. Mutation: a head that keeps yielding behind another keeps its record.
+func TestYieldEndsWithTheHeadship(t *testing.T) {
+	e, clk, h, _ := yieldScene(t, false, shortReq(768, 60))
+	wantYielding(t, h, 0)
+	id := wire.ID{OrderKey: 1, PID: 4998, Seq: 1} // ahead of everyone: a restart's first arrival
+	path, _ := writeTicket(t, e.st.Dir(), id, wire.Ticket{Label: "back", NeedMiB: 2048, CreatedNS: 1, Restart: true})
+	lockHere(t, path)
+	clk.advance(HeadMaxBackoff)
+	if w := waitOutcome(t, h); w.Outcome.YieldEnded != "headship" {
+		t.Errorf("head behind a new head: %+v; want its yield ended by headship", w.Outcome)
+	}
+	if _, ok := record(t, e); ok {
+		t.Error("the record outlived the headship")
+	}
+}
+
 // A dead ticket behind the head is no short waiter: the head starts at once. Mutation: a short
 // waiter judged without its lock probe makes the head yield to it.
 func TestADeadTicketIsNoShortWaiter(t *testing.T) {

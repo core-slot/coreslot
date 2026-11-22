@@ -149,14 +149,16 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 
 | key | meaning |
 |---|---|
-| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
+| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, `yielding` (a long head that fits lets short jobs go first), and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
 | `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time from its start to the end of its first step: reading the configuration, publishing the ticket, which waits for the admission section while that is held, and that step |
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
 | `ahead` | the ticket examined ahead of it; absent for the head |
-| `no_pass` | why it may not pass the head: `no_typical`, `headroom_unknown`, `no_holds`, `wait_unknown`, `watch_unreadable`, `too_long`, and for going out of turn `head_fits`, `pressure_not_normal` (the kernel's memory pressure level is not normal, or unknown), `hold_unreadable`, `out_of_turn_live`; absent otherwise. `wait_unknown` and `too_long` also mean it has not yet watched the head for its typical run time |
+| `no_pass` | why it may not pass the head: `no_typical`, `headroom_unknown`, `no_holds`, `wait_unknown`, `watch_unreadable`, `too_long`, and for going out of turn `head_fits`, `pressure_not_normal` (the kernel's memory pressure level is not normal, or unknown), `hold_unreadable`, `out_of_turn_live`, and for a short job past a yielding head `not_short`, `not_displaced`, `ends_late` (expected to end after the head's deadline), `overrun_live` (a short job already past its typical run time); absent otherwise. `wait_unknown` and `too_long` also mean it has not yet watched the head for its typical run time |
 | `w_s` | the expected wait a pass was judged on, when computed |
 | `calm_left_s` | with `restart_calm`: seconds of calm still needed |
+| `until_ns` | with `yielding`: the deadline the head published |
+| `yield_ended` | why the run's yield, as a head, ended: `deadline`, `clock` (its own monotonic clock), `overrun`, `no_taker` (nobody started in 3 s), `record` (its record was gone), `headship`; absent if it never yielded |
 | `headroom_mib`, `headroom_ok`, `reserve_mib` | as on a sample |
 | `room_mib` | the room the person's line shows: at least 0; for a container waiter the real free memory |
 | `level` | the detector's level; absent with no sample |
@@ -174,7 +176,8 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
 | `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
 | `w_s` | the expected wait, when computed |
-| `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait), `turn` (out of turn) or `forced` (on a `coreslot start` request, whatever the room); absent for the head |
+| `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait), `turn` (out of turn), `short` (a short job past a yielding head) or `forced` (on a `coreslot start` request, whatever the room); absent for the head |
+| `yield_ended` | as on `waiting`, for a head that yielded before it started |
 
 ### A wait that ends without a start
 

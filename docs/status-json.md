@@ -32,6 +32,8 @@ escape one before printing it to a terminal.
 | `dead_holds` | array of string | names of holds whose lock is free, awaiting reconciliation |
 | `cancel_requests` | array of string | pending cancel requests (ticket ids) |
 | `start_requests` | array | pending start requests (`coreslot start`) |
+| `head` | string or null | the id of the ticket a waiter's re-election would pick now: the first live ticket in queue order without a VM wait, so not always `position` 1; null with none. Each waiter decides on its own, so one that has just found the first ticket STALLED may act on another for up to one election |
+| `yield` | object or null | the head's yield to short jobs while it is valid (PROTOCOL.md section 10.3); null otherwise |
 | `ignored` | object | per directory (`queue`, `holds`, `cancel`, `start`, `order`), the number of entries that do not match the grammar or whose body is malformed |
 | `observed_s` | number | how long `--observe` watched the queue; 0 without it |
 | `docker` | object | Docker Desktop's VM and its running containers; present only with `status --docker`, absent otherwise |
@@ -194,6 +196,16 @@ to its command's own process group, which a `stoppable` run always has. A `SIGKI
 `coreslot run` alone; its command keeps running and keeps the reservation (`owner_exited` then
 shows it). A run stopped this way is not restarted, though `stoppable` asks for a restartable run:
 only the watchdog's own stops restart it.
+
+## `yield`
+
+A long head that fits lets short jobs it would displace go first, until a deadline it publishes.
+
+| key | type | meaning |
+|---|---|---|
+| `head` | string | the head's ticket id, equal to the top-level `head` |
+| `until_ns` | int | the deadline, by the wall clock: no short job starts that is expected to end after it, and the head starts by then or as soon as the room allows after it |
+| `last_pass_ns` | int | when a short job last started past it; 0 before any |
 
 ## `start_requests[]`
 

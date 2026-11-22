@@ -33,7 +33,7 @@ type Outcome struct {
 	Noted                            bool   // the ticket has its note: it fits on the host and waits for Docker's VM
 	DockerUngated                    string // why a request with a Docker need is not gated (Grant.DockerUngated)
 	YieldUntilNS                     int64  // a yielding head's deadline
-	YieldEnded                       string // why the head's yield ended at this attempt: record, deadline, clock, overrun, headship, no_taker
+	YieldEnded                       string // why the head's yield ended: record, deadline, clock, overrun, headship, no_taker
 }
 
 // Admission is the outcome of the attempt that admitted the grant; zero for a grant no attempt made.

@@ -28,6 +28,7 @@ type yieldState struct {
 	fitSince     time.Duration // since when the head has fit in a row, on the monotonic clock; -1 when it does not
 	lastPass     int64         // the record's last_pass_ns when fitSince was last reset
 	untilNS      int64
+	ended        string // why the yield ended, "" while it runs or before
 }
 
 // short reports whether a waiter of need, typical run time typicalS and restart is short beside a
@@ -60,7 +61,7 @@ func (t *Ticket) yieldEnds(sec *store.Section, holds []liveHold) error {
 	now, why := t.e.clock.Realtime(), ""
 	switch {
 	case !ok || rec.Head != t.id.String():
-		t.yield.active, t.out.YieldEnded = false, "record" // another may have removed it as stale: keep its file
+		t.yield.active, t.yield.ended = false, "record" // another may have removed it as stale: keep its file
 		return nil
 	case now >= rec.UntilNS:
 		why = "deadline"
@@ -79,7 +80,7 @@ func (t *Ticket) yieldEnds(sec *store.Section, holds []liveHold) error {
 
 // endYield ends the running yield for why and removes its record.
 func (t *Ticket) endYield(sec *store.Section, why string) error {
-	t.yield.active, t.out.YieldEnded = false, why
+	t.yield.active, t.yield.ended = false, why
 	return sec.RemoveYield()
 }
 

@@ -99,6 +99,12 @@ type MemInfo struct {
 	RoomMiB     int64 // the room a new job may take before FreeMiB clamps it at 0: negative when over-reserved
 }
 
+// YieldInfo is the head's valid yield record (PROTOCOL.md section 7.17), wall-clock times.
+type YieldInfo struct {
+	Head                string
+	UntilNS, LastPassNS int64
+}
+
 // StartInfo is one pending start request.
 type StartInfo struct {
 	Ticket      string // the ticket id
@@ -136,16 +142,20 @@ type Report struct {
 	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)
 	ReconciledNS     int64
 	Mem              MemInfo
-	ConfigError      string         // set when the memory could not be read
-	ConfigErr        error          // the error ConfigError is the reason of
-	Config           config.Config  // the configuration this snapshot read; zero when it could not be read
-	Tickets          []TicketInfo   // in queue order
-	Holds            []HolderInfo   // live holds, in name order
-	DeadHolds        []string       // names of holds whose probe succeeded, awaiting reconciliation
-	Cancels          []string       // pending cancel requests (ticket ids)
-	Starts           []StartInfo    // pending start requests
-	Ignored          map[string]int // per directory: entries that do not match the grammar or whose body is malformed
-	Section          SectionInfo
-	Watch            WatchInfo
-	Degraded         *DegradedInfo // nil when degraded mode is not recorded
+	ConfigError      string        // set when the memory could not be read
+	ConfigErr        error         // the error ConfigError is the reason of
+	Config           config.Config // the configuration this snapshot read; zero when it could not be read
+	Tickets          []TicketInfo  // in queue order
+	Holds            []HolderInfo  // live holds, in name order
+	DeadHolds        []string      // names of holds whose probe succeeded, awaiting reconciliation
+	Cancels          []string      // pending cancel requests (ticket ids)
+	Starts           []StartInfo   // pending start requests
+	// Head is the id of the ticket a waiter's re-election would pick: the first live ticket in
+	// queue order without a note, "" with none. Yield is its valid yield record, nil with none.
+	Head     string
+	Yield    *YieldInfo
+	Ignored  map[string]int // per directory: entries that do not match the grammar or whose body is malformed
+	Section  SectionInfo
+	Watch    WatchInfo
+	Degraded *DegradedInfo // nil when degraded mode is not recorded
 }

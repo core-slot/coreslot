@@ -204,7 +204,7 @@ func (t *Ticket) publishAdmission(sec *store.Section, dock *DockerReading, force
 	if t.status != statusWaiting {
 		return nil, ErrCanceled
 	}
-	t.out.DockerUngated = t.ungated
+	t.out.DockerUngated, t.out.YieldEnded = t.ungated, t.yield.ended
 	need := t.req.NeedMiB
 	g := &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
 	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock, forced); err != nil {
