@@ -33,13 +33,13 @@ func newDockerSource(sockets []string) engine.DockerSource {
 		if r.Code != "" || r.OtherEngine {
 			return engine.DockerReading{StartedNS: started}
 		}
-		return engine.DockerReading{OK: true, VMMiB: r.VMMiB, FreeEstMiB: r.FreeEstMiB(), VMNowMiB: vm.FootprintMiB, StartedNS: started}
+		return engine.DockerReading{OK: true, VMMiB: r.VMMiB, FreeEstMiB: r.FreeEstMiB(), VMNowMiB: vm.FootprintMiB, VMM: vm.VMM, StartedNS: started}
 	}}
 }
 
 // dockerGate is an attempt admitted on its Docker need: the VM growth its hold reserves on the
 // Mac, from V of the reading that admitted it, its need, and at each sample of its containers
-// their footprint and what the VM holds now. The VM is read from the process last identified,
+// their footprint, what the VM holds now and the VM's backend. The VM is read from the process last identified,
 // one proc_pid_rusage and no Docker call, and looked for again when that process is gone.
 type dockerGate struct {
 	needMiB, vMiB int64
@@ -67,7 +67,7 @@ func (d *dockerGate) sampled(footprintMiB, sampledNS int64) {
 		}
 	}
 	if ok {
-		d.growthMiB, d.known = min(state.Growth(d.vMiB, now, d.needMiB, footprintMiB), spec.MaxNeedMiB), true
+		d.growthMiB, d.known = min(state.Growth(d.vMiB, now, d.needMiB, footprintMiB, d.vm.VMM), spec.MaxNeedMiB), true
 	}
 }
 

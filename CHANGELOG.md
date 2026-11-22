@@ -20,7 +20,8 @@ All notable changes to this project are recorded here. The format follows
   waiting run's `docker_mem` and VM wait; `status --json` carries them as `docker_need_mib` and `docker_growth_mib`
   on holds and `docker_need_mib` and `vm_wait` on tickets, under the same `schema` 1. The telemetry `waiting` line's
   `reason` gains `vm_room_short` and `docker_no_reading`. README, "Waiting for Docker's VM", says what the
-  reservation does not hold back.
+  reservation does not hold back. The growth reserved is up to twice the unfilled need on Apple's hypervisor, whose
+  VM keeps the pages a transient touched, and one and a half times on Docker VMM, which gives them back.
 
 ### Changed
 

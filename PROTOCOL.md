@@ -1165,12 +1165,19 @@ process that is not identified makes a **failed** reading. In MiB:
 docker_reserve = min(3072, V / 4)                                       (integer division)
 docker_room    = free_est − docker_reserve
                           − Σ over live gated holds of max(0, docker_need − docker_footprint)
-growth         = min(max(0, V − vm_now), 2 × max(0, docker_need − docker_footprint))
+left           = max(0, docker_need − docker_footprint)
+growth         = min(max(0, V − vm_now), 2 × left)               on Apple's hypervisor
+growth         = min(max(0, V − vm_now), (3 × left + 1) / 2)     on Docker VMM   (integer division)
 ```
 
 A **live gated hold** is a live hold (section 12.1) whose body carries `docker_need_mib`; an absent
-`docker_footprint_mib` counts 0. The factor 2 is the most Docker's VM was measured to take on the
-host per MiB its containers newly reached; the first term is what the VM can still take at all.
+`docker_footprint_mib` counts 0. The factor, 2 or 3/2 rounded up, is the most Docker's VM was
+measured to take on the host per MiB its containers newly reached: on Apple's hypervisor a
+transient that touches twice what it keeps grows the VM by twice, and the VM keeps those pages; on
+Docker VMM the same transient is given back within seconds and what stays was at most 1.48 times.
+The backend is that of the VM process the reading identified (the implementation note below); only
+the run that writes `docker_growth_mib` computes it, and every other client reads the number. The
+first term is what the VM can still take at all.
 
 **An attempt.** A gated ticket attempts when any ticket would (sections 10.3 and 12.1), through steps
 1 to 6 of section 12.1. Its **host test** is steps 4 and 6, the room and the level gate, with its own
@@ -1978,7 +1985,7 @@ start until it exits, in both modes of section 23.6. Each tick:
    A gated hold (section 12.6) keeps its three Docker keys while its run sees its containers. At
    each sample of them that completes, its run writes `docker_sampled_ns`, the sample's end, and
    `docker_growth_mib`, the `growth` of section 12.6 from its Docker need, the sample's footprint, the `V` of the
-   reading that admitted it and `vm_now` read from the VM process it last identified, looked for
+   reading that admitted it, and `vm_now` and the backend of the VM process it last identified, looked for
    again once that process is gone; when it finds none it keeps the last `docker_growth_mib`, since
    unknown is not zero. A run that loses sight of its containers, or whose forwarder did not start,
    writes none of the three from then on, and its hold reserves no growth.
