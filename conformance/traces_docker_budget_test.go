@@ -61,8 +61,9 @@ func TestTraceThreeGatedContainerRequests(t *testing.T) {
 
 // A gated hold's reservation lowers the room every other client computes: by twice its unfilled need
 // on a fresh VM, less as its container grows, nothing once the VM's footprint reaches its size, and
-// more again when the footprint falls, as on Docker VMM, which gives freed memory back. Mutation: a
-// room that leaves the holds' growth out stays at the need's term alone.
+// more again when the footprint falls; after Docker restarts on Docker VMM, by 3/2 of its unfilled
+// need. Mutations: a room that leaves the holds' growth out stays at the need's term alone; a
+// factor that does not follow the VM's backend keeps 2048 on VMM.
 func TestTraceReservationLowersHostRoom(t *testing.T) {
 	const roomMiB = 8192
 	mine := dockertest.ID('a')
@@ -98,6 +99,10 @@ func TestTraceReservationLowersHostRoom(t *testing.T) {
 	reserves(0)
 	e.SetReadings(vm(7168))
 	reserves(1024) // min(8192 − 7168, 2 × 1024)
+	restarted := vm(2048)
+	restarted["DockerVMPID"], restarted["DockerVMVMM"] = vmPID+1, 1
+	e.SetReadings(restarted)
+	reserves(1536) // min(8192 − 2048, 3/2 × 1024)
 	e.finish(g)
 }
 

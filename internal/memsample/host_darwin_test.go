@@ -25,6 +25,12 @@ func TestReadHostDarwinLive(t *testing.T) {
 	if b.Decomp < a.Decomp || b.SwapIns < a.SwapIns {
 		t.Errorf("counters went back: %+v then %+v", a, b)
 	}
+	// The load and HOST_CPU_LOAD_INFO read, and a second of ticks passes on every core at 100 Hz.
+	// Mutation: a wrong flavor fails the call and leaves CPUTotal 0.
+	if !a.HasLoad || a.CPUTotal == 0 || b.CPUTotal <= a.CPUTotal || b.CPUBusy < a.CPUBusy || b.CPUBusy > b.CPUTotal {
+		t.Errorf("CPU: load %v (%v), ticks %d/%d then %d/%d; want a load and ticks that advance", a.HasLoad, a.Load1,
+			a.CPUBusy, a.CPUTotal, b.CPUBusy, b.CPUTotal)
+	}
 	if span := time.Duration(b.WallNS - a.WallNS); span < time.Second || span > 3*time.Second {
 		t.Errorf("WallNS advanced %v over a 1 s sleep", span)
 	}

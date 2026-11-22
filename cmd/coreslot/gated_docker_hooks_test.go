@@ -111,6 +111,22 @@ func TestGatedRunByDockerMem(t *testing.T) {
 	}
 }
 
+// On Docker VMM the reading that admits the run carries the backend, and the hold reserves
+// min(8192 − 2048, 3/2 × 2048) = 3072 MiB. Mutation: newDockerSource leaving the backend out of
+// the reading gives 4096.
+func TestGatedRunOnVMMReservesThreeHalves(t *testing.T) {
+	b := newFwBed(t, gatedNeeds("g"))
+	r := calm(0)
+	r["DockerVMState"], r["DockerVMPID"], r["DockerVMFootprintMiB"], r["DockerVMVMM"] = 1, vmPID, vmNowMiB, 1
+	b.readings(r)
+	if res := b.run(t, "g", saveHold); res.code != 0 {
+		t.Fatalf("exit %d: %s", res.code, res.stderr)
+	}
+	if growth, _ := num(b.hold(t), "docker_growth_mib"); growth != 3072 {
+		t.Errorf("docker_growth_mib %v; want 3072", growth)
+	}
+}
+
 // A docker_mem that is not a size above 0 makes the entry unreadable: no forwarder, no gate, the
 // needs-entry note once. Mutation: accepting a docker_mem of 0 engages the container command.
 func TestBadDockerMemNoForwarderNoGate(t *testing.T) {

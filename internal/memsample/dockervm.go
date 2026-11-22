@@ -19,21 +19,25 @@ const (
 )
 
 // VM is Docker Desktop's VM process: the process of one of its VM programs in the resource
-// coalition of Docker's backend. PID, StartNS and FootprintMiB are set only when State is
+// coalition of Docker's backend. PID, StartNS, FootprintMiB and VMM are set only when State is
 // VMIdentified.
 type VM struct {
 	State        VMState
 	PID          int
 	StartNS      int64
 	FootprintMiB int64
+	VMM          bool // the VM runs on Docker VMM, which gives freed memory back to the Mac
 }
 
 // The executables DockerVM matches, by the last element of their path: Docker's backend, and the VM
 // programs of its two backends, Apple's Virtualization framework and Docker VMM. The kernel keeps 16
 // bytes of a name in p_comm and 32 in pbi_name, which cut them, so the path is what is compared.
-const dockerBackendExe = "com.docker.backend"
+const (
+	dockerBackendExe = "com.docker.backend"
+	dockerVMMExe     = "com.docker.sailor"
+)
 
-var dockerVMExes = []string{"com.apple.Virtualization.VirtualMachine", "com.docker.sailor"}
+var dockerVMExes = []string{"com.apple.Virtualization.VirtualMachine", dockerVMMExe}
 
 // isVMExe reports whether p runs one of the VM programs.
 func isVMExe(p string) bool { return slices.Contains(dockerVMExes, path.Base(p)) }
@@ -105,7 +109,7 @@ func dockerVM(list func() ([]vmProc, bool), footprint func(pid int) (mib int64, 
 		if !ok {
 			return VM{State: VMNotRunning} // gone since the listing
 		}
-		return VM{State: VMIdentified, PID: found[0].PID, StartNS: found[0].StartNS, FootprintMiB: mib}
+		return VM{State: VMIdentified, PID: found[0].PID, StartNS: found[0].StartNS, FootprintMiB: mib, VMM: exeIs(found[0].Exec, dockerVMMExe)}
 	}
 	return VM{State: VMNotIdentified}
 }
@@ -115,17 +119,18 @@ const (
 	readingVMState     = "DockerVMState"
 	readingVMFootprint = "DockerVMFootprintMiB"
 	readingVMPID       = "DockerVMPID"
+	readingVMVMM       = "DockerVMVMM"
 )
 
 // DockerVM finds Docker Desktop's VM process: the process of one of its VM programs in the
 // resource coalition of Docker's backend. It lists the user's processes once and keeps nothing. In
-// a test build the readings hook replaces its state (0, 1 or 2), footprint and pid, the pid
-// standing for the start time too.
+// a test build the readings hook replaces its state (0, 1 or 2) and with it the backend (Docker
+// VMM when DockerVMVMM is 1), its footprint and pid, the pid standing for the start time too.
 func DockerVM() VM {
 	v := lookupVM()
 	if nums, set := testhooks.Readings(); set {
 		if s, ok := nums[readingVMState]; ok {
-			v.State = VMState(s)
+			v.State, v.VMM = VMState(s), nums[readingVMVMM] == 1 // the hook's VM, never the host's backend
 		}
 		if f, ok := nums[readingVMFootprint]; ok {
 			v.FootprintMiB = f
