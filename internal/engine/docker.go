@@ -40,6 +40,7 @@ type DockerReading struct {
 	VMMiB      int64 // V, the VM's memory as the engine reports it
 	FreeEstMiB int64 // V less what the running containers use
 	VMNowMiB   int64 // what the VM's process holds on the host now
+	VMM        bool  // the VM runs on Docker VMM, which sets the growth factor (state.Growth)
 	StartedNS  int64 // the wall clock (store.NowNS) just before the reading's first request
 }
 

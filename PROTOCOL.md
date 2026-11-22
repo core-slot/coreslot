@@ -787,9 +787,12 @@ whatever a client reports. It is written and removed only inside the section, re
 `rename` (section 11), without a `gen` bump; it is read with no section. The file itself is checked as
 in section 4.2. Being in `$S`, it is per machine; the configuration file stays each machine's default,
 and an override wins over a later edit of it until removed or ended. A reset removes it (section 4.4).
+The override is a convenience against no one: any process of the user can write it, as it can edit the
+configuration, and it refuses nothing; it changes only what the configuration already lets the same
+user change. A switch by hand has no end unless one is given, and `status` saying so is the reminder.
 
-> **Implementation note.** `coreslot watch observe|enforce [--for DURATION]` writes it, `--for` of
-> 1 min or more giving `until_ns`; `coreslot watch config` removes it. `status` shows the source in its
+> **Implementation note.** `coreslot watch observe|enforce [--for DURATION]` writes it, `--for` giving
+> `until_ns`; `coreslot watch config` removes it. `status` shows the source in its
 > watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and `watch.mode_until_ns`
 > whether or not a job runs.
 
@@ -1222,12 +1225,19 @@ process that is not identified makes a **failed** reading. In MiB:
 docker_reserve = min(3072, V / 4)                                       (integer division)
 docker_room    = free_est − docker_reserve
                           − Σ over live gated holds of max(0, docker_need − docker_footprint)
-growth         = min(max(0, V − vm_now), 2 × max(0, docker_need − docker_footprint))
+left           = max(0, docker_need − docker_footprint)
+growth         = min(max(0, V − vm_now), 2 × left)               on Apple's hypervisor
+growth         = min(max(0, V − vm_now), (3 × left + 1) / 2)     on Docker VMM   (integer division)
 ```
 
 A **live gated hold** is a live hold (section 12.1) whose body carries `docker_need_mib`; an absent
-`docker_footprint_mib` counts 0. The factor 2 is the most Docker's VM was measured to take on the
-host per MiB its containers newly reached; the first term is what the VM can still take at all.
+`docker_footprint_mib` counts 0. The factor, 2 or 3/2 rounded up, is the most Docker's VM was
+measured to take on the host per MiB its containers newly reached: on Apple's hypervisor a
+transient that touches twice what it keeps grows the VM by twice, and the VM keeps those pages; on
+Docker VMM the same transient is given back within seconds and what stays was at most 1.48 times.
+The backend is that of the VM process the reading identified (the implementation note below); only
+the run that writes `docker_growth_mib` computes it, and every other client reads the number. The
+first term is what the VM can still take at all.
 
 **An attempt.** A gated ticket attempts when any ticket would (sections 10.3 and 12.1), through steps
 1 to 6 of section 12.1. Its **host test** is steps 4 and 6, the room and the level gate, with its own
@@ -1427,7 +1437,7 @@ another format a client publishes no cancel or start request, trim request or un
 `degraded`, and does not remove its own hold after a run. A fail-open run still
 runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 5
 when nothing of either format is live, the other format's run log removed with the rest, except a
-format-3 directory's, which the upgrade keeps (section 4.4).
+format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
 
 > **Implementation note.** The Go CLI refuses cancellation, a start, a trim and `doctor --clear` under
 > another format, with the same notice.
@@ -1569,7 +1579,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `start`: the request was not published, for the same reasons, while a run that does not answer within the wait is exit 0; `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `start`: the request was not published, for the same reasons, while a run that does not answer within the wait is exit 0; `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -2094,7 +2104,7 @@ start until it exits, in both modes of section 23.6. Each tick:
    A gated hold (section 12.6) keeps its three Docker keys while its run sees its containers. At
    each sample of them that completes, its run writes `docker_sampled_ns`, the sample's end, and
    `docker_growth_mib`, the `growth` of section 12.6 from its Docker need, the sample's footprint, the `V` of the
-   reading that admitted it and `vm_now` read from the VM process it last identified, looked for
+   reading that admitted it, and `vm_now` and the backend of the VM process it last identified, looked for
    again once that process is gone; when it finds none it keeps the last `docker_growth_mib`, since
    unknown is not zero. A run that loses sight of its containers, or whose forwarder did not start,
    writes none of the three from then on, and its hold reserves no growth.
@@ -2299,8 +2309,8 @@ the mode at the run's own later tick.
 ### 23.6 Observe mode and the sample log
 
 The mode is the effective mode of section 7.15: this machine's override while it holds, else the
-configuration's. A round already written keeps its mode (section 23.5): switching to observe does not
-stop the runs an enforce round has listed. With the effective mode observe every step runs, the stop list included, except the kill: a run whose hold
+configuration's. A round already written keeps its mode (section 23.5): an enforce round written before a
+switch to observe still stops the runs it listed. With the effective mode observe every step runs, the stop list included, except the kill: a run whose hold
 is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
 (deprecated) or `[telemetry] enabled = true` the ticker that takes a machine sample appends one JSON line to
 `$S/telemetry/samples.jsonl` with the readings, `E`, the level and the bucket, in either mode. The

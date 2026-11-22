@@ -22,20 +22,14 @@ import (
 // itself is a usage error.
 func moveCommand(args []string, io IO) int {
 	fs, label, _, last, before, after := moveFlags()
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				fmt.Fprintln(io.Stdout, moveUsage)
-				return 0
-			}
-			fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), moveUsage)
-			return exitUsage
+	positional, err := parseInterleaved(fs, args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(io.Stdout, moveUsage)
+			return 0
 		}
-		if fs.NArg() == 0 {
-			break
-		}
-		positional, args = append(positional, fs.Arg(0)), fs.Args()[1:]
+		fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), moveUsage)
+		return exitUsage
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })

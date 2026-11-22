@@ -18,8 +18,18 @@ var hasPSI = sync.OnceValue(func() bool {
 	return err == nil && ok
 })
 
+// hasPSICPU reports, likewise, whether the kernel reports CPU pressure.
+var hasPSICPU = sync.OnceValue(func() bool {
+	data, err := os.ReadFile(procPSICPU)
+	_, ok := psiTotal(string(data), "some")
+	return err == nil && ok
+})
+
+const procPSICPU = "/proc/pressure/cpu"
+
 // readHost reads pswpin of /proc/vmstat, the swap and MemAvailable of /proc/meminfo, the PSI
-// memory stall where the kernel reports it, and the two clocks.
+// memory stall where the kernel reports it, the load averages, CPU ticks and PSI CPU stall where
+// they read, and the two clocks.
 func readHost() (HostReading, error) {
 	var r HostReading
 	data, err := os.ReadFile("/proc/vmstat")
@@ -45,6 +55,19 @@ func readHost() (HostReading, error) {
 	if hasPSI() {
 		if data, err := os.ReadFile(procPSI); err == nil {
 			r.PSISomeUS, r.HasPSI = psiTotal(string(data), "some")
+		}
+	}
+	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
+		r.Load1, r.Load5, r.HasLoad = loadavgLinux(string(data))
+	}
+	if data, err := os.ReadFile("/proc/stat"); err == nil {
+		if busy, total, ok := cpuTicksLinux(string(data)); ok {
+			r.CPUBusy, r.CPUTotal = busy, total
+		}
+	}
+	if hasPSICPU() {
+		if data, err := os.ReadFile(procPSICPU); err == nil {
+			r.PSICPUSomeUS, r.HasPSICPU = psiTotal(string(data), "some")
 		}
 	}
 	r.WallNS, r.AwakeNS, err = clocks()

@@ -18,11 +18,15 @@ All notable changes to this project are recorded here. The format follows
   `unanswered`), under the same `schema` 1, and the `admitted` telemetry line's `pass` gains `forced`.
 
 - `coreslot watch observe` and `coreslot watch enforce` switch the watchdog's mode on this machine, until
-  `coreslot watch config` or, with `--for DURATION` (1 min or more), for a while; the configuration file is never
+  `coreslot watch config` or, with `--for DURATION`, for a while; the configuration file is never
   written, and a stop round already written still acts. `status` shows an override in its watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and
   `watch.mode_until_ns` whether or not a job runs, under the same `schema` 1. The `enqueue` telemetry's `mode` is
   the mode in force.
 
+- Telemetry records the host's CPU without acting on it: each sample line gains `ncpu`, `load1` and `load5`,
+  `cpu_busy_pct` (the busy part of the CPU ticks since the previous sample) and, on Linux with PSI,
+  `psi_cpu_some_us_s`. Each key is absent where it was not read, never 0. A run's `ended` line gains `tree_cpu_s`,
+  its hold's tree CPU summed over its watch ticks. Admission is unchanged.
 - On macOS, a label's Docker need, `docker_mem` in `needs.toml`: each of its runs that gets a forwarder waits until
   that much fits inside Docker Desktop's VM, as well as its own need on the Mac, reading Docker's socket at most
   once every 2 s, plus one immediate retry, while it could otherwise start. Once started, its hold reserves on the
@@ -33,7 +37,8 @@ All notable changes to this project are recorded here. The format follows
   waiting run's `docker_mem` and VM wait; `status --json` carries them as `docker_need_mib` and `docker_growth_mib`
   on holds and `docker_need_mib` and `vm_wait` on tickets, under the same `schema` 1. The telemetry `waiting` line's
   `reason` gains `vm_room_short` and `docker_no_reading`. README, "Waiting for Docker's VM", says what the
-  reservation does not hold back.
+  reservation does not hold back. The growth reserved is up to twice the unfilled need on Apple's hypervisor, whose
+  VM keeps the pages a transient touched, and one and a half times on Docker VMM, which gives them back.
 
 ### Changed
 

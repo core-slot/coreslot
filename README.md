@@ -172,8 +172,8 @@ or restarting, its VM not found), or once the need can never fit the VM, it wait
 and says so when it starts. A run that fits on the Mac and waits only for the VM shows `waits for
 Docker's VM` in `status`, and every other run passes it: a `go test` or a `docker compose down`
 behind it starts. Once started, its hold reserves on the Mac the growth its containers may still
-cause the VM, up to twice what they have yet to reach of the need and never more than the VM can
-still grow. `status` shows each hold's `docker_mem`, its `docker footprint` and what is `reserved on
+cause the VM, up to twice what they have yet to reach of the need on Apple's hypervisor and one
+and a half times on Docker VMM, and never more than the VM can still grow. `status` shows each hold's `docker_mem`, its `docker footprint` and what is `reserved on
 the Mac for Docker's VM`, and each waiting run's `docker_mem`. Docker Desktop's VM is read on
 Apple's hypervisor and on Docker VMM alike. `--mem` and `mem` stay the memory of the command's own
 processes: on a command named `docker`, a pin reserves that on the Mac and makes it queue as usual,
@@ -187,11 +187,13 @@ What the reservation does not hold back:
   the watchdog stops other commands to make up for it.
 - Growth caused by Docker work without a Docker need, and by the VM's file cache, is not reserved.
 - A run whose containers never reach its need (a stack that was already up, a need set too large)
-  keeps up to twice the need reserved for as long as it runs, on a VM that has not grown to its
-  size.
+  keeps up to twice the need reserved (one and a half times on Docker VMM) for as long as it runs,
+  on a VM that has not grown to its size.
 - On Docker VMM the VM gives memory back to the Mac as its containers free it, so a hold reserves
   for as long as its containers have not filled its need, and for up to 6 s after the VM gives
-  memory back its reservation can be too low. On Apple's hypervisor a VM grown to its size
+  memory back its reservation can be too low. The factor 1.5 does not cover a transient that briefly
+  touches more, which Docker VMM gives back within about 2 s, and of the guest's cache creeping
+  above it after a step. On Apple's hypervisor a VM grown to its size
   reserves nothing more.
 - Runs behind one that waits for the VM may take Mac memory it needs. Room in the VM goes to
   waiting runs in arrival order, so containers outside coreslot that keep the VM full hold every
@@ -538,7 +540,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 4
+- [Protocol](PROTOCOL.md), the normative definition of format 5
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)

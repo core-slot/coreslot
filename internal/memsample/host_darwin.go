@@ -13,7 +13,7 @@ import (
 const vmVolume = "/System/Volumes/VM"
 
 // readHost reads the paging counters of host_statistics64, vm.swapusage, the free space of the
-// VM volume and the two clocks.
+// VM volume, the load averages and CPU ticks where they read, and the two clocks.
 func readHost() (HostReading, error) {
 	var r HostReading
 	var err error
@@ -32,6 +32,12 @@ func readHost() (HostReading, error) {
 		return r, fmt.Errorf("statfs %s: %w", vmVolume, err)
 	}
 	r.VMVolumeFreeMiB = int64(fs.Bavail * uint64(fs.Bsize) >> 20)
+	if b, err := unix.SysctlRaw("vm.loadavg"); err == nil {
+		r.Load1, r.Load5, r.HasLoad = loadavgDarwin(b)
+	}
+	if busy, total, ok := cpuTicks(); ok {
+		r.CPUBusy, r.CPUTotal = busy, total
+	}
 	r.WallNS, r.AwakeNS, err = clocks()
 	return r, err
 }
