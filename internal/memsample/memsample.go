@@ -78,8 +78,9 @@ type Root struct {
 // Footprints returns, for each root, the summed footprint in MiB of its descendants, the root
 // itself excluded, from one listing of the process table: the quantity Tree sums. A root that
 // passes Alive and has no readable descendant has an entry of 0; a root whose PID is below 2,
-// absent or reused has none. ok is false, with no entries, when the table cannot be read.
-func Footprints(roots []Root) (mib map[int]int64, ok bool) {
+// absent or reused has none, so two roots of one pid never share an entry. ok is false, with no
+// entries, when the table cannot be read.
+func Footprints(roots []Root) (mib map[Root]int64, ok bool) {
 	procs, ok := Listing()
 	if !ok {
 		return nil, false
@@ -89,12 +90,12 @@ func Footprints(roots []Root) (mib map[int]int64, ok bool) {
 
 // footprints is Footprints over the listing procs, reading each process with read: its own
 // memory and its shared memory, in KiB. A tree's shared memory counts once, its largest.
-func footprints(roots []Root, procs map[int]Proc, read func(pid int) (kib, shmKiB int64, ok bool)) map[int]int64 {
+func footprints(roots []Root, procs map[int]Proc, read func(pid int) (kib, shmKiB int64, ok bool)) map[Root]int64 {
 	parents := make(map[int]int, len(procs))
 	for pid, p := range procs {
 		parents[pid] = p.PPID
 	}
-	out := make(map[int]int64, len(roots))
+	out := make(map[Root]int64, len(roots))
 	for _, r := range roots {
 		if r.PID < 2 || !Alive(procs, r.PID, r.StartNS) {
 			continue
@@ -108,7 +109,7 @@ func footprints(roots []Root, procs map[int]Proc, read func(pid int) (kib, shmKi
 				kib, shm = kib+k, max(shm, s)
 			}
 		}
-		out[r.PID] = (kib + shm) >> 10
+		out[r] = (kib + shm) >> 10
 	}
 	return out
 }

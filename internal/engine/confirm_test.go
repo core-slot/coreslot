@@ -16,7 +16,7 @@ import (
 // read, so that no test depends on the trees of the machine it runs on; a test of the confirmation
 // sets the measurement with measure.
 func init() {
-	treeFootprints = func([]memsample.Root) (map[int]int64, bool) { return nil, false }
+	treeFootprints = func([]memsample.Root) (map[memsample.Root]int64, bool) { return nil, false }
 }
 
 // measure makes the confirmation measure the trees mib gives by pid (ok false: the process table
@@ -26,7 +26,7 @@ func measure(t *testing.T, mib map[int]int64, ok bool, between func()) *int {
 	t.Helper()
 	calls := new(int)
 	saved := treeFootprints
-	treeFootprints = func(roots []memsample.Root) (map[int]int64, bool) {
+	treeFootprints = func(roots []memsample.Root) (map[memsample.Root]int64, bool) {
 		*calls++
 		if between != nil {
 			between()
@@ -34,10 +34,10 @@ func measure(t *testing.T, mib map[int]int64, ok bool, between func()) *int {
 		if !ok {
 			return nil, false
 		}
-		out := map[int]int64{}
+		out := map[memsample.Root]int64{}
 		for _, r := range roots {
 			if v, in := mib[r.PID]; in {
-				out[r.PID] = v
+				out[r] = v
 			}
 		}
 		return out, true
@@ -73,6 +73,29 @@ func TestConfirmationRefusesMemoryAHoldFreed(t *testing.T) {
 	if d, _, _, _ := e.st.ReadWatch(); d.LastAdmitNS != 0 {
 		t.Errorf("a refused confirmation recorded a start: %d", d.LastAdmitNS)
 	}
+}
+
+// Two holds share a pid: one whose run had another start, which the measurement does not read, and
+// the live run's. The first keeps its written footprint, so 3072 MiB still fits. Mutation: matching
+// the measurement by pid alone gives it the live tree's 512 and refuses.
+func TestConfirmationMatchesTreesByPIDAndStart(t *testing.T) {
+	dir := capped(t, 6144)
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	pid := 4000 + int(otherHolds.Add(1))
+	lockHere(t, writeHold(t, dir, wire.Hold{Label: "earlier", PID: pid, StartNS: 1, NeedMiB: 4096, FootprintMiB: 3072}))
+	lockHere(t, writeHold(t, dir, wire.Hold{Label: "live", PID: pid, StartNS: 2, NeedMiB: 512, FootprintMiB: 512}))
+	setWatch(t, e, clk, watch.Detector{YellowClearedNS: sampleWallNS - 1e9}, 0)
+	saved := treeFootprints
+	treeFootprints = func([]memsample.Root) (map[memsample.Root]int64, bool) {
+		return map[memsample.Root]int64{{PID: pid, StartNS: 2}: 512}, true // Footprints reads only the live start
+	}
+	t.Cleanup(func() { treeFootprints = saved })
+	r := step(t, enqueue(t, e, need(3072)))
+	if !isAdmitted(r) {
+		t.Fatalf("got %#v; want admitted, the earlier hold keeping its written 3072 MiB", r)
+	}
+	r.(Admitted).Close()
 }
 
 // A refused confirmation reports no pass, though the waiter had passed the head by duration.

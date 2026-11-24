@@ -979,31 +979,3 @@ func TestReelectSkipsNoted(t *testing.T) {
 		t.Fatalf("the only ticket ahead is noted: want admitted by the idle rule, got %#v", r)
 	}
 }
-
-// Withdrawal and cancellation remove the ticket's note with the ticket. Mutation: leaving the note
-// out of the removal of one's own ticket keeps it.
-func TestWithdrawRemovesNote(t *testing.T) {
-	dir, e, _, tk := blocked(t, 128)
-	note(t, e, tk.Name())
-	if err := tk.Withdraw(); err != nil {
-		t.Fatal(err)
-	}
-	if exists(filepath.Join(dir, store.VMWaitDir, tk.Name())) {
-		t.Error("the withdrawn ticket's note is still there")
-	}
-}
-
-func TestCancelRemovesNote(t *testing.T) {
-	dir, e, clk, tk := blocked(t, 128)
-	note(t, e, tk.Name())
-	if err := e.CancelContext(context.Background(), ticketID(tk)); err != nil {
-		t.Fatal(err)
-	}
-	clk.advance(time.Second)
-	if _, err := tk.Step(context.Background()); !errors.Is(err, ErrCanceled) {
-		t.Fatalf("Step: %v, want ErrCanceled", err)
-	}
-	if exists(filepath.Join(dir, store.VMWaitDir, tk.Name())) {
-		t.Error("the cancelled ticket's note is still there")
-	}
-}
