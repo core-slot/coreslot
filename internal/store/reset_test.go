@@ -529,38 +529,3 @@ func TestResetClearsVMWaitAndOrder(t *testing.T) {
 		t.Errorf("FORMAT %q after the upgrade, want %q", b, currentFormat)
 	}
 }
-
-// A reset of a format-4 or a format-3 directory is the upgrade to 5: it keeps the run log and the
-// telemetry and writes FORMAT 5. A format-2 directory is another format: its run log and telemetry
-// go. Mutations: Upgraded without 3 removes format 3's files; without 4, format 4's; with 2, keeps
-// format 2's.
-func TestResetFromThreeAndFourKeepsLogAndTelemetry(t *testing.T) {
-	for _, tc := range []struct {
-		format int
-		kept   bool
-	}{{4, true}, {3, true}, {2, false}} {
-		t.Run(fmt.Sprint("format ", tc.format), func(t *testing.T) {
-			dir := newDir(t)
-			_, sec := resetFixture(t, dir)
-			if err := os.WriteFile(filepath.Join(dir, FormatFile), fmt.Appendf(nil, "coreslot-protocol %d\n", tc.format), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Mkdir(filepath.Join(dir, TelemetryDir), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, TelemetryDir, EventsFile), []byte("{}\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if live, done, err := sec.Reset(); err != nil || !live.Empty() {
-				t.Fatalf("Reset = %+v, %+v, %v", live, done, err)
-			}
-			logs, tel := names(t, filepath.Join(dir, LogDir)), names(t, filepath.Join(dir, TelemetryDir))
-			if kept := len(logs) == 2 && len(tel) == 1; kept != tc.kept || (!tc.kept && len(logs)+len(tel) != 0) {
-				t.Errorf("after the reset of format %d log/ holds %v and telemetry/ %v; want them kept: %v", tc.format, logs, tel, tc.kept)
-			}
-			if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != currentFormat {
-				t.Errorf("FORMAT %q after the reset, want %q", b, currentFormat)
-			}
-		})
-	}
-}

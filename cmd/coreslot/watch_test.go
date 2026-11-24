@@ -145,3 +145,14 @@ func TestStatusNotesALiveEnforceRound(t *testing.T) {
 		}
 	}
 }
+
+// status dates an override's end against its own clock: an end later the same day prints only its
+// time. Mutations: passing 0 or the wall clock now instead of the view's nowNS dates it.
+func TestStatusDatesTheOverrideByItsClock(t *testing.T) {
+	now := time.Date(2025, 3, 10, 10, 0, 0, 0, time.Local)
+	v := statusView{rep: engine.Report{Watch: engine.WatchInfo{Observe: true, ModeSource: "override",
+		ModeUntilNS: now.Add(time.Hour).UnixNano()}}, nowNS: now.UnixNano()}
+	if line := v.watchLine(); !strings.Contains(line, "switched by hand until 11:00,") {
+		t.Errorf("watch line %q; want the end's time alone", line)
+	}
+}

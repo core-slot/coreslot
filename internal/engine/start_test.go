@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/spec"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/watch"
 	"github.com/core-slot/coreslot/internal/wire"
@@ -206,4 +207,67 @@ func TestStartNowKeepsDockerKeys(t *testing.T) {
 	if hasNote(dir, tk) {
 		t.Error("the note outlived the forced admission")
 	}
+}
+
+// A gated waiter behind the head with no typical run time never attempts admission, so it has never
+// read Docker when its start request comes: the start takes one fresh reading, and the forced hold
+// carries the three Docker keys from it. Mutation: dropping the read in startNow admits it with no
+// Docker need.
+func TestStartNowReadsDockerForAWaiterThatNeverRead(t *testing.T) {
+	dir, e, clk, _ := blocked(t, 128)
+	f := &fakeDocker{clk: clk, reading: DockerReading{OK: true, VMMiB: testVMMiB, FreeEstMiB: 0, VMNowMiB: 8000}}
+	tk := enqueueGated(t, e, gated(64, 1000), f)
+	wantReason(t, waitOutcome(t, tk), ReasonBehindTicket, "")
+	if f.reads != 0 {
+		t.Fatalf("%d readings behind the head; want none", f.reads)
+	}
+	requestStart(t, dir, clk, tk)
+	g := admitted(t, step(t, tk))
+	defer g.Close()
+	if h := ownHold(t, e, g); f.reads != 1 || h.DockerNeedMiB != 1000 || h.DockerGrowthMiB != 2000 || h.DockerSampledNS != f.started || !h.Forced {
+		t.Errorf("%d readings; hold docker need %d, growth %d, sampled %d, forced %v; want 1, 1000, 2000, %d, true",
+			f.reads, h.DockerNeedMiB, h.DockerGrowthMiB, h.DockerSampledNS, h.Forced, f.started)
+	}
+}
+
+// A start request published while an ordinary admission of its ticket is under way leaves exactly
+// one hold, the ordinary one, and goes with the ticket. Mutation: leaving StartDir out of the
+// removal of one's own ticket keeps the request after the admission.
+func TestStartRacingAnAdmissionLeavesOneHold(t *testing.T) {
+	dir := capped(t, 1024)
+	clk := newFakeClock()
+	e := newEngine(t, dir, clk)
+	tk := enqueue(t, e, need(128))
+	old := point
+	t.Cleanup(func() { point = old })
+	point = func(name string) {
+		if name == "admit.before-enter" {
+			point = old
+			requestStart(t, dir, clk, tk)
+		}
+	}
+	g := admitted(t, step(t, tk))
+	defer g.Close()
+	holds, _, _, err := holdListing(e.st, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(holds) != 1 || ownHold(t, e, g).Forced {
+		t.Errorf("%d holds, forced %v; want the one ordinary hold", len(holds), ownHold(t, e, g).Forced)
+	}
+	if exists(filepath.Join(dir, store.StartDir, ticketID(tk).String())) {
+		t.Error("the start request outlived its admitted ticket")
+	}
+}
+
+// A container request starts on its own room beside a forced hold that took the room below zero:
+// its room leaves the holds out (PROTOCOL.md section 13.4). Mutation: counting the holds against a
+// container request's room keeps it waiting.
+func TestContainerRequestBesideAForcedHold(t *testing.T) {
+	dir, e, clk, tk := blocked(t, 128)
+	requestStart(t, dir, clk, tk)
+	forced := admitted(t, step(t, tk))
+	defer forced.Close()
+	g := admitted(t, step(t, enqueue(t, e, spec.Request{Label: "c", NeedMiB: 64, RealMemory: true})))
+	g.Close()
 }

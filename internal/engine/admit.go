@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
@@ -156,18 +157,18 @@ func (t *Ticket) confirm(cfg config.Config, holds []liveHold, need int64) (bool,
 			roots = append(roots, memsample.Root{PID: h.body.PID, StartNS: h.body.StartNS})
 		}
 	}
-	m1, err := t.e.machine()
-	if err != nil {
-		return false, err
-	}
+	m1, err1 := t.e.machine()
 	measured, _ := treeFootprints(roots)
-	m2, err := t.e.machine()
-	if err != nil || !m1.HeadroomOK || !m2.HeadroomOK {
-		return err == nil, err
+	m2, err2 := t.e.machine()
+	if err := cmp.Or(err1, err2); err != nil { // as reading() reports it
+		return false, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
+	}
+	if !m1.HeadroomOK || !m2.HeadroomOK {
+		return true, nil
 	}
 	now := slices.Clone(holds)
-	for i, h := range now {
-		if mib, ok := measured[h.body.PID]; ok && !h.unparsed {
+	for i, h := range now { // an unparsed hold, not measured, matches no root
+		if mib, ok := measured[memsample.Root{PID: h.body.PID, StartNS: h.body.StartNS}]; ok {
 			now[i].body.FootprintMiB = mib
 		}
 	}
