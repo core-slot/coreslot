@@ -187,7 +187,7 @@ func TestFootprintsSumsDescendants(t *testing.T) {
 	if !ok || !treeOK {
 		t.Fatalf("Footprints ok %v, Tree ok %v", ok, treeOK)
 	}
-	if mib := got[root.PID]; mib < 540 || mib > 760 || mib > treeKiB>>10-own>>11 {
+	if mib := got[root]; mib < 540 || mib > 760 || mib > treeKiB>>10-own>>11 {
 		t.Errorf("Footprints = %d MiB; want 540..760 MiB and below Tree's %d MiB by about the process's own %d MiB",
 			mib, treeKiB>>10, own>>10)
 	}
@@ -208,8 +208,9 @@ func TestFootprintsOfAChildlessRoot(t *testing.T) {
 		t.Fatal("Listing() not ok")
 	}
 	pid := cmd.Process.Pid
-	got, ok := Footprints([]Root{{PID: pid, StartNS: procs[pid].StartNS}})
-	if mib, has := got[pid]; !ok || !has || mib != 0 {
+	root := Root{PID: pid, StartNS: procs[pid].StartNS}
+	got, ok := Footprints([]Root{root})
+	if mib, has := got[root]; !ok || !has || mib != 0 {
 		t.Errorf("Footprints = %v, %v; want {%d: 0}, true", got, ok, pid)
 	}
 }
