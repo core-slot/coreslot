@@ -329,7 +329,10 @@ func (v statusView) human() string {
 		if h.Forced {
 			line += "  started now, out of turn"
 		}
-		p("%s  id %s", line, h.ID)
+		p("%s%s  id %s", line, marksText(h.Quiet, h.NoStop), h.ID)
+	}
+	if quiet := quietLabels(r.Holds); quiet != "" {
+		p("quiet window: no other job starts until %s", quiet)
 	}
 
 	if len(v.tickets) == 0 {
@@ -360,7 +363,7 @@ func (v statusView) human() string {
 		case "dead":
 			line += "  dead (withdrawn, or its owner exited)"
 		}
-		p("%s  id %s", line, t.info.ID)
+		p("%s%s  id %s", line, marksText(t.info.Quiet, t.info.NoStop), t.info.ID)
 	}
 	switch {
 	case v.observed > 0:
@@ -401,6 +404,35 @@ func (v statusView) human() string {
 	return b.String()
 }
 
+// marksText is what a hold's or a ticket's line says of its marks.
+func marksText(quiet, noStop bool) string {
+	s := ""
+	if quiet {
+		s += "  quiet window"
+	}
+	if noStop {
+		s += "  do not stop"
+	}
+	return s
+}
+
+// quietLabels names the live quiet holds, `check ends` or `check and e2e end`; "" when none is.
+func quietLabels(holds []engine.HolderInfo) string {
+	var labels []string
+	for _, h := range holds {
+		if h.Quiet {
+			labels = append(labels, labelText(h.Label))
+		}
+	}
+	switch len(labels) {
+	case 0:
+		return ""
+	case 1:
+		return labels[0] + " ends"
+	}
+	return strings.Join(labels[:len(labels)-1], ", ") + " and " + labels[len(labels)-1] + " end"
+}
+
 // protection says whether the watchdog is protecting now and, if not, why.
 func (v statusView) protection() (on bool, reason string) {
 	w := v.rep.Watch
@@ -413,8 +445,8 @@ func (v statusView) protection() (on bool, reason string) {
 		return false, "no run has sampled the machine in the last 6 s"
 	case w.Level == watch.Unknown:
 		return false, "the last sample is a gap (the machine slept, or a reading is missing)"
-	case w.Level == watch.Red && w.NextVictim == "":
-		return false, "a red round can stop no running command: each is the oldest, still learning or never stopped"
+	case w.Level >= watch.Red && w.NextVictim == "":
+		return false, "a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"
 	}
 	return true, ""
 }
@@ -450,7 +482,7 @@ func plural(n int64, one, many string) string {
 // out a directory with none; "" when nothing was ignored.
 func ignoredText(ignored map[string]int) string {
 	var parts []string
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir, store.QuietDir, store.NoStopDir} {
 		if n := ignored[dir]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%s %d", dir, n))
 		}
@@ -591,7 +623,9 @@ type jsonHold struct {
 	NeedMiB      int64   `json:"need_mib"`  // 0 for a run outside the budget
 	AskedMiB     int64   `json:"asked_mib"` // the need asked: need_mib unless the hold was trimmed
 	Trimmed      bool    `json:"trimmed"`
-	Forced       bool    `json:"forced"` // admitted at once on a start request, whatever the room
+	Forced       bool    `json:"forced"`  // admitted at once on a start request, whatever the room
+	Quiet        bool    `json:"quiet"`   // marked quiet: no other job is admitted while it is live
+	NoStop       bool    `json:"no_stop"` // marked do-not-stop: no stop round lists it
 	FootprintMiB int64   `json:"footprint_mib"`
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
@@ -625,6 +659,8 @@ type jsonTicket struct {
 	ExpectedWaitS *int64 `json:"expected_wait_s"`
 	DockerNeedMiB int64  `json:"docker_need_mib,omitempty"` // a gated ticket's Docker need
 	VMWait        bool   `json:"vm_wait,omitempty"`         // it fits on the Mac and waits for Docker's VM
+	Quiet         bool   `json:"quiet"`                     // its marks, which act once it is admitted
+	NoStop        bool   `json:"no_stop"`
 }
 
 func (v statusView) document() jsonStatus {
@@ -666,11 +702,11 @@ func (v statusView) document() jsonStatus {
 	if x := r.Degraded; x != nil {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
 	}
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir, store.QuietDir, store.NoStopDir} {
 		d.Ignored[dir] = r.Ignored[dir]
 	}
 	for _, h := range r.Holds {
-		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Forced: h.Forced, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
+		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Forced: h.Forced, Quiet: h.Quiet, NoStop: h.NoStop, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
 			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable,
@@ -683,7 +719,8 @@ func (v statusView) document() jsonStatus {
 	for _, t := range v.tickets {
 		jt := jsonTicket{Name: t.info.Name, ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
 			NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
-			Position: t.position, State: t.state, DockerNeedMiB: t.info.DockerNeedMiB, VMWait: t.info.Noted}
+			Position: t.position, State: t.state, DockerNeedMiB: t.info.DockerNeedMiB, VMWait: t.info.Noted,
+			Quiet: t.info.Quiet, NoStop: t.info.NoStop}
 		if t.info.WaitKnown {
 			jt.ExpectedWaitS = &t.info.WaitS
 		}

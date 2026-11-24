@@ -245,3 +245,24 @@ func TestStartNowPassesAQuietHold(t *testing.T) {
 		t.Errorf("pass %q, want forced", p)
 	}
 }
+
+// A snapshot carries the marks of the holds and the tickets. Mutation: reading them for the holds
+// only leaves the ticket unmarked.
+func TestSnapshotCarriesMarks(t *testing.T) {
+	dir := capped(t, 256)
+	e := newEngine(t, dir, newFakeClock())
+	g := hold(t, e, need(256))
+	tk := enqueue(t, e, need(256))
+	markID(t, dir, store.QuietDir, holdIDOf(g))
+	markID(t, dir, store.NoStopDir, ticketID(tk))
+	r, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := r.Holds[0]; !h.Quiet || h.NoStop {
+		t.Errorf("hold quiet %v, no-stop %v; want true, false", h.Quiet, h.NoStop)
+	}
+	if k := r.Tickets[0]; k.Quiet || !k.NoStop {
+		t.Errorf("ticket quiet %v, no-stop %v; want false, true", k.Quiet, k.NoStop)
+	}
+}

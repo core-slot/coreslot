@@ -17,6 +17,8 @@ type HolderInfo struct {
 	AskedMiB     int64  // the need it was admitted with, when its body says; 0 when NeedMiB is it
 	Trimmed      bool   // its run acted on a request to trim it
 	Forced       bool   // admitted at once on a start request, whatever the room
+	Quiet        bool   // marked quiet: while it is live no other job is admitted
+	NoStop       bool   // marked do-not-stop: its run keeps it out of every stop round
 	FootprintMiB int64  // what its run last measured
 	Stops        int
 	Container    bool  // container work: its containers' memory is not measured unless DockerFootprintMiB is set
@@ -83,6 +85,8 @@ type TicketInfo struct {
 	// note in vmwait/: it fits on the host and waits for Docker's VM.
 	DockerNeedMiB int64
 	Noted         bool
+	// Quiet and NoStop are its marks, which act once it is admitted.
+	Quiet, NoStop bool
 }
 
 // MemInfo is the memory in a snapshot, in MiB. Known is false when the headroom could not be read

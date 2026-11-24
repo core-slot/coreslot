@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
 	"github.com/core-slot/coreslot/internal/store"
@@ -129,5 +130,50 @@ func TestOffFollowsTicketToHolds(t *testing.T) {
 		if marked(t, dir, store.QuietDir, id) {
 			t.Errorf("hold %s is still marked quiet", id)
 		}
+	}
+}
+
+// status shows a hold's and a ticket's marks on their lines and in the document, and names the
+// quiet holds the queue waits for.
+func TestStatusShowsMarks(t *testing.T) {
+	const now = int64(1e18)
+	rep := engine.Report{
+		Holds: []engine.HolderInfo{
+			{Name: "h1", ID: "h1", Label: "check", PID: 4711, StartNS: now - 5e9, NeedMiB: 512, Quiet: true, NoStop: true},
+			{Name: "h2", ID: "h2", Label: "e2e", PID: 4712, StartNS: now - 5e9, NeedMiB: 512, Quiet: true},
+		},
+		Tickets: []engine.TicketInfo{{Name: "t1", ID: "t1", Label: "lint", PID: 4713, NeedMiB: 256, CreatedNS: now - 1e9, NoStop: true}},
+	}
+	v := buildStatus(rep, now, nil, 0)
+	out := v.human()
+	for _, want := range []string{"quiet window  do not stop  id h1", "quiet window  id h2", "do not stop  id t1",
+		"\nquiet window: no other job starts until check and e2e end\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status:\n%s\nwant %q", out, want)
+		}
+	}
+	d := v.document()
+	if h := d.Holds[0]; !h.Quiet || !h.NoStop || d.Holds[1].NoStop {
+		t.Errorf("holds' quiet and no_stop: %+v, %+v", h, d.Holds[1])
+	}
+	if tk := d.Tickets[0]; tk.Quiet || !tk.NoStop {
+		t.Errorf("the ticket's quiet %v and no_stop %v; want false, true", tk.Quiet, tk.NoStop)
+	}
+}
+
+// A run held back by a quiet window says so, naming the quiet job. Mutation: dropping the reason's
+// case leaves the snapshot's reason, which says nothing of the window.
+func TestWaitingLineOfAQuietWindow(t *testing.T) {
+	o, err := parseRun([]string{"--mem", "1M", "--", "true"}, IO{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, _ := lookupOf(t, "")
+	o.resolveNeed(lookup, noLearned, 32768)
+	holders := []engine.HolderInfo{{Label: "check", PID: 4711, NeedMiB: 512, StartNS: time.Now().UnixNano(), Quiet: true}}
+	r := &run{o: o, why: func() (string, []engine.HolderInfo) { return "", holders }}
+	got := r.waitingLine(engine.Waiting{Position: 1, Outcome: engine.Outcome{Reason: engine.ReasonQuiet}}, 0)
+	if want := "; a quiet window is open: no job starts until check ends"; !strings.Contains(got, want) {
+		t.Errorf("%q, want %q", got, want)
 	}
 }
