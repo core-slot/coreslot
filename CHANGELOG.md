@@ -8,6 +8,18 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.11.0 (2026-11-24)
+
+This release writes format 5. Upgrade every client of a machine together.
+
+### Upgrading
+
+A client of this release does not use a format-3 directory (v0.10.0) or a format-4 one: its runs start unbudgeted
+with a notice (`--strict` refuses) until `coreslot doctor --reset`. Run the reset when no hold and no ticket is
+live; it refuses while one is, and names it. On a format-3 or format-4 directory the reset is an upgrade to format 5
+that keeps the run log and the telemetry, so no label learns its need again. A format-2 directory's reset removes
+its run log.
+
 ### Added
 
 - `coreslot start <ticket-id>` (or `--label L`) starts a waiting job now, ahead of the queue and whatever memory is
