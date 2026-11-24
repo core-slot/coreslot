@@ -37,6 +37,14 @@ Changes a waiting ticket's place in the queue without ending its run: --first an
 ahead of or behind every ticket waiting now, --before and --after next to another one. Tickets
 that arrive later queue behind it as usual.`
 
+const watchUsage = `usage: coreslot watch observe | enforce [--for DURATION]
+       coreslot watch config`
+
+func watchFlags() (fs *flag.FlagSet, forD *time.Duration) {
+	fs = newFlagSet("coreslot watch")
+	return fs, fs.Duration("for", 0, "end the switch after this long, then the configuration's mode applies")
+}
+
 const trimUsage = `usage: coreslot trim <hold-id>
        coreslot trim --label LABEL
 
@@ -99,7 +107,22 @@ func moveFlags() (fs *flag.FlagSet, label *string, first, last *bool, before, af
 func doctorFlags() (fs *flag.FlagSet, doClear, doReset *bool) {
 	fs = newFlagSet("coreslot doctor")
 	return fs, fs.Bool("clear", false, "remove the degraded-mode record"),
-		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 4 or 3 is kept")
+		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 5, 4 or 3 is kept")
+}
+
+// parseInterleaved parses args with fs, its flags before or after the positional arguments, and
+// returns those in order.
+func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return positional, nil
+		}
+		positional, args = append(positional, fs.Arg(0)), fs.Args()[1:]
+	}
 }
 
 // newFlagSet returns a flag set that returns its errors to the caller and prints nothing itself.

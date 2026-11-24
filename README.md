@@ -280,7 +280,10 @@ notes](calibration/README.md#what-the-defaults-rest-on) say what recorded runs o
 each default, and which are not calibrated. See
 [`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
-the kill and says what it would have stopped.
+the kill and says what it would have stopped. `coreslot watch observe` or `coreslot watch enforce` switches
+the mode on this machine without touching the configuration, until `coreslot watch config`, or for a while
+with `--for 2h`; `status` says which mode applies and where it comes from. A stop round already written
+still acts after a switch to observe.
 
 A command is judged only once a run of its label has completed and measured that. Until then coreslot does
 not know what is normal for it (the median share its earlier runs measured, the same way, while the
@@ -526,7 +529,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 4
+- [Protocol](PROTOCOL.md), the normative definition of format 5
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)

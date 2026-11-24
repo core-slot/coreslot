@@ -34,9 +34,9 @@ type ResetDone struct {
 // Reset recreates the state directory (`coreslot doctor --reset`) inside the section the caller
 // entered, whatever format its FORMAT names, malformed or absent included: it removes every entry
 // of queue/, holds/, cancel/, order/ and vmwait/, degraded, gen, watch.json, trim.json and another
-// format's res/ with its files, then writes FORMAT of the format written. Under FORMAT 4, or 3 (an
-// upgrade: format 4 only adds vmwait/ and optional Docker keys of tickets and holds), or none yet
-// (which the first client writes as 4), it is a repair and keeps the entries of log/ and
+// format's res/ with its files, then writes FORMAT of the format written. Under FORMAT 5, or 4 or 3
+// (an upgrade: format 5 only adds watch-mode, format 4 vmwait/ and optional Docker keys), or none yet
+// (which the first client writes as 5), it is a repair and keeps the entries of log/ and
 // telemetry/; otherwise it removes them too, those of telemetry/ counted in Removed only. It keeps
 // admit.lock and config.toml (the format-stable file whose inode live clients may hold open, and
 // the configuration) and the directories themselves. It does not read the configuration.
@@ -100,7 +100,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 		return live, done, err
 	}
 	n, present, ferr := s.ReadFormat()
-	keepLog := ferr == nil && (!present || n == Format || n == UpgradedFormat)
+	keepLog := ferr == nil && (!present || n == Format || Upgraded(n))
 	done.FormatErr = ferr
 	var failed []error
 	remove := func(path string) bool {
@@ -130,7 +130,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 			}
 		}
 	}
-	for _, name := range []string{DegradedFile, GenFile, WatchFile, TrimFile} {
+	for _, name := range []string{DegradedFile, GenFile, WatchFile, TrimFile, WatchModeFile} {
 		remove(s.path(name))
 	}
 	if _, err := os.Lstat(s.path(otherRes)); err == nil {

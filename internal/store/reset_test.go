@@ -444,16 +444,16 @@ func TestSectionHeldProbe(t *testing.T) {
 }
 
 // telemetry/ is handled as log/ is: a repair keeps its files, and so does the upgrade from format
-// 3, which format 4 only extends by vmwait/ and optional keys; format 2 is another format now, and
-// a format change removes them, and its files are counted in Removed only, never in LogKept or
-// LogRemoved. Mutations: leaving TelemetryDir out of the reset keeps the files in the last cases;
-// counting them as the run log raises LogKept or LogRemoved; dropping UpgradedFormat from the
-// repair test removes them in the upgrade.
+// 4 or 3, which format 5 only extends by watch-mode (and format 4 by vmwait/ and optional keys);
+// format 2 is another format, and a format change removes them, and its files are counted in
+// Removed only, never in LogKept or LogRemoved. Mutations: leaving TelemetryDir out of the reset
+// keeps the files in the last cases; counting them as the run log raises LogKept or LogRemoved;
+// dropping Upgraded from the repair test removes them in the upgrades.
 func TestResetHandlesTelemetryDir(t *testing.T) {
 	for _, tc := range []struct {
 		name, format string
 		kept         bool
-	}{{"repair", currentFormat, true}, {"upgrade from 3", fmt.Sprintf("coreslot-protocol %d\n", UpgradedFormat), true},
+	}{{"repair", currentFormat, true}, {"upgrade from 4", "coreslot-protocol 4\n", true}, {"upgrade from 3", "coreslot-protocol 3\n", true},
 		{"format 2 is another format", "coreslot-protocol 2\n", false}, {"format change", foreignFormat, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := newDir(t)
@@ -492,13 +492,13 @@ func TestResetHandlesTelemetryDir(t *testing.T) {
 }
 
 // A reset empties order/ and vmwait/ with queue/: an override names a waiting ticket, and so does a
-// note, and none survives a reset; the directories themselves stay. The upgrade from format 3 keeps
-// the run log and writes FORMAT 4. Mutations: leaving VMWaitDir out of the reset keeps the note;
+// note, and none survives a reset; the directories themselves stay. The upgrade from format 4 keeps
+// the run log and writes FORMAT 5. Mutations: leaving VMWaitDir out of the reset keeps the note;
 // leaving OrderDir out keeps the override.
 func TestResetClearsVMWaitAndOrder(t *testing.T) {
 	dir := newDir(t)
 	_, sec := resetFixture(t, dir)
-	if err := os.WriteFile(filepath.Join(dir, FormatFile), fmt.Appendf(nil, "coreslot-protocol %d\n", UpgradedFormat), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, FormatFile), []byte("coreslot-protocol 4\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	id := wire.ID{OrderKey: 1791720000000000000, PID: 4711, Seq: 1}
@@ -523,21 +523,22 @@ func TestResetClearsVMWaitAndOrder(t *testing.T) {
 		}
 	}
 	if done.LogKept != 2 {
-		t.Errorf("the upgrade from format %d kept %d entries of log/, want 2", UpgradedFormat, done.LogKept)
+		t.Errorf("the upgrade from format 4 kept %d entries of log/, want 2", done.LogKept)
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != currentFormat {
 		t.Errorf("FORMAT %q after the upgrade, want %q", b, currentFormat)
 	}
 }
 
-// A reset of a format-3 directory is the upgrade to 4: it keeps the run log and the telemetry and
-// writes FORMAT 4. A format-2 directory is now another format: its run log and telemetry go.
-// Mutation: UpgradedFormat = 2 keeps format 2's files and removes format 3's.
-func TestResetFromThreeKeepsLogAndTelemetry(t *testing.T) {
+// A reset of a format-4 or a format-3 directory is the upgrade to 5: it keeps the run log and the
+// telemetry and writes FORMAT 5. A format-2 directory is another format: its run log and telemetry
+// go. Mutations: Upgraded without 3 removes format 3's files; without 4, format 4's; with 2, keeps
+// format 2's.
+func TestResetFromThreeAndFourKeepsLogAndTelemetry(t *testing.T) {
 	for _, tc := range []struct {
 		format int
 		kept   bool
-	}{{3, true}, {2, false}} {
+	}{{4, true}, {3, true}, {2, false}} {
 		t.Run(fmt.Sprint("format ", tc.format), func(t *testing.T) {
 			dir := newDir(t)
 			_, sec := resetFixture(t, dir)

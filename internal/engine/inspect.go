@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"cmp"
 	"slices"
 	"time"
 
@@ -34,7 +35,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 4
+		r.FormatUnderstood = true // the first entry writes format 5
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}
@@ -154,7 +155,11 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Tickets[head].WaitS, r.Tickets[head].WaitKnown = w, noPass == ""
 	}
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
-		Fresh: fresh(at, now)}
+		Fresh: fresh(at, now), ModeSource: cmp.Or(cfg.Mode.Source, "config"), ModeUntilNS: cfg.Mode.UntilNS,
+		ConfiguredObserve: cfg.Mode.ConfiguredObserve}
+	for _, h := range r.Holds {
+		r.Watch.EnforceRoundLive = r.Watch.EnforceRoundLive || !d.Observed && slices.Contains(d.Stop, h.Name)
+	}
 	if r.Watch.Fresh { // the newest sample knows which jobs have a learned normal S; this client does not
 		if next, _ := watch.StopList(smp.Jobs, d.Level == watch.Floor, 1, d.Kept, smp.Host.WallNS+now-at); len(next) > 0 {
 			r.Watch.NextVictim = next[0]

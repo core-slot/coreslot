@@ -1,23 +1,25 @@
-# coreslot protocol, format 4
+# coreslot protocol, format 5
 
-This document is the normative definition of the coreslot on-disk protocol, format 4: the state
+This document is the normative definition of the coreslot on-disk protocol, format 5: the state
 directory, its files and their bodies, the admission critical section, the watchdog that keeps
 memory pressure from stalling the work the clients started, and the descriptor and environment
 contract between a run and the command it starts. Memory is the only resource. A client written
 from this document alone, in any language, shares one memory budget and one watchdog with every
 other conforming client on the machine.
 
-Format 4 is format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of `vmwait/`
-(section 7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4). Every client of
-format 4 takes the holds' `docker_growth_mib` off its room (section 12.1) and passes over a noted
-ticket (section 10.3), which a client of format 3 does not; a reset upgrades a format-3 directory in
-place, keeping its run log (section 4.4).
+Format 5 is format 4 with this machine's override of the watchdog's mode, `watch-mode` (section
+7.15), which every client of format 5 reads for the mode it ticks and writes stop rounds in (section
+23.1). Format 4 was format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of
+`vmwait/` (section 7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4), by which
+every client takes the holds' `docker_growth_mib` off its room (section 12.1) and passes over a noted
+ticket (section 10.3). A reset upgrades a format-4 or a format-3 directory in place, keeping its run
+log (section 4.4); a format-2 directory is another format.
 
-Format 4's names, bodies and layout are never redefined once released: a release that needs
+Format 5's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
 no admission reads, as the needs file is (section 5.4). Until `v1.0.0` a minor release may
-introduce such a number, and may change what format 4 means elsewhere, such as the configuration's
+introduce such a number, and may change what format 5 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
@@ -50,7 +52,7 @@ requirement on a client.
 
 ## 2. Contract inventory
 
-Every shared file, field, environment variable and transition of format 4, and where it is defined.
+Every shared file, field, environment variable and transition of format 5, and where it is defined.
 
 | Item | Kind | Defined in |
 |---|---|---|
@@ -59,6 +61,7 @@ Every shared file, field, environment variable and transition of format 4, and w
 | `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
 | `watch.json` | file | [7.11](#711-watchjson), [23](#23-the-watchdog) |
 | `trim.json` | file | [7.13](#713-trimjson), [12.5](#125-trim) |
+| `watch-mode` | file | [7.15](#715-watch-mode), [23.1](#231-the-tick) |
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
@@ -156,7 +159,7 @@ Every conforming client MUST preserve these invariants:
   live they leave the head its start. A gated head (section 12.6) is admitted within 3 s of a
   reading by which both its tests pass; one whose VM test fails has its note by the end of that
   attempt, or within 2 s of its last note change.
-- **I6 one budget:** every client of format 4 reads the same holds and the same
+- **I6 one budget:** every client of format 5 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
   of them, one whose `victim` is false nor one whose label has no normal share, and a run signals only the process group of its own
@@ -236,6 +239,7 @@ admit.lock       the admission lock (section 7.7); never deleted, semantics fixe
 gen              {"gen": n, "reconciled_ns": t} (section 7.8)
 watch.json       the shared watchdog state (section 7.11)
 trim.json        requests to trim live holds (section 7.13); optional
+watch-mode       this machine's override of the watchdog's mode (section 7.15); optional
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
@@ -295,13 +299,14 @@ The directory is not a cache: liveness is decided by locks. Deleting or resettin
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
 process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/`,
-`order/` and `vmwait/` (an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`, `degraded`
+`order/` and `vmwait/` (an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`,
+`watch-mode` (a reset returns the watchdog to the configuration's mode), `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
-format 4. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+format 5. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 4, or format 3 (an upgrade: format 4 only adds `vmwait/` and optional
-Docker keys of tickets and holds), or is missing
-(which the first client writes as 4, section 15.1), the reset is a repair and keeps `log/` and
+When `FORMAT` names format 5, or format 4 or 3 (an upgrade: format 5 only adds `watch-mode`, and
+format 4 `vmwait/` and optional Docker keys of tickets and holds), or is missing
+(which the first client writes as 5, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
 learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
 format or cannot be read, it removes the entries of `log/` and `telemetry/` as well, and the CLI
@@ -309,7 +314,7 @@ says so of the run log: every label learns its need
 again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
-the directory as format 4; a live hold or ticket of any format stops it. It does not reconcile
+the directory as format 5; a live hold or ticket of any format stops it. It does not reconcile
 first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `order/` and `vmwait/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
 the next reconciliation removes them once they are older than 30 s. Once it has
@@ -650,7 +655,7 @@ client's own ticket after cancellation or withdrawal (13) or of its own hold (12
 taking the ticket's bump. The resume bump
 of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
 removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
-itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `admit.lock` or the run
+itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`, `admit.lock` or the run
 log, nor the holder's rewrite of its own hold's body. A crash can separate a removal from its
 bump, so a reader never relies on a bump to learn that an entry is gone (section 10.3).
 
@@ -750,6 +755,39 @@ ticket is gone (section 10.4), and a reset every one (section 4.4). A reader goe
 note that is not a regular file of the user still passes over the ticket of its name, whose owner
 would note it anyway.
 
+### 7.15 watch-mode
+
+`$S/watch-mode` is this machine's override of the watchdog's mode (section 23.6). It is optional: a
+client that never switches the mode writes none, and its absence is normal. It is one JSON object:
+
+```json
+{"mode": "observe", "set_ns": 1795300000000000000, "until_ns": 0}
+```
+
+| Key | Type | Content |
+|---|---|---|
+| `mode` | string | `"observe"` or `"enforce"` |
+| `set_ns` | integer | when it was written, informative |
+| `until_ns` | integer | when it ends, by the wall clock; `0` for until removed |
+
+The **effective mode** is the override's while the file parses, its `mode` is one of the two and its
+`until_ns` is `0` or later than the reader's wall clock; otherwise it is the configuration's `[watch]
+mode` (section 5.3). A file above 4 KiB, one that is not such an object, an unknown mode or a negative
+`until_ns` reads as no override. Every reader of the mode reads the effective mode: both ticks (section
+23.1, the restart waiter's included, section 12.4), the stop rounds they write (section 23.5) and
+whatever a client reports. It is written and removed only inside the section, replaced with a plain
+`rename` (section 11), without a `gen` bump; it is read with no section. The file itself is checked as
+in section 4.2. Being in `$S`, it is per machine; the configuration file stays each machine's default,
+and an override wins over a later edit of it until removed or ended. A reset removes it (section 4.4).
+The override is a convenience against no one: any process of the user can write it, as it can edit the
+configuration, and it refuses nothing; it changes only what the configuration already lets the same
+user change. A switch by hand has no end unless one is given, and `status` saying so is the reminder.
+
+> **Implementation note.** `coreslot watch observe|enforce [--for DURATION]` writes it, `--for` giving
+> `until_ns`; `coreslot watch config` removes it. `status` shows the source in its
+> watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and `watch.mode_until_ns`
+> whether or not a job runs.
+
 ## 8. The admission critical section
 
 `admit.lock` is the protocol's linearization point. Enqueue, admission, cancellation publication,
@@ -783,7 +821,7 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
   continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 4` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 5` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
@@ -961,7 +999,7 @@ whole machine.
 ## 11. Atomic publication
 
 Inside the section, a publication of a ticket, hold, cancel request, order override, `gen`, `FORMAT`,
-`degraded`, `watch.json` or `trim.json`:
+`degraded`, `watch.json`, `trim.json` or `watch-mode`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
    target's directory; on `EEXIST` (a young leftover of an earlier process with the same pid) the
@@ -980,7 +1018,7 @@ Inside the section, a publication of a ticket, hold, cancel request, order overr
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
      already requested, which is not an error (section 13.1);
-   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`: with a plain `rename`,
+   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`: with a plain `rename`,
      which replaces an existing file.
 
 The writer keeps its original descriptor: writing the body never closes the only lock-carrying
@@ -1333,14 +1371,14 @@ also exits 3 while a state error makes runs fail open (section 19).
 the layout other than `admit.lock`). Every format keeps `admit.lock`, an exclusive `flock` held
 only briefly by whoever changes admission state.
 
-A client that finds no `FORMAT` writes `coreslot-protocol 4` inside the section. Writing a newer
+A client that finds no `FORMAT` writes `coreslot-protocol 5` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
 ### 15.2 A format this client does not implement
 
-A state directory whose format is not 4 is not used. A client that finds another format leaves
+A state directory whose format is not 5 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
-writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json` or
+writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json`, `watch-mode` or
 `admit.lock` body), and its run fails open (section 14) with one notice that names the format and
 `coreslot doctor --reset`; under `--strict` it refuses with that notice. The decision is made at
 every section entry from the `FORMAT` read there (section 8).
@@ -1352,9 +1390,9 @@ remove the file: that would be a write into a format it does not implement.
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
 another format a client publishes no cancel request, trim request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
-runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 4
+runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 5
 when nothing of either format is live, the other format's run log removed with the rest, except a
-format-3 directory's, which the upgrade keeps (section 4.4).
+format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
 
 > **Implementation note.** The Go CLI refuses cancellation, a trim and `doctor --clear` under
 > another format, with the same notice.
@@ -1496,7 +1534,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1598,7 +1636,7 @@ generation). One generation is kept.
 All examples use one Linux machine: `MemTotal` is 16 GiB (`memory = 16384`), the configuration
 declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 20`, `red_points = 40`,
 `red_samples = 10`, `gate_pages_s = 1000`, `floor = "2G"`, `calm_s = 30`, `post_kill_s = 15` and
-`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 4`
+`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 5`
 unless stated. Listings show the entries under `$S` that matter; `[L]` marks a file whose lock is
 held by a live process. `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is
 independent of the others; except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old
@@ -2189,7 +2227,9 @@ the mode at the run's own later tick.
 
 ### 23.6 Observe mode and the sample log
 
-With `mode = "observe"` every step runs, the stop list included, except the kill: a run whose hold
+The mode is the effective mode of section 7.15: this machine's override while it holds, else the
+configuration's. A round already written keeps its mode (section 23.5): an enforce round written before a
+switch to observe still stops the runs it listed. With the effective mode observe every step runs, the stop list included, except the kill: a run whose hold
 is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
 (deprecated) or `[telemetry] enabled = true` the ticker that takes a machine sample appends one JSON line to
 `$S/telemetry/samples.jsonl` with the readings, `E`, the level and the bucket, in either mode. The

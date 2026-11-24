@@ -514,20 +514,21 @@ var (
 	foreignFormat = fmt.Sprintf("coreslot-protocol %d\n", Format+1)
 )
 
-// The format is 4, the one that adds the Docker keys and vmwait/, and a reset upgrades from 3, which
-// lacks only those. Mutations: Format = 3 or UpgradedFormat = 2 turns it red, and so does a
-// writeFormat that writes another number.
-func TestFormatIsFour(t *testing.T) {
-	if Format != 4 || UpgradedFormat != 3 || VMWaitDir != "vmwait" {
-		t.Fatalf("Format %d, UpgradedFormat %d, VMWaitDir %q; want 4, 3 and vmwait", Format, UpgradedFormat, VMWaitDir)
+// The format is 5, the one that adds watch-mode, and a reset upgrades from 4 and from 3, which lack
+// only it (and 3 the Docker keys and vmwait/), never from 2. Mutations: Format = 4, or Upgraded
+// taking 2 or leaving out 3 or 4, turns it red, and so does a writeFormat that writes another number.
+func TestFormatIsFive(t *testing.T) {
+	if Format != 5 || !Upgraded(4) || !Upgraded(3) || Upgraded(2) || Upgraded(5) || VMWaitDir != "vmwait" {
+		t.Fatalf("Format %d, Upgraded(4, 3, 2, 5) %v %v %v %v, VMWaitDir %q; want 5, true true false false and vmwait",
+			Format, Upgraded(4), Upgraded(3), Upgraded(2), Upgraded(5), VMWaitDir)
 	}
 	dir := newDir(t)
 	sec := enter(t, open(t, dir))
 	if _, _, err := sec.Format(); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 4\n" {
-		t.Errorf("a first client wrote FORMAT %q, want coreslot-protocol 4", b)
+	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 5\n" {
+		t.Errorf("a first client wrote FORMAT %q, want coreslot-protocol 5", b)
 	}
 }
 
