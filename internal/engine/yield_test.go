@@ -321,6 +321,21 @@ func TestShortPassNeedsAValidRecord(t *testing.T) {
 	}
 }
 
+// A record past its deadline is no longer valid: today's passes decide for a waiter that is not
+// short until the head removes the record. Mutation: dropping the deadline from shortPass's validity
+// keeps the record deciding, and the waiter reads not_short.
+func TestAnExpiredRecordLeavesTodaysPasses(t *testing.T) {
+	_, clk, h, ws := yieldScene(t, false, shortReq(768, 60), shortReq(768, 200))
+	wantYielding(t, h, 0)
+	if w := waitOutcome(t, ws[1]); w.Outcome.NoPass != "not_short" {
+		t.Fatalf("a waiter that is not short, before the deadline: %+v; want not_short", w.Outcome)
+	}
+	clk.advance(601 * time.Second) // the head does not step, so its record stays
+	if w := waitOutcome(t, ws[1]); w.Outcome.NoPass != "no_holds" {
+		t.Errorf("the same waiter after the deadline: %+v; want today's no_holds", w.Outcome)
+	}
+}
+
 // A second short waiter passes after the first ends, within 3 s of the head fitting again: the count
 // restarts on the pass and when the head stops fitting. Mutation: a count that restarts on neither
 // ends the yield by no taker the moment the first passer ends.

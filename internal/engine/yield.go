@@ -178,7 +178,7 @@ func (t *Ticket) shortBehind(room int64) (bool, error) {
 func (t *Ticket) shortPass(head wire.Ticket, headKey, headOrder state.Key, holds []liveHold, room int64) (why string, ok bool) {
 	rec, valid, err := t.e.st.ReadYield()
 	now := t.e.clock.Realtime()
-	if err != nil || !valid || rec.Head != wire.ID(headKey).String() { // ends_late covers a passed deadline
+	if err != nil || !valid || rec.Head != wire.ID(headKey).String() || now >= rec.UntilNS {
 		return "", false
 	}
 	level, read := kernelPressure()
