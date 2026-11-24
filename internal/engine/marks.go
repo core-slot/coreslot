@@ -14,7 +14,7 @@ import (
 // ticket or hold of that id nothing is published and it returns ErrNoTicket; the other results are
 // CancelContext's.
 func (e *Engine) MarkContext(ctx context.Context, dir string, id wire.ID) (already bool, err error) {
-	sec, err := e.enterMarks(ctx)
+	sec, _, err := e.enterPrepared(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -34,7 +34,7 @@ func (e *Engine) MarkContext(ctx context.Context, dir string, id wire.ID) (alrea
 // first attempt's hold live beside the second's). removed counts the marks removed; none is not an
 // error.
 func (e *Engine) UnmarkContext(ctx context.Context, dir string, id wire.ID) (removed int, err error) {
-	sec, err := e.enterMarks(ctx)
+	sec, _, err := e.enterPrepared(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -66,21 +66,23 @@ func (e *Engine) UnmarkContext(ctx context.Context, dir string, id wire.ID) (rem
 	return removed, nil
 }
 
-// enterMarks enters the section within ctx for a mark, as request does for a cancel request.
-func (e *Engine) enterMarks(ctx context.Context) (*store.Section, error) {
+// enterPrepared enters the section within ctx for a request or a mark and reconciles at now, the
+// clock the request then reads; a format this client does not implement is refused.
+func (e *Engine) enterPrepared(ctx context.Context) (*store.Section, int64, error) {
 	sec, err := e.enterUntil(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	n, understood, err := sec.Prepare(e.clock.Realtime())
+	now := e.clock.Realtime()
+	n, understood, err := sec.Prepare(now)
 	if err == nil && !understood {
 		err = refuseFormat(n, "")
 	}
 	if err != nil {
 		sec.Leave()
-		return nil, err
+		return nil, 0, err
 	}
-	return sec, nil
+	return sec, now, nil
 }
 
 // liveID reports whether id names a live ticket or a live hold.

@@ -35,19 +35,11 @@ func (e *Engine) StartContext(ctx context.Context, id wire.ID) error {
 
 // request publishes a cancel or start request, both of the cancel request's body.
 func (e *Engine) request(ctx context.Context, dir string, id wire.ID) error {
-	sec, err := e.enterUntil(ctx)
+	sec, now, err := e.enterPrepared(ctx)
 	if err != nil {
 		return err
 	}
 	defer sec.Leave()
-	now := e.clock.Realtime() // reconciliation and the cancel request read the same clock
-	n, understood, err := sec.Prepare(now)
-	if err != nil {
-		return err
-	}
-	if !understood {
-		return refuseFormat(n, "")
-	}
 	entries, _, err := e.st.List(store.QueueDir)
 	if err != nil {
 		return err
