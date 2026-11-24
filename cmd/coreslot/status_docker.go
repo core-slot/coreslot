@@ -43,7 +43,7 @@ type dockerView struct {
 // is not running; a VM that no candidate socket answers for is no reading, no_socket.
 func readDocker(enabled bool, loc location) *dockerView {
 	env := environ()
-	_, hold, miss := engine.DecideNested(os.Environ(), isAncestor)
+	_, hold, miss := engine.DecideNested(os.Environ(), ancestry())
 	sockets, off := docker.Features(runtime.GOOS, enabled, env, loc.home, inherited(env, hold, miss))
 	if off != docker.On {
 		return &dockerView{state: dockerOff, reason: string(off)}

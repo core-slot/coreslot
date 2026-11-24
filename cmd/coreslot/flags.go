@@ -70,7 +70,8 @@ Runs COMMAND once the budget grants it the memory it needs.
   --no-wait             refuse unless the request is admitted at once
   --strict              refuse instead of running unbudgeted when the state directory or the
                         configuration cannot be used
-  --independent         queue as a request of its own, even inside another run's grant
+  --independent         queue as a request of its own, even inside another run's grant; not
+                        under a running job marked quiet, which holds every queued request back
   --same-group          keep COMMAND in coreslot's own process group instead of a group of its
                         own, so that a caller that kills coreslot's group (SIGKILL included)
                         reaches the whole command tree. As in a terminal, a SIGINT or SIGQUIT

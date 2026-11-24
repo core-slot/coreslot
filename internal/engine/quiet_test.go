@@ -266,3 +266,53 @@ func TestSnapshotCarriesMarks(t *testing.T) {
 		t.Errorf("ticket quiet %v, no-stop %v; want false, true", k.Quiet, k.NoStop)
 	}
 }
+
+// publishFakeHold publishes a live hold of pid, started at startNS, and returns its id and its
+// descriptor, which keeps it live until the test ends or the caller closes it.
+func publishFakeHold(t *testing.T, e *Engine, pid int, startNS int64, label string) (wire.ID, *os.File) {
+	t.Helper()
+	sec, err := e.st.Enter(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sec.Leave()
+	f, name, err := sec.PublishHold(wire.Hold{Label: label, PID: pid, StartNS: startNS, NeedMiB: 1}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	id, _ := wire.ParseName(name)
+	return id, f
+}
+
+// An --independent run nests under a quiet job only when a live quiet-marked hold is an ancestor's:
+// every such hold is tested, the newer of two included; a quiet hold of another process tree, and a
+// mark naming a ticket or a dead hold, nest nothing. Mutations: testing only the first live mark
+// misses the newer job; skipping isAncestor nests past an unrelated window; counting any mark nests
+// under a ticket's or a dead hold's.
+func TestQuietAncestor(t *testing.T) {
+	dir := capped(t, 1024)
+	e := newEngine(t, dir, newFakeClock())
+	older, _ := publishFakeHold(t, e, 1001, 1791720000000000000, "older")
+	newer, _ := publishFakeHold(t, e, 1002, 1791720001000000000, "newer")
+	markID(t, dir, store.QuietDir, older)
+	markID(t, dir, store.QuietDir, newer)
+	if label, ok := QuietAncestor(dir, func(pid int) bool { return pid == 1002 }); !ok || label != "newer" {
+		t.Errorf("under the newer quiet job: %q, %v; want newer, true", label, ok)
+	}
+	if label, ok := QuietAncestor(dir, func(int) bool { return false }); ok {
+		t.Errorf("no quiet job is an ancestor, yet it nests under %q", label)
+	}
+
+	other := capped(t, 1024)
+	e2 := newEngine(t, other, newFakeClock())
+	tk := enqueue(t, e2, need(64))
+	markID(t, other, store.QuietDir, ticketID(tk))
+	dead, f := publishFakeHold(t, e2, 1003, 1791720002000000000, "dead")
+	markID(t, other, store.QuietDir, dead)
+	f.Close() // the hold dies with its mark in place
+	publishFakeHold(t, e2, 1004, 1791720003000000000, "unmarked")
+	if label, ok := QuietAncestor(other, func(int) bool { return true }); ok {
+		t.Errorf("a mark on a ticket or a dead hold nests the run under %q", label)
+	}
+}

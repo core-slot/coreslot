@@ -1327,13 +1327,13 @@ func TestPassThroughOffReadsNothing(t *testing.T) {
 	saved := openReadOnly
 	openReadOnly = func(dir string) (*store.Store, error) { opens++; return saved(dir) }
 	t.Cleanup(func() { openReadOnly = saved })
-	if code := b.r.passThrough(map[string]string{}, "parent"); code != 0 {
+	if code := b.r.passThrough(map[string]string{}, "parent", "parent_hold"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if opens != 0 || b.r.record.Recorder != nil || hasTelemetryDir(b.dir) {
 		t.Errorf("off: %d opens, recorder %v, telemetry/ %v", opens, b.r.record.Recorder, hasTelemetryDir(b.dir))
 	}
-	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
+	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent", "parent_hold"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if opens != 1 {
@@ -1378,7 +1378,7 @@ func TestPassThroughRefusesForeignFormat(t *testing.T) {
 func TestPassThroughBadLocationWritesNothing(t *testing.T) {
 	b := newEnded(t, "true")
 	b.r.record, b.r.loc.err = runRecord{}, errors.New("no home")
-	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
+	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent", "parent_hold"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if hasTelemetryDir(b.dir) {
@@ -1621,7 +1621,7 @@ func TestNoLiveForPassThrough(t *testing.T) {
 	calls := fakeSweep(t)
 	b := newEnded(t, "sleep", "1.5")
 	b.r.record = runRecord{}
-	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent"); code != 0 {
+	if code := b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent", "parent_hold"); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if got := eventNames(events(t, b.dir)); got != "outside ended" {
@@ -1760,7 +1760,7 @@ func TestNoContainerRunNeverConnects(t *testing.T) {
 			var code int
 			if c.inner {
 				b.r.record = runRecord{}
-				code = b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent")
+				code = b.r.passThrough(map[string]string{engine.EnvTelemetry: "1"}, "parent", "parent_hold")
 			} else {
 				code = b.r.runChild(b.child("", ""))
 			}

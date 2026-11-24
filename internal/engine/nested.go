@@ -47,3 +47,29 @@ func DecideNested(env []string, isAncestor func(pid int) bool) (inside bool, hol
 	}
 	return true, hold, ""
 }
+
+// QuietAncestor reports whether a live quiet-marked hold of the state directory dir belongs to an
+// ancestor of this process, and that hold's label (PROTOCOL.md section 18): such an --independent run
+// nests instead of queueing behind the window its own job holds. It reads without the section: the
+// marks of quiet/, a holds/ listing and a lock probe of each, and tests every marked live hold's pid
+// with isAncestor. A directory it cannot read is no quiet ancestor. It writes nothing.
+func QuietAncestor(dir string, isAncestor func(pid int) bool) (label string, ok bool) {
+	st, err := store.OpenReadOnly(dir)
+	if err != nil {
+		return "", false
+	}
+	marks, err := st.Marks(store.QuietDir)
+	if err != nil || len(marks) == 0 {
+		return "", false
+	}
+	holds, _, _, err := holdListing(st, 0)
+	if err != nil {
+		return "", false
+	}
+	for _, h := range holds {
+		if id, _ := wire.ParseName(h.name); marks[id.String()] && isAncestor(h.body.PID) {
+			return h.body.Label, true
+		}
+	}
+	return "", false
+}
