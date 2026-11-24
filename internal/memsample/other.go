@@ -15,6 +15,9 @@ func readHost() (HostReading, error) {
 // Tree is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) { return 0, nil, false }
 
+// footprint is implemented on macOS and Linux only; elsewhere it reads nothing.
+func footprint(int) (kib, shmKiB int64, ok bool) { return 0, 0, false }
+
 // Headroom is implemented on macOS and Linux only; elsewhere it reads nothing.
 func Headroom() (mib int64, ok bool) { return 0, false }
 

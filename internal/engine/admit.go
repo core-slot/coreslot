@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -119,11 +120,61 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		}
 		dock = &t.reading
 	}
+	// 6a. The room confirmed on the live holds' trees measured now.
+	if !t.req.RealMemory && len(holds) > 0 {
+		fits, err := t.confirm(cfg, holds, need)
+		if err != nil {
+			return nil, false, err
+		}
+		if !fits {
+			t.out.Reason, t.out.Pass = ReasonRoomShort, ""
+			return nil, false, t.unnote(sec)
+		}
+	}
 	if record != nil {
 		record()
 	}
 	g, err = t.publishAdmission(sec, dock, false)
 	return g, false, err
+}
+
+// treeFootprints measures the live holds' trees for confirm; tests replace it.
+var treeFootprints = memsample.Footprints
+
+// confirm reports whether need fits the room built from one instant (PROTOCOL.md section 12.1,
+// step 6a): the headroom read before and after one measurement of every live hold's tree, the
+// lower of the two, and each measured hold's footprint in place of the one its run last wrote. A
+// hold that cannot be measured keeps its written footprint; with the headroom unread it confirms.
+// It sets the outcome's headroom and room to the values it used. It only ever refuses: it runs
+// after the room test passed. Its adversary is timing, a hold's memory moving between its run's
+// write and this admission; its anchor is the kernel's process table and headroom, read by this
+// process inside the section, which no hold body or other party's file feeds.
+func (t *Ticket) confirm(cfg config.Config, holds []liveHold, need int64) (bool, error) {
+	roots := make([]memsample.Root, 0, len(holds))
+	for _, h := range holds {
+		if !h.unparsed {
+			roots = append(roots, memsample.Root{PID: h.body.PID, StartNS: h.body.StartNS})
+		}
+	}
+	m1, err := t.e.machine()
+	if err != nil {
+		return false, err
+	}
+	measured, _ := treeFootprints(roots)
+	m2, err := t.e.machine()
+	if err != nil || !m1.HeadroomOK || !m2.HeadroomOK {
+		return err == nil, err
+	}
+	now := slices.Clone(holds)
+	for i, h := range now {
+		if mib, ok := measured[h.body.PID]; ok && !h.unparsed {
+			now[i].body.FootprintMiB = mib
+		}
+	}
+	headroom := min(m1.HeadroomMiB, m2.HeadroomMiB)
+	room := state.Room(headroom, cfg.ReserveMiB, reservations(now))
+	t.out.HeadroomMiB, t.out.RoomMiB = headroom, room
+	return need <= room, nil
 }
 
 // enterAdmission enters the section for an admission and checks its format and step 1: a cancel

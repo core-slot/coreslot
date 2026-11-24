@@ -68,6 +68,51 @@ func treeSum(root int, parents map[int]int, read func(pid int) (kib int64, t Tre
 	return sum, times, len(times) > 0
 }
 
+// Root is a tree to measure: a run's pid and the start time its hold carries, which tells a
+// reused pid (Alive).
+type Root struct {
+	PID     int
+	StartNS int64
+}
+
+// Footprints returns, for each root, the summed footprint in MiB of its descendants, the root
+// itself excluded, from one listing of the process table: the quantity Tree sums. A root that
+// passes Alive and has no readable descendant has an entry of 0; a root whose PID is below 2,
+// absent or reused has none. ok is false, with no entries, when the table cannot be read.
+func Footprints(roots []Root) (mib map[int]int64, ok bool) {
+	procs, ok := Listing()
+	if !ok {
+		return nil, false
+	}
+	return footprints(roots, procs, footprint), true
+}
+
+// footprints is Footprints over the listing procs, reading each process with read: its own
+// memory and its shared memory, in KiB. A tree's shared memory counts once, its largest.
+func footprints(roots []Root, procs map[int]Proc, read func(pid int) (kib, shmKiB int64, ok bool)) map[int]int64 {
+	parents := make(map[int]int, len(procs))
+	for pid, p := range procs {
+		parents[pid] = p.PPID
+	}
+	out := make(map[int]int64, len(roots))
+	for _, r := range roots {
+		if r.PID < 2 || !Alive(procs, r.PID, r.StartNS) {
+			continue
+		}
+		var kib, shm int64
+		for _, pid := range descendants(r.PID, parents) {
+			if pid == r.PID {
+				continue
+			}
+			if k, s, ok := read(pid); ok {
+				kib, shm = kib+k, max(shm, s)
+			}
+		}
+		out[r.PID] = (kib + shm) >> 10
+	}
+	return out
+}
+
 // meminfo returns the value of key, in KiB, from the text of /proc/meminfo. It lives here, not
 // in the Linux file, so that it is tested on every platform.
 func meminfo(text, key string) (kib int64, ok bool) {

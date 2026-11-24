@@ -37,6 +37,13 @@ func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	})
 }
 
+// footprint reads pid's physical footprint, in KiB, with no shared part: V4 is enough, its
+// footprint is V6's.
+func footprint(pid int) (kib, shmKiB int64, ok bool) {
+	ri, ok := rusage(pid, rusageV4)
+	return int64(ri[footprintAt] >> 10), 0, ok
+}
+
 // Listing reads the process table once: kern.proc.all's parent, start time and p_comm of every
 // process.
 func Listing() (map[int]Proc, bool) {
