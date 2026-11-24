@@ -29,6 +29,8 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"start/", "Start request", "start/"},
 	{"order/", "Order override", "order/"},
 	{"vmwait/", "Note", "vmwait/"},
+	{"quiet/", "Marks", "quiet/"},
+	{"nostop/", "Marks", "nostop/"},
 	{"degraded", "degraded", "degraded"},
 	{"log/", "log/ (run log)", "log/runs.jsonl"},
 	{"telemetry/", "Layout", "telemetry/"},

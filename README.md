@@ -364,6 +364,8 @@ coreslot report            # the last 7 days: runs, waits, memory stops, heavies
 coreslot doctor            # state directory, filesystem, permissions, format, readings, forwarders still serving
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
 coreslot start <ticket-id>    # or: coreslot start --label L; starts a waiting job now, out of turn
+coreslot quiet <id>           # while this job runs, no other job starts; --off removes the mark
+coreslot no-stop <id>         # the watchdog never stops this job; --off removes the mark
 coreslot move <ticket-id> --first   # or --last, --before <id>, --after <id>; changes its place, keeps its run
 coreslot trim <hold-id>       # or: coreslot trim --label L; a running job reserves what it uses
 ```
@@ -433,6 +435,26 @@ comes back as an ordinary waiting job. The job's run must be a coreslot that kno
 older one never answers, and `status --json` then marks the request `unanswered` after 10 s. Exit
 status 75 means nothing was written. `status` marks such a job `started now, out of turn`, and
 `status --json` has each hold's `forced` and the pending `start_requests`.
+
+**Mark a job.** Two marks, set on a waiting or a running job by the id `coreslot status` shows, and
+removed with `--off`; they combine, and neither changes the job's place in the queue or anyone
+else's:
+
+- `coreslot quiet <id>`, a quiet window: while the job runs, no other job is admitted; jobs already
+  running go on. On a running job it closes admissions within about a second; a waiting job keeps
+  its place and its window opens when it starts, in its turn. The window ends when the job ends,
+  however it ends (exit, crash, a stop by the watchdog), or with `--off`. Several waiting quiet jobs
+  start one after another; several running ones hold the window until the last ends. `coreslot
+  start` still starts a job during a window. A `coreslot run --independent` that the quiet job
+  itself starts runs inside the job's grant instead of waiting for its window. A quiet window is no
+  reservation: the job still needs its room, and the watchdog may still stop it.
+- `coreslot no-stop <id>`: the watchdog never stops the job; a round stops another job instead, or
+  none, which is what the machine would do without coreslot. It does not keep the machine out of
+  swap.
+
+`status` shows `quiet window` and `do not stop` on the job's line, and `status --json` each hold's
+and ticket's `quiet` and `no_stop`. Any process of the user can set or remove a mark. Exit status 75
+means nothing was changed.
 
 ### What it did: `coreslot report`
 
@@ -545,7 +567,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 5
+- [Protocol](PROTOCOL.md), the normative definition of format 6
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)
