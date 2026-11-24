@@ -234,7 +234,8 @@ A long head that fits lets short jobs it would displace go first, until a deadli
 | `expected_wait_s` | int or null | the first live ticket's expected wait, see below |
 | `docker_need_mib` | int | present for a ticket gated on Docker Desktop's VM: its Docker need |
 | `vm_wait` | bool | present and true while the gated ticket fits on the Mac and waits for room in Docker Desktop's VM, or for a reading of it: every other run passes over it |
-| `quiet`, `no_stop` | bool | its marks, as on a hold; they act once it is admitted |
+| `quiet` | bool | marked with `coreslot quiet`; the window opens once it is admitted |
+| `no_stop` | bool | marked with `coreslot no-stop`; it acts once it is admitted |
 
 `expected_wait_s` is the head's expected wait `W` of the passing rule, the rule by which a waiter
 with a typical run time may start ahead of the head when it is expected to end within `W`

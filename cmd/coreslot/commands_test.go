@@ -229,7 +229,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("holds = %v", holds)
 	}
 	h := holds[0].(map[string]any)
-	const holdKeys = "arrival_ns asked_mib footprint_mib forced held_for_s id label left_s name need_mib owner_exited pid start_ns stoppable stops trimmed typical_s"
+	const holdKeys = "arrival_ns asked_mib footprint_mib forced held_for_s id label left_s name need_mib no_stop owner_exited pid quiet start_ns stoppable stops trimmed typical_s"
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}
@@ -242,7 +242,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("tickets = %v", tickets)
 	}
 	tk := tickets[0].(map[string]any)
-	const ticketKeys = "created_ns expected_wait_s id label name need_mib pid position stalled state waited_s"
+	const ticketKeys = "created_ns expected_wait_s id label name need_mib no_stop pid position quiet stalled state waited_s"
 	if got := keysOf(tk); got != ticketKeys {
 		t.Errorf("ticket keys\n got %s\nwant %s", got, ticketKeys)
 	}
