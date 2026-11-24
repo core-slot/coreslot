@@ -3,9 +3,6 @@
 package main
 
 import (
-	"context"
-	"errors"
-	"flag"
 	"fmt"
 	"time"
 
@@ -23,57 +20,15 @@ var startAnswerWait = 8 * time.Second
 // answer in time is not one: exit 0, as with --no-wait, which does not wait.
 func startCommand(args []string, io IO) int {
 	fs, label, noWait := startFlags()
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(io.Stdout, startUsage)
-			return 0
-		}
-		fmt.Fprintf(io.Stderr, "coreslot: %s\n%s\n", text(err.Error()), startUsage)
-		return exitUsage
+	id, byLabel, code := ticketArgs(fs, "start", startUsage, args, io)
+	if code >= 0 {
+		return code
 	}
-	byLabel := false
-	fs.Visit(func(f *flag.Flag) { byLabel = byLabel || f.Name == "label" })
-	if byLabel == (fs.NArg() > 0) || fs.NArg() > 1 {
-		fmt.Fprintf(io.Stderr, "coreslot: start takes a ticket id or --label\n%s\n", startUsage)
-		return exitUsage
-	}
-	var id wire.ID
-	if !byLabel {
-		var ok bool
-		if id, ok = wire.ParseName(fs.Arg(0)); !ok {
-			fmt.Fprintf(io.Stderr, "coreslot: %q is not a ticket id (the id column of `coreslot status`)\n", fs.Arg(0))
-			return exitUsage
-		}
-	}
-
-	e, err := openEngine(locate(), true)
-	if err != nil {
-		return commandFailed("start", err, io)
-	}
-	if !e.Store().Exists() {
-		fmt.Fprintln(io.Stderr, "coreslot: start: no state directory yet (nothing has run), so no ticket is waiting")
-		return exitRefusal
-	}
-	if byLabel {
-		var code int
-		if id, code = soleWaiting(e, "start", *label, io); code >= 0 {
-			return code
-		}
-	}
-
-	ctx, stop := context.WithTimeout(context.Background(), cancelWait)
-	defer stop()
-	var busy *engine.SectionBusyError
-	switch err := e.StartContext(ctx, id); {
-	case err == nil:
-	case errors.Is(err, engine.ErrNoTicket):
-		fmt.Fprintf(io.Stderr, "coreslot: start: no waiting ticket %s (it was admitted, withdrawn or removed)\n", id)
-		return exitRefusal
-	case errors.As(err, &busy), errors.Is(err, context.DeadlineExceeded):
-		fmt.Fprintf(io.Stderr, "coreslot: start refused: %s; no start request was published\n", sectionBusyText(e, cancelWait))
-		return exitRefusal
-	default:
-		return commandFailed("start", err, io)
+	c := ticketCommand{verb: "start", noTicket: "no waiting ticket %s (it was admitted, withdrawn or removed)",
+		nothing: "no start request was published", publish: (*engine.Engine).StartContext}
+	e, id, code := c.request(id, byLabel, *label, io)
+	if code >= 0 {
+		return code
 	}
 	if *noWait {
 		fmt.Fprintf(io.Stdout, "coreslot: start requested for ticket %s\n", id)
@@ -97,7 +52,7 @@ func startCommand(args []string, io IO) int {
 func awaitStart(e *engine.Engine, id wire.ID) (h engine.HolderInfo, started, gone bool) {
 	deadline := time.Now().Add(startAnswerWait)
 	for {
-		if r, err := e.Snapshot(); err == nil && !waitingIn(r, id) {
+		if r, err := e.Snapshot(); err == nil && !waitingTickets(r)[id.String()] {
 			for _, h := range r.Holds {
 				if h.Forced && h.PID == id.PID {
 					return h, true, false
@@ -110,14 +65,4 @@ func awaitStart(e *engine.Engine, id wire.ID) (h engine.HolderInfo, started, gon
 		}
 		time.Sleep(min(trimAnswerPoll, time.Until(deadline)))
 	}
-}
-
-// waitingIn reports whether rep lists the ticket id as live.
-func waitingIn(rep engine.Report, id wire.ID) bool {
-	for _, t := range rep.Tickets {
-		if t.ID == id.String() && !t.Dead {
-			return true
-		}
-	}
-	return false
 }

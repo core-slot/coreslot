@@ -495,12 +495,18 @@ type jsonStart struct {
 // live run of this coreslot acts on it at its next poll.
 const startAnswerAge = 10 * time.Second
 
-// startRequests are r's pending start requests at nowNS.
-func startRequests(r engine.Report, nowNS int64) []jsonStart {
+// waitingTickets is the set of the ids of the live tickets r lists.
+func waitingTickets(r engine.Report) map[string]bool {
 	waiting := map[string]bool{}
 	for _, t := range r.Tickets {
 		waiting[t.ID] = waiting[t.ID] || !t.Dead
 	}
+	return waiting
+}
+
+// startRequests are r's pending start requests at nowNS.
+func startRequests(r engine.Report, nowNS int64) []jsonStart {
+	waiting := waitingTickets(r)
 	out := []jsonStart{} // never null in the document
 	for _, s := range r.Starts {
 		var age time.Duration // 0 for a malformed body, whose time is unknown and which its run ignores
