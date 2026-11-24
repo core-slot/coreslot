@@ -34,9 +34,13 @@ func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	var shmem int64
 	kib, times, ok = treeSum(root, parents, func(pid int) (int64, TreeTimes, bool) {
 		own, shm, ok := footprint(pid)
-		user, err1 := strconv.ParseInt(stats[pid][11], 10, 64)
-		sys, err2 := strconv.ParseInt(stats[pid][12], 10, 64)
-		if !ok || err1 != nil || err2 != nil {
+		f := stats[pid] // none for a root the listing did not see
+		if !ok || len(f) < 13 {
+			return 0, TreeTimes{}, false
+		}
+		user, err1 := strconv.ParseInt(f[11], 10, 64)
+		sys, err2 := strconv.ParseInt(f[12], 10, 64)
+		if err1 != nil || err2 != nil {
 			return 0, TreeTimes{}, false
 		}
 		shmem = max(shmem, shm)
