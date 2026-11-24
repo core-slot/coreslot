@@ -35,7 +35,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 5
+		r.FormatUnderstood = true // the first entry writes format 6
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}

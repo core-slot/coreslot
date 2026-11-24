@@ -90,7 +90,7 @@ func (s *Store) readDir(op, dir string) (path string, names []string, parse func
 		names = []string{}
 	}
 	parse = wire.ParseName
-	if dir == CancelDir || dir == StartDir || dir == OrderDir {
+	if namedByID(dir) {
 		parse = wire.ParseID
 	}
 	return path, names, parse, nil
@@ -196,6 +196,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 
 	// 1. Dead tickets and holds.
 	tickets := map[string]bool{} // ids and names of the tickets still present
+	holds := map[string]bool{}   // ids of the holds still present
 	for _, dir := range []string{QueueDir, HoldsDir} {
 		entries, _, err := sec.s.List(dir)
 		if err != nil {
@@ -214,6 +215,8 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 				removed++
 			} else if !gone && dir == QueueDir {
 				tickets[e.ID.String()], tickets[e.Name] = true, true
+			} else if !gone {
+				holds[e.ID.String()] = true
 			}
 		}
 	}
@@ -236,6 +239,23 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 			removed++
 		}
 	}
+	// Marks whose ticket and hold are both gone.
+	for _, dir := range []string{QuietDir, NoStopDir} {
+		named, _, err := sec.s.List(dir)
+		if err != nil {
+			return removed, err
+		}
+		for _, e := range named {
+			if tickets[e.Name] || holds[e.Name] {
+				continue
+			}
+			if r, err := sec.removeEntry(dir, e.Name); err != nil {
+				return removed, err
+			} else if r {
+				removed++
+			}
+		}
+	}
 	// The yield record, once its head's ticket is gone; one that is no record names none.
 	if _, err := os.Lstat(sec.s.path(YieldFile)); err == nil {
 		if y, _, err := sec.s.ReadYield(); err != nil {
@@ -250,7 +270,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	}
 
 	// 3. Temporary files older than 30 s.
-	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir} {
+	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir, QuietDir, NoStopDir} {
 		d := sec.s.path(dir)
 		names, err := readNames(d)
 		if errors.Is(err, fs.ErrNotExist) {

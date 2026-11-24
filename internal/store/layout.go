@@ -27,6 +27,10 @@ const (
 	CancelDir  = "cancel"
 	StartDir   = "start" // start requests, named as cancel requests are (PROTOCOL.md section 7.16)
 	OrderDir   = "order"
+	// QuietDir and NoStopDir hold a job's marks: empty files named by the id of the ticket or the
+	// hold they mark (PROTOCOL.md section 7.18).
+	QuietDir  = "quiet"
+	NoStopDir = "nostop"
 	// VMWaitDir holds the notes of gated tickets that wait for Docker's VM: a note is named as its
 	// ticket and is an empty file of mode 0600 that carries no lock.
 	VMWaitDir     = "vmwait"
@@ -119,7 +123,7 @@ func openDir(dir string, create bool) (*Store, error) {
 	if err := checkFilesystem(dir); err != nil {
 		return nil, err
 	}
-	for _, d := range []string{QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir, LogDir} {
+	for _, d := range []string{QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir, QuietDir, NoStopDir, LogDir} {
 		if err := CheckEntry(s.path(d), true); err != nil {
 			return nil, err
 		}

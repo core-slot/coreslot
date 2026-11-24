@@ -31,7 +31,7 @@ const (
 // doctorCommand is `coreslot doctor [--clear] [--reset]`: it checks the directory, its filesystem,
 // permissions, format, the configuration and the degraded record, and
 // reports every finding. --clear removes the degraded record. --reset recreates the state as this
-// client's format, whatever format it had, keeping the run log of format 5, 4 or 3, but only when nothing
+// client's format, whatever format it had, keeping the run log of format 6, 5, 4 or 3, but only when nothing
 // is live (PROTOCOL.md section 4.4). It exits 1 when it found a problem, else 3 while degraded
 // mode is recorded, else 0; a refused --clear or --reset is 75 (PROTOCOL.md section 19).
 func doctorCommand(args []string, io IO) int {
