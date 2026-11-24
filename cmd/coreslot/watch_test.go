@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/core-slot/coreslot/internal/engine"
 )
 
 // watch sets an override with or without an end and returns to the configuration, and status
@@ -35,13 +38,14 @@ func TestWatchCommandSwitchesThisMachine(t *testing.T) {
 	}
 }
 
-// Anything but observe, enforce or config, a --for that is not positive and a --for without a mode
-// to end are usage errors that change nothing. Mutation: accepting --for 0 writes an override with
-// no end.
+// Anything but observe, enforce or config, a --for that is not positive, a --for whose end is past
+// the clock's range and a --for without a mode to end are usage errors that change nothing.
+// Mutations: accepting --for 0 writes an override with no end; dropping the range check writes the
+// overflowed end as 0, an override with no end, and exits 0.
 func TestWatchCommandUsage(t *testing.T) {
 	dir := stateDir(t, "")
 	for _, args := range [][]string{{"watch"}, {"watch", "off"}, {"watch", "observe", "enforce"}, {"watch", "observe", "--for", "0s"},
-		{"watch", "config", "--for", "1h"}, {"watch", "--for", "1h"}} {
+		{"watch", "observe", "--for", "2500000h"}, {"watch", "config", "--for", "1h"}, {"watch", "--for", "1h"}} {
 		if r := cli(t, baseEnv(dir), args...); r.code != exitUsage {
 			t.Errorf("%q: exit %d (%q); want %d", args, r.code, r.stderr, exitUsage)
 		}
@@ -102,5 +106,42 @@ func TestEnqueueRecordsTheEffectiveMode(t *testing.T) {
 	evs := events(t, b.dir)
 	if len(evs) == 0 || evs[0]["mode"] != "observe" {
 		t.Errorf("enqueue %v; want mode observe", evs)
+	}
+}
+
+// An end on another day than now carries its date; an end today only its time. Mutation: formatting
+// every end as 15:04 drops the date two days ahead.
+func TestSwitchedTextDatesAnotherDay(t *testing.T) {
+	now := time.Date(2026, 11, 24, 10, 0, 0, 0, time.Local)
+	for _, c := range []struct {
+		until time.Time
+		want  string
+	}{
+		{now.Add(time.Hour), "switched by hand until 11:00"},
+		{now.Add(48 * time.Hour), "switched by hand until 2026-11-26 10:00"},
+	} {
+		if got := switchedText(c.until.UnixNano(), now.UnixNano()); got != c.want {
+			t.Errorf("switchedText(%v) = %q; want %q", c.until, got, c.want)
+		}
+	}
+}
+
+// Under observe, status says a stop round written in enforce mode still stops what it listed; under
+// enforce, or with no such round, it says nothing of it. Mutation: dropping the clause, or its
+// Observe condition, fails a row.
+func TestStatusNotesALiveEnforceRound(t *testing.T) {
+	const note = "a stop round written before the switch still stops the jobs it listed"
+	for _, c := range []struct {
+		w    engine.WatchInfo
+		want bool
+	}{
+		{engine.WatchInfo{Observe: true, EnforceRoundLive: true}, true},
+		{engine.WatchInfo{Observe: false, EnforceRoundLive: true}, false},
+		{engine.WatchInfo{Observe: true}, false},
+	} {
+		v := statusView{rep: engine.Report{Watch: c.w}, nowNS: 1}
+		if got := strings.Contains(v.watchLine(), note); got != c.want {
+			t.Errorf("%+v: the line notes the round: %v; want %v\n%s", c.w, got, c.want, v.watchLine())
+		}
 	}
 }

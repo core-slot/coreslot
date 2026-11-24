@@ -424,7 +424,7 @@ func (v statusView) watchLine() string {
 	}
 	if w := v.rep.Watch; w.ModeSource == "override" {
 		state += fmt.Sprintf("; %s mode %s, the configuration says %s (`coreslot watch config` returns to it)",
-			modeName(w.Observe), switchedText(w.ModeUntilNS), modeName(w.ConfiguredObserve))
+			modeName(w.Observe), switchedText(w.ModeUntilNS, v.nowNS), modeName(w.ConfiguredObserve))
 	}
 	if w := v.rep.Watch; w.Observe && w.EnforceRoundLive {
 		state += "; a stop round written before the switch still stops the jobs it listed"

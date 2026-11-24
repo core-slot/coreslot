@@ -157,8 +157,8 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
 		Fresh: fresh(at, now), ModeSource: cmp.Or(cfg.Mode.Source, "config"), ModeUntilNS: cfg.Mode.UntilNS,
 		ConfiguredObserve: cfg.Mode.ConfiguredObserve}
-	for _, h := range r.Holds {
-		r.Watch.EnforceRoundLive = r.Watch.EnforceRoundLive || !d.Observed && slices.Contains(d.Stop, h.Name)
+	for i, h := range r.Holds { // a listed run that found a container client since ignores the stop
+		r.Watch.EnforceRoundLive = r.Watch.EnforceRoundLive || !d.Observed && live[i].body.Victim && slices.Contains(d.Stop, h.Name)
 	}
 	if r.Watch.Fresh { // the newest sample knows which jobs have a learned normal S; this client does not
 		if next, _ := watch.StopList(smp.Jobs, d.Level == watch.Floor, 1, d.Kept, smp.Host.WallNS+now-at); len(next) > 0 {

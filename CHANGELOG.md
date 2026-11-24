@@ -8,6 +8,15 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- `coreslot watch --for` refuses, as a usage error, a duration whose end is past the clock's range, which
+  wrote an override with no end while it printed a time. An end on another day prints its date.
+- `status` no longer says a stop round written before a switch to observe still stops its jobs once every
+  listed job has found a container client, which ignores the stop.
+- The telemetry `memory` line's `vm.name` is the VM program's full name; on Apple's hypervisor it was the kernel's
+  31-byte `com.apple.Virtualization.Virtua`.
+
 ## v0.11.0 (2026-11-24)
 
 This release writes format 5. Upgrade every client of a machine together.
