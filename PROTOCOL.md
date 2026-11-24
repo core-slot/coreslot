@@ -582,7 +582,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | as in the ticket |
-| `pid` | integer | `≥ 0`; equal to the name's pid |
+| `pid` | integer | `≥ 0`; equal to the name's pid; the process whose descendants run the command, which a confirmation measures (section 12.1) |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns |
 | `arrival_ns` | integer | `≥ 0`; when the run first arrived in the queue, also after a restart (section 24) |
 | `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB. It is the need asked when the hold is published; its holder MAY rewrite it afterwards to any value from 1 to the need asked (section 12.5). `0` for a run outside the budget (section 14), which reserves nothing |
@@ -1192,8 +1192,32 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
 A gated request (section 12.6) also passes its VM test between steps 6 and 7. A head that passed
 them may then yield to short jobs instead of step 7 (section 10.3), before step 6 records its start.
 
+**The confirmation (step 6a).** A footprint is its run's last write, up to a few seconds old, while
+the headroom is read now: memory a run has just freed would count both as free and as still used.
+So a client that can read the process table SHOULD, after every other test has passed, before step
+7 and before the level gate records the start, confirm the room of a request that counts footprints
+(not a container request) while a hold is live:
+
+1. read the headroom, `H1`;
+2. read the process table once, and for each live hold whose `pid` is at least 2 and is the process
+   that started no more than 1 s after the hold's `start_ns` (so not a reused pid), sum the
+   footprint, as section 20 measures a run's, of that pid's descendants, the pid itself
+   left out;
+3. read the headroom again, `H2`;
+4. compute the room with `min(H1, H2)` for the headroom and each measured sum in place of its hold's
+   `footprint_mib`.
+
+If the request does not fit this room, it is not admitted and waits as for step 4. A hold that
+cannot be measured keeps its `footprint_mib`; when the process table cannot be read, all do; when a
+headroom reading fails, the confirmation admits. The confirmation only ever refuses: the request
+has already passed step 4 on the written footprints, and every other rule (step 4, the passing rule
+of section 10.3, `status`) keeps that room. A hold whose `pid` is not the parent of its command's
+processes is measured at 0 and so charged its whole need; a client MUST write as `pid` the process
+whose descendants run the command. No hostile party is in view: the confirmation reads only the
+kernel, inside the section, and no hold body moves it beyond its own `need_mib`.
+
 A **forced start** (section 13.4) takes step 1 and then step 7 alone: no room, no idle rule, no
-re-election, no level gate, and no VM test. Its hold says its full need, its ticket's `arrival_ns`
+re-election, no level gate, no confirmation, and no VM test. Its hold says its full need, its ticket's `arrival_ns`
 and `forced`, and it records no start for the level gate's spacing (section 12.4). A gated run's
 hold carries the Docker keys of a reading taken outside the section, as a gated admission's does
 (section 12.6), and none when no reading can be had.
