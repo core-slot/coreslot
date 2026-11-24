@@ -108,3 +108,18 @@ func (e *Engine) liveID(id wire.ID) (bool, error) {
 	}
 	return false, nil
 }
+
+// NoStop reports whether the grant's hold is marked do-not-stop (PROTOCOL.md section 7.18), read
+// without the section; a mark directory that cannot be read reads as no mark. The control it serves
+// has no adversary: it is the user's choice on the user's machine. Its anchor is nostop/<hold id>,
+// written by `coreslot no-stop` or moved there by this run at admission, which this run reads
+// before every write of its hold and again before it acts on a stop round; its cost is what the
+// machine does without coreslot, where nothing is stopped.
+func (g *Grant) NoStop() bool {
+	id, ok := wire.ParseName(g.holdName)
+	if !ok {
+		return false
+	}
+	marks, err := g.e.st.Marks(store.NoStopDir)
+	return err == nil && marks[id.String()]
+}

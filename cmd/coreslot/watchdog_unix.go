@@ -99,10 +99,20 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	if g != nil && g.GrantMiB() > 0 {
 		tail = state.NewTail(g.GrantMiB(), int(time.Duration(r.trimWindowS)*time.Second/memSampleEvery))
 	}
-	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
+	// A do-not-stop mark keeps the hold out of stop rounds. Once the mark goes, a run that refused
+	// round R stays out until a tick reads a round other than R: R's listing would otherwise stay
+	// live and hold back every new round (PROTOCOL.md section 7.18).
+	var noStop struct {
+		on       bool  // the run writes Victim false
+		refused  int64 // the round it refused while marked; 0 for none
+		lastRead int64 // the round the last tick read; 0 when it read none
+	}
+	victim := func() bool { return !noStop.on && !p.container && sup.group && r.o.restartable() }
+	if g != nil { // constant for the attempt, Victim until a hit or a mark: written once, before its first tick
 		r.hold = g.HoldName()
+		noStop.on = g.NoStop()
 		r.updateHold(st, g, func(h *wire.Hold) {
-			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
+			h.Victim, h.Stops, h.NormalShare, h.Learned = victim(), r.stops, r.share, r.learned
 			h.TypicalCPUS, h.Container = r.cpuS, p.container
 			h.DockerNote, h.DockerFootprintMiB = r.dockerNote(), r.dockerFootprint()
 			r.setDockerKeys(g, h)
@@ -171,13 +181,19 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		if trim.found {
 			need = tail.Need()
 		}
+		if g.NoStop() {
+			noStop.on = true
+		} else if noStop.on && (noStop.refused == 0 || noStop.lastRead > 0 && noStop.lastRead != noStop.refused) {
+			noStop.on, noStop.refused = false, 0
+		}
 		wrote := r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA, h.NoCPUS = p.cpuNS, stall, noCPUS
 			h.SampledNS, h.DockerNote, h.DockerFootprintMiB = store.NowNS(), r.dockerNote(), r.dockerFootprint()
 			r.setDockerKeys(g, h)
-			if p.container { // every update, so that a failed one repeats by itself
-				h.Victim, h.Container = false, true
+			h.Victim = victim() // every update, so that a failed one repeats by itself
+			if p.container {
+				h.Container = true
 			}
 			if trim.found { // every update, as the footprint it follows
 				h.NeedMiB, h.AskedMiB, h.Trimmed = need, g.GrantMiB(), true
@@ -191,12 +207,18 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			continue
 		}
 		det, err := g.Tick(ctx)
+		noStop.lastRead = det.LastRoundNS // the zero detector of a failed tick reads no round
 		r.countClosed(d, det, err)
 		keptRound = r.keptNotice(det, g.HoldName(), keptRound)
 		if err != nil || p.container || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
 		round = det.LastRoundNS
+		if g.NoStop() { // marked since the run's last write: the round is refused, as if acted on
+			noStop.on, noStop.refused = true, round
+			r.notice("%s is marked do-not-stop: not stopped (%s)", commandText(r.o.argv), r.stopDetail(det.RoundFloor, kib, d))
+			continue
+		}
 		if r.stopFor(det, kib, d, keptRound != 0, sup.KillGroup) {
 			return true, p
 		}
