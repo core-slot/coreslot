@@ -34,6 +34,31 @@ func (sec *Section) Unmark(dir string, id wire.ID) (removed bool, err error) {
 	return sec.removeByID(dir, id)
 }
 
+// MoveMarks moves every mark of from to to inside the section: a ticket's marks to its hold at
+// admission (PROTOCOL.md section 12.1 step 7).
+func (sec *Section) MoveMarks(from, to wire.ID) error {
+	for _, dir := range markDirs {
+		if removed, err := sec.Unmark(dir, from); err != nil {
+			return err
+		} else if removed {
+			if _, err := sec.Mark(dir, to); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// UnmarkAll removes every mark of id inside the section.
+func (sec *Section) UnmarkAll(id wire.ID) error {
+	for _, dir := range markDirs {
+		if _, err := sec.Unmark(dir, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Marks lists the ids dir marks, without the section; stray entries are ignored, never trusted.
 func (s *Store) Marks(dir string) (map[string]bool, error) {
 	if !isMarkDir(dir) {
@@ -50,4 +75,6 @@ func (s *Store) Marks(dir string) (map[string]bool, error) {
 	return marks, nil
 }
 
-func isMarkDir(dir string) bool { return slices.Contains([]string{QuietDir, NoStopDir}, dir) }
+var markDirs = []string{QuietDir, NoStopDir}
+
+func isMarkDir(dir string) bool { return slices.Contains(markDirs, dir) }

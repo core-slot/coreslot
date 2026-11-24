@@ -17,6 +17,7 @@ const (
 	// A gated ticket that fits on the host waits for room in Docker's VM, or for a reading of it.
 	ReasonVMRoomShort, ReasonDockerNoReading WaitReason = "vm_room_short", "docker_no_reading"
 	ReasonYielding                           WaitReason = "yielding" // a long head that fits lets short jobs go first
+	ReasonQuiet                              WaitReason = "quiet"    // a quiet job runs: no other job is admitted
 )
 
 // Outcome is what the ticket's last admission attempt decided and the numbers it used. Comparable, carried by value.
