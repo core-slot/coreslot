@@ -8,6 +8,14 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- A command could start on memory a running command had just released and was about to use again:
+  the room counted it as free and, until the running command's next report, as still in use. Before
+  a command starts beside running ones, coreslot now measures their process trees and the free
+  memory at that moment, and waits when the room is not there (`PROTOCOL.md` section 12.1, the
+  confirmation). `status` still shows the room from the last reports.
+
 ## v0.11.0 (2026-11-24)
 
 This release writes format 5. Upgrade every client of a machine together.

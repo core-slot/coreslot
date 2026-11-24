@@ -162,7 +162,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `w_s` | the expected wait a pass was judged on, when computed |
 | `calm_left_s` | with `restart_calm`: seconds of calm still needed |
 | `headroom_mib`, `headroom_ok`, `reserve_mib` | as on a sample |
-| `room_mib` | the room the person's line shows: at least 0; for a container waiter the real free memory |
+| `room_mib` | the room the person's line shows: at least 0; for a container waiter the real free memory. It is built from the holds' last reports, so for a few seconds after a hold frees memory it can fit while the confirmation refuses with `room_short` |
 | `level` | the detector's level; absent with no sample |
 | `read_age_ms` | the age of that sample; absent with no sample |
 | `holders` | up to 16 live holds, those with the most left to grow into first: `hold`, `need_mib`, `footprint_mib`, `child_exited`, `owner_exited`, `sample_age_ms` (absent when never sampled). A holder's `need_mib` is what it reserves now, which may move during a trimmed hold's life |
@@ -175,7 +175,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `waited_s` | the attempt's wait, the run log's `waited_s` |
 | `reason_s` | seconds per reason since the last `waiting` |
 | `last_reason` | the reason of the last step before the admission; empty when the first step admitted the run, which says nothing of how long that took: see `reason_s` |
-| `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
+| `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read; beside a live hold, except for a container request, the confirmation's headroom (the lower of its two readings) and room ([`PROTOCOL.md` section 12.1](../PROTOCOL.md#121-steps)) |
 | `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
 | `w_s` | the expected wait, when computed |
 | `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait), `turn` (out of turn) or `forced` (on a `coreslot start` request, whatever the room); absent for the head |

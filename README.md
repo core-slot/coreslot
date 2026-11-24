@@ -107,7 +107,9 @@ stats` prints. Else 1 MiB for a command named
 `docker`, `docker-compose` or `podman`, else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
 (on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
 less the reserve, less what each running command still has to grow into (its need less what it uses
-now). A command starts when its need fits the room. A need larger than the machine's memory less the
+now). A command starts when its need fits the room. A running command reports what it uses every
+2 s, so before a command starts beside running ones, coreslot measures them at that moment rather
+than trust their last report, and waits if the room is not there now. A need larger than the machine's memory less the
 reserve starts only when no other coreslot job runs. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
