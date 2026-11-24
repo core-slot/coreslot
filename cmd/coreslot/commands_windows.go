@@ -25,6 +25,16 @@ func moveCommand(args []string, io IO) int {
 	return noBudget("move", moveUsage, fs, args, io)
 }
 
+func quietCommand(args []string, io IO) int {
+	fs, _ := quietFlags()
+	return noBudget("quiet", quietUsage, fs, args, io)
+}
+
+func noStopCommand(args []string, io IO) int {
+	fs, _ := noStopFlags()
+	return noBudget("no-stop", noStopUsage, fs, args, io)
+}
+
 func trimCommand(args []string, io IO) int {
 	fs, _ := trimFlags()
 	return noBudget("trim", trimUsage, fs, args, io)
