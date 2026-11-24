@@ -290,7 +290,7 @@ func (t *Ticket) publish(sec *store.Section) error {
 	if t.req.ArrivalNS > 0 {
 		arrival = t.req.ArrivalNS
 	}
-	tk := wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival, Restart: t.req.Restart}
+	tk := wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival, Restart: t.req.Restart, TypicalS: t.req.TypicalS}
 	if t.gated() {
 		tk.DockerNeedMiB = t.req.DockerNeedMiB
 	}

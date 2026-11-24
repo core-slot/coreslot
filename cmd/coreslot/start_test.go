@@ -136,6 +136,24 @@ func TestStartRequestTurnsUnanswered(t *testing.T) {
 	}
 }
 
+// An old start request is unanswered only while its ticket still waits: one whose ticket is gone or
+// dead is answered or moot. Mutation: dropping the ticket check marks the last two unanswered.
+func TestStartRequestUnansweredOnlyWhileItsTicketWaits(t *testing.T) {
+	now := time.Now().UnixNano()
+	old := now - int64(11*time.Second)
+	r := engine.Report{
+		Tickets: []engine.TicketInfo{{ID: "waits"}, {ID: "dead", Dead: true}},
+		Starts:  []engine.StartInfo{{Ticket: "waits", RequestedNS: old}, {Ticket: "gone", RequestedNS: old}, {Ticket: "dead", RequestedNS: old}},
+	}
+	got := map[string]bool{}
+	for _, s := range startRequests(r, now) {
+		got[s.Ticket] = s.Unanswered
+	}
+	if !got["waits"] || got["gone"] || got["dead"] {
+		t.Errorf("unanswered by ticket %v; want only the one whose ticket waits", got)
+	}
+}
+
 // start refuses what cancel refuses: a label two waiting tickets share, a ticket that is not
 // waiting; and takes exactly one ticket. Nothing is published on a refusal.
 func TestStartRefusals(t *testing.T) {

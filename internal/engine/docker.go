@@ -21,7 +21,9 @@ import (
 const ReadEvery = 2 * time.Second
 
 // noteEvery is the least time between two publications of a ticket's note; removals are not
-// spaced.
+// spaced. Each publication bumps gen and every waiter re-lists on a bump, so without it a ticket
+// whose VM test swings between attempts would wake them all at each one; the cost is that a host
+// run may wait up to that long behind a ticket that would have noted.
 const noteEvery = 2 * time.Second
 
 // failedReadingsUngate is how many failed readings in a row ungate a ticket's Docker part. A count,

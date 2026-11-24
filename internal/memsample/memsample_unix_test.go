@@ -54,9 +54,10 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// A shell that started two helpers of 300 MiB each holds about 600 MiB as a tree, though the
-// shell itself holds almost nothing. Mutation: sum the root alone, and the tree is a few MiB.
-func TestTreeCountsChildren(t *testing.T) {
+// twoHelpers starts a shell that starts two helpers of 300 MiB each, and returns it once both are
+// ready; it kills them when the test ends.
+func twoHelpers(t testing.TB) *exec.Cmd {
+	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +98,13 @@ func TestTreeCountsChildren(t *testing.T) {
 			t.Fatalf("%d of 2 helpers ready after 30 s", n)
 		}
 	}
+	return cmd
+}
+
+// A shell that started two helpers of 300 MiB each holds about 600 MiB as a tree, though the
+// shell itself holds almost nothing. Mutation: sum the root alone, and the tree is a few MiB.
+func TestTreeCountsChildren(t *testing.T) {
+	cmd := twoHelpers(t)
 	kib, _, ok := Tree(cmd.Process.Pid)
 	if mib := kib / 1024; !ok || mib < 540 || mib > 760 {
 		t.Errorf("Tree = %d MiB, %v; want 540..760 MiB, true", mib, ok)
@@ -151,6 +159,97 @@ func TestHeadroom(t *testing.T) {
 	}
 	if mib, ok := Headroom(); !ok || mib <= 0 || mib > total {
 		t.Errorf("Headroom = %d, %v; want 1..%d, true", mib, ok, total)
+	}
+}
+
+// selfRoot is the test process as a root to measure, with its listed start time.
+func selfRoot(t testing.TB) Root {
+	t.Helper()
+	procs, ok := Listing()
+	if !ok {
+		t.Fatal("Listing() not ok")
+	}
+	return Root{PID: os.Getpid(), StartNS: procs[os.Getpid()].StartNS}
+}
+
+// The test process's descendants, a shell and its two helpers of 300 MiB, sum to about 600 MiB,
+// and the test process's own footprint is left out. Mutations: walk the direct children alone (the
+// shell, a few MiB); count the root too (equal to Tree of the test process).
+func TestFootprintsSumsDescendants(t *testing.T) {
+	twoHelpers(t)
+	root := selfRoot(t)
+	own, _, ok := footprint(root.PID)
+	if !ok {
+		t.Fatal("the test process's own footprint is unreadable")
+	}
+	got, ok := Footprints([]Root{root})
+	treeKiB, _, treeOK := Tree(root.PID)
+	if !ok || !treeOK {
+		t.Fatalf("Footprints ok %v, Tree ok %v", ok, treeOK)
+	}
+	if mib := got[root]; mib < 540 || mib > 760 || mib > treeKiB>>10-own>>11 {
+		t.Errorf("Footprints = %d MiB; want 540..760 MiB and below Tree's %d MiB by about the process's own %d MiB",
+			mib, treeKiB>>10, own>>10)
+	}
+}
+
+// A live root with no child has an entry of 0. Mutation: give no entry to a root with nothing read.
+func TestFootprintsOfAChildlessRoot(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	procs, ok := Listing()
+	if !ok {
+		t.Fatal("Listing() not ok")
+	}
+	pid := cmd.Process.Pid
+	root := Root{PID: pid, StartNS: procs[pid].StartNS}
+	got, ok := Footprints([]Root{root})
+	if mib, has := got[root]; !ok || !has || mib != 0 {
+		t.Errorf("Footprints = %v, %v; want {%d: 0}, true", got, ok, pid)
+	}
+}
+
+// A reaped pid, a pid listed with a later start than its hold's (reused), and pids 0 and 1 have
+// no entry. Mutations: report 0 for a root that is not listed; drop the start-time test; walk
+// from pid 1.
+func TestFootprintsSkipsRootsItCannotTrust(t *testing.T) {
+	done := exec.Command("true")
+	if err := done.Run(); err != nil {
+		t.Fatal(err)
+	}
+	self := selfRoot(t)
+	reused := Root{PID: self.PID, StartNS: self.StartNS - int64(10*time.Second)}
+	procs, _ := Listing() // pids 0 and 1 with their own start times, so that only the pid test refuses them
+	for _, r := range []Root{{PID: done.Process.Pid}, reused, {PID: 0, StartNS: procs[0].StartNS}, {PID: 1, StartNS: procs[1].StartNS}} {
+		if got, ok := Footprints([]Root{r}); !ok || len(got) != 0 {
+			t.Errorf("Footprints(%+v) = %v, %v; want no entry, true", r, got, ok)
+		}
+	}
+}
+
+// Three roots: the test process and two childless children.
+func BenchmarkFootprints(b *testing.B) {
+	roots := []Root{selfRoot(b)}
+	for range 2 {
+		cmd := exec.Command("sleep", "60")
+		if err := cmd.Start(); err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		})
+		procs, _ := Listing()
+		roots = append(roots, Root{PID: cmd.Process.Pid, StartNS: procs[cmd.Process.Pid].StartNS})
+	}
+	for b.Loop() {
+		Footprints(roots)
 	}
 }
 

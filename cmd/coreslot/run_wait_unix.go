@@ -182,6 +182,8 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 		why = "; waits for room in Docker's VM"
 	case engine.ReasonDockerNoReading:
 		why = "; waits for a reading of Docker's VM"
+	case engine.ReasonYielding:
+		why = "; " + yieldText(w.Outcome.YieldUntilNS)
 	}
 	r.record.waiting(w)
 	if !r.advised {

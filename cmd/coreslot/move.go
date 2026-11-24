@@ -61,47 +61,28 @@ func moveCommand(args []string, io IO) int {
 			continue
 		}
 		var ok bool
-		if *p.id, ok = wire.ParseName(p.s); !ok {
-			fmt.Fprintf(io.Stderr, "coreslot: %q is not a ticket id (the id column of `coreslot status`)\n", p.s)
+		if *p.id, ok = ticketID(p.s, io); !ok {
 			return exitUsage
 		}
 	}
 
-	e, err := openEngine(locate(), true)
-	if err != nil {
-		return commandFailed("move", err, io)
+	c := ticketCommand{verb: "move", noTicket: "ticket %s or the one it is placed by is not waiting (admitted, withdrawn or removed)",
+		nothing: "nothing was moved", named: func(id wire.ID) int {
+			if refText != "" && ref == id {
+				fmt.Fprintf(io.Stderr, "coreslot: move: a ticket cannot be moved next to itself\n%s\n", moveUsage)
+				return exitUsage
+			}
+			return -1
+		}, publish: func(e *engine.Engine, ctx context.Context, id wire.ID) error {
+			_, err := e.MoveContext(ctx, id, place, ref)
+			return err
+		}}
+	_, id, code := c.request(id, set["label"], *label, io)
+	if code >= 0 {
+		return code
 	}
-	if !e.Store().Exists() {
-		fmt.Fprintln(io.Stderr, "coreslot: move: no state directory yet (nothing has run), so no ticket is waiting")
-		return exitRefusal
-	}
-	if set["label"] {
-		var code int
-		if id, code = soleWaiting(e, "move", *label, io); code >= 0 {
-			return code
-		}
-	}
-	if refText != "" && ref == id {
-		fmt.Fprintf(io.Stderr, "coreslot: move: a ticket cannot be moved next to itself\n%s\n", moveUsage)
-		return exitUsage
-	}
-
-	ctx, stop := context.WithTimeout(context.Background(), cancelWait)
-	defer stop()
-	var busy *engine.SectionBusyError
-	switch _, err := e.MoveContext(ctx, id, place, ref); {
-	case err == nil:
-		fmt.Fprintf(io.Stdout, "coreslot: moved ticket %s\n", id)
-		return 0
-	case errors.Is(err, engine.ErrNoTicket):
-		fmt.Fprintf(io.Stderr, "coreslot: move: ticket %s or the one it is placed by is not waiting (admitted, withdrawn or removed)\n", id)
-		return exitRefusal
-	case errors.As(err, &busy), errors.Is(err, context.DeadlineExceeded):
-		fmt.Fprintf(io.Stderr, "coreslot: move refused: %s; nothing was moved\n", sectionBusyText(e, cancelWait))
-		return exitRefusal
-	default:
-		return commandFailed("move", err, io)
-	}
+	fmt.Fprintf(io.Stdout, "coreslot: moved ticket %s\n", id)
+	return 0
 }
 
 // firstOf is the first of args, "" when there is none.

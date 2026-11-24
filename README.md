@@ -27,7 +27,10 @@ coreslot status                                # what runs, what waits, whether 
   waits in one first-in, first-out queue. A command that fits may pass the head of the queue when
   its earlier runs say it will be done before the head could start, or, while the head does not fit
   and the kernel reports normal memory pressure, out of turn: one at a time, and for no longer than
-  it has itself watched the head wait. A command with no earlier run never passes. The exception is
+  it has itself watched the head wait. A long head (10 min or more) that could start lets short
+  commands (2 min or less) that would not fit beside it go first, until a deadline of a quarter of its
+  own run time that `status` shows; it starts by then, or once the short ones still running end. A
+  command with no earlier run never passes. The exception is
   container work: while another command runs, a command named `docker`, `docker-compose` or
   `podman` with no pinned need passes the queue, with or without
   earlier runs ([how it decides](#how-it-decides)). When no coreslot command is running, the head of
@@ -107,7 +110,9 @@ stats` prints. Else 1 MiB for a command named
 `docker`, `docker-compose` or `podman`, else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
 (on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
 less the reserve, less what each running command still has to grow into (its need less what it uses
-now). A command starts when its need fits the room. A need larger than the machine's memory less the
+now). A command starts when its need fits the room. A running command reports what it uses every
+2 s, so before a command starts beside running ones, coreslot measures them at that moment rather
+than trust their last report, and waits if the room is not there now. A need larger than the machine's memory less the
 reserve starts only when no other coreslot job runs. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
@@ -173,11 +178,12 @@ and says so when it starts. A run that fits on the Mac and waits only for the VM
 Docker's VM` in `status`, and every other run passes it: a `go test` or a `docker compose down`
 behind it starts. Once started, its hold reserves on the Mac the growth its containers may still
 cause the VM, up to twice what they have yet to reach of the need on Apple's hypervisor and one
-and a half times on Docker VMM, and never more than the VM can still grow. `status` shows each hold's `docker_mem`, its `docker footprint` and what is `reserved on
-the Mac for Docker's VM`, and each waiting run's `docker_mem`. Docker Desktop's VM is read on
-Apple's hypervisor and on Docker VMM alike. `--mem` and `mem` stay the memory of the command's own
-processes: on a command named `docker`, a pin reserves that on the Mac and makes it queue as usual,
-so a pin meant as the containers' memory belongs in `docker_mem`.
+and a half times on Docker VMM, and never more than the VM can still grow. `status` shows each
+hold's `docker_mem`, its `docker footprint` and what is `reserved on the Mac for Docker's VM`, and
+each waiting run's `docker_mem`. Docker Desktop's VM is read on Apple's hypervisor and on Docker
+VMM alike. `--mem` and `mem` stay the memory of the command's own processes: on a command named
+`docker`, a pin reserves that on the Mac and makes it queue as usual, so a pin meant as the
+containers' memory belongs in `docker_mem`.
 
 What the reservation does not hold back:
 
@@ -192,9 +198,8 @@ What the reservation does not hold back:
 - On Docker VMM the VM gives memory back to the Mac as its containers free it, so a hold reserves
   for as long as its containers have not filled its need, and for up to 6 s after the VM gives
   memory back its reservation can be too low. The factor 1.5 does not cover a transient that briefly
-  touches more, which Docker VMM gives back within about 2 s, and of the guest's cache creeping
-  above it after a step. On Apple's hypervisor a VM grown to its size
-  reserves nothing more.
+  touches more, which Docker VMM gives back within about 2 s, nor the guest's cache creeping above
+  it after a step. On Apple's hypervisor a VM grown to its size reserves nothing more.
 - Runs behind one that waits for the VM may take Mac memory it needs. Room in the VM goes to
   waiting runs in arrival order, so containers outside coreslot that keep the VM full hold every
   such run; only `--timeout` bounds that.
@@ -338,7 +343,7 @@ xattr -d com.apple.quarantine ./coreslot
 `coreslot version` prints the version and the protocol formats it implements. A state directory of
 another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`,
 which also removes that format's run log, so every label learns its memory need again. On a
-directory of this client's format, or of format 3 (which the reset upgrades), the reset is a repair
+directory of this client's format, or of format 3 or 4 (which the reset upgrades), the reset is a repair
 and keeps the run log; to make the labels learn again,
 remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 

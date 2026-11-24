@@ -92,8 +92,10 @@ func TestListVMProcsReadsPathNotName(t *testing.T) {
 	}
 }
 
-// Sweep's vm is DockerVM's process: read when identified, absent when not identified or not running.
-// Mutations: dropping the DockerVM wiring in Sweep, or reading vm whatever the state, reddens a row.
+// Sweep's vm is DockerVM's process: read when identified, absent when not identified or not running,
+// and named by its backend's program in full. Mutations: dropping the DockerVM wiring in Sweep, or
+// reading vm whatever the state, reddens a row; keeping the kernel's process name names it after this
+// test binary.
 func TestSweepVMComesFromDockerVM(t *testing.T) {
 	procs, ok := Listing()
 	if !ok {
@@ -102,14 +104,21 @@ func TestSweepVMComesFromDockerVM(t *testing.T) {
 	self := VM{State: VMIdentified, PID: os.Getpid(), StartNS: procs[os.Getpid()].StartNS, FootprintMiB: 1}
 	saved := lookupVM
 	t.Cleanup(func() { lookupVM = saved })
-	for _, state := range []VMState{VMIdentified, VMNotIdentified, VMNotRunning} {
-		lookupVM = func() VM { v := self; v.State = state; return v }
+	for _, c := range []struct {
+		state VMState
+		vmm   bool
+		name  string
+	}{
+		{VMIdentified, false, "com.apple.Virtualization.VirtualMachine"}, {VMIdentified, true, "com.docker.sailor"},
+		{VMNotIdentified, false, ""}, {VMNotRunning, false, ""},
+	} {
+		lookupVM = func() VM { v := self; v.State, v.VMM = c.state, c.vmm; return v }
 		_, vm, ok := Sweep(1)
-		if want := state == VMIdentified; !ok || (vm != nil) != want {
-			t.Errorf("state %d: Sweep's vm = %+v (ok %v), want present %v", state, vm, ok, want)
+		if want := c.state == VMIdentified; !ok || (vm != nil) != want {
+			t.Errorf("state %d: Sweep's vm = %+v (ok %v), want present %v", c.state, vm, ok, want)
 		}
-		if vm != nil && (vm.StartNS != self.StartNS || vm.FootprintMiB <= 0) {
-			t.Errorf("vm = %+v, want this process's start time and a footprint", *vm)
+		if vm != nil && (vm.StartNS != self.StartNS || vm.FootprintMiB <= 0 || vm.Name != c.name) {
+			t.Errorf("vm = %+v, want this process's start time, a footprint and the name %s", *vm, c.name)
 		}
 	}
 }

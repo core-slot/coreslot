@@ -35,3 +35,11 @@ func TestReadHostDarwinLive(t *testing.T) {
 		t.Errorf("WallNS advanced %v over a 1 s sleep", span)
 	}
 }
+
+// HOST_CPU_LOAD_INFO's slots are user, system, idle and nice; only idle is not busy. Mutation:
+// counting slot 2 as busy, or leaving nice (slot 3) out, gives another busy sum.
+func TestBusyTicksSlotOrder(t *testing.T) {
+	if busy, total := busyTicks([4]uint32{1, 10, 100, 1000}); busy != 1011 || total != 1111 {
+		t.Errorf("busyTicks = %d of %d; want 1011 of 1111", busy, total)
+	}
+}

@@ -10,6 +10,47 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,
+  lets the jobs behind it that typically run 2 min or less, and would not fit beside it, start first, until a
+  deadline of a quarter of its typical run time (10 min for a 40-min head), which it publishes in the new
+  `yield.json`. It starts by the deadline, or once the short jobs still running end; a short job that runs past its
+  typical time, or 3 s with nobody taking the room, ends the yield at once. A head never yields twice, nor when it is a
+  restart, was moved, cannot read the headroom or the kernel's pressure is not normal (so never on Linux). Tickets
+  carry their label's `typical_s`. `status` reads "letting short jobs go first until 14:32"; `status --json` gains the
+  top-level `head` and `yield`, under the same `schema` 1; telemetry gains the `waiting` reason `yielding` with
+  `until_ns`, `yield_ended`, the `short` pass and its `no_pass` reasons.
+- Format 5 gains the optional `$S/yield.json` (`PROTOCOL.md` section 7.17) and the ticket's optional
+  `typical_s`; no reset is needed. A v0.11.0 client never opens the file and ignores the key, so it neither yields
+  nor passes as a short job, and its tickets carry no `typical_s`.
+
+### Fixed
+
+- `coreslot watch --for` refuses, as a usage error, a duration whose end is past the clock's range, which
+  wrote an override with no end while it printed a time. An end on another day prints its date.
+- `status` no longer says a stop round written before a switch to observe still stops its jobs once every
+  listed job has found a container client, which ignores the stop.
+- The telemetry `memory` line's `vm.name` is the VM program's full name; on Apple's hypervisor it was the kernel's
+  31-byte `com.apple.Virtualization.Virtua`.
+- A command could start on memory a running command had just released and was about to use again:
+  the room counted it as free and, until the running command's next report, as still in use. Before
+  a command starts beside running ones, coreslot now measures their process trees and the free
+  memory at that moment, and waits when the room is not there (`PROTOCOL.md` section 12.1, the
+  confirmation). `status` still shows the room from the last reports.
+
+## v0.11.0 (2026-11-24)
+
+This release writes format 5. Upgrade every client of a machine together.
+
+### Upgrading
+
+A client of this release does not use a format-3 directory (v0.10.0) or a format-4 one: its runs start unbudgeted
+with a notice (`--strict` refuses) until `coreslot doctor --reset`. Run the reset when no hold and no ticket is
+live; it refuses while one is, and names it. On a format-3 or format-4 directory the reset is an upgrade to format 5
+that keeps the run log and the telemetry, so no label learns its need again. A format-2 directory's reset removes
+its run log.
+
+### Added
+
 - `coreslot start <ticket-id>` (or `--label L`) starts a waiting job now, ahead of the queue and whatever memory is
   free: its own run admits itself at its next poll with a hold that still reserves its full need, so the room may go
   below zero and other jobs wait. It waits up to 8 s for the run to start, or returns at once with `--no-wait`. A

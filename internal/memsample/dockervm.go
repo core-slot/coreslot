@@ -34,10 +34,20 @@ type VM struct {
 // bytes of a name in p_comm and 32 in pbi_name, which cut them, so the path is what is compared.
 const (
 	dockerBackendExe = "com.docker.backend"
+	appleVMExe       = "com.apple.Virtualization.VirtualMachine"
 	dockerVMMExe     = "com.docker.sailor"
 )
 
-var dockerVMExes = []string{"com.apple.Virtualization.VirtualMachine", dockerVMMExe}
+var dockerVMExes = []string{appleVMExe, dockerVMMExe}
+
+// Program is the last element of the identified VM's executable path, the program DockerVM matched,
+// which the kernel's process name cuts on Apple's hypervisor.
+func (v VM) Program() string {
+	if v.VMM {
+		return dockerVMMExe
+	}
+	return appleVMExe
+}
 
 // isVMExe reports whether p runs one of the VM programs.
 func isVMExe(p string) bool { return slices.Contains(dockerVMExes, path.Base(p)) }

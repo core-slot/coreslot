@@ -94,6 +94,12 @@ func (x *runRecord) waiting(w engine.Waiting) {
 	if out.Reason == engine.ReasonRestartCalm {
 		f["calm_left_s"] = out.CalmLeftS
 	}
+	if out.Reason == engine.ReasonYielding {
+		f["until_ns"] = out.YieldUntilNS
+	}
+	if out.YieldEnded != "" {
+		f["yield_ended"] = out.YieldEnded
+	}
 	if rep := x.snap; rep != nil {
 		f["headroom_mib"], f["headroom_ok"], f["reserve_mib"] = rep.Mem.HeadroomMiB, rep.Mem.HeadroomOK, rep.Mem.ReserveMiB
 		f["room_mib"], f["holders"] = waitRoom(*rep, x.run.o.request()), holderLines(rep.Holds)
@@ -118,6 +124,9 @@ func (x *runRecord) admitted(g *engine.Grant) {
 	}
 	if a.Pass != "" {
 		f["pass"] = a.Pass
+	}
+	if a.YieldEnded != "" {
+		f["yield_ended"] = a.YieldEnded
 	}
 	x.Emit("admitted", f)
 }

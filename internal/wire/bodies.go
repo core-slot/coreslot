@@ -28,6 +28,7 @@ type Ticket struct {
 	CreatedNS     int64
 	Restart       bool  // optional: a stopped run coming back
 	DockerNeedMiB int64 // optional: the gated run's Docker need, 1..MaxNeedMiB when present
+	TypicalS      int64 // optional: its label's typical run time in seconds, 0 unknown (section 7.3)
 }
 
 // Hold is the body of a holds entry (section 7.4): the reservation of a run and what its run last
@@ -81,6 +82,7 @@ type ticketJSON struct {
 	CreatedNS     int64  `json:"created_ns"`
 	Restart       bool   `json:"restart,omitempty"`
 	DockerNeedMiB int64  `json:"docker_need_mib,omitempty"`
+	TypicalS      int64  `json:"typical_s,omitempty"`
 }
 
 type holdJSON struct {
@@ -194,8 +196,8 @@ func (t Ticket) validate() error {
 	if err := (spec.Request{Label: t.Label, NeedMiB: t.NeedMiB}).Validate(); err != nil {
 		return malformed("%v", err)
 	}
-	if t.CreatedNS < 0 {
-		return malformed("created_ns is negative")
+	if t.CreatedNS < 0 || t.TypicalS < 0 {
+		return malformed("created_ns and typical_s are at least 0")
 	}
 	if t.DockerNeedMiB < 0 || t.DockerNeedMiB > spec.MaxNeedMiB {
 		return malformed("docker_need_mib is in [1, %d] when present", spec.MaxNeedMiB)
@@ -269,6 +271,9 @@ func DecodeTicket(body []byte) (Ticket, error) {
 		return Ticket{}, err
 	}
 	if t.DockerNeedMiB, err = dockerNeed(o); err != nil {
+		return Ticket{}, err
+	}
+	if t.TypicalS, err = optional(o, "typical_s", o.int64); err != nil {
 		return Ticket{}, err
 	}
 	if err := t.validate(); err != nil {

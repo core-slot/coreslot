@@ -351,6 +351,9 @@ func (v statusView) human() string {
 		if t.info.Noted {
 			line += "  waits for Docker's VM"
 		}
+		if y := v.rep.Yield; y != nil && y.Head == t.info.ID {
+			line += "  " + yieldText(y.UntilNS)
+		}
 		switch t.state {
 		case "stalled":
 			line += "  STALLED"
@@ -424,7 +427,7 @@ func (v statusView) watchLine() string {
 	}
 	if w := v.rep.Watch; w.ModeSource == "override" {
 		state += fmt.Sprintf("; %s mode %s, the configuration says %s (`coreslot watch config` returns to it)",
-			modeName(w.Observe), switchedText(w.ModeUntilNS), modeName(w.ConfiguredObserve))
+			modeName(w.Observe), switchedText(w.ModeUntilNS, v.nowNS), modeName(w.ConfiguredObserve))
 	}
 	if w := v.rep.Watch; w.Observe && w.EnforceRoundLive {
 		state += "; a stop round written before the switch still stops the jobs it listed"
@@ -478,9 +481,22 @@ type jsonStatus struct {
 	DeadHolds        []string       `json:"dead_holds"`
 	CancelRequests   []string       `json:"cancel_requests"`
 	StartRequests    []jsonStart    `json:"start_requests"`
+	Head             *string        `json:"head"`  // the ticket a waiter's re-election would pick; null with none
+	Yield            *jsonYield     `json:"yield"` // the head's valid yield record; null with none
 	Ignored          map[string]int `json:"ignored"`
 	ObservedS        float64        `json:"observed_s"`
 	Docker           *jsonDocker    `json:"docker,omitempty"` // only with --docker
+}
+
+type jsonYield struct {
+	Head       string `json:"head"`
+	UntilNS    int64  `json:"until_ns"`
+	LastPassNS int64  `json:"last_pass_ns"`
+}
+
+// yieldText says that a head lets short jobs go first, until when.
+func yieldText(untilNS int64) string {
+	return "letting short jobs go first until " + time.Unix(0, untilNS).Format("15:04")
 }
 
 // jsonStart is a pending start request: unanswered once older than startAnswerAge while its ticket
@@ -495,12 +511,18 @@ type jsonStart struct {
 // live run of this coreslot acts on it at its next poll.
 const startAnswerAge = 10 * time.Second
 
-// startRequests are r's pending start requests at nowNS.
-func startRequests(r engine.Report, nowNS int64) []jsonStart {
+// waitingTickets is the set of the ids of the live tickets r lists.
+func waitingTickets(r engine.Report) map[string]bool {
 	waiting := map[string]bool{}
 	for _, t := range r.Tickets {
 		waiting[t.ID] = waiting[t.ID] || !t.Dead
 	}
+	return waiting
+}
+
+// startRequests are r's pending start requests at nowNS.
+func startRequests(r engine.Report, nowNS int64) []jsonStart {
+	waiting := waitingTickets(r)
 	out := []jsonStart{} // never null in the document
 	for _, s := range r.Starts {
 		var age time.Duration // 0 for a malformed body, whose time is unknown and which its run ignores
@@ -616,6 +638,12 @@ func (v statusView) document() jsonStatus {
 	}
 	if v.docker != nil {
 		d.Docker = v.docker.document()
+	}
+	if r.Head != "" {
+		d.Head = &r.Head
+	}
+	if y := r.Yield; y != nil {
+		d.Yield = &jsonYield{Head: y.Head, UntilNS: y.UntilNS, LastPassNS: y.LastPassNS}
 	}
 	if r.Mem.Known {
 		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB, MachineMiB: r.Mem.MachineMiB,

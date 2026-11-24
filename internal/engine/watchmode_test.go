@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/wire"
 )
 
 // setWatchMode writes this machine's override, or removes it for mode "".
@@ -83,19 +84,25 @@ func TestSnapshotShowsTheModeSource(t *testing.T) {
 	}
 }
 
-// A snapshot flags a stop round written in enforce mode whose listed hold is still live, which its
-// run acts on whatever the mode is now; an observed round, or one whose holds are gone, is no such
-// round. Mutation: ignoring d.Observed flags the observed round.
+// A snapshot flags a stop round written in enforce mode whose listed hold is still live and still a
+// victim, which its run acts on whatever the mode is now; an observed round, one whose holds are gone,
+// or one whose listed run has since found a container client (no victim, it ignores the stop) is no
+// such round. Mutations: ignoring d.Observed flags the observed round; ignoring Victim flags the last.
 func TestSnapshotFlagsALiveEnforceRound(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		observed bool
 		listLive bool
+		victim   bool
 		want     bool
-	}{{"enforce round, hold live", false, true, true}, {"observed round", true, true, false}, {"hold gone", false, false, false}} {
+	}{{"enforce round, hold live", false, true, true, true}, {"observed round", true, true, true, false},
+		{"hold gone", false, false, true, false}, {"listed hold no victim", false, true, false, false}} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEngine(t, newStateDir(t, ""), newFakeClock())
 			g := hold(t, e, need(64))
+			if err := g.UpdateHold(func(h *wire.Hold) { h.Victim = c.victim }); err != nil {
+				t.Fatal(err)
+			}
 			listed := "01795300000000000000-0000000001-000001-gone"
 			if c.listLive {
 				listed = g.HoldName()

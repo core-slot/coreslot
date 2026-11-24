@@ -52,7 +52,7 @@ Verdict reminders, all from `PROTOCOL.md`:
   characters backslash, u, d, 8, 0, 0. Many JSON libraries replace a lone surrogate with U+FFFD or
   keep it as a lone code unit before you can see it, so scan the raw bytes. `bad-*surrogate*` and
   `ok-escaped-backslash-then-u-is-not-an-escape` exercise this.
-- Every key of the table is required, except the ticket's `restart` and `docker_need_mib` and the
+- Every key of the table is required, except the ticket's `restart`, `docker_need_mib` and `typical_s` and the
   hold's `typical_s`, `cpu_ns`, `typical_cpu_s`, `stall_ewma`, `container`, `no_cpu_s`, `asked_mib`,
   `trimmed`, `docker_note`, `docker_footprint_mib`, `docker_need_mib`, `docker_growth_mib`,
   `docker_sampled_ns` and `forced`, which are optional and read as `false`, `""` and `0` when absent

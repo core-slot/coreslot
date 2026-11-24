@@ -102,7 +102,7 @@ One line per machine sample, written by whichever run takes the sample.
 | `ncpu` | the logical CPUs this process may run on (Go's `runtime.NumCPU`) |
 | `load1`, `load5` | the host's 1- and 5-minute load averages: macOS `vm.loadavg`, Linux `/proc/loadavg`. Absent when not read |
 | `cpu_busy_pct` | the busy part of the host's CPU ticks since the previous sample, in percent: user, nice and system over all ticks (macOS `HOST_CPU_LOAD_INFO`, Linux the `cpu` line of `/proc/stat`, whose total runs through `steal`). Absent on the first sample after a gap, and when a counter went back (macOS's 32-bit ticks wrap) |
-| `psi_cpu_some_us_s` | Linux: PSI cpu `some` in microseconds per second since the previous sample (`/proc/pressure/cpu`); absent without PSI |
+| `psi_cpu_some_us_s` | Linux: PSI cpu `some` in microseconds per second since the previous sample (`/proc/pressure/cpu`). Absent without PSI, on the first sample, after a gap, and when the counter went back |
 
 A sample whose reading failed reports `level` `unknown`, zero readings and `headroom_ok` false.
 
@@ -153,16 +153,18 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 
 | key | meaning |
 |---|---|
-| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
+| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, `yielding` (a long head that fits lets short jobs go first), and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
 | `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time from its start to the end of its first step: reading the configuration, publishing the ticket, which waits for the admission section while that is held, and that step |
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
 | `ahead` | the ticket examined ahead of it; absent for the head |
-| `no_pass` | why it may not pass the head: `no_typical`, `headroom_unknown`, `no_holds`, `wait_unknown`, `watch_unreadable`, `too_long`, and for going out of turn `head_fits`, `pressure_not_normal` (the kernel's memory pressure level is not normal, or unknown), `hold_unreadable`, `out_of_turn_live`; absent otherwise. `wait_unknown` and `too_long` also mean it has not yet watched the head for its typical run time |
+| `no_pass` | why it may not pass the head: `no_typical`, `headroom_unknown`, `no_holds`, `wait_unknown`, `watch_unreadable`, `too_long`, and for going out of turn `head_fits`, `pressure_not_normal` (the kernel's memory pressure level is not normal, or unknown), `hold_unreadable`, `out_of_turn_live`, and for a short job past a yielding head `not_short`, `not_displaced`, `ends_late` (expected to end after the head's deadline), `overrun_live` (a short job already past its typical run time); absent otherwise. `wait_unknown` and `too_long` also mean it has not yet watched the head for its typical run time |
 | `w_s` | the expected wait a pass was judged on, when computed |
 | `calm_left_s` | with `restart_calm`: seconds of calm still needed |
+| `until_ns` | with `yielding`: the deadline the head published |
+| `yield_ended` | why the run's yield, as a head, ended: `deadline`, `clock` (its own monotonic clock), `overrun`, `no_taker` (nobody started in 3 s), `record` (its record was gone), `headship`; absent if it never yielded |
 | `headroom_mib`, `headroom_ok`, `reserve_mib` | as on a sample |
-| `room_mib` | the room the person's line shows: at least 0; for a container waiter the real free memory |
+| `room_mib` | the room the person's line shows: at least 0; for a container waiter the real free memory. It is built from the holds' last reports, so for a few seconds after a hold frees memory it can fit while the confirmation refuses with `room_short` |
 | `level` | the detector's level; absent with no sample |
 | `read_age_ms` | the age of that sample; absent with no sample |
 | `holders` | up to 16 live holds, those with the most left to grow into first: `hold`, `need_mib`, `footprint_mib`, `child_exited`, `owner_exited`, `sample_age_ms` (absent when never sampled). A holder's `need_mib` is what it reserves now, which may move during a trimmed hold's life |
@@ -175,10 +177,11 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `waited_s` | the attempt's wait, the run log's `waited_s` |
 | `reason_s` | seconds per reason since the last `waiting` |
 | `last_reason` | the reason of the last step before the admission; empty when the first step admitted the run, which says nothing of how long that took: see `reason_s` |
-| `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
+| `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read; beside a live hold, except for a container request, the confirmation's headroom (the lower of its two readings) and room ([`PROTOCOL.md` section 12.1](../PROTOCOL.md#121-steps)) |
 | `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
 | `w_s` | the expected wait, when computed |
-| `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait), `turn` (out of turn) or `forced` (on a `coreslot start` request, whatever the room); absent for the head |
+| `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait), `turn` (out of turn), `short` (a short job past a yielding head) or `forced` (on a `coreslot start` request, whatever the room); absent for the head |
+| `yield_ended` | as on `waiting`, for a head that yielded before it started |
 
 ### A wait that ends without a start
 
@@ -207,7 +210,7 @@ attempt's only copy.
 | `signal` | the signal that killed the command, by name; an `exit 137` of the command's own is not one |
 | `stopped_by` | `watchdog_red` or `watchdog_floor` when a stop round killed it, `outside` when a SIGKILL did that coreslot did not send; absent otherwise |
 | `mean_footprint_mib` | the mean of the tree's 1 s readings, in whole MiB; absent for a run with no reading |
-| `tree_cpu_s` | the user and system time of the hold's watch ticks, summed: the CPU seconds the samples' `jobs[].d_user_ns` and `d_sys_ns` carry. It misses a process that started and ended between two ticks, which the record's `user_s` and `sys_s` count once it is reaped. Absent for a run that held no hold or never ticked |
+| `tree_cpu_s` | the user and system time of the hold's watch ticks, summed: every tick of the run's own, including those whose sample another run took or that no sample listed, so the samples' `jobs[].d_user_ns` and `d_sys_ns` show it only in part (a sample lists a job only while its tick is fresh). It misses a process that started and ended between two ticks, which the record's `user_s` and `sys_s` count once it is reaped. Absent for a run that held no hold or never ticked |
 
 ### `outside` and `live`
 
@@ -235,7 +238,7 @@ Nothing is written where processes cannot be swept.
 
 | key | meaning |
 |---|---|
-| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor` (Docker VMM) in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name`, `footprint_mib` (on Apple's hypervisor the most the guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now, file cache included), `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
+| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor` (Docker VMM) in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name` (that program's name in full, which the kernel's process name cuts to `com.apple.Virtualization.Virtua`), `footprint_mib` (on Apple's hypervisor the most the guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now, file cache included), `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
 | `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
 
 ### `containers`
