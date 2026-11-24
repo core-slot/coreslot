@@ -145,9 +145,11 @@ func (sec *Section) RemoveOwnTicket(name string) (removed bool, err error) {
 	if err != nil {
 		return removed, err
 	}
-	// Its order override and its note go with it (PROTOCOL.md section 7.12).
-	if _, err := sec.removeByID(OrderDir, id); err != nil {
-		return removed, err
+	// Its order override, its start request and its note go with it (PROTOCOL.md sections 7.12, 7.16).
+	for _, dir := range []string{OrderDir, StartDir} {
+		if _, err := sec.removeByID(dir, id); err != nil {
+			return removed, err
+		}
 	}
 	if _, err := sec.removeNote(name); err != nil {
 		return removed, err

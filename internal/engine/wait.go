@@ -236,6 +236,20 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 	if cancelled {
 		return nil, t.onCancelled()
 	}
+	started, err := t.startRequested()
+	if err != nil {
+		return t.settledOr(err)
+	}
+	if started {
+		g, err := t.startNow(ctx, single)
+		if err != nil {
+			return t.settledOr(err)
+		}
+		if g != nil {
+			return Admitted{g}, nil
+		}
+		return t.waiting(), nil // the section was busy: the next step asks again
+	}
 	if now < t.nextElection {
 		return t.waiting(), nil
 	}

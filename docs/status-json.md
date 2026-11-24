@@ -31,7 +31,8 @@ escape one before printing it to a terminal.
 | `tickets` | array | the queue, in queue order |
 | `dead_holds` | array of string | names of holds whose lock is free, awaiting reconciliation |
 | `cancel_requests` | array of string | pending cancel requests (ticket ids) |
-| `ignored` | object | per directory (`queue`, `holds`, `cancel`, `order`), the number of entries that do not match the grammar or whose body is malformed |
+| `start_requests` | array | pending start requests (`coreslot start`) |
+| `ignored` | object | per directory (`queue`, `holds`, `cancel`, `start`, `order`), the number of entries that do not match the grammar or whose body is malformed |
 | `observed_s` | number | how long `--observe` watched the queue; 0 without it |
 | `docker` | object | Docker Desktop's VM and its running containers; present only with `status --docker`, absent otherwise |
 
@@ -156,6 +157,7 @@ The watchdog, from the newest shared sample.
 | `need_mib` | int | what the hold reserves; 0 for a run outside the budget |
 | `asked_mib` | int | the need the hold was admitted with; equal to `need_mib` unless the hold was trimmed |
 | `trimmed` | bool | its run acted on a `coreslot trim` request: `need_mib` follows what the command uses, up to `asked_mib` |
+| `forced` | bool | its run started at once on a `coreslot start` request, whatever the room: `need_mib` is still its full need, so `mem.room_mib` may be below 0 |
 | `footprint_mib` | int | what its run last measured |
 | `stops` | int | how many times it was stopped |
 | `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read; true for a `pid` of 0 or 1, never a run's |
@@ -192,6 +194,14 @@ to its command's own process group, which a `stoppable` run always has. A `SIGKI
 `coreslot run` alone; its command keeps running and keeps the reservation (`owner_exited` then
 shows it). A run stopped this way is not restarted, though `stoppable` asks for a restartable run:
 only the watchdog's own stops restart it.
+
+## `start_requests[]`
+
+| key | type | meaning |
+|---|---|---|
+| `ticket` | string | the ticket id the request names |
+| `age_s` | number | since the request was written; 0 when its body is malformed, which its run ignores |
+| `unanswered` | bool | the request is older than 10 s and its ticket still waits: its run is stopped or STALLED, or an older coreslot started it, and it will not act on it |
 
 ## `tickets[]`
 

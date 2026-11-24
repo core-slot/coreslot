@@ -57,7 +57,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 	}
 	s := sec.s
 	listed := map[string][]string{}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir, LogDir, TelemetryDir} {
+	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir, LogDir, TelemetryDir} {
 		if err := CheckEntry(s.path(dir), true); err != nil {
 			return live, done, err
 		}
@@ -114,7 +114,7 @@ func (sec *Section) Reset() (live LiveState, done ResetDone, err error) {
 		}
 		return false
 	}
-	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir, LogDir, TelemetryDir} {
+	for _, dir := range []string{QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir, LogDir, TelemetryDir} {
 		for _, name := range listed[dir] {
 			switch {
 			case dir != LogDir && dir != TelemetryDir:

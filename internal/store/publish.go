@@ -74,15 +74,15 @@ var renameNoReplace = renameNoReplaceOS
 const maxTmpAttempts = 1000
 
 // noReplaceDirs are the directories whose entries are published without replacement.
-var noReplaceDirs = []string{QueueDir, HoldsDir, CancelDir}
+var noReplaceDirs = []string{QueueDir, HoldsDir, CancelDir, StartDir}
 
 // listedDirs are the directories List and ListNames read: noReplaceDirs, order/, whose entries a
 // later override of the same ticket replaces, and vmwait/, whose notes are named as their tickets.
-var listedDirs = []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir}
+var listedDirs = []string{QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir}
 
 // Publish publishes body as dir/name inside the section (PROTOCOL.md section 11), where dir is
-// QueueDir, HoldsDir or CancelDir and name matches that directory's grammar (a ticket or hold
-// name, or a ticket id for a cancel request): it creates dir/.tmp-<pid>-<seq> with O_EXCL (taking the next
+// QueueDir, HoldsDir, CancelDir or StartDir and name matches that directory's grammar (a ticket or hold
+// name, or a ticket id for a cancel or start request): it creates dir/.tmp-<pid>-<seq> with O_EXCL (taking the next
 // seq on EEXIST), takes flock(LOCK_EX) on it when lockCarrying, writes the body, and moves it to
 // name without replacing an existing file. When name exists it removes its temporary file and
 // returns an error matching fs.ErrExist: the caller takes its next seq and retries.
@@ -95,7 +95,7 @@ func (sec *Section) Publish(dir, name string, body []byte, lockCarrying bool) (*
 		return nil, err
 	}
 	if !slices.Contains(noReplaceDirs, dir) {
-		return nil, fmt.Errorf("store: Publish into %q: not a directory of tickets, holds or cancel requests", dir)
+		return nil, fmt.Errorf("store: Publish into %q: not a directory of tickets, holds, cancel or start requests", dir)
 	}
 	if !nameMatches(dir, name) {
 		return nil, fmt.Errorf("store: Publish of %q into %s: the name does not match the directory's grammar", name, dir)
@@ -209,7 +209,7 @@ func (sec *Section) RemoveNote(ticketName string) error {
 // HoldsDir, a ticket name in VMWaitDir, a ticket id in CancelDir and OrderDir (PROTOCOL.md section
 // 7.1).
 func nameMatches(dir, name string) bool {
-	if dir == CancelDir || dir == OrderDir {
+	if dir == CancelDir || dir == StartDir || dir == OrderDir {
 		_, ok := wire.ParseID(name)
 		return ok
 	}

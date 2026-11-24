@@ -358,6 +358,7 @@ coreslot stats             # per label, what the need is learned from
 coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
 coreslot doctor            # state directory, filesystem, permissions, format, readings, forwarders still serving
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
+coreslot start <ticket-id>    # or: coreslot start --label L; starts a waiting job now, out of turn
 coreslot move <ticket-id> --first   # or --last, --before <id>, --after <id>; changes its place, keeps its run
 coreslot trim <hold-id>       # or: coreslot trim --label L; a running job reserves what it uses
 ```
@@ -417,6 +418,16 @@ answers. Any process of yours can trim any of your jobs, and the job's own sessi
 from the one line its `coreslot run` prints. `status` marks such a job `trimmed` and shows
 `(asked …)` beside what it reserves; `status --json` has each hold's `id`, `asked_mib` and
 `trimmed`.
+
+**Start a waiting job now.** `coreslot start <ticket-id>` (or `--label L`) starts a waiting job at
+once, ahead of the queue and whatever memory is free: its own `coreslot run` acts on the request at
+its next poll, and `start` waits up to 8 s for it (`--no-wait` returns at once). Its full need still
+counts, so the room may go below zero and other jobs wait until memory frees up; if memory runs out,
+the watchdog may stop it as it would any job that queued when it did, and a job stopped that way
+comes back as an ordinary waiting job. The job's run must be a coreslot that knows the request; an
+older one never answers, and `status --json` then marks the request `unanswered` after 10 s. Exit
+status 75 means nothing was written. `status` marks such a job `started now, out of turn`, and
+`status --json` has each hold's `forced` and the pending `start_requests`.
 
 ### What it did: `coreslot report`
 

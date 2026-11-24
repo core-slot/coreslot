@@ -30,6 +30,19 @@ STALLED after 10s without a refresh, so use 10s or more.`
 const cancelUsage = `usage: coreslot cancel <ticket-id>
        coreslot cancel --label LABEL`
 
+const startUsage = `usage: coreslot start <ticket-id> [--no-wait]
+       coreslot start --label LABEL [--no-wait]
+
+Starts a waiting job now, ahead of the queue, whatever memory is free. Its full
+need still counts, so other jobs wait until memory frees up; if memory runs out,
+the watchdog may stop it as it would any job that queued when it did.`
+
+func startFlags() (fs *flag.FlagSet, label *string, noWait *bool) {
+	fs = newFlagSet("coreslot start")
+	return fs, fs.String("label", "", "start the one waiting ticket with this label"),
+		fs.Bool("no-wait", false, "return once the request is written, without waiting for the run to start")
+}
+
 const moveUsage = `usage: coreslot move <ticket-id> --first | --last | --before <ticket-id> | --after <ticket-id>
        coreslot move --label LABEL --first | --last | --before <ticket-id> | --after <ticket-id>
 

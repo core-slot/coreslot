@@ -178,7 +178,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `headroom_mib`, `headroom_ok`, `reserve_mib`, `room_mib` | what the decision read |
 | `watch_gate` | what the watch state could tell: `checked`, `stale`, `unknown`, `no_holds` |
 | `w_s` | the expected wait, when computed |
-| `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait) or `turn` (out of turn); absent for the head |
+| `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait), `turn` (out of turn) or `forced` (on a `coreslot start` request, whatever the room); absent for the head |
 
 ### A wait that ends without a start
 

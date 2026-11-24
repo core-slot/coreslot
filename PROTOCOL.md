@@ -65,6 +65,7 @@ Every shared file, field, environment variable and transition of format 5, and w
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
+| `start/` | directory of start requests | [7.16](#716-start-request), [13.4](#134-start-now) |
 | `order/` | directory of order overrides | [7.12](#712-order-override), [9](#9-order), [13.3](#133-move) |
 | `vmwait/` | directory of notes | [7.14](#714-note), [12.6](#126-a-gated-request) |
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
@@ -78,6 +79,7 @@ Every shared file, field, environment variable and transition of format 5, and w
 | ticket body | body | [7.3](#73-ticket) |
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
+| start body | body | [7.16](#716-start-request) |
 | order body | body | [7.12](#712-order-override) |
 | run-log memory keys | field | [20](#20-run-log) |
 | `docker_footprint_mib` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
@@ -85,6 +87,7 @@ Every shared file, field, environment variable and transition of format 5, and w
 | `docker_need_mib` | field of the ticket and hold bodies | [7.3](#73-ticket), [7.4](#74-hold), [12.6](#126-a-gated-request) |
 | `docker_growth_mib` | field of the hold body | [7.4](#74-hold), [12.6](#126-a-gated-request), [23.1](#231-the-tick) |
 | `docker_sampled_ns` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
+| `forced` | field of the hold body | [7.4](#74-hold), [13.4](#134-start-now) |
 | `CORESLOT_GRANTED_MEM` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
@@ -102,6 +105,7 @@ Every shared file, field, environment variable and transition of format 5, and w
 | restart | transition | [24](#24-restart-of-a-stopped-run), example [21.9](#219-stop-round-and-restart) |
 | cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
 | withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
+| start now | transition | [13.4](#134-start-now), example [21.11](#2111-start-now) |
 | move | transition | [13.3](#133-move) |
 | reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
 | pass-through | transition | [18](#18-nested-runs-pass-through), example [21.7](#217-pass-through) |
@@ -141,12 +145,14 @@ Every conforming client MUST preserve these invariants:
   an unreadable headroom (nothing gates the head), both of section 12.1, and a container request
   (section 12.1), whose room leaves out the hold bodies, all but their `docker_growth_mib` when it
   is gated. A gated request (section 12.6) must also pass its VM test: a second condition, never
-  an exception.
+  an exception. A forced start (section 13.4) ignores the room: its hold still says its full need
+  (I2), so the room may go below zero and every ordinary admission waits.
 - **I4 order:** ordinary admissions happen in effective order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
   it except one that passes it, by duration or out of turn (section 10.3), and, while a hold is live, a container
-  request (section 12.1), and a run passing over a noted ticket (section 12.6); a waiter is passed
-  over only while it is STALLED, dead, canceled or noted.
+  request (section 12.1), and a run passing over a noted ticket (section 12.6); a forced start
+  (section 13.4) starts ahead of every ticket; a waiter is passed over only while it is STALLED,
+  dead, canceled or noted.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
   no process is stopped inside the admission section, the head is admitted within 3 s; up to 4
@@ -199,7 +205,7 @@ Every conforming client MUST preserve these invariants:
   `mode & 0o022 != 0`. The check applies to `$S` and to every file and directory of the layout
   (section 4.4) that the client opens, probes or removes; a directory or top-level file of the
   layout, or a temporary file in `$S`, that is a symlink, a directory, another user's, or group- or
-  world-writable is a state error. Inside `queue/`, `holds/` and `cancel/` the rule is different:
+  world-writable is a state error. Inside `queue/`, `holds/`, `cancel/` and `start/` the rule is different:
   an entry whose name matches the directory's grammar (section 7.1, temporaries included) but whose
   type, owner or mode fails the checks above is not a state error. It is a **stray**: ignored and
   counted exactly like an entry with a malformed body (section 7.2): never trusted, never opened
@@ -243,6 +249,7 @@ watch-mode       this machine's override of the watchdog's mode (section 7.15); 
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
+start/           start requests (section 7.16)
 order/           order overrides (section 7.12)
 vmwait/          notes of gated tickets (section 7.14)
 degraded         degraded-mode record (section 7.9)
@@ -254,11 +261,11 @@ needs.toml       needs file (section 5.4); optional, present only under the over
 
 `log/` may also contain `runs.1.jsonl` and, left or still written by an older client, `watch.jsonl` and
 `watch.1.jsonl`. Each of
-`queue/`, `holds/`, `cancel/`, `order/`, `vmwait/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
+`queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
 (section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
 of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
-the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `order/`, `vmwait/` and `log/` are created only
+the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/` and `log/` are created only
 by a client that has read a `FORMAT` it understands (section 15.2).
 
 `telemetry/` is optional, and its absence is normal: it exists only once a client has recorded
@@ -299,12 +306,12 @@ The directory is not a cache: liveness is decided by locks. Deleting or resettin
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
 process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/`,
-`order/` and `vmwait/` (an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`,
+`start/`, `order/` and `vmwait/` (a start request, an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`,
 `watch-mode` (a reset returns the watchdog to the configuration's mode), `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
 format 5. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 5, or format 4 or 3 (an upgrade: format 5 only adds `watch-mode`, and
+When `FORMAT` names format 5, or format 4 or 3 (an upgrade: format 5 only adds `watch-mode`, `start/` and the hold's optional `forced`, and
 format 4 `vmwait/` and optional Docker keys of tickets and holds), or is missing
 (which the first client writes as 5, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
@@ -315,7 +322,7 @@ again. To make the labels learn again without a format change, remove `log/runs.
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
 the directory as format 5; a live hold or ticket of any format stops it. It does not reconcile
-first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `order/` and `vmwait/` reconciliation
+first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `start/`, `order/` and `vmwait/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
 the next reconciliation removes them once they are older than 30 s. Once it has
 recreated the directory, nothing being live, it also removes every entry and birth of the
@@ -592,6 +599,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `docker_need_mib` | integer | optional; `1..1073741824` when present; the Docker need the hold was admitted on (section 12.6), written while its run sees its containers; absent for any other hold, and a writer omits it then |
 | `docker_growth_mib` | integer | optional; `0..1073741824`; the growth of Docker's VM the hold reserves on the host (section 12.6); written with `docker_need_mib` alone, and every room takes it off (section 12.1) |
 | `docker_sampled_ns` | integer | optional; `≥ 0`; written with `docker_need_mib` alone: the wall clock of the reading that admitted the hold, then of its run's last sample of its containers (section 23.1) |
+| `forced` | boolean | optional; `true` when a forced start published the hold, whatever the room (section 13.4); absent means `false`, and a writer omits it then. No admission reads it |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -654,8 +662,8 @@ client's own ticket after cancellation or withdrawal (13) or of its own hold (12
 `gen` once when it publishes or removes a note on its own (12.6), a note removed with its ticket
 taking the ticket's bump. The resume bump
 of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
-removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
-itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`, `admit.lock` or the run
+removed anything (10.4). Publishing a cancel or start request does not bump `gen` (the owner polls
+`cancel/` and `start/` itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`, `admit.lock` or the run
 log, nor the holder's rewrite of its own hold's body. A crash can separate a removal from its
 bump, so a reader never relies on a bump to learn that an entry is gone (section 10.3).
 
@@ -788,12 +796,18 @@ user change. A switch by hand has no end unless one is given, and `status` sayin
 > watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and `watch.mode_until_ns`
 > whether or not a job runs.
 
+### 7.16 Start request
+
+`$S/start/<cancel>`, not lock-carrying; its name is the target ticket's id and its body a cancel
+request's (section 7.5), `requester_pid` being the starter's. It asks the ticket's own run to start
+at once (section 13.4).
+
 ## 8. The admission critical section
 
-`admit.lock` is the protocol's linearization point. Enqueue, admission, cancellation publication,
+`admit.lock` is the protocol's linearization point. Enqueue, admission, cancel and start publication,
 reconciliation and run-log rotation MUST happen while holding
 `flock(LOCK_EX)` on it; so does every other publication (section 11), every write of `watch.json`
-and every removal of a ticket, hold, cancel request or temporary file. A refresh (section 10.2), a
+and every removal of a ticket, hold, cancel or start request, or temporary file. A refresh (section 10.2), a
 probe, the rewrite of a hold's own body and a run-log append happen outside it.
 
 - **Entry is non-blocking.** A client tries `LOCK_EX|LOCK_NB` and retries with backoff from 10 ms
@@ -899,7 +913,8 @@ A waiter:
   (section 10.4). A gated waiter also watches every gated ticket ahead of it beyond the window,
   whose Docker needs its VM test sums (section 12.6), so that STALLED applies to them too; one it
   has never observed counts until it has watched it for the stall time;
-- checks `cancel/` for its own ticket id on every poll (section 13.1);
+- checks `cancel/` for its own ticket id on every poll (section 13.1), then `start/` (section 13.4),
+  wherever it is in the queue and before any wait for its next election;
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
   rescan when `gen` changed) before each attempt;
 - behind a live ticket, when its run has a typical run time or its request is a container request
@@ -970,7 +985,7 @@ the examination are counted without being examined.
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
 client that enters the section for any purpose other than admission
-(enqueue, cancellation publication, a move, a trim request, removal of its own ticket or hold, a resume
+(enqueue, cancel or start publication, a move, a trim request, removal of its own ticket or hold, a resume
 bump,
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
@@ -982,13 +997,13 @@ neither does a reset (section 4.4), and neither does a watchdog tick (section 23
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
    that is not a regular file of the user, section 4.2, is ignored and counted, never probed or
    removed, and reconciliation goes on and writes `gen` as usual);
-2. removes every cancel request in `cancel/`, every order override in `order/` and every note in
+2. removes every cancel request in `cancel/`, every start request in `start/`, every order override in `order/` and every note in
    `vmwait/` whose ticket is gone: its ticket is any `queue/` entry
    that is not ignored as a stray (section 4.2) whose name matches the ticket grammar and whose
    first three fields are that id (for a note, whose name is the note's), whatever its body. An entry ignored as a stray (a wrong type,
-   owner or mode) is not an entry for this purpose: it never protects a cancel request, an
+   owner or mode) is not an entry for this purpose: it never protects a cancel or start request, an
    override or a note;
-3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `order/` and `vmwait/` whose mtime is
+3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `start/`, `order/` and `vmwait/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
    if it removed anything.
@@ -998,7 +1013,7 @@ whole machine.
 
 ## 11. Atomic publication
 
-Inside the section, a publication of a ticket, hold, cancel request, order override, `gen`, `FORMAT`,
+Inside the section, a publication of a ticket, hold, cancel or start request, order override, `gen`, `FORMAT`,
 `degraded`, `watch.json`, `trim.json` or `watch-mode`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
@@ -1007,7 +1022,7 @@ Inside the section, a publication of a ticket, hold, cancel request, order overr
 2. takes `flock(LOCK_EX)` on it if the file is lock-carrying (ticket, hold);
 3. writes the body;
 4. moves it to its final name:
-   - ticket, hold, cancel request: without replacing an existing file: `renameat2(RENAME_NOREPLACE)`
+   - ticket, hold, cancel or start request: without replacing an existing file: `renameat2(RENAME_NOREPLACE)`
      on Linux, `renamex_np(RENAME_EXCL)` on macOS, and where those are unavailable (the call or its
      library wrapper is missing, or it fails with `ENOSYS`) or unsupported by the filesystem (it
      fails with `EINVAL`, `ENOTSUP` or `EOPNOTSUPP`), `link(2)` to the final name followed by
@@ -1017,7 +1032,8 @@ Inside the section, a publication of a ticket, hold, cancel request, order overr
      name carrying its next `seq`. A cancel request is
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
-     already requested, which is not an error (section 13.1);
+     already requested, which is not an error (section 13.1). A start request is published the
+     same way (section 13.4);
    - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`: with a plain `rename`,
      which replaces an existing file.
 
@@ -1074,9 +1090,15 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
 7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket and its order
-   override and note if it has them, bumps `gen`, and leaves the section.
+   override, start request and note if it has them, bumps `gen`, and leaves the section.
 
 A gated request (section 12.6) also passes its VM test between steps 6 and 7.
+
+A **forced start** (section 13.4) takes step 1 and then step 7 alone: no room, no idle rule, no
+re-election, no level gate, and no VM test. Its hold says its full need, its ticket's `arrival_ns`
+and `forced`, and it records no start for the level gate's spacing (section 12.4). A gated run's
+hold carries the Docker keys of a reading taken outside the section, as a gated admission's does
+(section 12.6), and none when no reading can be had.
 
 A **container request** is the request of a container command (section 5.4) whose need neither its
 caller nor a `mem` in the needs file named: a person who pins a need chose to reserve it and to wait
@@ -1290,7 +1312,7 @@ step 1, so a cancel published before the owner's admitting section wins; one pub
 no ticket and has no effect: cancellation never revokes a hold, and never stops a command. A
 canceller that finds the request already published (section 11) treats the cancellation as already
 requested; that is not an error. On finding it, the owner closes its ticket descriptor (the ticket
-is dead at once), removes the ticket, the cancel request and its order override, if any, in its next section if it can enter one
+is dead at once), removes the ticket, the cancel request, and its order override and start request, if any, in its next section if it can enter one
 (bumping `gen`, section 7.8), and stops: the CLI exits with the refusal code.
 
 > **Implementation note.** The Go CLI checks `queue/` first and refuses, with a diagnostic that no
@@ -1323,6 +1345,29 @@ ticket, as it may cancel one: a move is a convenience, not a control.
 
 > **Implementation note.** The Go CLI's `coreslot move` takes a ticket id or `--label`, and exactly
 > one of `--first`, `--last`, `--before <id>` and `--after <id>`.
+
+### 13.4 Start now
+
+A start request asks a waiting ticket's own run to start at once, ahead of the queue and whatever the
+room. A starter publishes `$S/start/<ticket-id>` (section 7.16) inside the section, as a canceller
+publishes a cancel request (section 13.1): it MAY first check that `queue/` holds the ticket, an
+existing request means it is already requested, publishing it does not bump `gen`, and
+reconciliation removes one whose ticket is gone (section 10.4). The owner checks `start/` for its id
+on every poll, after `cancel/` and before any wait for its next election, so a waiter behind the head
+that never attempts admission (section 10.3) sees it too. On finding it, the owner enters the section
+and makes a forced start (section 12.1): a cancel request found at step 1 still wins. Its hold
+reserves its full need (I2) and says `forced`, so the room may go below zero, and every ordinary
+admission waits until memory frees up; a container request, whose room leaves out the holds, is not
+held back (section 12.1). The hold keeps its ticket's `arrival_ns`, so a stop round lists it by its
+queue arrival like any other run (section 23.5). A forced run that a round stops comes back as an
+ordinary restart ticket (section 24): the force does not survive the stop. A run that does not know
+the request never acts on it, and the request stays until its ticket goes. Any process of the user
+may start any ticket, as it may cancel one: a start is the user's choice, not a control.
+
+> **Implementation note.** The Go CLI's `coreslot start` takes a ticket id or `--label`, and waits up
+> to 8 s for the run to start; `--no-wait` returns once the request is written. `status --json` lists
+> pending requests in `start_requests`, each `unanswered` once older than 10 s while its ticket still
+> waits, and marks a forced hold `forced`; the `admitted` telemetry line's `pass` is `forced`.
 
 ## 14. Errors, fail-open and degraded mode
 
@@ -1388,20 +1433,20 @@ it closes its ticket's descriptor, so the ticket is dead at once, and fails open
 remove the file: that would be a write into a format it does not implement.
 
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
-another format a client publishes no cancel request, trim request or unbudgeted hold, records and clears no
+another format a client publishes no cancel or start request, trim request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
 runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 5
 when nothing of either format is live, the other format's run log removed with the rest, except a
 format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
 
-> **Implementation note.** The Go CLI refuses cancellation, a trim and `doctor --clear` under
+> **Implementation note.** The Go CLI refuses cancellation, a start, a trim and `doctor --clear` under
 > another format, with the same notice.
 
 ## 16. Windows
 
 The CLI runs the command without a budget and prints one warning per run; `[platform]
-windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel`, `trim` and
-`doctor` exit 70 on Windows (there is no budget to inspect, cancel, trim or repair), and their
+windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel`, `start`, `trim`
+and `doctor` exit 70 on Windows (there is no budget to inspect, cancel, start, trim or repair), and their
 `--help` exits 0.
 There is no watchdog on Windows.
 
@@ -1534,7 +1579,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `start`: the request was not published, for the same reasons, while a run that does not answer within the wait is exit 0; `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1542,7 +1587,7 @@ itself.
 | 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusal of `--clear` is 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
-`status` exits 3, `doctor` exits 1 and `cancel` and `trim` refuse with 75. `--help` prints on
+`status` exits 3, `doctor` exits 1 and `cancel`, `start` and `trim` refuse with 75. `--help` prints on
 stdout and exits 0 for every command. A command's own exit 75 is its status like any other: the run prints no marker
 for it, and only a give-up (section 24.2) prints one.
 
@@ -1654,7 +1699,8 @@ defaults to `fail`, so a `--timeout` that expires refuses; with `run` an ordinar
 outside the budget, while a restart (section 24) refuses whatever `--on-timeout` says. Strict mode
 is `--strict`; `--refusal-code` defaults to 75. The other
 commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
-`coreslot cancel --label LABEL`, `coreslot trim <hold-id>`, `coreslot trim --label LABEL`,
+`coreslot cancel --label LABEL`, `coreslot start <ticket-id> [--no-wait]`, `coreslot start --label LABEL
+[--no-wait]`, `coreslot trim <hold-id>`, `coreslot trim --label LABEL`,
 `coreslot doctor [--clear] [--reset]`,
 `coreslot stats [--label LABEL] [--json]`, `coreslot report [--days N] [--json]` and
 `coreslot version`.
@@ -1960,6 +2006,41 @@ holds/01791721202000000000-0000007300-000004-gate_big [L]
 Every later tick of pid 6500 writes the window's need again: if `pool:a` grows, its reservation
 rises with it, up to 4 096 MiB, and the room falls; a shortage that follows is a stop round's
 (section 23.5).
+
+### 21.11 Start now
+
+Pid 4000 holds 6 GiB for `gate:e2e`, and the room is 1 024 MiB. Pid 5120 waits at the head for
+3 072 MiB, and pid 6000 behind it for 2 048 MiB, with no typical run time, so it never attempts
+admission. At 12:02:00 pid 8000 runs `coreslot start 01791720100000000000-0000006000-000001`.
+
+Before:
+
+```
+gen                                                    {"gen": 61, "reconciled_ns": ...}
+queue/01791720000000000000-0000005120-000001-gate_big  [L]
+queue/01791720100000000000-0000006000-000001-gate_lint [L]
+start/                                                 (empty)
+```
+
+Pid 8000 publishes, inside the section, `start/01791720100000000000-0000006000-000001` with
+`{"requested_ns": 1791720120000000000, "requester_pid": 8000}`, without a `gen` bump. Pid 6000 finds
+it on its next poll, enters the section, finds no cancel request, and, with neither the room nor the
+head consulted, publishes its hold with `"arrival_ns": 1791720100000000000`, `"need_mib": 2048` and
+`"forced": true`, closes and unlinks its ticket and the start request, bumps `gen`, and starts its
+command.
+
+After:
+
+```
+gen                                                    {"gen": 62, "reconciled_ns": ...}
+holds/01791720120200000000-0000006000-000002-gate_lint [L]
+queue/01791720000000000000-0000005120-000001-gate_big  [L]
+start/                                                 (empty)
+```
+
+The room is now `1024 − 2048 = −1024` MiB. Pid 5120 keeps its place at the head and waits until
+memory frees up. Had a red round come, it would list a run that arrived after 12:01:40 before pid
+6000's.
 
 ## 22. Timing constants
 

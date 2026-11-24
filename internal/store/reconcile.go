@@ -90,7 +90,7 @@ func (s *Store) readDir(op, dir string) (path string, names []string, parse func
 		names = []string{}
 	}
 	parse = wire.ParseName
-	if dir == CancelDir || dir == OrderDir {
+	if dir == CancelDir || dir == StartDir || dir == OrderDir {
 		parse = wire.ParseID
 	}
 	return path, names, parse, nil
@@ -221,7 +221,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	// 2. Cancel requests, order overrides and notes whose ticket is gone. tickets holds only the
 	// entries of step 1 that are live and not stray: a stray never protects any (PROTOCOL.md section
 	// 10.4).
-	for _, dir := range []string{CancelDir, OrderDir, VMWaitDir} {
+	for _, dir := range []string{CancelDir, StartDir, OrderDir, VMWaitDir} {
 		named, _, err := sec.s.List(dir)
 		if err != nil {
 			return removed, err
@@ -238,7 +238,7 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 	}
 
 	// 3. Temporary files older than 30 s.
-	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir} {
+	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir} {
 		d := sec.s.path(dir)
 		names, err := readNames(d)
 		if errors.Is(err, fs.ErrNotExist) {
