@@ -82,21 +82,33 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		room = state.GrowthRoom(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
+	if t.yield.active {
+		if err := t.yieldEnds(sec, holds); err != nil {
+			return nil, false, err
+		}
+	}
 	if m.HeadroomOK && len(holds) > 0 && need > room {
-		t.out.Reason = ReasonRoomShort
+		t.out.Reason, t.yield.fitSince = ReasonRoomShort, -1
 		return nil, false, t.unnote(sec)
 	}
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
 	// hold live a container request needs no pass; with none the idle start is the head's.
+	isHead := false
 	if !t.req.RealMemory || len(holds) == 0 {
 		head, headKey, headOrder, err := t.reelect()
 		if err != nil {
 			return nil, false, err
 		}
+		if head != nil && t.yield.active {
+			if err := t.endYield(sec, "headship"); err != nil {
+				return nil, false, err
+			}
+		}
 		if head != nil && !t.passes(*head, headKey, headOrder, holds, room, cfg, m) {
 			t.out.Reason = ReasonBehindHead
 			return nil, false, nil
 		}
+		isHead = head == nil
 	}
 	var record func() // the level gate's record of this start, made only when it admits
 	if len(holds) > 0 {
@@ -120,6 +132,12 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 			return nil, read, err
 		}
 		dock = &t.reading
+	}
+	// A head that would start now may yield to short jobs first, before the gate records its start.
+	if isHead {
+		if wait, err := t.yieldWait(ctx, sec, room, m); wait || err != nil {
+			return nil, false, err
+		}
 	}
 	// 6a. The room confirmed on the live holds' trees measured now.
 	if !t.req.RealMemory && len(holds) > 0 {
@@ -238,7 +256,7 @@ func (t *Ticket) publishAdmission(sec *store.Section, dock *DockerReading, force
 	if t.status != statusWaiting {
 		return nil, ErrCanceled
 	}
-	t.out.DockerUngated = t.ungated
+	t.out.DockerUngated, t.out.YieldEnded = t.ungated, t.yield.ended
 	need := t.req.NeedMiB
 	g := &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
 	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock, forced); err != nil {
@@ -246,6 +264,9 @@ func (t *Ticket) publishAdmission(sec *store.Section, dock *DockerReading, force
 	}
 	t.f.Close()
 	_, _ = sec.RemoveOwnTicket(t.name) // already gone counts as success (PROTOCOL.md 10.3)
+	if t.out.Pass == "short" {
+		t.notePass(sec)
+	}
 	// A failed bump does not undo the admission: waiters probe the tickets ahead of them on
 	// every election, so the closed ticket is passed over without a rescan.
 	_ = sec.BumpGen()
@@ -391,6 +412,13 @@ func (t *Ticket) liveAhead(en aheadEntry, now time.Duration) (bool, error) {
 // the calm a restart still needs; or out of turn, whatever W is (outOfTurn).
 func (t *Ticket) passes(head wire.Ticket, headKey, headOrder state.Key, holds []liveHold, room int64, cfg config.Config,
 	m config.Machine) bool {
+	if why, ok := t.shortPass(head, headKey, headOrder, holds, room); ok { // a yielding head fits: no other pass applies
+		if why == "" {
+			t.out.Pass = "short"
+		}
+		t.out.NoPass = why
+		return why == ""
+	}
 	switch { // with no hold live the head starts at once
 	case t.req.TypicalS == 0:
 		t.out.NoPass = "no_typical"
@@ -432,10 +460,7 @@ const pressureNormal = 1
 
 // kernelPressure is the kernel's memory pressure level and whether it could be read; a system that
 // has none (Linux) reports it as not read. Tests replace it.
-var kernelPressure = func() (int, bool) {
-	_, level, ok := memsample.Parts()
-	return level, ok && level != 0
-}
+var kernelPressure = memsample.Pressure
 
 // outOfTurn is the first condition that keeps this ticket from going out of turn ahead of head, ""
 // when none does (PROTOCOL.md section 10.3): head does not fit the room now; the kernel's memory

@@ -8,6 +8,21 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,
+  lets the jobs behind it that typically run 2 min or less, and would not fit beside it, start first, until a
+  deadline of a quarter of its typical run time (10 min for a 40-min head), which it publishes in the new
+  `yield.json`. It starts by the deadline, or once the short jobs still running end; a short job that runs past its
+  typical time, or 3 s with nobody taking the room, ends the yield at once. A head never yields twice, nor when it is a
+  restart, was moved, cannot read the headroom or the kernel's pressure is not normal (so never on Linux). Tickets
+  carry their label's `typical_s`. `status` reads "letting short jobs go first until 14:32"; `status --json` gains the
+  top-level `head` and `yield`, under the same `schema` 1; telemetry gains the `waiting` reason `yielding` with
+  `until_ns`, `yield_ended`, the `short` pass and its `no_pass` reasons.
+- Format 5 gains the optional `$S/yield.json` (`PROTOCOL.md` section 7.17) and the ticket's optional
+  `typical_s`; no reset is needed. A v0.11.0 client never opens the file and ignores the key, so it neither yields
+  nor passes as a short job, and its tickets carry no `typical_s`.
+
 ### Fixed
 
 - `coreslot watch --for` refuses, as a usage error, a duration whose end is past the clock's range, which

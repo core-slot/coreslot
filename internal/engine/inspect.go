@@ -194,6 +194,18 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Starts = append(r.Starts, s)
 	}
 
+	for _, t := range r.Tickets {
+		if !t.Dead && !t.Noted {
+			r.Head = t.ID
+			break
+		}
+	}
+	if y, ok, err := e.st.ReadYield(); err != nil {
+		return Report{}, err
+	} else if ok && y.Head == r.Head && store.NowNS() < y.UntilNS {
+		r.Yield = &YieldInfo{Head: y.Head, UntilNS: y.UntilNS, LastPassNS: y.LastPassNS}
+	}
+
 	r.Section, err = e.sectionInfo()
 	if err != nil {
 		return Report{}, err

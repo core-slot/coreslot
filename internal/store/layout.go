@@ -34,6 +34,7 @@ const (
 	WatchFile     = "watch.json"
 	TrimFile      = "trim.json"
 	WatchModeFile = "watch-mode"
+	YieldFile     = "yield.json" // the head's yield record (PROTOCOL.md section 7.17)
 	LogDir        = "log"
 	RunLog        = "runs.jsonl"
 	RunLogOld     = "runs.1.jsonl"
@@ -130,7 +131,7 @@ func openDir(dir string, create bool) (*Store, error) {
 		}
 		f.Close()
 	}
-	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, TrimFile, WatchModeFile, ConfigFile,
+	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, TrimFile, WatchModeFile, YieldFile, ConfigFile,
 		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld), filepath.Join(LogDir, WatchLog),
 		filepath.Join(LogDir, WatchLogOld)} {
 		if err := CheckEntry(s.path(name), false); err != nil {

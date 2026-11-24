@@ -27,7 +27,10 @@ coreslot status                                # what runs, what waits, whether 
   waits in one first-in, first-out queue. A command that fits may pass the head of the queue when
   its earlier runs say it will be done before the head could start, or, while the head does not fit
   and the kernel reports normal memory pressure, out of turn: one at a time, and for no longer than
-  it has itself watched the head wait. A command with no earlier run never passes. The exception is
+  it has itself watched the head wait. A long head (10 min or more) that could start lets short
+  commands (2 min or less) that would not fit beside it go first, until a deadline of a quarter of its
+  own run time that `status` shows; it starts by then, or once the short ones still running end. A
+  command with no earlier run never passes. The exception is
   container work: while another command runs, a command named `docker`, `docker-compose` or
   `podman` with no pinned need passes the queue, with or without
   earlier runs ([how it decides](#how-it-decides)). When no coreslot command is running, the head of

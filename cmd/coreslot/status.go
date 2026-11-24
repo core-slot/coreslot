@@ -351,6 +351,9 @@ func (v statusView) human() string {
 		if t.info.Noted {
 			line += "  waits for Docker's VM"
 		}
+		if y := v.rep.Yield; y != nil && y.Head == t.info.ID {
+			line += "  " + yieldText(y.UntilNS)
+		}
 		switch t.state {
 		case "stalled":
 			line += "  STALLED"
@@ -478,9 +481,22 @@ type jsonStatus struct {
 	DeadHolds        []string       `json:"dead_holds"`
 	CancelRequests   []string       `json:"cancel_requests"`
 	StartRequests    []jsonStart    `json:"start_requests"`
+	Head             *string        `json:"head"`  // the ticket a waiter's re-election would pick; null with none
+	Yield            *jsonYield     `json:"yield"` // the head's valid yield record; null with none
 	Ignored          map[string]int `json:"ignored"`
 	ObservedS        float64        `json:"observed_s"`
 	Docker           *jsonDocker    `json:"docker,omitempty"` // only with --docker
+}
+
+type jsonYield struct {
+	Head       string `json:"head"`
+	UntilNS    int64  `json:"until_ns"`
+	LastPassNS int64  `json:"last_pass_ns"`
+}
+
+// yieldText says that a head lets short jobs go first, until when.
+func yieldText(untilNS int64) string {
+	return "letting short jobs go first until " + time.Unix(0, untilNS).Format("15:04")
 }
 
 // jsonStart is a pending start request: unanswered once older than startAnswerAge while its ticket
@@ -622,6 +638,12 @@ func (v statusView) document() jsonStatus {
 	}
 	if v.docker != nil {
 		d.Docker = v.docker.document()
+	}
+	if r.Head != "" {
+		d.Head = &r.Head
+	}
+	if y := r.Yield; y != nil {
+		d.Yield = &jsonYield{Head: y.Head, UntilNS: y.UntilNS, LastPassNS: y.LastPassNS}
 	}
 	if r.Mem.Known {
 		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB, MachineMiB: r.Mem.MachineMiB,

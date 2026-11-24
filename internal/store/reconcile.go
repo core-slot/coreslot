@@ -236,6 +236,18 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 			removed++
 		}
 	}
+	// The yield record, once its head's ticket is gone; one that is no record names none.
+	if _, err := os.Lstat(sec.s.path(YieldFile)); err == nil {
+		if y, _, err := sec.s.ReadYield(); err != nil {
+			return removed, err
+		} else if !tickets[y.Head] {
+			if r, err := sec.removeEntry("", YieldFile); err != nil {
+				return removed, err
+			} else if r {
+				removed++
+			}
+		}
+	}
 
 	// 3. Temporary files older than 30 s.
 	for _, dir := range []string{"", QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir} {

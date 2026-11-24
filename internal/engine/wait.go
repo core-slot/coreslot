@@ -113,6 +113,8 @@ type Ticket struct {
 	ungated string        // why the Docker part went ungated; "" while it is gated
 	noted   bool          // the ticket's note is published
 	notedAt time.Duration // when it was last published, on the monotonic clock
+
+	yield yieldState // a head's yield to short jobs (yield.go)
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
@@ -302,7 +304,7 @@ func (t *Ticket) step(ctx context.Context, single bool) (StepResult, error) {
 func (t *Ticket) waiting() Waiting {
 	w := t.last
 	w.Evals, w.Outcome = t.attempts, t.out
-	w.Outcome.Noted, w.Outcome.DockerUngated = t.noted, t.ungated
+	w.Outcome.Noted, w.Outcome.DockerUngated, w.Outcome.YieldEnded = t.noted, t.ungated, t.yield.ended
 	return w
 }
 
