@@ -832,7 +832,8 @@ is not such an object reads as no record. Only the head writes it, and each shor
 sets its `last_pass_ns`; it is written and removed only inside the section, replaced with a plain
 `rename` (section 11), without a `gen` bump, and read with no section. The file itself is checked as
 in section 4.2. Reconciliation removes it once its head's ticket is gone (section 10.4), the head
-removes a stale one, and a reset removes it (section 4.4).
+removes a stale one, and a reset removes it (section 4.4). Any process of the user can write it: it is
+not a control, and the head ends its yield by its own clock whatever it says (section 10.3).
 
 ## 8. The admission critical section
 
@@ -1033,13 +1034,33 @@ valid record names the head, it is short (from its own request; a noted waiter i
 expected to end by the deadline (`now + d ≤ until_ns`), no short job overruns, and the kernel's
 pressure level is normal. The `no_holds` restriction does not apply to it. In the admitting section
 it sets the record's `last_pass_ns` to now. Several short jobs may start, side by side or one after
-another, as the room allows. While a valid record names the head no other pass applies: the head
-fits, so it ends in no time and cannot be passed out of turn.
+another, as the room allows. While a valid record names the head no other pass applies, even while a
+short job holds the room the head needs: a pass by duration or out of turn could run past the
+deadline, and the head's bound below rests on it. A record whose deadline has passed is not valid, so
+today's passes decide again even before the head removes it.
 
 **The head's bound.** Every short job starts expected to end by the deadline, so the head starts by
 the deadline, or as soon as the room allows after it: the delay past the deadline is the overrun of
 the short jobs running then, never a chain, since an overrun ends the yield and stops new passes. At
 a wait deadline of its own the head may still time out as a head that never yielded would.
+
+**What the yield's rules rest on.** No rule of the yield stops a hostile party: any process of the
+user can write `yield.json`, as it can start or move a ticket. Each rule guards the head against one
+way the yield could outlast its worth:
+- **The deadline** guards against a stream of short arrivals that would keep the head waiting for
+  ever. The head computes it from its own `typical_s`, waiters only read it, and the head's own
+  monotonic clock ends the yield whatever the file says.
+- **The thresholds** (a head of at least 600 s, a short job of at most 120 s) guard against a
+  learned typical run time that understates. A waiter's `typical_s` comes from its label's run log
+  (section 5.4); a short job that runs long costs one overrun, which ends the yield.
+- **The no-taker rule** guards against a yield nobody uses, such as a short waiter whose owner has
+  stopped. It reads `last_pass_ns`, which only a passer's admitting section writes, and it refuses no
+  one; it only ends the yield sooner.
+- **The pressure test** guards against a room that the kernel is already reclaiming. It reads the
+  kernel's pressure level; where the level cannot be read, nothing yields, as today.
+- **The overrun rule** guards against a passer that runs long while more passers follow it. It reads
+  the live hold's own `start_ns` and `typical_s`, which the passer's run writes; a hold without
+  `typical_s` never counts.
 
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting. It
