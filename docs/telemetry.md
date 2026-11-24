@@ -102,7 +102,7 @@ One line per machine sample, written by whichever run takes the sample.
 | `ncpu` | the logical CPUs this process may run on (Go's `runtime.NumCPU`) |
 | `load1`, `load5` | the host's 1- and 5-minute load averages: macOS `vm.loadavg`, Linux `/proc/loadavg`. Absent when not read |
 | `cpu_busy_pct` | the busy part of the host's CPU ticks since the previous sample, in percent: user, nice and system over all ticks (macOS `HOST_CPU_LOAD_INFO`, Linux the `cpu` line of `/proc/stat`, whose total runs through `steal`). Absent on the first sample after a gap, and when a counter went back (macOS's 32-bit ticks wrap) |
-| `psi_cpu_some_us_s` | Linux: PSI cpu `some` in microseconds per second since the previous sample (`/proc/pressure/cpu`); absent without PSI |
+| `psi_cpu_some_us_s` | Linux: PSI cpu `some` in microseconds per second since the previous sample (`/proc/pressure/cpu`). Absent without PSI, on the first sample, after a gap, and when the counter went back |
 
 A sample whose reading failed reports `level` `unknown`, zero readings and `headroom_ok` false.
 
@@ -210,7 +210,7 @@ attempt's only copy.
 | `signal` | the signal that killed the command, by name; an `exit 137` of the command's own is not one |
 | `stopped_by` | `watchdog_red` or `watchdog_floor` when a stop round killed it, `outside` when a SIGKILL did that coreslot did not send; absent otherwise |
 | `mean_footprint_mib` | the mean of the tree's 1 s readings, in whole MiB; absent for a run with no reading |
-| `tree_cpu_s` | the user and system time of the hold's watch ticks, summed: the CPU seconds the samples' `jobs[].d_user_ns` and `d_sys_ns` carry. It misses a process that started and ended between two ticks, which the record's `user_s` and `sys_s` count once it is reaped. Absent for a run that held no hold or never ticked |
+| `tree_cpu_s` | the user and system time of the hold's watch ticks, summed: every tick of the run's own, including those whose sample another run took or that no sample listed, so the samples' `jobs[].d_user_ns` and `d_sys_ns` show it only in part (a sample lists a job only while its tick is fresh). It misses a process that started and ended between two ticks, which the record's `user_s` and `sys_s` count once it is reaped. Absent for a run that held no hold or never ticked |
 
 ### `outside` and `live`
 
@@ -238,7 +238,7 @@ Nothing is written where processes cannot be swept.
 
 | key | meaning |
 |---|---|
-| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor` (Docker VMM) in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name`, `footprint_mib` (on Apple's hypervisor the most the guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now, file cache included), `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
+| `vm` | Docker Desktop's VM process: the one running `com.apple.Virtualization.VirtualMachine` (Apple's hypervisor) or `com.docker.sailor` (Docker VMM) in the same resource coalition as a process running `com.docker.backend` (compared by executable path, not by the truncated process name): `name` (that program's name in full, which the kernel's process name cuts to `com.apple.Virtualization.Virtua`), `footprint_mib` (on Apple's hypervisor the most the guest has touched, which does not fall while the VM runs; on Docker VMM what the guest holds now, file cache included), `resident_mib`, `cpu_s`, `start_ns`, whose change is a VM restart or Resource Saver having stopped an idle VM; absent when Docker's VM is not running, when more than one process matches, or when an engine other than Docker Desktop's runs |
 | `top` | the five largest processes of the person by footprint: `name` (the process's registered name, not its truncated command name) and `footprint_mib` |
 
 ### `containers`

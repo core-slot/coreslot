@@ -1360,13 +1360,16 @@ growth as free twice: the ticket leaves, reads again and enters again, once per 
 such reading ends the attempt without a note. An attempt therefore enters the section at most three
 times. When both tests pass, the level gate records the start (section 12.4) and the ticket is
 admitted (step 7): its hold is published with `docker_need_mib`, `docker_sampled_ns` the reading's
-instant and `docker_growth_mib` the `growth` of the reading's `V` and `vm_now` and a Docker footprint
-of 0 (a restart's own, section 24.1), so that no admission sees the hold without it.
+instant and `docker_growth_mib` the `growth` of the reading's `V`, `vm_now` and backend, and a
+Docker footprint of 0 (a restart's own, section 24.1), so that no admission sees the hold
+without it.
 
 **The note.** When the VM test fails, or the reading failed, the ticket publishes its note (section
 7.14) in that section, unless it has one, it makes a single attempt (a no-wait try then reports that
-it would wait), or it published one less than 2 s ago. It removes the note at an attempt whose host
-test fails, when its Docker part goes ungated, and with its ticket. Every run, gated or not, passes
+it would wait), or it published one less than 2 s ago: each publication bumps `gen` (section 7.8)
+and every waiter re-lists on a bump, so a ticket whose VM test swings between attempts would
+otherwise wake them all at each one. It removes the note at an attempt whose host test fails, when
+its Docker part goes ungated, and with its ticket. Every run, gated or not, passes
 over a live ticket that has a note in its election and re-election (sections 10.3 and 12.1 step 5):
 the first live ticket without a note is its head, and when there is none it is the head itself and
 the idle rule is its. So a run that needs only the host never waits for a ticket that waits only

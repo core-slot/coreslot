@@ -8,6 +8,27 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- `coreslot watch --for` refuses, as a usage error, a duration whose end is past the clock's range, which
+  wrote an override with no end while it printed a time. An end on another day prints its date.
+- `status` no longer says a stop round written before a switch to observe still stops its jobs once every
+  listed job has found a container client, which ignores the stop.
+- The telemetry `memory` line's `vm.name` is the VM program's full name; on Apple's hypervisor it was the kernel's
+  31-byte `com.apple.Virtualization.Virtua`.
+
+## v0.11.0 (2026-11-24)
+
+This release writes format 5. Upgrade every client of a machine together.
+
+### Upgrading
+
+A client of this release does not use a format-3 directory (v0.10.0) or a format-4 one: its runs start unbudgeted
+with a notice (`--strict` refuses) until `coreslot doctor --reset`. Run the reset when no hold and no ticket is
+live; it refuses while one is, and names it. On a format-3 or format-4 directory the reset is an upgrade to format 5
+that keeps the run log and the telemetry, so no label learns its need again. A format-2 directory's reset removes
+its run log.
+
 ### Added
 
 - A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,

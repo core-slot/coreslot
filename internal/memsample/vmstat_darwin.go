@@ -97,8 +97,14 @@ func cpuTicks() (busy, total uint64, ok bool) {
 	if int32(kr) != 0 || count != uint32(len(t)) {
 		return 0, 0, false
 	}
+	busy, total = busyTicks(t)
+	return busy, total, true
+}
+
+// busyTicks is busy and all of cpu_ticks in host_cpu_load_info's order: user, system, idle, nice.
+func busyTicks(t [4]uint32) (busy, total uint64) {
 	busy = uint64(t[0]) + uint64(t[1]) + uint64(t[3])
-	return busy, busy + uint64(t[2]), true
+	return busy, busy + uint64(t[2])
 }
 
 // timebase is mach_timebase_info: a mach tick is numer/denom ns.

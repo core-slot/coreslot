@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/core-slot/coreslot/internal/engine"
@@ -34,11 +35,15 @@ func watchCommand(args []string, io IO) int {
 		fmt.Fprintf(io.Stderr, "coreslot: watch takes observe, enforce (with a positive --for) or config\n%s\n", watchUsage)
 		return exitUsage
 	}
-	mode, until := verb, int64(0)
+	mode, until, now := verb, int64(0), store.NowNS()
+	if set && forD.Nanoseconds() > math.MaxInt64-now { // an end the clock cannot hold would read as none
+		fmt.Fprintf(io.Stderr, "coreslot: watch: --for %s ends past the clock's range\n%s\n", *forD, watchUsage)
+		return exitUsage
+	}
 	if verb == "config" {
 		mode = ""
 	} else if set {
-		until = store.NowNS() + forD.Nanoseconds()
+		until = now + forD.Nanoseconds()
 	}
 
 	e, err := openEngine(locate(), true)
@@ -61,7 +66,7 @@ func watchCommand(args []string, io IO) int {
 	case mode == "":
 		fmt.Fprintln(io.Stdout, "coreslot: the watchdog follows the configuration's mode on this machine")
 	default:
-		fmt.Fprintf(io.Stdout, "coreslot: the watchdog is in %s mode on this machine, %s (`coreslot watch config` returns to the configuration)\n", mode, switchedText(until))
+		fmt.Fprintf(io.Stdout, "coreslot: the watchdog is in %s mode on this machine, %s (`coreslot watch config` returns to the configuration)\n", mode, switchedText(until, now))
 	}
 	return 0
 }
@@ -74,10 +79,15 @@ func modeName(observe bool) string {
 	return "enforce"
 }
 
-// switchedText says how long a switch by hand holds: until switched back, or until its end.
-func switchedText(untilNS int64) string {
+// switchedText says how long a switch by hand holds: until switched back, or until its end, with
+// its date when the end is not on nowNS's day.
+func switchedText(untilNS, nowNS int64) string {
 	if untilNS == 0 {
 		return "switched by hand until switched back"
 	}
-	return "switched by hand until " + time.Unix(0, untilNS).Format("15:04")
+	end, layout := time.Unix(0, untilNS), "15:04"
+	if y, m, d := time.Unix(0, nowNS).Date(); end.Year() != y || end.Month() != m || end.Day() != d {
+		layout = "2006-01-02 15:04"
+	}
+	return "switched by hand until " + end.Format(layout)
 }
