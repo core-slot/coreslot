@@ -33,22 +33,31 @@ func Tree(root int) (kib int64, times map[int]TreeTimes, ok bool) {
 	const tickNS = int64(time.Second) / userHZ
 	var shmem int64
 	kib, times, ok = treeSum(root, parents, func(pid int) (int64, TreeTimes, bool) {
-		data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
-		if err != nil {
-			return 0, TreeTimes{}, false
-		}
-		anon, ok := meminfo(string(data), "RssAnon")
+		own, shm, ok := footprint(pid)
 		user, err1 := strconv.ParseInt(stats[pid][11], 10, 64)
 		sys, err2 := strconv.ParseInt(stats[pid][12], 10, 64)
 		if !ok || err1 != nil || err2 != nil {
 			return 0, TreeTimes{}, false
 		}
-		swap, _ := meminfo(string(data), "VmSwap")
-		shm, _ := meminfo(string(data), "RssShmem")
 		shmem = max(shmem, shm)
-		return anon + swap, TreeTimes{UserNS: user * tickNS, SysNS: sys * tickNS}, true
+		return own, TreeTimes{UserNS: user * tickNS, SysNS: sys * tickNS}, true
 	})
 	return kib + shmem, times, ok
+}
+
+// footprint reads RssAnon + VmSwap and RssShmem of /proc/<pid>/status, in KiB.
+func footprint(pid int) (kib, shmKiB int64, ok bool) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return 0, 0, false
+	}
+	anon, ok := meminfo(string(data), "RssAnon")
+	if !ok {
+		return 0, 0, false
+	}
+	swap, _ := meminfo(string(data), "VmSwap")
+	shm, _ := meminfo(string(data), "RssShmem")
+	return anon + swap, shm, true
 }
 
 // userHZ is the unit of the start time in /proc/<pid>/stat: clock ticks of 1/100 s.
