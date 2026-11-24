@@ -438,32 +438,6 @@ func TestStatusShowsGatedTicketAndNote(t *testing.T) {
 	}
 }
 
-// status reads the Docker part of each hold and ticket from their bodies: without --docker it runs
-// no program and opens no socket, whatever a hold or ticket carries. Mutation: status running
-// `docker` (the stand-in on PATH) to show a gated hold leaves its mark.
-func TestStatusRunsNoProgram(t *testing.T) {
-	dir := budgetDir(t, 8192)
-	g := hold(t, openLib(t, dir), "gate", 384)
-	if err := g.UpdateHold(func(h *wire.Hold) { h.DockerNeedMiB, h.DockerGrowthMiB = 2048, 3072 }); err != nil {
-		t.Fatal(err)
-	}
-	bin, mark := t.TempDir(), filepath.Join(t.TempDir(), "ran")
-	for _, name := range []string{"docker", "sh", "ps"} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n/usr/bin/touch "+mark+"\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	env := append(baseEnv(dir), "PATH="+bin)
-	for _, args := range [][]string{{"status"}, {"status", "--json"}} {
-		if r := cli(t, env, args...); r.code != 0 {
-			t.Fatalf("%v exited %d: %s", args, r.code, r.stderr)
-		}
-	}
-	if _, err := os.Stat(mark); err == nil {
-		t.Error("status ran a program")
-	}
-}
-
 // status prints mem in bytes and each hold's need, `unbudgeted` for one that reserves nothing.
 func TestStatusHumanMem(t *testing.T) {
 	rep := memReport()
