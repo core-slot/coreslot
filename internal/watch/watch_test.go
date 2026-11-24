@@ -524,3 +524,33 @@ func stopList(jobs []Job, floor bool, shortMiB int64) []string {
 	stop, _ := StopList(jobs, floor, shortMiB, nil, 0)
 	return stop
 }
+
+// Each guard of the CPU rates holds back a wrong value on its own: every row but the first makes one
+// guard fail and no other, and the rate it guards is then absent while the other stays. Mutations:
+// dropping prev.CPUTotal > 0 gives a since-boot average; dropping cur.CPUTotal > prev.CPUTotal gives
+// about 0 % after a wrap; dropping the busy-Δ check gives over 100 %; dropping the PSI check gives a
+// huge rate after the counter went back. Each reddens its row.
+func TestRatesCPUGuardsEachHold(t *testing.T) {
+	prev := memsample.HostReading{WallNS: 1e9, AwakeNS: 1e9, CPUBusy: 1000, CPUTotal: 4000, PSICPUSomeUS: 1e6, HasPSICPU: true}
+	cur := memsample.HostReading{WallNS: 3e9, AwakeNS: 3e9, CPUBusy: 1600, CPUTotal: 6000, PSICPUSomeUS: 15e5, HasPSICPU: true}
+	for _, c := range []struct {
+		name     string
+		edit     func(p, c *memsample.HostReading)
+		cpu, psi bool
+		cpuPct   float64
+		psiPerS  float64
+	}{
+		{"both valid", func(p, c *memsample.HostReading) {}, true, true, 30, 250000},
+		{"no previous total", func(p, c *memsample.HostReading) { p.CPUBusy, p.CPUTotal = 0, 0 }, false, true, 0, 250000},
+		{"total went back", func(p, c *memsample.HostReading) { c.CPUBusy, c.CPUTotal = 1100, 3000 }, false, true, 0, 250000},
+		{"busy beyond total", func(p, c *memsample.HostReading) { c.CPUBusy = 4000 }, false, true, 0, 250000},
+		{"PSI went back", func(p, c *memsample.HostReading) { c.PSICPUSomeUS = 5e5 }, true, false, 30, 0},
+	} {
+		p, q := prev, cur
+		c.edit(&p, &q)
+		r, ok := rates(p, q)
+		if !ok || r.HasCPUBusy != c.cpu || r.HasPSICPU != c.psi || r.CPUBusyPct != c.cpuPct || r.PSICPUSomeUSS != c.psiPerS {
+			t.Errorf("%s: rates = %+v (ok %v); want cpu %v %.0f %%, psi %v %.0f/s", c.name, r, ok, c.cpu, c.cpuPct, c.psi, c.psiPerS)
+		}
+	}
+}

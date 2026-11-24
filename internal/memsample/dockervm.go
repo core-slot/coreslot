@@ -39,6 +39,15 @@ const (
 
 var dockerVMExes = []string{"com.apple.Virtualization.VirtualMachine", dockerVMMExe}
 
+// Program is the last element of the identified VM's executable path, the program DockerVM matched,
+// which the kernel's process name cuts on Apple's hypervisor.
+func (v VM) Program() string {
+	if v.VMM {
+		return dockerVMMExe
+	}
+	return dockerVMExes[0]
+}
+
 // isVMExe reports whether p runs one of the VM programs.
 func isVMExe(p string) bool { return slices.Contains(dockerVMExes, path.Base(p)) }
 
