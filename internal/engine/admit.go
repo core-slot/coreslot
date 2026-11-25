@@ -75,7 +75,7 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	need := t.req.NeedMiB
 	var reserved []state.MemHold
 	if !t.req.RealMemory || gated {
-		reserved = reservations(holds)
+		reserved = reservations(holds, t.e.clock.Realtime())
 	}
 	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	if t.req.RealMemory && gated {
@@ -216,7 +216,7 @@ func (t *Ticket) confirm(cfg config.Config, holds []liveHold, need int64) (bool,
 		}
 	}
 	headroom := min(m1.HeadroomMiB, m2.HeadroomMiB)
-	room := state.Room(headroom, cfg.ReserveMiB, reservations(now))
+	room := state.Room(headroom, cfg.ReserveMiB, reservations(now, t.e.clock.Realtime()))
 	t.out.HeadroomMiB, t.out.RoomMiB = headroom, room
 	return need <= room, nil
 }

@@ -151,7 +151,9 @@ func TestRunUsesConfiguredTrimWindow(t *testing.T) {
 }
 
 // A run whose hold no request names never rewrites need_mib, and its body has neither key,
-// whatever its footprint. Mutation: write the window's need into every hold → 600, red.
+// whatever its footprint. The harness's run has a bound of 0, which no grant fits, so it does not
+// follow either (TestNoFollow covers a pinned run with the bound open). Mutation: write the
+// window's need into every hold → 600, red.
 func TestRunNeverRewritesNeedUntrimmed(t *testing.T) {
 	_, g, st := trimHold(t, 4000)
 	r := trimRun(t, 2)

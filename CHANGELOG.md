@@ -8,6 +8,26 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- A command whose need was not pinned (learned, or the default) stops reserving its whole need after its peak: once
+  it has run for its label's window, its hold reserves the most it used within that window plus a margin, never more
+  than its need, and rises again with its use. The window is 1.5 times the longest gap a run of the label needed,
+  from its last 20 runs, at least 120 s and at most a day; 600 s until 3 runs have recorded one. Each run's line in
+  the run log gains `mem_window_s`, and `coreslot stats` prints each label's window. A pinned need, a run with a
+  Docker interest, an oversized need and a restart keep their whole need.
+
+### Changed
+
+- **Format 7.** Every client must apply one rule for what a live hold reserves (below), since a run may now lower
+  its `need_mib` without a request, so a client of format 6 steps out of the budget with its existing notice. Run
+  `coreslot doctor --reset` once nothing is live: on a format-6 to format-3 directory it is an upgrade that keeps the
+  run log and the telemetry.
+- What a hold reserves has one definition: its `need_mib` while its run measures it, and at least its `asked_mib`
+  once its command has exited or it has not been sampled for 6 s, so a lowered reservation nobody measures no longer
+  stands. The room, the head's expected wait, `status`'s `reserved_mib` and each hold's `need_mib` use it
+  (`PROTOCOL.md` section 12.1).
+
 ## v0.12.0 (2026-11-25)
 
 This release writes format 6. Upgrade every client of a machine together.

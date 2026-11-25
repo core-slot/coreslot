@@ -57,7 +57,7 @@ listed here; after it, an incompatible change to either needs a new major versio
 | `v0.12.0` | 6 (format 5 with `quiet/` and `nostop/`, the optional `yield.json` and the ticket's optional `typical_s`; `doctor --reset` upgrades a format-5, format-4 or format-3 directory and keeps its run log) |
 
 `coreslot version` prints the formats a binary implements, for example
-`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 6.
+`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 7.
 
 `telemetry/`, and the `log/watch.jsonl` an older client may have left or still write, need no new format number:
 they are optional files that no reader of the format needs, and no admission reads them

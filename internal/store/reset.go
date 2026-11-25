@@ -27,16 +27,16 @@ const otherRes = "res"
 type ResetDone struct {
 	Removed    int   // entries removed, those of log/ included
 	LogRemoved int   // entries of log/ removed: FORMAT named another format or could not be read
-	LogKept    int   // entries of log/ kept: a repair, under FORMAT 6, 5, 4, 3 or none yet
+	LogKept    int   // entries of log/ kept: a repair, under FORMAT 7, 6, 5, 4, 3 or none yet
 	FormatErr  error // why FORMAT could not be read, when it could not
 }
 
 // Reset recreates the state directory (`coreslot doctor --reset`) inside the section the caller
 // entered, whatever format its FORMAT names, malformed or absent included: it removes every entry
 // of queue/, holds/, cancel/, order/, vmwait/, quiet/ and nostop/, degraded, gen, watch.json, trim.json and another
-// format's res/ with its files, then writes FORMAT of the format written. Under FORMAT 6, or 5, 4 or 3
-// (an upgrade: format 6 only adds quiet/ and nostop/, format 5 watch-mode, format 4 vmwait/ and optional Docker keys), or none yet
-// (which the first client writes as 6), it is a repair and keeps the entries of log/ and
+// format's res/ with its files, then writes FORMAT of the format written. Under FORMAT 7, or 6, 5, 4 or 3
+// (an upgrade: format 7 only changes what a hold reserves, format 6 adds quiet/ and nostop/, format 5 watch-mode, format 4
+// vmwait/ and optional Docker keys), or none yet (which the first client writes as 7), it is a repair and keeps the entries of log/ and
 // telemetry/; otherwise it removes them too, those of telemetry/ counted in Removed only. It keeps
 // admit.lock and config.toml (the format-stable file whose inode live clients may hold open, and
 // the configuration) and the directories themselves. It does not read the configuration.

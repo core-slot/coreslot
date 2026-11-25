@@ -241,10 +241,14 @@ func TestTrimByLabelAmbiguous(t *testing.T) {
 // hold adds what is not measured. Mutations: take a lowered need_mib as the answer instead of
 // trimmed → the case that sets trimmed alone gets "has not answered yet", red; read a hold that is
 // gone as no answer → "ended" gets "has not answered yet", red; leave Trimmed out of the
-// snapshot's hold (engine's info) → every answered case gets "has not answered yet", red.
+// snapshot's hold (engine's info) → every answered case gets "has not answered yet", red. A lowered
+// answer carries a fresh sample, as a ticking run's does: a hold its run does not measure reserves
+// what it asked for.
 func TestTrimAnswers(t *testing.T) {
 	const asked = 4000
-	lowered := func(h *wire.Hold) { h.Trimmed, h.AskedMiB, h.NeedMiB, h.FootprintMiB = true, asked, 600, 200 }
+	lowered := func(h *wire.Hold) {
+		h.Trimmed, h.AskedMiB, h.NeedMiB, h.FootprintMiB, h.SampledNS = true, asked, 600, 200, store.NowNS()
+	}
 	following := func(h *wire.Hold) { h.Trimmed, h.AskedMiB, h.FootprintMiB = true, asked, 3000 }
 	cases := []struct {
 		name      string

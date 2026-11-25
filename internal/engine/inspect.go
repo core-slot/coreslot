@@ -35,7 +35,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 6
+		r.FormatUnderstood = true // the first entry writes format 7
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}
@@ -123,11 +123,11 @@ func (e *Engine) Snapshot() (Report, error) {
 	d, smp, at, watchErr := e.st.ReadWatch() // no readable watch.json is no sample
 	now := e.clock.Realtime()                // one clock for the snapshot, after the reads it judges
 	for _, h := range live {
-		info := h.info()
+		info := h.info(now)
 		info.ChildExited, info.SampleAgeMS = h.body.ChildExited, sampleAgeMS(h.body.SampledNS, now)
 		info.LeftS = holdLeftS(h.body, now)
 		r.Holds = append(r.Holds, info)
-		r.Mem.ReservedMiB += h.body.NeedMiB
+		r.Mem.ReservedMiB += info.NeedMiB
 	}
 	if memErr == nil {
 		r.Mem.HeadroomMiB, r.Mem.HeadroomOK, r.Mem.ReserveMiB = machine.HeadroomMiB, machine.HeadroomOK, cfg.ReserveMiB
@@ -135,7 +135,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	var room int64 // 0 while the headroom is unread
 	if memErr == nil && machine.HeadroomOK {
 		r.Mem.Known = true
-		room = state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live))
+		room = state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live, now))
 		r.Mem.RoomMiB, r.Mem.FreeMiB, r.Mem.MachineMiB = room, max(0, room), machine.MemMiB
 		r.Mem.RealFreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, nil))
 	}

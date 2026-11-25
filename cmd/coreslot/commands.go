@@ -142,7 +142,7 @@ func moveFlags() (fs *flag.FlagSet, label *string, first, last *bool, before, af
 func doctorFlags() (fs *flag.FlagSet, doClear, doReset *bool) {
 	fs = newFlagSet("coreslot doctor")
 	return fs, fs.Bool("clear", false, "remove the degraded-mode record"),
-		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 6, 5, 4 or 3 is kept")
+		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 7, 6, 5, 4 or 3 is kept")
 }
 
 // parseInterleaved parses args with fs, its flags before or after the positional arguments, and

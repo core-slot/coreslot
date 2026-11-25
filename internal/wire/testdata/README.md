@@ -1,4 +1,4 @@
-# Wire-format fixtures (protocol format 5)
+# Wire-format fixtures (protocol format 7)
 
 Test vectors for the names and bodies of `PROTOCOL.md` section 7. The Go reference implementation
 reads these files; it does not generate them at test time. This

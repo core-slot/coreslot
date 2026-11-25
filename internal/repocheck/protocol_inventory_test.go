@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// contractInventory is every shared file, field, environment variable and transition of format 6,
+// contractInventory is every shared file, field, environment variable and transition of format 7,
 // the items PROTOCOL.md's contract inventory (its section 2) must list, including the three the
 // state-directory override adds (section 4.1): `config.toml`, `needs.toml` and
 // `CORESLOT_STATE_DIR`. The list is kept here, apart from the document, so that an item added to,
@@ -63,7 +63,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"admission", "Admission", "idle rule"},
 	{"level gate", "The level gate", "calm_s"},
 	{"gated admission", "A gated request", "VM test"},
-	{"trim", "Trim", "trim.json"},
+	{"trim", "Trim and the following reservation", "trim.json"},
 	{"tick", "The tick", "footprint_mib"},
 	{"stop round", "Stop rounds", "SIGKILL"},
 	{"restart", "Restart of a stopped run", "first arrival"},

@@ -13,7 +13,7 @@ const versionUsage = `usage: coreslot version
 Prints the version and the protocol formats this coreslot implements.`
 
 // versionCommand prints the CLI's version and the protocol format it implements, for example
-// `coreslot 0.12.0 (protocol formats: 6)`.
+// `coreslot 0.12.0 (protocol formats: 7)`.
 func versionCommand(args []string, io IO) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Fprintln(io.Stdout, versionUsage)

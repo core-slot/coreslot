@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// Bounds of format 6 (PROTOCOL.md section 7).
+// Bounds of format 7 (PROTOCOL.md section 7).
 const (
 	MaxLabelBytes = 128
 	// MaxNeedMiB bounds every MiB amount of a body (1 PiB), so that summing a full directory of
