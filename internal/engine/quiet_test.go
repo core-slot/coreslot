@@ -316,3 +316,22 @@ func TestQuietAncestor(t *testing.T) {
 		t.Errorf("a mark on a ticket or a dead hold nests the run under %q", label)
 	}
 }
+
+// A quiet window stops a yielding head's no-taker count: once the window ends, the yield, which
+// still has time, waits 3 s more for a taker. Mutation: leaving the count running in step 1c ends
+// the yield as no_taker at the head's first attempt after the window.
+func TestQuietWindowRestartsTheNoTakerCount(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, capped(t, 1536+128), clk)
+	g := hold(t, e, need(128))
+	h := enqueue(t, e, headReq)
+	enqueue(t, e, shortReq(768, 60))
+	wantYielding(t, h, 0)
+	dir := e.st.Dir()
+	markID(t, dir, store.QuietDir, holdIDOf(g))
+	clk.advance(5 * time.Second)
+	wantReason(t, waitOutcome(t, h), ReasonQuiet, "")
+	unmarkID(t, dir, store.QuietDir, holdIDOf(g))
+	clk.advance(HeadMaxBackoff)
+	wantYielding(t, h, 0)
+}

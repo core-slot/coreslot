@@ -83,10 +83,11 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
 	// 1c. While a quiet job runs no other job is admitted, whatever path this attempt would take.
+	// A yielding head has not fit meanwhile: its no-taker count starts again after the window.
 	if quiet, err := quietHolds(t.e.st, holds); err != nil {
 		return nil, false, err
 	} else if len(quiet) > 0 {
-		t.out.Reason = ReasonQuiet
+		t.out.Reason, t.yield.fitSince = ReasonQuiet, -1
 		return nil, false, t.unnote(sec)
 	}
 	if t.yield.active {
