@@ -356,6 +356,10 @@ func (v statusView) human() string {
 		}
 		if y := v.rep.Yield; y != nil && y.Head == t.info.ID {
 			line += "  " + yieldText(y.UntilNS)
+		} else if r := v.rep; t.info.ID == r.Head && len(r.Holds) == 0 && r.Mem.Known && t.info.NeedMiB > r.Mem.RoomMiB && !t.info.Noted {
+			// Nothing runs and it does not fit: it would start by the idle rule unless it waits
+			// while memory outside coreslot grows, which only its own run knows.
+			line += "  nothing runs but it does not fit: waits while memory outside coreslot grows, " + idleWaitText()
 		}
 		switch t.state {
 		case "stalled":

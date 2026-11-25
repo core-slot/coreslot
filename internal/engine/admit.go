@@ -82,12 +82,20 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		room = state.GrowthRoom(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
+	t.idle.note(t.e.clock.Monotonic(), m, len(holds) == 0)
+	// A yielding head's no-taker count restarts when this attempt finds it not fitting
+	// (PROTOCOL.md section 10.3); any other exit, a read of Docker's VM or the level gate among
+	// them, keeps it (yield.go). The yield itself goes on, bounded by its deadline and its span.
+	defer func() {
+		if g == nil && t.out.Reason.notFitting() {
+			t.yield.fitSince = -1
+		}
+	}()
 	// 1c. While a quiet job runs no other job is admitted, whatever path this attempt would take.
-	// A yielding head has not fit meanwhile: its no-taker count starts again after the window.
 	if quiet, err := quietHolds(t.e.st, holds); err != nil {
 		return nil, false, err
 	} else if len(quiet) > 0 {
-		t.out.Reason, t.yield.fitSince = ReasonQuiet, -1
+		t.out.Reason = ReasonQuiet
 		return nil, false, t.unnote(sec)
 	}
 	if t.yield.active {
@@ -96,7 +104,7 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		}
 	}
 	if m.HeadroomOK && len(holds) > 0 && need > room {
-		t.out.Reason, t.yield.fitSince = ReasonRoomShort, -1
+		t.out.Reason = ReasonRoomShort
 		return nil, false, t.unnote(sec)
 	}
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
@@ -130,6 +138,10 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		record = rec
 	} else {
 		t.out.WatchGate = "no_holds"
+		if isHead && t.idleWait(m, need, room) { // the idle start, unless memory outside coreslot grows
+			t.out.Reason = ReasonIdleGrowing
+			return nil, false, t.unnote(sec)
+		}
 	}
 
 	// 6. A gated request's VM test, on a reading taken outside the section.
@@ -483,12 +495,12 @@ func (t *Ticket) passes(head wire.Ticket, headKey, headOrder state.Key, holds []
 	return false
 }
 
-// pressureNormal is the kernel's normal memory pressure level, as memsample.Parts reports it.
-const pressureNormal = 1
+// PressureNormal is the kernel's normal memory pressure level, as memsample.Parts reports it.
+const PressureNormal = 1
 
-// kernelPressure is the kernel's memory pressure level and whether it could be read; a system that
+// KernelPressure is the kernel's memory pressure level and whether it could be read; a system that
 // has none (Linux) reports it as not read. Tests replace it.
-var kernelPressure = memsample.Pressure
+var KernelPressure = memsample.Pressure
 
 // outOfTurn is the first condition that keeps this ticket from going out of turn ahead of head, ""
 // when none does (PROTOCOL.md section 10.3): head does not fit the room now; the kernel's memory
@@ -502,7 +514,7 @@ func (t *Ticket) outOfTurn(head wire.Ticket, headKey, headOrder state.Key, holds
 	if head.NeedMiB <= room {
 		return "head_fits"
 	}
-	if level, ok := kernelPressure(); !ok || level != pressureNormal {
+	if level, ok := KernelPressure(); !ok || level != PressureNormal {
 		return "pressure_not_normal"
 	}
 	for _, h := range holds {

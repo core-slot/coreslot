@@ -518,9 +518,9 @@ func TestNotedTicketThatStopsAttemptingStopsReading(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	old := kernelPressure
-	kernelPressure = func() (int, bool) { return 2, true } // nobody goes out of turn
-	t.Cleanup(func() { kernelPressure = old })
+	old := KernelPressure
+	KernelPressure = func() (int, bool) { return 2, true } // nobody goes out of turn
+	t.Cleanup(func() { KernelPressure = old })
 	start := clk.clock().Realtime()
 	lockHere(t, writeHold(t, dir, wire.Hold{Label: "ending", NeedMiB: 512, StartNS: start, TypicalS: 105}))
 	head := enqueue(t, e, need(1024)) // waits 105 s for the hold's 512 MiB

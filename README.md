@@ -113,7 +113,8 @@ less the reserve, less what each running command still has to grow into (its nee
 now). A command starts when its need fits the room. A running command reports what it uses every
 2 s, so before a command starts beside running ones, coreslot measures them at that moment rather
 than trust their last report, and waits if the room is not there now. A need larger than the machine's memory less the
-reserve starts only when no other coreslot job runs. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
+reserve starts only when no other coreslot job runs. A command that does not fit and would start
+because no other coreslot job runs waits up to 5 minutes while memory outside coreslot is growing. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
 **After the peak.** A command whose need was not pinned, learned or the default, does not keep its
