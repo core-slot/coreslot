@@ -79,7 +79,8 @@ var listClient = memsample.ContainerClient
 // stop from then on, and the next tick's hold update clears its Victim. The scan stays under a
 // forwarder, for a client that bypasses it. The scan needs a log, the one reader that outlives the
 // hold: a pass-through has none. An engaged run starts a sample of its containers every third tick,
-// and every hold write carries the last sample done. A hold that reserves memory keeps a window over
+// a gated one every tick until they reach its Docker need, and every hold write carries the last
+// sample done. A hold that reserves memory keeps a window over
 // the listings that succeeded from the attempt's start; once a tick finds a request to trim it in
 // trim.json, every later tick writes the window's need into the hold, never above the need asked.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
@@ -168,7 +169,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
 		noCPUS := noCPU.add(d, active, func() bool { return p.container && listClient(sup.pid) }) // a run not yet container work scanned this listing
-		if r.fwd != nil && (n/listingsPerTick)%sampleTicks == 0 {
+		if r.fwd != nil && ((n/listingsPerTick)%sampleTicks == 0 || r.growing()) {
 			// Off the tick path: a hung engine never delays a tick, and the hold takes the last
 			// sample done.
 			go sampleDocker(ctx, r.fwd, r.gate)
