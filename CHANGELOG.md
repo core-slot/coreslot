@@ -10,22 +10,6 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
-- A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,
-  lets the jobs behind it that typically run 2 min or less, and would not fit beside it, start first, until a
-  deadline of a quarter of its typical run time (10 min for a 40-min head), which it publishes in the new
-  `yield.json`. It starts by the deadline, or once the short jobs still running end; a short job that runs past its
-  typical time, or 3 s with nobody taking the room, ends the yield at once. A head never yields twice, nor when it is a
-  restart, was moved, cannot read the headroom or the kernel's pressure is not normal (so never on Linux). Tickets
-  carry their label's `typical_s`. `status` reads "letting short jobs go first until 14:32"; `status --json` gains the
-  top-level `head` and `yield`, under the same `schema` 1; telemetry gains the `waiting` reason `yielding` with
-  `until_ns`, `yield_ended`, the `short` pass and its `no_pass` reasons.
-- Two marks on a job, set with `coreslot quiet <id>` and `coreslot no-stop <id>` on a waiting or running job and
-  removed with `--off`. While a job marked quiet runs, no other job is admitted (a forced start still is); the
-  window ends when the job ends, however it ends, or with `--off`. A job marked do-not-stop is never a stop round's
-  victim. Neither moves a job in the queue. An `--independent` run started inside a quiet job runs inside its
-  parent's grant instead of waiting for the window. `status` shows the marks, and `status --json` each hold's and
-  ticket's `quiet` and `no_stop`; the protection reason covers the floor too. Telemetry gains the `waiting` reason
-  `quiet` and the `pass_through` reason `quiet`.
 - A command with a learned need stops reserving its whole need after its peak: once it has run for its label's
   window, its hold reserves the most it used within that window plus a margin, never more than its need, and rises
   again with its use. The window is 1.5 times the longest gap a run of the label needed, from its last 20 runs, at
@@ -43,6 +27,38 @@ All notable changes to this project are recorded here. The format follows
   once its command has exited or it has not been sampled for 6 s, so a lowered reservation nobody measures no longer
   stands. The room, the head's expected wait, `status`'s `reserved_mib` and each hold's `need_mib` use it
   (`PROTOCOL.md` section 12.1).
+
+## v0.12.0 (2026-11-25)
+
+This release writes format 6. Upgrade every client of a machine together.
+
+### Upgrading
+
+A client of this release does not use a format-5 directory (v0.11.0), nor a format-4 or format-3 one: its runs start
+unbudgeted with a notice (`--strict` refuses) until `coreslot doctor --reset`. Run the reset when no job is running
+or waiting; it refuses while a hold or a ticket is live, and names it. On a format-5, format-4 or format-3 directory
+the reset is an upgrade to format 6 that keeps the run log and the telemetry, so no label learns its need again. A
+v0.11.0 client treats a format-6 directory as foreign in the same way, so do not run the two on one machine.
+
+### Added
+
+- A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,
+  lets the jobs behind it that typically run 2 min or less, and would not fit beside it, start first, until a
+  deadline of a quarter of its typical run time (10 min for a 40-min head), which it publishes in the new
+  `yield.json`. It starts by the deadline, or once the short jobs still running end; a short job that runs past its
+  typical time, or 3 s with nobody taking the room, ends the yield at once. A head never yields twice, nor when it is a
+  restart, was moved, cannot read the headroom or the kernel's pressure is not normal (so never on Linux). Tickets
+  carry their label's `typical_s`. `status` reads "letting short jobs go first until 14:32"; `status --json` gains the
+  top-level `head` and `yield`, under the same `schema` 1; telemetry gains the `waiting` reason `yielding` with
+  `until_ns`, `yield_ended`, the `short` pass and its `no_pass` reasons.
+- Two marks on a job, set with `coreslot quiet <id>` and `coreslot no-stop <id>` on a waiting or running job and
+  removed with `--off`. While a job marked quiet runs, no other job is admitted (a forced start still is); the
+  window ends when the job ends, however it ends, or with `--off`. A job marked do-not-stop is never a stop round's
+  victim. Neither moves a job in the queue. An `--independent` run started inside a quiet job runs inside its
+  parent's grant instead of waiting for the window. `status` shows the marks, and `status --json` each hold's and
+  ticket's `quiet` and `no_stop`; the protection reason covers the floor too. Telemetry gains the `waiting` reason
+  `quiet` and the `pass_through` reason `quiet`.
+### Changed
 
 - **Format 6.** The state directory gains `quiet/` and `nostop/`, the marks (`PROTOCOL.md` section 7.18), which
   every client must read at admission and in its own run's ticks, so a client of format 5 steps out of the budget
