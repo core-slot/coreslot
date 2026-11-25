@@ -64,8 +64,8 @@ const pressureReading = "PressureLevel"
 func overlay(r HostReading, nums map[string]int64) HostReading {
 	v := reflect.ValueOf(&r).Elem()
 	for name, n := range nums {
-		if strings.HasPrefix(name, "DockerVM") || name == pressureReading {
-			continue // DockerVM and Pressure read these, not the host reading
+		if strings.HasPrefix(name, "DockerVM") || strings.HasPrefix(name, "Tail") || name == pressureReading {
+			continue // DockerVM, Pressure and a run's reservation window read these, not the host reading
 		}
 		switch f := v.FieldByName(name); f.Kind() {
 		case reflect.Uint64:
