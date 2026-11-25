@@ -237,7 +237,7 @@ func TestTornHoldCountsNoDockerTerms(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []state.MemHold{{NeedMiB: 426}, {NeedMiB: 426}, {NeedMiB: 200, FootprintMiB: 50, GrowthMiB: 1500}, {GrowthMiB: 600}}
-	if got := reservations(live); !slices.Equal(got, want) {
+	if got := reservations(live, 0); !slices.Equal(got, want) {
 		t.Errorf("reservations %+v; want %+v", got, want)
 	}
 }
@@ -363,5 +363,90 @@ func TestHoldLeftS(t *testing.T) {
 		if got := holdLeftS(wire.Hold{TypicalS: 600, StartNS: c.startNS}, now); got != c.want {
 			t.Errorf("%s: %d, want %d", c.name, got, c.want)
 		}
+	}
+}
+
+// TestReserved: a hold that asked for 4000 and reserves 600 at a footprint of 300 reserves its 600
+// while its run measures it, and its 4000 asked once it does not: the room of 8000 less the 1024
+// reserve subtracts 300 or 3700. A hold without asked_mib keeps its need; VM growth is subtracted
+// whole either way. Each case names its mutation.
+func TestReserved(t *testing.T) {
+	now := int64(1e18)
+	fresh := wire.Hold{NeedMiB: 600, AskedMiB: 4000, FootprintMiB: 300, SampledNS: now - 1e9}
+	stale, exited, trimmed, unasked, grows, growsStale := fresh, fresh, fresh, fresh, fresh, fresh
+	stale.SampledNS = now - 7e9
+	exited.ChildExited = true
+	trimmed.SampledNS, trimmed.Trimmed = now-7e9, true
+	unasked.SampledNS, unasked.AskedMiB = now-7e9, 0
+	grows.DockerGrowthMiB = 512
+	growsStale.DockerGrowthMiB, growsStale.SampledNS = 512, now-7e9
+	for _, c := range []struct {
+		name string
+		body wire.Hold
+		room int64
+	}{
+		{"FreshFollowingHoldReservesNeed", fresh, 6676},
+		// Mutation: dropping the freshness test → 6676.
+		{"StaleFollowingHoldReservesAsked", stale, 3276},
+		// Mutation: dropping the child_exited clause → 6676.
+		{"ExitedHoldReservesAsked", exited, 3276},
+		// Mutation: applying the rule only to untrimmed holds → 6676.
+		{"StaleTrimmedHoldReservesAsked", trimmed, 3276},
+		// Mutation: taking asked_mib alone for a hold not measured → 6976.
+		{"ReservedHoldWithoutAskedUnchanged", unasked, 6676},
+		// Mutation: folding the growth into what the hold reserves → it counts twice, 5652 and 2252.
+		{"ReservedLeavesDockerGrowth", grows, 6164},
+		{"ReservedLeavesDockerGrowthStale", growsStale, 2764},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := state.Room(8000, 1024, reservations([]liveHold{{name: "h", body: c.body}}, now)); got != c.room {
+				t.Errorf("room %d; want %d", got, c.room)
+			}
+		})
+	}
+}
+
+// A hold expected to end frees what it reserves in the head's wait: a stale following hold 10 s
+// into its typical 60 frees its 4000 asked, so a head of 3500 waits 50 s. Mutation: crediting the
+// body's need_mib (600) leaves the wait unknown.
+func TestHeadWaitCreditsReserved(t *testing.T) {
+	now := int64(1e18)
+	h := wire.Hold{NeedMiB: 600, AskedMiB: 4000, FootprintMiB: 300, SampledNS: now - 7e9, StartNS: now - 10e9, TypicalS: 60}
+	if w, noPass := headWait(3500, false, []liveHold{{name: "h", body: h}}, 0, now, true, nil, watch.Config{}); w != 50 || noPass != "" {
+		t.Errorf("W %d (%q); want 50", w, noPass)
+	}
+}
+
+// A snapshot shows what each hold reserves, sums it in reserved_mib, and its room subtracts exactly
+// that less each footprint, clamped per hold, and each hold's VM growth: a stale following hold
+// reserves its 4000 asked at a footprint of 300; a fresh one its 500 under a footprint of 900, with
+// 512 of growth. 16000 - 1024 - 3700 - 0 - 512 = 10764. Mutation: applying the rule in the room
+// alone shows the stale hold at 600 and reserved_mib 1100.
+func TestSnapshotReservedMatchesRoom(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, newStateDir(t, ""), clk)
+	setLiveMem(t, 16000)
+	a, b := hold(t, e, need(4000)), hold(t, e, need(500))
+	for _, c := range []struct {
+		g  *Grant
+		fn func(*wire.Hold)
+	}{
+		{a, func(h *wire.Hold) { h.NeedMiB, h.AskedMiB, h.FootprintMiB, h.SampledNS = 600, 4000, 300, clk.real-7e9 }},
+		{b, func(h *wire.Hold) { h.FootprintMiB, h.DockerGrowthMiB, h.SampledNS = 900, 512, clk.real-1e9 }},
+	} {
+		if err := c.g.UpdateHold(c.fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := e.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Holds) != 2 {
+		t.Fatalf("%d holds; want 2", len(r.Holds))
+	}
+	if r.Mem.ReservedMiB != 4500 || r.Mem.RoomMiB != 10764 || r.Holds[0].NeedMiB != 4000 {
+		t.Errorf("reserved %d, room %d, the stale hold at %d; want 4500, 10764, 4000",
+			r.Mem.ReservedMiB, r.Mem.RoomMiB, r.Holds[0].NeedMiB)
 	}
 }
