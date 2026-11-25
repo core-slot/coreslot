@@ -309,15 +309,15 @@ func TestRunLogUsageKeys(t *testing.T) {
 }
 
 // The memory keys are written when known and left out when not, never as a measured zero; the
-// sustained level follows the peak and reads back. Mutations: drop omitempty from mem_peak_kib or
-// mem_sustained_kib.
+// sustained level and the window follow the peak and read back. Mutations: drop omitempty from
+// mem_peak_kib, mem_sustained_kib or mem_window_s.
 func TestRunRecordMemKeys(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)
-	kib, sustained := int64(368640), int64(307200)
+	kib, sustained, window := int64(368640), int64(307200), 280.0
 	r := RunRecord{TimeNS: 1791720000000000000, Label: "mem"}
 	measured := r
-	measured.MemPeakKiB, measured.MemSustainedKiB = &kib, &sustained
+	measured.MemPeakKiB, measured.MemSustainedKiB, measured.MemWindowS = &kib, &sustained, &window
 	for _, rec := range []RunRecord{r, measured} {
 		if err := s.AppendRun(rec); err != nil {
 			t.Fatal(err)
@@ -327,15 +327,16 @@ func TestRunRecordMemKeys(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("%d lines, want 2: %q", len(lines), lines)
 	}
-	if strings.Contains(lines[0], `"mem_peak_kib"`) || strings.Contains(lines[0], `"mem_sustained_kib"`) {
+	if strings.Contains(lines[0], `"mem_`) {
 		t.Errorf("a line without memory has a memory key: %s", lines[0])
 	}
-	if want := `"mem_peak_kib":368640,"mem_sustained_kib":307200`; !strings.Contains(lines[1], want) {
+	if want := `"mem_peak_kib":368640,"mem_sustained_kib":307200,"mem_window_s":280`; !strings.Contains(lines[1], want) {
 		t.Errorf("line = %s; want it to contain %s", lines[1], want)
 	}
 	runs, _, err := s.ReadRuns()
-	if err != nil || len(runs) != 2 || runs[1].MemSustainedKiB == nil || *runs[1].MemSustainedKiB != sustained {
-		t.Errorf("read back %+v, %v; want mem_sustained_kib 307200 on the second", runs, err)
+	if err != nil || len(runs) != 2 || runs[1].MemSustainedKiB == nil || *runs[1].MemSustainedKiB != sustained ||
+		runs[1].MemWindowS == nil || *runs[1].MemWindowS != window {
+		t.Errorf("read back %+v, %v; want mem_sustained_kib 307200 and mem_window_s 280 on the second", runs, err)
 	}
 }
 

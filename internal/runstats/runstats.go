@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -103,6 +104,25 @@ func TypicalS(window []store.RunRecord) int64 {
 	}
 	slices.Sort(ran)
 	return max(1, int64(math.Ceil(ran[min(len(ran)-1, len(ran)*9/10)])))
+}
+
+// WindowS is the label's reservation window in seconds (PROTOCOL.md section 20): with at least
+// state.TailMinWindows runs of the window carrying a counted mem_window_s, 1.5 times the largest,
+// rounded up, at least floorS and at most state.TailMaxWindowS; defaultS otherwise. A key counts
+// only when it is a number in (0, state.TailMaxWindowS]; any other is ignored as if absent, so a
+// forged or corrupt value never sizes the window.
+func WindowS(window []store.RunRecord, floorS, defaultS int64) int64 {
+	keyed, largest := 0, 0.0
+	for _, r := range window {
+		if w := r.MemWindowS; w != nil && *w > 0 && *w <= state.TailMaxWindowS { // NaN fails both
+			keyed, largest = keyed+1, max(largest, *w)
+		}
+	}
+	if keyed < state.TailMinWindows {
+		return defaultS
+	}
+	learned := int64(math.Ceil(largest * state.TailFactorNum / state.TailFactorDen))
+	return min(state.TailMaxWindowS, max(floorS, learned))
 }
 
 // MinCPURuns is how many runs of a label's window must report their CPU time before a red stop
