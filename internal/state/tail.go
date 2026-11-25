@@ -40,7 +40,9 @@ func (t *Tail) Add(footprintMiB int64) {
 
 // Need is what the hold reserves: the need asked until the window holds as many readings as it
 // spans, then min(asked, recent + Margin(asked)), recent the largest reading in the window, the
-// newest included.
+// newest included. Counting the newest reading is the rise with growth, a lowered hold's only
+// protection on its way up: its anchor is the run's own reading of its tree from the kernel, which
+// no label, run log or hold body moves (the run's follows says more).
 func (t *Tail) Need() int64 {
 	if t.n < len(t.readings) {
 		return t.asked

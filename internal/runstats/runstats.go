@@ -115,6 +115,11 @@ func TypicalS(window []store.RunRecord) int64 {
 // rounded up, at least floorS and at most state.TailMaxWindowS; defaultS otherwise. A key counts
 // only when it is a number in (0, state.TailMaxWindowS]; any other is ignored as if absent, so a
 // forged or corrupt value never sizes the window. learned is false when the default is returned.
+// The window is a convenience, not a control: its anchor is the label's counted run-log lines, which
+// any process of the user can append, and such a process can already pin needs or write holds, so
+// there is no adversary to stop. The floor bounds the harm of a forged or honestly short window; the
+// range check and the cap keep a forged or corrupt long value from overflowing into a one-reading
+// window, and a long window only keeps the need longer.
 func WindowS(window []store.RunRecord, floorS, defaultS int64) (s int64, learned bool) {
 	keyed, largest := 0, 0.0
 	for _, r := range window {

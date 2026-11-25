@@ -247,7 +247,11 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 // follows reports whether the attempt on g follows what its run uses (PROTOCOL.md section 12.5):
 // its need was not pinned, it had no Docker interest at its start, its grant is within the bound
 // (not oversized) and it is the run's first attempt, as a restart after a stop reuses the window
-// that may have missed the regrowth it was stopped for.
+// that may have missed the regrowth it was stopped for. A following hold's only protection against
+// its own run growing back is the rise with growth (state.Tail.Need): its anchor is the footprint the
+// run reads of its own tree from the kernel each second, which no label, run log or hold body moves,
+// so the reservation follows real use upward at the next tick. It cannot take back memory already
+// lent to a newer job; that collision is the watchdog's stop round.
 func (r *run) follows(g *engine.Grant) bool {
 	return !r.o.pinned && !r.dockerInterest() && g.GrantMiB() <= r.boundMiB && r.stops == 0
 }

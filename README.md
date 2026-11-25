@@ -116,15 +116,16 @@ than trust their last report, and waits if the room is not there now. A need lar
 reserve starts only when no other coreslot job runs. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
-**After the peak.** A command with a learned need does not keep its whole need reserved until it
-ends. Once it has run for its label's window, it reserves the most it used within that window plus
-a margin (a tenth of its need, at least 256 MiB), never more than its need, and its reservation rises
-again at the next report when it grows. The window is learned from the label's runs: each run
-records the longest stretch after which its memory still came back to near its later peak, and the
-window is 1.5 times the longest of those over the last 20 runs, at least 2 minutes; 10 minutes until
-3 runs have recorded one. `coreslot stats` prints it. A need pinned with `--mem` or in `needs.toml`, a
-command with Docker work and a restart keep their whole need. A command that grows back past what
-was released, on a machine that is short meanwhile, is the watchdog's.
+**After the peak.** A command whose need was not pinned, learned or the default, does not keep its
+whole need reserved until it ends. Once it has run for its label's window, it reserves the most it
+used within that window plus a margin (a tenth of its need, at least 256 MiB), never more than its
+need, and its reservation rises again at the next report when it grows. The window is learned from
+the label's runs: each run records the longest stretch after which its memory still came back to
+near its later peak, and the window is 1.5 times the longest of those over the last 20 runs, at
+least 2 minutes; 10 minutes until 3 runs have recorded one. `coreslot stats` prints it. A need
+pinned with `--mem` or in `needs.toml`, a command with Docker work, a need larger than the machine's
+memory less the reserve and a restart keep their whole need. A command that grows back past what was
+released, on a machine that is short meanwhile, is the watchdog's.
 
 **Container work.** A container's processes are not in the command's tree, so the run's footprint
 leaves them out (on macOS a forwarder reads them apart, below). Container work is a command named `docker`, `docker-compose` or `podman`, or a run whose tree

@@ -10,12 +10,12 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
-- A command with a learned need stops reserving its whole need after its peak: once it has run for its label's
-  window, its hold reserves the most it used within that window plus a margin, never more than its need, and rises
-  again with its use. The window is 1.5 times the longest gap a run of the label needed, from its last 20 runs, at
-  least 120 s and at most a day; 600 s until 3 runs have recorded one. Each run's line in the run log gains
-  `mem_window_s`, and `coreslot stats` prints each label's window. A pinned need, a run with a Docker interest, an
-  oversized need and a restart keep their whole need.
+- A command whose need was not pinned (learned, or the default) stops reserving its whole need after its peak: once
+  it has run for its label's window, its hold reserves the most it used within that window plus a margin, never more
+  than its need, and rises again with its use. The window is 1.5 times the longest gap a run of the label needed,
+  from its last 20 runs, at least 120 s and at most a day; 600 s until 3 runs have recorded one. Each run's line in
+  the run log gains `mem_window_s`, and `coreslot stats` prints each label's window. A pinned need, a run with a
+  Docker interest, an oversized need and a restart keep their whole need.
 
 ### Changed
 
@@ -58,6 +58,7 @@ v0.11.0 client treats a format-6 directory as foreign in the same way, so do not
   parent's grant instead of waiting for the window. `status` shows the marks, and `status --json` each hold's and
   ticket's `quiet` and `no_stop`; the protection reason covers the floor too. Telemetry gains the `waiting` reason
   `quiet` and the `pass_through` reason `quiet`.
+
 ### Changed
 
 - **Format 6.** The state directory gains `quiet/` and `nostop/`, the marks (`PROTOCOL.md` section 7.18), which

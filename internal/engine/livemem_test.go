@@ -385,6 +385,7 @@ func TestReserved(t *testing.T) {
 		body wire.Hold
 		room int64
 	}{
+		// Mutation: always taking the larger of need_mib and asked_mib → 3276.
 		{"FreshFollowingHoldReservesNeed", fresh, 6676},
 		// Mutation: dropping the freshness test → 6676.
 		{"StaleFollowingHoldReservesAsked", stale, 3276},

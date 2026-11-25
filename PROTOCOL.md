@@ -1390,8 +1390,8 @@ included, takes what it reserves by section 12.1's rule, which every client must
 > stopped attempt's peak, whichever is larger, under a new hold that is not trimmed. For container
 > work the reservation follows the client's own memory alone (section 23.5).
 >
-> The Go CLI also makes a run **follow** without a request when its need was learned (not pinned
-> with `--mem` or the needs file), it had no Docker interest at its start (section 17: a container
+> The Go CLI also makes a run **follow** without a request when its need was not pinned with
+> `--mem` or the needs file (a learned need or the cold start), it had no Docker interest at its start (section 17: a container
 > command, a label whose counted runs had container work, or a `docker_mem` need), its need is not
 > oversized (section 12.2) and it is the run's first attempt. Its window spans the label's window
 > `W` (section 20) of readings instead of trim's, with the same formula, written at every tick from
@@ -1640,7 +1640,7 @@ another format a client publishes no cancel or start request, trim request or un
 `degraded`, and does not remove its own hold after a run. A fail-open run still
 runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 7
 when nothing of either format is live, the other format's run log removed with the rest, except a
-format-5, format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
+format-6, format-5, format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
 
 > **Implementation note.** The Go CLI refuses cancellation, a start, a mark, a trim and `doctor --clear` under
 > another format, with the same notice.
