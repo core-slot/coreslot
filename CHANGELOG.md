@@ -35,6 +35,10 @@ All notable changes to this project are recorded here. The format follows
 
 ### Changed
 
+- **Format 7.** Every client must apply one rule for what a live hold reserves (below), since a run may now lower
+  its `need_mib` without a request, so a client of format 6 steps out of the budget with its existing notice. Run
+  `coreslot doctor --reset` once nothing is live: on a format-6 to format-3 directory it is an upgrade that keeps the
+  run log and the telemetry.
 - What a hold reserves has one definition: its `need_mib` while its run measures it, and at least its `asked_mib`
   once its command has exited or it has not been sampled for 6 s, so a lowered reservation nobody measures no longer
   stands. The room, the head's expected wait, `status`'s `reserved_mib` and each hold's `need_mib` use it

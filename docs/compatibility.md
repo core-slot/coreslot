@@ -56,7 +56,7 @@ listed here; after it, an incompatible change to either needs a new major versio
 | `v0.11.0` | 5 (format 3 with `vmwait/`, the Docker keys of tickets and holds, and `watch-mode`; `doctor --reset` upgrades a format-4 or format-3 directory and keeps its run log) |
 
 `coreslot version` prints the formats a binary implements, for example
-`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 6.
+`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 7.
 
 `telemetry/`, and the `log/watch.jsonl` an older client may have left or still write, need no new format number:
 they are optional files that no reader of the format needs, and no admission reads them

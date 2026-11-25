@@ -1,13 +1,16 @@
-# coreslot protocol, format 6
+# coreslot protocol, format 7
 
-This document is the normative definition of the coreslot on-disk protocol, format 6: the state
+This document is the normative definition of the coreslot on-disk protocol, format 7: the state
 directory, its files and their bodies, the admission critical section, the watchdog that keeps
 memory pressure from stalling the work the clients started, and the descriptor and environment
 contract between a run and the command it starts. Memory is the only resource. A client written
 from this document alone, in any language, shares one memory budget and one watchdog with every
 other conforming client on the machine.
 
-Format 6 is format 5 with a job's two marks, `quiet/` and `nostop/` (section 7.18), which every
+Format 7 is format 6 with one rule for what a live hold reserves (section 12.1): its `need_mib`
+while its run measures it, and at least its `asked_mib` once it does not, which every client applies
+to its room, since a run may now lower `need_mib` without a request (section 12.5). Format 6 was
+format 5 with a job's two marks, `quiet/` and `nostop/` (section 7.18), which every
 client of format 6 reads at admission (section 12.1) and in its own run's ticks (section 23.1): a
 client that ignored them would admit jobs beside a quiet job and stop a do-not-stop one. Format 5 was
 format 4 with this machine's override of the watchdog's mode, `watch-mode` (section 7.15), which every
@@ -15,14 +18,14 @@ client of format 5 reads for the mode it ticks and writes stop rounds in (sectio
 was format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of `vmwait/` (section
 7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4), by which
 every client takes the holds' `docker_growth_mib` off its room (section 12.1) and passes over a noted
-ticket (section 10.3). A reset upgrades a format-5, format-4 or format-3 directory in place, keeping its
+ticket (section 10.3). A reset upgrades a format-6, format-5, format-4 or format-3 directory in place, keeping its
 run log (section 4.4); a format-2 directory is another format.
 
-Format 6's names, bodies and layout are never redefined once released: a release that needs
+Format 7's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
 no admission reads, as the needs file is (section 5.4). Until `v1.0.0` a minor release may
-introduce such a number, and may change what format 6 means elsewhere, such as the configuration's
+introduce such a number, and may change what format 7 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
@@ -55,7 +58,7 @@ requirement on a client.
 
 ## 2. Contract inventory
 
-Every shared file, field, environment variable and transition of format 6, and where it is defined.
+Every shared file, field, environment variable and transition of format 7, and where it is defined.
 
 | Item | Kind | Defined in |
 |---|---|---|
@@ -177,7 +180,7 @@ Every conforming client MUST preserve these invariants:
   reading by which both its tests pass; one whose VM test fails has its note by the end of that
   attempt, or within 2 s of its last note change. While a quiet hold is live (section 7.18) no
   ordinary admission happens: the head is admitted by these rules once the window ends.
-- **I6 one budget:** every client of format 6 reads the same holds and the same
+- **I6 one budget:** every client of format 7 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
   of them, one whose `victim` is false nor one whose label has no normal share, and a run signals only the process group of its own
@@ -324,12 +327,12 @@ process still locks; only then does it remove the entries of `queue/`, `holds/`,
 `start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` (a start request, an override, a note and a mark name a waiting or running job, and none survives), `gen`, `watch.json`, `trim.json`,
 `watch-mode` (a reset returns the watchdog to the configuration's mode), `yield.json`, `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
-format 6. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+format 7. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 6, or format 5, 4 or 3 (an upgrade: format 6 only adds `quiet/` and `nostop/`, format 5 `watch-mode`, `start/`, `yield.json`, the hold's optional `forced` and the ticket's
+When `FORMAT` names format 7, or format 6, 5, 4 or 3 (an upgrade: format 7 only changes what a hold reserves, format 6 adds `quiet/` and `nostop/`, format 5 `watch-mode`, `start/`, `yield.json`, the hold's optional `forced` and the ticket's
 optional `typical_s`, and
 format 4 `vmwait/` and optional Docker keys of tickets and holds), or is missing
-(which the first client writes as 6, section 15.1), the reset is a repair and keeps `log/` and
+(which the first client writes as 7, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
 learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
 format or cannot be read, it removes the entries of `log/` and `telemetry/` as well, and the CLI
@@ -337,7 +340,7 @@ says so of the run log: every label learns its need
 again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
-the directory as format 6; a live hold or ticket of any format stops it. It does not reconcile
+the directory as format 7; a live hold or ticket of any format stops it. It does not reconcile
 first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
 the next reconciliation removes them once they are older than 30 s. Once it has
@@ -912,7 +915,7 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
   continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 6` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 7` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
@@ -1616,7 +1619,7 @@ also exits 3 while a state error makes runs fail open (section 19).
 the layout other than `admit.lock`). Every format keeps `admit.lock`, an exclusive `flock` held
 only briefly by whoever changes admission state.
 
-A client that finds no `FORMAT` writes `coreslot-protocol 6` inside the section. Writing a newer
+A client that finds no `FORMAT` writes `coreslot-protocol 7` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
 ### 15.2 A format this client does not implement
@@ -1635,7 +1638,7 @@ remove the file: that would be a write into a format it does not implement.
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
 another format a client publishes no cancel or start request, trim request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
-runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 6
+runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 7
 when nothing of either format is live, the other format's run log removed with the rest, except a
 format-5, format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
 
