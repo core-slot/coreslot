@@ -8,6 +8,18 @@ All notable changes to this project are recorded here. The format follows
 
 ## Unreleased
 
+## v0.12.0 (2026-11-25)
+
+This release writes format 6. Upgrade every client of a machine together.
+
+### Upgrading
+
+A client of this release does not use a format-5 directory (v0.11.0), nor a format-4 or format-3 one: its runs start
+unbudgeted with a notice (`--strict` refuses) until `coreslot doctor --reset`. Run the reset when no job is running
+or waiting; it refuses while a hold or a ticket is live, and names it. On a format-5, format-4 or format-3 directory
+the reset is an upgrade to format 6 that keeps the run log and the telemetry, so no label learns its need again. A
+v0.11.0 client treats a format-6 directory as foreign in the same way, so do not run the two on one machine.
+
 ### Added
 
 - A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,
