@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,8 +22,10 @@ import (
 	"github.com/core-slot/coreslot/internal/needs"
 	"github.com/core-slot/coreslot/internal/runstats"
 	"github.com/core-slot/coreslot/internal/spec"
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 	"github.com/core-slot/coreslot/internal/telemetry"
+	"github.com/core-slot/coreslot/internal/testhooks"
 	"github.com/core-slot/coreslot/internal/watch"
 )
 
@@ -38,9 +41,15 @@ const maxStops = 3
 // readLog reads the run log once for a run: the need it gives label (ok false when unknown), the
 // need its peaks alone give (0 when unknown), the label's normal share of system time (learned
 // false when none of those runs has a tick share), its typical run time (0 when unknown), its
-// typical CPU seconds (0 when too few of those runs report them) and whether one of those runs was
-// container work.
-func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB int64, share float64, learned bool, typicalS int64, typicalCPUS float64, marked bool) {
+// typical CPU seconds (0 when too few of those runs report them), whether one of those runs was
+// container work and the label's reservation window in seconds (runstats.WindowS; a test build may
+// shorten its floor and default through the readings hook's TailFloorS and TailDefaultS).
+func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB int64, share float64, learned bool, typicalS int64, typicalCPUS float64, marked bool, windowS int64) {
+	floorS, defaultS := int64(state.TailFloorS), int64(state.TailDefaultS)
+	if nums, set := testhooks.Readings(); set {
+		floorS, defaultS = cmp.Or(nums["TailFloorS"], floorS), cmp.Or(nums["TailDefaultS"], defaultS)
+	}
+	windowS = defaultS
 	if loc.err != nil {
 		return
 	}
@@ -59,6 +68,7 @@ func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB in
 	typicalS = runstats.TypicalS(window)
 	typicalCPUS = runstats.TypicalCPUS(window)
 	marked = containerMarked(window)
+	windowS = runstats.WindowS(window, floorS, defaultS)
 	return
 }
 
@@ -109,8 +119,9 @@ type run struct {
 	gate          *dockerGate
 	ungated       string
 	// trimWindowS is [watch] trim_window_s from the run's start: the window of a trimmed hold of
-	// any of its attempts.
-	trimWindowS int64
+	// any of its attempts. windowS is the label's reservation window from the run log, and
+	// boundMiB the machine's memory less its reserve, both read at the run's start.
+	trimWindowS, windowS, boundMiB int64
 	// peakNeedMiB is the need the label's peaks alone give, from the run log read at the start;
 	// restartFloorMiB is it when the run's start need was learned, else 0: what every restart of
 	// the run reserves at least.
@@ -142,14 +153,14 @@ func runCommand(args []string, io IO) int {
 		lookup = func(string) (needs.Entry, bool, bool) { return entry, found, bad } // its notice said once
 	}
 	machine, _ := readMachine()
-	needMiB, known, peakNeedMiB, share, learned, typicalS, cpuS, marked := readLog(loc, o.label)
+	needMiB, known, peakNeedMiB, share, learned, typicalS, cpuS, marked, windowS := readLog(loc, o.label)
 	o.typicalS = typicalS
 	o.resolveNeed(lookup, func() (int64, bool) { return needMiB, known }, machine.MemMiB)
 	signal.Notify(runSignals, notIgnored(handledSignals...)...)
 	defer signal.Stop(runSignals)
 	installStops()
 	r := &run{o: o, io: io, loc: loc, start: time.Now(), share: share, learned: learned, cpuS: cpuS, memMiB: machine.MemMiB,
-		entry: entry, entryBad: bad, marked: marked, peakNeedMiB: peakNeedMiB}
+		entry: entry, entryBad: bad, marked: marked, peakNeedMiB: peakNeedMiB, windowS: windowS}
 	return r.decide()
 }
 
@@ -177,7 +188,7 @@ func (r *run) ordinary(nested bool) int {
 	req := r.o.request()
 	start := e.ReadRunStart(req.NeedMiB)
 	r.sockets, r.dockerOff = docker.Features(runtime.GOOS, start.DockerOn, environ(), r.loc.home, nested)
-	r.trimWindowS = start.TrimWindowS
+	r.trimWindowS, r.boundMiB = start.TrimWindowS, start.BoundMiB
 	if start.Over {
 		r.notice("needs %s, more than the %s the machine has above its reserve; starts only when no other coreslot job runs",
 			spec.FormatMiB(req.NeedMiB), spec.FormatMiB(start.BoundMiB))
