@@ -63,7 +63,7 @@ var contractInventory = []struct{ item, title, mention string }{
 	{"admission", "Admission", "idle rule"},
 	{"level gate", "The level gate", "calm_s"},
 	{"gated admission", "A gated request", "VM test"},
-	{"trim", "Trim", "trim.json"},
+	{"trim", "Trim and the following reservation", "trim.json"},
 	{"tick", "The tick", "footprint_mib"},
 	{"stop round", "Stop rounds", "SIGKILL"},
 	{"restart", "Restart of a stopped run", "first arrival"},

@@ -26,8 +26,19 @@ All notable changes to this project are recorded here. The format follows
   parent's grant instead of waiting for the window. `status` shows the marks, and `status --json` each hold's and
   ticket's `quiet` and `no_stop`; the protection reason covers the floor too. Telemetry gains the `waiting` reason
   `quiet` and the `pass_through` reason `quiet`.
+- A command with a learned need stops reserving its whole need after its peak: once it has run for its label's
+  window, its hold reserves the most it used within that window plus a margin, never more than its need, and rises
+  again with its use. The window is 1.5 times the longest gap a run of the label needed, from its last 20 runs, at
+  least 120 s and at most a day; 600 s until 3 runs have recorded one. Each run's line in the run log gains
+  `mem_window_s`, and `coreslot stats` prints each label's window. A pinned need, a run with a Docker interest, an
+  oversized need and a restart keep their whole need.
 
 ### Changed
+
+- What a hold reserves has one definition: its `need_mib` while its run measures it, and at least its `asked_mib`
+  once its command has exited or it has not been sampled for 6 s, so a lowered reservation nobody measures no longer
+  stands. The room, the head's expected wait, `status`'s `reserved_mib` and each hold's `need_mib` use it
+  (`PROTOCOL.md` section 12.1).
 
 - **Format 6.** The state directory gains `quiet/` and `nostop/`, the marks (`PROTOCOL.md` section 7.18), which
   every client must read at admission and in its own run's ticks, so a client of format 5 steps out of the budget

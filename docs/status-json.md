@@ -115,14 +115,14 @@ memory the kernel can hand out now without paging,
 admission keeps free), less what each live hold reserves and its run has not used yet
 (`need_mib − footprint_mib`, never below 0), less the growth of Docker Desktop's VM that each
 live hold of a run gated on Docker reserves on the host (its body's `docker_growth_mib`).
-`reserved_mib` is a different number, the sum of the live holds' needs. `room_mib` is unclamped: it is negative when the reserve and the holds take more
+`reserved_mib` is a different number, the sum of what the live holds reserve. `room_mib` is unclamped: it is negative when the reserve and the holds take more
 than the headroom, with no hold live too when the headroom is below the reserve. `free_mib` is the
 same room clamped at 0. A reader of
 telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
 
 | key | type | meaning |
 |---|---|---|
-| `reserved_mib` | int | the sum of the live holds' needs |
+| `reserved_mib` | int | the sum of what the live holds reserve, each hold's `need_mib` below |
 | `free_mib` | int | the room, never below 0 |
 | `machine_mib` | int | the machine's memory |
 | `reserve_mib` | int | what admission keeps free |
@@ -156,8 +156,8 @@ The watchdog, from the newest shared sample.
 | `start_ns` | int | when the hold was admitted |
 | `held_for_s` | number | how long it has been held |
 | `arrival_ns` | int | when its run first arrived in the queue |
-| `need_mib` | int | what the hold reserves; 0 for a run outside the budget |
-| `asked_mib` | int | the need the hold was admitted with; equal to `need_mib` unless the hold was trimmed |
+| `need_mib` | int | what the hold reserves: the `need_mib` its run last wrote while the run measures it, and at least `asked_mib` once it does not (its command exited, or no sample for 6 s); 0 for a run outside the budget |
+| `asked_mib` | int | the need the hold was admitted with; equal to `need_mib` unless the hold follows what its run uses or was trimmed |
 | `trimmed` | bool | its run acted on a `coreslot trim` request: `need_mib` follows what the command uses, up to `asked_mib` |
 | `forced` | bool | its run started at once on a `coreslot start` request, whatever the room: `need_mib` is still its full need, so `mem.room_mib` may be below 0 |
 | `quiet` | bool | marked with `coreslot quiet`: while it runs no other job is admitted, and every waiting ticket waits for it to end |
