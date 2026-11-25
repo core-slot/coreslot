@@ -83,9 +83,9 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
 	// 1c. While a quiet job runs no other job is admitted, whatever path this attempt would take.
-	if quiet, err := quietHeld(t.e.st, holds); err != nil {
+	if quiet, err := quietHolds(t.e.st, holds); err != nil {
 		return nil, false, err
-	} else if quiet {
+	} else if len(quiet) > 0 {
 		t.out.Reason = ReasonQuiet
 		return nil, false, t.unnote(sec)
 	}
@@ -164,24 +164,21 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	return g, false, err
 }
 
-// quietHeld reports whether a quiet mark names one of the live holds (PROTOCOL.md section 12.1,
-// step 1c); a mark naming a ticket, or a hold that is not live, holds nothing back. Its adversary is
+// quietHolds is the live holds a quiet mark names (PROTOCOL.md section 12.1, step 1c); a mark naming
+// a ticket, or a hold that is not live, holds nothing back. Its adversary is
 // none: the honest jobs that would start beside the one the user wants to run alone. Its anchor is
 // quiet/<hold id>, written inside the section by `coreslot quiet` or moved there by the job's own
 // run at admission, and the hold's lock, which the kernel keeps for the job's processes; any process
 // of the user can remove the mark, so it is a convenience that fails open (a crash drops the lock, a
 // missing mark blocks nothing).
-func quietHeld(st *store.Store, holds []liveHold) (bool, error) {
+func quietHolds(st *store.Store, holds []liveHold) (quiet []liveHold, err error) {
 	marks, err := st.Marks(store.QuietDir)
-	if err != nil || len(marks) == 0 {
-		return false, err
-	}
 	for _, h := range holds {
 		if id, ok := wire.ParseName(h.name); ok && marks[id.String()] {
-			return true, nil
+			quiet = append(quiet, h)
 		}
 	}
-	return false, nil
+	return quiet, err
 }
 
 // treeFootprints measures the live holds' trees for confirm; tests replace it.
@@ -670,7 +667,9 @@ func (g *Grant) removeHold() {
 	}
 	// The attempt is over, however it ended: its marks go even when a descendant keeps the hold.
 	if hid, ok := wire.ParseName(g.holdName); ok {
-		_ = sec.UnmarkAll(hid)
+		for _, dir := range []string{store.QuietDir, store.NoStopDir} {
+			_, _ = sec.Unmark(dir, hid)
+		}
 	}
 	if removed, err := sec.ProbeAndRemoveHold(g.holdName); err == nil && removed {
 		_ = sec.BumpGen() // removing one's own hold bumps gen once (PROTOCOL.md section 7.8)

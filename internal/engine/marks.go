@@ -19,7 +19,7 @@ func (e *Engine) MarkContext(ctx context.Context, dir string, id wire.ID) (alrea
 		return false, err
 	}
 	defer sec.Leave()
-	if live, err := e.liveID(id); err != nil || !live {
+	if live, _, err := e.liveID(id); err != nil || !live {
 		if err == nil {
 			err = ErrNoTicket
 		}
@@ -40,13 +40,9 @@ func (e *Engine) UnmarkContext(ctx context.Context, dir string, id wire.ID) (rem
 	}
 	defer sec.Leave()
 	ids := []wire.ID{id}
-	if live, err := e.liveID(id); err != nil {
+	if live, holds, err := e.liveID(id); err != nil {
 		return 0, err
 	} else if !live {
-		holds, _, _, err := holdListing(e.st, 0) // the need is not read
-		if err != nil {
-			return 0, err
-		}
 		for _, h := range holds {
 			if h.body.PID == id.PID && h.body.ArrivalNS == int64(id.OrderKey) {
 				hid, _ := wire.ParseName(h.name)
@@ -85,30 +81,31 @@ func (e *Engine) enterPrepared(ctx context.Context) (*store.Section, int64, erro
 	return sec, now, nil
 }
 
-// liveID reports whether id names a live ticket or a live hold.
-func (e *Engine) liveID(id wire.ID) (bool, error) {
-	for _, dir := range []string{store.QueueDir, store.HoldsDir} {
-		entries, _, err := e.st.List(dir)
-		if err != nil {
-			return false, err
+// liveID reports whether id names a live ticket or a live hold, and returns the live holds.
+func (e *Engine) liveID(id wire.ID) (live bool, holds []liveHold, err error) {
+	if holds, _, _, err = holdListing(e.st, 0); err != nil { // the need is not read
+		return false, nil, err
+	}
+	for _, h := range holds {
+		if hid, _ := wire.ParseName(h.name); hid == id {
+			return true, holds, nil
 		}
-		for _, en := range entries {
-			if en.ID != id {
-				continue
-			}
-			dead, err := probe(e.st, dir, en.Name)
-			if gone(err) || stray(err) {
-				continue
-			}
-			if err != nil {
-				return false, err
-			}
-			if !dead {
-				return true, nil
+	}
+	entries, _, err := e.st.List(store.QueueDir)
+	if err != nil {
+		return false, nil, err
+	}
+	for _, en := range entries {
+		if en.ID == id {
+			dead, err := probe(e.st, store.QueueDir, en.Name)
+			if err == nil && !dead {
+				return true, holds, nil
+			} else if err != nil && !gone(err) && !stray(err) {
+				return false, nil, err
 			}
 		}
 	}
-	return false, nil
+	return false, holds, nil
 }
 
 // NoStop reports whether the grant's hold is marked do-not-stop (PROTOCOL.md section 7.18), read

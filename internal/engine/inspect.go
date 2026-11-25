@@ -206,22 +206,19 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Yield = &YieldInfo{Head: y.Head, UntilNS: y.UntilNS, LastPassNS: y.LastPassNS}
 	}
 
-	marks := map[string]map[string]bool{}
-	for _, dir := range []string{store.QuietDir, store.NoStopDir} {
-		entries, ignored, err := e.st.List(dir)
-		if err != nil {
-			return Report{}, err
-		}
-		r.Ignored[dir], marks[dir] = ignored, map[string]bool{}
-		for _, en := range entries {
-			marks[dir][en.Name] = true
-		}
+	quiet, err := e.st.Marks(store.QuietDir)
+	if err != nil {
+		return Report{}, err
+	}
+	noStop, err := e.st.Marks(store.NoStopDir)
+	if err != nil {
+		return Report{}, err
 	}
 	for i, h := range r.Holds {
-		r.Holds[i].Quiet, r.Holds[i].NoStop = marks[store.QuietDir][h.ID], marks[store.NoStopDir][h.ID]
+		r.Holds[i].Quiet, r.Holds[i].NoStop = quiet[h.ID], noStop[h.ID]
 	}
 	for i, t := range r.Tickets {
-		r.Tickets[i].Quiet, r.Tickets[i].NoStop = marks[store.QuietDir][t.ID], marks[store.NoStopDir][t.ID]
+		r.Tickets[i].Quiet, r.Tickets[i].NoStop = quiet[t.ID], noStop[t.ID]
 	}
 
 	r.Section, err = e.sectionInfo()

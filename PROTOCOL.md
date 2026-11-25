@@ -221,8 +221,8 @@ Every conforming client MUST preserve these invariants:
   type, owner or mode fails the checks above is not a state error. It is a **stray**: ignored and
   counted exactly like an entry with a malformed body (section 7.2): never trusted, never opened
   or probed, never removed (reconciliation skips it and goes on), and `status` and `doctor` report
-  it in the ignored count. An entry whose name does not match its directory's grammar is ignored
-  whatever its type (section 4.4).
+  it in the ignored count, a stray mark excepted. An entry whose name does not match its
+  directory's grammar is ignored whatever its type (section 4.4).
   These directories are `0700` and the user's own, so only the user (or the superuser) can place an
   entry in them; a hostile same-user process is outside the threat model.
 - Every descriptor a client opens on a file under `$S` MUST be close-on-exec (`O_CLOEXEC`), except

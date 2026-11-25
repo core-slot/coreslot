@@ -221,39 +221,22 @@ func (sec *Section) ReconcileIfDue(nowNS int64) (removed int, err error) {
 		}
 	}
 
-	// 2. Cancel requests, order overrides and notes whose ticket is gone. tickets holds only the
-	// entries of step 1 that are live and not stray: a stray never protects any (PROTOCOL.md section
-	// 10.4).
-	for _, dir := range []string{CancelDir, StartDir, OrderDir, VMWaitDir} {
+	// 2. Cancel requests, order overrides and notes whose ticket is gone, and marks whose ticket and
+	// hold are both gone. tickets and holds hold only the entries of step 1 that are live and not
+	// stray: a stray never protects any (PROTOCOL.md section 10.4).
+	for _, dir := range []string{CancelDir, StartDir, OrderDir, VMWaitDir, QuietDir, NoStopDir} {
 		named, _, err := sec.s.List(dir)
 		if err != nil {
 			return removed, err
 		}
 		for _, e := range named {
-			if tickets[e.Name] {
+			if tickets[e.Name] || holds[e.Name] && (dir == QuietDir || dir == NoStopDir) {
 				continue
 			}
 			if err := os.Remove(sec.s.path(dir, e.Name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return removed, err
 			}
 			removed++
-		}
-	}
-	// Marks whose ticket and hold are both gone.
-	for _, dir := range []string{QuietDir, NoStopDir} {
-		named, _, err := sec.s.List(dir)
-		if err != nil {
-			return removed, err
-		}
-		for _, e := range named {
-			if tickets[e.Name] || holds[e.Name] {
-				continue
-			}
-			if r, err := sec.removeEntry(dir, e.Name); err != nil {
-				return removed, err
-			} else if r {
-				removed++
-			}
 		}
 	}
 	// The yield record, once its head's ticket is gone; one that is no record names none.

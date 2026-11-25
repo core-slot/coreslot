@@ -52,43 +52,31 @@ func markCommand(verb, usage, dir string, fs *flag.FlagSet, off *bool, args []st
 		fmt.Fprintf(io.Stderr, "coreslot: %q is not a ticket or hold id (the id column of `coreslot status`)\n", pos[0])
 		return exitUsage
 	}
-	e, err := openEngine(locate(), true)
-	if err != nil {
-		return commandFailed(verb, err, io)
-	}
-	if !e.Store().Exists() { // nothing has run; do not create the directory for it
-		fmt.Fprintf(io.Stderr, "coreslot: %s: no state directory yet (nothing has run), so no job is waiting or running\n", verb)
-		return exitRefusal
-	}
-	ctx, stop := context.WithTimeout(context.Background(), cancelWait)
-	defer stop()
 	var already bool
-	var removed int
+	c := ticketCommand{verb: verb, noTicket: "no live ticket or hold %s (it ended, or was cancelled or removed)",
+		nothing: "nothing was changed", publish: func(e *engine.Engine, ctx context.Context, id wire.ID) (err error) {
+			already, err = e.MarkContext(ctx, dir, id)
+			return err
+		}}
 	if *off {
-		removed, err = e.UnmarkContext(ctx, dir, id)
-	} else {
-		already, err = e.MarkContext(ctx, dir, id)
-	}
-	var busy *engine.SectionBusyError
-	switch {
-	case err == nil && *off && removed == 0:
-		fmt.Fprintf(io.Stderr, "coreslot: %s --off: %s carries no such mark, and no live hold of its run does\n", verb, id)
-	case err == nil && *off:
-		fmt.Fprintf(io.Stdout, "coreslot: "+unmarked+"\n", id)
-		return 0
-	case err == nil:
-		if already {
-			fmt.Fprintf(io.Stdout, "coreslot: %s was already marked\n", id)
-		} else {
-			fmt.Fprintf(io.Stdout, "coreslot: "+marked+"\n", id)
+		c.verb, c.noTicket = verb+" --off", "%s carries no such mark, and no live hold of its run does"
+		c.publish = func(e *engine.Engine, ctx context.Context, id wire.ID) error {
+			if removed, err := e.UnmarkContext(ctx, dir, id); err != nil || removed > 0 {
+				return err
+			}
+			return engine.ErrNoTicket
 		}
-		return 0
-	case errors.Is(err, engine.ErrNoTicket):
-		fmt.Fprintf(io.Stderr, "coreslot: %s: no live ticket or hold %s (it ended, or was cancelled or removed)\n", verb, id)
-	case errors.As(err, &busy), errors.Is(err, context.DeadlineExceeded):
-		fmt.Fprintf(io.Stderr, "coreslot: %s refused: %s; nothing was changed\n", verb, sectionBusyText(e, cancelWait))
-	default:
-		return commandFailed(verb, err, io)
 	}
-	return exitRefusal
+	if _, _, code := c.request(id, false, "", io); code >= 0 {
+		return code
+	}
+	switch {
+	case *off:
+		fmt.Fprintf(io.Stdout, "coreslot: "+unmarked+"\n", id)
+	case already:
+		fmt.Fprintf(io.Stdout, "coreslot: %s was already marked\n", id)
+	default:
+		fmt.Fprintf(io.Stdout, "coreslot: "+marked+"\n", id)
+	}
+	return 0
 }

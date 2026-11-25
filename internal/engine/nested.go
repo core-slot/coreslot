@@ -58,16 +58,13 @@ func QuietAncestor(dir string, isAncestor func(pid int) bool) (label string, ok 
 	if err != nil {
 		return "", false
 	}
-	marks, err := st.Marks(store.QuietDir)
-	if err != nil || len(marks) == 0 {
-		return "", false
-	}
 	holds, _, _, err := holdListing(st, 0)
 	if err != nil {
 		return "", false
 	}
-	for _, h := range holds {
-		if id, _ := wire.ParseName(h.name); marks[id.String()] && isAncestor(h.body.PID) {
+	quiet, _ := quietHolds(st, holds) // none when quiet/ cannot be read
+	for _, h := range quiet {
+		if isAncestor(h.body.PID) {
 			return h.body.Label, true
 		}
 	}
