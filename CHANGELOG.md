@@ -10,6 +10,11 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- A head that does not fit the room no longer starts the instant no coreslot job runs while memory outside coreslot
+  is growing: it waits, with the `waiting` reason `idle_growing`, while the free memory it read fell by more than
+  1 GiB within the last minute or the kernel's memory pressure is not normal, for at most 5 minutes, then starts as
+  before. On a calm machine nothing changes. Its `admitted` line carries `idle_waited_s`.
+
 - A command whose need was not pinned (learned, or the default) stops reserving its whole need after its peak: once
   it has run for its label's window, its hold reserves the most it used within that window plus a margin, never more
   than its need, and rises again with its use. The window is 1.5 times the longest gap a run of the label needed,

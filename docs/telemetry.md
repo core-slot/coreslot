@@ -153,7 +153,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 
 | key | meaning |
 |---|---|
-| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, `yielding` (a long head that fits lets short jobs go first), `quiet` (a job marked quiet runs), and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
+| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, `yielding` (a long head that fits lets short jobs go first), `quiet` (a job marked quiet runs), `idle_growing` (no coreslot job runs, the head does not fit the room and memory outside coreslot grows: it waits at most 5 min), and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
 | `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time from its start to the end of its first step: reading the configuration, publishing the ticket, which waits for the admission section while that is held, and that step |
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
@@ -182,6 +182,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 | `w_s` | the expected wait, when computed |
 | `pass` | how a run started ahead of the head: `duration` (it ends within the head's expected wait), `turn` (out of turn), `short` (a short job past a yielding head) or `forced` (on a `coreslot start` request, whatever the room); absent for the head |
 | `yield_ended` | as on `waiting`, for a head that yielded before it started |
+| `idle_waited_s` | for a head that waited with reason `idle_growing`: how long, in seconds, from its first attempt with no hold live; absent otherwise |
 
 ### A wait that ends without a start
 

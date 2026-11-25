@@ -1235,7 +1235,9 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
 4. applies the **idle rule**: when no hold is live, the head starts whatever the numbers say; idle
    means "no coreslot job running", never machine load. When a hold is live and the headroom is
    known, the head leaves the section and waits unless its request fits. When the headroom is
-   unknown nothing gates the head;
+   unknown nothing gates the head. A head whose request does not fit MAY delay its idle start
+   while memory outside coreslot grows, for a bound it keeps, after which it starts as above: the
+   idle start stays reachable for a request the room never fits;
 5. repeats the election (section 10.3) over a fresh listing of `queue/` and `vmwait/`, the
    **re-election**: every well-formed ticket ahead of it in order is probed, and if any is neither
    dead nor STALLED for this observer (its mtime from the listing counts as an observation) nor
@@ -1274,6 +1276,12 @@ of section 10.3, `status`) keeps that room. A hold whose `pid` is not the parent
 processes is measured at 0 and so charged its whole need; a client MUST write as `pid` the process
 whose descendants run the command. No hostile party is in view: the confirmation reads only the
 kernel, inside the section, and no hold body moves it beyond its own `need_mib`.
+
+> **Implementation note.** The Go CLI's head delays its idle start over the room while the
+> headroom it read itself at its attempts fell by more than 1 GiB within the last 60 s, or the
+> kernel's memory pressure, when it can be read, is not normal; at most 300 s from its first such
+> attempt, counted again after a hold was live. It keeps its readings in its own process; no file
+> carries them.
 
 A **forced start** (section 13.4) takes step 1 and then step 7 alone: no step 1c, no room, no idle rule, no
 re-election, no level gate, no confirmation, and no VM test. Its hold says its full need, its ticket's `arrival_ns`
