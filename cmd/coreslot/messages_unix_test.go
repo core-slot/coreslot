@@ -92,7 +92,8 @@ func TestStopMessageParts(t *testing.T) {
 }
 
 // status shows the level and E, whether the watchdog protects and why not, and each job's
-// footprint, stops and whether it is the next victim.
+// footprint, stops and whether it is the next victim. With no victim a floor round stops nothing
+// either, and says why as a red one does (mutation: giving the reason at red only).
 func TestStatusWatch(t *testing.T) {
 	const now = int64(1e18)
 	holds := []engine.HolderInfo{
@@ -111,9 +112,11 @@ func TestStatusWatch(t *testing.T) {
 		// no victim at red, whether the learning job is the newest or the oldest, or none is
 		// learning: red lists nobody, so it does not say "protecting"
 		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true, Learning: 1}},
-			"watch: red, E 41.0 points; not protecting: a red round can stop no running command: each is the oldest, still learning or never stopped"},
+			"watch: red, E 41.0 points; not protecting: a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"},
 		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true}},
-			"watch: red, E 41.0 points; not protecting: a red round can stop no running command: each is the oldest, still learning or never stopped"},
+			"watch: red, E 41.0 points; not protecting: a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"},
+		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Floor, Excess: 41, Fresh: true}},
+			"watch: floor, E 41.0 points; not protecting: a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"},
 		{rep(engine.WatchInfo{Level: watch.Green, Fresh: true, Observe: true}, holds),
 			"watch: green, E 0.0 points; not protecting: observe mode logs what it would stop and stops nothing"},
 		{rep(engine.WatchInfo{Level: watch.Unknown, Fresh: true}, holds),

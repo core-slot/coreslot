@@ -82,6 +82,14 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		room = state.GrowthRoom(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
+	// 1c. While a quiet job runs no other job is admitted, whatever path this attempt would take.
+	// A yielding head has not fit meanwhile: its no-taker count starts again after the window.
+	if quiet, err := quietHolds(t.e.st, holds); err != nil {
+		return nil, false, err
+	} else if len(quiet) > 0 {
+		t.out.Reason, t.yield.fitSince = ReasonQuiet, -1
+		return nil, false, t.unnote(sec)
+	}
 	if t.yield.active {
 		if err := t.yieldEnds(sec, holds); err != nil {
 			return nil, false, err
@@ -155,6 +163,23 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	}
 	g, err = t.publishAdmission(sec, dock, false)
 	return g, false, err
+}
+
+// quietHolds is the live holds a quiet mark names (PROTOCOL.md section 12.1, step 1c); a mark naming
+// a ticket, or a hold that is not live, holds nothing back. Its adversary is
+// none: the honest jobs that would start beside the one the user wants to run alone. Its anchor is
+// quiet/<hold id>, written inside the section by `coreslot quiet` or moved there by the job's own
+// run at admission, and the hold's lock, which the kernel keeps for the job's processes; any process
+// of the user can remove the mark, so it is a convenience that fails open (a crash drops the lock, a
+// missing mark blocks nothing).
+func quietHolds(st *store.Store, holds []liveHold) (quiet []liveHold, err error) {
+	marks, err := st.Marks(store.QuietDir)
+	for _, h := range holds {
+		if id, ok := wire.ParseName(h.name); ok && marks[id.String()] {
+			quiet = append(quiet, h)
+		}
+	}
+	return quiet, err
 }
 
 // treeFootprints measures the live holds' trees for confirm; tests replace it.
@@ -247,8 +272,8 @@ func (t *Ticket) startNow(ctx context.Context, single bool) (*Grant, error) {
 	return t.publishAdmission(sec, dock, true)
 }
 
-// publishAdmission is step 7: publish the hold, close and unlink the ticket (with its note, order
-// override and start request), bump gen. A Withdraw that came first wins; once the hold is
+// publishAdmission is step 7: publish the hold, move the ticket's marks to it, close and unlink the
+// ticket (with its note, order override and start request), bump gen. A Withdraw that came first wins; once the hold is
 // published the ticket is admitted and Withdraw has no effect.
 func (t *Ticket) publishAdmission(sec *store.Section, dock *DockerReading, forced bool) (*Grant, error) {
 	t.mu.Lock()
@@ -261,6 +286,9 @@ func (t *Ticket) publishAdmission(sec *store.Section, dock *DockerReading, force
 	g := &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
 	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock, forced); err != nil {
 		return nil, err
+	}
+	if hid, ok := wire.ParseName(g.holdName); ok {
+		_ = sec.MoveMarks(t.id, hid) // a mark lost to a state error fails open
 	}
 	t.f.Close()
 	_, _ = sec.RemoveOwnTicket(t.name) // already gone counts as success (PROTOCOL.md 10.3)
@@ -637,6 +665,12 @@ func (g *Grant) removeHold() {
 	defer sec.Leave()
 	if _, understood, err := sec.Prepare(g.e.clock.Realtime()); err != nil || !understood {
 		return
+	}
+	// The attempt is over, however it ended: its marks go even when a descendant keeps the hold.
+	if hid, ok := wire.ParseName(g.holdName); ok {
+		for _, dir := range []string{store.QuietDir, store.NoStopDir} {
+			_, _ = sec.Unmark(dir, hid)
+		}
 	}
 	if removed, err := sec.ProbeAndRemoveHold(g.holdName); err == nil && removed {
 		_ = sec.BumpGen() // removing one's own hold bumps gen once (PROTOCOL.md section 7.8)

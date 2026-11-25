@@ -2,7 +2,7 @@
 // the flock(2) protocol of PROTOCOL.md.
 //
 //	coreslot run [--mem SIZE] [flags] -- COMMAND...
-//	coreslot status | cancel | move | trim | watch | doctor | stats | report | version
+//	coreslot status | cancel | start | move | quiet | no-stop | trim | watch | doctor | stats | report | version
 //
 // All printing, signal handling and exit statuses live here; the engine does none of them.
 package main
@@ -34,6 +34,8 @@ commands:
   cancel   cancel a waiting request
   start    start a waiting request now, out of turn
   move     change a waiting request's place in the queue
+  quiet    let no other job start while this one runs
+  no-stop  never let the watchdog stop this job
   trim     lower a running job's reservation to what it uses
   watch    switch the watchdog between observe and enforce on this machine
   doctor   check the state directory and the configuration
@@ -66,6 +68,10 @@ func dispatch(args []string, io IO) int {
 		return startCommand(args[1:], io)
 	case "move":
 		return moveCommand(args[1:], io)
+	case "quiet":
+		return quietCommand(args[1:], io)
+	case "no-stop":
+		return noStopCommand(args[1:], io)
 	case "trim":
 		return trimCommand(args[1:], io)
 	case "watch":

@@ -50,6 +50,28 @@ Changes a waiting ticket's place in the queue without ending its run: --first an
 ahead of or behind every ticket waiting now, --before and --after next to another one. Tickets
 that arrive later queue behind it as usual.`
 
+const quietUsage = `usage: coreslot quiet <id> [--off]
+
+Marks a waiting or running job, by the id coreslot status shows: while it runs,
+no other job starts; jobs already running go on. A waiting job keeps its place
+and acts once it starts. The window ends when the job ends, however it ends, or
+with --off.`
+
+func quietFlags() (fs *flag.FlagSet, off *bool) {
+	fs = newFlagSet("coreslot quiet")
+	return fs, fs.Bool("off", false, "remove the mark")
+}
+
+const noStopUsage = `usage: coreslot no-stop <id> [--off]
+
+Marks a waiting or running job, by the id coreslot status shows, so that the
+watchdog never stops it; a round stops another job instead, or none.`
+
+func noStopFlags() (fs *flag.FlagSet, off *bool) {
+	fs = newFlagSet("coreslot no-stop")
+	return fs, fs.Bool("off", false, "remove the mark")
+}
+
 const watchUsage = `usage: coreslot watch observe | enforce [--for DURATION]
        coreslot watch config`
 
@@ -120,7 +142,7 @@ func moveFlags() (fs *flag.FlagSet, label *string, first, last *bool, before, af
 func doctorFlags() (fs *flag.FlagSet, doClear, doReset *bool) {
 	fs = newFlagSet("coreslot doctor")
 	return fs, fs.Bool("clear", false, "remove the degraded-mode record"),
-		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 5, 4 or 3 is kept")
+		fs.Bool("reset", false, "empty the state directory, if nothing is live; a run log of format 6, 5, 4 or 3 is kept")
 }
 
 // parseInterleaved parses args with fs, its flags before or after the positional arguments, and

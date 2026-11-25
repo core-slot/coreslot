@@ -35,7 +35,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 5
+		r.FormatUnderstood = true // the first entry writes format 6
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}
@@ -204,6 +204,21 @@ func (e *Engine) Snapshot() (Report, error) {
 		return Report{}, err
 	} else if ok && y.Head == r.Head && store.NowNS() < y.UntilNS {
 		r.Yield = &YieldInfo{Head: y.Head, UntilNS: y.UntilNS, LastPassNS: y.LastPassNS}
+	}
+
+	quiet, err := e.st.Marks(store.QuietDir)
+	if err != nil {
+		return Report{}, err
+	}
+	noStop, err := e.st.Marks(store.NoStopDir)
+	if err != nil {
+		return Report{}, err
+	}
+	for i, h := range r.Holds {
+		r.Holds[i].Quiet, r.Holds[i].NoStop = quiet[h.ID], noStop[h.ID]
+	}
+	for i, t := range r.Tickets {
+		r.Tickets[i].Quiet, r.Tickets[i].NoStop = quiet[t.ID], noStop[t.ID]
 	}
 
 	r.Section, err = e.sectionInfo()

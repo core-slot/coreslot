@@ -443,8 +443,8 @@ func TestSectionHeldProbe(t *testing.T) {
 	}
 }
 
-// telemetry/ is handled as log/ is: a repair keeps its files, and so does the upgrade from format
-// 4 or 3, which format 5 only extends by watch-mode (and format 4 by vmwait/ and optional keys);
+// telemetry/ is handled as log/ is: a repair keeps its files, and so does the upgrade from format 5,
+// 4 or 3, which format 6 only extends by quiet/ and nostop/ (format 5 by watch-mode, format 4 by vmwait/ and optional keys);
 // format 2 is another format, and a format change removes them, and its files are counted in
 // Removed only, never in LogKept or LogRemoved. Mutations: leaving TelemetryDir out of the reset
 // keeps the files in the last cases; counting them as the run log raises LogKept or LogRemoved;
@@ -453,7 +453,7 @@ func TestResetHandlesTelemetryDir(t *testing.T) {
 	for _, tc := range []struct {
 		name, format string
 		kept         bool
-	}{{"repair", currentFormat, true}, {"upgrade from 4", "coreslot-protocol 4\n", true}, {"upgrade from 3", "coreslot-protocol 3\n", true},
+	}{{"repair", currentFormat, true}, {"upgrade from 5", "coreslot-protocol 5\n", true}, {"upgrade from 4", "coreslot-protocol 4\n", true}, {"upgrade from 3", "coreslot-protocol 3\n", true},
 		{"format 2 is another format", "coreslot-protocol 2\n", false}, {"format change", foreignFormat, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := newDir(t)

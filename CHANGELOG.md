@@ -19,9 +19,21 @@ All notable changes to this project are recorded here. The format follows
   carry their label's `typical_s`. `status` reads "letting short jobs go first until 14:32"; `status --json` gains the
   top-level `head` and `yield`, under the same `schema` 1; telemetry gains the `waiting` reason `yielding` with
   `until_ns`, `yield_ended`, the `short` pass and its `no_pass` reasons.
-- Format 5 gains the optional `$S/yield.json` (`PROTOCOL.md` section 7.17) and the ticket's optional
-  `typical_s`; no reset is needed. A v0.11.0 client never opens the file and ignores the key, so it neither yields
-  nor passes as a short job, and its tickets carry no `typical_s`.
+- Two marks on a job, set with `coreslot quiet <id>` and `coreslot no-stop <id>` on a waiting or running job and
+  removed with `--off`. While a job marked quiet runs, no other job is admitted (a forced start still is); the
+  window ends when the job ends, however it ends, or with `--off`. A job marked do-not-stop is never a stop round's
+  victim. Neither moves a job in the queue. An `--independent` run started inside a quiet job runs inside its
+  parent's grant instead of waiting for the window. `status` shows the marks, and `status --json` each hold's and
+  ticket's `quiet` and `no_stop`; the protection reason covers the floor too. Telemetry gains the `waiting` reason
+  `quiet` and the `pass_through` reason `quiet`.
+
+### Changed
+
+- **Format 6.** The state directory gains `quiet/` and `nostop/`, the marks (`PROTOCOL.md` section 7.18), which
+  every client must read at admission and in its own run's ticks, so a client of format 5 steps out of the budget
+  with its existing notice. Format 6 also carries the optional `yield.json` (section 7.17) and the ticket's optional
+  `typical_s`. Run `coreslot doctor --reset` once nothing is live: on a format-5, format-4 or format-3 directory it
+  is an upgrade that keeps the run log and the telemetry.
 
 ### Fixed
 

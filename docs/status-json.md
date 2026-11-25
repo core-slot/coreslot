@@ -160,6 +160,8 @@ The watchdog, from the newest shared sample.
 | `asked_mib` | int | the need the hold was admitted with; equal to `need_mib` unless the hold was trimmed |
 | `trimmed` | bool | its run acted on a `coreslot trim` request: `need_mib` follows what the command uses, up to `asked_mib` |
 | `forced` | bool | its run started at once on a `coreslot start` request, whatever the room: `need_mib` is still its full need, so `mem.room_mib` may be below 0 |
+| `quiet` | bool | marked with `coreslot quiet`: while it runs no other job is admitted, and every waiting ticket waits for it to end |
+| `no_stop` | bool | marked with `coreslot no-stop`: no stop round lists it |
 | `footprint_mib` | int | what its run last measured |
 | `stops` | int | how many times it was stopped |
 | `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read; true for a `pid` of 0 or 1, never a run's |
@@ -232,6 +234,8 @@ A long head that fits lets short jobs it would displace go first, until a deadli
 | `expected_wait_s` | int or null | the first live ticket's expected wait, see below |
 | `docker_need_mib` | int | present for a ticket gated on Docker Desktop's VM: its Docker need |
 | `vm_wait` | bool | present and true while the gated ticket fits on the Mac and waits for room in Docker Desktop's VM, or for a reading of it: every other run passes over it |
+| `quiet` | bool | marked with `coreslot quiet`; the window opens once it is admitted |
+| `no_stop` | bool | marked with `coreslot no-stop`; it acts once it is admitted |
 
 `expected_wait_s` is the head's expected wait `W` of the passing rule, the rule by which a waiter
 with a typical run time may start ahead of the head when it is expected to end within `W`

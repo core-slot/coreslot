@@ -1,25 +1,28 @@
-# coreslot protocol, format 5
+# coreslot protocol, format 6
 
-This document is the normative definition of the coreslot on-disk protocol, format 5: the state
+This document is the normative definition of the coreslot on-disk protocol, format 6: the state
 directory, its files and their bodies, the admission critical section, the watchdog that keeps
 memory pressure from stalling the work the clients started, and the descriptor and environment
 contract between a run and the command it starts. Memory is the only resource. A client written
 from this document alone, in any language, shares one memory budget and one watchdog with every
 other conforming client on the machine.
 
-Format 5 is format 4 with this machine's override of the watchdog's mode, `watch-mode` (section
-7.15), which every client of format 5 reads for the mode it ticks and writes stop rounds in (section
-23.1). Format 4 was format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of
-`vmwait/` (section 7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4), by which
+Format 6 is format 5 with a job's two marks, `quiet/` and `nostop/` (section 7.18), which every
+client of format 6 reads at admission (section 12.1) and in its own run's ticks (section 23.1): a
+client that ignored them would admit jobs beside a quiet job and stop a do-not-stop one. Format 5 was
+format 4 with this machine's override of the watchdog's mode, `watch-mode` (section 7.15), which every
+client of format 5 reads for the mode it ticks and writes stop rounds in (section 23.1). Format 4
+was format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of `vmwait/` (section
+7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4), by which
 every client takes the holds' `docker_growth_mib` off its room (section 12.1) and passes over a noted
-ticket (section 10.3). A reset upgrades a format-4 or a format-3 directory in place, keeping its run
-log (section 4.4); a format-2 directory is another format.
+ticket (section 10.3). A reset upgrades a format-5, format-4 or format-3 directory in place, keeping its
+run log (section 4.4); a format-2 directory is another format.
 
-Format 5's names, bodies and layout are never redefined once released: a release that needs
+Format 6's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
 no admission reads, as the needs file is (section 5.4). Until `v1.0.0` a minor release may
-introduce such a number, and may change what format 5 means elsewhere, such as the configuration's
+introduce such a number, and may change what format 6 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
@@ -52,7 +55,7 @@ requirement on a client.
 
 ## 2. Contract inventory
 
-Every shared file, field, environment variable and transition of format 5, and where it is defined.
+Every shared file, field, environment variable and transition of format 6, and where it is defined.
 
 | Item | Kind | Defined in |
 |---|---|---|
@@ -69,6 +72,8 @@ Every shared file, field, environment variable and transition of format 5, and w
 | `start/` | directory of start requests | [7.16](#716-start-request), [13.4](#134-start-now) |
 | `order/` | directory of order overrides | [7.12](#712-order-override), [9](#9-order), [13.3](#133-move) |
 | `vmwait/` | directory of notes | [7.14](#714-note), [12.6](#126-a-gated-request) |
+| `quiet/` | directory of marks | [7.18](#718-marks), [12.1](#121-steps) |
+| `nostop/` | directory of marks | [7.18](#718-marks), [23.5](#235-stop-rounds) |
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
 | `telemetry/` (optional, not part of the format) | directory of the local record | [4.4](#44-layout), [23.6](#236-observe-mode-and-the-sample-log) |
@@ -169,8 +174,9 @@ Every conforming client MUST preserve these invariants:
   published, or as soon as the room allows after it: the overrun of short jobs still running then is
   the delay past it. A gated head (section 12.6) is admitted within 3 s of a
   reading by which both its tests pass; one whose VM test fails has its note by the end of that
-  attempt, or within 2 s of its last note change.
-- **I6 one budget:** every client of format 5 reads the same holds and the same
+  attempt, or within 2 s of its last note change. While a quiet hold is live (section 7.18) no
+  ordinary admission happens: the head is admitted by these rules once the window ends.
+- **I6 one budget:** every client of format 6 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
   of them, one whose `victim` is false nor one whose label has no normal share, and a run signals only the process group of its own
@@ -210,13 +216,13 @@ Every conforming client MUST preserve these invariants:
   `mode & 0o022 != 0`. The check applies to `$S` and to every file and directory of the layout
   (section 4.4) that the client opens, probes or removes; a directory or top-level file of the
   layout, or a temporary file in `$S`, that is a symlink, a directory, another user's, or group- or
-  world-writable is a state error. Inside `queue/`, `holds/`, `cancel/` and `start/` the rule is different:
+  world-writable is a state error. Inside `queue/`, `holds/`, `cancel/`, `start/`, `quiet/` and `nostop/` the rule is different:
   an entry whose name matches the directory's grammar (section 7.1, temporaries included) but whose
   type, owner or mode fails the checks above is not a state error. It is a **stray**: ignored and
   counted exactly like an entry with a malformed body (section 7.2): never trusted, never opened
   or probed, never removed (reconciliation skips it and goes on), and `status` and `doctor` report
-  it in the ignored count. An entry whose name does not match its directory's grammar is ignored
-  whatever its type (section 4.4).
+  it in the ignored count, a stray mark excepted. An entry whose name does not match its
+  directory's grammar is ignored whatever its type (section 4.4).
   These directories are `0700` and the user's own, so only the user (or the superuser) can place an
   entry in them; a hostile same-user process is outside the threat model.
 - Every descriptor a client opens on a file under `$S` MUST be close-on-exec (`O_CLOEXEC`), except
@@ -258,6 +264,8 @@ cancel/          cancellation requests (section 7.5)
 start/           start requests (section 7.16)
 order/           order overrides (section 7.12)
 vmwait/          notes of gated tickets (section 7.14)
+quiet/           marks: no other job starts while the job runs (section 7.18)
+nostop/          marks: no stop round lists the job (section 7.18)
 degraded         degraded-mode record (section 7.9)
 log/runs.jsonl   run log (section 7.10)
 telemetry/       the optional local record; absent is normal (below)
@@ -267,11 +275,11 @@ needs.toml       needs file (section 5.4); optional, present only under the over
 
 `log/` may also contain `runs.1.jsonl` and, left or still written by an older client, `watch.jsonl` and
 `watch.1.jsonl`. Each of
-`queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
+`queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/`, `nostop/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
 (section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
 of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
-the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/` and `log/` are created only
+the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/`, `nostop/` and `log/` are created only
 by a client that has read a `FORMAT` it understands (section 15.2).
 
 `telemetry/` is optional, and its absence is normal: it exists only once a client has recorded
@@ -312,15 +320,15 @@ The directory is not a cache: liveness is decided by locks. Deleting or resettin
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
 process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/`,
-`start/`, `order/` and `vmwait/` (a start request, an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`,
+`start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` (a start request, an override, a note and a mark name a waiting or running job, and none survives), `gen`, `watch.json`, `trim.json`,
 `watch-mode` (a reset returns the watchdog to the configuration's mode), `yield.json`, `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
-format 5. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+format 6. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 5, or format 4 or 3 (an upgrade: format 5 only adds `watch-mode`, `start/`, `yield.json`, the hold's optional `forced` and the ticket's
+When `FORMAT` names format 6, or format 5, 4 or 3 (an upgrade: format 6 only adds `quiet/` and `nostop/`, format 5 `watch-mode`, `start/`, `yield.json`, the hold's optional `forced` and the ticket's
 optional `typical_s`, and
 format 4 `vmwait/` and optional Docker keys of tickets and holds), or is missing
-(which the first client writes as 5, section 15.1), the reset is a repair and keeps `log/` and
+(which the first client writes as 6, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
 learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
 format or cannot be read, it removes the entries of `log/` and `telemetry/` as well, and the CLI
@@ -328,8 +336,8 @@ says so of the run log: every label learns its need
 again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
-the directory as format 5; a live hold or ticket of any format stops it. It does not reconcile
-first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `start/`, `order/` and `vmwait/` reconciliation
+the directory as format 6; a live hold or ticket of any format stops it. It does not reconcile
+first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
 the next reconciliation removes them once they are older than 30 s. Once it has
 recreated the directory, nothing being live, it also removes every entry and birth of the
@@ -592,7 +600,7 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `d_user_ns`, `d_sys_ns`, `d_page_wait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_page_wait_ns` is `0` where the kernel reports no page wait (section 23.1) |
 | `normal_share` | number | `0..1`; the label's normal share `S0` (section 23.3) as the run read it from the run log when it started; `0` when `learned` is false |
 | `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
-| `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), its command does not share coreslot's process group, and it is not container work (section 23.5) |
+| `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), its command does not share coreslot's process group, it is not container work (section 23.5), and it is not marked do-not-stop (section 7.18) |
 | `learned` | boolean | `true` when the run log gave the label a normal share when the run started; otherwise the hold is learning (section 23.3) |
 | `child_exited` | boolean | `true` once the run's command has exited |
 | `cpu_ns` | integer | optional; `≥ 0`; the user and system time its process tree spent in this attempt so far: the sum of its ticks' `d_user_ns` and `d_sys_ns` (section 23.1) |
@@ -619,7 +627,8 @@ A hold is published with `stops`, `footprint_mib`, the three deltas, `normal_sha
 `sampled_ns` at 0 and `victim`, `learned` and `child_exited` false. Once its command has started
 the run writes `stops`, `victim`, `normal_share`, `learned`, `typical_cpu_s` and a container
 command's `container`, which hold for the attempt, except that finding a client in its tree clears
-`victim` and sets `container` (section 23.5). Each tick (section 23.1) writes the measured keys,
+`victim` and sets `container`, and a do-not-stop mark holds `victim` false while it stands (section
+23.5). Each tick (section 23.1) writes the measured keys,
 `cpu_ns` and `stall_ewma` among them, `docker_footprint_mib` and `docker_note` as the run's Docker part
 stands, which the first write after the command's start carries too, a gated hold's three Docker
 keys (section 23.1), with which it is published (section 12.6), and, once the holder has acted
@@ -835,12 +844,44 @@ in section 4.2. Reconciliation removes it once its head's ticket is gone (sectio
 removes a stale one, and a reset removes it (section 4.4). Any process of the user can write it: it is
 not a control, and the head ends its yield by its own clock whatever it says (section 10.3).
 
+### 7.18 Marks
+
+`$S/quiet/<id>` and `$S/nostop/<id>` are a job's **marks**: empty files, not lock-carrying, named by
+the id of the ticket or the hold they mark (the first three fields of its name, section 7.1). They are
+published without replacement (section 11), an existing one meaning the job is already marked, and
+removed only inside the section, neither with a `gen` bump; they are read without the section. Their
+entries are checked as `cancel/`'s are (section 4.2).
+
+- A **quiet** mark on a live hold holds back every ordinary admission while the hold is live (section
+  12.1, step 1c); jobs already running go on. One on a ticket, or on a hold that is not live, holds
+  nothing back: a waiting quiet job keeps its place and acts once it is admitted, in its turn. Of
+  several waiting quiet jobs, the first admitted holds back the next; several running ones hold the
+  window until the last of them ends.
+- A **no-stop** mark on a hold keeps it out of every stop round: its own run writes `victim` false
+  while the mark stands (section 23.5). One on a ticket acts once the ticket is admitted.
+
+A mark follows its job. At admission and at a forced start the run moves its ticket's marks to its
+hold, in the section that publishes the hold (section 12.1, step 7); a cancellation and a withdrawal
+remove them with the ticket (section 13); the release of an attempt's hold removes its marks, however
+the attempt ended, even when a descendant keeps the hold live (section 12.3), so a stopped job's
+restart ticket is unmarked. Reconciliation removes a mark whose ticket and hold are both gone
+(section 10.4), and a reset removes them all (section 4.4). Any process of the user can mark or unmark
+any job: a mark moves nothing in the queue, and is a convenience, not a control. It stands against no
+hostile party, only against the user's own jobs that would start beside a quiet one and the
+watchdog's rounds. A quiet mark fails open: a missing mark holds nothing back, and a crash releases
+the hold's lock.
+
+> **Implementation note.** The Go CLI's `coreslot quiet <id>` and `coreslot no-stop <id>` mark a live
+> ticket or hold by the id `status` shows; `--off` removes the mark and, for a ticket admitted
+> meanwhile, the mark of every live hold of its run (the same `pid`, and the ticket's order key as its
+> `arrival_ns`). `status --json` gives every hold's and ticket's `quiet` and `no_stop`.
+
 ## 8. The admission critical section
 
-`admit.lock` is the protocol's linearization point. Enqueue, admission, cancel and start publication,
+`admit.lock` is the protocol's linearization point. Enqueue, admission, cancel, start and mark publication,
 reconciliation and run-log rotation MUST happen while holding
 `flock(LOCK_EX)` on it; so does every other publication (section 11), every write of `watch.json`
-and every removal of a ticket, hold, cancel or start request, `yield.json` or temporary file. A refresh (section 10.2), a
+and every removal of a ticket, hold, cancel or start request, mark, `yield.json` or temporary file. A refresh (section 10.2), a
 probe, the rewrite of a hold's own body and a run-log append happen outside it.
 
 - **Entry is non-blocking.** A client tries `LOCK_EX|LOCK_NB` and retries with backoff from 10 ms
@@ -868,7 +909,7 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
   continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 5` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 6` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
@@ -1099,8 +1140,9 @@ neither does a reset (section 4.4), and neither does a watchdog tick (section 23
    first three fields are that id (for a note, whose name is the note's), whatever its body. An entry ignored as a stray (a wrong type,
    owner or mode) is not an entry for this purpose: it never protects a cancel or start request, an
    override or a note. It also removes `yield.json` when its `head` is no such ticket, or it is no
-   record (section 7.17);
-3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `start/`, `order/` and `vmwait/` whose mtime is
+   record (section 7.17), and every mark in `quiet/` and `nostop/` whose id is neither such a ticket's
+   nor a hold's that step 1 left in place;
+3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
    if it removed anything.
@@ -1110,7 +1152,7 @@ whole machine.
 
 ## 11. Atomic publication
 
-Inside the section, a publication of a ticket, hold, cancel or start request, order override, `gen`, `FORMAT`,
+Inside the section, a publication of a ticket, hold, cancel or start request, mark, order override, `gen`, `FORMAT`,
 `degraded`, `watch.json`, `trim.json`, `watch-mode` or `yield.json`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
@@ -1119,7 +1161,7 @@ Inside the section, a publication of a ticket, hold, cancel or start request, or
 2. takes `flock(LOCK_EX)` on it if the file is lock-carrying (ticket, hold);
 3. writes the body;
 4. moves it to its final name:
-   - ticket, hold, cancel or start request: without replacing an existing file: `renameat2(RENAME_NOREPLACE)`
+   - ticket, hold, cancel or start request, mark: without replacing an existing file: `renameat2(RENAME_NOREPLACE)`
      on Linux, `renamex_np(RENAME_EXCL)` on macOS, and where those are unavailable (the call or its
      library wrapper is missing, or it fails with `ENOSYS`) or unsupported by the filesystem (it
      fails with `EINVAL`, `ENOTSUP` or `EOPNOTSUPP`), `link(2)` to the final name followed by
@@ -1129,8 +1171,8 @@ Inside the section, a publication of a ticket, hold, cancel or start request, or
      name carrying its next `seq`. A cancel request is
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
-     already requested, which is not an error (section 13.1). A start request is published the
-     same way (section 13.4);
+     already requested, which is not an error (section 13.1). A start request and a mark are
+     published the same way (sections 13.4 and 7.18);
    - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`, `yield.json`: with a plain `rename`,
      which replaces an existing file.
 
@@ -1170,7 +1212,11 @@ The room may be negative. A request **fits** when its need is at most the room.
 Inside the section the head, a waiter that may pass it (section 10.3) or a container request
 (below):
 
-1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1);
+1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1). Then, as
+   **step 1c**, once steps 2 and 3 have read the configuration and listed the live holds, while a
+   quiet mark names a live hold (section 7.18), it leaves the section and waits, whatever path it
+   would take: no ordinary admission happens while a quiet job runs, and none
+   records a start for the level gate's spacing (section 12.4);
 2. reads the configuration and the machine's memory (section 5.1); an invalid configuration or an
    unknown `memory` is a state error (section 14);
 3. lists the live holds and computes the room;
@@ -1186,8 +1232,9 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
    observed, such as one published after its election, counts as live;
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
-7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket and its order
-   override, start request and note if it has them, bumps `gen`, and leaves the section.
+7. publishes its hold (section 7.4), moves its ticket's marks to the hold (section 7.18), closes its
+   ticket descriptor, unlinks its ticket and its order override, start request and note if it has
+   them, bumps `gen`, and leaves the section.
 
 A gated request (section 12.6) also passes its VM test between steps 6 and 7. A head that passed
 them may then yield to short jobs instead of step 7 (section 10.3), before step 6 records its start.
@@ -1216,7 +1263,7 @@ processes is measured at 0 and so charged its whole need; a client MUST write as
 whose descendants run the command. No hostile party is in view: the confirmation reads only the
 kernel, inside the section, and no hold body moves it beyond its own `need_mib`.
 
-A **forced start** (section 13.4) takes step 1 and then step 7 alone: no room, no idle rule, no
+A **forced start** (section 13.4) takes step 1 and then step 7 alone: no step 1c, no room, no idle rule, no
 re-election, no level gate, no confirmation, and no VM test. Its hold says its full need, its ticket's `arrival_ns`
 and `forced`, and it records no start for the level gate's spacing (section 12.4). A gated run's
 hold carries the Docker keys of a reading taken outside the section, as a gated admission's does
@@ -1272,7 +1319,9 @@ section if it can within 2 s, probes its hold and unlinks it only if the probe s
 descendant still holds it), bumping `gen` when it did (section 7.8); otherwise reconciliation
 removes the hold later. Other clients MAY remove their hold the same way, or leave it to
 reconciliation. This applies to every hold a run published, including a fail-open run's unbudgeted
-hold (section 14), and to the hold of a stopped attempt (section 24).
+hold (section 14), and to the hold of a stopped attempt (section 24). In that section the run also
+removes its hold's marks (section 7.18), whether or not it can unlink the hold: a descendant that
+keeps the hold live keeps no quiet window.
 
 ### 12.4 The level gate
 
@@ -1437,7 +1486,7 @@ step 1, so a cancel published before the owner's admitting section wins; one pub
 no ticket and has no effect: cancellation never revokes a hold, and never stops a command. A
 canceller that finds the request already published (section 11) treats the cancellation as already
 requested; that is not an error. On finding it, the owner closes its ticket descriptor (the ticket
-is dead at once), removes the ticket, the cancel request, and its order override and start request, if any, in its next section if it can enter one
+is dead at once), removes the ticket, the cancel request, and its order override, start request and marks, if any, in its next section if it can enter one
 (bumping `gen`, section 7.8), and stops: the CLI exits with the refusal code.
 
 > **Implementation note.** The Go CLI checks `queue/` first and refuses, with a diagnostic that no
@@ -1448,7 +1497,9 @@ is dead at once), removes the ticket, the cancel request, and its order override
 A waiter whose own deadline passes, whose wait is abandoned by its caller, or that is interrupted
 (`Ctrl-C` on a waiting CLI, which then exits 130) withdraws by closing its ticket descriptor: the
 ticket is dead at once, and withdrawal never depends on entering the section. The waiter MAY then
-remove its ticket in a section, bumping `gen` (section 7.8); otherwise reconciliation removes it.
+remove its ticket and its marks in a section, bumping `gen` (section 7.8); otherwise reconciliation
+removes them. A run that leaves the queue to run outside the budget withdraws so, and its marks go:
+no window opens for a job coreslot did not admit.
 
 ### 13.3 Move
 
@@ -1484,7 +1535,9 @@ and makes a forced start (section 12.1): a cancel request found at step 1 still 
 reserves its full need (I2) and says `forced`, so the room may go below zero, and every ordinary
 admission waits until memory frees up; a container request, whose room leaves out the holds, is not
 held back (section 12.1). The hold keeps its ticket's `arrival_ns`, so a stop round lists it by its
-queue arrival like any other run (section 23.5). A forced run that a round stops comes back as an
+queue arrival like any other run (section 23.5). A forced start takes no step 1c, so it is
+admitted while a quiet hold runs, and its hold takes its ticket's marks (section 7.18). A forced run
+that a round stops comes back as an
 ordinary restart ticket (section 24): the force does not survive the stop. A run that does not know
 the request never acts on it, and the request stays until its ticket goes. Any process of the user
 may start any ticket, as it may cancel one: a start is the user's choice, not a control.
@@ -1541,12 +1594,12 @@ also exits 3 while a state error makes runs fail open (section 19).
 the layout other than `admit.lock`). Every format keeps `admit.lock`, an exclusive `flock` held
 only briefly by whoever changes admission state.
 
-A client that finds no `FORMAT` writes `coreslot-protocol 5` inside the section. Writing a newer
+A client that finds no `FORMAT` writes `coreslot-protocol 6` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
 ### 15.2 A format this client does not implement
 
-A state directory whose format is not 5 is not used. A client that finds another format leaves
+A state directory whose format is not 6 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
 writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json`, `watch-mode` or
 `admit.lock` body), and its run fails open (section 14) with one notice that names the format and
@@ -1560,11 +1613,11 @@ remove the file: that would be a write into a format it does not implement.
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
 another format a client publishes no cancel or start request, trim request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
-runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 5
+runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 6
 when nothing of either format is live, the other format's run log removed with the rest, except a
-format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
+format-5, format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
 
-> **Implementation note.** The Go CLI refuses cancellation, a start, a trim and `doctor --clear` under
+> **Implementation note.** The Go CLI refuses cancellation, a start, a mark, a trim and `doctor --clear` under
 > another format, with the same notice.
 
 ## 16. Windows
@@ -1675,7 +1728,15 @@ empty variable is absent), in this order:
    not an ancestor's, or a `$S` that cannot be resolved, makes the run an ordinary request: a
    parent that holds the budget is always an ancestor whose hold is live. (When the process table
    cannot be read, the Go CLI takes the hold's pid for an ancestor's.)
-3. Otherwise, or with `--independent`, it is an ordinary request.
+3. With `--independent`, a run that rule 2 would make a pass-through and that has a live
+   quiet-marked hold (section 7.18) among its ancestors takes the path it would take without
+   `--independent`: rule 1 when `CORESLOT_UNBUDGETED` is set, else rule 2. Queued, it would wait for
+   the window its own job holds while that job waits for it. It lists `quiet/` without the section,
+   resolves each mark to a live hold through a listing of `holds/` and a probe, and tests every such
+   hold's pid against one reading of the process table, which counts as an ancestor's when it cannot
+   be read; it decides once, at its start. A run outside every grant, and one whose quiet ancestor's
+   own run has exited, queues and waits for the window like any job.
+4. Otherwise, or with `--independent`, it is an ordinary request.
 
 A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and writes nothing under
 `$S`: no ticket, hold, `gen` bump, degraded record or run-log line. It has no
@@ -1704,7 +1765,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `start`: the request was not published, for the same reasons, while a run that does not answer within the wait is exit 0; `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound); `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `start`: the request was not published, for the same reasons, while a run that does not answer within the wait is exit 0; `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound); `quiet` and `no-stop`: nothing was marked (no live ticket or hold with that id, a state error, a format it does not implement, or the admission section held for longer than its bound), and with `--off` no such mark was found on the id or on a live hold of its ticket's run; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1712,7 +1773,7 @@ itself.
 | 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusal of `--clear` is 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
-`status` exits 3, `doctor` exits 1 and `cancel`, `start` and `trim` refuse with 75. `--help` prints on
+`status` exits 3, `doctor` exits 1 and `cancel`, `start`, `quiet`, `no-stop` and `trim` refuse with 75. `--help` prints on
 stdout and exits 0 for every command. A command's own exit 75 is its status like any other: the run prints no marker
 for it, and only a give-up (section 24.2) prints one.
 
@@ -2250,7 +2311,9 @@ start until it exits, in both modes of section 23.6. Each tick:
    unknown is not zero. A run that loses sight of its containers, or whose forwarder did not start,
    writes none of the three from then on, and its hold reserves no growth.
    `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s` hold for the attempt: the run
-   writes them once, when its command starts, before its first tick. For a hold that reserves
+   writes them once, when its command starts, before its first tick, except `victim`, which a
+   do-not-stop mark of its hold holds false: the run reads the mark before every write of its hold
+   and writes `victim` in each (section 23.5). For a hold that reserves
    memory it also reads `trim.json` (section 7.13), outside the section, until it finds a request
    for its hold; once it has, a run that acts on it writes `need_mib`, `asked_mib` and `trimmed`
    (section 12.5) in every rewrite of the attempt.
@@ -2316,9 +2379,9 @@ holds whose `footprint_mib` is at least 128 (0 when there are none): a smaller t
 which `S` counts whole, need not be memory work, so it never raises `E`, and `E` is below the larger
 trees' own mean only when the mean over every counted hold is lower still. A learning hold is no part of `E`: it still reserves memory (section
 12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
-have no normal share (`status --json`: `watch.learning`); at red, when a red round has no victim
-(every running hold is the oldest, learning or never a victim), it does not say that the watchdog is
-protecting but that a red round can stop no running command.
+have no normal share (`status --json`: `watch.learning`); at red or at the floor, when a round has no
+victim (every running hold is the oldest, learning, never a victim or marked do-not-stop), it does not
+say that the watchdog is protecting but that a round can stop no running command.
 A command is judged only once a run of its label has
 completed with a `tick_share` (a run shorter than one tick, or whose every gate was open or unread, leaves the label learning); until then only a floor round stops it (section 23.5). The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
@@ -2411,8 +2474,8 @@ has `victim` true. Rounds are one at a time.
    (`detector.observed`), whose holds never exit, holds nothing back.
 
 The oldest running hold, a hold whose run did not declare its command safe to run again (the
-CLI's `--restart=no`), a hold whose label has `no_restart`, container work and a run that shares
-coreslot's process group are never victims, and a hold that is learning (it has no normal share) is a victim of
+CLI's `--restart=no`), a hold whose label has `no_restart`, container work, a hold marked
+do-not-stop and a run that shares coreslot's process group are never victims, and a hold that is learning (it has no normal share) is a victim of
 a floor round only. A run outside the budget (section 14, `--on-timeout run`) ticks nothing, so it
 is no running hold: it is never a victim and never the oldest. A run that finds its command ended
 by a `SIGKILL` it did not send does not restart it (section 24.3). The kill reaches the command's
@@ -2439,6 +2502,17 @@ sees a library client and a call shorter than a second too.
 > **Implementation note.** The Go CLI reads `p_comm` and, on macOS, the peer path of each unix
 > socket with `proc_pidfdinfo`. On Linux it reads the name in `/proc/PID/stat` alone: a client socket has no path
 > of its own there, so a library client stays ordinary work.
+
+**A do-not-stop mark** (section 7.18) keeps a hold out of every round, red and floor alike, at the
+no-coreslot baseline for that job: without coreslot nothing is stopped. Its run writes `victim` false
+at every write while the mark stands, and reads the mark again before it acts on a round that lists
+its hold, as one marked after its last write is: a marked run does not stop its command, says so,
+in observe mode too without saying what it would stop, and takes the round as acted on. Once the
+mark goes, a run that never refused a round writes `victim` as it would without the mark at its next
+write; one that refused round R does so only once a tick has read a `detector.last_round_ns` above 0
+and other than R, so that R's listing never stays live and holds back every new round (rule 3). The
+next round after the mark goes may still pass over the job and stop another. With every candidate
+marked, a round lists nothing.
 
 A run stopped by a floor round tells its agent that the whole machine ran out of memory (swap
 nearly full) and to free memory outside coreslot before the command comes back, and restarts it by

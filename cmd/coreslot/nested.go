@@ -34,18 +34,29 @@ func environ() map[string]string {
 // (engine.DecideNested); anything else is an ordinary request that drops the inherited context
 // first. A run inside a live parent hold, --independent too, keeps its command in the parent
 // command's process group, so that a stop round's kill of that group reaches it; it is no victim.
+// An --independent run inside a live parent hold that has a live quiet-marked hold among its
+// ancestors takes the path it would take without --independent: its job's window would otherwise
+// hold it back while the job waits for it. It is decided once, here.
 func (r *run) decide() int {
 	env := environ()
 	if reason := env[engine.EnvUnbudgeted]; reason != "" && !r.o.independent {
-		return r.passThroughUnbudgeted(env, reason)
+		return r.passThroughUnbudgeted(env, reason, "parent_unbudgeted")
 	}
+	isAncestor := ancestry()
 	inside, hold, miss := engine.DecideNested(os.Environ(), isAncestor)
 	r.nestedMiss = miss
 	nested := inherited(env, hold, miss) // a stale exported variable names no parent
 	if inside {
 		r.o.sameGroup = true
 		if !r.o.independent {
-			return r.passThrough(env, hold)
+			return r.passThrough(env, hold, "parent_hold")
+		}
+		if label, ok := engine.QuietAncestor(r.loc.dir, isAncestor); ok {
+			r.notice("a quiet window of %s is open above this run, so --independent does not apply: it runs inside its parent's grant", labelText(label))
+			if reason := env[engine.EnvUnbudgeted]; reason != "" {
+				return r.passThroughUnbudgeted(env, reason, "quiet")
+			}
+			return r.passThrough(env, hold, "quiet")
 		}
 		r.parentHold = hold
 	}
@@ -60,11 +71,23 @@ func inherited(env map[string]string, hold, miss string) bool {
 	return env[engine.EnvUnbudgeted] != "" || hold != "" && miss != "not_ancestor" && miss != "malformed"
 }
 
-// isAncestor reports whether pid is an ancestor of this process. An unreadable process table
-// counts as one: the live hold the environment names is then trusted, rather than queueing
-// behind a parent that may hold the whole budget.
-func isAncestor(pid int) bool {
-	procs, ok := memsample.Listing()
+// listProcesses reads the process table for ancestry; tests replace it.
+var listProcesses = memsample.Listing
+
+// ancestry returns the test of whether a pid is an ancestor of this process, on one listing of the
+// process table taken at its first use, so that a run outside any grant lists nothing.
+func ancestry() func(pid int) bool {
+	list := sync.OnceValues(listProcesses)
+	return func(pid int) bool {
+		procs, ok := list()
+		return isAncestorIn(procs, ok, pid)
+	}
+}
+
+// isAncestorIn reports whether pid is an ancestor of this process in procs. An unreadable process
+// table (ok false) counts as one: the live hold the environment names is then trusted, rather than
+// queueing behind a parent that may hold the whole budget, and a quiet window above nests the run.
+func isAncestorIn(procs map[int]memsample.Proc, ok bool, pid int) bool {
 	if !ok {
 		return true
 	}
@@ -196,7 +219,7 @@ func withGrant(grantMiB int64) []string {
 // passThrough runs the command inside the parent's reservation (PROTOCOL.md section 18): no
 // queue, no section, no lock. The inherited hold's descriptor is passed on as it is, and
 // CORESLOT_GRANTED_MEM is narrowed to the run's need when the parent's grant is larger.
-func (r *run) passThrough(env map[string]string, parentHold string) int {
+func (r *run) passThrough(env map[string]string, parentHold, reason string) int {
 	grant := r.o.need
 	parent, err := strconv.ParseInt(env[engine.EnvGrantedMem], 10, 64)
 	if err == nil && parent >= 0 && parent < grant {
@@ -206,7 +229,7 @@ func (r *run) passThrough(env map[string]string, parentHold string) int {
 		}
 		grant = parent
 	}
-	r.recordPassThrough(env, "parent_hold", parentHold)
+	r.recordPassThrough(env, reason, parentHold)
 	return r.runChild(child{env: withGrant(grant), grantMiB: grant, release: func() error { return nil }})
 }
 
@@ -225,8 +248,8 @@ func (r *run) recordPassThrough(env map[string]string, reason, parent string) {
 
 // passThroughUnbudgeted runs under a parent that runs unbudgeted (PROTOCOL.md section 18 rule
 // 1): with its need, passing CORESLOT_UNBUDGETED on, writing no degraded record.
-func (r *run) passThroughUnbudgeted(env map[string]string, reason string) int {
+func (r *run) passThroughUnbudgeted(env map[string]string, reason, why string) int {
 	r.notice("the parent run is unbudgeted (%s); running unbudgeted with mem=%s", text(reason), spec.FormatMiB(r.o.need))
-	r.recordPassThrough(env, "parent_unbudgeted", "")
+	r.recordPassThrough(env, why, "")
 	return r.runChild(child{env: withGrant(r.o.need), grantMiB: r.o.need, failCode: "parent_unbudgeted", release: func() error { return nil }})
 }

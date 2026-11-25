@@ -153,7 +153,7 @@ snapshot that line reads. A failed snapshot leaves out the keys from `headroom_m
 
 | key | meaning |
 |---|---|
-| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, `yielding` (a long head that fits lets short jobs go first), and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
+| `reason` | what the last step found: `behind_ticket`, `section_busy`, `room_short`, `behind_head`, `watch_level`, `watch_spacing`, `restart_stale`, `restart_level`, `restart_calm`, `restart_margin`, `yielding` (a long head that fits lets short jobs go first), `quiet` (a job marked quiet runs), and for a run with a Docker need that fits on the Mac `vm_room_short` (it waits for room in Docker's VM) or `docker_no_reading` (for a reading of it) |
 | `reason_s` | seconds waited on each reason since the last line; `enqueue` is the attempt's time from its start to the end of its first step: reading the configuration, publishing the ticket, which waits for the admission section while that is held, and that step |
 | `evals` | admission attempts so far |
 | `max_gap_ms` | the longest time between two steps since the last line |
@@ -222,7 +222,7 @@ pass-through killed with its parent's group by a stop round.
 | key | meaning |
 |---|---|
 | `kind` | `pass_through`, `fail_open`, `timeout_run` |
-| `reason` | `parent_hold`, `parent_unbudgeted`, `state_error`, `timeout`; a closed code, never the reason's text |
+| `reason` | `parent_hold`, `parent_unbudgeted`, `quiet` (an `--independent` run under a quiet job, run inside its parent's grant), `state_error`, `timeout`; a closed code, never the reason's text |
 | `need_mib` | the run's need |
 | `parent` | a pass-through's parent hold; absent otherwise |
 | `waited_s`, `reason_s`, `last_reason` | on `fail_open`, when a state error ended a wait: as on the lines of a wait that ends without a start |
