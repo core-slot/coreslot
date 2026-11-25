@@ -36,6 +36,7 @@ func marked(t *testing.T, dir, kind, id string) bool {
 // quiet and no-stop mark a waiting ticket and a running hold by the id status shows; a second mark
 // says so; --off, before or after the id, removes it. An id that names no live ticket or hold, and
 // an --off with nothing to remove, are refusals (exit 75); a malformed id is a usage error.
+// Mutation: marking any id, live or not, exits 0 for the unknown id.
 func TestMarkCommands(t *testing.T) {
 	dir := budgetDir(t, 512)
 	c := openLib(t, dir)
@@ -134,7 +135,8 @@ func TestOffFollowsTicketToHolds(t *testing.T) {
 }
 
 // status shows a hold's and a ticket's marks on their lines and in the document, and names the
-// quiet holds the queue waits for.
+// quiet holds the queue waits for. Mutation: the ticket's JSON leaving its marks out reads them as
+// false.
 func TestStatusShowsMarks(t *testing.T) {
 	const now = int64(1e18)
 	rep := engine.Report{

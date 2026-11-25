@@ -866,8 +866,10 @@ remove them with the ticket (section 13); the release of an attempt's hold remov
 the attempt ended, even when a descendant keeps the hold live (section 12.3), so a stopped job's
 restart ticket is unmarked. Reconciliation removes a mark whose ticket and hold are both gone
 (section 10.4), and a reset removes them all (section 4.4). Any process of the user can mark or unmark
-any job: a mark moves nothing in the queue, and is a convenience, not a control. A quiet mark fails
-open: a missing mark holds nothing back, and a crash releases the hold's lock.
+any job: a mark moves nothing in the queue, and is a convenience, not a control. It stands against no
+hostile party, only against the user's own jobs that would start beside a quiet one and the
+watchdog's rounds. A quiet mark fails open: a missing mark holds nothing back, and a crash releases
+the hold's lock.
 
 > **Implementation note.** The Go CLI's `coreslot quiet <id>` and `coreslot no-stop <id>` mark a live
 > ticket or hold by the id `status` shows; `--off` removes the mark and, for a ticket admitted
@@ -1211,8 +1213,9 @@ Inside the section the head, a waiter that may pass it (section 10.3) or a conta
 (below):
 
 1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1). Then, as
-   **step 1c**, while a quiet mark names a live hold (section 7.18), it leaves the section and waits,
-   whatever path it would take: no ordinary admission happens while a quiet job runs, and none
+   **step 1c**, once steps 2 and 3 have read the configuration and listed the live holds, while a
+   quiet mark names a live hold (section 7.18), it leaves the section and waits, whatever path it
+   would take: no ordinary admission happens while a quiet job runs, and none
    records a start for the level gate's spacing (section 12.4);
 2. reads the configuration and the machine's memory (section 5.1); an invalid configuration or an
    unknown `memory` is a state error (section 14);
