@@ -22,6 +22,17 @@ const (
 	ReasonIdleGrowing WaitReason = "idle_growing"
 )
 
+// notFitting reports whether an attempt that ended for r found the ticket not fitting: its need
+// over the room, the room closed by a quiet job, or its Docker part short of the VM or unread.
+// A new reason belongs here when it means the ticket does not fit.
+func (r WaitReason) notFitting() bool {
+	switch r {
+	case ReasonRoomShort, ReasonQuiet, ReasonIdleGrowing, ReasonVMRoomShort, ReasonDockerNoReading:
+		return true
+	}
+	return false
+}
+
 // Outcome is what the ticket's last admission attempt decided and the numbers it used. Comparable, carried by value.
 type Outcome struct {
 	Reason                           WaitReason // "" when admitted

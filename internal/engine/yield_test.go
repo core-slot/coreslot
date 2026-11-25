@@ -434,3 +434,29 @@ func TestADeadTicketIsNoShortWaiter(t *testing.T) {
 		t.Error("the head yielded to a dead ticket")
 	}
 }
+
+// A gated head that yields leaves the section every 2 s to read Docker's VM; a read is no sign that
+// it does not fit, so nobody taking its yield ends it after 3 s, as for any head. Mutation: counting
+// a read exit as not fitting runs the yield to its deadline (10 min here).
+func TestGatedYieldingHeadEndsByNoTaker(t *testing.T) {
+	clk := newFakeClock()
+	e := newEngine(t, capped(t, 1536), clk)
+	f := &fakeDocker{clk: clk, reading: vm(8000)}
+	req := headReq
+	req.DockerNeedMiB = 500
+	h := enqueueGated(t, e, req, f)
+	enqueue(t, e, shortReq(768, 60))
+	for waited := time.Duration(0); ; waited += 500 * time.Millisecond {
+		r := step(t, h)
+		if g, ok := r.(Admitted); ok {
+			if why := g.Grant.Admission().YieldEnded; why != "no_taker" || waited < 3*time.Second || waited > 5*time.Second {
+				t.Errorf("admitted after %v, its yield ended for %q; want no_taker after about 3 s", waited, why)
+			}
+			return
+		}
+		if waited > time.Minute {
+			t.Fatalf("still waiting after %v (%d readings of the VM)", waited, f.reads)
+		}
+		clk.advance(500 * time.Millisecond)
+	}
+}

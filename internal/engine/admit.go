@@ -83,11 +83,11 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
 	t.idle.note(t.e.clock.Monotonic(), m, len(holds) == 0)
-	// A yielding head counts no taker while it does not fit: every exit of this attempt but the
-	// yield's own wait stops the count, which starts again once the head fits (yield.go). The yield
-	// itself goes on, bounded by its deadline and its span.
+	// A yielding head's no-taker count restarts when this attempt finds it not fitting
+	// (PROTOCOL.md section 10.3); any other exit, a read of Docker's VM or the level gate among
+	// them, keeps it (yield.go). The yield itself goes on, bounded by its deadline and its span.
 	defer func() {
-		if g == nil && t.out.Reason != ReasonYielding {
+		if g == nil && t.out.Reason.notFitting() {
 			t.yield.fitSince = -1
 		}
 	}()

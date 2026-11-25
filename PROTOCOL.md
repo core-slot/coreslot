@@ -1070,8 +1070,10 @@ when: its wall clock reaches `until_ns`; its own monotonic clock says the yield'
 since it started (a backward step of the wall clock cannot lengthen it); a short job overruns (a live
 hold whose `arrival_ns` is at or after the head's effective order key has a `typical_s` above 0 and
 has run longer than it; a hold with none never counts); nobody takes it: it has fit the room for 3 s
-in a row by its monotonic clock with `last_pass_ns` unchanged, the count restarting whenever the head
-does not fit or a pass is noted, so each short job that ends gives the next 3 s, which is at least two
+in a row by its monotonic clock with `last_pass_ns` unchanged, the count restarting whenever an
+attempt of the head finds it not fitting (its need over the room, a quiet job's window, or its
+Docker part short of Docker's VM or unread) or a pass is noted, and going on through any other
+exit, such as a read of Docker's VM or the level gate, so each short job that ends gives the next 3 s, which is at least two
 of its elections; its record is missing or names another ticket (another head removed it as stale:
 it leaves that file); or another ticket becomes head. Every end is final: a ticket yields at most
 once.
