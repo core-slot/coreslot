@@ -127,6 +127,11 @@ func statsCommand(args []string, io IO) int {
 		fmt.Fprintf(&b, "%s  %d %s\n", text(s.Label), s.Runs, plural(int64(s.Runs), "run", "runs"))
 		line("window", s.Span())
 		line("need", needText(s.NeedMiB, s.PeakNeedMiB))
+		reserve := fmt.Sprintf("follows use over a %d s window", s.WindowS)
+		if !s.WindowLearned {
+			reserve += " (default)"
+		}
+		line("reserve", reserve)
 		line("waited", fmt.Sprintf("%.0fs", s.WaitedS))
 		line("current", currentText(l.needs, s.Label))
 	}

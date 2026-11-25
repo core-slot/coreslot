@@ -68,7 +68,7 @@ func readLog(loc location, label string) (needMiB int64, ok bool, peakNeedMiB in
 	typicalS = runstats.TypicalS(window)
 	typicalCPUS = runstats.TypicalCPUS(window)
 	marked = containerMarked(window)
-	windowS = runstats.WindowS(window, floorS, defaultS)
+	windowS, _ = runstats.WindowS(window, floorS, defaultS)
 	return
 }
 

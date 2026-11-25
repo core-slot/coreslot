@@ -314,7 +314,7 @@ func TestWindowS(t *testing.T) {
 		{"Cap", windowed(f(80000), f(10), f(10)), 86400},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := WindowS(c.rs, 120, 600); got != c.want {
+			if got, _ := WindowS(c.rs, 120, 600); got != c.want {
 				t.Errorf("WindowS = %d; want %d", got, c.want)
 			}
 		})

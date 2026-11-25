@@ -29,6 +29,10 @@ type Stats struct {
 	// has a peak: what a stopped run comes back with, and the pin stats suggests.
 	PeakNeedMiB int64
 	WaitedS     float64 // summed over the window
+	// WindowS is the label's reservation window (WindowS), and WindowLearned whether the window's
+	// runs gave it rather than the default.
+	WindowS       int64
+	WindowLearned bool
 }
 
 // counted reports whether r says what its label needs: labelled, not run without the budget, not
@@ -110,8 +114,8 @@ func TypicalS(window []store.RunRecord) int64 {
 // state.TailMinWindows runs of the window carrying a counted mem_window_s, 1.5 times the largest,
 // rounded up, at least floorS and at most state.TailMaxWindowS; defaultS otherwise. A key counts
 // only when it is a number in (0, state.TailMaxWindowS]; any other is ignored as if absent, so a
-// forged or corrupt value never sizes the window.
-func WindowS(window []store.RunRecord, floorS, defaultS int64) int64 {
+// forged or corrupt value never sizes the window. learned is false when the default is returned.
+func WindowS(window []store.RunRecord, floorS, defaultS int64) (s int64, learned bool) {
 	keyed, largest := 0, 0.0
 	for _, r := range window {
 		if w := r.MemWindowS; w != nil && *w > 0 && *w <= state.TailMaxWindowS { // NaN fails both
@@ -119,10 +123,10 @@ func WindowS(window []store.RunRecord, floorS, defaultS int64) int64 {
 		}
 	}
 	if keyed < state.TailMinWindows {
-		return defaultS
+		return defaultS, false
 	}
-	learned := int64(math.Ceil(largest * state.TailFactorNum / state.TailFactorDen))
-	return min(state.TailMaxWindowS, max(floorS, learned))
+	s = int64(math.Ceil(largest * state.TailFactorNum / state.TailFactorDen))
+	return min(state.TailMaxWindowS, max(floorS, s)), true
 }
 
 // MinCPURuns is how many runs of a label's window must report their CPU time before a red stop
@@ -189,6 +193,7 @@ func summarize(label string, n int, window []store.RunRecord) Stats {
 	}
 	s.NeedMiB, _ = NeedMiB(window)
 	s.PeakNeedMiB, _ = PeakNeedMiB(window)
+	s.WindowS, s.WindowLearned = WindowS(window, state.TailFloorS, state.TailDefaultS)
 	return s
 }
 

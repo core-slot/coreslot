@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,5 +101,29 @@ func TestStatsMalformedNeedsIsANotice(t *testing.T) {
 	}
 	if r := cli(t, baseEnv(dir), "stats"); !strings.Contains(r.stdout, "current  none") {
 		t.Errorf("stats over a malformed needs file:\n%s", r.stdout)
+	}
+}
+
+// Each label shows its reservation window: learned from 3 runs that carry one (1.5 times the
+// largest, 100 s, at least 120 s), and the default under 3, which says so. Mutation: printing the
+// default as learned drops "(default)" from d's line, red.
+func TestStatsWindow(t *testing.T) {
+	dir := stateDir(t, "")
+	if err := os.Mkdir(filepath.Join(dir, "log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var log strings.Builder
+	for i, label := range []string{"w", "w", "w", "d", "d"} {
+		fmt.Fprintf(&log, `{"time_ns":%d,"label":%q,"waited_s":0,"ran_s":1,"mem_window_s":100,"exit":0,"fail_open":""}`+"\n", i+1, label)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "log", "runs.jsonl"), []byte(log.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := cli(t, baseEnv(dir), "stats")
+	for _, want := range []string{"w  3 runs\n  window  3 runs 1970-01-01\n  need  nothing measured\n  reserve  follows use over a 150 s window\n",
+		"d  2 runs\n  window  2 runs 1970-01-01\n  need  nothing measured\n  reserve  follows use over a 600 s window (default)\n"} {
+		if r.code != 0 || !strings.Contains(r.stdout, want) {
+			t.Errorf("stats: exit %d, want %q in:\n%s", r.code, want, r.stdout)
+		}
 	}
 }
