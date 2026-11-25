@@ -184,6 +184,8 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 		why = "; waits for a reading of Docker's VM"
 	case engine.ReasonYielding:
 		why = "; " + yieldText(w.Outcome.YieldUntilNS)
+	case engine.ReasonIdleGrowing:
+		why = "; no coreslot job runs, but memory outside coreslot is growing: it waits up to 5 min before starting anyway"
 	case engine.ReasonQuiet:
 		why = "; a quiet window is open: no job starts until " + cmp.Or(quietLabels(holders), "a quiet job ends")
 	}

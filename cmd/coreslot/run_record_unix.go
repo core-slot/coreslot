@@ -128,6 +128,9 @@ func (x *runRecord) admitted(g *engine.Grant) {
 	if a.YieldEnded != "" {
 		f["yield_ended"] = a.YieldEnded
 	}
+	if a.IdleWaitedS > 0 {
+		f["idle_waited_s"] = a.IdleWaitedS
+	}
 	x.Emit("admitted", f)
 }
 

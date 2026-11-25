@@ -18,6 +18,8 @@ const (
 	ReasonVMRoomShort, ReasonDockerNoReading WaitReason = "vm_room_short", "docker_no_reading"
 	ReasonYielding                           WaitReason = "yielding" // a long head that fits lets short jobs go first
 	ReasonQuiet                              WaitReason = "quiet"    // a quiet job runs: no other job is admitted
+	// With no hold live, a head over the room waits while memory outside coreslot grows (idle.go).
+	ReasonIdleGrowing WaitReason = "idle_growing"
 )
 
 // Outcome is what the ticket's last admission attempt decided and the numbers it used. Comparable, carried by value.
@@ -30,11 +32,12 @@ type Outcome struct {
 	CalmLeftS                        float64
 	HeadroomMiB, ReserveMiB, RoomMiB int64
 	HeadroomOK                       bool
-	WatchGate                        string // checked, stale, unknown, no_holds
-	Noted                            bool   // the ticket has its note: it fits on the host and waits for Docker's VM
-	DockerUngated                    string // why a request with a Docker need is not gated (Grant.DockerUngated)
-	YieldUntilNS                     int64  // a yielding head's deadline
-	YieldEnded                       string // why the head's yield ended: record, deadline, clock, overrun, headship, no_taker
+	WatchGate                        string  // checked, stale, unknown, no_holds
+	Noted                            bool    // the ticket has its note: it fits on the host and waits for Docker's VM
+	DockerUngated                    string  // why a request with a Docker need is not gated (Grant.DockerUngated)
+	YieldUntilNS                     int64   // a yielding head's deadline
+	YieldEnded                       string  // why the head's yield ended: record, deadline, clock, overrun, headship, no_taker
+	IdleWaitedS                      float64 // how long the head waited for memory outside coreslot to stop growing; 0 when it did not
 }
 
 // Admission is the outcome of the attempt that admitted the grant; zero for a grant no attempt made.

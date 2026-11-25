@@ -82,6 +82,7 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		room = state.GrowthRoom(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
+	t.idle.note(t.e.clock.Monotonic(), m, len(holds) == 0)
 	// 1c. While a quiet job runs no other job is admitted, whatever path this attempt would take.
 	// A yielding head has not fit meanwhile: its no-taker count starts again after the window.
 	if quiet, err := quietHolds(t.e.st, holds); err != nil {
@@ -130,6 +131,10 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		record = rec
 	} else {
 		t.out.WatchGate = "no_holds"
+		if isHead && t.idleWait(m, need, room) { // the idle start, unless memory outside coreslot grows
+			t.out.Reason = ReasonIdleGrowing
+			return nil, false, t.unnote(sec)
+		}
 	}
 
 	// 6. A gated request's VM test, on a reading taken outside the section.

@@ -115,6 +115,7 @@ type Ticket struct {
 	notedAt time.Duration // when it was last published, on the monotonic clock
 
 	yield yieldState // a head's yield to short jobs (yield.go)
+	idle  idleTrend  // a head's headroom trend for the idle wait (idle.go)
 }
 
 func newTicket(e *Engine, req spec.Request) *Ticket {
