@@ -5,6 +5,7 @@ package main
 import (
 	"slices"
 
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -14,7 +15,8 @@ const sustainTicks = 5
 // peak is the largest reading of the command tree's memory; ok is false when no reading succeeded.
 // container says the run was container work: kib is its tree's, which leaves out its containers.
 // sustainedKiB is the largest, over every sustainTicks tick readings in a row, of their least;
-// sustained is false while no such row has been seen.
+// sustained is false while no such row has been seen. readings are the attempt's footprints in MiB,
+// one per listing that succeeded, kept only while the run holds a grant of askedMiB above 0.
 type peak struct {
 	kib          int64
 	ok           bool
@@ -27,6 +29,8 @@ type peak struct {
 	sustained    bool
 	cpuNS        int64 // the tree's user and system time, summed over the hold's ticks
 	cpuTicks     int64 // the ticks summed
+	readings     []int32
+	askedMiB     int64
 }
 
 // tick records one watch tick's reading of the tree; ok false, a listing that failed, ends the row.
@@ -46,8 +50,9 @@ func (p *peak) tick(kib int64, ok bool) {
 }
 
 // setMemPeak records the larger of the sampled peak and the rusage's maxRSSKiB (nil when unknown)
-// as the run's memory peak, and the sustained level when the run had one. The rusage is a floor: it
-// sees one process at a time, never a tree's sum.
+// as the run's memory peak, the sustained level when the run had one, and the window its readings
+// needed (state.Gap, in seconds, at most a day) when it had two. The rusage is a floor: it sees one
+// process at a time, never a tree's sum.
 func setMemPeak(rec *store.RunRecord, maxRSSKiB *int64, p peak) {
 	switch {
 	case p.ok && (maxRSSKiB == nil || p.kib >= *maxRSSKiB):
@@ -57,5 +62,9 @@ func setMemPeak(rec *store.RunRecord, maxRSSKiB *int64, p peak) {
 	}
 	if p.sustained {
 		rec.MemSustainedKiB = &p.sustainedKiB
+	}
+	if n, ok := state.Gap(p.readings, p.askedMiB); ok {
+		s := min(float64(n)*memSampleEvery.Seconds(), state.TailMaxWindowS)
+		rec.MemWindowS = &s
 	}
 }

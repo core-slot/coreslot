@@ -10,6 +10,7 @@ import (
 
 	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/store"
+	"github.com/core-slot/coreslot/internal/watch"
 )
 
 // The tree's listing keeps the largest reading and when it was taken, not the last one.
@@ -138,5 +139,36 @@ func TestSetMemPeakSustained(t *testing.T) {
 	setMemPeak(&rec, nil, p)
 	if rec.MemSustainedKiB != nil {
 		t.Errorf("no level: sustained %d; want none", *rec.MemSustainedKiB)
+	}
+}
+
+// An attempt with a grant records in its run-log line the window its readings needed, from the
+// listings that succeeded: 100, 100, 1500, 1500, 3000 with a margin of 400 need 5 readings, 5 s.
+// A stopped attempt's line carries one too; an attempt without a grant carries none. Mutations:
+// appending a failed listing's 0 too gives 7 s; returning a stopped attempt's peak without its
+// readings leaves its line without the key; keeping readings without a grant gives the third a key.
+func TestRunLogCarriesMemWindow(t *testing.T) {
+	windowOf := func(p peak) float64 { // 0 when the line has no key
+		var rec store.RunRecord
+		if setMemPeak(&rec, nil, p); rec.MemWindowS == nil {
+			return 0
+		}
+		return *rec.MemWindowS
+	}
+	_, g, st := trimHold(t, 4000)
+	_, p := trimWatch(t, trimRun(t, 60), g, st, []int64{100, 100, 1500, -1, -1, 1500, 3000}, nil)
+	if w := windowOf(p); w != 5 {
+		t.Errorf("mem_window_s %v; want 5", w)
+	}
+	g, st = watchedHold(t)
+	storeRound(t, st, watch.Detector{Level: watch.Red, Stop: []string{g.HoldName()}, LastRoundNS: 1})
+	countKills(t)
+	stopped, p := watchFor(t, restartable("make", "test"), &supervisor{pid: 42, group: true}, g, st, 6, func(int) bool { return false }, nil)
+	if w := windowOf(p); !stopped || w == 0 {
+		t.Errorf("stopped %v, mem_window_s %v; want a stopped attempt with the key", stopped, w)
+	}
+	_, p = watchFor(t, restartable("make", "test"), &supervisor{pid: 42}, nil, nil, 3, func(int) bool { return false }, nil)
+	if w := windowOf(p); w != 0 {
+		t.Errorf("without a grant: mem_window_s %v; want none", w)
 	}
 }

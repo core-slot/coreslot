@@ -98,6 +98,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 	}
 	if g != nil && g.GrantMiB() > 0 {
 		tail = state.NewTail(g.GrantMiB(), int(time.Duration(r.trimWindowS)*time.Second/memSampleEvery))
+		p.askedMiB = g.GrantMiB()
 	}
 	// A do-not-stop mark keeps the hold out of stop rounds. Once the mark goes, a run that refused
 	// round R stays out until a tick reads a round other than R: R's listing would otherwise stay
@@ -132,6 +133,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			}
 			if tail != nil { // a listing that failed is no reading
 				tail.Add(kib >> 10)
+				p.readings = append(p.readings, int32(kib>>10))
 			}
 		}
 		if r.fwd != nil {
