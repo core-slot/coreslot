@@ -298,6 +298,13 @@ func (r *run) dockerGated() bool {
 	return r.gate != nil && r.fwd != nil && !r.fwd.part.blind()
 }
 
+// growing says whether the attempt's hold may still reserve growth its containers have taken: it
+// is gated and their footprint is below its need. Its run samples them every tick until then, so
+// that the reservation drops one tick after they grew.
+func (r *run) growing() bool {
+	return r.dockerGated() && r.fwd.part.footprintMiB() < r.gate.needMiB
+}
+
 // setDockerKeys writes into h, for a grant admitted on its Docker need, the growth and stamp of
 // the attempt's last sample, and drops its Docker keys once the attempt is no longer gated (its
 // forwarder did not start, or the run lost sight of its containers). Before the first sample the

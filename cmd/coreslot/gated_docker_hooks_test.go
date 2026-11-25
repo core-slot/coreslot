@@ -307,3 +307,35 @@ func TestHoldGrowthFollowsANewVM(t *testing.T) {
 		t.Errorf("the gate follows pid %d, want %d", g.vm.PID, vmPID+1)
 	}
 }
+
+// A gated run samples its containers at every tick until their footprint reaches its need, then at
+// every third: the growth its hold reserves drops one tick after its containers grew, not up to
+// three. Its container grows at listing 7; the sample of tick 8 shows at listing 9 with a growth of
+// min(8192 − 3072, 2 × 0) = 0; the samples are those of ticks 2, 4, 6 and 8, then 12 and 18.
+// Mutations: the every-third cadence alone keeps the growth of tick 6, 2048, at listing 9, red;
+// sampling at every tick to the end makes 9 samples, red.
+func TestGatedSamplesEveryTickUntilItsNeed(t *testing.T) {
+	set := readingsHook(t)
+	set(1, vmPID, vmNowMiB)
+	id := dockertest.ID('a')
+	f := partEngine(t, id, "db", 0)
+	g, st := watchedHold(t)
+	r, events, _ := engagedRun(t, f)
+	r.gate = &dockerGate{needMiB: 1024, vMiB: 8192}
+	events <- created(id)
+	watchFor(t, r, &supervisor{pid: 42, group: true}, g, st, 19, func(int) bool { return false }, func(n int) {
+		switch n {
+		case 7:
+			f.SetUsage(id, 1024<<20)
+			set(1, vmPID, vmNowMiB+1024)
+		case 9:
+			if growth, known, _ := r.gate.last(); growth != 0 || !known {
+				t.Errorf("listing 9: growth %d (known %v), want 0", growth, known)
+			}
+		case 19:
+			if got := len(statsCalls(f)); got != 6 {
+				t.Errorf("%d samples, want 6", got)
+			}
+		}
+	})
+}
