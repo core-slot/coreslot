@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"math/rand/v2"
 	"testing"
 )
 
@@ -108,4 +109,135 @@ func FuzzTail(f *testing.F) {
 			}
 		}
 	})
+}
+
+// gapReference is mem_window_s in readings, computed from its definition in quadratic time.
+func gapReference(rs []int32, asked int64) int {
+	m, n := Margin(asked), 0
+	for j := 1; j < len(rs); j++ { // reading j in the definition's numbering, rs[j:] the later ones
+		var f int64
+		for _, r := range rs[j:] {
+			f = max(f, int64(r))
+		}
+		u := 0
+		for i := j; i >= 1; i-- {
+			if int64(rs[i-1]) >= f-m {
+				u = i
+				break
+			}
+		}
+		n = max(n, j-u+1)
+	}
+	return n
+}
+
+// covers reports whether a Tail of window readings, fed the series, never reserves less than a
+// later reading that is at most the need asked.
+func covers(rs []int32, asked int64, window int) bool {
+	tail := NewTail(asked, window)
+	for t, r := range rs {
+		tail.Add(int64(r))
+		for _, later := range rs[t+1:] {
+			if int64(later) <= asked && tail.Need() < int64(later) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// TestGapCounterExample: a slow climb after a low stretch counts in full, looking forward to the
+// largest reading still to come; a window one reading shorter reserves too little. Mutation:
+// looking back from each reading to the largest earlier one gives 1.
+func TestGapCounterExample(t *testing.T) {
+	rs := []int32{100, 100, 100, 400, 700, 1000, 1300, 1600}
+	if n, ok := Gap(rs, 4000); n != 7 || !ok {
+		t.Fatalf("Gap = %d, %v; want 7, true", n, ok)
+	}
+	if !covers(rs, 4000, 7) || covers(rs, 4000, 6) {
+		t.Errorf("a window of 7 must cover the series and one of 6 must not")
+	}
+}
+
+// TestGapShapes: a climb of k readings, each step above the margin, gives k; a dip of d readings
+// between equal peaks gives d + 1; a flat series gives 1; one reading gives none. Mutation:
+// dropping the + 1 gives 0 for the flat series.
+func TestGapShapes(t *testing.T) {
+	for _, c := range []struct {
+		rs   []int32
+		want int
+		ok   bool
+	}{
+		{[]int32{0, 500, 1000, 1500}, 4, true},
+		{[]int32{3000, 0, 0, 0, 3000}, 4, true},
+		{[]int32{800, 800, 800}, 1, true},
+		{[]int32{800}, 0, false},
+	} {
+		if n, ok := Gap(c.rs, 4000); n != c.want || ok != c.ok {
+			t.Errorf("Gap(%v) = %d, %v; want %d, %v", c.rs, n, ok, c.want, c.ok)
+		}
+	}
+}
+
+// TestGapLaterPeakLengthensEarlierGap: the 1650 at the end lengthens the gap behind the 0 at
+// reading 6 back to the 1300 at reading 1. Mutation: computing the gap only at the newest reading
+// gives 2.
+func TestGapLaterPeakLengthensEarlierGap(t *testing.T) {
+	if n, _ := Gap([]int32{1300, 0, 0, 1000, 0, 0, 1250, 0, 1650}, 4000); n != 6 {
+		t.Errorf("Gap = %d; want 6", n)
+	}
+}
+
+// FuzzGap: for any series of up to 64 readings, Gap equals the definition, and a window of that
+// many readings never reserves less than a later reading at most the need asked. Mutation: taking
+// the stack's bottom instead of the topmost reading at least F - m gives 5 instead of 3 for the
+// second seed (400, 0, 300, 0, 0, 300).
+func FuzzGap(f *testing.F) {
+	f.Add(uint16(4000), []byte{0, 100, 0, 100, 0, 100, 1, 144, 2, 188, 3, 232, 5, 20, 6, 64})
+	f.Add(uint16(0), []byte{1, 144, 0, 0, 1, 44, 0, 0, 0, 0, 1, 44})
+	f.Fuzz(func(t *testing.T, asked uint16, data []byte) {
+		var rs []int32
+		for i := 0; i+2 <= len(data) && len(rs) < 64; i += 2 {
+			rs = append(rs, int32(binary.BigEndian.Uint16(data[i:])%8193))
+		}
+		n, ok := Gap(rs, int64(asked))
+		if want := gapReference(rs, int64(asked)); ok != (len(rs) >= 2) || n != want {
+			t.Fatalf("Gap(%v, %d) = %d, %v; want %d", rs, asked, n, ok, want)
+		}
+		if ok && !covers(rs, int64(asked), n) {
+			t.Fatalf("a window of %d readings does not cover %v (asked %d)", n, rs, asked)
+		}
+	})
+}
+
+// TestTailShortenKeepsNewest: shortening keeps the newest readings and never lengthens. Mutation:
+// keeping the oldest readings (1 and 2) gives 258 after the 0 instead of 261.
+func TestTailShortenKeepsNewest(t *testing.T) {
+	tail := NewTail(1000, 5)
+	addAll(tail, 1, 2, 3, 4, 5)
+	tail.Shorten(10)
+	if got := tail.Need(); got != 261 {
+		t.Fatalf("Need after Shorten(10) = %d; want 261", got)
+	}
+	tail.Shorten(2)
+	tail.Add(0)
+	if got := tail.Need(); got != 261 {
+		t.Errorf("Need after Shorten(2) and a 0 = %d; want 261 (5 + 256)", got)
+	}
+	tail.Add(0)
+	if got := tail.Need(); got != 256 {
+		t.Errorf("Need after a second 0 = %d; want 256", got)
+	}
+}
+
+// BenchmarkGapDay: a day-long run's readings, one a second, as a random walk.
+func BenchmarkGapDay(b *testing.B) {
+	rs := make([]int32, 86400)
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := 1; i < len(rs); i++ {
+		rs[i] = max(0, rs[i-1]+int32(rng.IntN(201))-100)
+	}
+	for b.Loop() {
+		Gap(rs, 8000)
+	}
 }
