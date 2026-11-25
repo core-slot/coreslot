@@ -48,6 +48,10 @@ All notable changes to this project are recorded here. The format follows
   a command starts beside running ones, coreslot now measures their process trees and the free
   memory at that moment, and waits when the room is not there (`PROTOCOL.md` section 12.1, the
   confirmation). `status` still shows the room from the last reports.
+- A gated Docker run kept the VM growth its containers had already taken reserved for up to 8 s after they took
+  it, so commands and containers behind it waited for memory that was in use, not about to be. A gated run now samples its
+  containers every tick (2 s) until they reach its Docker need, then every third tick as before (`PROTOCOL.md`
+  section 23.1).
 
 ## v0.11.0 (2026-11-24)
 

@@ -2268,12 +2268,12 @@ pid 6000 ends at 12:11:20, the head fits and starts; pid 6100 starts after it as
 | trim answer (CLI) | waited for up to 8 s, read every 0.25 s outside the section |
 | trim section entry (CLI) | within 1 s, else refused |
 | a forwarder's ready report | within 2 s of its start |
-| a run's containers (macOS) | sampled every third tick (6 s), off the tick, under one 2 s deadline per sample; at most 256 per run, a 257th makes the run blind |
+| a run's containers (macOS) | sampled every third tick (6 s), a gated run's every tick (2 s) until their footprint reaches its Docker need; off the tick, under one 2 s deadline per sample; at most 256 per run, a 257th makes the run blind |
 | the tap | reads a request or response head of at most 64 KiB; a longer one makes the run blind |
 | forwarder entries | the walk at most once an hour, at most 65 536 names; a swapped entry removed 30 days after its forwarder ended |
 | a gated ticket's reading | at most once per 2 s, under one 2 s deadline; one more at once when its instant is too early; ungated after 8 failed in a row |
 | a gated ticket's note | published at most once per 2 s |
-| a gated hold's growth | rewritten at each sample of its containers (6 s) |
+| a gated hold's growth | rewritten at each sample of its containers (2 s until they reach its need, then 6 s) |
 
 ## 23. The watchdog
 
@@ -2295,9 +2295,11 @@ start until it exits, in both modes of section 23.6. Each tick:
    `d_page_wait_ns` (the tree's times since the run's previous tick), `cpu_ns`, `stall_ewma` and
    `no_cpu_s` (section 7.4) and `sampled_ns`. It sets `child_exited` once, when the command has exited.
    A run with a forwarder (section 17) also writes `docker_footprint_mib` and `docker_note`. Every
-   third tick (6 s) it starts a sample of its containers' usage, outside the tick and under one 2 s
-   deadline, from the upstream socket, never through its forwarder; each tick writes the last sample
-   done, so an engine that hangs never delays a tick. A container counts by what it grew since the
+   third tick (6 s) it starts a sample of its containers' usage, and a gated run (section 12.6) every
+   tick until the sample's footprint reaches its Docker need, so that its hold's growth drops one tick
+   after its containers grew. Each sample runs outside the tick and under one 2 s deadline, from the
+   upstream socket, never through its forwarder; each tick writes the last sample done, so an engine
+   that hangs never delays a tick. A container counts by what it grew since the
    run first touched it: one the command created from 0, one it only touched from its usage when the
    run first read it after that touch, also off the tick; one that is gone counts 0. The run loses
    sight of them, and writes `ungated: blind` without a footprint from then on, when its forwarder
