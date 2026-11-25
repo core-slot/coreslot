@@ -109,7 +109,7 @@ func (t *Ticket) yieldWait(ctx context.Context, sec *store.Section, room int64, 
 	if y.done || t.req.Restart || t.req.RealMemory || t.req.TypicalS < yieldLongS || !m.HeadroomOK || need > room {
 		return false, nil
 	}
-	if level, ok := kernelPressure(); !ok || level != pressureNormal {
+	if level, ok := KernelPressure(); !ok || level != PressureNormal {
 		return false, nil
 	}
 	until := now + t.req.TypicalS*int64(time.Second)/yieldShare
@@ -181,7 +181,7 @@ func (t *Ticket) shortPass(head wire.Ticket, headKey, headOrder state.Key, holds
 	if err != nil || !valid || rec.Head != wire.ID(headKey).String() || now >= rec.UntilNS {
 		return "", false
 	}
-	level, read := kernelPressure()
+	level, read := KernelPressure()
 	switch {
 	case t.req.Restart || t.req.TypicalS == 0 || t.req.TypicalS > yieldShortS || t.noted:
 		return "not_short", true
@@ -191,7 +191,7 @@ func (t *Ticket) shortPass(head wire.Ticket, headKey, headOrder state.Key, holds
 		return "ends_late", true
 	case overrunLive(holds, headOrder, now):
 		return "overrun_live", true
-	case !read || level != pressureNormal:
+	case !read || level != PressureNormal:
 		return "pressure_not_normal", true
 	}
 	return "", true

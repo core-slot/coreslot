@@ -44,6 +44,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// The kernel's pressure as normal, in this process and every coreslot it starts as itself: an idle
+	// start over the room would otherwise wait whenever the test machine is at warn.
+	engine.KernelPressure = func() (int, bool) { return engine.PressureNormal, true }
 	if h := os.Getenv(helperEnv); h != "" {
 		os.Exit(runHelper(h, os.Args[1:]))
 	}

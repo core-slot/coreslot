@@ -35,7 +35,7 @@ func growingIdle(t *testing.T, needMiB int64) (*Engine, *Ticket, *fakeClock) {
 func TestIdleWaitsWhileOutsideGrowsUpToTheBound(t *testing.T) {
 	_, h, clk := growingIdle(t, 6000)
 	headroom := int64(6000)
-	for waited := time.Duration(0); waited < idleWaitMax; waited += 20 * time.Second {
+	for waited := time.Duration(0); waited < IdleWaitMax; waited += 20 * time.Second {
 		if w := waitOutcome(t, h); w.Outcome.Reason != ReasonIdleGrowing {
 			t.Fatalf("after %v: reason %q; want idle_growing", waited, w.Outcome.Reason)
 		}
@@ -94,5 +94,34 @@ func TestIdleWaitsAtPressure(t *testing.T) {
 		if isAdmitted(r) == c.waits {
 			t.Errorf("pressure %d read %v: admitted %v; want %v", c.level, c.read, isAdmitted(r), !c.waits)
 		}
+	}
+}
+
+// Every exit of a yielding head from the section but the yield's own wait stops its no-taker
+// count: a head that yields, then waits while memory outside coreslot grows, waits 3 s more for a
+// taker once it fits again. Mutation: dropping admitEntry's deferred reset ends the yield as
+// no_taker at the head's first attempt after the wait (the quiet window's test reddens too).
+func TestYieldingHeadExitsStopTheNoTakerCount(t *testing.T) {
+	_, clk, h, _ := yieldScene(t, false, shortReq(768, 60))
+	wantYielding(t, h, 0)
+	full := testHeadroom.mib
+	clk.advance(time.Second)
+	setLiveMem(t, full-1036) // a room of 500 under the head's 1024, a fall of 1036
+	wantReason(t, waitOutcome(t, h), ReasonIdleGrowing, "")
+	clk.advance(61 * time.Second)
+	setLiveMem(t, full)
+	wantYielding(t, h, 0)
+}
+
+// A forced start passes the idle wait: it takes its own path, whatever the room and the trend.
+// Mutation: making the forced start wait on the idle trend leaves the head waiting.
+func TestForcedStartPassesTheIdleWait(t *testing.T) {
+	e, h, clk := growingIdle(t, 6000)
+	if w := waitOutcome(t, h); w.Outcome.Reason != ReasonIdleGrowing {
+		t.Fatalf("reason %q; want idle_growing", w.Outcome.Reason)
+	}
+	requestStart(t, e.st.Dir(), clk, h)
+	if g := admitted(t, step(t, h)); g.Admission().Pass != "forced" {
+		t.Errorf("pass %q; want forced", g.Admission().Pass)
 	}
 }

@@ -318,7 +318,7 @@ func TestQuietAncestor(t *testing.T) {
 }
 
 // A quiet window stops a yielding head's no-taker count: once the window ends, the yield, which
-// still has time, waits 3 s more for a taker. Mutation: leaving the count running in step 1c ends
+// still has time, waits 3 s more for a taker. Mutation: dropping admitEntry's deferred reset ends
 // the yield as no_taker at the head's first attempt after the window.
 func TestQuietWindowRestartsTheNoTakerCount(t *testing.T) {
 	clk := newFakeClock()

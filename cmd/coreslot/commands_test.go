@@ -2220,3 +2220,21 @@ func TestStatusConfigWarningShown(t *testing.T) {
 		t.Errorf("doctor (exit %d) lacks the warning line, or calls it a problem:\n%s", r.code, r.stdout)
 	}
 }
+
+// With nothing running, a head that does not fit says it waits while memory outside coreslot
+// grows; a head that fits, or one beside a live hold, says nothing of it. Mutation: dropping the
+// room test shows it on the head that fits.
+func TestStatusShowsTheIdleWait(t *testing.T) {
+	for _, c := range []struct {
+		need  int64
+		holds []engine.HolderInfo
+		want  bool
+	}{{2000, nil, true}, {500, nil, false}, {2000, []engine.HolderInfo{{Name: "h", Label: "x", PID: 7}}, false}} {
+		rep := engine.Report{Head: "t1", Holds: c.holds, Tickets: []engine.TicketInfo{{Name: "t1", ID: "t1", Label: "q", PID: 9, NeedMiB: c.need}}}
+		rep.Mem.Known, rep.Mem.RoomMiB = true, 1000
+		h := buildStatus(rep, 0, nil, 0).human()
+		if got := strings.Contains(h, "waits while memory outside coreslot grows, at most 5 min"); got != c.want {
+			t.Errorf("need %d, %d holds: shown %v; want %v:\n%s", c.need, len(c.holds), got, c.want, h)
+		}
+	}
+}

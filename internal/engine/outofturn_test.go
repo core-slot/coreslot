@@ -16,15 +16,15 @@ import (
 // The engine's tests run at a normal kernel memory pressure level whatever the machine's, so that
 // whether a waiter may go out of turn never depends on the machine; a test that needs another level
 // sets it with setPressure.
-func init() { kernelPressure = func() (int, bool) { return pressureNormal, true } }
+func init() { KernelPressure = func() (int, bool) { return PressureNormal, true } }
 
 // setPressure makes the kernel report the memory pressure level level for the rest of the test (ok
-// false: a level that cannot be read). Going out of turn requires pressureNormal.
+// false: a level that cannot be read). Going out of turn requires PressureNormal.
 func setPressure(t *testing.T, level int, ok bool) {
 	t.Helper()
-	saved := kernelPressure
-	kernelPressure = func() (int, bool) { return level, ok }
-	t.Cleanup(func() { kernelPressure = saved })
+	saved := KernelPressure
+	KernelPressure = func() (int, bool) { return level, ok }
+	t.Cleanup(func() { KernelPressure = saved })
 }
 
 // unknownHeadScene is a head that waits for memory outside coreslot: A (1024 MiB, no typical run
@@ -223,7 +223,7 @@ func TestOutOfTurnOnlyAtNormalPressure(t *testing.T) {
 		level int
 		ok    bool
 		turn  bool
-	}{{"normal", pressureNormal, true, true}, {"warning", 2, true, false}, {"critical", 4, true, false}, {"unreadable", 0, false, false}} {
+	}{{"normal", PressureNormal, true, true}, {"warning", 2, true, false}, {"critical", 4, true, false}, {"unreadable", 0, false, false}} {
 		t.Run(c.name, func(t *testing.T) {
 			e, clk, _, _ := unknownHeadScene(t)
 			setPressure(t, c.level, c.ok)
