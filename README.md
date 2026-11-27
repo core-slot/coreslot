@@ -48,7 +48,9 @@ coreslot status                                # what runs, what waits, whether 
   its command while that command's background Docker connections stay open
   ([Docker on macOS](#how-it-decides)).
 
-**Measured.** On a 16 GB MacBook Air, four agents started a VS Code type check (twice), FastAPI's
+**Measured.** These runs used the v0.4.0 and v0.4.1 releases and have not been repeated since;
+admission has changed in later releases, from v0.5.0 on ([changelog](CHANGELOG.md)). On a 16 GB
+MacBook Air, four agents started a VS Code type check (twice), FastAPI's
 tests and SQLAlchemy's ORM tests at once, five times unwrapped and five times under `coreslot run`,
 in alternating order. Unwrapped, the machine sat at memory pressure warn for 66 to 115 s of each set
 and wrote 8 to 13 GiB to swap; under coreslot it never left normal and wrote none, and the agents'
@@ -113,11 +115,11 @@ less the reserve, less what each running command still has to grow into (its nee
 now). A command starts when its need fits the room. A running command reports what it uses every
 2 s, so before a command starts beside running ones, coreslot measures them at that moment rather
 than trust their last report, and waits if the room is not there now. A need larger than the machine's memory less the
-reserve starts only when no other coreslot job runs. A command that does not fit and would start
+reserve starts only when no other coreslot job runs. From the next release, a command that does not fit and would start
 because no other coreslot job runs waits up to 5 minutes while memory outside coreslot is growing. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
 
-**After the peak.** A command whose need was not pinned, learned or the default, does not keep its
+**After the peak (next release).** A command whose need was not pinned, learned or the default, does not keep its
 whole need reserved until it ends. Once it has run for its label's window, it reserves the most it
 used within that window plus a margin (a tenth of its need, at least 256 MiB), never more than its
 need, and its reservation rises again at the next report when it grows. The window is learned from
@@ -355,7 +357,8 @@ xattr -d com.apple.quarantine ./coreslot
 `coreslot version` prints the version and the protocol formats it implements. A state directory of
 another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`,
 which also removes that format's run log, so every label learns its memory need again. On a
-directory of this client's format, or of format 3 to 6 (which the reset upgrades), the reset is a repair
+directory of this client's format, or of an older format the reset upgrades (3 to 5 in v0.12.0,
+3 to 6 from the next release), the reset is a repair
 and keeps the run log; to make the labels learn again,
 remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 
@@ -371,7 +374,7 @@ coreslot run --restart=yes --label gate:unit -- npm test  # a label of your own
 coreslot run --restart=no -- ./migrate.sh                 # never killed and run twice
 coreslot status            # the watchdog's level, running commands, the queue; --json for scripts
 coreslot status --docker   # also Docker Desktop's VM and each running container, read from the Docker socket
-coreslot stats             # per label, what the need and the reservation's window are learned from
+coreslot stats             # per label, what the need is learned from; from the next release, also the reservation's window
 coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
 coreslot doctor            # state directory, filesystem, permissions, format, readings, forwarders still serving
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
@@ -579,7 +582,8 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 7
+- [Protocol](PROTOCOL.md), the normative definition of format 7, which the next release implements
+  (v0.12.0 implements format 6)
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)
