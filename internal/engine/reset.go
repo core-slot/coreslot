@@ -26,7 +26,7 @@ func (e *LiveError) Unwrap() error { return ErrRefused }
 // Reset recreates the state directory as the format this client writes (`coreslot doctor --reset`),
 // whatever format it had: inside the admission section it checks that there are no holds, no
 // tickets and no other section holder, and only then removes the entries of queue/, holds/,
-// cancel/, order/ and vmwait/, those of log/ unless FORMAT names format 4, 3 or none, gen, degraded
+// cancel/, order/ and vmwait/, those of log/ unless FORMAT names format 7, 6, 5, 4, 3 or none, gen, degraded
 // and the res/ another format may hold, and writes FORMAT, keeping admit.lock and config.toml. It
 // returns what store.(*Section).Reset did.
 //

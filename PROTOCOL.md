@@ -1,23 +1,31 @@
-# coreslot protocol, format 4
+# coreslot protocol, format 7
 
-This document is the normative definition of the coreslot on-disk protocol, format 4: the state
+This document is the normative definition of the coreslot on-disk protocol, format 7: the state
 directory, its files and their bodies, the admission critical section, the watchdog that keeps
 memory pressure from stalling the work the clients started, and the descriptor and environment
 contract between a run and the command it starts. Memory is the only resource. A client written
 from this document alone, in any language, shares one memory budget and one watchdog with every
 other conforming client on the machine.
 
-Format 4 is format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of `vmwait/`
-(section 7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4). Every client of
-format 4 takes the holds' `docker_growth_mib` off its room (section 12.1) and passes over a noted
-ticket (section 10.3), which a client of format 3 does not; a reset upgrades a format-3 directory in
-place, keeping its run log (section 4.4).
+Format 7 is format 6 with one rule for what a live hold reserves (section 12.1): its `need_mib`
+while its run measures it, and at least its `asked_mib` once it does not, which every client applies
+to its room, since a run may now lower `need_mib` without a request (section 12.5). Format 6 was
+format 5 with a job's two marks, `quiet/` and `nostop/` (section 7.18), which every
+client of format 6 reads at admission (section 12.1) and in its own run's ticks (section 23.1): a
+client that ignored them would admit jobs beside a quiet job and stop a do-not-stop one. Format 5 was
+format 4 with this machine's override of the watchdog's mode, `watch-mode` (section 7.15), which every
+client of format 5 reads for the mode it ticks and writes stop rounds in (section 23.1). Format 4
+was format 3 with the budget of Docker Desktop's VM (section 12.6): the notes of `vmwait/` (section
+7.14) and the Docker keys of tickets and holds (sections 7.3 and 7.4), by which
+every client takes the holds' `docker_growth_mib` off its room (section 12.1) and passes over a noted
+ticket (section 10.3). A reset upgrades a format-6, format-5, format-4 or format-3 directory in place, keeping its
+run log (section 4.4); a format-2 directory is another format.
 
-Format 4's names, bodies and layout are never redefined once released: a release that needs
+Format 7's names, bodies and layout are never redefined once released: a release that needs
 different metadata introduces a new format number instead (section 15). Within a format the only
 additions are an optional key that every reader may ignore (section 7.2) and an optional file that
 no admission reads, as the needs file is (section 5.4). Until `v1.0.0` a minor release may
-introduce such a number, and may change what format 4 means elsewhere, such as the configuration's
+introduce such a number, and may change what format 7 means elsewhere, such as the configuration's
 defaults and size grammar (section 5); from `v1.0.0` on, either needs a new major version
 ([compatibility policy](docs/compatibility.md#versions)).
 
@@ -50,7 +58,7 @@ requirement on a client.
 
 ## 2. Contract inventory
 
-Every shared file, field, environment variable and transition of format 4, and where it is defined.
+Every shared file, field, environment variable and transition of format 7, and where it is defined.
 
 | Item | Kind | Defined in |
 |---|---|---|
@@ -58,12 +66,17 @@ Every shared file, field, environment variable and transition of format 4, and w
 | `admit.lock` | file | [7.7](#77-admitlock), [8](#8-the-admission-critical-section) |
 | `gen` | file | [7.8](#78-gen), [10](#10-liveness-waiting-and-reconciliation) |
 | `watch.json` | file | [7.11](#711-watchjson), [23](#23-the-watchdog) |
-| `trim.json` | file | [7.13](#713-trimjson), [12.5](#125-trim) |
+| `trim.json` | file | [7.13](#713-trimjson), [12.5](#125-trim-and-the-following-reservation) |
+| `watch-mode` | file | [7.15](#715-watch-mode), [23.1](#231-the-tick) |
+| `yield.json` | file | [7.17](#717-yieldjson), [10.3](#103-waiting-and-election) |
 | `queue/` | directory of tickets | [7.3](#73-ticket), [10](#10-liveness-waiting-and-reconciliation) |
 | `holds/` | directory of holds | [7.4](#74-hold), [6](#6-holds-and-descriptor-ownership), [12](#12-admission) |
 | `cancel/` | directory of cancel requests | [7.5](#75-cancel-request), [13](#13-cancellation-and-withdrawal) |
+| `start/` | directory of start requests | [7.16](#716-start-request), [13.4](#134-start-now) |
 | `order/` | directory of order overrides | [7.12](#712-order-override), [9](#9-order), [13.3](#133-move) |
 | `vmwait/` | directory of notes | [7.14](#714-note), [12.6](#126-a-gated-request) |
+| `quiet/` | directory of marks | [7.18](#718-marks), [12.1](#121-steps) |
+| `nostop/` | directory of marks | [7.18](#718-marks), [23.5](#235-stop-rounds) |
 | `degraded` | file | [7.9](#79-degraded), [14](#14-errors-fail-open-and-degraded-mode) |
 | `log/` | directory of the run log | [7.10](#710-log-run-log), [20](#20-run-log) |
 | `telemetry/` (optional, not part of the format) | directory of the local record | [4.4](#44-layout), [23.6](#236-observe-mode-and-the-sample-log) |
@@ -75,13 +88,16 @@ Every shared file, field, environment variable and transition of format 4, and w
 | ticket body | body | [7.3](#73-ticket) |
 | hold body | body | [7.4](#74-hold) |
 | cancel body | body | [7.5](#75-cancel-request) |
+| start body | body | [7.16](#716-start-request) |
 | order body | body | [7.12](#712-order-override) |
 | run-log memory keys | field | [20](#20-run-log) |
 | `docker_footprint_mib` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
 | `docker_note` | field of the hold body | [7.4](#74-hold), [17](#17-descriptor-and-environment-contract) |
+| `typical_s` | field of the ticket and hold bodies | [7.3](#73-ticket), [7.4](#74-hold), [10.3](#103-waiting-and-election) |
 | `docker_need_mib` | field of the ticket and hold bodies | [7.3](#73-ticket), [7.4](#74-hold), [12.6](#126-a-gated-request) |
 | `docker_growth_mib` | field of the hold body | [7.4](#74-hold), [12.6](#126-a-gated-request), [23.1](#231-the-tick) |
 | `docker_sampled_ns` | field of the hold body | [7.4](#74-hold), [23.1](#231-the-tick) |
+| `forced` | field of the hold body | [7.4](#74-hold), [13.4](#134-start-now) |
 | `CORESLOT_GRANTED_MEM` | environment | [17](#17-descriptor-and-environment-contract) |
 | `CORESLOT_HOLD` | environment | [17](#17-descriptor-and-environment-contract), [18](#18-nested-runs-pass-through) |
 | `CORESLOT_UNBUDGETED` | environment | [14](#14-errors-fail-open-and-degraded-mode), [18](#18-nested-runs-pass-through) |
@@ -93,12 +109,14 @@ Every shared file, field, environment variable and transition of format 4, and w
 | admission | transition | [12](#12-admission), example [21.3](#213-admission) |
 | level gate | transition | [12.4](#124-the-level-gate), example [21.8](#218-tick-and-level) |
 | gated admission | transition | [12.6](#126-a-gated-request) |
-| trim | transition | [12.5](#125-trim), example [21.10](#2110-trim) |
+| trim | transition | [12.5](#125-trim-and-the-following-reservation), example [21.10](#2110-trim) |
 | tick | transition | [23.1](#231-the-tick), example [21.8](#218-tick-and-level) |
 | stop round | transition | [23.5](#235-stop-rounds), example [21.9](#219-stop-round-and-restart) |
 | restart | transition | [24](#24-restart-of-a-stopped-run), example [21.9](#219-stop-round-and-restart) |
 | cancellation | transition | [13.1](#131-cancellation), example [21.4](#214-cancellation) |
 | withdrawal | transition | [13.2](#132-withdrawal), example [21.5](#215-withdrawal) |
+| start now | transition | [13.4](#134-start-now), example [21.11](#2111-start-now) |
+| yield | transition | [10.3](#103-waiting-and-election), example [21.12](#2112-yield) |
 | move | transition | [13.3](#133-move) |
 | reconciliation | transition | [10.4](#104-reconciliation), example [21.6](#216-reconciliation) |
 | pass-through | transition | [18](#18-nested-runs-pass-through), example [21.7](#217-pass-through) |
@@ -130,20 +148,23 @@ Every conforming client MUST preserve these invariants:
   place, never replaced (section 7.4). A holder checks this when it rewrites its body and at
   release (section 12.3); a holder that finds `st_nlink == 0` or a different inode at its hold's
   path has a state error (section 14) and reports degraded mode to its user.
-- **I2 truthful reservation:** a live hold's body says what it reserves (`need_mib`, section 7.4),
-  and nothing is reserved without a live hold.
+- **I2 truthful reservation:** a live hold's body says what it reserves (section 12.1): its
+  `need_mib` (section 7.4) while its run measures it, and the larger of `need_mib` and `asked_mib`
+  once it does not; nothing is reserved without a live hold.
 - **I3 soft room:** an ordinary admission starts a request only when its need fits the room
   (section 12.1). The budget is soft: the room is computed from the kernel's readings and the hold
   bodies, and is not a cap. The exceptions are the idle rule (a head starts when no hold is live),
   an unreadable headroom (nothing gates the head), both of section 12.1, and a container request
   (section 12.1), whose room leaves out the hold bodies, all but their `docker_growth_mib` when it
   is gated. A gated request (section 12.6) must also pass its VM test: a second condition, never
-  an exception.
+  an exception. A forced start (section 13.4) ignores the room: its hold still says its full need
+  (I2), so the room may go below zero and every ordinary admission waits.
 - **I4 order:** ordinary admissions happen in effective order-key order (section 9) among waiters whose
   tickets were published before the election (section 10.3): the head blocks every waiter behind
   it except one that passes it, by duration or out of turn (section 10.3), and, while a hold is live, a container
-  request (section 12.1), and a run passing over a noted ticket (section 12.6); a waiter is passed
-  over only while it is STALLED, dead, canceled or noted.
+  request (section 12.1), a run passing over a noted ticket (section 12.6), and a short job passing a
+  yielding head (section 10.3); a forced start (section 13.4) starts ahead of every ticket; a waiter is passed over only while it is STALLED,
+  dead, canceled or noted.
 - **I5 progress:** assuming every live client is scheduled at least once per poll period, if the
   head's need fits the room (or no hold is live), the level gate (section 12.4) lets it start, and
   no process is stopped inside the admission section, the head is admitted within 3 s; up to 4
@@ -153,10 +174,13 @@ Every conforming client MUST preserve these invariants:
   container requests (section 12.1) may take the room a head waits for, or the start that spacing
   allows after a yellow clear (section 12.4), and so delay it for as long as they keep coming or
   run; only a timeout of its own, if it has one, bounds that. The head keeps its place. With no hold
-  live they leave the head its start. A gated head (section 12.6) is admitted within 3 s of a
+  live they leave the head its start. A yielding head (section 10.3) is admitted by the deadline it
+  published, or as soon as the room allows after it: the overrun of short jobs still running then is
+  the delay past it. A gated head (section 12.6) is admitted within 3 s of a
   reading by which both its tests pass; one whose VM test fails has its note by the end of that
-  attempt, or within 2 s of its last note change.
-- **I6 one budget:** every client of format 4 reads the same holds and the same
+  attempt, or within 2 s of its last note change. While a quiet hold is live (section 7.18) no
+  ordinary admission happens: the head is admitted by these rules once the window ends.
+- **I6 one budget:** every client of format 7 reads the same holds and the same
   `watch.json` under the same admission lock.
 - **I7 own children only:** a stop round lists only running holds (section 23.3), never the oldest
   of them, one whose `victim` is false nor one whose label has no normal share, and a run signals only the process group of its own
@@ -196,13 +220,13 @@ Every conforming client MUST preserve these invariants:
   `mode & 0o022 != 0`. The check applies to `$S` and to every file and directory of the layout
   (section 4.4) that the client opens, probes or removes; a directory or top-level file of the
   layout, or a temporary file in `$S`, that is a symlink, a directory, another user's, or group- or
-  world-writable is a state error. Inside `queue/`, `holds/` and `cancel/` the rule is different:
+  world-writable is a state error. Inside `queue/`, `holds/`, `cancel/`, `start/`, `quiet/` and `nostop/` the rule is different:
   an entry whose name matches the directory's grammar (section 7.1, temporaries included) but whose
   type, owner or mode fails the checks above is not a state error. It is a **stray**: ignored and
   counted exactly like an entry with a malformed body (section 7.2): never trusted, never opened
   or probed, never removed (reconciliation skips it and goes on), and `status` and `doctor` report
-  it in the ignored count. An entry whose name does not match its directory's grammar is ignored
-  whatever its type (section 4.4).
+  it in the ignored count, a stray mark excepted. An entry whose name does not match its
+  directory's grammar is ignored whatever its type (section 4.4).
   These directories are `0700` and the user's own, so only the user (or the superuser) can place an
   entry in them; a hostile same-user process is outside the threat model.
 - Every descriptor a client opens on a file under `$S` MUST be close-on-exec (`O_CLOEXEC`), except
@@ -236,11 +260,16 @@ admit.lock       the admission lock (section 7.7); never deleted, semantics fixe
 gen              {"gen": n, "reconciled_ns": t} (section 7.8)
 watch.json       the shared watchdog state (section 7.11)
 trim.json        requests to trim live holds (section 7.13); optional
+watch-mode       this machine's override of the watchdog's mode (section 7.15); optional
+yield.json       the head's yield to short jobs (section 7.17); optional
 queue/           tickets (section 7.3)
 holds/           holds (section 7.4)
 cancel/          cancellation requests (section 7.5)
+start/           start requests (section 7.16)
 order/           order overrides (section 7.12)
 vmwait/          notes of gated tickets (section 7.14)
+quiet/           marks: no other job starts while the job runs (section 7.18)
+nostop/          marks: no stop round lists the job (section 7.18)
 degraded         degraded-mode record (section 7.9)
 log/runs.jsonl   run log (section 7.10)
 telemetry/       the optional local record; absent is normal (below)
@@ -250,11 +279,11 @@ needs.toml       needs file (section 5.4); optional, present only under the over
 
 `log/` may also contain `runs.1.jsonl` and, left or still written by an older client, `watch.jsonl` and
 `watch.1.jsonl`. Each of
-`queue/`, `holds/`, `cancel/`, `order/`, `vmwait/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
+`queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/`, `nostop/` and `$S` itself may contain temporary files named `.tmp-<pid>-<seq>`
 (section 11). A client creates a directory of the layout when it first needs it, with mode `0700`;
 `EEXIST` is not an error, and the existing entry is checked as in section 4.2. Missing ancestors
 of `$S` (`~/.local/state/` often does not exist) are created with mode `0700` and are not checked:
-the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `order/`, `vmwait/` and `log/` are created only
+the policy of section 4.2 starts at `$S`. `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/`, `nostop/` and `log/` are created only
 by a client that has read a `FORMAT` it understands (section 15.2).
 
 `telemetry/` is optional, and its absence is normal: it exists only once a client has recorded
@@ -295,13 +324,15 @@ The directory is not a cache: liveness is decided by locks. Deleting or resettin
 client is live loses the reservations of its holds and is not supported. The CLI's `doctor
 --reset` runs inside the admission section and checks that no holds or tickets exist that some
 process still locks; only then does it remove the entries of `queue/`, `holds/`, `cancel/`,
-`order/` and `vmwait/` (an override and a note name a waiting ticket, and none survives), `gen`, `watch.json`, `trim.json`, `degraded`
+`start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` (a start request, an override, a note and a mark name a waiting or running job, and none survives), `gen`, `watch.json`, `trim.json`,
+`watch-mode` (a reset returns the watchdog to the configuration's mode), `yield.json`, `degraded`
 and the `res/` directory a directory of another format may hold, and writes `FORMAT` naming
-format 4. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
+format 7. It keeps `admit.lock`, `config.toml` and `needs.toml`: the
 format-stable file (section 15.1), whose inode live clients may hold open, and the configuration.
-When `FORMAT` names format 4, or format 3 (an upgrade: format 4 only adds `vmwait/` and optional
-Docker keys of tickets and holds), or is missing
-(which the first client writes as 4, section 15.1), the reset is a repair and keeps `log/` and
+When `FORMAT` names format 7, or format 6, 5, 4 or 3 (an upgrade: format 7 only changes what a hold reserves, format 6 adds `quiet/` and `nostop/`, format 5 `watch-mode`, `start/`, `yield.json`, the hold's optional `forced` and the ticket's
+optional `typical_s`, and
+format 4 `vmwait/` and optional Docker keys of tickets and holds), or is missing
+(which the first client writes as 7, section 15.1), the reset is a repair and keeps `log/` and
 `telemetry/` too: the run log is what every label's
 learned need and normal stall share come from (sections 20 and 23). When `FORMAT` names another
 format or cannot be read, it removes the entries of `log/` and `telemetry/` as well, and the CLI
@@ -309,8 +340,8 @@ says so of the run log: every label learns its need
 again. To make the labels learn again without a format change, remove `log/runs.jsonl` and
 `log/runs.1.jsonl`; to set one label's need, pin it in the needs file (section 5.4). A reset
 never deletes, renames or replaces `admit.lock`. Whatever `FORMAT` names, missing, malformed or another format, it recreates
-the directory as format 4; a live hold or ticket of any format stops it. It does not reconcile
-first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `order/` and `vmwait/` reconciliation
+the directory as format 7; a live hold or ticket of any format stops it. It does not reconcile
+first (section 10.4): it removes every entry of `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` reconciliation
 would remove, and more. Temporary files directly in `$S` (section 11) are not entries it removes;
 the next reconciliation removes them once they are older than 30 s. Once it has
 recreated the directory, nothing being live, it also removes every entry and birth of the
@@ -400,7 +431,8 @@ enabled = true        # false: read no Docker socket, give no run a forwarder, g
   (introduction). `trim_window_s` is the Go CLI's own key (section 12.5): a number of seconds from
   2 to 3600, rounded up to a whole second, default 60. Unlike its neighbours it is lenient: any
   other value reads as the default, with a warning where the configuration is shown, and never
-  makes the configuration invalid. No admission reads it, and another client may ignore it.
+  makes the configuration invalid. No admission reads it, and another client may ignore it. It is
+  trim's window alone: the window a learned run follows over is learned per label (section 12.5).
 - `[platform]`: `windows_warning`, a boolean.
 - `[telemetry]`: `enabled`, a boolean, default `false`. With `true` the machine samples of
   `sample_log` are taken too, while `sample_log = true` alone takes samples and records nothing
@@ -553,6 +585,7 @@ Body:
 | `created_ns` | integer | `≥ 0`; the run's arrival: the wall clock when the ticket was published, a restarted run's first arrival (section 24) |
 | `restart` | boolean | optional; `true` for a stopped run coming back (section 24), which waits under the restart conditions of section 12.4 |
 | `docker_need_mib` | integer | optional; `1..1073741824` when present; the Docker need of a gated request (section 12.6); absent for any other, and a writer omits it then |
+| `typical_s` | integer | optional; `≥ 0`; the run's typical run time in seconds (section 10.3), as its hold will carry it; `0` or absent when it has none, and a writer omits it then. A head reads it to find the short jobs behind it (section 10.3) |
 
 ### 7.4 Hold
 
@@ -562,17 +595,17 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | Key | Type | Rule |
 |---|---|---|
 | `label` | string | as in the ticket |
-| `pid` | integer | `≥ 0`; equal to the name's pid |
+| `pid` | integer | `≥ 0`; equal to the name's pid; the process whose descendants run the command, which a confirmation measures (section 12.1) |
 | `start_ns` | integer | `≥ 0`; equal to the name's start-ns |
 | `arrival_ns` | integer | `≥ 0`; when the run first arrived in the queue, also after a restart (section 24) |
-| `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB. It is the need asked when the hold is published; its holder MAY rewrite it afterwards to any value from 1 to the need asked (section 12.5). `0` for a run outside the budget (section 14), which reserves nothing |
+| `need_mib` | integer | `0..1073741824`; what the hold reserves, in MiB, while its run measures it (section 12.1). It is the need asked when the hold is published; its holder MAY rewrite it afterwards to any value from 1 to the need asked, while its run follows what it uses or once it was trimmed (section 12.5). `0` for a run outside the budget (section 14), which reserves nothing |
 | `typical_s` | integer | optional; `≥ 0`; the run's typical run time in seconds (section 10.3), as it learned it when it started; `0` when it has none |
 | `stops` | integer | `≥ 0`; how often the run was stopped for memory before this attempt |
 | `footprint_mib` | integer | `0..1073741824`; the run's footprint as it last measured it; `0` when not measured |
 | `d_user_ns`, `d_sys_ns`, `d_page_wait_ns` | integer | `≥ 0`; the time its process tree spent in user mode, in system mode and waiting for pages, in the run's latest tick period; `d_page_wait_ns` is `0` where the kernel reports no page wait (section 23.1) |
 | `normal_share` | number | `0..1`; the label's normal share `S0` (section 23.3) as the run read it from the run log when it started; `0` when `learned` is false |
 | `sampled_ns` | integer | `≥ 0`; when the run last measured, `0` before it has |
-| `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), its command does not share coreslot's process group, and it is not container work (section 23.5) |
+| `victim` | boolean | `true` when a stop round may list the hold: its run declared its command safe to stop and run again, its label has no `no_restart` (section 5.4), its command does not share coreslot's process group, it is not container work (section 23.5), and it is not marked do-not-stop (section 7.18) |
 | `learned` | boolean | `true` when the run log gave the label a normal share when the run started; otherwise the hold is learning (section 23.3) |
 | `child_exited` | boolean | `true` once the run's command has exited |
 | `cpu_ns` | integer | optional; `≥ 0`; the user and system time its process tree spent in this attempt so far: the sum of its ticks' `d_user_ns` and `d_sys_ns` (section 23.1) |
@@ -580,13 +613,14 @@ its reservation, and passes that descriptor to its command as fd 3 (section 17).
 | `stall_ewma` | number | optional; `0..1`; its share `S` (section 23.3) smoothed over its ticks with a time constant of 10 s: the first tick's `S`, then `S̃ ← S̃ + (1 − e^(−p / 10 s)) (S − S̃)` for a tick period `p` |
 | `container` | boolean | optional; `true` once the run is container work (section 23.5); absent means `false`, and a writer omits it then |
 | `no_cpu_s` | integer | optional; `≥ 0`; how long its process tree has used next to no CPU, in seconds of the machine's awake time: 300 for each whole 5-minute window in a row in which each tick's listing (section 23.1) read at least one process of the tree and showed none that the tick before had not (a child born and reaped between two ticks leaves no time a tick sees, so a tree that keeps making processes never counts, and a wait loop that forks, such as `until nc -z db 5432; do sleep 1; done`, is never marked), so that an attempt's first window never counts either, the tree's `d_user_ns`, `d_sys_ns` and `d_page_wait_ns` together came to under 1 % of the window, and no container client (section 23.5) was in the tree at the window's end; a writer omits it below 1800. It informs `status` alone, which shows it only on a running hold (section 23.3): a wait that is not stuck, such as a slow network read, looks the same, and so does work outside the tree or in a part of it that cannot be read (a container whose client has closed, a build daemon, a child run as another user), so nothing else reads it and it never makes a hold dead or a victim |
-| `asked_mib` | integer | optional; `0..1073741824`; the need asked, written with `trimmed` by a holder that acted on a request to trim its hold (section 12.5); absent means `0`, which says that `need_mib` is the need asked, and a writer omits it then. No admission reads it |
+| `asked_mib` | integer | optional; `0..1073741824`; the need asked, written with `need_mib` by a holder whose run follows what it uses or that acted on a request to trim its hold (section 12.5); absent means `0`, which says that `need_mib` is the need asked, and a writer omits it then. A hold its run no longer measures reserves at least this (section 12.1) |
 | `trimmed` | boolean | optional; `true` once the holder acted on a request to trim its hold (section 12.5): `need_mib` then follows its footprint; absent means `false`, and a writer omits it then. No admission reads it |
 | `docker_footprint_mib` | integer | optional; `0..1073741824`; while the run's forwarder sees its containers (section 17), how much they have grown since the run first touched each, as the run's last sample of them read it (section 23.1), `0` included; absent for a run without a forwarder, before its forwarder relays a first connection, and once the run has lost sight of them. It informs `status` alone |
 | `docker_note` | string | optional; at most 64 bytes of `[a-z0-9:. -]`; why the run's Docker work has no forwarder or is no longer counted: `no-forwarder: ` followed by `config`, `nested`, `state-dir`, `remote-host`, `needs-entry`, `switch`, `upstream`, `context`, `address` or `start` (section 17), `ungated: blind` once a run with a forwarder has lost sight of its containers, or `ungated: no-reading` or `ungated: oversized` for a gated request admitted without its Docker need (section 12.6). Only a run with a Docker interest (section 17) writes a `no-forwarder` note; absent when there is nothing to say, and a writer omits it then. It informs `status` alone, and a reader MUST accept a word it does not know |
 | `docker_need_mib` | integer | optional; `1..1073741824` when present; the Docker need the hold was admitted on (section 12.6), written while its run sees its containers; absent for any other hold, and a writer omits it then |
 | `docker_growth_mib` | integer | optional; `0..1073741824`; the growth of Docker's VM the hold reserves on the host (section 12.6); written with `docker_need_mib` alone, and every room takes it off (section 12.1) |
 | `docker_sampled_ns` | integer | optional; `≥ 0`; written with `docker_need_mib` alone: the wall clock of the reading that admitted the hold, then of its run's last sample of its containers (section 23.1) |
+| `forced` | boolean | optional; `true` when a forced start published the hold, whatever the room (section 13.4); absent means `false`, and a writer omits it then. No admission reads it |
 
 A body whose `pid` or `start_ns` differs from its name's is malformed. Comparing them needs the
 name, so it is done by the reader of `holds/`, not by a body decoder. A start-ns in a name may be
@@ -598,11 +632,13 @@ A hold is published with `stops`, `footprint_mib`, the three deltas, `normal_sha
 `sampled_ns` at 0 and `victim`, `learned` and `child_exited` false. Once its command has started
 the run writes `stops`, `victim`, `normal_share`, `learned`, `typical_cpu_s` and a container
 command's `container`, which hold for the attempt, except that finding a client in its tree clears
-`victim` and sets `container` (section 23.5). Each tick (section 23.1) writes the measured keys,
+`victim` and sets `container`, and a do-not-stop mark holds `victim` false while it stands (section
+23.5). Each tick (section 23.1) writes the measured keys,
 `cpu_ns` and `stall_ewma` among them, `docker_footprint_mib` and `docker_note` as the run's Docker part
 stands, which the first write after the command's start carries too, a gated hold's three Docker
-keys (section 23.1), with which it is published (section 12.6), and, once the holder has acted
-on a request to trim its hold, `need_mib`, `asked_mib` and `trimmed` (section 12.5). Only
+keys (section 23.1), with which it is published (section 12.6), and, while its run follows what
+it uses or once the holder has acted on a request to trim its hold, `need_mib` and `asked_mib`,
+with `trimmed` after a trim (section 12.5). Only
 the holder writes its body, at publication and then in place: one write at offset 0
 of the whole body, padded with spaces to the length it replaces, so that the file and its lock keep
 their inode and the file never shrinks (I1). It keeps `label`, `pid` and
@@ -649,8 +685,8 @@ client's own ticket after cancellation or withdrawal (13) or of its own hold (12
 `gen` once when it publishes or removes a note on its own (12.6), a note removed with its ticket
 taking the ticket's bump. The resume bump
 of section 10.2 is the one bump without such a change, and reconciliation increases `gen` when it
-removed anything (10.4). Publishing a cancel request does not bump `gen` (the owner polls `cancel/`
-itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `admit.lock` or the run
+removed anything (10.4). Publishing a cancel or start request does not bump `gen` (the owner polls
+`cancel/` and `start/` itself), nor does writing `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`, `admit.lock` or the run
 log, nor the holder's rewrite of its own hold's body. A crash can separate a removal from its
 bump, so a reader never relies on a bump to learn that an entry is gone (section 10.3).
 
@@ -750,12 +786,108 @@ ticket is gone (section 10.4), and a reset every one (section 4.4). A reader goe
 note that is not a regular file of the user still passes over the ticket of its name, whose owner
 would note it anyway.
 
+### 7.15 watch-mode
+
+`$S/watch-mode` is this machine's override of the watchdog's mode (section 23.6). It is optional: a
+client that never switches the mode writes none, and its absence is normal. It is one JSON object:
+
+```json
+{"mode": "observe", "set_ns": 1795300000000000000, "until_ns": 0}
+```
+
+| Key | Type | Content |
+|---|---|---|
+| `mode` | string | `"observe"` or `"enforce"` |
+| `set_ns` | integer | when it was written, informative |
+| `until_ns` | integer | when it ends, by the wall clock; `0` for until removed |
+
+The **effective mode** is the override's while the file parses, its `mode` is one of the two and its
+`until_ns` is `0` or later than the reader's wall clock; otherwise it is the configuration's `[watch]
+mode` (section 5.3). A file above 4 KiB, one that is not such an object, an unknown mode or a negative
+`until_ns` reads as no override. Every reader of the mode reads the effective mode: both ticks (section
+23.1, the restart waiter's included, section 12.4), the stop rounds they write (section 23.5) and
+whatever a client reports. It is written and removed only inside the section, replaced with a plain
+`rename` (section 11), without a `gen` bump; it is read with no section. The file itself is checked as
+in section 4.2. Being in `$S`, it is per machine; the configuration file stays each machine's default,
+and an override wins over a later edit of it until removed or ended. A reset removes it (section 4.4).
+The override is a convenience against no one: any process of the user can write it, as it can edit the
+configuration, and it refuses nothing; it changes only what the configuration already lets the same
+user change. A switch by hand has no end unless one is given, and `status` saying so is the reminder.
+
+> **Implementation note.** `coreslot watch observe|enforce [--for DURATION]` writes it, `--for` giving
+> `until_ns`; `coreslot watch config` removes it. `status` shows the source in its
+> watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and `watch.mode_until_ns`
+> whether or not a job runs.
+
+### 7.16 Start request
+
+`$S/start/<cancel>`, not lock-carrying; its name is the target ticket's id and its body a cancel
+request's (section 7.5), `requester_pid` being the starter's. It asks the ticket's own run to start
+at once (section 13.4).
+
+### 7.17 yield.json
+
+`$S/yield.json` is the head's yield to short jobs (section 10.3), at most one. It is optional, and its
+absence is normal. It is one JSON object:
+
+```json
+{"head": "01791720000000000000-0000005120-000001", "start_ns": 1791720600000000000, "until_ns": 1791721200000000000, "last_pass_ns": 0}
+```
+
+| Key | Type | Content |
+|---|---|---|
+| `head` | string | the yielding head's ticket id |
+| `start_ns` | integer | `≥ 0`; when the yield started, by the host's wall clock |
+| `until_ns` | integer | `≥ 0`; the deadline it published, by the host's wall clock |
+| `last_pass_ns` | integer | `≥ 0`; when a short job last passed it; `0` before any |
+
+A record is **valid** when it parses, its `head` is the current head's id (section 10.3) and the
+reader's wall clock is before `until_ns`; any other record is stale. A file above 4 KiB or one that
+is not such an object reads as no record. Only the head writes it, and each short job that passes
+sets its `last_pass_ns`; it is written and removed only inside the section, replaced with a plain
+`rename` (section 11), without a `gen` bump, and read with no section. The file itself is checked as
+in section 4.2. Reconciliation removes it once its head's ticket is gone (section 10.4), the head
+removes a stale one, and a reset removes it (section 4.4). Any process of the user can write it: it is
+not a control, and the head ends its yield by its own clock whatever it says (section 10.3).
+
+### 7.18 Marks
+
+`$S/quiet/<id>` and `$S/nostop/<id>` are a job's **marks**: empty files, not lock-carrying, named by
+the id of the ticket or the hold they mark (the first three fields of its name, section 7.1). They are
+published without replacement (section 11), an existing one meaning the job is already marked, and
+removed only inside the section, neither with a `gen` bump; they are read without the section. Their
+entries are checked as `cancel/`'s are (section 4.2).
+
+- A **quiet** mark on a live hold holds back every ordinary admission while the hold is live (section
+  12.1, step 1c); jobs already running go on. One on a ticket, or on a hold that is not live, holds
+  nothing back: a waiting quiet job keeps its place and acts once it is admitted, in its turn. Of
+  several waiting quiet jobs, the first admitted holds back the next; several running ones hold the
+  window until the last of them ends.
+- A **no-stop** mark on a hold keeps it out of every stop round: its own run writes `victim` false
+  while the mark stands (section 23.5). One on a ticket acts once the ticket is admitted.
+
+A mark follows its job. At admission and at a forced start the run moves its ticket's marks to its
+hold, in the section that publishes the hold (section 12.1, step 7); a cancellation and a withdrawal
+remove them with the ticket (section 13); the release of an attempt's hold removes its marks, however
+the attempt ended, even when a descendant keeps the hold live (section 12.3), so a stopped job's
+restart ticket is unmarked. Reconciliation removes a mark whose ticket and hold are both gone
+(section 10.4), and a reset removes them all (section 4.4). Any process of the user can mark or unmark
+any job: a mark moves nothing in the queue, and is a convenience, not a control. It stands against no
+hostile party, only against the user's own jobs that would start beside a quiet one and the
+watchdog's rounds. A quiet mark fails open: a missing mark holds nothing back, and a crash releases
+the hold's lock.
+
+> **Implementation note.** The Go CLI's `coreslot quiet <id>` and `coreslot no-stop <id>` mark a live
+> ticket or hold by the id `status` shows; `--off` removes the mark and, for a ticket admitted
+> meanwhile, the mark of every live hold of its run (the same `pid`, and the ticket's order key as its
+> `arrival_ns`). `status --json` gives every hold's and ticket's `quiet` and `no_stop`.
+
 ## 8. The admission critical section
 
-`admit.lock` is the protocol's linearization point. Enqueue, admission, cancellation publication,
+`admit.lock` is the protocol's linearization point. Enqueue, admission, cancel, start and mark publication,
 reconciliation and run-log rotation MUST happen while holding
 `flock(LOCK_EX)` on it; so does every other publication (section 11), every write of `watch.json`
-and every removal of a ticket, hold, cancel request or temporary file. A refresh (section 10.2), a
+and every removal of a ticket, hold, cancel or start request, mark, `yield.json` or temporary file. A refresh (section 10.2), a
 probe, the rewrite of a hold's own body and a run-log append happen outside it.
 
 - **Entry is non-blocking.** A client tries `LOCK_EX|LOCK_NB` and retries with backoff from 10 ms
@@ -783,7 +915,7 @@ probe, the rewrite of a hold's own body and a run-log append happen outside it.
   itself, once it holds no momentary lock, and forwards `SIGCONT` to that group when it is
   continued.
 - On every entry, a client reads `FORMAT` before changing anything and acts on it as section 15
-  says; when `FORMAT` is missing it writes `coreslot-protocol 4` (section 11).
+  says; when `FORMAT` is missing it writes `coreslot-protocol 7` (section 11).
 - A crash inside the section releases the lock; every step is ordered so that a crash leaves either
   the old state or the new state plus dead files that reconciliation removes.
 - Leaving the section is closing the `admit.lock` descriptor.
@@ -861,11 +993,13 @@ A waiter:
   (section 10.4). A gated waiter also watches every gated ticket ahead of it beyond the window,
   whose Docker needs its VM test sums (section 12.6), so that STALLED applies to them too; one it
   has never observed counts until it has watched it for the stall time;
-- checks `cancel/` for its own ticket id on every poll (section 13.1);
+- checks `cancel/` for its own ticket id on every poll (section 13.1), then `start/` (section 13.4),
+  wherever it is in the queue and before any wait for its next election;
 - as head, retries admission with backoff from 0.25 s up to 0.5 s, repeating the election (with a
   rescan when `gen` changed) before each attempt;
 - behind a live ticket, when its run has a typical run time or its request is a container request
-  (section 12.1), makes a single admission attempt per election to pass the head (below).
+  (section 12.1), makes a single admission attempt per election to pass the head (below), and as head
+  may yield to short jobs (below).
 
 **Passing.** A run's **typical run time** `d`, in whole seconds, is learned from its label's
 counted runs (section 20) when it starts, and its hold carries it as `typical_s`; a run of a label
@@ -913,6 +1047,70 @@ no pass (section 12.1) and leaves the head its place.
 > **Implementation note.** The Go CLI's typical run time is the 90th percentile of the `ran_s` of
 > the window its need is learned from (section 5.4), rounded up to a whole second and at least 1.
 
+**Short jobs past a long head.** A head that could start now may let short jobs go first, by a
+deadline it publishes in `yield.json` (section 7.17). A waiter `w` behind the head `h` in effective
+order (section 9) is **short** when its ticket is live (its lock cannot be taken), it has no note
+(section 7.14), no `restart` and a ticket `typical_s` in `1..120`, and it fits the room but would not
+fit beside the head (`need_w ≤ room < need_w + need_h`). The head keeps no STALLED verdict on the
+tickets behind it: a stopped owner's ticket can be short, and the no-taker rule below ends a yield it
+cannot use.
+
+The head **starts a yield** at an attempt that would admit it (section 12.1, after the VM test and
+before the level gate records the start, so a yield uses no spacing slot) when: the headroom was read
+and its need fits the room; the kernel's pressure level is normal (as for going out of turn); its
+typical run time is at least 600 s; it has no `restart`, is no container request, has no order
+override (section 7.12) and never yielded before; and a short waiter is behind it. It writes the
+record with `start_ns` now and `until_ns` now plus a quarter of its typical run time (10 min for a
+40-min head), capped at its own wait deadline less 60 s when it has one, and does not yield when that
+cap is not more than 3 s away. It publishes no hold and keeps waiting. A head with no hold live may
+yield: the idle rule is for a head that cannot fit.
+
+The head **ends its yield**, removes the record and is admitted as usual at that or a later attempt,
+when: its wall clock reaches `until_ns`; its own monotonic clock says the yield's length has passed
+since it started (a backward step of the wall clock cannot lengthen it); a short job overruns (a live
+hold whose `arrival_ns` is at or after the head's effective order key has a `typical_s` above 0 and
+has run longer than it; a hold with none never counts); nobody takes it: it has fit the room for 3 s
+in a row by its monotonic clock with `last_pass_ns` unchanged, the count restarting whenever an
+attempt of the head finds it not fitting (its need over the room, a quiet job's window, or its
+Docker part short of Docker's VM or unread) or a pass is noted, and going on through any other
+exit, such as a read of Docker's VM or the level gate, so each short job that ends gives the next 3 s, which is at least two
+of its elections; its record is missing or names another ticket (another head removed it as stale:
+it leaves that file); or another ticket becomes head. Every end is final: a ticket yields at most
+once.
+
+A waiter **passes as short**, besides fitting the room and the level gate as any admission, when a
+valid record names the head, it is short (from its own request; a noted waiter is not), it is
+expected to end by the deadline (`now + d ≤ until_ns`), no short job overruns, and the kernel's
+pressure level is normal. The `no_holds` restriction does not apply to it. In the admitting section
+it sets the record's `last_pass_ns` to now. Several short jobs may start, side by side or one after
+another, as the room allows. While a valid record names the head no other pass applies, even while a
+short job holds the room the head needs: a pass by duration or out of turn could run past the
+deadline, and the head's bound below rests on it. A record whose deadline has passed is not valid, so
+today's passes decide again even before the head removes it.
+
+**The head's bound.** Every short job starts expected to end by the deadline, so the head starts by
+the deadline, or as soon as the room allows after it: the delay past the deadline is the overrun of
+the short jobs running then, never a chain, since an overrun ends the yield and stops new passes. At
+a wait deadline of its own the head may still time out as a head that never yielded would.
+
+**What the yield's rules rest on.** No rule of the yield stops a hostile party: any process of the
+user can write `yield.json`, as it can start or move a ticket. Each rule guards the head against one
+way the yield could outlast its worth:
+- **The deadline** guards against a stream of short arrivals that would keep the head waiting for
+  ever. The head computes it from its own `typical_s`, waiters only read it, and the head's own
+  monotonic clock ends the yield whatever the file says.
+- **The thresholds** (a head of at least 600 s, a short job of at most 120 s) guard against a
+  learned typical run time that understates. A waiter's `typical_s` comes from its label's run log
+  (section 5.4); a short job that runs long costs one overrun, which ends the yield.
+- **The no-taker rule** guards against a yield nobody uses, such as a short waiter whose owner has
+  stopped. It reads `last_pass_ns`, which only a passer's admitting section writes, and it refuses no
+  one; it only ends the yield sooner.
+- **The pressure test** guards against a room that the kernel is already reclaiming. It reads the
+  kernel's pressure level; where the level cannot be read, nothing yields, as today.
+- **The overrun rule** guards against a passer that runs long while more passers follow it. It reads
+  the live hold's own `start_ns` and `typical_s`, which the passer's run writes; a hold without
+  `typical_s` never counts.
+
 Only a non-conforming actor removes a live ticket (reconciliation removes dead ones only). A waiter
 whose own ticket's name disappears while it still holds the ticket's descriptor keeps waiting. It
 loses its place, though. No other client sees the ticket any more, so waiters behind it may be
@@ -932,7 +1130,7 @@ the examination are counted without being examined.
 
 Reconciliation removes dead files. It runs inside the section at most once per 30 s machine-wide: a
 client that enters the section for any purpose other than admission
-(enqueue, cancellation publication, a move, a trim request, removal of its own ticket or hold, a resume
+(enqueue, cancel or start publication, a move, a trim request, removal of its own ticket or hold, a resume
 bump,
 publication of an unbudgeted hold, a `degraded` write or removal, log rotation) and finds
 `reconciled_ns` in `gen` older than 30 s on its wall clock (or in the future by more than 30 s) MUST
@@ -944,13 +1142,15 @@ neither does a reset (section 4.4), and neither does a watchdog tick (section 23
    the file **while still holding the probe lock**, then closes it (an entry whose name matches but
    that is not a regular file of the user, section 4.2, is ignored and counted, never probed or
    removed, and reconciliation goes on and writes `gen` as usual);
-2. removes every cancel request in `cancel/`, every order override in `order/` and every note in
+2. removes every cancel request in `cancel/`, every start request in `start/`, every order override in `order/` and every note in
    `vmwait/` whose ticket is gone: its ticket is any `queue/` entry
    that is not ignored as a stray (section 4.2) whose name matches the ticket grammar and whose
    first three fields are that id (for a note, whose name is the note's), whatever its body. An entry ignored as a stray (a wrong type,
-   owner or mode) is not an entry for this purpose: it never protects a cancel request, an
-   override or a note;
-3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `order/` and `vmwait/` whose mtime is
+   owner or mode) is not an entry for this purpose: it never protects a cancel or start request, an
+   override or a note. It also removes `yield.json` when its `head` is no such ticket, or it is no
+   record (section 7.17), and every mark in `quiet/` and `nostop/` whose id is neither such a ticket's
+   nor a hold's that step 1 left in place;
+3. removes every temporary file (`.tmp-*`) in `$S`, `queue/`, `holds/`, `cancel/`, `start/`, `order/`, `vmwait/`, `quiet/` and `nostop/` whose mtime is
    older than 30 s;
 4. writes `gen` with `reconciled_ns` set to the current wall clock, and with `gen` increased by one
    if it removed anything.
@@ -960,8 +1160,8 @@ whole machine.
 
 ## 11. Atomic publication
 
-Inside the section, a publication of a ticket, hold, cancel request, order override, `gen`, `FORMAT`,
-`degraded`, `watch.json` or `trim.json`:
+Inside the section, a publication of a ticket, hold, cancel or start request, mark, order override, `gen`, `FORMAT`,
+`degraded`, `watch.json`, `trim.json`, `watch-mode` or `yield.json`:
 
 1. creates `<dir>/.tmp-<pid>-<seq>` with `O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC`, mode `0600`, in the
    target's directory; on `EEXIST` (a young leftover of an earlier process with the same pid) the
@@ -969,7 +1169,7 @@ Inside the section, a publication of a ticket, hold, cancel request, order overr
 2. takes `flock(LOCK_EX)` on it if the file is lock-carrying (ticket, hold);
 3. writes the body;
 4. moves it to its final name:
-   - ticket, hold, cancel request: without replacing an existing file: `renameat2(RENAME_NOREPLACE)`
+   - ticket, hold, cancel or start request, mark: without replacing an existing file: `renameat2(RENAME_NOREPLACE)`
      on Linux, `renamex_np(RENAME_EXCL)` on macOS, and where those are unavailable (the call or its
      library wrapper is missing, or it fails with `ENOSYS`) or unsupported by the filesystem (it
      fails with `EINVAL`, `ENOTSUP` or `EOPNOTSUPP`), `link(2)` to the final name followed by
@@ -979,8 +1179,9 @@ Inside the section, a publication of a ticket, hold, cancel request, order overr
      name carrying its next `seq`. A cancel request is
      not retried: its name is its target's id, so an existing one means that ticket's cancellation
      is already requested; the canceller removes its temporary and reports the cancellation as
-     already requested, which is not an error (section 13.1);
-   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`: with a plain `rename`,
+     already requested, which is not an error (section 13.1). A start request and a mark are
+     published the same way (sections 13.4 and 7.18);
+   - order override, `gen`, `FORMAT`, `degraded`, `watch.json`, `trim.json`, `watch-mode`, `yield.json`: with a plain `rename`,
      which replaces an existing file.
 
 The writer keeps its original descriptor: writing the body never closes the only lock-carrying
@@ -1010,35 +1211,85 @@ room = headroom − reserve − Σ over live holds of max(0, need − footprint)
 
 where `headroom` and `reserve` are the readings of section 5.1 and the configuration (section 5.3),
 and a **live hold** is a well-formed hold of `holds/` whose probe fails because some process holds
-it. A live hold contributes its `need_mib` less its `footprint_mib`, and nothing when the footprint
-is the larger or `need_mib` is 0 (a run outside the budget), and its `docker_growth_mib` in full:
+it. A live hold contributes what it reserves, `need`, less its `footprint_mib`, and nothing when
+the footprint is the larger or `need` is 0 (a run outside the budget), and its `docker_growth_mib` in full:
 the growth of Docker's VM it reserves on the host (section 12.6), 0 when absent. A live hold whose
 body does not parse contributes the cold start need (section 5.1) in full, and no growth. Stray and gone holds are left out.
+A hold **reserves** its `need_mib` while its run measures it: its body is well formed,
+`child_exited` is false and `sampled_ns` is at most 6 s old, as section 23.3 has a running hold.
+Otherwise it reserves the larger of `need_mib` and `asked_mib`: a run that ticks late or whose
+command has exited keeps nothing lowered that nobody measures, since unknown is not zero (section
+7.2). Every reader of what a hold reserves uses this: the room, the head's expected wait (section
+10.3) and what a client shows.
 The room may be negative. A request **fits** when its need is at most the room.
 
 Inside the section the head, a waiter that may pass it (section 10.3) or a container request
 (below):
 
-1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1);
+1. checks `cancel/` for its own ticket id; if present, it is canceled (section 13.1). Then, as
+   **step 1c**, once steps 2 and 3 have read the configuration and listed the live holds, while a
+   quiet mark names a live hold (section 7.18), it leaves the section and waits, whatever path it
+   would take: no ordinary admission happens while a quiet job runs, and none
+   records a start for the level gate's spacing (section 12.4);
 2. reads the configuration and the machine's memory (section 5.1); an invalid configuration or an
    unknown `memory` is a state error (section 14);
 3. lists the live holds and computes the room;
 4. applies the **idle rule**: when no hold is live, the head starts whatever the numbers say; idle
    means "no coreslot job running", never machine load. When a hold is live and the headroom is
    known, the head leaves the section and waits unless its request fits. When the headroom is
-   unknown nothing gates the head;
+   unknown nothing gates the head. A head whose request does not fit MAY delay its idle start
+   while memory outside coreslot grows, for a bound it keeps, after which it starts as above: the
+   idle start stays reachable for a request the room never fits;
 5. repeats the election (section 10.3) over a fresh listing of `queue/` and `vmwait/`, the
    **re-election**: every well-formed ticket ahead of it in order is probed, and if any is neither
    dead nor STALLED for this observer (its mtime from the listing counts as an observation) nor
    noted (section 12.6), the head leaves the section
-   and waits, unless it may pass the first of them (section 10.3). A ticket the head has never
+   and waits, unless it may pass the first of them (section 10.3), as short included. A ticket the head has never
    observed, such as one published after its election, counts as live;
 6. while a hold is live, applies the level gate (section 12.4) and leaves and waits if it holds the
    request back;
-7. publishes its hold (section 7.4), closes its ticket descriptor, unlinks its ticket and its order
-   override and note if it has them, bumps `gen`, and leaves the section.
+7. publishes its hold (section 7.4), moves its ticket's marks to the hold (section 7.18), closes its
+   ticket descriptor, unlinks its ticket and its order override, start request and note if it has
+   them, bumps `gen`, and leaves the section.
 
-A gated request (section 12.6) also passes its VM test between steps 6 and 7.
+A gated request (section 12.6) also passes its VM test between steps 6 and 7. A head that passed
+them may then yield to short jobs instead of step 7 (section 10.3), before step 6 records its start.
+
+**The confirmation (step 6a).** A footprint is its run's last write, up to a few seconds old, while
+the headroom is read now: memory a run has just freed would count both as free and as still used.
+So a client that can read the process table SHOULD, after every other test has passed, before step
+7 and before the level gate records the start, confirm the room of a request that counts footprints
+(not a container request) while a hold is live:
+
+1. read the headroom, `H1`;
+2. read the process table once, and for each live hold whose `pid` is at least 2 and is the process
+   that started no more than 1 s after the hold's `start_ns` (so not a reused pid), sum the
+   footprint, as section 20 measures a run's, of that pid's descendants, the pid itself
+   left out;
+3. read the headroom again, `H2`;
+4. compute the room with `min(H1, H2)` for the headroom and each measured sum in place of its hold's
+   `footprint_mib`.
+
+If the request does not fit this room, it is not admitted and waits as for step 4. A hold that
+cannot be measured keeps its `footprint_mib`; when the process table cannot be read, all do; when a
+headroom reading fails, the confirmation admits. The confirmation only ever refuses: the request
+has already passed step 4 on the written footprints, and every other rule (step 4, the passing rule
+of section 10.3, `status`) keeps that room. A hold whose `pid` is not the parent of its command's
+processes is measured at 0 and so charged its whole need; a client MUST write as `pid` the process
+whose descendants run the command. No hostile party is in view: the confirmation reads only the
+kernel, inside the section, and no hold body moves it beyond its own `need_mib`.
+
+> **Implementation note.** The Go CLI's head delays its idle start over the room while the
+> headroom it read itself at its attempts fell by more than 1 GiB within the last 60 s, or the
+> kernel's memory pressure, when it can be read, is not normal; at most 300 s from its first such
+> attempt, counted again after a hold was live. It keeps its readings in its own process; no file
+> carries them.
+
+A **forced start** (section 13.4) takes step 1 and then step 7 alone: no step 1c, no room, no idle rule, no
+re-election, no level gate, no confirmation, and no VM test. Its hold says its full need, its ticket's `arrival_ns`
+and `forced`, and it records no start for the level gate's spacing (section 12.4). A gated run's
+hold carries the Docker keys of a reading taken outside the section, as a gated admission's does
+(section 12.6), and none when no reading can be had.
 
 A **container request** is the request of a container command (section 5.4) whose need neither its
 caller nor a `mem` in the needs file named: a person who pins a need chose to reserve it and to wait
@@ -1090,7 +1341,9 @@ section if it can within 2 s, probes its hold and unlinks it only if the probe s
 descendant still holds it), bumping `gen` when it did (section 7.8); otherwise reconciliation
 removes the hold later. Other clients MAY remove their hold the same way, or leave it to
 reconciliation. This applies to every hold a run published, including a fail-open run's unbudgeted
-hold (section 14), and to the hold of a stopped attempt (section 24).
+hold (section 14), and to the hold of a stopped attempt (section 24). In that section the run also
+removes its hold's marks (section 7.18), whether or not it can unlink the hold: a descendant that
+keeps the hold live keeps no quiet window.
 
 ### 12.4 The level gate
 
@@ -1116,7 +1369,7 @@ fresh sample, the level green, the level calm for `calm_s` (`host_now − calm_s
 and, when the headroom is known, a room of at least its need plus `max(256 MiB, need / 10)`. With
 no hold live, the idle rule starts it like any other.
 
-### 12.5 Trim
+### 12.5 Trim and the following reservation
 
 A client MAY ask the holder of a live hold to lower its reservation, by writing a request for the
 hold's id into `trim.json` (section 7.13) inside the section. The request changes no body, moves no
@@ -1125,9 +1378,12 @@ ticket and admits nothing: whatever room it frees is taken in order, as any room
 A holder that finds a request for its own hold MAY lower its `need_mib` (section 7.4), and rewrite
 it at every tick after (section 23.1). It MUST NOT raise `need_mib` above the need asked, nor write
 0; a holder that lowers it SHOULD write `asked_mib` and `trimmed` with it. A holder that does not
-know the request ignores it. A reader of a hold, admission and the watchdog included, takes
-`need_mib` as it finds it. A request names one hold, and so one attempt: a restarted run (section
+know the request ignores it. A request names one hold, and so one attempt: a restarted run (section
 24) comes back under a new hold that no request names.
+
+A holder MAY also lower `need_mib` without a request, to follow what its run uses (below). It then
+writes `asked_mib` in every rewrite and no `trimmed`. A reader of a hold, admission and the watchdog
+included, takes what it reserves by section 12.1's rule, which every client must apply.
 
 > **Implementation note.** `coreslot trim <hold-id>`, or `coreslot trim --label LABEL` for the one
 > live hold reserving memory with that label, writes the request (its exit statuses are section
@@ -1143,6 +1399,16 @@ know the request ignores it. A reader of a hold, admission and the watchdog incl
 > trimmed run that is stopped comes back (section 24) with the need it had at its start or the
 > stopped attempt's peak, whichever is larger, under a new hold that is not trimmed. For container
 > work the reservation follows the client's own memory alone (section 23.5).
+>
+> The Go CLI also makes a run **follow** without a request when its need was not pinned with
+> `--mem` or the needs file (a learned need or the cold start), it had no Docker interest at its start (section 17: a container
+> command, a label whose counted runs had container work, or a `docker_mem` need), its need is not
+> oversized (section 12.2) and it is the run's first attempt. Its window spans the label's window
+> `W` (section 20) of readings instead of trim's, with the same formula, written at every tick from
+> the attempt's start. A run that becomes container work stops following and writes `need_mib = A`
+> without `asked_mib` at every later tick, so that a write that failed repeats; a trim makes a
+> following window the shorter of the two, and never lengthens one. A restart does not follow: the
+> regrowth its stopped attempt was stopped for may be what its window missed.
 
 ### 12.6 A gated request
 
@@ -1202,13 +1468,16 @@ growth as free twice: the ticket leaves, reads again and enters again, once per 
 such reading ends the attempt without a note. An attempt therefore enters the section at most three
 times. When both tests pass, the level gate records the start (section 12.4) and the ticket is
 admitted (step 7): its hold is published with `docker_need_mib`, `docker_sampled_ns` the reading's
-instant and `docker_growth_mib` the `growth` of the reading's `V` and `vm_now` and a Docker footprint
-of 0 (a restart's own, section 24.1), so that no admission sees the hold without it.
+instant and `docker_growth_mib` the `growth` of the reading's `V`, `vm_now` and backend, and a
+Docker footprint of 0 (a restart's own, section 24.1), so that no admission sees the hold
+without it.
 
 **The note.** When the VM test fails, or the reading failed, the ticket publishes its note (section
 7.14) in that section, unless it has one, it makes a single attempt (a no-wait try then reports that
-it would wait), or it published one less than 2 s ago. It removes the note at an attempt whose host
-test fails, when its Docker part goes ungated, and with its ticket. Every run, gated or not, passes
+it would wait), or it published one less than 2 s ago: each publication bumps `gen` (section 7.8)
+and every waiter re-lists on a bump, so a ticket whose VM test swings between attempts would
+otherwise wake them all at each one. It removes the note at an attempt whose host test fails, when
+its Docker part goes ungated, and with its ticket. Every run, gated or not, passes
 over a live ticket that has a note in its election and re-election (sections 10.3 and 12.1 step 5):
 the first live ticket without a note is its head, and when there is none it is the head itself and
 the idle rule is its. So a run that needs only the host never waits for a ticket that waits only
@@ -1252,7 +1521,7 @@ step 1, so a cancel published before the owner's admitting section wins; one pub
 no ticket and has no effect: cancellation never revokes a hold, and never stops a command. A
 canceller that finds the request already published (section 11) treats the cancellation as already
 requested; that is not an error. On finding it, the owner closes its ticket descriptor (the ticket
-is dead at once), removes the ticket, the cancel request and its order override, if any, in its next section if it can enter one
+is dead at once), removes the ticket, the cancel request, and its order override, start request and marks, if any, in its next section if it can enter one
 (bumping `gen`, section 7.8), and stops: the CLI exits with the refusal code.
 
 > **Implementation note.** The Go CLI checks `queue/` first and refuses, with a diagnostic that no
@@ -1263,7 +1532,9 @@ is dead at once), removes the ticket, the cancel request and its order override,
 A waiter whose own deadline passes, whose wait is abandoned by its caller, or that is interrupted
 (`Ctrl-C` on a waiting CLI, which then exits 130) withdraws by closing its ticket descriptor: the
 ticket is dead at once, and withdrawal never depends on entering the section. The waiter MAY then
-remove its ticket in a section, bumping `gen` (section 7.8); otherwise reconciliation removes it.
+remove its ticket and its marks in a section, bumping `gen` (section 7.8); otherwise reconciliation
+removes them. A run that leaves the queue to run outside the budget withdraws so, and its marks go:
+no window opens for a job coreslot did not admit.
 
 ### 13.3 Move
 
@@ -1285,6 +1556,31 @@ ticket, as it may cancel one: a move is a convenience, not a control.
 
 > **Implementation note.** The Go CLI's `coreslot move` takes a ticket id or `--label`, and exactly
 > one of `--first`, `--last`, `--before <id>` and `--after <id>`.
+
+### 13.4 Start now
+
+A start request asks a waiting ticket's own run to start at once, ahead of the queue and whatever the
+room. A starter publishes `$S/start/<ticket-id>` (section 7.16) inside the section, as a canceller
+publishes a cancel request (section 13.1): it MAY first check that `queue/` holds the ticket, an
+existing request means it is already requested, publishing it does not bump `gen`, and
+reconciliation removes one whose ticket is gone (section 10.4). The owner checks `start/` for its id
+on every poll, after `cancel/` and before any wait for its next election, so a waiter behind the head
+that never attempts admission (section 10.3) sees it too. On finding it, the owner enters the section
+and makes a forced start (section 12.1): a cancel request found at step 1 still wins. Its hold
+reserves its full need (I2) and says `forced`, so the room may go below zero, and every ordinary
+admission waits until memory frees up; a container request, whose room leaves out the holds, is not
+held back (section 12.1). The hold keeps its ticket's `arrival_ns`, so a stop round lists it by its
+queue arrival like any other run (section 23.5). A forced start takes no step 1c, so it is
+admitted while a quiet hold runs, and its hold takes its ticket's marks (section 7.18). A forced run
+that a round stops comes back as an
+ordinary restart ticket (section 24): the force does not survive the stop. A run that does not know
+the request never acts on it, and the request stays until its ticket goes. Any process of the user
+may start any ticket, as it may cancel one: a start is the user's choice, not a control.
+
+> **Implementation note.** The Go CLI's `coreslot start` takes a ticket id or `--label`, and waits up
+> to 8 s for the run to start; `--no-wait` returns once the request is written. `status --json` lists
+> pending requests in `start_requests`, each `unanswered` once older than 10 s while its ticket still
+> waits, and marks a forced hold `forced`; the `admitted` telemetry line's `pass` is `forced`.
 
 ## 14. Errors, fail-open and degraded mode
 
@@ -1333,14 +1629,14 @@ also exits 3 while a state error makes runs fail open (section 19).
 the layout other than `admit.lock`). Every format keeps `admit.lock`, an exclusive `flock` held
 only briefly by whoever changes admission state.
 
-A client that finds no `FORMAT` writes `coreslot-protocol 4` inside the section. Writing a newer
+A client that finds no `FORMAT` writes `coreslot-protocol 7` inside the section. Writing a newer
 `FORMAT` is the business of the release that introduces it.
 
 ### 15.2 A format this client does not implement
 
-A state directory whose format is not 4 is not used. A client that finds another format leaves
+A state directory whose format is not 6 is not used. A client that finds another format leaves
 the state directory as it found it and takes no part in the budget: it publishes nothing and
-writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json` or
+writes nothing (no ticket, hold, log, degraded record, `gen` bump, `watch.json`, `trim.json`, `watch-mode` or
 `admit.lock` body), and its run fails open (section 14) with one notice that names the format and
 `coreslot doctor --reset`; under `--strict` it refuses with that notice. The decision is made at
 every section entry from the `FORMAT` read there (section 8).
@@ -1350,20 +1646,20 @@ it closes its ticket's descriptor, so the ticket is dead at once, and fails open
 remove the file: that would be a write into a format it does not implement.
 
 Every other operation that would write follows the same rule, except a reset (section 4.4): under
-another format a client publishes no cancel request, trim request or unbudgeted hold, records and clears no
+another format a client publishes no cancel or start request, trim request or unbudgeted hold, records and clears no
 `degraded`, and does not remove its own hold after a run. A fail-open run still
-runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 4
+runs its command but writes nothing. `coreslot doctor --reset` recreates the directory as format 7
 when nothing of either format is live, the other format's run log removed with the rest, except a
-format-3 directory's, which the upgrade keeps (section 4.4).
+format-6, format-5, format-4 or format-3 directory's, which the upgrade keeps (section 4.4).
 
-> **Implementation note.** The Go CLI refuses cancellation, a trim and `doctor --clear` under
+> **Implementation note.** The Go CLI refuses cancellation, a start, a mark, a trim and `doctor --clear` under
 > another format, with the same notice.
 
 ## 16. Windows
 
 The CLI runs the command without a budget and prints one warning per run; `[platform]
-windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel`, `trim` and
-`doctor` exit 70 on Windows (there is no budget to inspect, cancel, trim or repair), and their
+windows_warning = false` silences it; strict mode refuses instead. `status`, `cancel`, `start`, `trim`
+and `doctor` exit 70 on Windows (there is no budget to inspect, cancel, start, trim or repair), and their
 `--help` exits 0.
 There is no watchdog on Windows.
 
@@ -1376,7 +1672,7 @@ places them above. It sets this environment:
 
 | Variable | Value |
 |---|---|
-| `CORESLOT_GRANTED_MEM` | the memory the run asked for, in MiB: its need, also for a run outside the budget; it stays the need asked when the hold is trimmed (section 12.5) and reserves less |
+| `CORESLOT_GRANTED_MEM` | the memory the run asked for, in MiB: its need, also for a run outside the budget; it stays the need asked when the hold follows its run or is trimmed (section 12.5) and reserves less |
 | `CORESLOT_HOLD` | the hold's name, when the run passes a hold descriptor, which is always fd 3 |
 | `CORESLOT_UNBUDGETED` | the reason, for a fail-open or unbudgeted pass-through run |
 | `CORESLOT_TELEMETRY` | `1`, for a run that is recording (section 5.3); absent otherwise, an inherited value included |
@@ -1467,7 +1763,15 @@ empty variable is absent), in this order:
    not an ancestor's, or a `$S` that cannot be resolved, makes the run an ordinary request: a
    parent that holds the budget is always an ancestor whose hold is live. (When the process table
    cannot be read, the Go CLI takes the hold's pid for an ancestor's.)
-3. Otherwise, or with `--independent`, it is an ordinary request.
+3. With `--independent`, a run that rule 2 would make a pass-through and that has a live
+   quiet-marked hold (section 7.18) among its ancestors takes the path it would take without
+   `--independent`: rule 1 when `CORESLOT_UNBUDGETED` is set, else rule 2. Queued, it would wait for
+   the window its own job holds while that job waits for it. It lists `quiet/` without the section,
+   resolves each mark to a live hold through a listing of `holds/` and a probe, and tests every such
+   hold's pid against one reading of the process table, which counts as an ancestor's when it cannot
+   be read; it decides once, at its start. A run outside every grant, and one whose quiet ancestor's
+   own run has exited, queues and waits for the window like any job.
+4. Otherwise, or with `--independent`, it is an ordinary request.
 
 A pass-through, valid (rule 2) or unbudgeted (rule 1), enters no section and writes nothing under
 `$S`: no ticket, hold, `gen` bump, degraded record or run-log line. It has no
@@ -1496,7 +1800,7 @@ itself.
 |---|---|
 | child's own | the command ran (`128 + signal` when killed) |
 | 130 | interrupted while waiting (`Ctrl-C`) |
-| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
+| 75 | refusal (section 14), including giving up after 3 stops (section 24); `--refusal-code` changes it for commands whose own 75 matters; `cancel`: the request was not published (no such waiting ticket, an ambiguous label, a state error, a format it does not implement, or the admission section held for longer than its bound); `start`: the request was not published, for the same reasons, while a run that does not answer within the wait is exit 0; `move`: nothing was moved, for the same reasons or because the ticket it is placed by is not waiting; `trim`: no request was written (no such live hold, a hold whose command has exited, a label that names no live hold reserving memory or several, no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound), while a hold that reserves nothing, which has nothing to lower, and a run that does not answer within the wait are exit 0; `watch`: the mode was not changed (no state directory yet, a state error, a format it does not implement, or the admission section held for longer than its bound); `quiet` and `no-stop`: nothing was marked (no live ticket or hold with that id, a state error, a format it does not implement, or the admission section held for longer than its bound), and with `--off` no such mark was found on the id or on a live hold of its ticket's run; `doctor --clear`: the record is kept because `FORMAT` is malformed or names a format it does not implement; `doctor --reset`: nothing is removed because something is live (a hold, a ticket, a client inside the admission section) |
 | 64 | usage error |
 | 126 / 127 | the command is not executable / not found |
 | 70 | internal error: something other than a state error, a refusal or a usage error stopped the command from running |
@@ -1504,7 +1808,7 @@ itself.
 | 1 | `doctor`: it found a problem (an unusable directory, filesystem, configuration, or a `FORMAT` that is malformed or names a format this client does not implement), including a state error that keeps `--clear` or `--reset` from acting or leaves `--reset` partial; the `FORMAT` refusal of `--clear` is 75 |
 
 A state error (section 14) is never exit 70: `run` fails open (or refuses under `--strict`),
-`status` exits 3, `doctor` exits 1 and `cancel` and `trim` refuse with 75. `--help` prints on
+`status` exits 3, `doctor` exits 1 and `cancel`, `start`, `quiet`, `no-stop` and `trim` refuse with 75. `--help` prints on
 stdout and exits 0 for every command. A command's own exit 75 is its status like any other: the run prints no marker
 for it, and only a give-up (section 24.2) prints one.
 
@@ -1530,6 +1834,7 @@ informative string; a writer that cannot fit it writes no line. The object carri
 | `tick_share` | number | optional; `0..1`; the run's share of time lost to memory over its ticks whose paging gate was closed (below) |
 | `mem_peak_kib` | integer | optional; memory peak of the command's process tree, in KiB (below) |
 | `mem_sustained_kib` | integer | optional; the largest level the tree's memory held for 5 ticks in a row, in KiB (below) |
+| `mem_window_s` | number | optional; `(0, 86400]`; the window, in seconds, that would never have reserved less than the attempt later used (below) |
 | `stops` | integer | optional; on the line of a stopped attempt, how often the run has been stopped for memory, this stop included; absent on every other line |
 | `exit` | integer | the run's exit status |
 | `fail_open` | string | the fail-open reason, or empty |
@@ -1571,6 +1876,14 @@ whose sums all succeeded it takes the least of the 5, and `mem_sustained_kib` is
 those. A tick whose listing failed has no sum and ends the row. A writer that does not tick, or
 whose attempt had no 5 such ticks in a row, omits the key.
 
+The key `mem_window_s` is OPTIONAL too, under the same rule. A writer that keeps the readings of
+an attempt with a grant above 0 (each listing of 1 s that succeeded, in MiB) numbers them from 1,
+and with `A` the need granted and `m = max(256 MiB, A / 10)`: for each reading `j` that has a later
+one, `F` is the largest later reading and `u` the last reading at or before `j` that is at least
+`F − m` (0 when there is none); `mem_window_s` is the largest `j − u + 1`, times the listing period,
+capped at 86 400. A writer with fewer than two readings omits it. A reader ignores a value that is
+not a number in `(0, 86400]`, as if absent.
+
 The key `container` is OPTIONAL too: a writer writes it only when true, and a reader treats an
 absent key as false. It says that the run's memory peak leaves out its containers.
 It changes no counting: such a run counts as any other.
@@ -1591,14 +1904,17 @@ generation). One generation is kept.
 > parse. A label's need is the 90th percentile of its last 20 counted runs' figures, rounded up to a
 > whole MiB and at least 1 MiB. A run's figure is its `mem_sustained_kib`, never above its
 > `mem_peak_kib` nor more than 1 GiB under it; its `mem_peak_kib` when the line has no
-> `mem_sustained_kib`; none when the line has no `mem_peak_kib`.
+> `mem_sustained_kib`; none when the line has no `mem_peak_kib`. A label's window `W`, for a run
+> that follows (section 12.5), is 1.5 times the largest `mem_window_s` of those runs, rounded up to
+> a whole second, at least 120 s and at most 86 400 s, once at least 3 of them carry one; 600 s
+> otherwise.
 
 ## 21. Worked examples
 
 All examples use one Linux machine: `MemTotal` is 16 GiB (`memory = 16384`), the configuration
 declares `[memory] reserve = "1G"` and, in `[watch]`, `yellow_points = 20`, `red_points = 40`,
 `red_samples = 10`, `gate_pages_s = 1000`, `floor = "2G"`, `calm_s = 30`, `post_kill_s = 15` and
-`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 4`
+`spacing_s = 3`, and `$S` is `/home/ana/.local/state/coreslot`. `FORMAT` is `coreslot-protocol 5`
 unless stated. Listings show the entries under `$S` that matter; `[L]` marks a file whose lock is
 held by a live process. `T0` is 2026-10-11T12:00:00Z, `1791720000000000000` ns. Each example is
 independent of the others; except in section 21.6, `reconciled_ns` in `gen` is less than 30 s old
@@ -1616,7 +1932,8 @@ defaults to `fail`, so a `--timeout` that expires refuses; with `run` an ordinar
 outside the budget, while a restart (section 24) refuses whatever `--on-timeout` says. Strict mode
 is `--strict`; `--refusal-code` defaults to 75. The other
 commands are `coreslot status [--json] [--observe DURATION]`, `coreslot cancel <ticket-id>`,
-`coreslot cancel --label LABEL`, `coreslot trim <hold-id>`, `coreslot trim --label LABEL`,
+`coreslot cancel --label LABEL`, `coreslot start <ticket-id> [--no-wait]`, `coreslot start --label LABEL
+[--no-wait]`, `coreslot trim <hold-id>`, `coreslot trim --label LABEL`,
 `coreslot doctor [--clear] [--reset]`,
 `coreslot stats [--label LABEL] [--json]`, `coreslot report [--days N] [--json]` and
 `coreslot version`.
@@ -1923,6 +2240,57 @@ Every later tick of pid 6500 writes the window's need again: if `pool:a` grows, 
 rises with it, up to 4 096 MiB, and the room falls; a shortage that follows is a stop round's
 (section 23.5).
 
+### 21.11 Start now
+
+Pid 4000 holds 6 GiB for `gate:e2e`, and the room is 1 024 MiB. Pid 5120 waits at the head for
+3 072 MiB, and pid 6000 behind it for 2 048 MiB, with no typical run time, so it never attempts
+admission. At 12:02:00 pid 8000 runs `coreslot start 01791720100000000000-0000006000-000001`.
+
+Before:
+
+```
+gen                                                    {"gen": 61, "reconciled_ns": ...}
+queue/01791720000000000000-0000005120-000001-gate_big  [L]
+queue/01791720100000000000-0000006000-000001-gate_lint [L]
+start/                                                 (empty)
+```
+
+Pid 8000 publishes, inside the section, `start/01791720100000000000-0000006000-000001` with
+`{"requested_ns": 1791720120000000000, "requester_pid": 8000}`, without a `gen` bump. Pid 6000 finds
+it on its next poll, enters the section, finds no cancel request, and, with neither the room nor the
+head consulted, publishes its hold with `"arrival_ns": 1791720100000000000`, `"need_mib": 2048` and
+`"forced": true`, closes and unlinks its ticket and the start request, bumps `gen`, and starts its
+command.
+
+After:
+
+```
+gen                                                    {"gen": 62, "reconciled_ns": ...}
+holds/01791720120200000000-0000006000-000002-gate_lint [L]
+queue/01791720000000000000-0000005120-000001-gate_big  [L]
+start/                                                 (empty)
+```
+
+The room is now `1024 − 2048 = −1024` MiB. Pid 5120 keeps its place at the head and waits until
+memory frees up. Had a red round come, it would list a run that arrived after 12:01:40 before pid
+6000's.
+
+### 21.12 Yield
+
+The room is 4 096 MiB and no hold is live. Pid 5120 heads the queue with 3 072 MiB and a typical run
+time of 2 400 s (40 min); behind it pid 6000 needs 2 048 MiB with `typical_s` 60, and pid 6100
+2 560 MiB with `typical_s` 90. Each would fit alone and neither beside the head (4 096 − 3 072 = 1 024).
+
+At 12:10:00 pid 5120 could start. It finds both short, writes `yield.json` with `start_ns`
+1791720600000000000 and `until_ns` 1791721200000000000 (12:20:00), and keeps waiting. At its next
+election pid 6000 passes as short (it ends by 12:11:00, before the deadline), publishes its hold and
+sets `last_pass_ns`. Pid 6100 does not fit beside it and waits; so does the head.
+
+At 12:11:05 pid 6000 is still running, past its 60 s: an overrun. The head removes the record at its
+next attempt; pid 6100, which would otherwise pass once pid 6000 ends, no longer finds a record. When
+pid 6000 ends at 12:11:20, the head fits and starts; pid 6100 starts after it as usual. The head waited
+80 s for a job that saved pid 6000 a 40-min wait.
+
 ## 22. Timing constants
 
 | Constant | Value |
@@ -1944,15 +2312,16 @@ rises with it, up to 4 096 MiB, and the room falls; a shortage that follows is a
 | restart | gives up after 3 stops; margin `max(256 MiB, need / 10)` |
 | stall share smoothing | time constant 10 s (`stall_ewma`) |
 | trim window (CLI) | `[watch] trim_window_s` of readings, 60 s by default |
+| following window (CLI) | 1.5 × the label's largest `mem_window_s`, at least 120 s, at most 86 400 s, from 3 counted runs that carry one; 600 s otherwise; not configurable |
 | trim answer (CLI) | waited for up to 8 s, read every 0.25 s outside the section |
 | trim section entry (CLI) | within 1 s, else refused |
 | a forwarder's ready report | within 2 s of its start |
-| a run's containers (macOS) | sampled every third tick (6 s), off the tick, under one 2 s deadline per sample; at most 256 per run, a 257th makes the run blind |
+| a run's containers (macOS) | sampled every third tick (6 s), a gated run's every tick (2 s) until their footprint reaches its Docker need; off the tick, under one 2 s deadline per sample; at most 256 per run, a 257th makes the run blind |
 | the tap | reads a request or response head of at most 64 KiB; a longer one makes the run blind |
 | forwarder entries | the walk at most once an hour, at most 65 536 names; a swapped entry removed 30 days after its forwarder ended |
 | a gated ticket's reading | at most once per 2 s, under one 2 s deadline; one more at once when its instant is too early; ungated after 8 failed in a row |
 | a gated ticket's note | published at most once per 2 s |
-| a gated hold's growth | rewritten at each sample of its containers (6 s) |
+| a gated hold's growth | rewritten at each sample of its containers (2 s until they reach its need, then 6 s) |
 
 ## 23. The watchdog
 
@@ -1974,9 +2343,11 @@ start until it exits, in both modes of section 23.6. Each tick:
    `d_page_wait_ns` (the tree's times since the run's previous tick), `cpu_ns`, `stall_ewma` and
    `no_cpu_s` (section 7.4) and `sampled_ns`. It sets `child_exited` once, when the command has exited.
    A run with a forwarder (section 17) also writes `docker_footprint_mib` and `docker_note`. Every
-   third tick (6 s) it starts a sample of its containers' usage, outside the tick and under one 2 s
-   deadline, from the upstream socket, never through its forwarder; each tick writes the last sample
-   done, so an engine that hangs never delays a tick. A container counts by what it grew since the
+   third tick (6 s) it starts a sample of its containers' usage, and a gated run (section 12.6) every
+   tick until the sample's footprint reaches its Docker need, so that its hold's growth drops one tick
+   after its containers grew. Each sample runs outside the tick and under one 2 s deadline, from the
+   upstream socket, never through its forwarder; each tick writes the last sample done, so an engine
+   that hangs never delays a tick. A container counts by what it grew since the
    run first touched it: one the command created from 0, one it only touched from its usage when the
    run first read it after that touch, also off the tick; one that is gone counts 0. The run loses
    sight of them, and writes `ungated: blind` without a footprint from then on, when its forwarder
@@ -1990,10 +2361,13 @@ start until it exits, in both modes of section 23.6. Each tick:
    unknown is not zero. A run that loses sight of its containers, or whose forwarder did not start,
    writes none of the three from then on, and its hold reserves no growth.
    `stops`, `victim`, `normal_share`, `learned` and `typical_cpu_s` hold for the attempt: the run
-   writes them once, when its command starts, before its first tick. For a hold that reserves
+   writes them once, when its command starts, before its first tick, except `victim`, which a
+   do-not-stop mark of its hold holds false: the run reads the mark before every write of its hold
+   and writes `victim` in each (section 23.5). For a hold that reserves
    memory it also reads `trim.json` (section 7.13), outside the section, until it finds a request
    for its hold; once it has, a run that acts on it writes `need_mib`, `asked_mib` and `trimmed`
-   (section 12.5) in every rewrite of the attempt.
+   (section 12.5) in every rewrite of the attempt, as a run that follows what it uses writes
+   `need_mib` and `asked_mib` in every rewrite.
 2. **Samples.** It enters the section briefly (section 8; a tick that cannot enter within a short
    bound leaves its part of that period to the others) and reads `watch.json`. If the stored sample
    is at least 1.5 s old (a period less a quarter, so that runs ticking every 2 s never leave the
@@ -2055,10 +2429,10 @@ time, say nothing about memory. `E` is the smaller of that mean and the same mea
 holds whose `footprint_mib` is at least 128 (0 when there are none): a smaller tree's system time,
 which `S` counts whole, need not be memory work, so it never raises `E`, and `E` is below the larger
 trees' own mean only when the mean over every counted hold is lower still. A learning hold is no part of `E`: it still reserves memory (section
-12), counts in the room and is listed by `status`, which says `learning:` and how many running holds
-have no normal share (`status --json`: `watch.learning`); at red, when a red round has no victim
-(every running hold is the oldest, learning or never a victim), it does not say that the watchdog is
-protecting but that a red round can stop no running command.
+12.1), counts in the room and is listed by `status`, which says `learning:` and how many running holds
+have no normal share (`status --json`: `watch.learning`); at red or at the floor, when a round has no
+victim (every running hold is the oldest, learning, never a victim or marked do-not-stop), it does not
+say that the watchdog is protecting but that a round can stop no running command.
 A command is judged only once a run of its label has
 completed with a `tick_share` (a run shorter than one tick, or whose every gate was open or unread, leaves the label learning); until then only a floor round stops it (section 23.5). The **paging gate** is open when the
 decompressions and swap-ins together rose by at least `gate_pages_s` per second over the period or,
@@ -2151,8 +2525,8 @@ has `victim` true. Rounds are one at a time.
    (`detector.observed`), whose holds never exit, holds nothing back.
 
 The oldest running hold, a hold whose run did not declare its command safe to run again (the
-CLI's `--restart=no`), a hold whose label has `no_restart`, container work and a run that shares
-coreslot's process group are never victims, and a hold that is learning (it has no normal share) is a victim of
+CLI's `--restart=no`), a hold whose label has `no_restart`, container work, a hold marked
+do-not-stop and a run that shares coreslot's process group are never victims, and a hold that is learning (it has no normal share) is a victim of
 a floor round only. A run outside the budget (section 14, `--on-timeout run`) ticks nothing, so it
 is no running hold: it is never a victim and never the oldest. A run that finds its command ended
 by a `SIGKILL` it did not send does not restart it (section 24.3). The kill reaches the command's
@@ -2180,6 +2554,17 @@ sees a library client and a call shorter than a second too.
 > socket with `proc_pidfdinfo`. On Linux it reads the name in `/proc/PID/stat` alone: a client socket has no path
 > of its own there, so a library client stays ordinary work.
 
+**A do-not-stop mark** (section 7.18) keeps a hold out of every round, red and floor alike, at the
+no-coreslot baseline for that job: without coreslot nothing is stopped. Its run writes `victim` false
+at every write while the mark stands, and reads the mark again before it acts on a round that lists
+its hold, as one marked after its last write is: a marked run does not stop its command, says so,
+in observe mode too without saying what it would stop, and takes the round as acted on. Once the
+mark goes, a run that never refused a round writes `victim` as it would without the mark at its next
+write; one that refused round R does so only once a tick has read a `detector.last_round_ns` above 0
+and other than R, so that R's listing never stays live and holds back every new round (rule 3). The
+next round after the mark goes may still pass over the job and stop another. With every candidate
+marked, a round lists nothing.
+
 A run stopped by a floor round tells its agent that the whole machine ran out of memory (swap
 nearly full) and to free memory outside coreslot before the command comes back, and restarts it by
 itself as for any stop (section 24.1); a give-up or a refusal that follows a floor stop says it too.
@@ -2189,7 +2574,9 @@ the mode at the run's own later tick.
 
 ### 23.6 Observe mode and the sample log
 
-With `mode = "observe"` every step runs, the stop list included, except the kill: a run whose hold
+The mode is the effective mode of section 7.15: this machine's override while it holds, else the
+configuration's. A round already written keeps its mode (section 23.5): an enforce round written before a
+switch to observe still stops the runs it listed. With the effective mode observe every step runs, the stop list included, except the kill: a run whose hold
 is listed reports `would stop <label> (<reason>)` and goes on. With `sample_log = true`
 (deprecated) or `[telemetry] enabled = true` the ticker that takes a machine sample appends one JSON line to
 `$S/telemetry/samples.jsonl` with the readings, `E`, the level and the bucket, in either mode. The

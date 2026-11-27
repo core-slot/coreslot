@@ -38,8 +38,9 @@ func procName(pid int) (string, bool) {
 
 // Sweep reads the footprint, resident size, CPU time and name of every process of this user, and
 // returns the n with the largest footprint and Docker's VM process (DockerVM's, nil unless it is
-// identified). A process that is gone or that cannot be read is skipped; ok is false when the table
-// cannot be listed or no process could be read.
+// identified, named by its program rather than the kernel's cut name). A process that is gone or
+// that cannot be read is skipped; ok is false when the table cannot be listed or no process could
+// be read.
 func Sweep(n int) (top []ProcMem, vm *ProcMem, ok bool) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
@@ -58,7 +59,9 @@ func Sweep(n int) (top []ProcMem, vm *ProcMem, ok bool) {
 	}
 	if v := DockerVM(); v.State == VMIdentified {
 		if tb, err := timebase(); err == nil {
-			vm = readProc(procRef{v.PID, v.StartNS}, tb)
+			if vm = readProc(procRef{v.PID, v.StartNS}, tb); vm != nil {
+				vm.Name = v.Program()
+			}
 		}
 	}
 	return top, vm, true

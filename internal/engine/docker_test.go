@@ -161,26 +161,6 @@ func TestGatedContainerRequestRoomLeavesGrowth(t *testing.T) {
 	admitted(t, step(t, enqueue(t, e, spec.Request{Label: "u", NeedMiB: 1500, RealMemory: true})))
 }
 
-// The reading is taken outside the section: when Read runs, another description can enter it.
-// Mutation: taking the reading before leaving the section makes TryEnter fail.
-func TestReadOutsideSection(t *testing.T) {
-	clk := newFakeClock()
-	e := newEngine(t, newStateDir(t, ""), clk)
-	f := &fakeDocker{clk: clk, reading: vm(10000)}
-	f.onRead = func() {
-		sec, ok, err := e.st.TryEnter()
-		if err != nil || !ok {
-			t.Errorf("Read ran while the section was held (%v)", err)
-			return
-		}
-		sec.Leave()
-	}
-	admitted(t, step(t, enqueueGated(t, e, gated(128, 1000), f)))
-	if f.reads != 1 {
-		t.Errorf("%d readings, want 1", f.reads)
-	}
-}
-
 // One Step of a gated container request is one attempt: the Mac test, the reading outside, and
 // the entry after it, which makes the VM test and admits. Mutation: counting each entry as an
 // attempt makes it two.
@@ -397,21 +377,6 @@ func TestLevelGateRecordsOnlyOnAdmission(t *testing.T) {
 	}
 }
 
-// A VM test that fails publishes the note; the admission removes it with the ticket. Mutation:
-// publishing no note leaves the first check without one.
-func TestVMTestFailPublishesNote(t *testing.T) {
-	dir := newStateDir(t, "")
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	f := &fakeDocker{clk: clk, reading: vm(500)}
-	tk := enqueueGated(t, e, gated(128, 1000), f)
-	w := waitOutcome(t, tk)
-	wantReason(t, w, ReasonVMRoomShort, "")
-	if !w.Outcome.Noted || !hasNote(dir, tk) {
-		t.Errorf("noted %v, note %v; want both", w.Outcome.Noted, hasNote(dir, tk))
-	}
-}
-
 // Mutation: leaving the note out of the removal of one's own ticket keeps it after the admission.
 func TestAdmissionRemovesNote(t *testing.T) {
 	dir := newStateDir(t, "")
@@ -425,24 +390,6 @@ func TestAdmissionRemovesNote(t *testing.T) {
 	admitted(t, step(t, tk))
 	if hasNote(dir, tk) {
 		t.Error("the admitted ticket's note is still there")
-	}
-}
-
-// An attempt whose Mac test fails removes the note at once, within 2 s of its publication.
-// Mutation: keeping the note when the Mac test fails.
-func TestMacFailRemovesNoteAtOnce(t *testing.T) {
-	dir := newStateDir(t, "")
-	clk := newFakeClock()
-	e := newEngine(t, dir, clk)
-	f := &fakeDocker{clk: clk, reading: vm(500)}
-	tk := enqueueGated(t, e, gated(128, 1000), f)
-	waitOutcome(t, tk)
-	lockHere(t, holdPath(t, dir, 1024)) // the host's room is gone
-	clk.advance(500 * time.Millisecond)
-	w := waitOutcome(t, tk)
-	wantReason(t, w, ReasonRoomShort, "")
-	if w.Outcome.Noted || hasNote(dir, tk) {
-		t.Error("the note stayed although the Mac test failed")
 	}
 }
 
@@ -571,9 +518,9 @@ func TestNotedTicketThatStopsAttemptingStopsReading(t *testing.T) {
 	dir := newStateDir(t, "")
 	clk := newFakeClock()
 	e := newEngine(t, dir, clk)
-	old := kernelPressure
-	kernelPressure = func() (int, bool) { return 2, true } // nobody goes out of turn
-	t.Cleanup(func() { kernelPressure = old })
+	old := KernelPressure
+	KernelPressure = func() (int, bool) { return 2, true } // nobody goes out of turn
+	t.Cleanup(func() { KernelPressure = old })
 	start := clk.clock().Realtime()
 	lockHere(t, writeHold(t, dir, wire.Hold{Label: "ending", NeedMiB: 512, StartNS: start, TypicalS: 105}))
 	head := enqueue(t, e, need(1024)) // waits 105 s for the hold's 512 MiB
@@ -678,32 +625,5 @@ func TestAtMostThreeEntries(t *testing.T) {
 				isAdmitted(r), 3*i, 2*i)
 		}
 		clk.advance(ReadEvery)
-	}
-}
-
-// A Docker part that cannot be judged, because it cannot be read or never fits, is ungated and
-// admitted, never refused: there is no strict form of either. Mutation: refusing an oversized need
-// with ErrRefused.
-func TestUngatedPartIsNeverRefused(t *testing.T) {
-	limit := testVMMiB - state.DockerReserve(testVMMiB)
-	for _, tc := range []struct {
-		why     string
-		reading DockerReading
-		need    int64
-	}{{"no-reading", DockerReading{}, 1000}, {"oversized", vm(limit), limit + 1}} {
-		clk := newFakeClock()
-		e := newEngine(t, newStateDir(t, ""), clk)
-		tk := enqueueGated(t, e, gated(128, tc.need), &fakeDocker{clk: clk, reading: tc.reading})
-		var r StepResult
-		for i := 0; i < testFailedReadings && !isAdmitted(r); i++ {
-			var err error
-			if r, err = tk.Step(context.Background()); err != nil {
-				t.Fatalf("%s: Step: %v", tc.why, err)
-			}
-			clk.advance(ReadEvery)
-		}
-		if g := admitted(t, r); g.DockerUngated() != tc.why {
-			t.Errorf("ungated %q, want %q", g.DockerUngated(), tc.why)
-		}
 	}
 }

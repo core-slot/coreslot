@@ -64,12 +64,12 @@ func holdListing(st *store.Store, coldStartMiB int64) (live []liveHold, dead []s
 	return live, dead, ignored, nil
 }
 
-// info is the hold as a waiter or a snapshot shows it.
-func (h liveHold) info() HolderInfo {
+// info is the hold as a waiter or a snapshot shows it at nowNS, its need what it reserves then.
+func (h liveHold) info(nowNS int64) HolderInfo {
 	b := h.body
 	id, _ := wire.ParseName(h.name)
-	return HolderInfo{Name: h.name, ID: id.String(), AskedMiB: b.AskedMiB, Trimmed: b.Trimmed, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
-		NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS, TypicalS: b.TypicalS,
+	return HolderInfo{Name: h.name, ID: id.String(), AskedMiB: b.AskedMiB, Trimmed: b.Trimmed, Forced: b.Forced, Label: b.Label, PID: b.PID, StartNS: b.StartNS, ArrivalNS: b.ArrivalNS,
+		NeedMiB: reserved(b, nowNS), FootprintMiB: b.FootprintMiB, Stops: b.Stops, Container: b.Container, NoCPUS: b.NoCPUS, TypicalS: b.TypicalS,
 		DockerFootprintMiB: b.DockerFootprintMiB, DockerNote: b.DockerNote, DockerNeedMiB: b.DockerNeedMiB, DockerGrowthMiB: b.DockerGrowthMiB}
 }
 
@@ -79,14 +79,26 @@ func holdLeftS(h wire.Hold, nowNS int64) int64 {
 	return max(0, h.TypicalS-(nowNS-h.StartNS)/1e9)
 }
 
-// reservations are the room's input: each live hold that reserves memory or growth of Docker's VM,
-// with the footprint and the growth its run last wrote. A hold whose body did not parse carries
-// its cold-start need and no growth (holdListing).
-func reservations(holds []liveHold) []state.MemHold {
+// reserved is what a live hold reserves at nowNS (PROTOCOL.md section 12.1): its need_mib while
+// its run measures it, its command alive and its sample fresh as runningJobs has it, and the larger
+// of need_mib and asked_mib otherwise. A correctness rule with no adversary: its anchor is the
+// holder's own sampled_ns and child_exited, which only the holder or a writer of the state
+// directory can move, and either can already write any need_mib.
+func reserved(b wire.Hold, nowNS int64) int64 {
+	if !b.ChildExited && fresh(b.SampledNS, nowNS) {
+		return b.NeedMiB
+	}
+	return max(b.NeedMiB, b.AskedMiB)
+}
+
+// reservations are the room's input at nowNS: each live hold that reserves memory or growth of
+// Docker's VM, with what it reserves, the footprint and the growth its run last wrote. A hold
+// whose body did not parse carries its cold-start need and no growth (holdListing).
+func reservations(holds []liveHold, nowNS int64) []state.MemHold {
 	out := make([]state.MemHold, 0, len(holds))
 	for _, h := range holds {
-		if b := h.body; b.NeedMiB > 0 || b.DockerGrowthMiB > 0 {
-			out = append(out, state.MemHold{NeedMiB: b.NeedMiB, FootprintMiB: b.FootprintMiB, GrowthMiB: b.DockerGrowthMiB})
+		if b := h.body; reserved(b, nowNS) > 0 || b.DockerGrowthMiB > 0 {
+			out = append(out, state.MemHold{NeedMiB: reserved(b, nowNS), FootprintMiB: b.FootprintMiB, GrowthMiB: b.DockerGrowthMiB})
 		}
 	}
 	return out
@@ -125,13 +137,14 @@ func (e *Engine) sampler(cfg config.Config, m config.Machine) func() (watch.Samp
 		if err != nil {
 			return watch.Sample{}, err
 		}
-		s := watch.Sample{Host: host, Jobs: runningJobs(holds, e.clock.Realtime()),
+		now := e.clock.Realtime()
+		s := watch.Sample{Host: host, Jobs: runningJobs(holds, now),
 			HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, HeadroomOK: m.HeadroomOK}
 		for _, h := range holds {
 			s.Live = append(s.Live, h.name)
 		}
 		if m.HeadroomOK {
-			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds))
+			s.RoomMiB = state.Room(m.HeadroomMiB, cfg.ReserveMiB, reservations(holds, now))
 			s.ShortMiB = max(cfg.ReserveMiB-m.HeadroomMiB, 0)
 		}
 		return s, nil

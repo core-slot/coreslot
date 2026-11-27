@@ -16,6 +16,9 @@ type HolderInfo struct {
 	NeedMiB      int64  // what the hold reserves; 0 for a run outside the budget
 	AskedMiB     int64  // the need it was admitted with, when its body says; 0 when NeedMiB is it
 	Trimmed      bool   // its run acted on a request to trim it
+	Forced       bool   // admitted at once on a start request, whatever the room
+	Quiet        bool   // marked quiet: while it is live no other job is admitted
+	NoStop       bool   // marked do-not-stop: its run keeps it out of every stop round
 	FootprintMiB int64  // what its run last measured
 	Stops        int
 	Container    bool  // container work: its containers' memory is not measured unless DockerFootprintMiB is set
@@ -46,13 +49,20 @@ type HolderInfo struct {
 
 // WatchInfo is the shared watch state in a snapshot.
 type WatchInfo struct {
-	Level      watch.Level
-	Excess     float64 // E, in points, at the newest sample
-	SampledNS  int64   // when, by the wall clock, the newest sample was taken; 0 when none was
-	Fresh      bool    // the newest sample is young enough for admission to read
-	Observe    bool    // [watch] mode is observe: nothing is stopped
-	NextVictim string  // the hold the next stop round lists first; "" when none
-	Learning   int     // running jobs whose label has no normal share yet: no part of E, stopped by a floor round only
+	Level       watch.Level
+	Excess      float64 // E, in points, at the newest sample
+	SampledNS   int64   // when, by the wall clock, the newest sample was taken; 0 when none was
+	Fresh       bool    // the newest sample is young enough for admission to read
+	Observe     bool    // the watchdog's mode is observe: nothing is stopped
+	ModeSource  string  // "config" or "override" (coreslot watch, this machine)
+	ModeUntilNS int64   // when an override ends; 0 for until removed, or none
+	// ConfiguredObserve is the configuration's own mode, which an override replaces.
+	ConfiguredObserve bool
+	// EnforceRoundLive: the last round was written in enforce mode and a hold it listed is live and
+	// still a victim, so it still stops that hold whatever the mode is now (PROTOCOL.md section 23.5).
+	EnforceRoundLive bool
+	NextVictim       string // the hold the next stop round lists first; "" when none
+	Learning         int    // running jobs whose label has no normal share yet: no part of E, stopped by a floor round only
 }
 
 // TicketInfo describes one queue entry in a snapshot.
@@ -75,6 +85,8 @@ type TicketInfo struct {
 	// note in vmwait/: it fits on the host and waits for Docker's VM.
 	DockerNeedMiB int64
 	Noted         bool
+	// Quiet and NoStop are its marks, which act once it is admitted.
+	Quiet, NoStop bool
 }
 
 // MemInfo is the memory in a snapshot, in MiB. Known is false when the headroom could not be read
@@ -91,6 +103,18 @@ type MemInfo struct {
 	ReserveMiB  int64
 	MachineMiB  int64 // the machine's memory; 0 unless Known
 	RoomMiB     int64 // the room a new job may take before FreeMiB clamps it at 0: negative when over-reserved
+}
+
+// YieldInfo is the head's valid yield record (PROTOCOL.md section 7.17), wall-clock times.
+type YieldInfo struct {
+	Head                string
+	UntilNS, LastPassNS int64
+}
+
+// StartInfo is one pending start request.
+type StartInfo struct {
+	Ticket      string // the ticket id
+	RequestedNS int64  // wall clock when it was written; 0 when its body is malformed
 }
 
 // SectionInfo is the informational body of admit.lock and whether the section is held now.
@@ -124,15 +148,20 @@ type Report struct {
 	Gen              int64  // in [0, 2^63-1] (PROTOCOL.md section 7.8)
 	ReconciledNS     int64
 	Mem              MemInfo
-	ConfigError      string         // set when the memory could not be read
-	ConfigErr        error          // the error ConfigError is the reason of
-	Config           config.Config  // the configuration this snapshot read; zero when it could not be read
-	Tickets          []TicketInfo   // in queue order
-	Holds            []HolderInfo   // live holds, in name order
-	DeadHolds        []string       // names of holds whose probe succeeded, awaiting reconciliation
-	Cancels          []string       // pending cancel requests (ticket ids)
-	Ignored          map[string]int // per directory: entries that do not match the grammar or whose body is malformed
-	Section          SectionInfo
-	Watch            WatchInfo
-	Degraded         *DegradedInfo // nil when degraded mode is not recorded
+	ConfigError      string        // set when the memory could not be read
+	ConfigErr        error         // the error ConfigError is the reason of
+	Config           config.Config // the configuration this snapshot read; zero when it could not be read
+	Tickets          []TicketInfo  // in queue order
+	Holds            []HolderInfo  // live holds, in name order
+	DeadHolds        []string      // names of holds whose probe succeeded, awaiting reconciliation
+	Cancels          []string      // pending cancel requests (ticket ids)
+	Starts           []StartInfo   // pending start requests
+	// Head is the id of the ticket a waiter's re-election would pick: the first live ticket in
+	// queue order without a note, "" with none. Yield is its valid yield record, nil with none.
+	Head     string
+	Yield    *YieldInfo
+	Ignored  map[string]int // per directory: entries that do not match the grammar or whose body is malformed
+	Section  SectionInfo
+	Watch    WatchInfo
+	Degraded *DegradedInfo // nil when degraded mode is not recorded
 }

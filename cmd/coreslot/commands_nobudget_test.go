@@ -18,8 +18,11 @@ func TestNoBudgetAnswersOnlyHelp(t *testing.T) {
 	}{
 		{"status", statusUsage, func() *flag.FlagSet { fs, _, _, _ := statusFlags(); return fs }},
 		{"cancel", cancelUsage, func() *flag.FlagSet { fs, _ := cancelFlags(); return fs }},
+		{"start", startUsage, func() *flag.FlagSet { fs, _, _ := startFlags(); return fs }},
 		{"doctor", doctorUsage, func() *flag.FlagSet { fs, _, _ := doctorFlags(); return fs }},
 		{"trim", trimUsage, func() *flag.FlagSet { fs, _ := trimFlags(); return fs }},
+		{"quiet", quietUsage, func() *flag.FlagSet { fs, _ := quietFlags(); return fs }},
+		{"no-stop", noStopUsage, func() *flag.FlagSet { fs, _ := noStopFlags(); return fs }},
 	}
 	cases := []struct {
 		args []string

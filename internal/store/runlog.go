@@ -45,9 +45,12 @@ type RunRecord struct {
 	// MemSustainedKiB is the largest level the tree's footprint held for 5 watch ticks in a row
 	// (PROTOCOL.md section 20), in KiB; nil, and then not encoded, when the run had no such row.
 	MemSustainedKiB *int64 `json:"mem_sustained_kib,omitempty"`
-	Stops           int    `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
-	Exit            int    `json:"exit"`
-	FailOpen        string `json:"fail_open"`
+	// MemWindowS is the window, in seconds, that would never have reserved less than the attempt
+	// later used (PROTOCOL.md section 20); nil, and then not encoded, under two readings.
+	MemWindowS *float64 `json:"mem_window_s,omitempty"`
+	Stops      int      `json:"stops,omitempty"` // times the run was stopped; encoded only above 0
+	Exit       int      `json:"exit"`
+	FailOpen   string   `json:"fail_open"`
 	// Container says the run was container work (PROTOCOL.md section 20); encoded only when true.
 	Container bool `json:"container,omitempty"`
 }

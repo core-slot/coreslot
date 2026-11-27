@@ -23,19 +23,23 @@ import (
 // pid admit.lock records and matching ctx.Err() (context.DeadlineExceeded for a deadline), or
 // ctx.Err() itself when ctx had already ended.
 func (e *Engine) CancelContext(ctx context.Context, id wire.ID) error {
-	sec, err := e.enterUntil(ctx)
+	return e.request(ctx, store.CancelDir, id)
+}
+
+// StartContext publishes a start request for the ticket id, as CancelContext publishes a cancel
+// request and with the same results (PROTOCOL.md section 7.16): the ticket's own run finds it on
+// its next poll and admits itself at once with a forced hold. A cancel request found first wins.
+func (e *Engine) StartContext(ctx context.Context, id wire.ID) error {
+	return e.request(ctx, store.StartDir, id)
+}
+
+// request publishes a cancel or start request, both of the cancel request's body.
+func (e *Engine) request(ctx context.Context, dir string, id wire.ID) error {
+	sec, now, err := e.enterPrepared(ctx)
 	if err != nil {
 		return err
 	}
 	defer sec.Leave()
-	now := e.clock.Realtime() // reconciliation and the cancel request read the same clock
-	n, understood, err := sec.Prepare(now)
-	if err != nil {
-		return err
-	}
-	if !understood {
-		return refuseFormat(n, "")
-	}
 	entries, _, err := e.st.List(store.QueueDir)
 	if err != nil {
 		return err
@@ -54,9 +58,9 @@ func (e *Engine) CancelContext(ctx context.Context, id wire.ID) error {
 	if err != nil {
 		return err
 	}
-	// An existing request means the cancellation is already requested, which is not an error
-	// (PROTOCOL.md section 11). Publishing a cancel request does not bump gen (section 7.8).
-	if _, err := sec.Publish(store.CancelDir, id.String(), body, false); err != nil && !errors.Is(err, fs.ErrExist) {
+	// An existing request means it is already requested, which is not an error (PROTOCOL.md
+	// section 11). Publishing a request does not bump gen (section 7.8).
+	if _, err := sec.Publish(dir, id.String(), body, false); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	return nil
@@ -64,8 +68,14 @@ func (e *Engine) CancelContext(ctx context.Context, id wire.ID) error {
 
 // cancelRequested reports whether a well-formed cancel request for this ticket exists. A
 // malformed one is ignored, never trusted (PROTOCOL.md section 7.2).
-func (t *Ticket) cancelRequested() (bool, error) {
-	body, err := t.e.readBody(store.CancelDir, t.id.String())
+func (t *Ticket) cancelRequested() (bool, error) { return t.requested(store.CancelDir) }
+
+// startRequested reports whether a well-formed start request for this ticket exists; its body is
+// a cancel request's (PROTOCOL.md section 7.16).
+func (t *Ticket) startRequested() (bool, error) { return t.requested(store.StartDir) }
+
+func (t *Ticket) requested(dir string) (bool, error) {
+	body, err := t.e.readBody(dir, t.id.String())
 	if gone(err) || stray(err) {
 		return false, nil // a stray entry under the id is ignored, never trusted
 	}

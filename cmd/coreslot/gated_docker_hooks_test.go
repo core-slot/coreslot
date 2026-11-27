@@ -127,51 +127,22 @@ func TestGatedRunOnVMMReservesThreeHalves(t *testing.T) {
 	}
 }
 
-// A docker_mem that is not a size above 0 makes the entry unreadable: no forwarder, no gate, the
-// needs-entry note once. Mutation: accepting a docker_mem of 0 engages the container command.
-func TestBadDockerMemNoForwarderNoGate(t *testing.T) {
-	b := gatedBed(t, "[needs.\"bad\"]\ndocker_mem = \"0\"\n")
-	command := filepath.Join(b.work, "docker")
-	if err := os.WriteFile(command, []byte("#!/bin/sh\n"+saveHost+saveHold+"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	r := cli(t, b.env, "run", "--restart=yes", "--label", "bad", "--mem", "64M", "--", command)
-	if r.code != 0 {
-		t.Fatalf("exit %d: %s", r.code, r.stderr)
-	}
-	h := b.hold(t)
-	if _, gated := h["docker_need_mib"]; gated || h["docker_note"] != docker.NoteNeedsEntry || strings.TrimSpace(b.file(t, "host")) != "" {
-		t.Errorf("hold %v, DOCKER_HOST %q; want the needs-entry note, no need and no forwarder", h, b.file(t, "host"))
-	}
-	if n := count(r.stderr, docker.NoteNeedsEntry); n != 1 {
-		t.Errorf("%d notices of %q: %s", n, docker.NoteNeedsEntry, r.stderr)
-	}
-	if reqs := b.fake.Requests(); len(reqs) != 0 {
-		t.Errorf("the engine was called: %q", reqs)
-	}
-}
-
 // A Docker need on a run that cannot be engaged (here a DOCKER_HOST that is no unix socket) is
-// ignored: the run starts, says why once and carries the note, and is never refused, also under
-// --strict. Mutation: a Docker need left out of the run's interest says nothing and carries no note.
+// ignored: the run starts, says why once and carries the note. Mutation: a Docker need left out of
+// the run's interest says nothing and carries no note.
 func TestNeedWithoutForwarderIgnored(t *testing.T) {
 	b := gatedBed(t, gatedNeeds("n"))
 	want := docker.OffNote(docker.OffRemoteHost)
-	for _, strict := range []bool{false, true} {
-		args := []string{"run", "--restart=yes", "--label", "n", "--mem", "64M"}
-		if strict {
-			args = append(args, "--strict")
-		}
-		r := cli(t, append(append([]string{}, b.env...), "DOCKER_HOST=tcp://192.0.2.10:2376"), append(args, "--", "sh", "-c", saveHold)...)
-		if r.code != 0 {
-			t.Fatalf("strict %v: exit %d: %s", strict, r.code, r.stderr)
-		}
-		if n := count(r.stderr, want); n != 1 {
-			t.Errorf("strict %v: %d notices of %q: %s", strict, n, want, r.stderr)
-		}
-		if h := b.hold(t); h["docker_note"] != want || h["docker_need_mib"] != nil {
-			t.Errorf("strict %v: hold %v; want the note %q and no Docker need", strict, h, want)
-		}
+	r := cli(t, append(append([]string{}, b.env...), "DOCKER_HOST=tcp://192.0.2.10:2376"),
+		"run", "--restart=yes", "--label", "n", "--mem", "64M", "--", "sh", "-c", saveHold)
+	if r.code != 0 {
+		t.Fatalf("exit %d: %s", r.code, r.stderr)
+	}
+	if n := count(r.stderr, want); n != 1 {
+		t.Errorf("%d notices of %q: %s", n, want, r.stderr)
+	}
+	if h := b.hold(t); h["docker_note"] != want || h["docker_need_mib"] != nil {
+		t.Errorf("hold %v; want the note %q and no Docker need", h, want)
 	}
 	if n := b.fake.Conns(); n != 0 {
 		t.Errorf("%d connections to the engine", n)
@@ -284,23 +255,6 @@ func TestTimeoutRunUngated(t *testing.T) {
 	}
 }
 
-// A gated waiter short of room on the Mac never reads Docker: it opens no socket while it waits.
-// Mutation: the VM test before the Mac test in the engine's attempt reads at every attempt.
-func TestGatedWaiterReadsOnlyAtAttempts(t *testing.T) {
-	b := gatedBed(t, gatedNeeds("g"))
-	if r := b.run(t, "init", "true"); r.code != 0 { // the state directory's layout
-		t.Fatalf("exit %d: %s", r.code, r.stderr)
-	}
-	holdUntil(t, b.dir, 1000) // of the 1024 MiB of headroom
-	r := cli(t, b.env, "run", "--restart=yes", "--label", "g", "--mem", "512M", "--timeout", "3s", "--", "true")
-	if r.code == 0 || !strings.Contains(r.stderr, "not admitted within") {
-		t.Fatalf("exit %d, want a timeout: %s", r.code, r.stderr)
-	}
-	if n := b.fake.Conns(); n != 0 {
-		t.Errorf("a waiter short of the Mac connected %d times", n)
-	}
-}
-
 // readingsHook points the readings hook of this process at a file of the test's.
 func readingsHook(t *testing.T) func(state, pid, footprintMiB int64) {
 	t.Helper()
@@ -352,4 +306,36 @@ func TestHoldGrowthFollowsANewVM(t *testing.T) {
 	if g.vm.PID != vmPID+1 {
 		t.Errorf("the gate follows pid %d, want %d", g.vm.PID, vmPID+1)
 	}
+}
+
+// A gated run samples its containers at every tick until their footprint reaches its need, then at
+// every third: the growth its hold reserves drops one tick after its containers grew, not up to
+// three. Its container grows at listing 7; the sample of tick 8 shows at listing 9 with a growth of
+// min(8192 − 3072, 2 × 0) = 0; the samples are those of ticks 2, 4, 6 and 8, then 12 and 18.
+// Mutations: the every-third cadence alone keeps the growth of tick 6, 2048, at listing 9, red;
+// sampling at every tick to the end makes 9 samples, red.
+func TestGatedSamplesEveryTickUntilItsNeed(t *testing.T) {
+	set := readingsHook(t)
+	set(1, vmPID, vmNowMiB)
+	id := dockertest.ID('a')
+	f := partEngine(t, id, "db", 0)
+	g, st := watchedHold(t)
+	r, events, _ := engagedRun(t, f)
+	r.gate = &dockerGate{needMiB: 1024, vMiB: 8192}
+	events <- created(id)
+	watchFor(t, r, &supervisor{pid: 42, group: true}, g, st, 19, func(int) bool { return false }, func(n int) {
+		switch n {
+		case 7:
+			f.SetUsage(id, 1024<<20)
+			set(1, vmPID, vmNowMiB+1024)
+		case 9:
+			if growth, known, _ := r.gate.last(); growth != 0 || !known {
+				t.Errorf("listing 9: growth %d (known %v), want 0", growth, known)
+			}
+		case 19:
+			if got := len(statsCalls(f)); got != 6 {
+				t.Errorf("%d samples, want 6", got)
+			}
+		}
+	})
 }

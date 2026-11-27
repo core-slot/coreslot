@@ -79,9 +79,12 @@ var listClient = memsample.ContainerClient
 // stop from then on, and the next tick's hold update clears its Victim. The scan stays under a
 // forwarder, for a client that bypasses it. The scan needs a log, the one reader that outlives the
 // hold: a pass-through has none. An engaged run starts a sample of its containers every third tick,
-// and every hold write carries the last sample done. A hold that reserves memory keeps a window over
-// the listings that succeeded from the attempt's start; once a tick finds a request to trim it in
-// trim.json, every later tick writes the window's need into the hold, never above the need asked.
+// a gated one every tick until they reach its Docker need, and every hold write carries the last
+// sample done. A hold that reserves memory keeps a window over the listings that succeeded from the
+// attempt's start. While the attempt follows (follows), or once a tick finds a request to trim it in
+// trim.json, every later tick writes the window's need into the hold, never above the need asked; a
+// trim shortens the window to the trim window. A following run that becomes container work stops
+// following and writes the need asked from then on.
 func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, st *store.Store) (stopped bool, p peak) {
 	t := time.NewTicker(memSampleEvery)
 	defer t.Stop()
@@ -96,13 +99,30 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 		found bool // a request names the hold: it holds for the attempt
 		said  bool // a write of the trimmed need succeeded and the run said so
 	}
+	readings := func(s int64) int { return int(time.Duration(s) * time.Second / memSampleEvery) }
+	follow, reset := false, false // reset: the run followed and became container work
 	if g != nil && g.GrantMiB() > 0 {
-		tail = state.NewTail(g.GrantMiB(), int(time.Duration(r.trimWindowS)*time.Second/memSampleEvery))
+		window := r.trimWindowS
+		if follow = r.follows(g); follow {
+			window = r.windowS
+		}
+		tail = state.NewTail(g.GrantMiB(), readings(window))
+		p.askedMiB = g.GrantMiB()
 	}
-	if g != nil { // constant for the attempt, Victim until a hit: written once, before its first tick
+	// A do-not-stop mark keeps the hold out of stop rounds. Once the mark goes, a run that refused
+	// round R stays out until a tick reads a round other than R: R's listing would otherwise stay
+	// live and hold back every new round (PROTOCOL.md section 7.18).
+	var noStop struct {
+		on       bool  // the run writes Victim false
+		refused  int64 // the round it refused while marked; 0 for none
+		lastRead int64 // the round the last tick read; 0 when it read none
+	}
+	victim := func() bool { return !noStop.on && !p.container && sup.group && r.o.restartable() }
+	if g != nil { // constant for the attempt, Victim until a hit or a mark: written once, before its first tick
 		r.hold = g.HoldName()
+		noStop.on = g.NoStop()
 		r.updateHold(st, g, func(h *wire.Hold) {
-			h.Victim, h.Stops, h.NormalShare, h.Learned = sup.group && r.o.restartable(), r.stops, r.share, r.learned
+			h.Victim, h.Stops, h.NormalShare, h.Learned = victim(), r.stops, r.share, r.learned
 			h.TypicalCPUS, h.Container = r.cpuS, p.container
 			h.DockerNote, h.DockerFootprintMiB = r.dockerNote(), r.dockerFootprint()
 			r.setDockerKeys(g, h)
@@ -122,6 +142,7 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			}
 			if tail != nil { // a listing that failed is no reading
 				tail.Add(kib >> 10)
+				p.readings = append(p.readings, int32(kib>>10))
 			}
 		}
 		if r.fwd != nil {
@@ -158,29 +179,43 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			stall, smoothed = watch.Smooth(stall, s, !smoothed, float64(memsample.PeriodNS)/1e9), true
 		}
 		noCPUS := noCPU.add(d, active, func() bool { return p.container && listClient(sup.pid) }) // a run not yet container work scanned this listing
-		if r.fwd != nil && (n/listingsPerTick)%sampleTicks == 0 {
+		if r.fwd != nil && ((n/listingsPerTick)%sampleTicks == 0 || r.growing()) {
 			// Off the tick path: a hung engine never delays a tick, and the hold takes the last
 			// sample done.
 			go sampleDocker(ctx, r.fwd, r.gate)
 		}
 		// The request is read after the tick has measured, until one is found.
 		if tail != nil && !trim.found {
-			trim.found = g.TrimRequested()
+			if trim.found = g.TrimRequested(); trim.found {
+				tail.Shorten(readings(r.trimWindowS))
+			}
+		}
+		if follow && p.container {
+			follow, reset = false, true
 		}
 		var need int64
-		if trim.found {
+		if follow || trim.found {
 			need = tail.Need()
+		}
+		if g.NoStop() {
+			noStop.on = true
+		} else if noStop.on && (noStop.refused == 0 || noStop.lastRead > 0 && noStop.lastRead != noStop.refused) {
+			noStop.on, noStop.refused = false, 0
 		}
 		wrote := r.updateHold(st, g, func(h *wire.Hold) {
 			h.FootprintMiB, h.DUserNS, h.DSysNS, h.DPageWaitNS = kib>>10, d.UserNS, d.SysNS, d.PageWaitNS
 			h.CPUNS, h.StallEWMA, h.NoCPUS = p.cpuNS, stall, noCPUS
 			h.SampledNS, h.DockerNote, h.DockerFootprintMiB = store.NowNS(), r.dockerNote(), r.dockerFootprint()
 			r.setDockerKeys(g, h)
-			if p.container { // every update, so that a failed one repeats by itself
-				h.Victim, h.Container = false, true
+			h.Victim = victim() // every update, so that a failed one repeats by itself
+			if p.container {
+				h.Container = true
 			}
-			if trim.found { // every update, as the footprint it follows
-				h.NeedMiB, h.AskedMiB, h.Trimmed = need, g.GrantMiB(), true
+			if reset { // every update, so that a failed one repeats; a trim's write below wins
+				h.NeedMiB, h.AskedMiB = g.GrantMiB(), 0
+			}
+			if follow || trim.found { // every update, as the footprint it follows
+				h.NeedMiB, h.AskedMiB, h.Trimmed = need, g.GrantMiB(), trim.found
 			}
 		})
 		if wrote && trim.found && !trim.said {
@@ -191,16 +226,34 @@ func (r *run) watchChild(ctx context.Context, sup *supervisor, g *engine.Grant, 
 			continue
 		}
 		det, err := g.Tick(ctx)
+		noStop.lastRead = det.LastRoundNS // the zero detector of a failed tick reads no round
 		r.countClosed(d, det, err)
 		keptRound = r.keptNotice(det, g.HoldName(), keptRound)
 		if err != nil || p.container || det.LastRoundNS == round || !slices.Contains(det.Stop, g.HoldName()) {
 			continue
 		}
 		round = det.LastRoundNS
+		if g.NoStop() { // marked since the run's last write: the round is refused, as if acted on
+			noStop.on, noStop.refused = true, round
+			r.notice("%s is marked do-not-stop: not stopped (%s)", commandText(r.o.argv), r.stopDetail(det.RoundFloor, kib, d))
+			continue
+		}
 		if r.stopFor(det, kib, d, keptRound != 0, sup.KillGroup) {
 			return true, p
 		}
 	}
+}
+
+// follows reports whether the attempt on g follows what its run uses (PROTOCOL.md section 12.5):
+// its need was not pinned, it had no Docker interest at its start, its grant is within the bound
+// (not oversized) and it is the run's first attempt, as a restart after a stop reuses the window
+// that may have missed the regrowth it was stopped for. A following hold's only protection against
+// its own run growing back is the rise with growth (state.Tail.Need): its anchor is the footprint the
+// run reads of its own tree from the kernel each second, which no label, run log or hold body moves,
+// so the reservation follows real use upward at the next tick. It cannot take back memory already
+// lent to a newer job; that collision is the watchdog's stop round.
+func (r *run) follows(g *engine.Grant) bool {
+	return !r.o.pinned && !r.dockerInterest() && g.GrantMiB() <= r.boundMiB && r.stops == 0
 }
 
 // sayTrimmed says that the attempt's hold now reserves needMiB, lowered by hand with `coreslot

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/core-slot/coreslot/internal/engine"
+	"github.com/core-slot/coreslot/internal/memsample"
 	"github.com/core-slot/coreslot/internal/wire"
 )
 
@@ -324,5 +325,47 @@ func TestInherited(t *testing.T) {
 		if got := inherited(tc.env, tc.hold, tc.miss); got != tc.want {
 			t.Errorf("%s: inherited = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The ancestry test lists the process table once, at its first use: a run outside any grant lists
+// nothing, and the nesting decision and the quiet check share one listing. An unreadable table counts
+// as an ancestor. Mutations: listing at every test lists twice; reading an unreadable table as no
+// ancestor answers false.
+func TestAncestryListsOnce(t *testing.T) {
+	saved := listProcesses
+	t.Cleanup(func() { listProcesses = saved })
+	lists := 0
+	listProcesses = func() (map[int]memsample.Proc, bool) {
+		lists++
+		return map[int]memsample.Proc{os.Getppid(): {PPID: 1}}, true
+	}
+	isAncestor := ancestry()
+	if lists != 0 {
+		t.Fatalf("%d listings before the first test, want none", lists)
+	}
+	if !isAncestor(os.Getppid()) || isAncestor(os.Getpid()+1_000_000) || lists != 1 {
+		t.Errorf("the parent %v, a stranger %v, after %d listings; want true, false, 1", isAncestor(os.Getppid()), isAncestor(os.Getpid()+1_000_000), lists)
+	}
+	listProcesses = func() (map[int]memsample.Proc, bool) { return nil, false }
+	if !ancestry()(4242) {
+		t.Error("an unreadable process table is no ancestor; want one")
+	}
+}
+
+// An --independent run with no typical run time inside a job marked quiet runs at once inside the
+// job's grant, though the room would take it: queued, the window would hold it back while its job
+// waits for it. It says so, and its pass-through line gives the reason quiet. Mutation: letting it
+// queue keeps it waiting until its --timeout.
+func TestIndependentNestsUnderQuietAncestor(t *testing.T) {
+	dir := recordedDir(t, 1024)
+	r := outer(t, dir, "256M", `"$BIN" quiet "$CORESLOT_HOLD" >/dev/null || exit 9
+		"$BIN" run --independent --label inner --timeout 3s --mem 64M -- true; echo "code=$?"`)
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "code=0" || !strings.Contains(r.stderr, "a quiet window of ") {
+		t.Fatalf("exit %d, stdout %q, stderr %q; want the inner run nested at once, and said", r.code, r.stdout, r.stderr)
+	}
+	inner := labelled(events(t, dir), "inner")
+	if len(inner) == 0 || inner[0]["kind"] != "pass_through" || inner[0]["reason"] != "quiet" {
+		t.Errorf("inner events %v; want a pass_through line with the reason quiet", inner)
 	}
 }

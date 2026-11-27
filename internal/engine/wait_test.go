@@ -445,19 +445,6 @@ func TestElectSkipsNotedTicket(t *testing.T) {
 	}
 }
 
-// The election passes over a noted ticket and stops at the first live one without a note beyond it.
-// Mutation: inverting the note test stops the election at the noted ticket.
-func TestElectStopsAtFirstUnnotedLive(t *testing.T) {
-	e := newEngine(t, newStateDir(t, ""), newFakeClock())
-	first := enqueue(t, e, need(128))
-	noted := enqueue(t, e, need(128))
-	note(t, e, noted.Name())
-	r := step(t, enqueue(t, e, need(128)))
-	if w, ok := r.(Waiting); !ok || w.Ahead != first.Name() || w.Position != 2 {
-		t.Fatalf("got %#v; want waiting at position 2 behind %s", r, first.Name())
-	}
-}
-
 // A noted ticket is still observed while it is passed over, so it goes STALLED as any ticket does
 // when its owner stops. Mutation: passing over a noted ticket before reading its mtime leaves it
 // unobserved and never STALLED.

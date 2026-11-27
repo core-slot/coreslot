@@ -146,7 +146,7 @@ func (r *run) engage() {
 	selected := selectedContext(env, r.loc.home)
 	upstream, note := docker.Engage(docker.EngageInput{
 		Off:       r.dockerOff,
-		Interest:  r.o.containerCommand() || r.marked || r.entry.DockerMemMiB > 0,
+		Interest:  r.dockerInterest(),
 		Switch:    r.entry.DockerForward,
 		EntryBad:  r.entryBad,
 		UserHost:  env["DOCKER_HOST"],
@@ -154,6 +154,12 @@ func (r *run) engage() {
 		Reference: ref,
 	})
 	r.setEngagement(engagement{upstream: upstream, note: note, context: selected})
+}
+
+// dockerInterest reports whether the run had a Docker interest at its start: a container command,
+// a label whose window had container work, or a docker_mem need.
+func (r *run) dockerInterest() bool {
+	return r.o.containerCommand() || r.marked || r.entry.DockerMemMiB > 0
 }
 
 // selectedContext is the Docker context the user selected: DOCKER_CONTEXT, else the currentContext
@@ -296,6 +302,13 @@ func (r *run) dockerNote() string {
 // admitted on it, and its run sees its containers.
 func (r *run) dockerGated() bool {
 	return r.gate != nil && r.fwd != nil && !r.fwd.part.blind()
+}
+
+// growing says whether the attempt's hold may still reserve growth its containers have taken: it
+// is gated and their footprint is below its need. Its run samples them every tick until then, so
+// that the reservation drops one tick after they grew.
+func (r *run) growing() bool {
+	return r.dockerGated() && r.fwd.part.footprintMiB() < r.gate.needMiB
 }
 
 // setDockerKeys writes into h, for a grant admitted on its Docker need, the growth and stamp of

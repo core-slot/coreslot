@@ -326,7 +326,13 @@ func (v statusView) human() string {
 		if h.Trimmed {
 			line += "  trimmed"
 		}
-		p("%s  id %s", line, h.ID)
+		if h.Forced {
+			line += "  started now, out of turn"
+		}
+		p("%s%s  id %s", line, marksText(h.Quiet, h.NoStop), h.ID)
+	}
+	if quiet := quietLabels(r.Holds); quiet != "" {
+		p("quiet window: no other job starts until %s", quiet)
 	}
 
 	if len(v.tickets) == 0 {
@@ -348,13 +354,20 @@ func (v statusView) human() string {
 		if t.info.Noted {
 			line += "  waits for Docker's VM"
 		}
+		if y := v.rep.Yield; y != nil && y.Head == t.info.ID {
+			line += "  " + yieldText(y.UntilNS)
+		} else if r := v.rep; t.info.ID == r.Head && len(r.Holds) == 0 && r.Mem.Known && t.info.NeedMiB > r.Mem.RoomMiB && !t.info.Noted {
+			// Nothing runs and it does not fit: it would start by the idle rule unless it waits
+			// while memory outside coreslot grows, which only its own run knows.
+			line += "  nothing runs but it does not fit: waits while memory outside coreslot grows, " + idleWaitText()
+		}
 		switch t.state {
 		case "stalled":
 			line += "  STALLED"
 		case "dead":
 			line += "  dead (withdrawn, or its owner exited)"
 		}
-		p("%s  id %s", line, t.info.ID)
+		p("%s%s  id %s", line, marksText(t.info.Quiet, t.info.NoStop), t.info.ID)
 	}
 	switch {
 	case v.observed > 0:
@@ -376,10 +389,52 @@ func (v statusView) human() string {
 	if n := len(r.Cancels); n > 0 {
 		p("pending cancel requests: %d", n)
 	}
+	if starts := startRequests(r, v.nowNS); len(starts) > 0 {
+		unanswered := 0
+		for _, s := range starts {
+			if s.Unanswered {
+				unanswered++
+			}
+		}
+		line := fmt.Sprintf("pending start requests: %d", len(starts))
+		if unanswered > 0 {
+			line += fmt.Sprintf(", %d unanswered (a stopped run, or one an older coreslot started, never answers)", unanswered)
+		}
+		p("%s", line)
+	}
 	if ignored := ignoredText(r.Ignored); ignored != "" {
 		p("ignored entries (malformed or stray): %s", ignored)
 	}
 	return b.String()
+}
+
+// marksText is what a hold's or a ticket's line says of its marks.
+func marksText(quiet, noStop bool) string {
+	s := ""
+	if quiet {
+		s += "  quiet window"
+	}
+	if noStop {
+		s += "  do not stop"
+	}
+	return s
+}
+
+// quietLabels names the live quiet holds, `check ends` or `check and e2e end`; "" when none is.
+func quietLabels(holds []engine.HolderInfo) string {
+	var labels []string
+	for _, h := range holds {
+		if h.Quiet {
+			labels = append(labels, labelText(h.Label))
+		}
+	}
+	switch len(labels) {
+	case 0:
+		return ""
+	case 1:
+		return labels[0] + " ends"
+	}
+	return strings.Join(labels[:len(labels)-1], ", ") + " and " + labels[len(labels)-1] + " end"
 }
 
 // protection says whether the watchdog is protecting now and, if not, why.
@@ -394,8 +449,8 @@ func (v statusView) protection() (on bool, reason string) {
 		return false, "no run has sampled the machine in the last 6 s"
 	case w.Level == watch.Unknown:
 		return false, "the last sample is a gap (the machine slept, or a reading is missing)"
-	case w.Level == watch.Red && w.NextVictim == "":
-		return false, "a red round can stop no running command: each is the oldest, still learning or never stopped"
+	case w.Level >= watch.Red && w.NextVictim == "":
+		return false, "a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"
 	}
 	return true, ""
 }
@@ -405,6 +460,13 @@ func (v statusView) watchLine() string {
 	state := "protecting"
 	if on, why := v.protection(); !on {
 		state = "not protecting: " + why
+	}
+	if w := v.rep.Watch; w.ModeSource == "override" {
+		state += fmt.Sprintf("; %s mode %s, the configuration says %s (`coreslot watch config` returns to it)",
+			modeName(w.Observe), switchedText(w.ModeUntilNS, v.nowNS), modeName(w.ConfiguredObserve))
+	}
+	if w := v.rep.Watch; w.Observe && w.EnforceRoundLive {
+		state += "; a stop round written before the switch still stops the jobs it listed"
 	}
 	if w := v.rep.Watch; w.Fresh {
 		return fmt.Sprintf("watch: %s, E %.1f points; %s", w.Level, w.Excess, state)
@@ -424,7 +486,7 @@ func plural(n int64, one, many string) string {
 // out a directory with none; "" when nothing was ignored.
 func ignoredText(ignored map[string]int) string {
 	var parts []string
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.OrderDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir} {
 		if n := ignored[dir]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%s %d", dir, n))
 		}
@@ -454,9 +516,58 @@ type jsonStatus struct {
 	Tickets          []jsonTicket   `json:"tickets"`
 	DeadHolds        []string       `json:"dead_holds"`
 	CancelRequests   []string       `json:"cancel_requests"`
+	StartRequests    []jsonStart    `json:"start_requests"`
+	Head             *string        `json:"head"`  // the ticket a waiter's re-election would pick; null with none
+	Yield            *jsonYield     `json:"yield"` // the head's valid yield record; null with none
 	Ignored          map[string]int `json:"ignored"`
 	ObservedS        float64        `json:"observed_s"`
 	Docker           *jsonDocker    `json:"docker,omitempty"` // only with --docker
+}
+
+type jsonYield struct {
+	Head       string `json:"head"`
+	UntilNS    int64  `json:"until_ns"`
+	LastPassNS int64  `json:"last_pass_ns"`
+}
+
+// yieldText says that a head lets short jobs go first, until when.
+func yieldText(untilNS int64) string {
+	return "letting short jobs go first until " + time.Unix(0, untilNS).Format("15:04")
+}
+
+// jsonStart is a pending start request: unanswered once older than startAnswerAge while its ticket
+// still waits.
+type jsonStart struct {
+	Ticket     string  `json:"ticket"`
+	AgeS       float64 `json:"age_s"`
+	Unanswered bool    `json:"unanswered"`
+}
+
+// startAnswerAge is the age at which a start request whose ticket still waits is unanswered: a
+// live run of this coreslot acts on it at its next poll.
+const startAnswerAge = 10 * time.Second
+
+// waitingTickets is the set of the ids of the live tickets r lists.
+func waitingTickets(r engine.Report) map[string]bool {
+	waiting := map[string]bool{}
+	for _, t := range r.Tickets {
+		waiting[t.ID] = waiting[t.ID] || !t.Dead
+	}
+	return waiting
+}
+
+// startRequests are r's pending start requests at nowNS.
+func startRequests(r engine.Report, nowNS int64) []jsonStart {
+	waiting := waitingTickets(r)
+	out := []jsonStart{} // never null in the document
+	for _, s := range r.Starts {
+		var age time.Duration // 0 for a malformed body, whose time is unknown and which its run ignores
+		if s.RequestedNS > 0 {
+			age = time.Duration(max(nowNS-s.RequestedNS, 0))
+		}
+		out = append(out, jsonStart{Ticket: s.Ticket, AgeS: age.Seconds(), Unanswered: age > startAnswerAge && waiting[s.Ticket]})
+	}
+	return out
 }
 
 type jsonDegraded struct {
@@ -490,6 +601,9 @@ type jsonWatch struct {
 	Reason       string  `json:"reason"`
 	NextVictim   string  `json:"next_victim"`
 	Learning     int     `json:"learning"`
+	Mode         string  `json:"mode"`          // enforce or observe, holds or none
+	ModeSource   string  `json:"mode_source"`   // config, or override (coreslot watch, this machine)
+	ModeUntilNS  int64   `json:"mode_until_ns"` // when an override ends; 0 for until switched back or none
 }
 
 // jsonMem is the memory in MiB; null when the configuration or the machine's free memory cannot be read.
@@ -513,6 +627,9 @@ type jsonHold struct {
 	NeedMiB      int64   `json:"need_mib"`  // 0 for a run outside the budget
 	AskedMiB     int64   `json:"asked_mib"` // the need asked: need_mib unless the hold was trimmed
 	Trimmed      bool    `json:"trimmed"`
+	Forced       bool    `json:"forced"`  // admitted at once on a start request, whatever the room
+	Quiet        bool    `json:"quiet"`   // marked quiet: no other job is admitted while it is live
+	NoStop       bool    `json:"no_stop"` // marked do-not-stop: no stop round lists it
 	FootprintMiB int64   `json:"footprint_mib"`
 	Stops        int     `json:"stops"`
 	OwnerExited  bool    `json:"owner_exited"` // the owner exited; a descendant holds the reservation
@@ -546,6 +663,8 @@ type jsonTicket struct {
 	ExpectedWaitS *int64 `json:"expected_wait_s"`
 	DockerNeedMiB int64  `json:"docker_need_mib,omitempty"` // a gated ticket's Docker need
 	VMWait        bool   `json:"vm_wait,omitempty"`         // it fits on the Mac and waits for Docker's VM
+	Quiet         bool   `json:"quiet"`                     // its marks, which act once it is admitted
+	NoStop        bool   `json:"no_stop"`
 }
 
 func (v statusView) document() jsonStatus {
@@ -554,17 +673,24 @@ func (v statusView) document() jsonStatus {
 		Schema: statusSchema, StateDir: r.StateDir, StateDirExists: r.StateDirExists, Format: r.Format, FormatPresent: r.FormatPresent,
 		FormatUnderstood: r.FormatUnderstood, FormatError: r.FormatError, Gen: r.Gen, ReconciledNS: r.ReconciledNS, ConfigError: r.ConfigError, ConfigWarnings: nonNil(r.Config.Warnings),
 		Section: jsonSection{Held: r.Section.Held}, Holds: []jsonHold{}, Tickets: []jsonTicket{},
-		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels),
+		DeadHolds: nonNil(r.DeadHolds), CancelRequests: nonNil(r.Cancels), StartRequests: startRequests(r, v.nowNS),
 		Ignored: map[string]int{}, ObservedS: v.observed.Seconds(),
 	}
 	if v.docker != nil {
 		d.Docker = v.docker.document()
 	}
+	if r.Head != "" {
+		d.Head = &r.Head
+	}
+	if y := r.Yield; y != nil {
+		d.Yield = &jsonYield{Head: y.Head, UntilNS: y.UntilNS, LastPassNS: y.LastPassNS}
+	}
 	if r.Mem.Known {
 		d.Mem = &jsonMem{ReservedMiB: r.Mem.ReservedMiB, FreeMiB: r.Mem.FreeMiB, MachineMiB: r.Mem.MachineMiB,
 			ReserveMiB: r.Mem.ReserveMiB, HeadroomMiB: r.Mem.HeadroomMiB, RoomMiB: r.Mem.RoomMiB}
 	}
-	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim, Learning: r.Watch.Learning}
+	d.Watch = jsonWatch{ExcessPoints: r.Watch.Excess, NextVictim: r.Watch.NextVictim, Learning: r.Watch.Learning,
+		Mode: modeName(r.Watch.Observe), ModeSource: r.Watch.ModeSource, ModeUntilNS: r.Watch.ModeUntilNS}
 	d.Watch.Protecting, d.Watch.Reason = v.protection()
 	if r.Watch.Fresh {
 		d.Watch.Level = r.Watch.Level.String()
@@ -580,11 +706,11 @@ func (v statusView) document() jsonStatus {
 	if x := r.Degraded; x != nil {
 		d.Degraded = &jsonDegraded{Reason: x.Reason, FirstNS: x.FirstNS, Count: x.Count, Malformed: x.Malformed}
 	}
-	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.OrderDir} {
+	for _, dir := range []string{store.QueueDir, store.HoldsDir, store.CancelDir, store.StartDir, store.OrderDir} {
 		d.Ignored[dir] = r.Ignored[dir]
 	}
 	for _, h := range r.Holds {
-		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
+		jh := jsonHold{Name: h.Name, ID: h.ID, AskedMiB: askedMiB(h), Trimmed: h.Trimmed, Forced: h.Forced, Quiet: h.Quiet, NoStop: h.NoStop, Label: h.Label, PID: h.PID, StartNS: h.StartNS,
 			HeldForS: time.Duration(max(v.nowNS-h.StartNS, 0)).Seconds(), ArrivalNS: h.ArrivalNS,
 			NeedMiB: h.NeedMiB, FootprintMiB: h.FootprintMiB, Stops: h.Stops, OwnerExited: h.OwnerExited,
 			Container: h.Container, NoCPUS: holdNoCPUS(h), TypicalS: h.TypicalS, Stoppable: h.Stoppable,
@@ -597,7 +723,8 @@ func (v statusView) document() jsonStatus {
 	for _, t := range v.tickets {
 		jt := jsonTicket{Name: t.info.Name, ID: t.info.ID, Label: t.info.Label, PID: t.info.PID,
 			NeedMiB: t.info.NeedMiB, CreatedNS: t.info.CreatedNS, WaitedS: t.waited.Seconds(),
-			Position: t.position, State: t.state, DockerNeedMiB: t.info.DockerNeedMiB, VMWait: t.info.Noted}
+			Position: t.position, State: t.state, DockerNeedMiB: t.info.DockerNeedMiB, VMWait: t.info.Noted,
+			Quiet: t.info.Quiet, NoStop: t.info.NoStop}
 		if t.info.WaitKnown {
 			jt.ExpectedWaitS = &t.info.WaitS
 		}

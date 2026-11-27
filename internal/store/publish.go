@@ -74,15 +74,15 @@ var renameNoReplace = renameNoReplaceOS
 const maxTmpAttempts = 1000
 
 // noReplaceDirs are the directories whose entries are published without replacement.
-var noReplaceDirs = []string{QueueDir, HoldsDir, CancelDir}
+var noReplaceDirs = []string{QueueDir, HoldsDir, CancelDir, StartDir, QuietDir, NoStopDir}
 
 // listedDirs are the directories List and ListNames read: noReplaceDirs, order/, whose entries a
 // later override of the same ticket replaces, and vmwait/, whose notes are named as their tickets.
-var listedDirs = []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir}
+var listedDirs = []string{QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir, QuietDir, NoStopDir}
 
 // Publish publishes body as dir/name inside the section (PROTOCOL.md section 11), where dir is
-// QueueDir, HoldsDir or CancelDir and name matches that directory's grammar (a ticket or hold
-// name, or a ticket id for a cancel request): it creates dir/.tmp-<pid>-<seq> with O_EXCL (taking the next
+// QueueDir, HoldsDir, CancelDir or StartDir and name matches that directory's grammar (a ticket or hold
+// name, or a ticket id for a cancel or start request): it creates dir/.tmp-<pid>-<seq> with O_EXCL (taking the next
 // seq on EEXIST), takes flock(LOCK_EX) on it when lockCarrying, writes the body, and moves it to
 // name without replacing an existing file. When name exists it removes its temporary file and
 // returns an error matching fs.ErrExist: the caller takes its next seq and retries.
@@ -95,7 +95,7 @@ func (sec *Section) Publish(dir, name string, body []byte, lockCarrying bool) (*
 		return nil, err
 	}
 	if !slices.Contains(noReplaceDirs, dir) {
-		return nil, fmt.Errorf("store: Publish into %q: not a directory of tickets, holds or cancel requests", dir)
+		return nil, fmt.Errorf("store: Publish into %q: not a directory published without replacement", dir)
 	}
 	if !nameMatches(dir, name) {
 		return nil, fmt.Errorf("store: Publish of %q into %s: the name does not match the directory's grammar", name, dir)
@@ -206,15 +206,19 @@ func (sec *Section) RemoveNote(ticketName string) error {
 }
 
 // nameMatches reports whether name matches dir's grammar: a ticket or hold name in QueueDir and
-// HoldsDir, a ticket name in VMWaitDir, a ticket id in CancelDir and OrderDir (PROTOCOL.md section
-// 7.1).
+// HoldsDir, a ticket name in VMWaitDir, an id in the other directories (PROTOCOL.md section 7.1).
 func nameMatches(dir, name string) bool {
-	if dir == CancelDir || dir == OrderDir {
+	if namedByID(dir) {
 		_, ok := wire.ParseID(name)
 		return ok
 	}
 	_, ok := wire.ParseName(name)
 	return ok
+}
+
+// namedByID reports whether dir's entries are named by an id, with no display.
+func namedByID(dir string) bool {
+	return dir == CancelDir || dir == StartDir || dir == OrderDir || dir == QuietDir || dir == NoStopDir
 }
 
 // writeTmp creates a fresh temporary file in d, locks it when lockCarrying, and writes body,
@@ -392,7 +396,7 @@ func (sec *Section) BumpGen() error {
 const formatPrefix = "coreslot-protocol "
 
 // Format reads FORMAT, which every entry does before changing anything (PROTOCOL.md section
-// 8). When FORMAT is absent it writes `coreslot-protocol 4`. It reports the format n and
+// 8). When FORMAT is absent it writes `coreslot-protocol 6`. It reports the format n and
 // whether this client implements it (Understood). A malformed FORMAT is a *StateError. When the
 // format is understood it also rewrites admit.lock's informational body to name this holder; when
 // it is not, it writes nothing at all.

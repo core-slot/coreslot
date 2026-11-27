@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"cmp"
 	"slices"
 	"time"
 
@@ -34,7 +35,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	case err != nil:
 		r.FormatError, r.FormatErr = err.Error(), err
 	case !present:
-		r.FormatUnderstood = true // the first entry writes format 4
+		r.FormatUnderstood = true // the first entry writes format 7
 	default:
 		r.Format, r.FormatUnderstood = n, store.Understood(n)
 	}
@@ -122,11 +123,11 @@ func (e *Engine) Snapshot() (Report, error) {
 	d, smp, at, watchErr := e.st.ReadWatch() // no readable watch.json is no sample
 	now := e.clock.Realtime()                // one clock for the snapshot, after the reads it judges
 	for _, h := range live {
-		info := h.info()
+		info := h.info(now)
 		info.ChildExited, info.SampleAgeMS = h.body.ChildExited, sampleAgeMS(h.body.SampledNS, now)
 		info.LeftS = holdLeftS(h.body, now)
 		r.Holds = append(r.Holds, info)
-		r.Mem.ReservedMiB += h.body.NeedMiB
+		r.Mem.ReservedMiB += info.NeedMiB
 	}
 	if memErr == nil {
 		r.Mem.HeadroomMiB, r.Mem.HeadroomOK, r.Mem.ReserveMiB = machine.HeadroomMiB, machine.HeadroomOK, cfg.ReserveMiB
@@ -134,7 +135,7 @@ func (e *Engine) Snapshot() (Report, error) {
 	var room int64 // 0 while the headroom is unread
 	if memErr == nil && machine.HeadroomOK {
 		r.Mem.Known = true
-		room = state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live))
+		room = state.Room(machine.HeadroomMiB, cfg.ReserveMiB, reservations(live, now))
 		r.Mem.RoomMiB, r.Mem.FreeMiB, r.Mem.MachineMiB = room, max(0, room), machine.MemMiB
 		r.Mem.RealFreeMiB = max(0, state.Room(machine.HeadroomMiB, cfg.ReserveMiB, nil))
 	}
@@ -154,7 +155,11 @@ func (e *Engine) Snapshot() (Report, error) {
 		r.Tickets[head].WaitS, r.Tickets[head].WaitKnown = w, noPass == ""
 	}
 	r.Watch = WatchInfo{Level: d.Level, Excess: d.Excess, SampledNS: at, Observe: cfg.Watch.Observe,
-		Fresh: fresh(at, now)}
+		Fresh: fresh(at, now), ModeSource: cmp.Or(cfg.Mode.Source, "config"), ModeUntilNS: cfg.Mode.UntilNS,
+		ConfiguredObserve: cfg.Mode.ConfiguredObserve}
+	for i, h := range r.Holds { // a listed run that found a container client since ignores the stop
+		r.Watch.EnforceRoundLive = r.Watch.EnforceRoundLive || !d.Observed && live[i].body.Victim && slices.Contains(d.Stop, h.Name)
+	}
 	if r.Watch.Fresh { // the newest sample knows which jobs have a learned normal S; this client does not
 		if next, _ := watch.StopList(smp.Jobs, d.Level == watch.Floor, 1, d.Kept, smp.Host.WallNS+now-at); len(next) > 0 {
 			r.Watch.NextVictim = next[0]
@@ -173,6 +178,47 @@ func (e *Engine) Snapshot() (Report, error) {
 	r.Ignored[store.CancelDir] = ignored
 	for _, en := range cancels {
 		r.Cancels = append(r.Cancels, en.Name)
+	}
+	starts, ignored, err := e.st.List(store.StartDir)
+	if err != nil {
+		return Report{}, err
+	}
+	r.Ignored[store.StartDir] = ignored
+	for _, en := range starts {
+		s := StartInfo{Ticket: en.Name}
+		if body, err := e.readBody(store.StartDir, en.Name); err == nil {
+			if c, err := wire.DecodeCancel(body); err == nil {
+				s.RequestedNS = c.RequestedNS
+			}
+		}
+		r.Starts = append(r.Starts, s)
+	}
+
+	for _, t := range r.Tickets {
+		if !t.Dead && !t.Noted {
+			r.Head = t.ID
+			break
+		}
+	}
+	if y, ok, err := e.st.ReadYield(); err != nil {
+		return Report{}, err
+	} else if ok && y.Head == r.Head && store.NowNS() < y.UntilNS {
+		r.Yield = &YieldInfo{Head: y.Head, UntilNS: y.UntilNS, LastPassNS: y.LastPassNS}
+	}
+
+	quiet, err := e.st.Marks(store.QuietDir)
+	if err != nil {
+		return Report{}, err
+	}
+	noStop, err := e.st.Marks(store.NoStopDir)
+	if err != nil {
+		return Report{}, err
+	}
+	for i, h := range r.Holds {
+		r.Holds[i].Quiet, r.Holds[i].NoStop = quiet[h.ID], noStop[h.ID]
+	}
+	for i, t := range r.Tickets {
+		r.Tickets[i].Quiet, r.Tickets[i].NoStop = quiet[t.ID], noStop[t.ID]
 	}
 
 	r.Section, err = e.sectionInfo()

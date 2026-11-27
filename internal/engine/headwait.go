@@ -12,7 +12,7 @@ import (
 // headWait is the expected wait W of PROTOCOL.md section 10.3 for the head of the queue, as the
 // passing rule judges it: 0 with no live hold (the idle rule); unknown with the headroom unread;
 // otherwise the live holds with a typical run time end soonest first, each freeing the larger of
-// its need and its footprint, until room covers needMiB, and a restart head waits at least the
+// what it reserves and its footprint, until room covers needMiB, and a restart head waits at least the
 // calm it still needs. noPass is "headroom_unknown", "wait_unknown" or "watch_unreadable" when W
 // is unknown, and w is then 0. readWatch is called only for a restart head.
 func headWait(needMiB int64, restart bool, holds []liveHold, room, nowNS int64, headroomOK bool,
@@ -31,7 +31,7 @@ func headWait(needMiB int64, restart bool, holds []liveHold, room, nowNS int64, 
 		if room >= needMiB {
 			break
 		}
-		room, w = room+max(h.body.NeedMiB, h.body.FootprintMiB), holdLeftS(h.body, nowNS)
+		room, w = room+max(reserved(h.body, nowNS), h.body.FootprintMiB), holdLeftS(h.body, nowNS)
 	}
 	if room < needMiB {
 		return 0, "wait_unknown"

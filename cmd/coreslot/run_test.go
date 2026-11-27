@@ -44,6 +44,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// The kernel's pressure as normal, in this process and every coreslot it starts as itself: an idle
+	// start over the room would otherwise wait whenever the test machine is at warn.
+	engine.KernelPressure = func() (int, bool) { return engine.PressureNormal, true }
 	if h := os.Getenv(helperEnv); h != "" {
 		os.Exit(runHelper(h, os.Args[1:]))
 	}
@@ -657,7 +660,7 @@ func TestWrappedClientIsMarked(t *testing.T) {
 	if v, ok := lines[1]["container"]; ok {
 		t.Errorf("the true run's record has container %v", v)
 	}
-	if need, ok, _, _, _, _, _, _ := readLog(location{dir: dir}, "w"); !ok || need <= 0 {
+	if need, ok, _, _, _, _, _, _, _ := readLog(location{dir: dir}, "w"); !ok || need <= 0 {
 		t.Errorf("learned need %d, %v; want one", need, ok)
 	}
 }

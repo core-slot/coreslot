@@ -47,11 +47,25 @@ func ReadHost() (HostReading, error) {
 	return r, err
 }
 
+// Pressure is the kernel's memory pressure level and whether it could be read (Parts); none reads
+// as not read. In a test build the readings hook may set it as PressureLevel.
+func Pressure() (level int, ok bool) {
+	if nums, set := testhooks.Readings(); set {
+		if l, has := nums[pressureReading]; has {
+			return int(l), true
+		}
+	}
+	_, level, ok = Parts()
+	return level, ok && level != 0
+}
+
+const pressureReading = "PressureLevel"
+
 func overlay(r HostReading, nums map[string]int64) HostReading {
 	v := reflect.ValueOf(&r).Elem()
 	for name, n := range nums {
-		if strings.HasPrefix(name, "DockerVM") {
-			continue // DockerVM reads these, not the host reading
+		if strings.HasPrefix(name, "DockerVM") || strings.HasPrefix(name, "Tail") || name == pressureReading {
+			continue // DockerVM, Pressure and a run's reservation window read these, not the host reading
 		}
 		switch f := v.FieldByName(name); f.Kind() {
 		case reflect.Uint64:

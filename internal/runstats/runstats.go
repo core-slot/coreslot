@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/core-slot/coreslot/internal/state"
 	"github.com/core-slot/coreslot/internal/store"
 )
 
@@ -28,6 +29,10 @@ type Stats struct {
 	// has a peak: what a stopped run comes back with, and the pin stats suggests.
 	PeakNeedMiB int64
 	WaitedS     float64 // summed over the window
+	// WindowS is the label's reservation window (WindowS), and WindowLearned whether the window's
+	// runs gave it rather than the default.
+	WindowS       int64
+	WindowLearned bool
 }
 
 // counted reports whether r says what its label needs: labelled, not run without the budget, not
@@ -105,6 +110,30 @@ func TypicalS(window []store.RunRecord) int64 {
 	return max(1, int64(math.Ceil(ran[min(len(ran)-1, len(ran)*9/10)])))
 }
 
+// WindowS is the label's reservation window in seconds (PROTOCOL.md section 20): with at least
+// state.TailMinWindows runs of the window carrying a counted mem_window_s, 1.5 times the largest,
+// rounded up, at least floorS and at most state.TailMaxWindowS; defaultS otherwise. A key counts
+// only when it is a number in (0, state.TailMaxWindowS]; any other is ignored as if absent, so a
+// forged or corrupt value never sizes the window. learned is false when the default is returned.
+// The window is a convenience, not a control: its anchor is the label's counted run-log lines, which
+// any process of the user can append, and such a process can already pin needs or write holds, so
+// there is no adversary to stop. The floor bounds the harm of a forged or honestly short window; the
+// range check and the cap keep a forged or corrupt long value from overflowing into a one-reading
+// window, and a long window only keeps the need longer.
+func WindowS(window []store.RunRecord, floorS, defaultS int64) (s int64, learned bool) {
+	keyed, largest := 0, 0.0
+	for _, r := range window {
+		if w := r.MemWindowS; w != nil && *w > 0 && *w <= state.TailMaxWindowS { // NaN fails both
+			keyed, largest = keyed+1, max(largest, *w)
+		}
+	}
+	if keyed < state.TailMinWindows {
+		return defaultS, false
+	}
+	s = int64(math.Ceil(largest * state.TailFactorNum / state.TailFactorDen))
+	return min(state.TailMaxWindowS, max(floorS, s)), true
+}
+
 // MinCPURuns is how many runs of a label's window must report their CPU time before a red stop
 // round may keep its job as nearly finished.
 const MinCPURuns = 10
@@ -169,6 +198,7 @@ func summarize(label string, n int, window []store.RunRecord) Stats {
 	}
 	s.NeedMiB, _ = NeedMiB(window)
 	s.PeakNeedMiB, _ = PeakNeedMiB(window)
+	s.WindowS, s.WindowLearned = WindowS(window, state.TailFloorS, state.TailDefaultS)
 	return s
 }
 

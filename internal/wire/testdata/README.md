@@ -1,4 +1,4 @@
-# Wire-format fixtures (protocol format 4)
+# Wire-format fixtures (protocol format 7)
 
 Test vectors for the names and bodies of `PROTOCOL.md` section 7. The Go reference implementation
 reads these files; it does not generate them at test time. This
@@ -52,17 +52,17 @@ Verdict reminders, all from `PROTOCOL.md`:
   characters backslash, u, d, 8, 0, 0. Many JSON libraries replace a lone surrogate with U+FFFD or
   keep it as a lone code unit before you can see it, so scan the raw bytes. `bad-*surrogate*` and
   `ok-escaped-backslash-then-u-is-not-an-escape` exercise this.
-- Every key of the table is required, except the ticket's `restart` and `docker_need_mib` and the
+- Every key of the table is required, except the ticket's `restart`, `docker_need_mib` and `typical_s` and the
   hold's `typical_s`, `cpu_ns`, `typical_cpu_s`, `stall_ewma`, `container`, `no_cpu_s`, `asked_mib`,
-  `trimmed`, `docker_note`, `docker_footprint_mib`, `docker_need_mib`, `docker_growth_mib` and
-  `docker_sampled_ns`, which are optional and read as `false`, `""` and `0` when absent
+  `trimmed`, `docker_note`, `docker_footprint_mib`, `docker_need_mib`, `docker_growth_mib`,
+  `docker_sampled_ns` and `forced`, which are optional and read as `false`, `""` and `0` when absent
   (`ok-restart`, `ok-docker-need`, `ok-typical-s`, `ok-keep-estimate`, `ok-container`, `ok-no-cpu`,
-  `ok-trimmed`, `ok-docker-part`, `ok-docker-gated`). A missing
+  `ok-trimmed`, `ok-docker-part`, `ok-docker-gated`, `ok-forced`). A missing
   required key, a `null`, a value of another JSON type, or a value outside the key's rule is
   malformed (`bad-restart-not-a-boolean`, `bad-typical-s-negative`, `bad-cpu-ns-negative`,
   `bad-typical-cpu-s-negative`, `bad-stall-ewma-above-one`, `bad-container-not-a-boolean`,
   `bad-no-cpu-s-negative`, `bad-asked-mib-negative`, `bad-asked-mib-above-maximum`,
-  `bad-trimmed-not-a-boolean`).
+  `bad-trimmed-not-a-boolean`, `bad-forced-not-a-boolean`).
 - An integer has no fraction and no exponent and fits a signed 64-bit integer: `1.0`, `5e0`
   and `9223372036854775808` are not integers where an integer is required.
 - A duplicate key at any depth is malformed, including inside objects and arrays of unknown keys.

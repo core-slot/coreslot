@@ -182,6 +182,12 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 		why = "; waits for room in Docker's VM"
 	case engine.ReasonDockerNoReading:
 		why = "; waits for a reading of Docker's VM"
+	case engine.ReasonYielding:
+		why = "; " + yieldText(w.Outcome.YieldUntilNS)
+	case engine.ReasonIdleGrowing:
+		why = "; no coreslot job runs, but memory outside coreslot is growing: it waits " + idleWaitText()
+	case engine.ReasonQuiet:
+		why = "; a quiet window is open: no job starts until " + cmp.Or(quietLabels(holders), "a quiet job ends")
 	}
 	r.record.waiting(w)
 	if !r.advised {
@@ -197,6 +203,11 @@ func (r *run) waitingLine(w engine.Waiting, waited time.Duration) string {
 	}
 	return fmt.Sprintf("coreslot: waiting for %s%s (%s)%s%s%s%s", need, place,
 		duration(waited), why, holderList(holders, time.Now().UnixNano()), r.pipeNote(), advice)
+}
+
+// idleWaitText is how long, at most, a head waits for memory outside coreslot to stop growing.
+func idleWaitText() string {
+	return fmt.Sprintf("at most %.0f min before starting anyway", engine.IdleWaitMax.Minutes())
 }
 
 // maxHolderLines bounds the holders of a waiting line, so that the line fits MaxRunLine.

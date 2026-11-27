@@ -3,10 +3,12 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -45,30 +47,11 @@ func (t *Ticket) admit(ctx context.Context, single bool) (*Grant, error) {
 // Docker's VM and enters again.
 func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *Grant, read bool, err error) {
 	point("admit.before-enter")
-	sec, entered, err := t.e.enter(ctx, single)
-	if err != nil || !entered {
+	sec, err := t.enterAdmission(ctx, single)
+	if sec == nil || err != nil {
 		return nil, false, err
 	}
 	defer sec.Leave()
-	n, understood, err := sec.Format()
-	if err != nil {
-		return nil, false, err
-	}
-	if !understood {
-		return nil, false, refuseFormat(n, "")
-	}
-
-	// 1. A cancel request published before this section wins.
-	cancelled, err := t.cancelRequested()
-	if err != nil {
-		return nil, false, err
-	}
-	if cancelled {
-		if t.settle(statusCancelled) {
-			t.removeOwn(sec)
-		}
-		return nil, false, ErrCanceled
-	}
 	gated := t.gated()
 	if !gated { // a ticket whose Docker part went ungated waits as any other
 		if err := t.unnote(sec); err != nil {
@@ -92,28 +75,56 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 	need := t.req.NeedMiB
 	var reserved []state.MemHold
 	if !t.req.RealMemory || gated {
-		reserved = reservations(holds)
+		reserved = reservations(holds, t.e.clock.Realtime())
 	}
 	room := state.Room(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	if t.req.RealMemory && gated {
 		room = state.GrowthRoom(m.HeadroomMiB, cfg.ReserveMiB, reserved)
 	}
 	t.out = Outcome{HeadroomMiB: m.HeadroomMiB, ReserveMiB: cfg.ReserveMiB, RoomMiB: room, HeadroomOK: m.HeadroomOK}
+	t.idle.note(t.e.clock.Monotonic(), m, len(holds) == 0)
+	// A yielding head's no-taker count restarts when this attempt finds it not fitting
+	// (PROTOCOL.md section 10.3); any other exit, a read of Docker's VM or the level gate among
+	// them, keeps it (yield.go). The yield itself goes on, bounded by its deadline and its span.
+	defer func() {
+		if g == nil && t.out.Reason.notFitting() {
+			t.yield.fitSince = -1
+		}
+	}()
+	// 1c. While a quiet job runs no other job is admitted, whatever path this attempt would take.
+	if quiet, err := quietHolds(t.e.st, holds); err != nil {
+		return nil, false, err
+	} else if len(quiet) > 0 {
+		t.out.Reason = ReasonQuiet
+		return nil, false, t.unnote(sec)
+	}
+	if t.yield.active {
+		if err := t.yieldEnds(sec, holds); err != nil {
+			return nil, false, err
+		}
+	}
 	if m.HeadroomOK && len(holds) > 0 && need > room {
 		t.out.Reason = ReasonRoomShort
 		return nil, false, t.unnote(sec)
 	}
 	// 5. The re-election: a live ticket ahead of this one wins, unless this one may pass it. With a
 	// hold live a container request needs no pass; with none the idle start is the head's.
+	isHead := false
 	if !t.req.RealMemory || len(holds) == 0 {
 		head, headKey, headOrder, err := t.reelect()
 		if err != nil {
 			return nil, false, err
 		}
+		if head != nil && t.yield.active {
+			if err := t.endYield(sec, "headship"); err != nil {
+				return nil, false, err
+			}
+		}
 		if head != nil && !t.passes(*head, headKey, headOrder, holds, room, cfg, m) {
 			t.out.Reason = ReasonBehindHead
 			return nil, false, nil
 		}
+		isHead = head == nil
 	}
 	var record func() // the level gate's record of this start, made only when it admits
 	if len(holds) > 0 {
@@ -127,6 +138,10 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		record = rec
 	} else {
 		t.out.WatchGate = "no_holds"
+		if isHead && t.idleWait(m, need, room) { // the idle start, unless memory outside coreslot grows
+			t.out.Reason = ReasonIdleGrowing
+			return nil, false, t.unnote(sec)
+		}
 	}
 
 	// 6. A gated request's VM test, on a reading taken outside the section.
@@ -138,29 +153,165 @@ func (t *Ticket) admitEntry(ctx context.Context, single bool, at *attempt) (g *G
 		}
 		dock = &t.reading
 	}
+	// A head that would start now may yield to short jobs first, before the gate records its start.
+	if isHead {
+		if wait, err := t.yieldWait(ctx, sec, room, m); wait || err != nil {
+			return nil, false, err
+		}
+	}
+	// 6a. The room confirmed on the live holds' trees measured now.
+	if !t.req.RealMemory && len(holds) > 0 {
+		fits, err := t.confirm(cfg, holds, need)
+		if err != nil {
+			return nil, false, err
+		}
+		if !fits {
+			t.out.Reason, t.out.Pass = ReasonRoomShort, ""
+			return nil, false, t.unnote(sec)
+		}
+	}
 	if record != nil {
 		record()
 	}
+	g, err = t.publishAdmission(sec, dock, false)
+	return g, false, err
+}
 
-	// 7. Publish the hold, close and unlink the ticket (and its note), bump gen. A Withdraw that
-	// came first wins; once the hold is published the ticket is admitted and Withdraw has no effect.
+// quietHolds is the live holds a quiet mark names (PROTOCOL.md section 12.1, step 1c); a mark naming
+// a ticket, or a hold that is not live, holds nothing back. Its adversary is
+// none: the honest jobs that would start beside the one the user wants to run alone. Its anchor is
+// quiet/<hold id>, written inside the section by `coreslot quiet` or moved there by the job's own
+// run at admission, and the hold's lock, which the kernel keeps for the job's processes; any process
+// of the user can remove the mark, so it is a convenience that fails open (a crash drops the lock, a
+// missing mark blocks nothing).
+func quietHolds(st *store.Store, holds []liveHold) (quiet []liveHold, err error) {
+	marks, err := st.Marks(store.QuietDir)
+	for _, h := range holds {
+		if id, ok := wire.ParseName(h.name); ok && marks[id.String()] {
+			quiet = append(quiet, h)
+		}
+	}
+	return quiet, err
+}
+
+// treeFootprints measures the live holds' trees for confirm; tests replace it.
+var treeFootprints = memsample.Footprints
+
+// confirm reports whether need fits the room built from one instant (PROTOCOL.md section 12.1,
+// step 6a): the headroom read before and after one measurement of every live hold's tree, the
+// lower of the two, and each measured hold's footprint in place of the one its run last wrote. A
+// hold that cannot be measured keeps its written footprint; with the headroom unread it confirms.
+// It sets the outcome's headroom and room to the values it used. It only ever refuses: it runs
+// after the room test passed. Its adversary is timing, a hold's memory moving between its run's
+// write and this admission; its anchor is the kernel's process table and headroom, read by this
+// process inside the section, which no hold body or other party's file feeds.
+func (t *Ticket) confirm(cfg config.Config, holds []liveHold, need int64) (bool, error) {
+	roots := make([]memsample.Root, 0, len(holds))
+	for _, h := range holds {
+		if !h.unparsed {
+			roots = append(roots, memsample.Root{PID: h.body.PID, StartNS: h.body.StartNS})
+		}
+	}
+	m1, err1 := t.e.machine()
+	measured, _ := treeFootprints(roots)
+	m2, err2 := t.e.machine()
+	if err := cmp.Or(err1, err2); err != nil { // as reading() reports it
+		return false, &store.StateError{Reason: "machine: " + err.Error(), Err: err}
+	}
+	if !m1.HeadroomOK || !m2.HeadroomOK {
+		return true, nil
+	}
+	now := slices.Clone(holds)
+	for i, h := range now { // an unparsed hold, not measured, matches no root
+		if mib, ok := measured[memsample.Root{PID: h.body.PID, StartNS: h.body.StartNS}]; ok {
+			now[i].body.FootprintMiB = mib
+		}
+	}
+	headroom := min(m1.HeadroomMiB, m2.HeadroomMiB)
+	room := state.Room(headroom, cfg.ReserveMiB, reservations(now, t.e.clock.Realtime()))
+	t.out.HeadroomMiB, t.out.RoomMiB = headroom, room
+	return need <= room, nil
+}
+
+// enterAdmission enters the section for an admission and checks its format and step 1: a cancel
+// request published before this section wins. It returns nil with no error when the section was
+// busy; the caller leaves a section it returns.
+func (t *Ticket) enterAdmission(ctx context.Context, single bool) (*store.Section, error) {
+	sec, entered, err := t.e.enter(ctx, single)
+	if err != nil || !entered {
+		return nil, err
+	}
+	n, understood, err := sec.Format()
+	if err == nil && !understood {
+		err = refuseFormat(n, "")
+	}
+	cancelled := false
+	if err == nil {
+		cancelled, err = t.cancelRequested()
+	}
+	if err == nil && cancelled {
+		if t.settle(statusCancelled) {
+			t.removeOwn(sec)
+		}
+		err = ErrCanceled
+	}
+	if err != nil {
+		sec.Leave()
+		return nil, err
+	}
+	return sec, nil
+}
+
+// startNow admits the ticket at once on its start request (PROTOCOL.md section 12.1, the forced
+// admission): no room test, level gate (so no spacing slot), order, pass or VM test. Its hold
+// reserves the full need and keeps the ticket's arrival, so a red round takes it by its queue
+// arrival like any other run. A gated ticket's hold carries its Docker keys from a reading taken
+// outside the section, as a gated admission's does; with no reading to be had it carries none.
+func (t *Ticket) startNow(ctx context.Context, single bool) (*Grant, error) {
+	if t.gated() && t.e.clock.Monotonic()-t.readAt >= ReadEvery {
+		t.read(ctx, &attempt{})
+	}
+	sec, err := t.enterAdmission(ctx, single)
+	if sec == nil || err != nil {
+		return nil, err
+	}
+	defer sec.Leave()
+	t.out = Outcome{Pass: "forced"}
+	var dock *DockerReading
+	if t.gated() && t.reading.OK {
+		dock = &t.reading
+	}
+	return t.publishAdmission(sec, dock, true)
+}
+
+// publishAdmission is step 7: publish the hold, move the ticket's marks to it, close and unlink the
+// ticket (with its note, order override and start request), bump gen. A Withdraw that came first wins; once the hold is
+// published the ticket is admitted and Withdraw has no effect.
+func (t *Ticket) publishAdmission(sec *store.Section, dock *DockerReading, forced bool) (*Grant, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.status != statusWaiting {
-		return nil, false, ErrCanceled
+		return nil, ErrCanceled
 	}
-	t.out.DockerUngated = t.ungated
-	g = &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
-	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock); err != nil {
-		return nil, false, err
+	t.out.DockerUngated, t.out.YieldEnded = t.ungated, t.yield.ended
+	need := t.req.NeedMiB
+	g := &Grant{e: t.e, grantMiB: need, admission: t.out, dockerUngated: t.ungated}
+	if err := g.publishHold(sec, t.req, t.arrivalNS, need, dock, forced); err != nil {
+		return nil, err
+	}
+	if hid, ok := wire.ParseName(g.holdName); ok {
+		_ = sec.MoveMarks(t.id, hid) // a mark lost to a state error fails open
 	}
 	t.f.Close()
 	_, _ = sec.RemoveOwnTicket(t.name) // already gone counts as success (PROTOCOL.md 10.3)
+	if t.out.Pass == "short" {
+		t.notePass(sec)
+	}
 	// A failed bump does not undo the admission: waiters probe the tickets ahead of them on
 	// every election, so the closed ticket is passed over without a rescan.
 	_ = sec.BumpGen()
 	t.status, t.grant = statusAdmitted, g
-	return g, false, nil
+	return g, nil
 }
 
 // watchWait reports whether the shared watch state keeps the ticket out while holds are live, and
@@ -301,6 +452,13 @@ func (t *Ticket) liveAhead(en aheadEntry, now time.Duration) (bool, error) {
 // the calm a restart still needs; or out of turn, whatever W is (outOfTurn).
 func (t *Ticket) passes(head wire.Ticket, headKey, headOrder state.Key, holds []liveHold, room int64, cfg config.Config,
 	m config.Machine) bool {
+	if why, ok := t.shortPass(head, headKey, headOrder, holds, room); ok { // a yielding head fits: no other pass applies
+		if why == "" {
+			t.out.Pass = "short"
+		}
+		t.out.NoPass = why
+		return why == ""
+	}
 	switch { // with no hold live the head starts at once
 	case t.req.TypicalS == 0:
 		t.out.NoPass = "no_typical"
@@ -337,15 +495,12 @@ func (t *Ticket) passes(head wire.Ticket, headKey, headOrder state.Key, holds []
 	return false
 }
 
-// pressureNormal is the kernel's normal memory pressure level, as memsample.Parts reports it.
-const pressureNormal = 1
+// PressureNormal is the kernel's normal memory pressure level, as memsample.Parts reports it.
+const PressureNormal = 1
 
-// kernelPressure is the kernel's memory pressure level and whether it could be read; a system that
+// KernelPressure is the kernel's memory pressure level and whether it could be read; a system that
 // has none (Linux) reports it as not read. Tests replace it.
-var kernelPressure = func() (int, bool) {
-	_, level, ok := memsample.Parts()
-	return level, ok && level != 0
-}
+var KernelPressure = memsample.Pressure
 
 // outOfTurn is the first condition that keeps this ticket from going out of turn ahead of head, ""
 // when none does (PROTOCOL.md section 10.3): head does not fit the room now; the kernel's memory
@@ -359,7 +514,7 @@ func (t *Ticket) outOfTurn(head wire.Ticket, headKey, headOrder state.Key, holds
 	if head.NeedMiB <= room {
 		return "head_fits"
 	}
-	if level, ok := kernelPressure(); !ok || level != pressureNormal {
+	if level, ok := KernelPressure(); !ok || level != PressureNormal {
 		return "pressure_not_normal"
 	}
 	for _, h := range holds {
@@ -420,10 +575,10 @@ type Grant struct {
 // inside sec and keeps its descriptor. A grant admitted on its Docker need by the reading dock
 // carries that need, the VM growth it reserves on the host and the reading's stamp from this first
 // body on.
-func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64, dock *DockerReading) error {
+func (g *Grant) publishHold(sec *store.Section, req spec.Request, arrivalNS, needMiB int64, dock *DockerReading, forced bool) error {
 	start := max(g.e.clock.Realtime(), 0)
 	h := wire.Hold{Label: req.Label, PID: os.Getpid(), StartNS: start, ArrivalNS: max(arrivalNS, 0),
-		NeedMiB: needMiB, TypicalS: req.TypicalS}
+		NeedMiB: needMiB, TypicalS: req.TypicalS, Forced: forced}
 	if dock != nil {
 		h.DockerNeedMiB, h.DockerSampledNS = req.DockerNeedMiB, max(dock.StartedNS, 0)
 		h.DockerGrowthMiB = min(state.Growth(dock.VMMiB, dock.VMNowMiB, req.DockerNeedMiB, req.DockerFootprintMiB, dock.VMM), spec.MaxNeedMiB)
@@ -522,6 +677,12 @@ func (g *Grant) removeHold() {
 	defer sec.Leave()
 	if _, understood, err := sec.Prepare(g.e.clock.Realtime()); err != nil || !understood {
 		return
+	}
+	// The attempt is over, however it ended: its marks go even when a descendant keeps the hold.
+	if hid, ok := wire.ParseName(g.holdName); ok {
+		for _, dir := range []string{store.QuietDir, store.NoStopDir} {
+			_, _ = sec.Unmark(dir, hid)
+		}
 	}
 	if removed, err := sec.ProbeAndRemoveHold(g.holdName); err == nil && removed {
 		_ = sec.BumpGen() // removing one's own hold bumps gen once (PROTOCOL.md section 7.8)

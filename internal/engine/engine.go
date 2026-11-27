@@ -10,6 +10,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -122,7 +123,34 @@ func (e *Engine) Config() (config.Config, error) {
 	if err != nil {
 		return config.Config{}, &store.StateError{Reason: err.Error(), Err: err}
 	}
+	// The effective mode of PROTOCOL.md section 7.15: this machine's override while it holds, else
+	// the configuration's. Every reader of the mode goes through Config, so both ticks, the stop
+	// rounds, the run's records and status read one mode. The override is a convenience against no
+	// one: any process of the user can write it, as it can edit the configuration, and it refuses
+	// nothing; status showing "switched by hand" is the reminder that it holds.
+	mode, until, ok, err := e.st.ReadWatchMode()
+	if err != nil {
+		return config.Config{}, err
+	}
+	c.Mode.Source, c.Mode.ConfiguredObserve = "config", c.Watch.Observe
+	if ok && (until == 0 || until > store.NowNS()) {
+		c.Watch.Observe, c.Mode.Source, c.Mode.UntilNS = mode == "observe", "override", until
+	}
 	return c, nil
+}
+
+// SetWatchModeContext sets this machine's override inside the section, entered within ctx, or
+// removes it for mode "". A directory of a format this client does not implement is refused.
+func (e *Engine) SetWatchModeContext(ctx context.Context, mode string, untilNS int64) error {
+	sec, err := e.enterUntil(ctx)
+	if err != nil {
+		return err
+	}
+	defer sec.Leave()
+	if n, understood, err := sec.Prepare(e.clock.Realtime()); err != nil || !understood {
+		return cmp.Or(err, refuseFormat(n, ""))
+	}
+	return sec.SetWatchMode(mode, untilNS)
 }
 
 // reading reads the configuration and the machine's memory afresh, as every admission does
@@ -262,7 +290,7 @@ func (t *Ticket) publish(sec *store.Section) error {
 	if t.req.ArrivalNS > 0 {
 		arrival = t.req.ArrivalNS
 	}
-	tk := wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival, Restart: t.req.Restart}
+	tk := wire.Ticket{Label: t.req.Label, NeedMiB: t.req.NeedMiB, CreatedNS: arrival, Restart: t.req.Restart, TypicalS: t.req.TypicalS}
 	if t.gated() {
 		tk.DockerNeedMiB = t.req.DockerNeedMiB
 	}

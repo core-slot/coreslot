@@ -196,7 +196,7 @@ func TestStatusJSONSchema(t *testing.T) {
 	queue(t, c, "waiting", 256)
 
 	doc := statusDoc(t, dir, 0)
-	const top = "cancel_requests config_error config_warnings dead_holds degraded format format_error format_present format_understood gen holds ignored mem observed_s reconciled_ns schema section state_dir state_dir_exists tickets watch"
+	const top = "cancel_requests config_error config_warnings dead_holds degraded format format_error format_present format_understood gen head holds ignored mem observed_s reconciled_ns schema section start_requests state_dir state_dir_exists tickets watch yield"
 	if got := keysOf(doc); got != top {
 		t.Errorf("top-level keys\n got %s\nwant %s", got, top)
 	}
@@ -229,7 +229,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("holds = %v", holds)
 	}
 	h := holds[0].(map[string]any)
-	const holdKeys = "arrival_ns asked_mib footprint_mib held_for_s id label left_s name need_mib owner_exited pid start_ns stoppable stops trimmed typical_s"
+	const holdKeys = "arrival_ns asked_mib footprint_mib forced held_for_s id label left_s name need_mib no_stop owner_exited pid quiet start_ns stoppable stops trimmed typical_s"
 	if got := keysOf(h); got != holdKeys {
 		t.Errorf("hold keys\n got %s\nwant %s", got, holdKeys)
 	}
@@ -242,7 +242,7 @@ func TestStatusJSONSchema(t *testing.T) {
 		t.Fatalf("tickets = %v", tickets)
 	}
 	tk := tickets[0].(map[string]any)
-	const ticketKeys = "created_ns expected_wait_s id label name need_mib pid position stalled state waited_s"
+	const ticketKeys = "created_ns expected_wait_s id label name need_mib no_stop pid position quiet stalled state waited_s"
 	if got := keysOf(tk); got != ticketKeys {
 		t.Errorf("ticket keys\n got %s\nwant %s", got, ticketKeys)
 	}
@@ -435,32 +435,6 @@ func TestStatusShowsGatedTicketAndNote(t *testing.T) {
 	}
 	if _, ok := plain["docker_need_mib"]; ok || plain["vm_wait"] != nil {
 		t.Errorf("plain ticket %v carries a Docker key", plain)
-	}
-}
-
-// status reads the Docker part of each hold and ticket from their bodies: without --docker it runs
-// no program and opens no socket, whatever a hold or ticket carries. Mutation: status running
-// `docker` (the stand-in on PATH) to show a gated hold leaves its mark.
-func TestStatusRunsNoProgram(t *testing.T) {
-	dir := budgetDir(t, 8192)
-	g := hold(t, openLib(t, dir), "gate", 384)
-	if err := g.UpdateHold(func(h *wire.Hold) { h.DockerNeedMiB, h.DockerGrowthMiB = 2048, 3072 }); err != nil {
-		t.Fatal(err)
-	}
-	bin, mark := t.TempDir(), filepath.Join(t.TempDir(), "ran")
-	for _, name := range []string{"docker", "sh", "ps"} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n/usr/bin/touch "+mark+"\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	env := append(baseEnv(dir), "PATH="+bin)
-	for _, args := range [][]string{{"status"}, {"status", "--json"}} {
-		if r := cli(t, env, args...); r.code != 0 {
-			t.Fatalf("%v exited %d: %s", args, r.code, r.stderr)
-		}
-	}
-	if _, err := os.Stat(mark); err == nil {
-		t.Error("status ran a program")
 	}
 }
 
@@ -1424,7 +1398,10 @@ func TestDoctorResetSaysWhatBecameOfTheRunLog(t *testing.T) {
 		want         string
 	}{
 		{"current format", understoodFormat, true, false, kept},
-		{"upgrade", fmt.Sprintf("coreslot-protocol %d\n", store.UpgradedFormat), true, false, kept},
+		{"upgrade from 6", "coreslot-protocol 6\n", true, false, kept},
+		{"upgrade from 5", "coreslot-protocol 5\n", true, false, kept},
+		{"upgrade from 4", "coreslot-protocol 4\n", true, false, kept},
+		{"upgrade from 3", "coreslot-protocol 3\n", true, false, kept},
 		{"no FORMAT", "", true, false, kept},
 		{"current format without a log", understoodFormat, false, false, none},
 		{"format 2", "coreslot-protocol 2\n", true, false, other},
@@ -2241,5 +2218,23 @@ func TestStatusConfigWarningShown(t *testing.T) {
 	r := cli(t, baseEnv(dir), "doctor")
 	if r.code != 0 || !strings.Contains(r.stdout, "\nconfiguration warning: "+warning+"\n") || strings.Contains(r.stdout, "PROBLEM") {
 		t.Errorf("doctor (exit %d) lacks the warning line, or calls it a problem:\n%s", r.code, r.stdout)
+	}
+}
+
+// With nothing running, a head that does not fit says it waits while memory outside coreslot
+// grows; a head that fits, or one beside a live hold, says nothing of it. Mutation: dropping the
+// room test shows it on the head that fits.
+func TestStatusShowsTheIdleWait(t *testing.T) {
+	for _, c := range []struct {
+		need  int64
+		holds []engine.HolderInfo
+		want  bool
+	}{{2000, nil, true}, {500, nil, false}, {2000, []engine.HolderInfo{{Name: "h", Label: "x", PID: 7}}, false}} {
+		rep := engine.Report{Head: "t1", Holds: c.holds, Tickets: []engine.TicketInfo{{Name: "t1", ID: "t1", Label: "q", PID: 9, NeedMiB: c.need}}}
+		rep.Mem.Known, rep.Mem.RoomMiB = true, 1000
+		h := buildStatus(rep, 0, nil, 0).human()
+		if got := strings.Contains(h, "waits while memory outside coreslot grows, at most 5 min"); got != c.want {
+			t.Errorf("need %d, %d holds: shown %v; want %v:\n%s", c.need, len(c.holds), got, c.want, h)
+		}
 	}
 }

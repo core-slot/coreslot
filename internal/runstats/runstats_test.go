@@ -3,6 +3,7 @@
 package runstats
 
 import (
+	"math"
 	"testing"
 
 	"github.com/core-slot/coreslot/internal/store"
@@ -275,5 +276,47 @@ func TestTypicalCPUS(t *testing.T) {
 	last.UserS, last.SysS = f(60), f(4)
 	if got := TypicalCPUS(append(window, halfKnown, last)); got != 6.5 {
 		t.Errorf("10 runs with both keys: %v, want the median 6.5", got)
+	}
+}
+
+// windowed is a counted run per key, in order; a nil key is a line without mem_window_s.
+func windowed(keys ...*float64) []store.RunRecord {
+	rs := make([]store.RunRecord, len(keys))
+	for i, w := range keys {
+		rs[i] = run("w", int64(i))
+		rs[i].MemWindowS = w
+	}
+	return rs
+}
+
+// TestWindowS: the learned window is 1.5 times the largest counted key, rounded up, between the
+// floor and a day, once 3 runs carry a key; the default otherwise. Each case names its mutation.
+func TestWindowS(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rs   []store.RunRecord
+		want int64
+	}{
+		// Mutation: learning from 2 keyed runs → 150.
+		{"NeedsThree", windowed(f(100), f(100)), 600},
+		{"LearnsAtThree", windowed(f(100), f(100), f(100)), 150},
+		// Mutation: dropping the floor → 60.
+		{"Floor", windowed(f(40), f(40), f(40)), 120},
+		// Mutation: truncating instead of rounding up → 151.
+		{"FactorAndRounding", windowed(f(101), f(50), f(50)), 152},
+		// Mutation: taking the last key instead of the largest → 120 (the floor over 90).
+		{"LargestNotLast", windowed(f(300), f(50), f(60)), 450},
+		// Mutation: counting every run, keyed or not → 150.
+		{"CountsOnlyLinesWithTheKey", windowed(nil, f(100), nil, f(100), nil), 600},
+		// Mutation: dropping the range check → 120, the NaN taking the largest (the 1e10 alone: 86 400).
+		{"IgnoresOutOfRange", windowed(f(1e10), f(0), f(-5), f(math.NaN()), f(100), f(100), f(100)), 150},
+		// Mutation: dropping the cap → 120 000.
+		{"Cap", windowed(f(80000), f(10), f(10)), 86400},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got, _ := WindowS(c.rs, 120, 600); got != c.want {
+				t.Errorf("WindowS = %d; want %d", got, c.want)
+			}
+		})
 	}
 }

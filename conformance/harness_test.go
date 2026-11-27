@@ -8,6 +8,7 @@
 package conformance
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -209,6 +210,9 @@ type Env struct {
 
 	pause  []string      // CORESLOT_TESTHOOK_PAUSE of the next Start
 	offset time.Duration // CORESLOT_TESTHOOK_REALTIME_OFFSET of the next Start
+	// headroomMiB replaces confHeadroomMiB for e's processes when set, for a trace whose bound
+	// (the machine's memory less the reserve) must hold a need.
+	headroomMiB int64
 
 	dockerSock, dockerConfig string // set by SetEngine: the fake engine's socket, an empty Docker configuration
 }
@@ -257,10 +261,11 @@ func (e *Env) SetEngine(opts ...dockertest.Option) *dockertest.Fake {
 }
 
 // calm is the machine readings of a host that pages nothing and has ample swap room, with
-// swapUsedMiB of swap used: the watchdog's level then depends on no trace's host.
+// swapUsedMiB of swap used and normal kernel pressure: the watchdog's level, and an idle start over
+// the room, then depend on no trace's host.
 func calm(swapUsedMiB int64) map[string]int64 {
 	return map[string]int64{"Decomp": 0, "SwapIns": 0, "HasPSI": 0, "SwapUsedMiB": swapUsedMiB,
-		"SwapFreeMiB": 1 << 20, "VMVolumeFreeMiB": 1 << 20}
+		"SwapFreeMiB": 1 << 20, "VMVolumeFreeMiB": 1 << 20, "PressureLevel": 1}
 }
 
 // SetReadings replaces the named machine readings of every process sharing e's hook directory, as
@@ -344,7 +349,7 @@ func (e Env) environ() []string {
 		}
 	}
 	env = append(env, "CORESLOT_STATE_DIR="+e.Dir, "CORESLOT_TESTHOOK_DIR="+e.HookDir,
-		"CORESLOT_TESTHOOK_HEADROOM_MIB="+strconv.Itoa(confHeadroomMiB))
+		"CORESLOT_TESTHOOK_HEADROOM_MIB="+strconv.FormatInt(cmp.Or(e.headroomMiB, confHeadroomMiB), 10))
 	if e.dockerSock != "" {
 		env = append(env, "CORESLOT_TESTHOOK_DOCKER_SOCKET="+e.dockerSock, "DOCKER_CONFIG="+e.dockerConfig)
 	}

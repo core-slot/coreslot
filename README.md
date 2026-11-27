@@ -27,7 +27,10 @@ coreslot status                                # what runs, what waits, whether 
   waits in one first-in, first-out queue. A command that fits may pass the head of the queue when
   its earlier runs say it will be done before the head could start, or, while the head does not fit
   and the kernel reports normal memory pressure, out of turn: one at a time, and for no longer than
-  it has itself watched the head wait. A command with no earlier run never passes. The exception is
+  it has itself watched the head wait. A long head (10 min or more) that could start lets short
+  commands (2 min or less) that would not fit beside it go first, until a deadline of a quarter of its
+  own run time that `status` shows; it starts by then, or once the short ones still running end. A
+  command with no earlier run never passes. The exception is
   container work: while another command runs, a command named `docker`, `docker-compose` or
   `podman` with no pinned need passes the queue, with or without
   earlier runs ([how it decides](#how-it-decides)). When no coreslot command is running, the head of
@@ -107,9 +110,23 @@ stats` prints. Else 1 MiB for a command named
 `docker`, `docker-compose` or `podman`, else the smaller of 4 GiB and a quarter of the machine's memory. The room is the free memory
 (on macOS free, speculative, purgeable and file-backed pageable pages; on Linux `MemAvailable`),
 less the reserve, less what each running command still has to grow into (its need less what it uses
-now). A command starts when its need fits the room. A need larger than the machine's memory less the
-reserve starts only when no other coreslot job runs. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
+now). A command starts when its need fits the room. A running command reports what it uses every
+2 s, so before a command starts beside running ones, coreslot measures them at that moment rather
+than trust their last report, and waits if the room is not there now. A need larger than the machine's memory less the
+reserve starts only when no other coreslot job runs. A command that does not fit and would start
+because no other coreslot job runs waits up to 5 minutes while memory outside coreslot is growing. Waiting runs say why, and queued ones where they stand, when they begin to wait and every 30 s; a tool with
 a time limit of its own can expire first, so run coreslot in the background or raise the limit.
+
+**After the peak.** A command whose need was not pinned, learned or the default, does not keep its
+whole need reserved until it ends. Once it has run for its label's window, it reserves the most it
+used within that window plus a margin (a tenth of its need, at least 256 MiB), never more than its
+need, and its reservation rises again at the next report when it grows. The window is learned from
+the label's runs: each run records the longest stretch after which its memory still came back to
+near its later peak, and the window is 1.5 times the longest of those over the last 20 runs, at
+least 2 minutes; 10 minutes until 3 runs have recorded one. `coreslot stats` prints it. A need
+pinned with `--mem` or in `needs.toml`, a command with Docker work, a need larger than the machine's
+memory less the reserve and a restart keep their whole need. A command that grows back past what was
+released, on a machine that is short meanwhile, is the watchdog's.
 
 **Container work.** A container's processes are not in the command's tree, so the run's footprint
 leaves them out (on macOS a forwarder reads them apart, below). Container work is a command named `docker`, `docker-compose` or `podman`, or a run whose tree
@@ -173,11 +190,12 @@ and says so when it starts. A run that fits on the Mac and waits only for the VM
 Docker's VM` in `status`, and every other run passes it: a `go test` or a `docker compose down`
 behind it starts. Once started, its hold reserves on the Mac the growth its containers may still
 cause the VM, up to twice what they have yet to reach of the need on Apple's hypervisor and one
-and a half times on Docker VMM, and never more than the VM can still grow. `status` shows each hold's `docker_mem`, its `docker footprint` and what is `reserved on
-the Mac for Docker's VM`, and each waiting run's `docker_mem`. Docker Desktop's VM is read on
-Apple's hypervisor and on Docker VMM alike. `--mem` and `mem` stay the memory of the command's own
-processes: on a command named `docker`, a pin reserves that on the Mac and makes it queue as usual,
-so a pin meant as the containers' memory belongs in `docker_mem`.
+and a half times on Docker VMM, and never more than the VM can still grow. `status` shows each
+hold's `docker_mem`, its `docker footprint` and what is `reserved on the Mac for Docker's VM`, and
+each waiting run's `docker_mem`. Docker Desktop's VM is read on Apple's hypervisor and on Docker
+VMM alike. `--mem` and `mem` stay the memory of the command's own processes: on a command named
+`docker`, a pin reserves that on the Mac and makes it queue as usual, so a pin meant as the
+containers' memory belongs in `docker_mem`.
 
 What the reservation does not hold back:
 
@@ -192,9 +210,8 @@ What the reservation does not hold back:
 - On Docker VMM the VM gives memory back to the Mac as its containers free it, so a hold reserves
   for as long as its containers have not filled its need, and for up to 6 s after the VM gives
   memory back its reservation can be too low. The factor 1.5 does not cover a transient that briefly
-  touches more, which Docker VMM gives back within about 2 s, and of the guest's cache creeping
-  above it after a step. On Apple's hypervisor a VM grown to its size
-  reserves nothing more.
+  touches more, which Docker VMM gives back within about 2 s, nor the guest's cache creeping above
+  it after a step. On Apple's hypervisor a VM grown to its size reserves nothing more.
 - Runs behind one that waits for the VM may take Mac memory it needs. Room in the VM goes to
   waiting runs in arrival order, so containers outside coreslot that keep the VM full hold every
   such run; only `--timeout` bounds that.
@@ -280,7 +297,10 @@ notes](calibration/README.md#what-the-defaults-rest-on) say what recorded runs o
 each default, and which are not calibrated. See
 [`PROTOCOL.md` section 23](PROTOCOL.md#23-the-watchdog) for the exact rules and
 [the configuration](#configuration) to change them. `[watch] mode = "observe"` runs everything but
-the kill and says what it would have stopped.
+the kill and says what it would have stopped. `coreslot watch observe` or `coreslot watch enforce` switches
+the mode on this machine without touching the configuration, until `coreslot watch config`, or for a while
+with `--for 2h`; `status` says which mode applies and where it comes from. A stop round already written
+still acts after a switch to observe.
 
 A command is judged only once a run of its label has completed and measured that. Until then coreslot does
 not know what is normal for it (the median share its earlier runs measured, the same way, while the
@@ -335,7 +355,7 @@ xattr -d com.apple.quarantine ./coreslot
 `coreslot version` prints the version and the protocol formats it implements. A state directory of
 another format is not used: runs start unbudgeted with a notice until `coreslot doctor --reset`,
 which also removes that format's run log, so every label learns its memory need again. On a
-directory of this client's format, or of format 3 (which the reset upgrades), the reset is a repair
+directory of this client's format, or of format 3 to 6 (which the reset upgrades), the reset is a repair
 and keeps the run log; to make the labels learn again,
 remove `log/runs.jsonl` and `log/runs.1.jsonl` from the state directory.
 
@@ -351,10 +371,13 @@ coreslot run --restart=yes --label gate:unit -- npm test  # a label of your own
 coreslot run --restart=no -- ./migrate.sh                 # never killed and run twice
 coreslot status            # the watchdog's level, running commands, the queue; --json for scripts
 coreslot status --docker   # also Docker Desktop's VM and each running container, read from the Docker socket
-coreslot stats             # per label, what the need is learned from
+coreslot stats             # per label, what the need and the reservation's window are learned from
 coreslot report            # the last 7 days: runs, waits, memory stops, heaviest labels
 coreslot doctor            # state directory, filesystem, permissions, format, readings, forwarders still serving
 coreslot cancel <ticket-id>   # or: coreslot cancel --label L; withdraws a waiting request
+coreslot start <ticket-id>    # or: coreslot start --label L; starts a waiting job now, out of turn
+coreslot quiet <id>           # while this job runs, no other job starts; --off removes the mark
+coreslot no-stop <id>         # the watchdog never stops this job; --off removes the mark
 coreslot move <ticket-id> --first   # or --last, --before <id>, --after <id>; changes its place, keeps its run
 coreslot trim <hold-id>       # or: coreslot trim --label L; a running job reserves what it uses
 ```
@@ -414,6 +437,36 @@ answers. Any process of yours can trim any of your jobs, and the job's own sessi
 from the one line its `coreslot run` prints. `status` marks such a job `trimmed` and shows
 `(asked …)` beside what it reserves; `status --json` has each hold's `id`, `asked_mib` and
 `trimmed`.
+
+**Start a waiting job now.** `coreslot start <ticket-id>` (or `--label L`) starts a waiting job at
+once, ahead of the queue and whatever memory is free: its own `coreslot run` acts on the request at
+its next poll, and `start` waits up to 8 s for it (`--no-wait` returns at once). Its full need still
+counts, so the room may go below zero and other jobs wait until memory frees up; if memory runs out,
+the watchdog may stop it as it would any job that queued when it did, and a job stopped that way
+comes back as an ordinary waiting job. The job's run must be a coreslot that knows the request; an
+older one never answers, and `status --json` then marks the request `unanswered` after 10 s. Exit
+status 75 means nothing was written. `status` marks such a job `started now, out of turn`, and
+`status --json` has each hold's `forced` and the pending `start_requests`.
+
+**Mark a job.** Two marks, set on a waiting or a running job by the id `coreslot status` shows, and
+removed with `--off`; they combine, and neither changes the job's place in the queue or anyone
+else's:
+
+- `coreslot quiet <id>`, a quiet window: while the job runs, no other job is admitted; jobs already
+  running go on. On a running job it closes admissions within about a second; a waiting job keeps
+  its place and its window opens when it starts, in its turn. The window ends when the job ends,
+  however it ends (exit, crash, a stop by the watchdog), or with `--off`. Several waiting quiet jobs
+  start one after another; several running ones hold the window until the last ends. `coreslot
+  start` still starts a job during a window. A `coreslot run --independent` that the quiet job
+  itself starts runs inside the job's grant instead of waiting for its window. A quiet window is no
+  reservation: the job still needs its room, and the watchdog may still stop it.
+- `coreslot no-stop <id>`: the watchdog never stops the job; a round stops another job instead, or
+  none, which is what the machine would do without coreslot. It does not keep the machine out of
+  swap.
+
+`status` shows `quiet window` and `do not stop` on the job's line, and `status --json` each hold's
+and ticket's `quiet` and `no_stop`. Any process of the user can set or remove a mark. Exit status 75
+means nothing was changed.
 
 ### What it did: `coreslot report`
 
@@ -526,7 +579,7 @@ whose work happens in a container or on another host looks small to it.
 
 ## More
 
-- [Protocol](PROTOCOL.md), the normative definition of format 4
+- [Protocol](PROTOCOL.md), the normative definition of format 7
 - [Compatibility policy](docs/compatibility.md) and [changelog](CHANGELOG.md)
 - [Calibration](calibration/README.md), the harness, the records and what each default rests on
 - [Running a command on another machine under its budget](docs/remote.md)

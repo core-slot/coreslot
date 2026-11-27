@@ -514,23 +514,6 @@ var (
 	foreignFormat = fmt.Sprintf("coreslot-protocol %d\n", Format+1)
 )
 
-// The format is 4, the one that adds the Docker keys and vmwait/, and a reset upgrades from 3, which
-// lacks only those. Mutations: Format = 3 or UpgradedFormat = 2 turns it red, and so does a
-// writeFormat that writes another number.
-func TestFormatIsFour(t *testing.T) {
-	if Format != 4 || UpgradedFormat != 3 || VMWaitDir != "vmwait" {
-		t.Fatalf("Format %d, UpgradedFormat %d, VMWaitDir %q; want 4, 3 and vmwait", Format, UpgradedFormat, VMWaitDir)
-	}
-	dir := newDir(t)
-	sec := enter(t, open(t, dir))
-	if _, _, err := sec.Format(); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(filepath.Join(dir, FormatFile)); string(b) != "coreslot-protocol 4\n" {
-		t.Errorf("a first client wrote FORMAT %q, want coreslot-protocol 4", b)
-	}
-}
-
 func TestFormatUnknownIsReported(t *testing.T) {
 	dir := newDir(t)
 	s := open(t, dir)

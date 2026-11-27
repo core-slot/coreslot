@@ -15,14 +15,34 @@ func cancelCommand(args []string, io IO) int {
 	return noBudget("cancel", cancelUsage, fs, args, io)
 }
 
+func startCommand(args []string, io IO) int {
+	fs, _, _ := startFlags()
+	return noBudget("start", startUsage, fs, args, io)
+}
+
 func moveCommand(args []string, io IO) int {
 	fs, _, _, _, _, _ := moveFlags()
 	return noBudget("move", moveUsage, fs, args, io)
 }
 
+func quietCommand(args []string, io IO) int {
+	fs, _ := quietFlags()
+	return noBudget("quiet", quietUsage, fs, args, io)
+}
+
+func noStopCommand(args []string, io IO) int {
+	fs, _ := noStopFlags()
+	return noBudget("no-stop", noStopUsage, fs, args, io)
+}
+
 func trimCommand(args []string, io IO) int {
 	fs, _ := trimFlags()
 	return noBudget("trim", trimUsage, fs, args, io)
+}
+
+func watchCommand(args []string, io IO) int {
+	fs, _ := watchFlags()
+	return noBudget("watch", watchUsage, fs, args, io)
 }
 
 func doctorCommand(args []string, io IO) int {

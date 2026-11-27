@@ -25,19 +25,26 @@ const (
 	QueueDir   = "queue"
 	HoldsDir   = "holds"
 	CancelDir  = "cancel"
+	StartDir   = "start" // start requests, named as cancel requests are (PROTOCOL.md section 7.16)
 	OrderDir   = "order"
+	// QuietDir and NoStopDir hold a job's marks: empty files named by the id of the ticket or the
+	// hold they mark (PROTOCOL.md section 7.18).
+	QuietDir  = "quiet"
+	NoStopDir = "nostop"
 	// VMWaitDir holds the notes of gated tickets that wait for Docker's VM: a note is named as its
 	// ticket and is an empty file of mode 0600 that carries no lock.
-	VMWaitDir    = "vmwait"
-	DegradedFile = "degraded"
-	WatchFile    = "watch.json"
-	TrimFile     = "trim.json"
-	LogDir       = "log"
-	RunLog       = "runs.jsonl"
-	RunLogOld    = "runs.1.jsonl"
-	WatchLog     = "watch.jsonl"
-	WatchLogOld  = "watch.1.jsonl"
-	ConfigFile   = "config.toml"
+	VMWaitDir     = "vmwait"
+	DegradedFile  = "degraded"
+	WatchFile     = "watch.json"
+	TrimFile      = "trim.json"
+	WatchModeFile = "watch-mode"
+	YieldFile     = "yield.json" // the head's yield record (PROTOCOL.md section 7.17)
+	LogDir        = "log"
+	RunLog        = "runs.jsonl"
+	RunLogOld     = "runs.1.jsonl"
+	WatchLog      = "watch.jsonl"
+	WatchLogOld   = "watch.1.jsonl"
+	ConfigFile    = "config.toml"
 )
 
 // The telemetry directory and its files (an opt-in recorder; no admission reads them).
@@ -116,7 +123,7 @@ func openDir(dir string, create bool) (*Store, error) {
 	if err := checkFilesystem(dir); err != nil {
 		return nil, err
 	}
-	for _, d := range []string{QueueDir, HoldsDir, CancelDir, OrderDir, VMWaitDir, LogDir} {
+	for _, d := range []string{QueueDir, HoldsDir, CancelDir, StartDir, OrderDir, VMWaitDir, QuietDir, NoStopDir, LogDir} {
 		if err := CheckEntry(s.path(d), true); err != nil {
 			return nil, err
 		}
@@ -128,7 +135,7 @@ func openDir(dir string, create bool) (*Store, error) {
 		}
 		f.Close()
 	}
-	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, TrimFile, ConfigFile,
+	for _, name := range []string{AdmitLock, FormatFile, GenFile, DegradedFile, WatchFile, TrimFile, WatchModeFile, YieldFile, ConfigFile,
 		filepath.Join(LogDir, RunLog), filepath.Join(LogDir, RunLogOld), filepath.Join(LogDir, WatchLog),
 		filepath.Join(LogDir, WatchLogOld)} {
 		if err := CheckEntry(s.path(name), false); err != nil {

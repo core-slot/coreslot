@@ -53,10 +53,11 @@ listed here; after it, an incompatible change to either needs a new major versio
 |---|---|
 | `v0.4.0` | 2 |
 | `v0.10.0` | 3 (format 2 with `order/`; `doctor --reset` upgrades a format-2 directory and keeps its run log) |
-| unreleased | 4 (format 3 with `vmwait/` and the Docker keys of tickets and holds; `doctor --reset` upgrades a format-3 directory and keeps its run log) |
+| `v0.11.0` | 5 (format 3 with `vmwait/`, the Docker keys of tickets and holds, and `watch-mode`; `doctor --reset` upgrades a format-4 or format-3 directory and keeps its run log) |
+| `v0.12.0` | 6 (format 5 with `quiet/` and `nostop/`, the optional `yield.json` and the ticket's optional `typical_s`; `doctor --reset` upgrades a format-5, format-4 or format-3 directory and keeps its run log) |
 
 `coreslot version` prints the formats a binary implements, for example
-`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 4.
+`coreslot 0.4.0 (protocol formats: 2)`. [`PROTOCOL.md`](../PROTOCOL.md) defines format 7.
 
 `telemetry/`, and the `log/watch.jsonl` an older client may have left or still write, need no new format number:
 they are optional files that no reader of the format needs, and no admission reads them
@@ -93,7 +94,9 @@ change in any release; parse `status --json` instead.
 | `run` | `--mem SIZE` (such as `3G` or `768M`), `--label`, `--timeout`, `--on-timeout run\|fail`, `--no-wait`, `--strict`, `--independent`, `--same-group`, `--refusal-code` |
 | `status` | `--json`, `--docker`, `--observe DURATION` |
 | `cancel` | `<ticket-id>`, `--label LABEL` |
+| `start` | `<ticket-id>`, `--label LABEL`, `--no-wait` |
 | `trim` | `<hold-id>`, `--label LABEL` |
+| `watch` | `observe`, `enforce` (with `--for DURATION`), `config` |
 | `doctor` | `--clear`, `--reset` |
 | `stats` | `--label LABEL`, `--json` |
 | `report` | `--days N`, `--json` |

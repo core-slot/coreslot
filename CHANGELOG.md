@@ -10,6 +10,113 @@ All notable changes to this project are recorded here. The format follows
 
 ### Added
 
+- A head that does not fit the room no longer starts the instant no coreslot job runs while memory outside coreslot
+  is growing: it waits, with the `waiting` reason `idle_growing`, while the free memory it read fell by more than
+  1 GiB within the last minute or the kernel's memory pressure is not normal, for at most 5 minutes, then starts as
+  before. On a calm machine nothing changes. Its `admitted` line carries `idle_waited_s`.
+
+- A command whose need was not pinned (learned, or the default) stops reserving its whole need after its peak: once
+  it has run for its label's window, its hold reserves the most it used within that window plus a margin, never more
+  than its need, and rises again with its use. The window is 1.5 times the longest gap a run of the label needed,
+  from its last 20 runs, at least 120 s and at most a day; 600 s until 3 runs have recorded one. Each run's line in
+  the run log gains `mem_window_s`, and `coreslot stats` prints each label's window. A pinned need, a run with a
+  Docker interest, an oversized need and a restart keep their whole need.
+
+### Changed
+
+- **Format 7.** Every client must apply one rule for what a live hold reserves (below), since a run may now lower
+  its `need_mib` without a request, so a client of format 6 steps out of the budget with its existing notice. Run
+  `coreslot doctor --reset` once nothing is live: on a format-6 to format-3 directory it is an upgrade that keeps the
+  run log and the telemetry.
+- What a hold reserves has one definition: its `need_mib` while its run measures it, and at least its `asked_mib`
+  once its command has exited or it has not been sampled for 6 s, so a lowered reservation nobody measures no longer
+  stands. The room, the head's expected wait, `status`'s `reserved_mib` and each hold's `need_mib` use it
+  (`PROTOCOL.md` section 12.1).
+
+## v0.12.0 (2026-11-25)
+
+This release writes format 6. Upgrade every client of a machine together.
+
+### Upgrading
+
+A client of this release does not use a format-5 directory (v0.11.0), nor a format-4 or format-3 one: its runs start
+unbudgeted with a notice (`--strict` refuses) until `coreslot doctor --reset`. Run the reset when no job is running
+or waiting; it refuses while a hold or a ticket is live, and names it. On a format-5, format-4 or format-3 directory
+the reset is an upgrade to format 6 that keeps the run log and the telemetry, so no label learns its need again. A
+v0.11.0 client treats a format-6 directory as foreign in the same way, so do not run the two on one machine.
+
+### Added
+
+- A long head lets short jobs go first: a head whose label typically runs 10 min or more, and that could start now,
+  lets the jobs behind it that typically run 2 min or less, and would not fit beside it, start first, until a
+  deadline of a quarter of its typical run time (10 min for a 40-min head), which it publishes in the new
+  `yield.json`. It starts by the deadline, or once the short jobs still running end; a short job that runs past its
+  typical time, or 3 s with nobody taking the room, ends the yield at once. A head never yields twice, nor when it is a
+  restart, was moved, cannot read the headroom or the kernel's pressure is not normal (so never on Linux). Tickets
+  carry their label's `typical_s`. `status` reads "letting short jobs go first until 14:32"; `status --json` gains the
+  top-level `head` and `yield`, under the same `schema` 1; telemetry gains the `waiting` reason `yielding` with
+  `until_ns`, `yield_ended`, the `short` pass and its `no_pass` reasons.
+- Two marks on a job, set with `coreslot quiet <id>` and `coreslot no-stop <id>` on a waiting or running job and
+  removed with `--off`. While a job marked quiet runs, no other job is admitted (a forced start still is); the
+  window ends when the job ends, however it ends, or with `--off`. A job marked do-not-stop is never a stop round's
+  victim. Neither moves a job in the queue. An `--independent` run started inside a quiet job runs inside its
+  parent's grant instead of waiting for the window. `status` shows the marks, and `status --json` each hold's and
+  ticket's `quiet` and `no_stop`; the protection reason covers the floor too. Telemetry gains the `waiting` reason
+  `quiet` and the `pass_through` reason `quiet`.
+
+### Changed
+
+- **Format 6.** The state directory gains `quiet/` and `nostop/`, the marks (`PROTOCOL.md` section 7.18), which
+  every client must read at admission and in its own run's ticks, so a client of format 5 steps out of the budget
+  with its existing notice. Format 6 also carries the optional `yield.json` (section 7.17) and the ticket's optional
+  `typical_s`. Run `coreslot doctor --reset` once nothing is live: on a format-5, format-4 or format-3 directory it
+  is an upgrade that keeps the run log and the telemetry.
+
+### Fixed
+
+- `coreslot watch --for` refuses, as a usage error, a duration whose end is past the clock's range, which
+  wrote an override with no end while it printed a time. An end on another day prints its date.
+- `status` no longer says a stop round written before a switch to observe still stops its jobs once every
+  listed job has found a container client, which ignores the stop.
+- The telemetry `memory` line's `vm.name` is the VM program's full name; on Apple's hypervisor it was the kernel's
+  31-byte `com.apple.Virtualization.Virtua`.
+- A command could start on memory a running command had just released and was about to use again:
+  the room counted it as free and, until the running command's next report, as still in use. Before
+  a command starts beside running ones, coreslot now measures their process trees and the free
+  memory at that moment, and waits when the room is not there (`PROTOCOL.md` section 12.1, the
+  confirmation). `status` still shows the room from the last reports.
+- A gated Docker run kept the VM growth its containers had already taken reserved for up to 8 s after they took
+  it, so commands and containers behind it waited for memory that was in use, not about to be. A gated run now samples its
+  containers every tick (2 s) until they reach its Docker need, then every third tick as before (`PROTOCOL.md`
+  section 23.1).
+
+## v0.11.0 (2026-11-24)
+
+This release writes format 5. Upgrade every client of a machine together.
+
+### Upgrading
+
+A client of this release does not use a format-3 directory (v0.10.0) or a format-4 one: its runs start unbudgeted
+with a notice (`--strict` refuses) until `coreslot doctor --reset`. Run the reset when no hold and no ticket is
+live; it refuses while one is, and names it. On a format-3 or format-4 directory the reset is an upgrade to format 5
+that keeps the run log and the telemetry, so no label learns its need again. A format-2 directory's reset removes
+its run log.
+
+### Added
+
+- `coreslot start <ticket-id>` (or `--label L`) starts a waiting job now, ahead of the queue and whatever memory is
+  free: its own run admits itself at its next poll with a hold that still reserves its full need, so the room may go
+  below zero and other jobs wait. It waits up to 8 s for the run to start, or returns at once with `--no-wait`. A
+  started job is a red-round victim by its queue arrival, like any other. `status` marks its hold `started now, out of
+  turn`; `status --json` carries each hold's `forced` and the pending `start_requests` (`ticket`, `age_s`,
+  `unanswered`), under the same `schema` 1, and the `admitted` telemetry line's `pass` gains `forced`.
+
+- `coreslot watch observe` and `coreslot watch enforce` switch the watchdog's mode on this machine, until
+  `coreslot watch config` or, with `--for DURATION`, for a while; the configuration file is never
+  written, and a stop round already written still acts. `status` shows an override in its watch line, and `status --json` carries `watch.mode`, `watch.mode_source` and
+  `watch.mode_until_ns` whether or not a job runs, under the same `schema` 1. The `enqueue` telemetry's `mode` is
+  the mode in force.
+
 - Telemetry records the host's CPU without acting on it: each sample line gains `ncpu`, `load1` and `load5`,
   `cpu_busy_pct` (the busy part of the CPU ticks since the previous sample) and, on Linux with PSI,
   `psi_cpu_some_us_s`. Each key is absent where it was not read, never 0. A run's `ended` line gains `tree_cpu_s`,
@@ -29,6 +136,12 @@ All notable changes to this project are recorded here. The format follows
 
 ### Changed
 
+- **Format 5.** The state directory gains `watch-mode`, this machine's override of the watchdog's mode
+  (`PROTOCOL.md` section 7.15), which every client must read for the mode it ticks in, and `start/`, the start
+  requests, whose holds carry the optional key `forced` (sections 7.16 and 13.4), so a client of format 4 steps
+  out of the budget with its existing notice. Run `coreslot doctor --reset` once nothing is live: on a format-4 or a
+  format-3 directory it is an upgrade that keeps the run log and the telemetry. A format-2 directory is another
+  format, whose reset removes its run log.
 - **Format 4.** Tickets and holds gain the optional keys `docker_need_mib`, `docker_growth_mib` and
   `docker_sampled_ns`, and the state directory gains `vmwait/` (`PROTOCOL.md` sections 7.14 and 12.6). Every
   client must take the holds' VM growth off its room and pass over a noted ticket, so a client of format 3 steps

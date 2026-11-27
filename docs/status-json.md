@@ -31,7 +31,10 @@ escape one before printing it to a terminal.
 | `tickets` | array | the queue, in queue order |
 | `dead_holds` | array of string | names of holds whose lock is free, awaiting reconciliation |
 | `cancel_requests` | array of string | pending cancel requests (ticket ids) |
-| `ignored` | object | per directory (`queue`, `holds`, `cancel`, `order`), the number of entries that do not match the grammar or whose body is malformed |
+| `start_requests` | array | pending start requests (`coreslot start`) |
+| `head` | string or null | the id of the ticket a waiter's re-election would pick now: the first live ticket in queue order without a VM wait, so not always `position` 1; null with none. Each waiter decides on its own, so one that has just found the first ticket STALLED may act on another for up to one election |
+| `yield` | object or null | the head's yield to short jobs while it is valid (PROTOCOL.md section 10.3); null otherwise |
+| `ignored` | object | per directory (`queue`, `holds`, `cancel`, `start`, `order`), the number of entries that do not match the grammar or whose body is malformed |
 | `observed_s` | number | how long `--observe` watched the queue; 0 without it |
 | `docker` | object | Docker Desktop's VM and its running containers; present only with `status --docker`, absent otherwise |
 
@@ -112,14 +115,14 @@ memory the kernel can hand out now without paging,
 admission keeps free), less what each live hold reserves and its run has not used yet
 (`need_mib − footprint_mib`, never below 0), less the growth of Docker Desktop's VM that each
 live hold of a run gated on Docker reserves on the host (its body's `docker_growth_mib`).
-`reserved_mib` is a different number, the sum of the live holds' needs. `room_mib` is unclamped: it is negative when the reserve and the holds take more
+`reserved_mib` is a different number, the sum of what the live holds reserve. `room_mib` is unclamped: it is negative when the reserve and the holds take more
 than the headroom, with no hold live too when the headroom is below the reserve. `free_mib` is the
 same room clamped at 0. A reader of
 telemetry's `waiting` line sees that line clamp its own `room_mib` at 0.
 
 | key | type | meaning |
 |---|---|---|
-| `reserved_mib` | int | the sum of the live holds' needs |
+| `reserved_mib` | int | the sum of what the live holds reserve, each hold's `need_mib` below |
 | `free_mib` | int | the room, never below 0 |
 | `machine_mib` | int | the machine's memory |
 | `reserve_mib` | int | what admission keeps free |
@@ -138,6 +141,9 @@ The watchdog, from the newest shared sample.
 | `reason` | string | why it is not, empty when it is |
 | `next_victim` | string | the hold the next stop round lists first; empty when none |
 | `learning` | int | running jobs whose label has no normal share yet |
+| `mode` | string | the watchdog's mode on this machine, `enforce` or `observe`, whether or not a job runs |
+| `mode_source` | string | where the mode comes from: `config` (`[watch] mode`) or `override` (`coreslot watch`, this machine only) |
+| `mode_until_ns` | int | when an override ends, by the wall clock; 0 for an override until switched back, or none |
 
 ## `holds[]`
 
@@ -150,9 +156,12 @@ The watchdog, from the newest shared sample.
 | `start_ns` | int | when the hold was admitted |
 | `held_for_s` | number | how long it has been held |
 | `arrival_ns` | int | when its run first arrived in the queue |
-| `need_mib` | int | what the hold reserves; 0 for a run outside the budget |
-| `asked_mib` | int | the need the hold was admitted with; equal to `need_mib` unless the hold was trimmed |
+| `need_mib` | int | what the hold reserves: the `need_mib` its run last wrote while the run measures it, and at least `asked_mib` once it does not (its command exited, or no sample for 6 s); 0 for a run outside the budget |
+| `asked_mib` | int | the need the hold was admitted with; equal to `need_mib` unless the hold follows what its run uses or was trimmed |
 | `trimmed` | bool | its run acted on a `coreslot trim` request: `need_mib` follows what the command uses, up to `asked_mib` |
+| `forced` | bool | its run started at once on a `coreslot start` request, whatever the room: `need_mib` is still its full need, so `mem.room_mib` may be below 0 |
+| `quiet` | bool | marked with `coreslot quiet`: while it runs no other job is admitted, and every waiting ticket waits for it to end |
+| `no_stop` | bool | marked with `coreslot no-stop`: no stop round lists it |
 | `footprint_mib` | int | what its run last measured |
 | `stops` | int | how many times it was stopped |
 | `owner_exited` | bool | the owner exited while a descendant that inherited the hold's descriptor keeps the reservation; false also when the process table could not be read; true for a `pid` of 0 or 1, never a run's |
@@ -190,6 +199,24 @@ to its command's own process group, which a `stoppable` run always has. A `SIGKI
 shows it). A run stopped this way is not restarted, though `stoppable` asks for a restartable run:
 only the watchdog's own stops restart it.
 
+## `yield`
+
+A long head that fits lets short jobs it would displace go first, until a deadline it publishes.
+
+| key | type | meaning |
+|---|---|---|
+| `head` | string | the head's ticket id, equal to the top-level `head` |
+| `until_ns` | int | the deadline, by the wall clock: no short job starts that is expected to end after it, and the head starts by then or as soon as the room allows after it |
+| `last_pass_ns` | int | when a short job last started past it; 0 before any |
+
+## `start_requests[]`
+
+| key | type | meaning |
+|---|---|---|
+| `ticket` | string | the ticket id the request names |
+| `age_s` | number | since the request was written; 0 when its body is malformed, which its run ignores |
+| `unanswered` | bool | the request is older than 10 s and its ticket still waits: its run is stopped or STALLED, or an older coreslot started it, and it will not act on it |
+
 ## `tickets[]`
 
 | key | type | meaning |
@@ -207,6 +234,8 @@ only the watchdog's own stops restart it.
 | `expected_wait_s` | int or null | the first live ticket's expected wait, see below |
 | `docker_need_mib` | int | present for a ticket gated on Docker Desktop's VM: its Docker need |
 | `vm_wait` | bool | present and true while the gated ticket fits on the Mac and waits for room in Docker Desktop's VM, or for a reading of it: every other run passes over it |
+| `quiet` | bool | marked with `coreslot quiet`; the window opens once it is admitted |
+| `no_stop` | bool | marked with `coreslot no-stop`; it acts once it is admitted |
 
 `expected_wait_s` is the head's expected wait `W` of the passing rule, the rule by which a waiter
 with a typical run time may start ahead of the head when it is expected to end within `W`

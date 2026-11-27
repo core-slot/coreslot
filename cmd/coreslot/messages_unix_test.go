@@ -92,7 +92,8 @@ func TestStopMessageParts(t *testing.T) {
 }
 
 // status shows the level and E, whether the watchdog protects and why not, and each job's
-// footprint, stops and whether it is the next victim.
+// footprint, stops and whether it is the next victim. With no victim a floor round stops nothing
+// either, and says why as a red one does (mutation: giving the reason at red only).
 func TestStatusWatch(t *testing.T) {
 	const now = int64(1e18)
 	holds := []engine.HolderInfo{
@@ -111,9 +112,11 @@ func TestStatusWatch(t *testing.T) {
 		// no victim at red, whether the learning job is the newest or the oldest, or none is
 		// learning: red lists nobody, so it does not say "protecting"
 		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true, Learning: 1}},
-			"watch: red, E 41.0 points; not protecting: a red round can stop no running command: each is the oldest, still learning or never stopped"},
+			"watch: red, E 41.0 points; not protecting: a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"},
 		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Red, Excess: 41, Fresh: true}},
-			"watch: red, E 41.0 points; not protecting: a red round can stop no running command: each is the oldest, still learning or never stopped"},
+			"watch: red, E 41.0 points; not protecting: a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"},
+		{engine.Report{Holds: holds, Watch: engine.WatchInfo{Level: watch.Floor, Excess: 41, Fresh: true}},
+			"watch: floor, E 41.0 points; not protecting: a round can stop no running command: each is the oldest, still learning, never stopped or marked do-not-stop"},
 		{rep(engine.WatchInfo{Level: watch.Green, Fresh: true, Observe: true}, holds),
 			"watch: green, E 0.0 points; not protecting: observe mode logs what it would stop and stops nothing"},
 		{rep(engine.WatchInfo{Level: watch.Unknown, Fresh: true}, holds),
@@ -154,8 +157,9 @@ func TestStatusWatch(t *testing.T) {
 // Mutation: leaving Learning out of the document reports 0.
 func TestStatusJSONWatch(t *testing.T) {
 	w, _ := statusDoc(t, budgetDir(t, 8192), 0)["watch"].(map[string]any)
-	if len(w) != 6 || w["level"] != "" || w["protecting"] != false || w["reason"] != "no coreslot job is running" || w["learning"] != float64(0) {
-		t.Errorf("status --json watch = %v, want the six keys, no level, not protecting for want of a job, learning 0", w)
+	if len(w) != 9 || w["level"] != "" || w["protecting"] != false || w["reason"] != "no coreslot job is running" || w["learning"] != float64(0) ||
+		w["mode"] != "enforce" || w["mode_source"] != "config" || w["mode_until_ns"] != float64(0) {
+		t.Errorf("status --json watch = %v, want the nine keys, no level, not protecting for want of a job, learning 0, enforce from the configuration", w)
 	}
 	rep := engine.Report{Holds: []engine.HolderInfo{{Name: "h1"}, {Name: "h2"}},
 		Watch: engine.WatchInfo{Level: watch.Green, Fresh: true, NextVictim: "h2", Learning: 2}}
