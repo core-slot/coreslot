@@ -17,7 +17,7 @@ done | sort -u
 
 ```csv
 github.com/BurntSushi/toml,https://github.com/BurntSushi/toml/blob/v1.6.0/COPYING,MIT
-golang.org/x/sys/unix,https://cs.opensource.google/go/x/sys/+/v0.49.0:LICENSE,BSD-3-Clause
+golang.org/x/sys/unix,https://cs.opensource.google/go/x/sys/+/v0.50.0:LICENSE,BSD-3-Clause
 ```
 
 The Go standard library is compiled into the binary as well. It carries the Go project's
