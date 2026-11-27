@@ -49,7 +49,7 @@ coreslot status                                # what runs, what waits, whether 
   ([Docker on macOS](#how-it-decides)).
 
 **Measured.** These runs used the v0.4.0 and v0.4.1 releases and have not been repeated since;
-admission has changed in later releases, from v0.5.2 on ([changelog](CHANGELOG.md)). On a 16 GB
+admission has changed in later releases, from v0.5.0 on ([changelog](CHANGELOG.md)). On a 16 GB
 MacBook Air, four agents started a VS Code type check (twice), FastAPI's
 tests and SQLAlchemy's ORM tests at once, five times unwrapped and five times under `coreslot run`,
 in alternating order. Unwrapped, the machine sat at memory pressure warn for 66 to 115 s of each set
